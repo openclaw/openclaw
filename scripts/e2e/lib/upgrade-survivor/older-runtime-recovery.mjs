@@ -3,7 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { writeInstalledRecoveryEvidence } from "./installed-recovery-observations.mjs";
+import {
+  openInstalledRecoveryEvidence,
+  writeInstalledRecoveryEvidence,
+} from "./installed-recovery-observations.mjs";
 import { readDatabase } from "./observations.mjs";
 import {
   readWorkerCellPackageIdentity,
@@ -12,6 +15,7 @@ import {
 } from "./worker-cell-package.mjs";
 
 let phase = "resolve-installed-root";
+const sourceFiles = new Set(["older-runtime-recovery.mjs", "daemon-cli.js"]);
 async function main() {
   const [artifacts, candidateRoot, rootArgument, tarball] = process.argv.slice(2);
   const root = fs.realpathSync(rootArgument);
@@ -32,6 +36,7 @@ async function main() {
     const matches = [];
     const owners = [];
     for (const name of fs.readdirSync(path.join(packageRoot, "dist")).toSorted()) {
+      sourceFiles.add(name);
       if (!name.startsWith(`${prefix}-`) || !name.endsWith(".mjs")) {
         continue;
       }
@@ -289,27 +294,51 @@ async function main() {
 }
 await main().catch(
   /** @param {unknown} error */ (error) => {
-    fs.writeFileSync(
-      path.join(process.argv[2], "driver.err"),
-      String(error instanceof Error ? (error.stack ?? error.message) : error),
-      {
-        mode: 0o600,
-      },
+    let captured = false;
+    try {
+      const fd = openInstalledRecoveryEvidence(path.join(process.argv[2], "driver.err"));
+      try {
+        fs.writeFileSync(
+          fd,
+          String(error instanceof Error ? (error.stack ?? error.message) : error),
+        );
+        captured = true;
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      // Evidence failure must not expose the exception it was meant to keep private.
+    }
+    // Only installed public module names and numeric coordinates leave private evidence.
+    // Include causes: startup refusals need not retain an async frame in this driver.
+    const sites = [];
+    for (
+      let cause = error, depth = 0;
+      cause instanceof Error && depth < 4;
+      cause = cause.cause, depth++
+    ) {
+      for (const line of cause.stack?.split("\n", 16).slice(1) ?? []) {
+        const frame = line.startsWith("    at ")
+          ? line.match(/\/([^/]+\.m?js):(\d{1,8}):(\d{1,8})\)?$/u)
+          : null;
+        if (frame && sourceFiles.has(frame[1])) {
+          sites.push(frame.slice(1).join(":"));
+        }
+      }
+    }
+    fs.writeSync(
+      2,
+      `[older-runtime-recovery] phase=${phase} sites=${[...new Set(sites)].slice(0, 8).join(",") || "unknown"}\n`,
     );
-    // Assertion values stay private; publish only our static step and numeric source location.
-    const frame =
-      error instanceof Error
-        ? error.stack?.split("\n").find((line) => line.includes(import.meta.url))
-        : undefined;
-    const site =
-      frame
-        ?.slice(frame.indexOf(import.meta.url) + import.meta.url.length)
-        .match(/^:(\d+):(\d+)/u)
-        ?.slice(1)
-        .join(":") ?? "unknown";
-    console.error(`[older-runtime-recovery] phase=${phase} site=${site}`);
-    console.error("[older-runtime-recovery] inspect driver.err in the private run evidence");
-    console.error("[older-runtime-recovery] FAILED (exit 1)");
-    process.exitCode = 1;
+    fs.writeSync(
+      2,
+      captured
+        ? "[older-runtime-recovery] inspect driver.err in the private run evidence\n"
+        : "[older-runtime-recovery] private driver diagnostic unavailable\n",
+    );
+    fs.writeSync(2, "[older-runtime-recovery] FAILED (exit 1)\n");
+    // The disposable container owns remaining fixture children. Let its EXIT
+    // capture run now, before their live handles consume the whole-cell deadline.
+    process.exit(1);
   },
 );

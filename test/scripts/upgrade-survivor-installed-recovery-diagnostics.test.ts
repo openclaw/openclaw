@@ -83,6 +83,95 @@ function capture(f: ReturnType<typeof fixture>) {
   return publish(f).report;
 }
 
+it.each([false, true])(
+  "exits a rejected older-runtime startup with private evidence (unavailable=%j)",
+  (unavailable) => {
+    const f = fixture();
+    const baseline = path.join(f.root, "published");
+    const candidate = path.join(f.root, "candidate");
+    for (const [root, buildId] of [
+      [baseline, "published"],
+      [candidate, "candidate"],
+    ] as const) {
+      fs.mkdirSync(path.join(root, "dist/cli"), { recursive: true });
+      writeJson(path.join(root, "package.json"), {
+        name: "openclaw",
+        type: "module",
+        version: "2026.10.9",
+      });
+      writeJson(path.join(root, "dist/build-info.json"), {
+        version: "2026.10.9",
+        buildId,
+        commit: "a".repeat(40),
+      });
+      fs.writeFileSync(path.join(root, "openclaw.mjs"), "");
+      fs.writeFileSync(path.join(root, "dist/cli/daemon-cli.js"), "export {};\n");
+    }
+    // Fixture exports stop at startup rejection; the packaged lane owns restoration proof.
+    fs.mkdirSync(path.join(baseline, "dist/plugin-sdk"));
+    fs.writeFileSync(
+      path.join(baseline, "dist/plugin-sdk/plugin-state-store-runtime.js"),
+      "export function createPluginStateSyncKeyedStore() { return { register() {} }; }\n",
+    );
+    fs.writeFileSync(
+      path.join(baseline, "dist/update-run-ledger-fixture.mjs"),
+      "function createUpdateRun() { return { runId: 'diagnostic-run' }; } export { createUpdateRun };\n",
+    );
+    fs.writeFileSync(
+      path.join(candidate, "dist/update-managed-service-handoff-fixture.mjs"),
+      `
+      async function startManagedServiceUpdateHandoff() {
+        setInterval(() => {}, 1000);
+        throw new Error(${JSON.stringify(secret)}, { cause: new Error(${JSON.stringify(privateData)}) });
+      }
+      function transferManagedServiceUpdateHandoff() { throw new Error('unexpected transfer'); }
+      export { startManagedServiceUpdateHandoff, transferManagedServiceUpdateHandoff };
+    `,
+    );
+    writeJson(f.env.OPENCLAW_CONFIG_PATH, { gateway: {}, plugins: { enabled: false } });
+    const daemonLog = path.join(f.root, "gateway.log");
+    writeJson(`${daemonLog}.runtime.json`, { pid: process.pid });
+    const driverError = path.join(f.run.directory, "driver.err");
+    if (unavailable) {
+      fs.writeFileSync(driverError, "preserve existing evidence");
+    }
+    const result = runProcess(
+      node,
+      [
+        path.join(owner, "older-runtime-recovery.mjs"),
+        f.run.directory,
+        candidate,
+        baseline,
+        path.join(f.root, "candidate.tgz"),
+      ],
+      {
+        ...f.env,
+        NODE_OPTIONS: "",
+        OPENCLAW_TEST_WORKSPACE_DIR: path.join(f.root, "workspace"),
+        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG: daemonLog,
+      },
+      10_000,
+    );
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(
+      "phase=start-candidate-handoff sites=update-managed-service-handoff-fixture.mjs:",
+    );
+    expect(result.stderr).toContain(
+      unavailable
+        ? "private driver diagnostic unavailable"
+        : "inspect driver.err in the private run evidence",
+    );
+    expect(result.stderr).toMatch(/\[older-runtime-recovery\] FAILED \(exit 1\)\n$/u);
+    expect(result.stderr.length).toBeLessThan(2048);
+    for (const value of [secret, privateData, f.root]) {
+      expect(result.stdout + result.stderr).not.toContain(value);
+    }
+    expect(fs.readFileSync(driverError, "utf8")).toContain(
+      unavailable ? "preserve existing evidence" : secret,
+    );
+  },
+);
+
 it.skipIf(process.platform !== "linux").each([
   {
     name: "keeps unexpected command output private until diagnostic publication",
