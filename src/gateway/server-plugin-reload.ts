@@ -240,7 +240,7 @@ export async function reloadGatewayPlugins(
           pluginLookUpTable: lookup,
           pluginMetadataSnapshot: nextMetadata,
           replacePluginIds,
-          expectedSourceDigests: params.pluginLifecycle?.expectedSourceDigests,
+          pluginLifecycle: params.pluginLifecycle,
           prepareRegistrationFailureCleanup: prepareRegistrationFailureCleanup(params.nextConfig),
           env: params.env,
         };

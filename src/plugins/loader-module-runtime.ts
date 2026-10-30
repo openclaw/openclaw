@@ -147,6 +147,8 @@ export function createPluginModuleLoader(options: {
   loaderFilename?: string;
   installNativeSdkResolver?: boolean;
   expectedSourceDigests?: Readonly<Record<string, string>>;
+  /** Explicit development reload targets; empty unless the Gateway opted in. */
+  bundledCodeReloadPluginIds?: readonly string[];
 }) {
   const cache = getPluginCache();
   const captured = {
@@ -190,6 +192,9 @@ export function createPluginModuleLoader(options: {
           inspectionSourceIdentity: owner.immutableInstallIdentity,
           inspectionRetention: nativeAdmissionStateFor(cache).inspectionNativeEsm,
         };
+  const reloadsBundledCode = (owner: Owner) =>
+    owner.record.origin === "bundled" &&
+    captured.bundledCodeReloadPluginIds?.includes(owner.record.id) === true;
   const binding = (
     modulePath: string,
     owner: Owner,
@@ -200,6 +205,7 @@ export function createPluginModuleLoader(options: {
     source: modulePath,
     rootDir: owner.rootDir,
     standalone: owner.standalone,
+    reloadBundledCode: reloadsBundledCode(owner),
     expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
     ...inspection(owner),
     devSourceRoot: captured.devSourceRoot,
@@ -241,14 +247,15 @@ export function createPluginModuleLoader(options: {
         return;
       }
       await withPluginCache(cache, async () => {
+        const bundledCodeReload = reloadsBundledCode(owner);
         const bundledCapture =
-          owner.record.origin === "bundled"
+          owner.record.origin === "bundled" && !bundledCodeReload
             ? resolveBundledPluginStateOperationCapture({
                 rootDir: owner.rootDir,
                 source: modulePath,
               })
             : undefined;
-        if (owner.record.origin === "bundled" && !bundledCapture) {
+        if (owner.record.origin === "bundled" && !bundledCapture && !bundledCodeReload) {
           return;
         }
         const { preparePluginGenerationArtifact } = await import("./plugin-generation-worker.js");
@@ -257,6 +264,7 @@ export function createPluginModuleLoader(options: {
             rootDir: owner.rootDir,
             source: modulePath,
             standalone: owner.standalone,
+            bundledReload: bundledCodeReload,
           },
         );
         if (cache.retirement || isPluginRegistryRetired(owner.registry)) {

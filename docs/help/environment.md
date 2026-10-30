@@ -161,6 +161,11 @@ Installed third-party plugins may declare additional credential variables in the
 | `OPENCLAW_SKIP_CHANNELS`             | Start the Gateway without channel transports for troubleshooting.                            |
 | `OPENCLAW_THEME`                     | Force the TUI palette to `light` or `dark`.                                                  |
 
+For bundled plugin development, `OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS=1` lets
+`openclaw plugins reload` load edited bundled plugin code without restarting the
+Gateway. See
+[Development: reload edited bundled code](/cli/plugins/uninstall-and-update#development-reload-edited-bundled-code).
+
 ### Filesystem observation
 
 Config hot reload, skills refresh, memory indexing, and the development watch

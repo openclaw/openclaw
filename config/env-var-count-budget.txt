@@ -20,4 +20,5 @@
 # OPENCLAW_DEVICE_NAME_PREFIX was removed with unread Matrix device-health projections (#178345).
 # Retiring A2UI removes its four renderer build environment names.
 # OPENCLAW_CONFIG_READONLY_NOTICE (#187015) lets the deployment explain where to edit Gateway configuration.
-458
+# OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS (#187962) is the owner-approved launch-only bundled plugin development reload opt-in.
+459

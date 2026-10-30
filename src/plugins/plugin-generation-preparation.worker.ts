@@ -253,6 +253,9 @@ function createPreparationSession(context: CaptureCommand) {
               command.entryFile,
               (run) => run(),
               (filename) => mapSource(command.captureId, filename),
+              undefined,
+              undefined,
+              command.bundledReloadSource,
             ),
           );
           const captureRecovery = artifact.captureRecoverySource.bind(artifact);

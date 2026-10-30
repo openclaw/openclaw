@@ -7,6 +7,7 @@ import {
   type RootFileCopyBatchSync,
   type RootFileOpenBatchSync,
 } from "@openclaw/fs-safe/advanced";
+import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
@@ -59,6 +60,44 @@ export function linkPluginGenerationDependency(link: string, target: string): bo
   return true;
 }
 
+/** Native child imports can follow host identity without borrowing parent resolver hooks. */
+export function linkPluginGenerationHostModule(link: string, target: string): boolean {
+  if (fs.lstatSync(link, { throwIfNoEntry: false })) {
+    return false;
+  }
+  fs.mkdirSync(path.dirname(link), { recursive: true, mode: 0o700 });
+  try {
+    fs.symlinkSync(target, link, "file");
+    return true;
+  } catch (error) {
+    // Directory junctions can work where file links are denied. Keep the
+    // existing parent redirect; never copy a second SDK graph.
+    if (!["EPERM", "EACCES", "ENOSYS", "ENOTSUP"].some((code) => hasErrnoCode(error, code))) {
+      throw error;
+    }
+    return false;
+  }
+}
+
+/**
+ * Native Workers do not inherit the parent resolver. Link a captured relative import
+ * to the canonical host module instead of capturing another SDK identity.
+ */
+export function linkBundledSharedModule(
+  link: string,
+  shared: string,
+  additions: Set<string>,
+  hostModuleLinks: Set<string>,
+): void {
+  if (linkPluginGenerationHostModule(link, shared)) {
+    additions.add(link);
+  }
+  // Recovery can already contain the link; denied links still allow asset capture.
+  if (fs.lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    hostModuleLinks.add(link);
+  }
+}
+
 export function createPluginSourceLinkCapture() {
   const links = new Set<string>();
   return {
@@ -80,6 +119,7 @@ export function createPluginGenerationFileCapture({
   directory,
   outputRoot,
   capturedPaths,
+  hostModuleLinks,
   originalSources,
   hardlinkedSources,
   sourceCapture,
@@ -96,6 +136,7 @@ export function createPluginGenerationFileCapture({
   directory: string;
   outputRoot?: string;
   capturedPaths: Map<string, string>;
+  hostModuleLinks: ReadonlySet<string>;
   originalSources: Map<string, string>;
   hardlinkedSources: Set<string>;
   sourceCapture: Pick<ReturnType<typeof createPluginSourceCapture>, "additions">;
@@ -118,7 +159,7 @@ export function createPluginGenerationFileCapture({
     sourceEntry?: fs.BigIntStats,
   ) => {
     // Metadata can precede its package body; promotion never replaces those captured bytes.
-    if (capturedPaths.get(path.resolve(source)) === target) {
+    if (capturedPaths.get(path.resolve(source)) === target || hostModuleLinks.has(target)) {
       return;
     }
     const prepared = nativeAdmission.resolvePreparedSource(source);
