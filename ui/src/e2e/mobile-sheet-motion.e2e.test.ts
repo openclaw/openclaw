@@ -58,7 +58,7 @@ async function shellState(page: Page) {
   });
 }
 
-/** Drags the grabber by dy with frame-paced moves, like a finger. */
+/** Drags the grabber by dy with paced moves, then pauses before lifting. */
 async function dragGrabber(page: Page, dy: number, options: { steps: number; stepMs: number }) {
   const box = await page.locator(".chat-mobile-host__grabber").boundingBox();
   if (!box) {
@@ -72,10 +72,45 @@ async function dragGrabber(page: Page, dy: number, options: { steps: number; ste
     await page.mouse.move(x, y + (dy * step) / options.steps);
     await page.waitForTimeout(options.stepMs);
   }
+  // Hold still before lifting, like a deliberate placement: no momentum carries over.
+  await page.waitForTimeout(150);
   await page.mouse.up();
 }
 
-const flick = (page: Page, dy: number) => dragGrabber(page, dy, { steps: 6, stepMs: 16 });
+/**
+ * A 96 ms flick with explicit input timestamps, so release velocity (~1,500 px/s for
+ * 150 px) does not depend on how quickly a loaded runner delivers the events.
+ */
+async function flick(page: Page, dy: number) {
+  const box = await page.locator(".chat-mobile-host__grabber").boundingBox();
+  if (!box) {
+    throw new Error("grabber is not visible");
+  }
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  const cdp = await page.context().newCDPSession(page);
+  const start = Date.now() / 1000;
+  const send = (
+    type: "mousePressed" | "mouseMoved" | "mouseReleased",
+    at: number,
+    offset: number,
+  ) =>
+    cdp.send("Input.dispatchMouseEvent", {
+      type,
+      x,
+      y: y + offset,
+      button: "left",
+      buttons: type === "mouseReleased" ? 0 : 1,
+      clickCount: type === "mouseMoved" ? 0 : 1,
+      timestamp: start + at,
+    });
+  await send("mousePressed", 0, 0);
+  for (let step = 1; step <= 6; step += 1) {
+    await send("mouseMoved", step * 0.016, (dy * step) / 6);
+  }
+  await send("mouseReleased", 0.1, dy);
+  await cdp.detach();
+}
 
 suite.define(() => {
   it("presents and dismisses the Panels sheet with the sheet spring", async () => {
