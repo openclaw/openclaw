@@ -64,7 +64,8 @@ openclaw-sidebar-agent-roster {
   margin: 0 0 0 16px;
   padding-inline-end: 7px;
 }
-.sidebar-recent-session--team:has(> .sidebar-child-session-toggle) .sidebar-recent-session__details-endcap {
+.sidebar-recent-session--team:has(> .sidebar-child-session-toggle)
+  .sidebar-recent-session__details-endcap {
   padding-inline-end: 4px;
 }
 .sidebar-recent-session--team openclaw-viewer-facepile:not(:has(.viewer-facepile)),
