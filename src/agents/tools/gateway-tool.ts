@@ -72,7 +72,13 @@ function isConfigSchemaPathNotFoundError(error: unknown): boolean {
 }
 
 const MAINTENANCE_ACTIONS = ["update.run", "restart", "update.cleanup"] as const;
-const GATEWAY_ACTIONS = ["config.get", "config.schema.lookup", ...MAINTENANCE_ACTIONS] as const;
+const UPDATE_STATUS_ACTION = "update.status";
+const GATEWAY_ACTIONS = [
+  "config.get",
+  "config.schema.lookup",
+  UPDATE_STATUS_ACTION,
+  ...MAINTENANCE_ACTIONS,
+] as const;
 
 const GatewayToolSchema = Type.Object({
   action: stringEnum(GATEWAY_ACTIONS),
@@ -91,7 +97,7 @@ const GatewayToolSchema = Type.Object({
 });
 
 const GatewayUpdateToolSchema = Type.Object({
-  action: stringEnum(MAINTENANCE_ACTIONS),
+  action: stringEnum([...MAINTENANCE_ACTIONS, UPDATE_STATUS_ACTION]),
   note: GatewayToolSchema.properties.note,
   dryRun: GatewayToolSchema.properties.dryRun,
 });
@@ -106,8 +112,8 @@ export function createGatewayTool(options?: {
     label: "Gateway",
     name: "gateway",
     description: allowConfigReads
-      ? "Read gateway config/schema. Owner request/operator schedule: update.run, restart, update.cleanup. Use runtime-owned actions."
-      : "Owner request/operator schedule: update.run, restart, update.cleanup. Cleanup permanently retires eligible rollback copies; dryRun previews. Use runtime-owned actions.",
+      ? "Read gateway config/schema and update status. Owner/operator: update.run, restart, update.cleanup. Use runtime-owned actions."
+      : "Read update status; owner/operator: update.run, restart, update.cleanup. Cleanup permanently retires eligible rollback copies; dryRun previews. Use runtime-owned actions.",
     parameters: allowConfigReads ? GatewayToolSchema : GatewayUpdateToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
@@ -225,6 +231,12 @@ export function createGatewayTool(options?: {
           },
         );
         return jsonResult(summarizeUpdateRunResponse(result));
+      }
+      if (action === UPDATE_STATUS_ACTION) {
+        // Read-only update visibility stays available even when config reads are withheld.
+        const gatewayOpts = readGatewayCallOptions(params);
+        const status = await callGatewayTool(UPDATE_STATUS_ACTION, gatewayOpts, {}, { signal });
+        return jsonResult(status);
       }
       if (!allowConfigReads) {
         throw new ToolInputError(`Action not available: ${action}`);

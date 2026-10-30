@@ -506,7 +506,7 @@ describe("Tool Search", () => {
     "keeps gateway guidance consistent across surfaces with delegation denied=%s",
     (denyOpenClaw) => {
       const expected =
-        "Read gateway config/schema. Owner request/operator schedule: update.run, restart, update.cleanup. Use runtime-owned actions." +
+        "Read gateway config/schema and update status. Owner/operator: update.run, restart, update.cleanup. Use runtime-owned actions." +
         (denyOpenClaw ? "" : " Other system changes: use openclaw tool.");
       const authorizedTools = filterToolsByPolicy(
         [createGatewayTool(), ...createOpenClawDelegateToolsForRun({ sessionAgentId: "main" })],
