@@ -79,7 +79,11 @@ suite.define(() => {
             .toContain("start the synthetic thread");
           expect(await page.locator("openclaw-chat-pane").count()).toBe(0);
           await captureUiProof(suite, page, `instant-${incognito}-pending-chrome.png`);
-          expect(await page.locator(".chat-pane__header").isVisible()).toBe(true);
+          expect(
+            await page
+              .locator(incognito ? ".chat-pane__header" : ".agent-chat__header--mobile")
+              .isVisible(),
+          ).toBe(true);
           const followUpComposer = page.locator(
             ".agent-chat__composer-combobox:visible textarea:not(.new-session-page__message)",
           );

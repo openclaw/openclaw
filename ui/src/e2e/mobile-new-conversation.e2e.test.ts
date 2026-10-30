@@ -245,6 +245,53 @@ suite.define(() => {
     });
   });
 
+  it("shows the chat header while creating a session", async () => {
+    await suite.withPage(mobile, async ({ page }) => {
+      const gateway = await installScenario(page);
+      await page.goto(suite.server.baseUrl + "new?agent=research");
+      await page.locator(".new-session-page__message").fill("Help me plan the next release.");
+      const dir =
+        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+          ? createControlUiE2eArtifactDir("mobile-creation-navigation")
+          : null;
+      const toggle = navigationDrawerToggle(page);
+      const appearance = async (name: string) => {
+        if (dir) {
+          const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [toggle], {
+            animations: "disabled",
+          });
+          await writeFile(path.join(dir, name + ".png"), frame.png);
+        }
+        return toggle.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return {
+            size: [style.width, style.height],
+            border: style.border,
+            radius: style.borderRadius,
+            background: style.backgroundColor,
+            glyph: element.querySelector("svg path")?.getAttribute("d"),
+          };
+        });
+      };
+      const draft = await appearance("draft");
+      await gateway.deferNext("sessions.create");
+      await page.locator(".new-session-page__start-submit").tap();
+      await gateway.waitForRequest("sessions.create");
+      await page.locator("openclaw-pending-session-create").waitFor();
+      const pending = await appearance("pending");
+      const pendingCreate = page.locator("openclaw-pending-session-create");
+      expect(await pendingCreate.locator(".agent-chat__header--mobile").count()).toBe(1);
+      expect(await pendingCreate.locator(".chat-pane__header").count()).toBe(0);
+      await gateway.resolveDeferred("sessions.create");
+      await pendingCreate.waitFor({ state: "detached" });
+      const chat = await appearance("chat");
+      // The draft topbar and both chat headers present one control. The settled
+      // header geometry across admission is asserted in the instant-thread suite.
+      expect(draft).toEqual(chat);
+      expect(pending).toEqual(chat);
+    });
+  });
+
   it.each([
     { state: "denied", team: false },
     { state: "disconnected", team: false },
