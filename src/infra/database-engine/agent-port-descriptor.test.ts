@@ -41,14 +41,19 @@ it("backs up a schema-36 store without requiring the later cold archive chunk ta
   ).toBeUndefined();
 });
 
-it("keeps the cold archive chunk table when backing up a schema-37 store", async () => {
-  const descriptor = await loadAgentPortDescriptor(37);
-  const table = "session_transcript_cold_archive_chunks";
-  expect(descriptor.version).toBe(37);
-  expect(descriptor.tables.map(({ name }) => name)).toContain(table);
-  expect(descriptor.expectedCatalog.some((fact) => fact.table === table)).toBe(true);
-  expect(descriptor.preData).toContain(`CREATE TABLE "${table}"`);
-});
+it.each([37, 38])(
+  "keeps cold archive chunks and the prior payload CHECK in schema %s backups",
+  async (version) => {
+    const descriptor = await loadAgentPortDescriptor(version);
+    const table = "session_transcript_cold_archive_chunks";
+    expect(descriptor.version).toBe(version);
+    expect(descriptor.tables.map(({ name }) => name)).toContain(table);
+    expect(descriptor.expectedCatalog.some((fact) => fact.table === table)).toBe(true);
+    expect(descriptor.preData).toContain(`CREATE TABLE "${table}"`);
+    expect(descriptor.preData).not.toContain('"event_json" IS NULL AND "event_zstd" IS NULL');
+    expect(descriptor.sqlite).not.toContain("event_json IS NULL AND event_zstd IS NULL");
+  },
+);
 
 it.each([21, currentVersion])(
   "migrates only the private v%s copy, retiring legacy usage partitions",
@@ -135,4 +140,21 @@ it("preserves raw trajectories and refuses malformed compressed values", async (
   expect(() =>
     decode({ ...legacy, event_codec: "br", event_payload: "not a blob", event_utf8_bytes: 20 }),
   ).toThrow("Invalid compressed trajectory payload");
+});
+
+it("ports retained cold navigation without decoding absent payloads", async () => {
+  const descriptor = await loadAgentPortDescriptor();
+  const row = {
+    session_id: "cold",
+    seq: 0,
+    event_json: null,
+    event_zstd: null,
+    event_utf8_bytes: 123,
+    navigation_json: '{"version":1}',
+    navigation_type: "message",
+  };
+  expect(descriptor.decodeSqlite!.transcript_events!(row)).toBe(row);
+  const omitted = descriptor.projections!.flatMap(({ tables }) => tables);
+  expect(omitted).not.toContain("session_transcript_active_events");
+  expect(omitted).not.toContain("session_transcript_index_state");
 });

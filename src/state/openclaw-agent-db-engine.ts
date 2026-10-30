@@ -24,7 +24,12 @@ import {
   withoutAgentPostgresColdArchiveChunks,
 } from "./openclaw-agent-cold-archive-chunks-schema.js";
 import {
+  agentColdNavigationPostgresMigration,
+  withoutAgentPostgresColdNavigation,
+} from "./openclaw-agent-cold-navigation-schema.js";
+import {
   AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION,
+  AGENT_COLD_NAVIGATION_SCHEMA_VERSION,
   AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
   AGENT_MEMORY_REVISION_SCHEMA_VERSION,
   AGENT_VECTOR_DECODER_SCHEMA_VERSION,
@@ -100,7 +105,8 @@ export function admitAgentEngineSearchExtensions(
 }
 
 const agentPostgresSql = `${agentPostgresRuntime.sql}\n${agentSearchPostgresRuntime.sql}`;
-const agentPostgresV36Sql = withoutAgentPostgresColdArchiveChunks(agentPostgresSql);
+const agentPostgresV38Sql = withoutAgentPostgresColdNavigation(agentPostgresSql);
+const agentPostgresV36Sql = withoutAgentPostgresColdArchiveChunks(agentPostgresV38Sql);
 const agentPostgresV35Sql = withLegacyAgentPostgresMemoryPaths(agentPostgresV36Sql);
 const agentPostgresV34Sql = withLegacyPostgresIndexOrdering(
   agentPostgresV35Sql,
@@ -258,11 +264,11 @@ export const agentEngineSchema: StoreSchema = {
         postgresVectorSearchVersion: 2,
       },
       schema: {
-        postgres: agentPostgresSql,
+        postgres: agentPostgresV38Sql,
         postgresVectorDecoderVersion: 2,
         postgresVectorSearchVersion: 2,
       },
-      sql: `${agentColdArchiveChunksPostgresMigration(agentPostgresSql)}
+      sql: `${agentColdArchiveChunksPostgresMigration(agentPostgresV38Sql)}
         UPDATE schema_meta
         SET schema_version = ${AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION},
           app_version = '${VERSION.replaceAll("'", "''")}',
@@ -272,12 +278,12 @@ export const agentEngineSchema: StoreSchema = {
     {
       version: AGENT_TEXT_SEARCH_SCHEMA_VERSION,
       fromSchema: {
-        postgres: agentPostgresSql,
+        postgres: agentPostgresV38Sql,
         postgresVectorDecoderVersion: 2,
         postgresVectorSearchVersion: 2,
       },
       schema: {
-        postgres: agentPostgresSql,
+        postgres: agentPostgresV38Sql,
         postgresVectorDecoderVersion: 2,
         postgresVectorSearchVersion: 2,
         postgresTextSearchVersion: 2,
@@ -285,6 +291,27 @@ export const agentEngineSchema: StoreSchema = {
       sql: `${AGENT_TEXT_SEARCH_POSTGRES_SQL}
         UPDATE schema_meta
         SET schema_version = ${AGENT_TEXT_SEARCH_SCHEMA_VERSION},
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';`,
+    },
+    {
+      version: AGENT_COLD_NAVIGATION_SCHEMA_VERSION,
+      fromSchema: {
+        postgres: agentPostgresV38Sql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+        postgresTextSearchVersion: 2,
+      },
+      schema: {
+        postgres: agentPostgresSql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+        postgresTextSearchVersion: 2,
+      },
+      sql: `${agentColdNavigationPostgresMigration(agentPostgresSql)}
+        UPDATE schema_meta
+        SET schema_version = ${AGENT_COLD_NAVIGATION_SCHEMA_VERSION},
           app_version = '${VERSION.replaceAll("'", "''")}',
           updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
         WHERE meta_key = 'primary';`,

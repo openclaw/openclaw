@@ -445,6 +445,7 @@ export async function migrateLegacyMediaPersistence(
     preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
     integrityCheck?: "quick" | "full";
     onPreparedRepairTargets?: (targets: readonly AgentDatabaseMigrationTarget[]) => void;
+    onAdmittedTargets?: (targets: readonly AgentDatabaseMigrationTarget[]) => void;
     isSessionEntryStatePrepared?: (target: AgentDatabaseMigrationTarget) => boolean;
     prepareSessionEntryState?: (
       target: AgentDatabaseMigrationTarget,
@@ -463,6 +464,7 @@ export async function migrateLegacyMediaPersistence(
   const refusedAgentDatabasePaths: string[] = [];
   const recoveredAgentDatabasePaths = new Set<string>();
   const preparedRepairTargets: AgentDatabaseMigrationTarget[] = [];
+  const admittedTargets: AgentDatabaseMigrationTarget[] = [];
   try {
     const preparedDiscovery = prepareAgentDatabaseMigrationDiscovery({
       env,
@@ -601,6 +603,9 @@ export async function migrateLegacyMediaPersistence(
             `Migrated canonical transcript archive media in ${pathname}: ${result.rewrittenArchives} archive(s).`,
           );
         }
+        if (result.finalVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
+          admittedTargets.push(entry);
+        }
         // Only a version-only advance postpones the following Doctor repairs.
         const preparedForRepair = !result.deferred || !schemaAdvanced;
         if (preparedForRepair) {
@@ -673,6 +678,7 @@ export async function migrateLegacyMediaPersistence(
     leaseLoss ??= createUpdateErrorFact("media-persistence", error, env).leaseLoss;
   }
   params.onPreparedRepairTargets?.(preparedRepairTargets);
+  params.onAdmittedTargets?.(admittedTargets);
   return {
     changes,
     warnings,

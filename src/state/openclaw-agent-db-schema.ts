@@ -49,8 +49,10 @@ import {
   canonicalSessionValidationSchemaSql,
 } from "./openclaw-agent-canonical-validation-schema.js";
 import { AGENT_COLD_ARCHIVE_CHUNKS_SQL } from "./openclaw-agent-cold-archive-chunks-schema.js";
+import { migrateAgentColdNavigationInTransaction } from "./openclaw-agent-cold-navigation-schema.js";
 import {
   AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION,
+  AGENT_COLD_NAVIGATION_SCHEMA_VERSION,
   AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
   AGENT_MEDIA_SCHEMA_VERSION,
   AGENT_MEMORY_REVISION_SCHEMA_VERSION,
@@ -264,7 +266,7 @@ function migrateAgentStorageInTransaction(
     );
   }
   maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
-  migrateTranscriptPayloadStorageInTransaction(db);
+  migrateTranscriptPayloadStorageInTransaction(db, schemaSql);
   maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
   migrateMemoryIndexStorage(db, {
     renewAuthority: maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent,
@@ -417,6 +419,9 @@ function ensureAgentSchema(
         }
         if (crossesVersion(AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION)) {
           db.exec(AGENT_COLD_ARCHIVE_CHUNKS_SQL);
+        }
+        if (crossesVersion(AGENT_COLD_NAVIGATION_SCHEMA_VERSION)) {
+          migrateAgentColdNavigationInTransaction(db);
         }
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.

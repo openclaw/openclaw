@@ -57,8 +57,14 @@ export class ReadOnlySqliteTranscriptReader {
     }
     // Enumerate the schema-stable events table, not post-ship sessions columns.
     // Materialize IDs so enumeration cannot hold a read transaction across repairs.
+    // Cold archives own their payloads; retained navigation is outside these repairs.
+    const hotOnly = tableExists(this.database, "session_transcript_cold_archives")
+      ? " WHERE session_id NOT IN (SELECT session_id FROM session_transcript_cold_archives)"
+      : "";
     const rows = this.database
-      .prepare("SELECT DISTINCT session_id FROM transcript_events ORDER BY session_id ASC")
+      .prepare(
+        `SELECT DISTINCT session_id FROM transcript_events${hotOnly} ORDER BY session_id ASC`,
+      )
       .all();
     return rows.flatMap((row) => (typeof row.session_id === "string" ? [row.session_id] : []));
   }

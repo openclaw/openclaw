@@ -5,6 +5,7 @@ import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
   selectActiveTranscriptEventRows,
   parseActiveTranscriptMessageRow,
+  readProjectionTranscriptPayload,
   readSnapshotEventRows,
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEventPage,
@@ -19,7 +20,6 @@ import {
   resolveTranscriptBoundaryWindow,
 } from "./session-accessor.sqlite-reset-window.js";
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "./session-accessor.sqlite-visible-cursor.js";
-import { readTranscriptPayload } from "./transcript-payload.js";
 
 /** Reads a bounded active-path tail while preserving transcript line and byte caps. */
 export function readRecentSessionTranscriptMessageEventsFromProjection(
@@ -72,7 +72,7 @@ export function withRecentSessionTranscriptActiveEventsInSnapshot<T>(
 ): T {
   const limit = resolveIntegerOption(maxEvents, 0, { min: 0 });
   const query = selectActiveTranscriptEventRows(projection.database)
-    .select(["event.event_json", "event.event_zstd", "event.event_utf8_bytes"])
+    .select(["event.seq", "event.event_json", "event.event_zstd", "event.event_utf8_bytes"])
     .where("active.session_id", "=", projection.resolved.sessionId)
     .where("active.context_eligible", "=", 1)
     .orderBy("active.active_position", "desc")
@@ -90,7 +90,7 @@ export function withRecentSessionTranscriptActiveEventsInSnapshot<T>(
       // Finish stepping before reporting JSON errors: SQL and payload failures take precedence,
       // followed by the oldest malformed row in the selected tail.
       for (const row of iterateSqliteQuerySync(projection.database.db, query)) {
-        const eventJson = readTranscriptPayload(row);
+        const eventJson = readProjectionTranscriptPayload(projection, row, row.seq);
         let event: TranscriptEvent;
         try {
           // SAFETY: Transcript writers persist TranscriptEvent objects; parse failures are handled here.
@@ -191,7 +191,9 @@ export function readSessionTranscriptBoundedMessageTailPageFromProjection(
     .sort((left, right) => left.message_position - right.message_position)
     .flatMap((row) => {
       const payload = payloads.get(row.event_seq);
-      return payload === undefined ? [] : [parseActiveTranscriptMessageRow({ ...row, ...payload })];
+      return payload === undefined
+        ? []
+        : [parseActiveTranscriptMessageRow({ ...row, ...payload }, projection)];
     });
   return {
     ...checked,

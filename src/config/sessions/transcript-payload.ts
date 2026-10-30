@@ -413,6 +413,23 @@ function navigationProjection(
   report: Expression<string>,
   originalEvent: Expression<string>,
 ): RawBuilder<string | null> {
+  if (isPostgresSqlConnection(database)) {
+    return /* kysely-allow-raw: the same stored navigation envelope uses PostgreSQL native JSON and byte accounting. */ sql<
+      string | null
+    >`CASE
+      WHEN ${jsonValid(database, originalEvent)} AND ${jsonValid(database, report)} THEN CASE
+      WHEN json_typeof(${originalEvent}::json) != 'object'
+        OR coalesce(json_typeof(${originalEvent}::json -> 'message'), 'null') NOT IN ('object', 'null') THEN NULL
+      ELSE json_build_object('version', 1,
+        'report', ${report}::json,
+        'navigation', ${projectTranscriptPayloadNavigationSql(database, event)}::json,
+        'reset', ${projectResetBoundaryNavigationSql(database, originalEvent)}::json,
+        'model', ${projectModelContextNavigationSql(database, event)}::json,
+        'modelBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(0))}),
+        'modelWithoutCheckpointBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(1))}),
+        'withoutCustomDataBytes', octet_length(${jsonRemovePaths(database, event, [sql.lit("$.data")])}))::text
+      END ELSE NULL END`;
+  }
   const metadata = jsonObjectValue(database, {
     ...Object.fromEntries(
       Object.entries(NAVIGATION_ENVELOPE).map(([key, value]) => [
@@ -453,7 +470,7 @@ const navigationReader = createSqliteQueryCache((database: EngineConnection) =>
         )
         .select(["input.event_json", "input.report_json"])
         .select((eb) =>
-          supportsNodeSqliteJsonb()
+          !isPostgresSqlConnection(database) && supportsNodeSqliteJsonb()
             ? /* kysely-allow-raw: reuse native binary JSON only after the existing strict text validation. */ sql<
                 string | Uint8Array
               >`CASE WHEN json_valid(${eb.ref("input.event_json")})
@@ -464,7 +481,7 @@ const navigationReader = createSqliteQueryCache((database: EngineConnection) =>
         );
       const admitted = /* kysely-allow-raw: reject oversized metadata natively before returning its text to JavaScript. */ sql<
         string | null
-      >`CASE WHEN json_valid(metadata.navigation_json)
+      >`CASE WHEN ${jsonValid(database, sql.ref("metadata.navigation_json"))}
           AND octet_length(metadata.navigation_json) <= ${MAX_NAVIGATION_BYTES}
           THEN metadata.navigation_json ELSE NULL END`;
       return (
@@ -496,6 +513,14 @@ const navigationReader = createSqliteQueryCache((database: EngineConnection) =>
   ),
 );
 
+const identityPayload = (eventJson: string, utf8Bytes: number | null) => ({
+  ...deriveTranscriptPredicateFields(eventJson),
+  event_json: eventJson,
+  event_zstd: null,
+  event_utf8_bytes: utf8Bytes,
+  navigation_json: null,
+});
+
 /** Prepare canonical UTF-8 bytes and native query metadata before publishing a transcript row. */
 export function prepareTranscriptPayload(
   database: EngineConnection,
@@ -505,13 +530,7 @@ export function prepareTranscriptPayload(
 ): TranscriptPayloadRecord {
   const rawBytes = Buffer.byteLength(eventJson, "utf8");
   const utf8 = storageEncoding === "UTF-8";
-  const identity: TranscriptPayloadRecord = {
-    ...deriveTranscriptPredicateFields(eventJson),
-    event_json: eventJson,
-    event_zstd: null,
-    event_utf8_bytes: utf8 ? rawBytes : null,
-    navigation_json: null,
-  };
+  const identity = identityPayload(eventJson, utf8 ? rawBytes : null);
   // PostgreSQL rows never carry event_zstd; TOAST owns their physical compression.
   if (isPostgresSqlConnection(database)) {
     return identity;
@@ -573,6 +592,37 @@ export function prepareTranscriptPayload(
     return identity;
   }
   return { ...identity, event_json: null, event_zstd: compressed, navigation_json: navigation };
+}
+
+/** Cold payloads keep the same native navigation; exceptional imported bytes remain inline. */
+export function prepareColdTranscriptPayload(
+  database: EngineConnection,
+  eventJson: string,
+): TranscriptPayloadRecord {
+  const rawBytes = Buffer.byteLength(eventJson, "utf8");
+  const utf8 = readTranscriptStorageEncoding(database) === "UTF-8";
+  const payload = identityPayload(eventJson, utf8 ? rawBytes : null);
+  if (
+    !utf8 ||
+    rawBytes > MAX_COMPRESSED_EVENT_BYTES ||
+    eventJson.includes("\\u") ||
+    eventJson.includes("\0") ||
+    !eventJson.isWellFormed()
+  ) {
+    return payload;
+  }
+  let reportJson: string;
+  try {
+    const event: unknown = JSON.parse(eventJson);
+    if (findSessionTranscriptHeader([event])) {
+      return payload;
+    }
+    reportJson = JSON.stringify(projectSessionTranscriptReportFacts(event));
+  } catch {
+    return payload;
+  }
+  const navigation = navigationReader(database)({ eventJson, reportJson })?.navigation_json;
+  return navigation ? { ...payload, event_json: null, navigation_json: navigation } : payload;
 }
 
 export function transcriptEventNavigationSql(

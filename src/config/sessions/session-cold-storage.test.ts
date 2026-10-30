@@ -174,7 +174,7 @@ async function archiveFixture(fixture: Fixture) {
     expect(
       rows(fixture, `SELECT * FROM ${table} WHERE session_id = ?`, historicalId),
       table,
-    ).toEqual([]);
+    ).not.toHaveLength(0);
   }
   const archivePath = resolveSessionColdArchivePath(
     fixture.scope.storePath,
@@ -389,6 +389,20 @@ describe("cold transcript storage workers", () => {
       getNodeSqliteKysely<DB>(database)
         .selectFrom("transcript_events")
         .select("session_id")
+        .where((eb) =>
+          eb.not(
+            eb.exists(
+              eb
+                .selectFrom("session_transcript_cold_archives")
+                .select("session_id")
+                .whereRef(
+                  "session_transcript_cold_archives.session_id",
+                  "=",
+                  "transcript_events.session_id",
+                ),
+            ),
+          ),
+        )
         .distinct(),
     ).rows;
     expect(remaining).toHaveLength(1);
@@ -398,7 +412,12 @@ describe("cold transcript storage workers", () => {
       database.prepare("SELECT COUNT(*) AS count FROM session_transcript_cold_archives").get(),
     ).toEqual({ count: 1 });
     await expectCounts(runSessionColdStorageMaintenance({ config }));
-    expect(database.prepare("SELECT COUNT(*) AS count FROM transcript_events").get()).toEqual({
+    expect(
+      database
+        .prepare(`SELECT COUNT(*) AS count FROM transcript_events
+      WHERE session_id NOT IN (SELECT session_id FROM session_transcript_cold_archives)`)
+        .get(),
+    ).toEqual({
       count: 0,
     });
     expect(
@@ -737,6 +756,7 @@ describe("cold transcript storage workers", () => {
       const preparedDeletion = await archiveWorkers.materializeSessionStateDeletePlans([hotPlan!]);
       const archived =
         storage === "sqlite" ? await embedFixtureArchive(fixture) : await archiveFixture(fixture);
+      const navigation = transcriptRows(fixture, historicalId);
       if (storage === "missing" || storage === "corrupt") {
         if (storage === "missing") {
           await fs.unlink(archived.archivePath);
@@ -749,7 +769,7 @@ describe("cold transcript storage workers", () => {
         expect(readSessionColdTranscript(fixture.database(), historicalId)).toEqual(
           archived.descriptor,
         );
-        expect(transcriptRows(fixture, historicalId)).toEqual([]);
+        expect(transcriptRows(fixture, historicalId)).toEqual(navigation);
         await fs.writeFile(archived.archivePath, archived.bytes);
       }
       expect(
@@ -782,7 +802,7 @@ describe("cold transcript storage workers", () => {
         hostSql.restore();
       }
       expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
-      expect(transcriptRows(fixture, historicalId)).toEqual([]);
+      expect(transcriptRows(fixture, historicalId)).toEqual(navigation);
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       closeOpenClawAgentDatabasesForTest();
       let inspection: ReturnType<typeof openNodeSqliteDatabase> | undefined;

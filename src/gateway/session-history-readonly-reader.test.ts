@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
@@ -18,6 +19,14 @@ import {
   markCanonicalSessionValidationPending,
   setCanonicalSqliteSessionMainKey,
 } from "../config/sessions/session-canonical-key.js";
+import { readSessionColdChunks } from "../config/sessions/session-cold-storage-chunks.js";
+import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
+import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
+import {
+  restoreSessionColdTranscript,
+  runSessionColdStorageMaintenance,
+} from "../config/sessions/session-cold-storage.js";
+import { maintenanceConfig } from "../config/sessions/session-cold-storage.test-support.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { withSessionTranscriptProjectionReceipt } from "../config/sessions/session-transcript-projection-facts-scope.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
@@ -29,7 +38,10 @@ import {
   withScopedOpenClawAgentDatabaseReadOnly,
 } from "../state/openclaw-agent-db-readonly-scope.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../state/openclaw-agent-db-validation-cache.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { expectMessageIds, messageEvent } from "./session-history-events.test-support.js";
@@ -89,6 +101,133 @@ async function withHistory(
     });
   });
 }
+
+it("pages retained cold branches and resets without changing cursor identity or restoring payloads", async () => {
+  await withHistory(async ({ target, database, reader }) => {
+    const transcript = target.transcript;
+    await replaceTranscriptEvents(transcript, [
+      { type: "session", version: 3, id: transcript.sessionId },
+      messageEvent("old-user", { role: "user", content: "Old question" }),
+      messageEvent("old-answer", { role: "assistant", content: "Old answer" }, "old-user"),
+      messageEvent("off-path", { role: "assistant", content: "Other branch" }, "old-user"),
+      messageEvent("kept-user", { role: "user", content: "Keep this" }, "old-answer"),
+      messageEvent("kept-answer", { role: "assistant", content: "雪🦞".repeat(2048) }, "kept-user"),
+      { type: "reset", id: "reset", parentId: "kept-answer", firstKeptEntryId: "kept-user" },
+      messageEvent("new-user", { role: "user", content: "New question" }, "reset"),
+      messageEvent("new-answer", { role: "assistant", content: "New answer" }, "new-user"),
+      messageEvent(
+        "worker-input",
+        {
+          role: "user",
+          content: "Internal progress",
+          idempotencyKey: "worker-run:user",
+          provenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+            sourceRole: "subagent",
+          },
+        },
+        "new-answer",
+      ),
+      messageEvent(
+        "worker-answer",
+        {
+          role: "assistant",
+          content: "Internal acknowledgement",
+          __openclaw: { runId: "worker-run" },
+        },
+        "worker-input",
+      ),
+      messageEvent(
+        "human-steer",
+        {
+          role: "user",
+          content: "Explain the result",
+          __openclaw: { steerTargetRunId: "worker-run" },
+        },
+        "worker-answer",
+      ),
+      messageEvent(
+        "human-answer",
+        {
+          role: "assistant",
+          content: "Visible result",
+          __openclaw: { runId: "worker-run" },
+        },
+        "human-steer",
+      ),
+    ]);
+    await waitForSessionTranscriptProjection(transcript);
+    const options = { offset: 0, maxMessages: 20, maxBytes: 65_536, captureReadWindow: true };
+    const page = reader.readHistoryEventPage(options);
+    expect(page.events.map(({ event }) => event.id)).toEqual([
+      "kept-user",
+      "kept-answer",
+      "reset",
+      "new-user",
+      "new-answer",
+      "worker-input",
+      "worker-answer",
+      "human-steer",
+      "human-answer",
+    ]);
+    const around = {
+      messageId: "old-answer",
+      direction: "older" as const,
+      maxMessages: 2,
+      maxBytes: 65_536,
+    };
+    const historical = await reader.readSessionMessagesAroundIdWithStatsAsync(transcript, around);
+    expectMessageIds(historical.messages, ["old-user", "old-answer"]);
+    const delta = reader.readTranscriptDisplayDelta({ maxEvents: 20, maxBytes: 65_536 });
+    if (delta.kind !== "page") {
+      throw new Error("Expected initial display delta");
+    }
+    await replaceSessionEntry(transcript, { sessionId: "successor", updatedAt: 1 });
+    runOpenClawAgentWriteTransaction(({ db }) => {
+      db.prepare(
+        "UPDATE session_windows SET previous_session_id = NULL, updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+      ).run(transcript.sessionId);
+    }, target.database);
+    expect(
+      await runSessionColdStorageMaintenance({ config: maintenanceConfig(database.path) }),
+    ).toMatchObject({ archivedTranscripts: 1 });
+    const archive = readSessionColdTranscript(database.db, transcript.sessionId);
+    expect(archive).toBeDefined();
+    const visibility = createReadonlySessionHistoryReader(target).subagentCoordination;
+    expect(visibility.isSubagentRunMessage("worker-run", 7)).toBe(true);
+    expect(visibility.isSubagentRunMessage("worker-run", 9)).toBe(false);
+    expect(reader.readHistoryEventPage(options)).toEqual(page);
+    expect(reader.readTranscriptDisplayDelta({ maxEvents: 20, maxBytes: 65_536 })).toEqual(delta);
+    expect(await reader.readSessionMessagesAroundIdWithStatsAsync(transcript, around)).toEqual(
+      historical,
+    );
+    expect(reader.readTranscriptDisplayDelta({ cursor: delta.cursor })).toMatchObject({
+      kind: "page",
+      events: [],
+    });
+    expect(await reader.readSessionMessageByIdAsync(transcript, "off-path")).toMatchObject({
+      found: false,
+    });
+    expect(readSessionColdTranscript(database.db, transcript.sessionId)).toEqual(archive);
+    const chunk = readSessionColdChunks(database.db, archive!)[0] ?? archive!;
+    const archivePath = resolveSessionColdArchivePath(database.path, chunk.archive_name);
+    const original = await fs.readFile(archivePath);
+    try {
+      await fs.writeFile(archivePath, Buffer.from("corrupt synthetic chunk"));
+      expect(() => reader.readHistoryEventPage(options)).toThrow("failed verification");
+      expect(readSessionColdTranscript(database.db, transcript.sessionId)).toEqual(archive);
+    } finally {
+      await fs.writeFile(archivePath, original);
+    }
+    await restoreSessionColdTranscript(transcript);
+    expect(reader.readHistoryEventPage(options)).toEqual(page);
+    expect(reader.readTranscriptDisplayDelta({ cursor: delta.cursor })).toMatchObject({
+      kind: "page",
+      events: [],
+    });
+  });
+});
 
 it.each(["entry", "actor"] as const)(
   "reuses %s accounting facts and reloads them after a transcript write",

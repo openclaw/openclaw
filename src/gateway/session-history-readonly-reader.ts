@@ -139,6 +139,8 @@ export function createReadonlySessionHistoryReader(
           projection.resolveVisibleHistory = resolveWorkerVisibleHistoryProjection;
           return read(projection);
         },
+        undefined,
+        { allowCold: true },
       ),
     );
     if (result.kind === "unavailable") {

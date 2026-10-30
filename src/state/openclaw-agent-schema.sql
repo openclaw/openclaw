@@ -460,6 +460,12 @@ CREATE TABLE IF NOT EXISTS transcript_events (
       AND length(event_zstd) BETWEEN 1 AND 4194304
       AND navigation_json IS NOT NULL
     )
+    OR (
+      event_json IS NULL AND event_zstd IS NULL
+      AND event_utf8_bytes IS NOT NULL
+      AND event_utf8_bytes BETWEEN 1 AND 4194304
+      AND navigation_json IS NOT NULL
+    )
   ),
   CHECK (
     navigation_json IS NULL OR CASE WHEN json_valid(navigation_json) THEN coalesce(
