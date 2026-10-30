@@ -32,7 +32,7 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
 });
 
-it.skipIf(!connection).each(["ambient", "pinned", "temporary"])(
+it.skipIf(!connection).each(["ambient", "pinned", "temporary", "isolated"])(
   "exec writes to its own selected state store (%s)",
   async (mode) => {
     const root = directories.make("agent-exec-postgres-");
@@ -51,7 +51,15 @@ it.skipIf(!connection).each(["ambient", "pinned", "temporary"])(
     await fs.writeFile(configPath, JSON.stringify(config));
     const client = new Client({ connectionString: connection });
     await client.connect();
+    const countNamespaces = async () =>
+      (
+        await client.query<{ count: number }>(
+          "SELECT count(*)::int AS count FROM pg_namespace WHERE starts_with(nspname, $1)",
+          [schemaPrefix],
+        )
+      ).rows[0]?.count;
     try {
+      expect(await countNamespaces()).toBe(0);
       await withEnvAsync(
         {
           VITEST: undefined,
@@ -61,7 +69,7 @@ it.skipIf(!connection).each(["ambient", "pinned", "temporary"])(
           EXEC_CONFORMANCE_DSN: connection,
         },
         async () => {
-          const retained = mode !== "temporary";
+          const retained = mode === "ambient" || mode === "pinned";
           if (retained) {
             await withDatabaseEngineSelection(
               await resolveDatabaseEngineSelection(config),
@@ -72,13 +80,15 @@ it.skipIf(!connection).each(["ambient", "pinned", "temporary"])(
             );
           }
           setRuntimeConfigSnapshot(config);
-          const before = await client.query("SELECT nspname FROM pg_namespace ORDER BY nspname");
           const result = await runAgentExecWithMock(
             "write a state marker",
             {
               cwd: root,
               ...(retained ? { stateDir: root } : {}),
               ...(mode === "pinned" ? { config: configPath } : {}),
+              ...(mode === "isolated"
+                ? { isolated: true, configOverride: [JSON.stringify(config)] }
+                : {}),
             },
             createTestRuntime(),
             async () => {
@@ -111,13 +121,16 @@ it.skipIf(!connection).each(["ambient", "pinned", "temporary"])(
                     )
                     .get(),
                 ).toEqual({ value_json: '"persisted"' });
-                expect(
-                  (await client.query("SELECT nspname FROM pg_namespace ORDER BY nspname")).rows,
-                ).toEqual(before.rows);
               }
               return { payloads: [{ text: "persisted" }], meta: { durationMs: 1 } };
             },
           );
+          const namespaceCount = await countNamespaces();
+          if (retained) {
+            expect(namespaceCount).toBeGreaterThan(0);
+          } else {
+            expect(namespaceCount).toBe(0);
+          }
           expect(result.envelope.error).toBeUndefined();
           expect(result.exitCode).toBe(0);
         },
