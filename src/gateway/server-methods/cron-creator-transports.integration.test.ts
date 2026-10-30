@@ -18,7 +18,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
+  withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
@@ -28,7 +31,9 @@ import {
   revokeMcpLoopbackClientGrant,
 } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
+import { createOperatorClient } from "../server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { resolveGatewayChatCronCreatorAuthorityAdmission } from "./cron-creator-authority-admission.js";
 import {
@@ -165,34 +170,64 @@ function addJob(
   });
 }
 
-it("preserves ordinary restricted caller creation without management admission", async () => {
-  const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
-  client.internal = {};
-  expect(admission("restricted-creator", client)).toBeUndefined();
-  await inRun(
-    "restricted-creator",
-    undefined,
-    boundTo(fixture, async (_identity, admitted) => {
-      const tools = await createCreatorTransportTools({
-        transport: "embedded",
-        config,
-        admitted,
-        senderIsOwner: true,
-      });
-      await addJob(tools, "Restricted caller job", {
-        payload: { ...timedPayload },
-      });
-      const jobs = await fixture.read();
-      expect(jobs).toMatchObject([
-        {
-          ...ownedJob,
-          payload: { toolsAllow: ["*"], timeoutSeconds: 0 },
-        },
-      ]);
-      expect(jobs[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
-    }),
-  );
-});
+it.each(["operator.cron", "operator.write"])(
+  "admits %s automation creation without owner authority",
+  async (scope) => {
+    const profile = ensureProfileForEmail("scoped-cron@example.test");
+    const client = createOperatorClient({ profileId: profile.id, scopes: [scope] });
+    client.internal = { authenticatedOperator: true };
+    client.authPolicy = captureGatewayAuthPolicy(config, { role: "operator", authMethod: "token" });
+    const original = expectDefined(
+      await captureGatewayOperatorRunAuthority({
+        client,
+        context: fixture.context,
+        sourceAuthority: null,
+      }),
+      "authenticated source",
+    );
+    const creatorAdmission = expectDefined(
+      admission("restricted-creator", client),
+      "cron admission",
+    );
+    expect(creatorAdmission.managementEntitlement).toBeUndefined();
+    expect(creatorAdmission.callerOrigin).toEqual({ kind: "unknown" });
+    try {
+      await withPluginRuntimeGatewayRequestScope(
+        { client, context: fixture.context, isWebchatConnect: () => false },
+        () =>
+          inRun(
+            "restricted-creator",
+            creatorAdmission,
+            boundTo(fixture, async (_identity, admitted, creator) => {
+              const tools = await createCreatorTransportTools({
+                transport: "embedded",
+                config,
+                admitted,
+                creator,
+                senderIsOwner: false,
+              });
+              const result = await addJob(tools, "Restricted caller job", {
+                payload: { ...timedPayload },
+              });
+              expect(result).toHaveProperty("details.id");
+              const jobs = await fixture.read();
+              expect(jobs).toMatchObject([
+                {
+                  ...ownedJob,
+                  payload: { toolsAllow: ["*"], timeoutSeconds: 0 },
+                },
+              ]);
+              expect(jobs[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
+              expect(jobs[0]?.operatorSource?.source.snapshot.scopes).toEqual([scope]);
+            }),
+            original.authority,
+          ),
+      );
+    } finally {
+      original.release();
+    }
+  },
+);
 it.each([
   ["cli", "local", "device"],
   ["embedded", "local", "device"],

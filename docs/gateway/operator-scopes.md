@@ -29,18 +29,33 @@ require the `node` role.
 
 ## Scope levels
 
-| Scope                     | Meaning                                                                                                                                                       |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `operator.read`           | Read-only status, lists, catalog, logs, session reads, retained audit and execution-identity diagnostics, and other non-mutating calls.                       |
-| `operator.sessions.read`  | Read visible sessions, history, and session metadata without general Gateway read access.                                                                     |
-| `operator.sessions.write` | Read visible sessions, organize owned sessions, and start or continue the authenticated person's own work.                                                    |
-| `operator.write`          | Mutating operator actions: sending messages, invoking tools, updating talk/voice settings, node command relay. Also satisfies `operator.read`.                |
-| `operator.admin`          | Administrative access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, reserved namespaces, and high-risk approvals. |
-| `operator.pairing`        | Device and node pairing management: list, approve, reject, remove, rotate, revoke.                                                                            |
-| `operator.approvals`      | Exec and plugin approval APIs.                                                                                                                                |
-| `operator.questions`      | Listing, reading, answering, and resolving interactive questions.                                                                                             |
-| `operator.talk`           | Creating, steering, and closing Talk sessions without general Gateway write access. `operator.write` also satisfies this scope.                               |
-| `operator.talk.secrets`   | Reading Talk configuration with secrets included.                                                                                                             |
+| Scope                     | Meaning                                                                                                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `operator.read`           | Read-only status, lists, catalog, logs, session reads, retained audit and execution-identity diagnostics, and other non-mutating calls.                             |
+| `operator.sessions.read`  | Read visible sessions, history, and session metadata without general Gateway read access.                                                                           |
+| `operator.sessions.write` | Read visible sessions, organize owned sessions, and start or continue the authenticated person's own work.                                                          |
+| `operator.write`          | Mutating operator actions: sending messages, invoking tools, updating talk/voice settings, node command relay. Also satisfies `operator.read`.                      |
+| `operator.cron`           | Create and manage conversation-owned automations through an authenticated agent turn. Included in `operator.write`; does not grant global scheduler administration. |
+| `operator.admin`          | Administrative access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, reserved namespaces, and high-risk approvals.       |
+| `operator.pairing`        | Device and node pairing management: list, approve, reject, remove, rotate, revoke.                                                                                  |
+| `operator.approvals`      | Exec and plugin approval APIs.                                                                                                                                      |
+| `operator.questions`      | Listing, reading, answering, and resolving interactive questions.                                                                                                   |
+| `operator.talk`           | Creating, steering, and closing Talk sessions without general Gateway write access. `operator.write` also satisfies this scope.                                     |
+| `operator.talk.secrets`   | Reading Talk configuration with secrets included.                                                                                                                   |
+
+`operator.cron` allows a fresh authenticated conversation turn to create automations
+and manage jobs owned by that conversation and account. It does not make the
+requester a Gateway owner. Combine it with `operator.sessions.write` when the
+requester also needs permission to start a conversation; `operator.write` already
+includes both capabilities. Read-only and session-only scopes do not imply
+`operator.cron`.
+
+The agent runtime supplies the authenticated conversation boundary. Direct CLI
+and Control UI scheduler mutations still require `operator.admin`; global
+scheduler status still requires `operator.read`. A cron scope alone does not
+authorize command jobs, bypass tool or approval policy, or grant access to another
+conversation's jobs. Scheduled operator continuations retain the creator's actual
+scopes and revalidate their source authority; they do not become admin runs.
 
 Personal profile editing is a narrowly self-scoped exception to read-only
 behavior: `operator.read` or `operator.sessions.read` (including their implied
