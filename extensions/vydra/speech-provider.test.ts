@@ -49,6 +49,18 @@ describe("vydra speech provider", () => {
     expect(result.audioBuffer).toEqual(Buffer.from("mp3-data"));
   });
 
+  it("rejects an invalid environment baseUrl at synthesis instead of using hosted Vydra", async () => {
+    vi.stubEnv("VYDRA_BASE_URL", "https://[");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(
+      await provider.isConfiguredAsync?.({ providerConfig: request.providerConfig, timeoutMs: 1 }),
+    ).toBe(true);
+    await expect(synthesize()).rejects.toThrow("Invalid Vydra baseUrl: value is not a valid URL");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("treats blank environment API keys as unconfigured and rejects requests", async () => {
     vi.stubEnv("VYDRA_API_KEY", "\t  \n");
     const fetchMock = vi.fn();

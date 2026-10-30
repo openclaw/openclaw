@@ -16,7 +16,11 @@ function resolveQwenVideoBaseUrl(configuredBaseUrl: string | undefined): string 
   if (!direct) {
     return DEFAULT_QWEN_VIDEO_BASE_URL;
   }
-  return URL.parse(direct)?.toString() ?? DEFAULT_QWEN_VIDEO_BASE_URL;
+  const url = URL.parse(direct);
+  if (!url) {
+    throw new Error("Invalid Qwen baseUrl: value is not a valid URL");
+  }
+  return url.toString();
 }
 
 function resolveDashscopeAigcApiBaseUrl(baseUrl: string): string {
