@@ -31,7 +31,8 @@ vi.mock("../state/openclaw-state-worker-context.js", () => ({
   }),
 }));
 
-vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
+vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-db-async-lifecycle.js")>()),
   getOpenClawDatabaseMaintenanceScope: () => undefined,
 }));
 
