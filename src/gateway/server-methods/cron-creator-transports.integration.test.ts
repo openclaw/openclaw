@@ -8,6 +8,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
+import { bindCronRequesterGrant } from "../../agents/cron-creator-authority-context.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
@@ -21,6 +22,10 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import {
+  mintAgentRuntimeIdentityToken,
+  verifyAgentRuntimeIdentityToken,
+} from "../agent-runtime-identity-token.js";
 import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import {
   captureGatewayDeviceRevocation,
@@ -33,6 +38,7 @@ import {
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
+import { dispatchGatewayRequestInProcess } from "../server-in-process-dispatch.js";
 import { createOperatorClient } from "../server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { resolveGatewayChatCronCreatorAuthorityAdmission } from "./cron-creator-authority-admission.js";
@@ -41,6 +47,7 @@ import {
   CREATOR,
   cfg as baseCfg,
   stateDir,
+  cron as cronService,
   admission,
   inRun,
   createCronFixture,
@@ -228,6 +235,111 @@ it.each(["operator.cron", "operator.write"])(
     }
   },
 );
+it.each(["operator.cron", "operator.write"])(
+  "persists only owned jobs through signed %s requester grants and fences revocation",
+  async (scope) => {
+    const caller = captureGatewayDeviceRevocation(
+      fixture.context,
+      { deviceId: "scoped-creator-device", role: "operator" },
+      () => true,
+    );
+    const client = createOperatorClient({ profileName: "scoped-cron", scopes: [scope] });
+    const runId = "signed-scoped-creator";
+    const creatorAdmission = expectDefined(
+      admission(runId, client, undefined, caller.isCurrent),
+      "scoped creator admission",
+    );
+    const job = {
+      name: "Signed requester job",
+      schedule: { kind: "every" as const, everyMs: 60_000 },
+      sessionTarget: "current" as const,
+      sessionKey: SESSION,
+      wakeMode: "next-heartbeat" as const,
+      payload: { ...timedPayload, kind: "agentTurn" as const, toolsAllow: [] },
+      delivery: { mode: "none" as const },
+    };
+    try {
+      await inRun(
+        runId,
+        creatorAdmission,
+        boundTo(fixture, async (identity, admitted, creator) => {
+          expect(creator).toMatchObject({
+            callerOrigin: { kind: "unknown" },
+            callerScopedCreation: true,
+          });
+          expect(creator?.managementEntitlement).toBeUndefined();
+          const mint = expectDefined(bindCronRequesterGrant(runId), "requester grant issuer");
+          const request = async (method: string, params: Record<string, unknown>) => {
+            const token = await mintAgentRuntimeIdentityToken({
+              agentId: identity.agentId,
+              sessionKey: identity.sessionKey,
+              operationalRunInstance: identity.operationalRunInstance,
+              cronCreatorAuthorityGrant: mint(),
+            });
+            const signedIdentity = expectDefined(
+              await verifyAgentRuntimeIdentityToken(token),
+              "verified requester identity",
+            );
+            expect(signedIdentity.cronToolsAllowCapture).toBeUndefined();
+            expect(signedIdentity.cronManagementGrant).toBeUndefined();
+            expect(signedIdentity.turnSourceLocal).toBeUndefined();
+            const signedClient = createSyntheticPluginRuntimeClient({ scopes: [scope] });
+            signedClient.internal!.agentRuntimeIdentity = signedIdentity;
+            return dispatchGatewayRequestInProcess(method, params, {
+              client: signedClient,
+              context: fixture.context,
+            });
+          };
+          await request("cron.add", job);
+          const jobs = await fixture.read();
+          expect(jobs).toMatchObject([{ name: job.name, ...ownedJob }]);
+          expect(jobs[0]?.toolsAllowProvenance).toBeUndefined();
+          expect(jobs[0]?.runtimeAuthority).toBeUndefined();
+          for (const owner of [
+            { ...ownedJob.owner, sessionKey: "agent:main:foreign-conversation" },
+            { ...ownedJob.owner, accountId: "foreign-account" },
+          ]) {
+            const foreign = await cronService.add(
+              { ...job, name: "Foreign job", enabled: true, agentId: "main", owner },
+              {
+                scheduledToolPolicy: {
+                  version: 1,
+                  mode: "account",
+                  ownerSessionKey: owner.sessionKey,
+                  ownerAccountId: owner.accountId,
+                },
+              },
+            );
+            const before = await fixture.read();
+            await expect(
+              request("cron.update", {
+                id: foreign.id,
+                patch: { name: "Must not change" },
+              }),
+            ).rejects.toThrow(`Automation not found: ${foreign.id}.`);
+            expect(await fixture.read()).toEqual(before);
+          }
+          await fixture.rejectMutation(
+            () => request("cron.add", { ...job, name: "Revoked requester job" }),
+            /authority.*no longer active/i,
+            () =>
+              invalidateGatewayDeviceRevocation(
+                fixture.context,
+                "scoped-creator-device",
+                "operator",
+              ),
+          );
+          expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
+          expect(creator).toMatchObject({ active: true, signal: { aborted: false } });
+        }),
+      );
+    } finally {
+      fixture.release.resolve();
+      caller.release();
+    }
+  },
+);
+
 it.each([
   ["cli", "local", "device"],
   ["embedded", "local", "device"],

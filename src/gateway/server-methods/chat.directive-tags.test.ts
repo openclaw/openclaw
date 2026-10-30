@@ -4815,16 +4815,23 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
 describe("chat.send local operator client sender context", () => {
   it.each([
-    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web"],
-    [GATEWAY_CLIENT_NAMES.CLI, GATEWAY_CLIENT_MODES.CLI, "darwin"],
+    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web", "operator.admin", true],
+    [GATEWAY_CLIENT_NAMES.CLI, GATEWAY_CLIENT_MODES.CLI, "darwin", "operator.admin", true],
+    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web", "operator.admin", false],
+    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web", "operator.write", true],
+    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web", "operator.cron", false],
   ] as const)(
-    "binds lazy configured-MCP cron authority to an admitted local %s turn",
-    async (clientId, mode, platform) => {
+    "binds lazy configured-MCP cron authority for %s/%s/%s with %s (local: %s)",
+    async (clientId, mode, platform, scope, local) => {
       await createSqliteTranscriptFixture(`openclaw-chat-send-cron-authority-${clientId}-`);
       const { send } = createChatRequestFixture();
       let retainedResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
       let resolvedGrant: { runId: string; token: string } | undefined;
       mockState.cronAuthorityProbe = async (runId, capability) => {
+        const localOwner = local && scope === "operator.admin";
+        expect(capability?.callerOrigin).toEqual({ kind: localOwner ? "local" : "unknown" });
+        expect(capability?.callerScopedCreation).toBe(localOwner ? undefined : true);
+        expect(capability?.managementEntitlement).toBeUndefined();
         await new Promise<void>((resolveTick) => {
           setTimeout(resolveTick, 0);
         });
@@ -4862,9 +4869,9 @@ describe("chat.send local operator client sender context", () => {
         client: {
           connect: {
             client: { id: clientId, mode, version: "dev", platform },
-            scopes: ["operator.admin"],
+            scopes: [scope],
           },
-          internal: { isLocalClient: true },
+          internal: local ? { isLocalClient: true } : {},
         },
         expectBroadcast: false,
       });
@@ -4885,14 +4892,6 @@ describe("chat.send local operator client sender context", () => {
       client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
       directExternal: false,
       message: "Talk realtime agent consult prompt",
-    },
-    {
-      name: "remote client",
-      client: { internal: {}, scopes: ["operator.admin"] },
-    },
-    {
-      name: "non-admin client",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.write"] },
     },
     {
       name: "incognito session",
