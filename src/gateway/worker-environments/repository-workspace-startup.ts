@@ -1,3 +1,4 @@
+import type { GitHubCredentialReader } from "../../agents/github-credential-reader.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import { prepareRepositoryGitHubIdentity } from "./repository-github-identity.js";
@@ -21,6 +22,8 @@ export async function syncSessionRepositoryWorkspace(params: {
   generation: number;
   gitAuthor?: { name?: string; email?: string };
   runSetupScript?: boolean;
+  readNativeCredential?: GitHubCredentialReader;
+  retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
   preparedRepository?: PreparedRepositoryWorkspace;
   assertCurrent: () => void;
   markPhase?: (phase: string) => void;
@@ -51,7 +54,11 @@ export async function syncSessionRepositoryWorkspace(params: {
   params.assertCurrent();
   const github = prepared
     ? undefined
-    : await prepareRepositoryGitHubIdentity(params.agentId, params.assertCurrent);
+    : await prepareRepositoryGitHubIdentity(params.agentId, params.assertCurrent, {
+        repositoryUrl: repository.url,
+        readNativeCredential: params.readNativeCredential,
+        retainCredentialCleanup: params.retainCredentialCleanup,
+      });
   params.assertCurrent();
   const source: Extract<WorkerWorkspaceSyncRequest["source"], { kind: "repository" }> = {
     kind: "repository",

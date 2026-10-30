@@ -203,6 +203,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     signal?: AbortSignal;
     admittedNode?: WorkerNodePlacementAdmission;
     markPhase?: (phase: string) => void;
+    retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
   }): Promise<WorkerActiveDispatchPlacement> => {
     if (params.placement.state !== "provisioning") {
       throw new Error("Worker dispatch continuation requires a provisioning placement");
@@ -349,6 +350,8 @@ export function createWorkerPlacementDispatchStartup(options: {
           sessionKey: request.sessionKey,
           preparationKey: preparation.key,
           cacheKey: preparation.cacheKey,
+          readNativeCredential: request.readNativeCredential,
+          retainCredentialCleanup: params.retainCredentialCleanup,
           signal: params.signal,
           assertCurrent: assertSyncOwner,
         });
@@ -385,6 +388,8 @@ export function createWorkerPlacementDispatchStartup(options: {
                 markPhase: params.markPhase,
                 repository: params.workspace.repository,
                 preparedRepository,
+                readNativeCredential: request.readNativeCredential,
+                retainCredentialCleanup: params.retainCredentialCleanup,
                 tunnel,
                 sessionId: request.sessionId,
                 sessionKey: request.sessionKey,

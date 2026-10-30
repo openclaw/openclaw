@@ -166,3 +166,27 @@ it("retains request-owned App cleanup and retires reads when the selected App ch
   expect(fetcher.mock.calls.at(-1)?.[1].method).toBe("DELETE");
   await expect(identity.start(() => "closed read")).rejects.toThrow("changed");
 });
+
+it("rechecks the repository policy owner after metadata waits before issuing a token", async () => {
+  vi.stubEnv("FACTORY_AUTH_MODE", "github");
+  let current = true;
+  const nativeFetch = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation(async (url, init) => {
+    const response = await nativeFetch(url, init);
+    if (url.endsWith("/app")) {
+      current = false;
+    }
+    return response;
+  });
+  const readNativeCredential = Object.assign(async () => undefined, {
+    assertCurrent() {
+      if (!current) {
+        throw new Error("repository policy revoked");
+      }
+    },
+  });
+  await expect(prepareRead({ allowAppInstallation: true, readNativeCredential })).rejects.toThrow(
+    "repository policy revoked",
+  );
+  expect(fetcher.mock.calls.some(([url]) => url.endsWith("/access_tokens"))).toBe(false);
+});

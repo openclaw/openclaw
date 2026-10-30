@@ -5,6 +5,7 @@ import {
   matchesAgentLifecycleBinding,
   matchesAgentLifecycleBindingAsync,
 } from "../../agents/agent-lifecycle-registry.js";
+import type { GitHubCredentialReader } from "../../agents/github-credential-reader.js";
 import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-identity.js";
 import { resolveGitRepositoryPaths } from "../../agents/worktrees/git.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
@@ -24,6 +25,7 @@ import {
   readWorkerProjectSnapshot,
 } from "./project-preparation.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
+import type { WorkerProviderRepositorySource } from "./provider-project-preparation.js";
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
@@ -45,6 +47,7 @@ type WorkerProviderIntentOptions = Pick<
     signal?: AbortSignal,
     retainProviderSettlement?: (settled: Promise<void>) => void,
     beforeProvision?: () => void,
+    repositorySource?: WorkerProviderRepositorySource,
   ) => Promise<WorkerEnvironmentRecord>;
 };
 
@@ -63,6 +66,9 @@ export type WorkerProviderIntentPreparationOptions = {
   signal?: AbortSignal;
   setupAuthorized?: boolean;
   beforeProvision?: () => void;
+  assertCurrent?: () => void;
+  readNativeCredential?: GitHubCredentialReader;
+  retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
 };
 
 function allocationSnapshot(
@@ -97,7 +103,7 @@ function projectReplayIdentity(project: unknown): unknown {
 export function createWorkerProviderIntent(options: WorkerProviderIntentOptions) {
   const preparedIntents = new WeakMap<
     WorkerProviderPreparedIntent,
-    { profileId: string; assertCurrent: () => void }
+    { profileId: string; assertCurrent: () => void; repository?: WorkerProviderRepositorySource }
   >();
   const assertPreparedIntentCurrent = (profileId: string, intent: WorkerProviderPreparedIntent) => {
     const prepared = preparedIntents.get(intent);
@@ -222,7 +228,10 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           getConfig: options.getConfig,
           assertCurrent: () => {
             requireProfileId(profileId, signal);
+            createOptions.assertCurrent?.();
           },
+          readNativeCredential: createOptions.readNativeCredential,
+          retainCredentialCleanup: createOptions.retainCredentialCleanup,
           signal,
           knownRecipe: (admittedProject) => {
             for (const record of store.list()) {
@@ -319,6 +328,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       // Private repository authority remains live; profile and plugin metadata
       // are the snapshot selected when preparation began.
       assertCurrent: () => repositoryAdmission?.assertCurrent(),
+      repository: repositoryAdmission,
     });
     return intent;
   };
@@ -560,6 +570,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
             signal,
             undefined,
             createOptions.beforeProvision,
+            requested ? preparedIntents.get(requested)?.repository : undefined,
           );
         }
         return existing;
@@ -588,7 +599,14 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           assertPreparedIntentCurrent(profileId, admitted);
         },
       );
-      return resumeProvision(intent, provider, signal, undefined, createOptions.beforeProvision);
+      return resumeProvision(
+        intent,
+        provider,
+        signal,
+        undefined,
+        createOptions.beforeProvision,
+        preparedIntents.get(admitted)?.repository,
+      );
     });
   };
   return { prepareIntent, prepareRetention, assertPreparedIntentCurrent, createWithProfile };

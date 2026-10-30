@@ -305,6 +305,8 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       // a snapshot is reusable content, never a substitute for repository authority.
       repository = await prepareRepositoryWorkerProjectSource({
         expected: projectSnapshot,
+        readNativeCredential: request.readNativeCredential,
+        retainCredentialCleanup: request.retainCredentialCleanup,
         namespace: options.projectNamespace,
         getConfig: options.getConfig,
         assertCurrent,

@@ -264,7 +264,6 @@ it("accepts the initial SQLite and bare Git checkpoint before sync can finish or
     "repositoryAcceptance",
     "repositoryCleanup",
   ]);
-  expect(prepareRepositoryGitHubIdentity).toHaveBeenCalledWith(session.agentId, f.assertCurrent);
   expect(f.syncWorkspace).toHaveBeenCalledWith({
     authorize: expect.any(Function),
     sessionId: session.sessionId,

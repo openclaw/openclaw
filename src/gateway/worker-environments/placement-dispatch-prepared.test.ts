@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -8,6 +9,11 @@ import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gat
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createGitHubReadIdentity } from "../../agents/github-read-identity.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import {
+  setRuntimeConfigSnapshot,
+  clearRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
@@ -20,6 +26,7 @@ import { getSessionRepositoryWorkspaceStore } from "../../state/session-reposito
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import type { NodeWorkerPreparedWorkspaceResult } from "../../worker/node-workspace-prepared-protocol.js";
+import * as publicationAvailability from "../github-publication-availability.js";
 import {
   createNodeRegistryRuntime,
   updateNodeRunnerInventory,
@@ -343,6 +350,143 @@ async function preparedHarness(
 
 describe("prepared worker dispatch", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it.each([false, true])(
+    "cold repository checkout uses dispatch admission and revokes its token (revoked=%s)",
+    async (revoked) => {
+      const repositoryStore = getSessionRepositoryWorkspaceStore();
+      const created = await repositoryStore.create({
+        agentId: REQUEST.agentId,
+        sessionKey: REQUEST.sessionKey,
+        url: "https://github.com/example/project.git",
+        assertCurrent() {},
+      });
+      const repository = await repositoryStore.bindBase({
+        workspaceId: created.workspaceId,
+        expectedRevision: created.revision,
+        baseCommit: "a".repeat(40),
+        baseManifestHash: "sha256:" + "b".repeat(64),
+        assertCurrent() {},
+      });
+      const { harness, request } = await preparedHarness({
+        emptyWorkspace: true,
+        repository: { ...repository, baseCommit: "a".repeat(40) },
+      });
+      const config: OpenClawConfig = {
+        tools: {
+          github: {
+            kind: "app-installation",
+            profileId: "ghp_00000000000000000000000000000001",
+            app: {
+              appId: 101,
+              installationId: 202,
+              accountId: 303,
+              repositories: [{ id: 404, fullName: "example/project" }],
+              permissions: { contents: "read" },
+              privateKey: generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
+                type: "pkcs8",
+                format: "pem",
+              }),
+              keyVersion: "synthetic-v1",
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(config);
+      vi.spyOn(publicationAvailability, "currentGitHubPublicationConfig").mockReturnValue(config);
+      const native = await vi.importActual<typeof import("./repository-github-identity.js")>(
+        "./repository-github-identity.js",
+      );
+      vi.mocked(prepareRepositoryGitHubIdentity).mockImplementation(
+        native.prepareRepositoryGitHubIdentity,
+      );
+      vi.stubEnv("FACTORY_AUTH_MODE", "github");
+      let current = true;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("dispatch revoked");
+        }
+      };
+      const readNativeCredential = vi.fn(async () => {
+        await Promise.resolve();
+        current = !revoked;
+        return undefined;
+      });
+      const permissions = { contents: "read", metadata: "read" };
+      const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+        const pathname = new URL(new Request(input).url).pathname;
+        if (init?.method === "DELETE") {
+          return new Response(null, { status: 204 });
+        }
+        const bodies: Record<string, unknown> = {
+          "/app": { id: 101, slug: "synthetic", permissions },
+          "/app/installations/202": {
+            id: 202,
+            app_id: 101,
+            account: { id: 303 },
+            suspended_at: null,
+            permissions,
+          },
+          "/users/synthetic%5Bbot%5D": {
+            id: 9001,
+            login: "synthetic[bot]",
+            type: "Bot",
+            avatar_url: null,
+          },
+          "/installation/repositories": {
+            total_count: 1,
+            repositories: [{ id: 404, full_name: "example/project" }],
+          },
+          "/app/installations/202/access_tokens": {
+            token: "synthetic-dispatch-token",
+            expires_at: new Date(Date.now() + 3600000).toISOString(),
+            permissions,
+          },
+        };
+        if (!bodies[pathname]) {
+          throw new Error("Unexpected fixture endpoint: " + pathname);
+        }
+        return Response.json(bodies[pathname]);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      const tunnel = vi.mocked(harness.environments.startTunnel);
+      const originalTunnel = tunnel.getMockImplementation()!;
+      const checkout = vi.fn(async () => {
+        throw new Error("Synthetic checkout unavailable");
+      });
+      tunnel.mockImplementation(async (tunnelRequest) => {
+        const handle = await originalTunnel(tunnelRequest);
+        handle.syncWorkspace = async (input) => {
+          input.authorize?.();
+          if (input.source.kind !== "repository") {
+            throw new Error("Wrong source");
+          }
+          expect(input.source.gitToken).toBe("synthetic-dispatch-token");
+          return checkout();
+        };
+        return handle;
+      });
+      try {
+        await expect(
+          harness.service.dispatch({ ...request, readNativeCredential }, undefined, assertCurrent),
+        ).rejects.toThrow(revoked ? "dispatch revoked" : "Synthetic checkout unavailable");
+        expect(readNativeCredential).toHaveBeenCalledOnce();
+        expect(checkout).toHaveBeenCalledTimes(revoked ? 0 : 1);
+        expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(
+          revoked ? 0 : 1,
+        );
+        expect(fetcher.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(
+          revoked ? 0 : 1,
+        );
+        expect(harness.log).not.toContain("activation");
+      } finally {
+        clearRuntimeConfigSnapshot();
+        vi.unstubAllEnvs();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+      }
+    },
+  );
 
   function expectUnusedReserve(
     fixture: Pick<Awaited<ReturnType<typeof preparedHarness>>, "harness" | "store" | "ready">,

@@ -26,6 +26,7 @@ import {
 } from "./command-registration.js";
 import { bindPluginGatewayAccessPolicy } from "./gateway-access-policy-registration.js";
 import type { PluginGatewayAccessPolicy } from "./gateway-access-policy.types.js";
+import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { WidgetPresenter } from "./plugin-registration.types.js";
 import type { PluginRegistryState } from "./registry-state.js";
@@ -343,6 +344,48 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     );
   };
 
+  const registerRepositoryIntegration = (
+    record: PluginRecord,
+    integration: import("./repository-integration.types.js").RepositoryIntegration,
+  ) => {
+    if (
+      integration.version !== 1 ||
+      typeof integration.withIdentity !== "function" ||
+      typeof integration.resolveConnectionIdentity !== "function" ||
+      !["image", "repository"].includes(integration.preparedCapacity) ||
+      registry.repositoryIntegrations.some((entry) => entry.pluginId === record.id)
+    ) {
+      reportRegistrationError(record, "Invalid or duplicate repository integration");
+      return;
+    }
+    const instance = getPluginInstance(record);
+    if (!instance) {
+      reportRegistrationError(record, "Repository integration requires a live plugin instance");
+      return;
+    }
+    const bound = instance.wrap(integration);
+    const scoped: import("./repository-integration.types.js").RepositoryIntegration = {
+      version: 1,
+      preparedCapacity: bound.preparedCapacity,
+      resolveConnectionIdentity: bound.resolveConnectionIdentity,
+      // Callback arguments are plugin values too; bind their retained callables
+      // before the native credential owner can keep them past this invocation.
+      withIdentity: (context, run) =>
+        bound.withIdentity(context, (scope) => run(instance.wrap(scope))),
+    };
+    registry.repositoryIntegrations.push(
+      createIdentityRegistration(record, {
+        assertCurrent: () => {
+          if (!instance.acceptingCalls || instance.disposing) {
+            throw new PluginInstanceUnavailableError(record.id);
+          }
+          instance.lifecycle.signal.throwIfAborted();
+        },
+        integration: scoped,
+      }),
+    );
+  };
+
   const resolveServiceRegistrationId = (
     record: PluginRecord,
     service: { id: string },
@@ -486,6 +529,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     registerNodeHostCommand,
     registerNodeInvokePolicy,
     registerGatewayAccessPolicy,
+    registerRepositoryIntegration,
     registerSecurityAuditCollector,
     registerService,
     registerGatewayDiscoveryService,
