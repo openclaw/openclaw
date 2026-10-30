@@ -238,18 +238,6 @@ it("returns complete family usage while other reports occupy worker input capaci
         sessionId,
         sessionFile,
         mtime: 1000,
-        transcriptFile: {
-          kind: "sqlite" as const,
-          filePath: sessionFile,
-          sourcePath: sessionFile,
-          sessionId,
-          size: 1024,
-          mtimeMs: 1000,
-          eventCount: 4,
-          maxSeq: 4,
-          generation: "synthetic-generation",
-          cold: false,
-        },
       };
     }),
   );
@@ -267,7 +255,7 @@ it("returns complete family usage while other reports occupy worker input capaci
     ),
     families.map(({ key }) => [key, "opus"] as const),
   );
-  // Charge the observed background queue without allocating its payload. Two
+  // Leave 256 KiB for reports without allocating the background payload. Two
   // slots let a report finish while the background preparation remains admitted.
   const pool = new WorkerTaskPool<PoolFixtureInput, PoolFixtureResult>({
     workerUrl: resolveRuntimeWorkerUrl(workerTaskPoolEntrypoints.worker),
@@ -275,7 +263,7 @@ it("returns complete family usage while other reports occupy worker input capaci
     idleTimeoutMs: 0,
   });
   const release = createDeferred();
-  const backgroundBytes = 265_155_910;
+  const backgroundBytes = DEFAULT_WORKER_PENDING_BYTES - 256 * 1024;
   const background = pool.run(
     async () => {
       await release.promise;

@@ -69,6 +69,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-message-custody-payload-measure.mjs!",
   "scripts/perf/session-patch-response-measure.ts!",
   "scripts/perf/sessions-files-title-measure.ts!",
+  "scripts/perf/sessions-usage-measure.ts!",
   "scripts/perf/tool-loop-outcome-measure.ts!",
   "scripts/perf/tool-search-snapshot-measure.ts!",
   "scripts/perf/trajectory-record-event-measure.ts!",

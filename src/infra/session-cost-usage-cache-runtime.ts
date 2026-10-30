@@ -35,7 +35,6 @@ import type {
   CostUsageSummary,
   SessionCostSummary,
   UsageCacheStatus,
-  UsageCostTranscriptFile,
   UsageDailyBucket,
 } from "./session-cost-usage.types.js";
 
@@ -290,7 +289,6 @@ type SessionCostReadParams = {
   sessions: Array<{
     sessionId?: string;
     sessionFile: string;
-    transcriptFile?: UsageCostTranscriptFile;
   }>;
   config?: OpenClawConfig;
   agentId: string;
@@ -384,8 +382,9 @@ async function loadCapturedSessionCostSummariesFromCache(
 
 /**
  * Read the Usage overview from committed quarter rows: one worker pass per agent,
- * folded per family. Unsummarized or stale instances are refreshed (or backfilled
- * after an upgrade) before a second pass; see `runUsageReportAfterRefresh`.
+ * folded per family. Refresh missing or stale instances in the background; waiting
+ * here makes report latency depend on transcript size and can exhaust its budget
+ * before a large transcript publishes any progress.
  */
 export async function loadSessionUsageOverviewFromCache(params: {
   families: UsageCostWorkerSession[][];
@@ -416,24 +415,30 @@ export async function loadSessionUsageOverviewFromCache(params: {
     prepared.agentDir,
   );
   const families = compactUsageOverviewFamilies(params.families);
-  const result = await runUsageReportAfterRefresh(prepared, params, async () => {
-    const pass = await runUsageCostWorker(prepared, {
-      kind: "overview",
-      pricingFingerprint,
-      ...families,
-      startMs: params.startMs,
-      endMs: params.endMs,
-      includeUntimestamped: params.includeUntimestamped,
-      dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
-    });
-    if (pass.kind !== "overview") {
-      throw new Error("Usage worker returned an invalid overview");
-    }
-    return pass;
+  const result = await runUsageCostWorker(prepared, {
+    kind: "overview",
+    pricingFingerprint,
+    ...families,
+    startMs: params.startMs,
+    endMs: params.endMs,
+    includeUntimestamped: params.includeUntimestamped,
+    dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
   });
+  if (result.kind !== "overview") {
+    throw new Error("Usage worker returned an invalid overview");
+  }
   const { batch, ...status } = result;
   const refreshing = status.staleSessionFiles.length > 0 || status.invalidRows.length > 0;
   if (refreshing) {
+    requestCostUsageCacheRefresh({
+      config: params.config,
+      agentId: params.agentId,
+      storePath: prepared.location.storePath,
+      databasePath: prepared.location.databasePath,
+      env: prepared.location.env,
+      sessionFiles: status.staleSessionFiles,
+      rebuildRows: status.invalidRows,
+    });
     status.cacheStatus.status = "refreshing";
   }
   return { ...status, usage: { kind: "packed", batch, refreshing } };

@@ -32,7 +32,7 @@ export type UsageSessionSummaryTarget = {
   agentId: string;
   sessionId: string;
   sessionFile: string;
-  instances: Array<Pick<DiscoveredSession, "sessionId" | "sessionFile" | "transcriptFile">>;
+  instances: Array<Pick<DiscoveredSession, "sessionId" | "sessionFile">>;
 };
 
 const USAGE_AGENT_LOAD_CONCURRENCY = 12;
@@ -58,7 +58,6 @@ export async function discoverAllSessionsForUsage(params: {
   agentId?: string;
   startMs: number;
   endMs: number;
-  statistics?: false;
 }): Promise<DiscoveredSessionWithAgent[]> {
   return readWithSessionStoreTopology(async () => {
     const requestedAgentId = normalizeOptionalString(params.agentId);
@@ -72,7 +71,6 @@ export async function discoverAllSessionsForUsage(params: {
           agentId,
           startMs: params.startMs,
           endMs: params.endMs,
-          statistics: params.statistics,
         });
         return sessions.map((session) => Object.assign({}, session, { agentId }));
       }),
@@ -136,13 +134,12 @@ export async function loadUsageSessionSummaries(params: {
     Array<UsageSessionSummaryTarget["instances"][number] & { entryIndex: number }>
   >();
   for (const [entryIndex, merged] of mergedEntries.entries()) {
-    for (const { sessionId, sessionFile, transcriptFile } of merged.instances) {
+    for (const { sessionId, sessionFile } of merged.instances) {
       const agentSessions = sessionsByAgent.get(merged.agentId) ?? [];
       agentSessions.push({
         entryIndex,
         sessionId,
         sessionFile,
-        transcriptFile,
       });
       sessionsByAgent.set(merged.agentId, agentSessions);
     }
