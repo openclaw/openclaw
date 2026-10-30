@@ -378,6 +378,11 @@ budget. For nonblocking coordination, use `sessions_send` with `timeoutSeconds: 
 When that wait expires, eligible pending reply delivery continues observing the accepted
 run until it finishes; a wait interval does not discard a late reply. Nested
 inter-session replies use the same completion observation.
+On a Gateway, an eligible same-session follow-up retains its own accepted result;
+the guest does not need global `operator.write` permission to observe completion.
+An actual failed or cancelled run remains a failure, and any returned failure notice
+uses the same retained completion path. Current requester and session authority
+still govern the result.
 The low-level Gateway `sessions.send` RPC has a different contract: its JSON
 `timeoutMs` limits **receiver execution**, just like `chat.send`. Omit that field
 to keep the receiver's configured budget; bound the CLI wait separately with

@@ -134,7 +134,7 @@ const enSessionOrganization = {
     snoozeHour: "In 1 hour",
     snoozeThreeHours: "In 3 hours",
     snoozeEvening: "This evening",
-    snoozeTomorrow: "Tomorrow",
+    snoozeTomorrow: en.sessionsView.snoozeTomorrow,
     snoozeNextWeek: "Next week",
     snoozed: "Snoozed",
     snoozeWakes: en.sessionsView.snoozeWakes,

@@ -82,7 +82,6 @@ import {
 import {
   createPluginUpdateTransactionState,
   finalizePluginUpdateSummary,
-  recordPluginUpdateFailure,
   recordPluginUpdateTransaction,
 } from "./update-summary.js";
 import {
@@ -130,23 +129,13 @@ async function runInstalledPluginUpdate(
     outcomes.push({ pluginId, status: "skipped", message });
   };
 
-  const recordFailure = (
-    pluginId: string,
-    message: string,
-    options: Parameters<typeof recordPluginUpdateFailure>[0]["options"] = {},
-  ) => {
-    const failure = recordPluginUpdateFailure({
-      config: next,
-      disableOnFailure: params.disableOnFailure,
-      dryRun: params.dryRun,
-      logger,
-      outcomes,
+  const recordFailure = (pluginId: string, message: string, code?: string) => {
+    outcomes.push({
       pluginId,
+      status: "error",
+      code,
       message,
-      options,
     });
-    next = failure.config;
-    changed ||= failure.changed;
   };
 
   const duplicateAliases = new Map<string, string>();
@@ -371,19 +360,19 @@ async function runInstalledPluginUpdate(
       source: "npm" | "clawhub" = "npm",
     ): Promise<void> => {
       let installedPayloadRunnable = false;
+      // Metadata failures precede target availability; core sync must retain a
+      // runnable install during a registry outage when retention is requested.
       if (
+        retainOnUnavailable &&
         (code === PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE ||
-          (retainOnUnavailable && isUnavailablePluginSource(source, { ok: false, code }))) &&
-        (params.disableOnFailure || retainOnUnavailable) &&
+          isUnavailablePluginSource(source, { ok: false, code })) &&
         !params.dryRun &&
         currentVersion
       ) {
-        const compatible =
-          !retainOnUnavailable ||
-          isNpmMetadataCompatibleWithCurrentHost(
-            { packageOpenClaw: installedManifest?.openclaw },
-            { hostVersion: params.coreVersion, allowLegacyBareSemver: true },
-          );
+        const compatible = isNpmMetadataCompatibleWithCurrentHost(
+          { packageOpenClaw: installedManifest?.openclaw },
+          { hostVersion: params.coreVersion, allowLegacyBareSemver: true },
+        );
         try {
           installedPayloadRunnable =
             compatible &&
@@ -407,7 +396,7 @@ async function runInstalledPluginUpdate(
         });
         return;
       }
-      recordFailure(pluginId, message, { code, installedPayloadRunnable });
+      recordFailure(pluginId, message, code);
     };
     if (npmResolutionError) {
       await recordSourceFailure(npmResolutionError.message, npmResolutionError.code);

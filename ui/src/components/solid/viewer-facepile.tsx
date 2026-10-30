@@ -104,6 +104,8 @@ export type ViewerFacepileProps = {
   staticParticipants?: readonly SessionParticipant[];
   staticUsers?: readonly PresenceViewer[];
   maxVisible?: number;
+  /** The "+N" face takes the last of maxVisible slots instead of adding one. */
+  overflowInSlots?: boolean;
   totalCount?: number;
   personActivity?: PersonActivityRouting;
   registerLink?: (element: HTMLAnchorElement) => (() => void) | undefined;
@@ -137,10 +139,14 @@ export const ViewerFacepile = defineSolidBridge<ViewerFacepileProps>(
             props.excludeIdentities ?? EMPTY_VIEWER_IDENTITIES,
           )),
     );
-    const visible = createMemo(() => users().slice(0, props.maxVisible ?? 3));
-    const overflowCount = () => Math.max(users().length, props.totalCount ?? 0) - visible().length;
+    const total = () => Math.max(users().length, props.totalCount ?? 0);
+    const visible = createMemo(() => {
+      const slots = props.maxVisible ?? 3;
+      return users().slice(0, props.overflowInSlots && total() > slots ? slots - 1 : slots);
+    });
+    const overflowCount = () => total() - visible().length;
     const overflowLabel = () => {
-      const overflow = users().slice(props.maxVisible ?? 3);
+      const overflow = users().slice(visible().length);
       return overflow.length === overflowCount()
         ? overflow.map(presenceViewerLabel).join("\n")
         : t("sessionHovercard.moreParticipantsLabel", { count: String(overflowCount()) });
@@ -149,7 +155,7 @@ export const ViewerFacepile = defineSolidBridge<ViewerFacepileProps>(
       <Show when={users().length > 0}>
         <span
           class="viewer-facepile viewer-facepile--session"
-          data-viewer-count={Math.max(users().length, props.totalCount ?? 0)}
+          data-viewer-count={total()}
           aria-label={users().map(presenceViewerLabel).join(", ")}
         >
           <For
@@ -188,6 +194,7 @@ export const ViewerFacepile = defineSolidBridge<ViewerFacepileProps>(
       staticParticipants: { default: undefined, attribute: false },
       staticUsers: { default: undefined, attribute: false },
       maxVisible: { default: 3, attribute: "max-visible", type: Number },
+      overflowInSlots: { default: false, attribute: false },
       totalCount: { default: undefined, attribute: false },
       personActivity: { default: undefined, attribute: false },
       registerLink: { default: undefined, attribute: false },

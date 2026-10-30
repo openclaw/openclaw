@@ -267,6 +267,8 @@ export function startOpenClawStateLeaseHeartbeat(
             cause,
           })
         : cause;
+    // Shared-state checks can win before worker events; decorate the first loss here.
+    error.message += lossDetail();
     Atomics.store(shared, state.status, state.lost);
     clearStartupTimers();
     cancelExpiry?.();
@@ -547,7 +549,7 @@ export function startOpenClawStateLeaseHeartbeat(
         ? ": lease expired or ownership lost"
         : "";
     return new Error(
-      `state lease heartbeat exited${detail} (exitCode=${exitCode ?? "unknown"}, acquiredAt=${params.acquiredAt}, lastRenewedAt=${lastRenewedAt || "never"})${lossDetail()}`,
+      `state lease heartbeat exited${detail} (exitCode=${exitCode ?? "unknown"}, acquiredAt=${params.acquiredAt}, lastRenewedAt=${lastRenewedAt || "never"})`,
       renewalFailure
         ? { cause: Object.assign(new Error(renewalFailure.message), renewalFailure) }
         : undefined,
@@ -558,9 +560,7 @@ export function startOpenClawStateLeaseHeartbeat(
       fail(exitError(exitCode));
       return;
     }
-    const failure = toErrorObject(error, "state lease heartbeat worker failed");
-    failure.message += lossDetail();
-    fail(failure);
+    fail(toErrorObject(error, "state lease heartbeat worker failed"));
   });
   worker.onMessage((reply) => {
     if (reply === null) {

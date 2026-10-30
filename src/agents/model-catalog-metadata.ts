@@ -1,3 +1,4 @@
+import { ownsThinkingProfile } from "@openclaw/model-catalog-core/model-catalog-types";
 import {
   PREPARED_THINKING_POLICY,
   type ThinkingCatalogPolicyCarrier,
@@ -59,12 +60,12 @@ function clearRouteBoundCatalogMetadata(
 type ThinkingLevelMap = Partial<Record<string, string | null>>;
 type ThinkingFacts = {
   thinkingLevelMap?: ThinkingLevelMap;
-  compat?: { defaultThinkingLevel?: string } | null;
+  compat?: { defaultThinkingLevel?: string; thinkingLevels?: readonly string[] } | null;
 };
 
 /**
  * Merges a configured thinking map over a catalog row's, per key. When the catalog row owns its
- * thinking profile (`compat.defaultThinkingLevel`) and the configured row does not, config can only
+ * thinking profile (`ownsThinkingProfile`) and the configured row does not, config can only
  * exclude levels: a map written for the earlier provider hook must not widen the profile.
  */
 export function mergeConfiguredThinkingLevelMap(
@@ -72,8 +73,7 @@ export function mergeConfiguredThinkingLevelMap(
   configured: ThinkingFacts,
 ): ThinkingLevelMap | undefined {
   const exclusionsOnly =
-    base.compat?.defaultThinkingLevel !== undefined &&
-    configured.compat?.defaultThinkingLevel === undefined;
+    ownsThinkingProfile(base.compat) && !ownsThinkingProfile(configured.compat);
   const overlay =
     exclusionsOnly && configured.thinkingLevelMap
       ? Object.fromEntries(

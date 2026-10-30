@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
-import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { formatDiskSpaceBytes } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { findUpdateCaptureSpaceError } from "../../infra/update-capture-space.js";
@@ -16,7 +15,6 @@ import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   UpdatePreMutationError,
@@ -199,10 +197,6 @@ export async function initializeAndRunUpdate(
                     recoveryState.triageTarget,
                   );
                 },
-                databasePath: resolvePathViaExistingAncestorSync(
-                  resolveOpenClawStateSqlitePath(env),
-                ),
-                configPath: resolvePathViaExistingAncestorSync(resolveConfigPath(env)),
               };
               let originalCaptureAttempted = false;
               const captureOriginal = async () => {

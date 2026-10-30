@@ -9,7 +9,10 @@ import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources
 import { activeSessionOperations } from "../sessions/session-controller.state.js";
 import { captureSessionControllerStop, stopSession } from "../sessions/session-controller.stop.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
-import { recordGatewayShutdownWarning } from "./server-shutdown.js";
+import {
+  GatewayShutdownCleanupRetainedError,
+  recordGatewayShutdownWarning,
+} from "./server-shutdown.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 
@@ -25,6 +28,7 @@ export type GatewayRunShutdownParams = {
 export async function prepareGatewayRunShutdown(
   params: GatewayRunShutdownParams & {
     warnings: string[];
+    exitAfterClose?: boolean;
   },
 ): Promise<{ released: Promise<void>; failure?: { error: unknown } }> {
   const sources = listRpcSourceEntries().filter(([, entry]) =>
@@ -92,16 +96,31 @@ export async function prepareGatewayRunShutdown(
   params.cancelReceivedWork?.(reason);
   const interrupted = effects.interrupt(reason);
   // Raw model/tool ownership is resource cleanup, not permission to wait forever.
-  // The close owner bounds this join and forbids reusing a retained runtime.
   const terminalPersistence = sources.flatMap(([, source]) =>
     source.adapter.projectSessionTerminalPersistence
       ? [source.adapter.projectSessionTerminalPersistence]
       : [],
   );
+  const released = Promise.all([
+    capture.settled,
+    interrupted.released,
+    ...terminalPersistence,
+  ]).then(() => undefined);
   return {
     failure,
-    released: Promise.all([capture.settled, interrupted.released, ...terminalPersistence]).then(
-      () => undefined,
-    ),
+    released: params.exitAfterClose
+      ? raceWithTimeout(
+          released,
+          5_000,
+          () => {
+            // Do not dispose or reuse a generation whose raw cleanup is still live.
+            throw new GatewayShutdownCleanupRetainedError(
+              [],
+              "session admissions remain after shutdown grace",
+            );
+          },
+          { ref: false },
+        )
+      : released,
   };
 }

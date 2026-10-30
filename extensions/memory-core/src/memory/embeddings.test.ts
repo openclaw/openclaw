@@ -69,8 +69,6 @@ function createMissingCredentialsAdapter(
     transport: "remote",
     autoSelectPriority: 60,
     formatSetupError: coerceErrorMessage,
-    shouldContinueAutoSelection: (err) =>
-      err instanceof Error && err.message.includes("No API key found for provider"),
     create: async () => {
       throw missingBedrockCredentialsError;
     },
