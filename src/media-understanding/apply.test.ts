@@ -405,6 +405,35 @@ describe("applyMediaUnderstanding", () => {
     expect(decision && formatDecisionSummary(decision)).toMatch(`reason=${cause}`);
   });
 
+  it("names the fallback's cause in both the marker and the summary", async () => {
+    const ctx = await createAudioCtx();
+    const transcribeAudio = vi
+      .fn<TranscribeAudio>()
+      .mockRejectedValueOnce(
+        new ProviderHttpError("Audio transcription failed (HTTP 401)", {
+          status: 401,
+          code: "invalid_api_key",
+        }),
+      )
+      .mockRejectedValueOnce(
+        new ProviderHttpError("Audio transcription failed (HTTP 429)", {
+          status: 429,
+          code: "insufficient_quota",
+        }),
+      );
+    await applyAudio(ctx, transcribeAudio, {
+      cfg: configuredMedia([
+        { provider: "groq", model: "whisper-primary", capabilities: ["audio"] },
+        { provider: "groq", model: "whisper-fallback", capabilities: ["audio"] },
+      ]),
+    });
+    const cause = "provider account is out of quota (429 insufficient_quota)";
+    expect(transcribeAudio).toHaveBeenCalledTimes(2);
+    expect(ctx.Body).toBe(`[Audio attachment could not be analyzed: ${cause}]`);
+    const decision = ctx.MediaUnderstandingDecisions?.find((entry) => entry.capability === "audio");
+    expect(decision && formatDecisionSummary(decision)).toMatch(`reason=${cause}`);
+  });
+
   it("keeps the generic marker for an unclassified failure", async () => {
     const ctx = await createAudioCtx();
     await applyAudio(ctx, vi.fn<TranscribeAudio>().mockRejectedValue(new Error("boom")), {

@@ -141,7 +141,7 @@ describe("runCapability audio", () => {
         expect(result.outputs).toEqual([]);
         expect(hasAuth).not.toHaveBeenCalled();
         expect(formatDecisionSummary(result.decision)).toBe(
-          "audio: failed (0/1) reason=Audio transcription failed (HTTP 403)",
+          "audio: failed (0/1) reason=provider rejected the credential (403)",
         );
       }
     }
