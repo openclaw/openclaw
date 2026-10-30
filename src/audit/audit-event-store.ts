@@ -208,25 +208,6 @@ function pruneAfterInsert(
   auditEventRetention.set(db, { ...retention, nextSequence });
 }
 
-function getAuditSingleStatementRetention(
-  db: EngineConnection,
-  now: number,
-  at: number,
-  count: 1 | 2,
-  inPlainBatch = false,
-) {
-  const retention = auditEventRetention.get(db);
-  return (!db.isTransaction || inPlainBatch) &&
-    !isPostgresSqlConnection(db) &&
-    retention &&
-    retention.rowCount + count <= AUDIT_EVENT_MAX_ROWS &&
-    retention.nextExpiryAt >= now &&
-    at + AUDIT_EVENT_RETENTION_MS >= now &&
-    Number.isSafeInteger(retention.nextSequence + (count - 1))
-    ? retention
-    : undefined;
-}
-
 function parseInsertedAuditSequence(value: string): number {
   const sequence = Number(value);
   if (!Number.isSafeInteger(sequence) || sequence < 1) {
@@ -382,6 +363,25 @@ export function recordAuditRunInDatabase(
     auditEventRetention.delete(db);
     throw error;
   }
+}
+
+function getAuditSingleStatementRetention(
+  db: EngineConnection,
+  now: number,
+  at: number,
+  count: 1 | 2,
+  inPlainBatch = false,
+) {
+  const retention = auditEventRetention.get(db);
+  return (!db.isTransaction || inPlainBatch) &&
+    !isPostgresSqlConnection(db) &&
+    retention &&
+    retention.rowCount + count <= AUDIT_EVENT_MAX_ROWS &&
+    retention.nextExpiryAt >= now &&
+    at + AUDIT_EVENT_RETENTION_MS >= now &&
+    Number.isSafeInteger(retention.nextSequence + (count - 1))
+    ? retention
+    : undefined;
 }
 
 /** List newest-first records using the shared state worker and a stable sequence cursor. */
