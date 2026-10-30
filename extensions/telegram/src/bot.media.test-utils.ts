@@ -40,6 +40,11 @@ export async function createBotHandlerWithOptions(options: {
   proxyFetch?: typeof fetch;
   runtimeLog?: ReturnType<typeof vi.fn>;
   runtimeError?: ReturnType<typeof vi.fn>;
+  testTimings?: {
+    mediaGroupFlushMs?: number;
+    mediaGroupArrivalMs?: number;
+    textFragmentGapMs?: number;
+  };
 }): Promise<{
   handler: (ctx: Record<string, unknown>) => Promise<void>;
   replySpy: ReturnType<typeof vi.fn>;
@@ -60,7 +65,7 @@ export async function createBotHandlerWithOptions(options: {
     // resolve the bot user id from botInfo when a test ctx carries only a username.
     botInfo: telegramBotInfoForTest,
     config,
-    testTimings: TELEGRAM_TEST_TIMINGS,
+    testTimings: { ...TELEGRAM_TEST_TIMINGS, ...options.testTimings },
     ...(effectiveProxyFetch ? { proxyFetch: effectiveProxyFetch } : {}),
     runtime: {
       log: runtimeLog as (...data: unknown[]) => void,
