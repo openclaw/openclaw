@@ -37,20 +37,22 @@ export async function withNativeSecretService<T>(
   };
   const children: ChildProcess[] = [];
   const spawn = await loadManagedChildSpawner();
-  const start = (command: string, args: string[]) => {
+  const start = async (command: string, args: string[]) => {
     const child = spawn(command, args, {
       cwd: root,
       env,
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
     });
-    children.push(child);
     child.stderr?.resume();
+    // A failed spawn emits error, not exit; only a spawned process enters cleanup custody.
+    await once(child, "spawn");
+    children.push(child);
     return child;
   };
   return await runQaGatewayFixture(
     async () => {
-      const bus = start("dbus-daemon", [
+      const bus = await start("dbus-daemon", [
         "--session",
         "--nofork",
         "--print-address=1",
@@ -66,7 +68,7 @@ export async function withNativeSecretService<T>(
         throw new Error("Unexpected private D-Bus address");
       }
       bus.stdout?.resume();
-      const keyring = start("gnome-keyring-daemon", [
+      const keyring = await start("gnome-keyring-daemon", [
         "--foreground",
         "--unlock",
         "--components=secrets",

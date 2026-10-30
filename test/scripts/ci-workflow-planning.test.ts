@@ -12280,6 +12280,51 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("provisions native OAuth binaries for selected Gateway proof rows", () => {
+    const target = "test/e2e/qa-lab/runtime/codex-native-command-auth.e2e.test.ts";
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      nodeTestShards: [
+        { targets: [target] },
+        { groups: [{ shard_name: "native-auth", includePatterns: [target] }] },
+        { targets: ["src/agents/run-wait.test.ts"] },
+      ].map((selection, index) =>
+        Object.assign(
+          {
+            checkName: `native-auth-${index}`,
+            configs: ["test/vitest/vitest.e2e.config.ts"],
+            requiresDist: false,
+            shardName: "changed",
+          },
+          selection,
+        ),
+      ),
+    });
+    expect(result.status, result.output).toBe(0);
+    const rows = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include;
+    expect(
+      rows.map((row: { requires_native_secret_service?: boolean }) =>
+        Boolean(row.requires_native_secret_service),
+      ),
+    ).toEqual([true, true, false]);
+    const setup = requiredWorkflowStep(
+      readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps,
+      "Setup Node environment",
+    );
+    expect(setup.with?.["native-secret-service"]).toBe(
+      "${{ matrix.requires_native_secret_service == true && 'true' || 'false' }}",
+    );
+    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const install = requiredWorkflowStep(
+      action.runs.steps,
+      "Prepare native Secret Service fixture binaries",
+    );
+    expect(install.if).toBe("runner.os == 'Linux' && inputs.native-secret-service == 'true'");
+    expect(install.run).toContain(
+      "sudo -n apt-get install -y --no-install-recommends dbus gnome-keyring libglib2.0-bin",
+    );
+  });
+
   it("emits one final CI gate after every selected lane", () => {
     const workflow = readCiWorkflow();
     const gate = workflow.jobs["ci-gate"];

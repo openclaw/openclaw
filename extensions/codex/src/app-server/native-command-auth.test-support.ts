@@ -1,3 +1,7 @@
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { runQaGatewayFixture } from "openclaw/plugin-sdk/test-env";
 import { resolveManagedCodexNativeCommand } from "./managed-binary.js";
 import { isJsonObject } from "./protocol.js";
@@ -64,10 +68,22 @@ export async function loginNativeCommandGatewayForTest(params: {
       }
       callback.searchParams.set("code", "synthetic-code");
       callback.searchParams.set("state", url.searchParams.get("state")!);
-      const response = await fetch(callback, { signal: params.signal });
-      await response.arrayBuffer();
-      if (!response.ok) {
-        throw new Error("Synthetic OAuth callback failed");
+      const guarded = await fetchWithSsrFGuard({
+        url: callback.href,
+        signal: params.signal,
+        policy: {
+          ...ssrfPolicyFromHttpBaseUrlAllowedOrigin(callback.origin),
+          hostnameAllowlist: ["127.0.0.1"],
+        },
+        maxRedirects: 0,
+      });
+      try {
+        await guarded.response.arrayBuffer();
+        if (!guarded.response.ok) {
+          throw new Error("Synthetic OAuth callback failed");
+        }
+      } finally {
+        await guarded.release();
       }
       await login;
     },
