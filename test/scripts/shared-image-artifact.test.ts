@@ -274,7 +274,7 @@ describe("shared Docker image artifacts", () => {
       "utf8",
     );
     const expiry = expectDefined(
-      workflow.match(/          artifact_expiry\(\) \{[\s\S]*?\n          \}/)?.[0],
+      workflow.match(/ {10}artifact_expiry\(\) \{[\s\S]*?\n {10}\}/)?.[0],
       "release artifact expiry function",
     );
     // The workflow captures this function's stdout; that disables Bash's implicit errexit.
