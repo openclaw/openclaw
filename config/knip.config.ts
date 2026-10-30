@@ -754,6 +754,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-entry-patch-payload.ts!",
   "scripts/perf/session-event-envelope-measure.ts!",
   "scripts/perf/session-transcript-path-measure.ts!",
+  "scripts/perf/skill-directory-modes-measure.ts!",
   "scripts/perf/skill-search-copies-measure.ts!",
   "scripts/perf/skill-snapshot-hydration-measure.ts!",
   "scripts/perf/skill-collision-diagnostics-measure.ts!",
