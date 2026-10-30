@@ -6,15 +6,8 @@ import {
 import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
-import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { gateAgentToolExecution } from "../../agent-tool-availability.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
-import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
-import {
-  admitted,
-  attempt as authorityAttempt,
-} from "../../harness/tool-authority.runtime.test-support.js";
-import { prepareOperatorModelPolicy } from "../../operator-model-policy.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import { createClientToolDefinition, createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
@@ -58,38 +51,6 @@ import { prepareEmbeddedAttemptBundleTools as prepare } from "./attempt-bundle-t
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 
 describe("prepareEmbeddedAttemptBundleTools", () => {
-  it("offers personal MCP sign-in to the live Webchat participant without changing SenderId", async () => {
-    const profileId = "ada-profile";
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId,
-      scopes: ["operator.read", "operator.write"],
-      gatewayAccessGrant: null,
-      modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
-      assertCurrent() {},
-    });
-    await admitted(async ({ admittedRunContext }) => {
-      await withPreparedEmbeddedRunToolAuthority(
-        { admittedRunContext },
-        {
-          ...authorityAttempt,
-          senderId: undefined,
-          messageChannel: "webchat",
-          gatewayUiCommandTarget: { connId: "ada-connection", profileId },
-        },
-        undefined,
-        async (prepared) => {
-          const input = createInput();
-          Object.assign(input.attempt, prepared, { admittedRunContext });
-          await prepare(input);
-          expect(input.attempt.senderId).toBeUndefined();
-          expect(mocks.acquireSessionMcpRuntime).toHaveBeenCalledWith(
-            expect.objectContaining({ requesterSenderId: profileId }),
-          );
-        },
-      );
-    }, operatorAuthority);
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.createBundleLspToolRuntime.mockReset().mockResolvedValue(undefined);

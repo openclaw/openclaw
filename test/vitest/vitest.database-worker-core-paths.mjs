@@ -18,6 +18,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/approval-session-audience.sqlite.test.ts",
   "src/infra/state-migrations.plugin-doctor-context.postgres.test.ts",
   "src/secrets/runtime-web-provider.postgres.test.ts",
+  "src/agents/agent-bundle-mcp-webchat-requester.test.ts",
   "src/gateway/server-methods.workshop-contract.test.ts",
   // A real channel plugin install acquires the host-owned lifecycle lease.
   "src/cli/channels-add-install.test.ts",

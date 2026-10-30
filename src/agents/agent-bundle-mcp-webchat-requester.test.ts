@@ -1,8 +1,11 @@
+import { createServer } from "node:http";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { prepareReplyToolAuthority } from "../auto-reply/reply/reply-tool-authority.js";
 import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { materializeRequesterScopedMcpToolsForHarnessRun } from "../plugin-sdk/agent-harness-runtime.js";
 import { createReplyOperation } from "../sessions/session-controller.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { disposeAllSessionMcpRuntimes } from "./agent-bundle-mcp-manager-api.js";
 import {
@@ -18,7 +21,11 @@ import {
 } from "./agent-bundle-mcp-webchat-requester.js";
 import { withPreparedEmbeddedRunToolAuthority } from "./harness/tool-authority.runtime.js";
 import { admitted, attempt } from "./harness/tool-authority.runtime.test-support.js";
+import { requesterMcpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { readMcpOAuthStore } from "./mcp-oauth-store.js";
+import { withMcpOAuthTempHome } from "./mcp-oauth.test-harness.js";
 import { prepareOperatorModelPolicy } from "./operator-model-policy.js";
+import { closeProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
 
 const oauth = vi.hoisted(() => ({ status: vi.fn(), start: vi.fn() }));
 vi.mock("./mcp-oauth.js", async (importOriginal) => ({
@@ -296,40 +303,136 @@ it("closes a released native view before its parent turn ends", async () => {
   });
 });
 
-it("rechecks requester authority after awaited preparation before the next network effect", async () => {
-  await withTurn("ada-profile", async ({ turn, revoke }) => {
-    const requester = captureWebchatMcpRequester(turn)!;
-    let start!: () => void;
-    let release!: () => void;
-    const started = new Promise<void>((resolve) => {
-      start = resolve;
-    });
-    const prepared = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const effect = vi.fn();
-    const runtime = makeManagerRuntime(
-      { sessionId: turn.sessionId, workspaceDir: "/workspace" },
-      undefined,
-      {
-        getCatalog: async () => {
-          const assertBeforeRequest = captureGuardedFetchRequestAuthority()!;
-          start();
-          await prepared;
-          assertBeforeRequest();
-          effect();
-          return { version: 1, generatedAt: 0, servers: {}, tools: [] };
-        },
-      },
-    );
-    const pending = createMcpRunView(runtime, requester.assertCurrent).getCatalog();
-    await started;
-    revoke();
-    release();
-    await expect(pending).rejects.toThrow();
-    expect(effect).not.toHaveBeenCalled();
-  });
-});
+it.each([
+  ["native", "revoked"],
+  ["native", "steered"],
+  ["harness", "revoked"],
+  ["harness", "steered"],
+] as const)(
+  "blocks real %s OAuth discovery and persistence when the participant is %s during preparation",
+  async (consumer, change) => {
+    await withMcpOAuthTempHome(async () => {
+      // Exercise the actual SDK, HTTP guard and SQLite writer; only the external
+      // authorization server's first response is held at a deterministic boundary.
+      const actual = await vi.importActual<typeof import("./mcp-oauth.js")>("./mcp-oauth.js");
+      oauth.start.mockImplementation(actual.startMcpOAuthAuthorization);
+      const started = createDeferred();
+      const release = createDeferred();
+      const paths: string[] = [];
+      const server = await reserveTestPortListener({
+        offsets: [0],
+        createListener: () =>
+          createServer((request, response) => {
+            paths.push(request.url!);
+            started.resolve();
+            void release.promise.then(() => {
+              response.writeHead(200, { "content-type": "application/json" });
+              response.end(
+                JSON.stringify({
+                  resource: `${origin}/mcp`,
+                  authorization_servers: [origin],
+                }),
+              );
+            });
+          }),
+      });
+      const origin = `http://127.0.0.1:${server.claim.port}`;
+      const config = {
+        ...cfg,
+        mcp: { servers: { calendar: { ...cfg.mcp.servers.calendar, url: `${origin}/mcp` } } },
+      };
+      try {
+        await withTurn("ada-profile", async ({ turn, revoke }) => {
+          const requester = captureWebchatMcpRequester(turn)!;
+          await bindSessionMcpRuntimeTestScheduler();
+          const acquisition = await manager.acquire({
+            sessionId: turn.sessionId,
+            sessionKey: turn.sessionKey,
+            workspaceDir: "/workspace",
+            cfg: config,
+            requesterSenderId: requester.requesterSenderId,
+            messageChannel: "webchat",
+          });
+          const view =
+            consumer === "native"
+              ? await materializeBundleMcpToolsForRun({
+                  ...acquisition,
+                  assertRequesterCurrent: requester.assertCurrent,
+                })
+              : await materializeRequesterScopedMcpToolsForHarnessRun({
+                  sessionId: turn.sessionId,
+                  sessionKey: turn.sessionKey,
+                  workspaceDir: "/workspace",
+                  cfg: config,
+                  messageChannel: "webchat",
+                  policyContext: {
+                    config,
+                    messageChannel: "webchat",
+                    operatorProfileId: "ada-profile",
+                  },
+                });
+          expect(view).toBeDefined();
+          try {
+            const pending = view!.tools[0]!.execute("connect", {});
+            const settled = pending.then(
+              () => {
+                throw new Error("Connect unexpectedly succeeded");
+              },
+              (error: unknown) => error,
+            );
+            await Promise.race([
+              started.promise,
+              settled.then((error) => {
+                throw error;
+              }),
+            ]);
+            if (change === "revoked") {
+              revoke();
+            } else {
+              turn.replyOperation!.personalToolParticipants!.accept({
+                operatorAuthority: createAdmittedRunOperatorAuthority({
+                  profileId: "grace-profile",
+                  scopes: ["operator.read", "operator.write"],
+                  gatewayAccessGrant: null,
+                  modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
+                  assertCurrent() {},
+                }),
+                gatewayUiCommandTarget: { connId: "grace-connection", profileId: "grace-profile" },
+              });
+            }
+            release.resolve();
+            expect(await settled).toMatchObject({
+              message: expect.stringContaining(
+                change === "revoked"
+                  ? "admitted run authority is no longer active"
+                  : "Several people have steered",
+              ),
+            });
+            expect(paths).toHaveLength(1);
+            const identity = requesterMcpOAuthIdentity("calendar", `${origin}/mcp`, {
+              requesterSenderId: "ada-profile",
+              messageChannel: "webchat",
+            });
+            const stored = await readMcpOAuthStore(identity.storeKey);
+            expect(stored.tokens).toBeUndefined();
+            expect(stored.lastAuthorizationUrl).toBeUndefined();
+            expect(stored.codeVerifier).toBeUndefined();
+          } finally {
+            await view!.dispose();
+            if (consumer === "harness") {
+              acquisition.releaseLease();
+            }
+          }
+        });
+      } finally {
+        release.resolve();
+        await closeProviderTransportDispatcherPool();
+        await server.releaseListener();
+        await server.claim.release();
+      }
+    }, "webchat-mcp-real-oauth-");
+  },
+);
 
 it("does not borrow a person's credentials for a queued follow-up", async () => {
   await withTurn(
