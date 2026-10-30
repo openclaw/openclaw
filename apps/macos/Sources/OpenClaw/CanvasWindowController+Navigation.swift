@@ -70,13 +70,20 @@ extension CanvasWindowController {
 
     func webView(_: WKWebView, didFail _: WKNavigation!, withError error: Error) {
         let nsError = error as NSError
-        // A newer load superseding this one is not a failure.
+        // A newer load superseding this one is not a failure, and WebKit reports PDFs it hands to its
+        // plug-in (WebKitErrorDomain 204, "Plug-in handled load") through this callback while they display.
         if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled { return }
+        if nsError.domain == "WebKitErrorDomain", nsError.code == 204 { return }
         canvasWindowLogger.error(
             "canvas load failed domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public)")
+        // The system's description goes into HTML, so escape it; the code stays in the log above.
+        let reason = nsError.localizedDescription
+            .trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
         self.showLoadFailure(
-            "Canvas couldn't show this page (\(nsError.domain) \(nsError.code)). "
-                + "Check the file or URL, then present it again.")
+            "Canvas couldn't show this page: \(reason). Check the file or URL, then present it again.")
     }
 
     func webViewWebContentProcessDidTerminate(_: WKWebView) {
