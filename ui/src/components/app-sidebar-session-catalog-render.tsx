@@ -414,6 +414,14 @@ function renderCatalogHostGroup(
                     : null;
               });
               const collapsed = createMemo(() => collapsedSectionId() !== null);
+              const activity = createMemo(() =>
+                catalogSessionActivity(
+                  group().sessions,
+                  readLiveRowsByKey(),
+                  (row) =>
+                    params.host.sessionDataContext?.sessions.isRunVisuallyActive(row) ?? false,
+                ),
+              );
               return (
                 <div class="sidebar-session-catalog-project" role="listitem">
                   <button
@@ -428,6 +436,13 @@ function renderCatalogHostGroup(
                       {collapsed() ? <Icon name="chevronRight" /> : <Icon name="chevronDown" />}
                     </span>
                     <span class="sidebar-session-catalog-project__label">{group().label}</span>
+                    <Show when={collapsed() && activity().running}>
+                      <span
+                        class="session-run-spinner"
+                        role="img"
+                        aria-label={t("sessionsView.activeRun")}
+                      />
+                    </Show>
                     <span class="sidebar-session-catalog-project__count" aria-hidden="true">
                       {group().sessions.length}
                     </span>
