@@ -76,9 +76,79 @@
           }
         },
         "additionalProperties": false
+      },
+      "recallGate": {
+        "type": "object",
+        "required": ["baseUrl", "model"],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["off", "shadow", "live"],
+            "description": "off disables the gate; shadow (default) logs what it would inject and injects nothing; live injects matched records into the user turn."
+          },
+          "baseUrl": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "OpenAI-compatible base URL of the decision model, for example http://127.0.0.1:8010/v1."
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Decision model id."
+          },
+          "apiKey": {
+            "type": ["string", "object"],
+            "description": "Optional bearer token for the decision endpoint; accepts a SecretRef."
+          },
+          "highThreshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Score at or above which the matched page body is injected. Default 0.85."
+          },
+          "mediumThreshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Score at or above which a one-line pointer is injected. Default 0.5."
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 10000,
+            "description": "Whole-gate latency budget per turn. Default 1500."
+          },
+          "maxIndexChars": {
+            "type": "integer",
+            "minimum": 500,
+            "maximum": 200000,
+            "description": "Character budget of the index sent to the decision model. Default 24000."
+          },
+          "maxCandidates": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "description": "Most index entries scored per turn. Default 5."
+          }
+        },
+        "additionalProperties": false
       }
     },
     "additionalProperties": false
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [{ "path": "recallGate.apiKey", "expected": "string", "ownerKind": "capability" }]
+    }
+  },
+  "uiHints": {
+    "recallGate.apiKey": {
+      "label": "Recall gate API key",
+      "help": "Optional bearer token for the decision model endpoint.",
+      "sensitive": true
+    }
   },
   "doctorContract": {
     "configRepair": true
