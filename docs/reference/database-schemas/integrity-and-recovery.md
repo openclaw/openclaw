@@ -426,9 +426,9 @@ After shutdown grace, cached native handles also retire through their normal idl
 eviction path as soon as their final borrower releases them, unless dependent
 resources remain for that path. The orderly close owner drains those readers
 before closing the final writer, allowing its checkpoint and seal to complete.
-Independent idle handles do not wait for the restart marker or the ordinary
-30-minute idle window. Accepted cleanup can
-reopen through normal admission, which invalidates the seal again.
+Once restart marker persistence settles or times out, independent idle handles
+do not wait for unrelated service teardown or the ordinary 30-minute idle window.
+Accepted cleanup can reopen through normal admission, which invalidates the seal again.
 Required subagent cleanup remains tracked by its Gateway during drain, including
 child-session deletion, before database dependencies retire. Ordinary RPC
 admission stays closed; cleanup retains its original Gateway and session generation.
