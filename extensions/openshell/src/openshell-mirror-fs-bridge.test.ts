@@ -229,17 +229,17 @@ it.each(["parent", "symlink", "link"] as const)("rejects %s reads", async (kind)
   }
 });
 
-it("reads regular files and directories through the shared safe fs root", async () => {
-  await fs.mkdir(local("subdir/nested"), { recursive: true });
-  await seedLocal("subdir/secret.txt", "inside");
-  await expectDirectory(".", { subdir: true });
-  await expectDirectory(".", { nested: true, "secret.txt": false }, "/sandbox/subdir");
-  await expectRead("subdir/secret.txt", "inside", 6);
-  await expect(bridge.readFile({ filePath: "subdir/secret.txt", maxBytes: 5 })).rejects.toThrow(
+it("reads literal relative paths and directories through the safe fs root", async () => {
+  await fs.mkdir(local(" subdir/nested"), { recursive: true });
+  await seedLocal(" subdir/secret.txt", "inside");
+  await expectDirectory(".", { " subdir": true });
+  await expectDirectory(".", { nested: true, "secret.txt": false }, "/sandbox/ subdir");
+  await expectRead(" subdir/secret.txt", "inside", 6);
+  await expect(bridge.readFile({ filePath: " subdir/secret.txt", maxBytes: 5 })).rejects.toThrow(
     boundaryError,
   );
   await fs.symlink(
-    local("subdir"),
+    local(" subdir"),
     local("alias"),
     process.platform === "win32" ? "junction" : "dir",
   );
@@ -315,11 +315,4 @@ it.each([
     await expectRead(target, "agent");
     await expectDirectory(agent, { "note.txt": false });
   }
-});
-
-it("reads literal file paths without trimming whitespace", async () => {
-  await seedLocal(" x.txt", "literal-data");
-  await seedLocal("x.txt", "decoy-data");
-  await expectRead(" x.txt", "literal-data");
-  await expectRead("x.txt", "decoy-data");
 });
