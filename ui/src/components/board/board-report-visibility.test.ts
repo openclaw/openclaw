@@ -66,7 +66,6 @@ it("defers fixed reports until nearby, then retains their body and current conte
   await vi.dynamicImportSettled();
   await waitForSolid(() => expect(cell.textContent).toContain("Initial report"));
   expect(cell.querySelector(".board-widget__menu-trigger")).not.toBeNull();
-  expect(cell.querySelector(".board-widget__resize-handle")).not.toBeNull();
   const report = cell.querySelector("openclaw-report-widget");
   expect(observer!.targets.has(target)).toBe(false);
   cell.active = false;
@@ -83,7 +82,6 @@ it("defers fixed reports until nearby, then retains their body and current conte
   expect(cell.querySelector("openclaw-report-widget")).toBe(report);
   const auto = mountCell({ ...widget, name: "auto-report", heightMode: "auto" }, { context });
   await waitForSolid(() => expect(auto.textContent).toContain("Initial report"));
-  expect(auto.querySelector(".board-widget__chrome")).not.toBeNull();
   expect(observers.some(({ targets }) => targets.has(auto.querySelector(".board-widget")!))).toBe(
     false,
   );

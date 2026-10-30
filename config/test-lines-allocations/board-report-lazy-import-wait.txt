@@ -1,2 +1,0 @@
-2
-# Settle lazy imports before checking deferred and retained report content.
