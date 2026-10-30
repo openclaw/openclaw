@@ -143,10 +143,23 @@ transcript and online roster, remounts the first/last rows, and removes the nati
 `openclaw-app` host to exercise production disconnection while preserving the
 document for lifetime measurement. Settings parks chat and cannot prove disposal.
 A document nonce assertion rejects any reload as invalid disposal evidence.
-Per-sample JSON records request counts by full URL (including revision, ticket,
+Per-sample JSON records synthetic route admission counts by full URL (including revision, ticket,
 and size queries), method, kind and opaque auth-context identity; credentials are
 never recorded. Cumulative before/stable/scroll/disposal snapshots and separate
 boot/steady duplicate counts distinguish request ownership from bootstrap work.
+`cacheProbe.routeFulfillments` separately counts successfully fulfilled synthetic
+responses, split by Playwright resource type (`image` versus `fetch`).
+`cacheProbe.fetchAttempts` separates `cacheOnly` (`only-if-cached`) thumbnail probes
+from `networkEligible` fetches and records their cache mode, request mode,
+credentials mode, opaque authorization identity, and outcome. Correlate these with
+fulfillments by exact URL and method; the browser-side authorization identities
+are independent of route-side auth contexts, which also include cookies.
+`cacheProbe.networkDownloads` is `null`: these responses never reach
+an HTTP server, so this harness does not measure real downloads or browser-cache
+hits. The `requests`, snapshot, and duplicate fields all count route admissions,
+including admissions that fail before fulfillment. A repeat may be a cache-only
+probe rather than missing application reuse; it cannot prove a repeated network
+transfer.
 Chromium duration metrics use its `threadTicks` clock to measure thread CPU time,
 excluding time descheduled by other work on the host. Wall-clock load/scroll
 timings remain separate.
@@ -160,9 +173,9 @@ first pair includes pending and loaded screenshots for each bundle/profile.
 `summary.json` retains every sample, load
 average, bundle identity, and median/p95 load/scroll timings.
 
-Acceptance is zero CLS in the fixed media viewport, at most one fetch per unique
-media resource and kind, and no live object URLs owned only by disposed markdown
-consumers. Review retained URLs against their actual owner: a documented shared
+Acceptance is zero CLS in the fixed media viewport and no live object URLs owned
+only by disposed markdown consumers. Review repeated admissions alongside cache-only
+probes before attributing application reuse. Review retained URLs against their actual owner: a documented shared
 page-lifetime cache is distinct from a disposed consumer leak. Timing needs ten
 pairs with median regression ≤5% and p95 not worse. On a loaded host, repeat with
 the same base directory supplied as both bundles for an A/A control, then use
