@@ -29,18 +29,13 @@ afterEach(async () => {
 it.each(["menu", "padding"] as const)("keeps the mobile draft through %s focus", async (target) => {
   await page.viewport(430, 800);
   const editing = vi.fn();
-  const view = renderComposerFixture({
+  const { props, container } = renderComposerFixture({
     mobileComposer: true,
-    ...(target === "menu"
-      ? {
-          mobileKeyboardVisible: false,
-          capabilityMenu: makeCapabilities({ basePath: "" }),
-        }
-      : {}),
+    mobileKeyboardVisible: target === "menu" ? false : undefined,
+    capabilityMenu: target === "menu" ? makeCapabilities({ basePath: "" }) : undefined,
     draft: "Keep this draft and selection",
     onComposerEditingChange: editing,
   });
-  const { props, container } = view;
   if (target === "padding") {
     container.tabIndex = -1;
   }
