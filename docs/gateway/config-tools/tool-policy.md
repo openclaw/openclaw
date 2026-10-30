@@ -309,6 +309,15 @@ Keys use explicit prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `
 
 Per-agent `agents.entries.*.tools.toolsBySender` overrides the global sender match when it matches, even with an empty `{}` policy.
 
+In the embedded agent runner, global and per-agent sender policy on core tools is checked when a tool runs: every sender in a session sees the same core tool definitions and system prompt tool list, so the prompt cache survives a change of sender, and a call the sender's policy denies is refused. The tool list still changes by sender when:
+
+- a sender entry denies a plugin tool: that tool is not built for the sender.
+- a sender entry denies `process` but not `exec`: the `exec` description and parameters change.
+- a sender entry restricts any tool: the `sessions_spawn` description tells that sender it may start only hidden helpers of the same agent.
+- the agent runs on the Codex harness: a sender restriction turns native tools off for the turn.
+- the agent runs on a [CLI backend](/gateway/cli-backends) that gets Gateway tools through the loopback MCP bridge: the sender entry removes tools from that catalog.
+- the entry is a group-level `channels.<channel>.groups.*.toolsBySender` entry: it removes tools from the list.
+
 ## `tools.elevated`
 
 Controls elevated exec access outside the sandbox:

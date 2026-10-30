@@ -266,6 +266,48 @@ it.each<[string, ToolOptions]>([
     surface(createOpenClawCodingTools(userTurn)),
   );
 });
+// The documented shape: one trusted sender keeps every tool, everyone else loses mutations.
+it("offers one session's tool definitions to every sender and refuses denied calls", async () => {
+  const senderConfig: OpenClawConfig = {
+    ...config,
+    tools: {
+      ...config.tools,
+      toolsBySender: {
+        "id:alice": {},
+        "*": { deny: ["exec", "process", "write", "edit", "apply_patch"] },
+      },
+    },
+  };
+  setRuntimeConfigSnapshot(senderConfig);
+  const groupTurn = (senderId: string) =>
+    createOpenClawCodingTools({
+      ...session,
+      config: senderConfig,
+      sessionKey: "agent:main:telegram:group:team",
+      messageTo: "telegram:group:team",
+      runId: `run-${senderId}`,
+      senderId,
+    });
+  // sessions_spawn's agentId guidance names the sender's restriction, which its spawn
+  // admission enforces; every other definition is the session's.
+  const definitions = (senderId: string) =>
+    groupTurn(senderId).map((tool) =>
+      JSON.stringify({
+        name: tool.name,
+        description: tool.name === "sessions_spawn" ? "" : tool.description,
+        parameters: tool.parameters,
+      }),
+    );
+  expect(definitions("bob")).toEqual(definitions("alice"));
+  const write = (senderId: string) => groupTurn(senderId).find((tool) => tool.name === "write")!;
+  // alice's call reaches the write executor, which rejects a call without a path.
+  await expect(write("alice").execute("alice-write", {})).rejects.toThrow();
+  const refused = await write("bob").execute("refused-write", {});
+  expect(refused.details).toMatchObject({ gated: true });
+  expect(JSON.stringify(refused.content)).toContain(
+    "write is not allowed for the sender of this message (tools.toolsBySender)",
+  );
+});
 it("offers the same message definition on a source-bound completion turn", () => {
   const assemble = (sourceReplyOnly: boolean) =>
     surface(

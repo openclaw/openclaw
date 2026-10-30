@@ -55,7 +55,7 @@ import {
   getActiveAgentRingZeroTools,
   mergeAgentRingZeroTools,
 } from "./agent-tools.ring-zero-context.js";
-import { isHostSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
+import * as turnAuthority from "./agent-tools.turn-authority.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { resolveAutomationsRunScope } from "./automations-run-scope.js";
 import { registerOneShotExecScopeCleanup } from "./bash-process-control.js";
@@ -573,19 +573,20 @@ function* assembleOpenClawCodingTools(
       ),
       options?.config,
     );
+  const narrowedBy = turnAuthority.resolveTurnNarrowing(capabilityProfile.policy);
   const {
     tools: authorizedTools,
     turnAuthorized,
     callableTools,
     exportedTools,
-  } = resolveTurnToolSurface({
+  } = turnAuthority.resolveTurnToolSurface({
     turnTools: completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter)),
-    sessionTools:
-      capabilityProfile.policy.requesterPolicySource === "completion-handoff"
-        ? completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, undefined, "session"))
-        : undefined,
+    sessionTools: narrowedBy
+      ? completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, undefined, "session"))
+      : undefined,
+    narrowedBy,
     ownerOnlyDenied: new Set(ownerOnlyCoreToolDenylist),
-    hostSystemTurn: isHostSystemTurn(options ?? {}),
+    hostSystemTurn: turnAuthority.isHostSystemTurn(options ?? {}),
   });
   assertMemoryFlushPersistenceToolAvailable(authorizedTools, options?.memoryFlushTools);
   authorizedTools.forEach(bindAssembledAgentToolActionDescriptor);

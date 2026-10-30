@@ -807,7 +807,7 @@ describe("createOpenClawCodingTools", () => {
     );
   });
 
-  it("separates the canonical message provider from transport tool policy", () => {
+  it("separates the canonical message provider from transport tool policy", async () => {
     vi.mocked(createOpenClawTools).mockClear();
 
     const tools = createOpenClawCodingTools({
@@ -816,7 +816,10 @@ describe("createOpenClawCodingTools", () => {
       toolPolicyMessageProvider: "discord-voice",
       senderId: "speaker-1",
     });
-    expectToolNames(tools, [], ["exec", "tts"]);
+    // The sender policy keeps exec's definition and refuses the call.
+    expectToolNames(tools, ["exec"], ["tts"]);
+    const refused = await tools.find((tool) => tool.name === "exec")!.execute("exec", {});
+    expect(refused.details).toMatchObject({ gated: true });
     expect(lastCoreOptions().agentChannel).toBe("discord");
   });
 
