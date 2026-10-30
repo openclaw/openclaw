@@ -1,0 +1,2 @@
+108
+# Exact capture/receipt byte accounting in host and worker preparation, and preparation-scope lifetime.
