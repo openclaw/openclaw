@@ -574,6 +574,73 @@ describe("registered mcp.authLogin", () => {
     },
   );
 
+  it("signs a bundle-declared connector out without changing other connections", async () => {
+    await clearMcpOAuthCredentials(identity());
+    const previousMetadata = getCurrentPluginMetadataSnapshotState();
+    const rootDir = path.join(resolveStateDir(), "docs-logout-bundle");
+    const manifestPath = path.join(rootDir, ".codex-plugin", "plugin.json");
+    await mkdir(path.dirname(manifestPath), { recursive: true });
+    await writeFile(
+      manifestPath,
+      JSON.stringify({ name: "docs-bundle", mcpServers: { docs: config } }),
+    );
+    const bundleConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "off" } },
+      plugins: { enabled: true, entries: { "docs-bundle": { enabled: true } } },
+    };
+    const unrelated = operatorMcpOAuthIdentity("other", resourceUrl);
+    try {
+      setGatewayPluginMetadataSnapshot(
+        createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "docs-bundle",
+              origin: "global",
+              format: "bundle",
+              bundleFormat: "codex",
+              rootDir,
+              manifestPath,
+            },
+          ],
+        }),
+        { config: bundleConfig },
+      );
+      await writeConfigFile(bundleConfig);
+      const started = await begin();
+      expect((await callback(started.state)).status).toBe(200);
+      expect(await terminal(started.sessionId)).toMatchObject({ status: "done" });
+      expect((await store()).tokens?.access_token).toBe("fixture-access");
+      const unrelatedAttempt = await startMcpOAuthAuthorization(unrelated, resolvedTransport(), {});
+      if (unrelatedAttempt.status === "redirect") {
+        await cancelMcpOAuthAuthorization(unrelated, unrelatedAttempt.state);
+      }
+      const unrelatedBefore = await readMcpOAuthStore(unrelated.storeKey);
+      expect(unrelatedBefore.clientInformation).toBeDefined();
+
+      expect((await rpcReq(readOnly, "mcp.authLogout", { serverName: "docs" })).ok).toBe(false);
+      expect(
+        (await rpcReq(owner, "mcp.authLogout", { serverName: "missing" })).error,
+      ).toMatchObject({ message: expect.stringContaining("no operator sign-in to clear") });
+      expect((await store()).tokens?.access_token).toBe("fixture-access");
+
+      expect(await rpcReq(owner, "mcp.authLogout", { serverName: "docs" })).toMatchObject({
+        ok: true,
+        payload: { serverName: "docs" },
+      });
+      const stored = await store();
+      expect([stored.tokens, stored.clientInformation]).toEqual([undefined, undefined]);
+      expect(await readMcpOAuthStore(unrelated.storeKey)).toEqual(unrelatedBefore);
+    } finally {
+      await clearMcpOAuthCredentials(unrelated);
+      if (previousMetadata.owner === "gateway") {
+        setGatewayPluginMetadataSnapshot(previousMetadata.snapshot);
+      } else {
+        setCurrentPluginMetadataSnapshot(previousMetadata.snapshot);
+      }
+      await configure();
+    }
+  });
+
   it("does not cancel a newer CLI attempt when its browser sign-in is denied", async () => {
     await clearMcpOAuthCredentials(identity());
     const started = await begin();

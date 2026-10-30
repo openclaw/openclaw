@@ -216,6 +216,8 @@ Follow the printed authorization URL. OpenClaw normally captures the loopback re
 
 The CLI signs in only to servers defined under `mcp.servers`. A server that a plugin declares signs in from the plugin's page (**Sign in**, or **Accounts** → **Sign in**); a failed browser sign-in for it points back to the plugin settings instead of a CLI command.
 
+To sign out of a plugin-declared server, open the plugin's page and select **Accounts** → **Sign out**. OpenClaw removes the saved credentials on the Gateway; the plugin's tools need a new sign-in before their next call. Uninstalling the plugin also removes the saved sign-ins for its servers, so a reinstall starts signed out. A server under `mcp.servers` with the same name and URL keeps its credentials.
+
 ### Changes do not reach an active agent
 
 `openclaw mcp reload` refreshes runtimes owned by the current CLI process. A Gateway or agent running elsewhere needs its own reload, config publish, or restart.
