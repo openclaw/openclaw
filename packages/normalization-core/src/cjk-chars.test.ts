@@ -70,6 +70,15 @@ describe("normalization-core/cjk-chars", () => {
     },
   );
 
+  it.each([0x17000, 0x18800, 0x18b00, 0x18d00, 0x1b170, 0x1b2ff])(
+    "weights Tangut, Khitan, and Nushu supplementary scripts for U+%s",
+    (codePoint) => {
+      expect(estimateStringChars(String.fromCodePoint(codePoint))).toBe(
+        CHARS_PER_TOKEN_ESTIMATE * 4,
+      );
+    },
+  );
+
   it("covers CJK script-extension marks with measured weights", () => {
     expect(estimateStringChars("·".repeat(32))).toBe(32 * CHARS_PER_TOKEN_ESTIMATE);
     expect(estimateStringChars(String.fromCodePoint(0x02ca))).toBe(CHARS_PER_TOKEN_ESTIMATE * 2);
