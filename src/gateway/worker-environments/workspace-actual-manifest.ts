@@ -200,6 +200,8 @@ type ActualWorkspaceNode = WorkerWorkspaceManifestEntry | { path: string; type: 
 export async function scanActualWorkspaceManifest(
   params: ActualWorkspaceManifestOptions & {
     onEntry: (entry: ActualWorkspaceNode, identity?: string) => void;
+    // Only repair candidates authenticated against a saved root may retain this former input.
+    includeLegacyPnpmStore?: boolean;
     reuseFile?: (
       entryPath: string,
       identity: string,
@@ -222,7 +224,14 @@ export async function scanActualWorkspaceManifest(
   const ignored = params.gitIgnore?.paths;
   const isExcluded = async (relative: string): Promise<boolean> => {
     const retainedInput = retained.has(relative) || (await isStagedInput(relative));
-    if (isDerivedWorkspacePath(relative, retainedInput, params.buildCacheInputs !== undefined)) {
+    if (
+      isDerivedWorkspacePath(
+        relative,
+        retainedInput,
+        params.buildCacheInputs !== undefined,
+        params.includeLegacyPnpmStore,
+      )
+    ) {
       return true;
     }
     if (!ignored?.size || retainedInput || params.gitIgnore?.retainedPaths.has(relative)) {

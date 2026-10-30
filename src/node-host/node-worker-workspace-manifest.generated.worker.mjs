@@ -68,10 +68,12 @@ const DERIVED_WORKSPACE_ROOT_PATHS = [
   ".local/share/NuGet/v3-cache",
   ".nuget/packages",
   ".local/share/pnpm/store",
+  ".openclaw/.pnpm-store",
   ".artifacts/vitest-workers",
   ".artifacts/vitest-worker-cache",
   ".artifacts/vitest-shard-timings.json",
 ];
+const PNPM_FALLBACK_STORE_ROOT_PATH = ".openclaw/.pnpm-store";
 const BUILD_CACHE_ROOT_PATHS = [".artifacts/build-all-cache", ".artifacts/build-cache-inputs"];
 function isBuildCacheWorkspacePath(relativePath) {
   return BUILD_CACHE_ROOT_PATHS.some(
@@ -104,7 +106,12 @@ function isRuntimeOwnedWorkspacePath(relativePath) {
     )
   );
 }
-function isDerivedWorkspacePath(relativePath, retainedInput = false, excludeBuildCaches = false) {
+function isDerivedWorkspacePath(
+  relativePath,
+  retainedInput = false,
+  excludeBuildCaches = false,
+  includeLegacyPnpmStore = false,
+) {
   if (isRuntimeOwnedWorkspacePath(relativePath)) {
     return true;
   }
@@ -114,7 +121,9 @@ function isDerivedWorkspacePath(relativePath, retainedInput = false, excludeBuil
   if (excludeBuildCaches && isBuildCacheWorkspacePath(relativePath)) return true;
   if (
     DERIVED_WORKSPACE_ROOT_PATHS.some(
-      (root) => relativePath === root || relativePath.startsWith(root + "/"),
+      (root) =>
+        (!includeLegacyPnpmStore || root !== PNPM_FALLBACK_STORE_ROOT_PATH) &&
+        (relativePath === root || relativePath.startsWith(root + "/")),
     )
   ) {
     return true;
