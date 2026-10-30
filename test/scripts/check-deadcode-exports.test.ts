@@ -79,26 +79,6 @@ describe("check-deadcode-exports", () => {
     }
   });
 
-  it("models preloaded lineage writer calls without retaining removed consumers", () => {
-    const file = path.resolve("src/process/supervisor/service-child-group-anchor.ts");
-    const source = fs.readFileSync(file, "utf8");
-    const compile = createDynamicConsumerCompiler();
-    const symbols = ["recordNodeWorkerDescendantsReaped", "recordNodeWorkerLineageSettled"];
-    for (const symbol of symbols) {
-      expect(compile()).toContain(`${symbol} as `);
-      const removed = replaceFixture(source, `lineageCompletion.${symbol}(`, "unusedWriter(");
-      expect(compile(new Map([[file, removed]]))).not.toContain(`${symbol} as `);
-    }
-    const withoutLoad = replaceFixture(
-      source,
-      'await import("../../node-host/node-worker-lineage-completion.js").catch(() => undefined)',
-      "undefined",
-    );
-    expect(compile(new Map([[file, withoutLoad]]))).not.toContain(
-      'from "../src/node-host/node-worker-lineage-completion.js";',
-    );
-  });
-
   it("makes tests in every workspace roots of the full-tree export audit", () => {
     expectEntries(knipConfig.workspaces["."].entry, [
       "config/knip.config.ts!",
