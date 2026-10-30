@@ -667,6 +667,35 @@ it("filters skills across groups and restores the catalog when header search clo
   );
 });
 
+// NFC "ü" is U+00FC; NFD is "u" + combining diaeresis U+0308.
+it("matches an NFC skill search against an NFD skill name", async () => {
+  const nfdName = "Mu\u0308ller skill";
+  const base = makeMenu({
+    open: true,
+    view: "skills",
+    capabilityMenu: makeCapabilities({
+      skills: [{ key: "muller", name: nfdName, enabled: true, baseEnabled: true }],
+    }),
+  });
+  const view = mountSolid(() => <ChatComposerPlusMenu menu={base} />);
+  await waitForSolid(() =>
+    expect(view.queryByRole("button", { name: "Search skills", hidden: true })).not.toBeNull(),
+  );
+  view.getByRole("button", { name: "Search skills", hidden: true }).click();
+  await waitForSolid(() =>
+    expect(view.queryByRole("textbox", { name: "Search skills", hidden: true })).not.toBeNull(),
+  );
+  const input = view.getByRole("textbox", {
+    name: "Search skills",
+    hidden: true,
+  }) as HTMLInputElement;
+  input.value = "M\u00fcller";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await waitForSolid(() =>
+    expect(view.getByRole("menuitemcheckbox", { name: nfdName, hidden: true })).not.toBeNull(),
+  );
+});
+
 it("expands one server at a time and keeps switch and bulk tool actions separate", async () => {
   const patch = vi.fn();
   const open = vi.fn();
