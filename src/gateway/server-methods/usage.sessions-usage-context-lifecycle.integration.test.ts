@@ -293,22 +293,16 @@ it.for([
     const release = createDeferred();
     // Created after the cleanup hook is registered.
     const owned: { projection?: SessionRowProjection; releaseProfileCatalog?: () => void } = {};
-    const dispatches: string[] = [];
-    const actualRun = WorkerTaskPool.prototype.run;
-    WorkerTaskPool.prototype.run = new Proxy(actualRun, {
-      apply(target, receiver, args) {
-        const task = args[0];
-        if (
-          isRecord(task) &&
-          (task.kind === "prepare" || task.kind === "cohorts" || task.kind === "report") &&
-          isRecord(task.input) &&
-          Array.isArray(task.input.rows)
-        ) {
-          dispatches.push(task.kind);
-        }
-        return Reflect.apply(target, receiver, args);
-      },
-    });
+    const workerRun = vi.spyOn(WorkerTaskPool.prototype, "run");
+    const dispatches = () =>
+      workerRun.mock.calls.flatMap(([task]) =>
+        isRecord(task) &&
+        (task.kind === "prepare" || task.kind === "cohorts" || task.kind === "report") &&
+        isRecord(task.input) &&
+        Array.isArray(task.input.rows)
+          ? [task.kind]
+          : [],
+      );
     const actualReporter = usageOverviewReport.createUsageOverviewReporter;
     // Hold every worker report after it completes, so access can change before publication.
     const reporter = vi
@@ -330,7 +324,7 @@ it.for([
     onTestFinished(async () => {
       release.resolve();
       reporter.mockRestore();
-      WorkerTaskPool.prototype.run = actualRun;
+      workerRun.mockRestore();
       owned.projection?.dispose();
       owned.releaseProfileCatalog?.();
       await state.cleanup();
@@ -454,7 +448,7 @@ it.for([
     );
     if (!revoke) {
       // Hydrating saved context changes metadata, not this model-only aggregation.
-      expect(dispatches).toEqual(["prepare", "cohorts"]);
+      expect(dispatches()).toEqual(["prepare", "cohorts"]);
       expect(result.sessions[0]).toMatchObject({
         sessionId: sessions[0]!.sessionId,
         hasContextWeight: true,
@@ -462,7 +456,7 @@ it.for([
       expect(result.sessions[0]!.contextWeight).toBeUndefined();
 
       const read = async (query: string, includeContextWeight = false) => {
-        dispatches.length = 0;
+        workerRun.mockClear();
         const reply = vi.fn();
         await coreGatewayHandlers["sessions.usage"]!({
           req: { type: "req", id: query, method: "sessions.usage" },
@@ -479,16 +473,16 @@ it.for([
           context,
         });
         expect(reply).toHaveBeenCalledOnce();
-        const [success, payload] = reply.mock.calls[0]!;
+        const [success, response] = reply.mock.calls[0]!;
         expect(success).toBe(true);
-        return payload as SessionsUsageResult;
+        return response as SessionsUsageResult;
       };
       const contextOnly = await read("has:context");
-      expect(dispatches).toEqual(["prepare", "report"]);
+      expect(dispatches()).toEqual(["prepare", "report"]);
       expect(contextOnly.totals.totalTokens).toBe(17);
       expect(contextOnly.sessions.map((row) => row.sessionId)).toEqual([sessions[0]!.sessionId]);
       const withContext = await read("model:synthetic", true);
-      expect(dispatches).toEqual(["prepare", "cohorts"]);
+      expect(dispatches()).toEqual(["prepare", "cohorts"]);
       expect(withContext.totals.totalTokens).toBe(40);
       expect(withContext.sessions[0]!.contextWeight).toEqual(promptReport(timestamp, 100, 0));
     }
