@@ -470,7 +470,7 @@ export async function prepareNodeBootstrapArtifact(
         };
         scopes.push(scope);
         addFiles(root, dependencyFiles, scope.prefix, scope);
-        const packaged = { ...installed } as NodePackageManifest;
+        const packaged = { ...installed };
         delete packaged.scripts;
         delete packaged.devDependencies;
         addGeneratedFile(

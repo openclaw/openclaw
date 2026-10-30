@@ -134,8 +134,7 @@ if (args[0] === "--version") {
         buildId: "fixture-runtime-build",
         openclawVersion: "2026.8.1",
         install,
-        platforms:
-          install === "npm" ? [] : [{ platform: process.platform, arch: process.arch, prefix: "" }],
+        platforms: [{ platform: process.platform, arch: process.arch, prefix: "" }],
       }),
     );
     const inventory: Array<{ path: string; size: number; mode: number; sha256: string }> = [];

@@ -1,2 +1,2 @@
-# Real archive composition, dependency ownership, tamper rejection, and Linux lifecycle boundary proof.
-755
+# Archive composition, dependency ownership, tamper rejection, Linux lifecycle, and Docker digest classification proof.
+782
