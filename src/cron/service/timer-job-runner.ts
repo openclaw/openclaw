@@ -20,9 +20,11 @@ import {
 } from "./active-run-cancellation.js";
 import { isDeferredCronAdmission } from "./admission-deferred.js";
 import {
+  applyCronWatchdogWaitSignal,
   createCronAgentWatchdog,
   CRON_AGENT_SETUP_WATCHDOG_MS,
   settleTimedOutCronRun,
+  type CronWatchdogWaitSignal,
 } from "./agent-watchdog.js";
 import { createCronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
 import {
@@ -369,12 +371,8 @@ async function executeJobCoreWithTimeoutUnfinalized(
         untimedExecution = { ...untimedExecution, ...info };
       }
     };
-    const noteLaneState = (info?: { waiting?: boolean }) => {
-      if (info?.waiting === false) {
-        watchdog?.noteLaneAdmitted();
-        return;
-      }
-      watchdog?.noteLaneWait();
+    const noteLaneState = (info?: CronWatchdogWaitSignal) => {
+      applyCronWatchdogWaitSignal(watchdog, info);
     };
     const noteRunnerStarted = (info?: CronAgentExecutionStarted) => {
       if (watchdog) {

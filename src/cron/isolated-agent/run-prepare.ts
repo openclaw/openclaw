@@ -576,6 +576,9 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
       });
       cronSession.sessionEntry.systemSent = true;
       let preRunSessionPersisted = false;
+      const notePreparationWait = (waiting: boolean) =>
+        input.onLaneWait?.({ waiting, stage: "session-persistence" });
+      notePreparationWait(true);
       try {
         await persistSessionEntry();
         preRunSessionPersisted = true;
@@ -587,6 +590,8 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         if (sandbox === "required" || cronSession.sessionEntry.sandbox === "required") {
           throw err;
         }
+      } finally {
+        notePreparationWait(false);
       }
       await retireRolledCronSessionMcpRuntime({
         job: input.job,

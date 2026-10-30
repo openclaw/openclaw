@@ -17,7 +17,7 @@ import type {
  */
 export type CronLaneWaitCallback = (info?: {
   waiting?: boolean;
-  stage?: "session-preparation";
+  stage?: "session-preparation" | "session-persistence";
 }) => void;
 
 /** Pre-run disposition returned when isolated cron work never enters an agent runner. */

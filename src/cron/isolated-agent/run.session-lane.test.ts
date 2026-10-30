@@ -133,7 +133,7 @@ describe("session-bound cron lane admission", () => {
         await previous;
         await expect(withinTest(run, signal)).resolves.toMatchObject({ status: "ok" });
         expect(laneSignals).toContainEqual({ waiting: false, stage: "session-preparation" });
-        expect(laneSignals.filter((info) => info?.stage !== "session-preparation")).toEqual([]);
+        expect(laneSignals.every((info) => info?.stage !== undefined)).toBe(true);
         expect(accessor.loadSessionEntry(target)).toMatchObject({
           sessionId: target.sessionId,
           ...terminal,
@@ -174,6 +174,30 @@ describe("session-bound cron lane admission", () => {
     if (!cancel) {
       expect(harness.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     }
+  });
+
+  it("reports the session-row write as a preparation pause", async ({ signal }) => {
+    const { target } = await seedSession();
+    const preparationSignals: Array<{
+      waiting?: boolean;
+      stage?: "session-preparation" | "session-persistence";
+    }> = [];
+    const run = startCron(target, {
+      abortSignal: signal,
+      onLaneWait: (info) => {
+        if (info?.stage === "session-persistence") {
+          preparationSignals.push(info);
+        }
+      },
+    });
+    await expect(withinTest(run, signal)).resolves.toMatchObject({ status: "ok" });
+    // The persistence stage must add its own pair so the setup watchdog can pause
+    // while the session row is persisted, without touching admission signals.
+    expect(preparationSignals.length).toBeGreaterThanOrEqual(2);
+    expect(preparationSignals.slice(-2)).toEqual([
+      { waiting: true, stage: "session-persistence" },
+      { waiting: false, stage: "session-persistence" },
+    ]);
   });
 
   it("serializes cron turns through model settlement", async ({ signal }) => {

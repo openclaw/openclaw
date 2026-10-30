@@ -20,7 +20,11 @@ import {
   getSuspensionVisibleCronTaskRunCount,
   waitForActiveCronTaskRuns,
 } from "./active-run-cancellation.js";
-import { CRON_AGENT_SETUP_WATCHDOG_MS, createCronAgentWatchdog } from "./agent-watchdog.js";
+import {
+  applyCronWatchdogWaitSignal,
+  CRON_AGENT_SETUP_WATCHDOG_MS,
+  createCronAgentWatchdog,
+} from "./agent-watchdog.js";
 import { preExecutionTimeoutErrorMessage } from "./execution-errors.js";
 import type { CronServiceDeps } from "./state.js";
 import { executeJobCoreWithTimeout } from "./timer-job-runner.js";
@@ -274,6 +278,54 @@ describe("cron agent setup watchdog", () => {
     await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS + 1);
     expect(triggerTimeout).toHaveBeenCalledTimes(1);
     expect(watchdog.observedLaneWait()).toBe(false);
+  });
+
+  it("pauses the setup deadline during session-persistence writes without lane attribution", async () => {
+    const { triggerTimeout, watchdog, advance } = makeWatchdog(2);
+    watchdog.notePersistenceWait();
+    await advance(37_000);
+    expect(triggerTimeout).not.toHaveBeenCalled();
+    expect(watchdog.observedLaneWait()).toBe(false);
+    watchdog.notePersistenceResumed();
+    await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
+    expect(triggerTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(triggerTimeout).toHaveBeenCalledTimes(1);
+    expect(watchdog.observedLaneWait()).toBe(false);
+  });
+
+  it("bounds the session-persistence pause by the setup budget", async () => {
+    const { triggerTimeout, watchdog } = makeWatchdog(2);
+    watchdog.notePersistenceWait();
+    await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
+    expect(triggerTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(triggerTimeout).toHaveBeenCalledTimes(1);
+    watchdog.notePersistenceResumed();
+    await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS);
+    expect(triggerTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps controller-admission waits exempt beyond the setup budget", async () => {
+    const { triggerTimeout, watchdog } = makeWatchdog(2);
+    applyCronWatchdogWaitSignal(watchdog, { waiting: true, stage: "session-preparation" });
+    await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS + 1);
+    expect(triggerTimeout).not.toHaveBeenCalled();
+    expect(watchdog.observedLaneWait()).toBe(true);
+    applyCronWatchdogWaitSignal(watchdog, { waiting: false, stage: "session-preparation" });
+    await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS + 1);
+    expect(triggerTimeout).toHaveBeenCalledTimes(1);
+    expect(watchdog.observedLaneWait()).toBe(false);
+  });
+
+  it("routes session-persistence waits through the bounded allowance", async () => {
+    const { triggerTimeout, watchdog } = makeWatchdog(2);
+    applyCronWatchdogWaitSignal(watchdog, { waiting: true, stage: "session-persistence" });
+    await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
+    expect(triggerTimeout).not.toHaveBeenCalled();
+    expect(watchdog.observedLaneWait()).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(triggerTimeout).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the fallback watchdog armed across later setup progress", async () => {
