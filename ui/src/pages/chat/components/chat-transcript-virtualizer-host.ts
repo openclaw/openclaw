@@ -214,7 +214,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       initialRect: initialTranscriptRect(),
       initialOffset: initialOffset ?? Number.MAX_SAFE_INTEGER,
       anchorTo: "end",
-      followOnAppend: false,
       scrollToFn: (...args) =>
         scrollTranscriptOffset(this.offsetState, this, this.headerHeight, ...args),
       observeElementRect: this.viewportRect.observe,
@@ -242,6 +241,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           callback,
         ),
       measureElement: this.layout.measureRow,
+      // Row measurements can resize the range and mount new observed rows.
+      // Commit those writes outside native resize delivery to avoid WebKit's loop.
+      useAnimationFrameWithResizeObserver: true,
       rangeExtractor: (range) => this.initialRange.extract(range),
       // Virtual distance omits real padding, pinning readers ~80px up past scroll.ts's follow-lock.
       // scheduleCommittedChatScroll owns end-follow on content changes and source: "resize".

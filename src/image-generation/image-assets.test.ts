@@ -3,6 +3,7 @@ import {
   generatedImageAssetFromDataUrl,
   imageFileExtensionForMimeType,
   imageSourceUploadFileName,
+  parseImageDataUrl,
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
   resolveImageSourceUrl,
@@ -35,7 +36,16 @@ describe("image asset helpers", () => {
     expect(generatedImageAssetFromDataUrl({ dataUrl, index: 1 })).toEqual(asset);
   });
 
+  it("canonicalizes image data URLs for direct parser callers", () => {
+    expect(parseImageDataUrl("data:image/png;base64, Zg\n ")).toEqual({
+      mimeType: "image/png",
+      base64: "Zg==",
+    });
+  });
+
   it("rejects malformed base64 image data URLs", () => {
+    expect(parseImageDataUrl(malformedDataUrl)).toBeUndefined();
+    expect(parseImageDataUrl("data:image/png;base64,")).toBeUndefined();
     expect(generatedImageAssetFromDataUrl({ dataUrl: malformedDataUrl, index: 0 })).toBeUndefined();
   });
 

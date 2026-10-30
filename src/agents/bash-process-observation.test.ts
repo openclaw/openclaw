@@ -1,5 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { readBackgroundProcesses, stopBackgroundProcess } from "./bash-process-observation.js";
+import {
+  countRunningBackgroundProcesses,
+  readBackgroundProcesses,
+  stopBackgroundProcess,
+} from "./bash-process-observation.js";
 import { addSession, appendOutput, deleteSession, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -50,6 +54,7 @@ it("bounds encoded output and rows without consuming agent output or crossing gl
     appendOutput(session, "stdout", "界".repeat(2200));
   }
   const result = readBackgroundProcesses(scope);
+  expect(countRunningBackgroundProcesses(scope)).toBe(80);
   expect(result.truncated).toBe(true);
   expect(result.processes.length).toBeGreaterThan(0);
   expect(result.processes.length).toBeLessThanOrEqual(50);
@@ -58,8 +63,10 @@ it("bounds encoded output and rows without consuming agent output or crossing gl
   const global = seed("global-main", "global");
   const readGlobal = { scopeKeys: ["global"], agentId: "other" };
   expect(readBackgroundProcesses(readGlobal).processes).toEqual([]);
+  expect(countRunningBackgroundProcesses(readGlobal)).toBe(0);
   global.agentId = undefined;
   expect(readBackgroundProcesses({ ...readGlobal, agentId: "main" }).processes).toEqual([]);
+  expect(countRunningBackgroundProcesses({ ...readGlobal, agentId: "main" })).toBe(0);
 });
 
 it.each([

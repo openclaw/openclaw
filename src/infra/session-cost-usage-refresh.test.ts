@@ -8,6 +8,9 @@ import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "./agent-run-registry.js";
 import { refreshCostUsageCacheForAgent as refreshAgent } from "./session-cost-usage-aggregation.js";
@@ -194,11 +197,15 @@ async function withRefreshFixture(
       .map((file, index) => fs.writeFile(file, index === 0 ? firstRecord : userLine)),
   );
   await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-    if (fakeTimers) {
-      vi.useFakeTimers();
-    }
     const fixture = makeRefreshFixture(agentId, sessionFiles);
     try {
+      // Prepare real admission before fake time controls the refresh deadlines.
+      // A missing shared-state file requires an asynchronous filesystem probe on every batch.
+      openOpenClawStateDatabase();
+      await readAgentDeletionJournalStatusInWorker(agentId);
+      if (fakeTimers) {
+        vi.useFakeTimers();
+      }
       await run(fixture);
     } finally {
       try {
@@ -206,6 +213,7 @@ async function withRefreshFixture(
       } finally {
         fixture.refresh.mockReset();
         vi.useRealTimers();
+        await closeStateDatabaseForTest();
       }
     }
   });

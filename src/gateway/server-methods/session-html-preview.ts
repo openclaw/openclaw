@@ -12,8 +12,8 @@ import {
 } from "../../shared/html-preview-assets.js";
 
 type ResourceKind = "stylesheet" | "script" | "image" | "media";
-export type SessionHtmlPreviewResource = { ref: string; kind: ResourceKind };
-export type SessionHtmlPreviewPlan = { resources: SessionHtmlPreviewResource[] };
+type SessionHtmlPreviewResource = { ref: string; kind: ResourceKind };
+type SessionHtmlPreviewPlan = { resources: SessionHtmlPreviewResource[] };
 type Supported = { status: "supported"; plan: SessionHtmlPreviewPlan };
 type Unsupported = { status: "unsupported"; reason: string };
 

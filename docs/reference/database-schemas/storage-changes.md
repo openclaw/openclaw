@@ -1234,33 +1234,25 @@ rules, including the five-second polling deadline. The same plugin-owned worker
 reads iMessage's local startup watermark and finishes cleanup before the transport
 check and watch subscription. Empty databases retain the pre-first-row cursor;
 unavailable databases retain the existing fallback. Conversation-binding queries
-remain separate migration work.
+also use their plugin-owned worker.
 
 iMessage persisted echo reads, writes, and failed-send cleanup use the plugin-state
 worker. Sends await provisional echo persistence before transport and cleanup
 before reporting failure. Inbound echo matching awaits persisted facts before
-choosing whether to dispatch. Hosts with plugin-state comparison methods use the
-worker for recovery cursor writes; conditional writes preserve the greatest
-admitted row for each account and database. The declared OpenClaw 2026.9.4 peer
-and plugin API floor remains supported: hosts without those comparison methods
-run the same row decision in the retained synchronous store's transactional
-`update` callback. Failures from an available comparison method never fall back
-to synchronous writes. Remove this fallback only when the declared host floor
-excludes hosts without comparison support. Durable ingress joins each cursor
-update before admitting the next row and joins admitted work on shutdown.
-Existing namespaces, stored values, expiry, migration, and best-effort failure
+choosing whether to dispatch. Recovery cursor writes use the async keyed store
+and the selected state engine. The plugin serializes its cursor updates and
+preserves the greatest admitted row for each account and database. Cursor keys
+hash that pair so they work on PostgreSQL; legacy keys are adopted once.
+Durable ingress joins each cursor update before admitting the next row and joins
+admitted work on shutdown. Existing namespaces, stored values, expiry, and best-effort failure
 policies remain unchanged.
 
 The iMessage reply cache also hydrates and persists through worker-backed keyed
 stores. Its owner allocates short IDs in memory without yielding and serializes
 counter, eviction, and entry writes; callers join persistence before completion.
 A successfully read counter remains available if later entry hydration fails.
-The shared action dispatcher awaits the async conversation-matching companion
-before entering the action, including the first action after a restart. The
-existing boolean callback retains synchronous cold hydration for published
-OpenClaw 2026.9.4 hosts and other hosts without that companion. It remains a
-literal boolean, never a promise. Remove this plugin fallback only when its
-declared host floor excludes hosts without async matching. Existing cache
+The shared action dispatcher awaits async conversation matching and cold
+hydration before entering the action, including the first action after a restart. Existing cache
 namespaces, record shapes, TTLs, limits, and best-effort failure policy are unchanged.
 
 Discord presence cooldown reads, claims, and conditional rollback use the shared
@@ -2857,13 +2849,12 @@ Checkpoint modes, write admission, stored bytes, and reclamation limits are
 unchanged. Updates require no schema or configuration migration; the new process
 reconstructs its connection-owned schedules from the existing database owners.
 
-SQLite FTS5/BM25, vector tables, JSON table-valued queries, attached shadow
-databases, WAL maintenance, integrity checks, and backup operations remain
-SQLite capabilities. Keep their implementation behind the memory or database
-lifecycle owner. A future backend must supply equivalent product behavior or
-an explicit capability boundary; a second SQL dialect alone cannot replace
-these features. Schema, retention, migration, and multi-host changes still use
-the review checkpoint below.
+Keep SQLite FTS5/BM25, vector tables, JSON table-valued queries, attached shadow
+databases, WAL maintenance, integrity checks, and backup implementations behind
+the memory or database lifecycle owner. PostgreSQL supplies its own search and
+matched-backup behavior; see [database engines](/reference/database-engines).
+Schema, retention, migration, and multi-host changes still use the review
+checkpoint below.
 
 Prepared node-workspace registration, binding, mutation completion, and retirement
 run in the same shared-state worker as the node launch journal. Existing-only

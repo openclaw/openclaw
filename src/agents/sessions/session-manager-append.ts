@@ -1,3 +1,4 @@
+import { isPendingBackgroundResultMessage } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import {
   readActiveTranscriptEntryAnchor,
   readTranscriptMutationAtSync,
@@ -461,7 +462,11 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       }
     } else if (
       this.boundedContextIncomplete &&
-      transcriptEventContextEligibility(canonicalEntry) === 0
+      transcriptEventContextEligibility(canonicalEntry) === 0 &&
+      !(
+        canonicalEntry.type === "message" &&
+        isPendingBackgroundResultMessage(canonicalEntry.message)
+      )
     ) {
       // Match bounded hydration: SQLite owns display payloads; only the tail's ancestry is live.
       const parentId =

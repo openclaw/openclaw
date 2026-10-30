@@ -13,9 +13,11 @@ import { runAgentLoop } from "./agent-loop.js";
 import { TranscriptNotContinuableError } from "./errors.js";
 import {
   attachInternalSyncSteeringGetter,
+  getInternalBeforeRequest,
   getInternalBeforeToolBatch,
   getInternalRepetitionGuard,
   getInternalToolTurnCompletion,
+  setInternalBeforeRequest,
 } from "./internal-hooks.js";
 import { PendingMessageQueue } from "./pending-message-queue.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
@@ -489,7 +491,7 @@ export class Agent {
         },
       },
     );
-    return {
+    const config: AgentLoopConfig = {
       model: this.mutableState.model,
       repetitionGuard: getInternalRepetitionGuard(this),
       thinkingLevel: this.mutableState.thinkingLevel,
@@ -529,6 +531,17 @@ export class Agent {
         this.steeringQueue.consumeCancellation(message) ||
         this.followUpQueue.consumeCancellation(message),
     };
+    const beforeRequest = getInternalBeforeRequest(this);
+    if (beforeRequest) {
+      setInternalBeforeRequest(config, async (signal) => {
+        const messages = await beforeRequest(signal);
+        if (messages?.length) {
+          this.mutableState.messages.push(...messages);
+        }
+        return messages;
+      });
+    }
+    return config;
   }
 
   /**

@@ -353,7 +353,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 /* With no artwork to wrap, the ring collapses to the 12px spinner the trailing
    slot used to draw; a full-size empty circle reads as a missing icon. */
 .session-glyph--bare .session-glyph__ring {
-  inset: 3px;
+  inset: 4px;
 }
 
 /* Two identities share one run: the arc traces the union outline of the owner
@@ -3014,6 +3014,16 @@ td.data-table-key-col {
 .session-run-indicator--offscreen,
 .session-glyph__trace--queued .session-glyph__trace-run {
   animation-play-state: paused;
+}
+
+.session-glyph__ring--background,
+.session-glyph__trace--background {
+  opacity: 0.6;
+}
+
+.session-glyph__ring--background,
+.session-glyph__trace--background .session-glyph__trace-run {
+  animation-duration: 3.2s;
 }
 
 @keyframes session-run-trace {
