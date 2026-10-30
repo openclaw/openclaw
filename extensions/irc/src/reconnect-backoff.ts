@@ -15,13 +15,15 @@ const IRC_RECONNECT_STABLE_MS = 60_000;
 
 export function createIrcReconnectBackoff() {
   let attempt = 0;
+  // Uptime is a duration, not a wall-clock reading: the monotonic clock keeps the stability
+  // window intact when the system clock steps.
   let connectedAt: number | undefined;
   return {
     markConnected: () => {
-      connectedAt = Date.now();
+      connectedAt = performance.now();
     },
     nextDelayMs: () => {
-      if (connectedAt !== undefined && Date.now() - connectedAt >= IRC_RECONNECT_STABLE_MS) {
+      if (connectedAt !== undefined && performance.now() - connectedAt >= IRC_RECONNECT_STABLE_MS) {
         attempt = 0;
       }
       // The next delay is owed to whichever connection ends now; a failed connect attempt must
