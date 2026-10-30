@@ -135,8 +135,9 @@ try {
     const peer = createGatewayWsClient({
       url: `ws://127.0.0.1:${port}`,
       onEvent(event) {
-        if (event.event === "connect.challenge")
+        if (event.event === "connect.challenge") {
           challenge.resolve((event.payload as { nonce: string }).nonce);
+        }
       },
     });
     peers.push(peer);
@@ -197,7 +198,7 @@ try {
     };
   };
   async function report(sample: number) {
-    for (const { peer } of nodes)
+    for (const { peer } of nodes) {
       await request(peer, "node.event", {
         event: "node.host.stats",
         payloadJSON: JSON.stringify({
@@ -206,6 +207,7 @@ try {
           memoryFreeBytes: 4096 - sample,
         }),
       });
+    }
     const list = (await request(operator, "node.list")) as {
       nodes: { nodeId: string; connected: boolean; hostStats?: { memoryFreeBytes: number } }[];
     };
@@ -247,7 +249,9 @@ try {
   setPhase("final-sample");
   await report(16);
   setPhase("disconnect");
-  for (const { peer } of nodes.slice(0, 2)) peer.close();
+  for (const { peer } of nodes.slice(0, 2)) {
+    peer.close();
+  }
   await delay(1_000);
   const offline = (await request(operator, "node.list")) as {
     nodes: { connected: boolean; hostStats?: { memoryFreeBytes: number } }[];
@@ -276,7 +280,9 @@ try {
   evidence.failure = error instanceof Error ? error.message : String(error);
   throw error;
 } finally {
-  for (const peer of peers) peer.close();
+  for (const peer of peers) {
+    peer.close();
+  }
   database?.close();
   await stopChild(gateway, { teardownGraceMs: 10_000, killGraceMs: 2_000 });
   writeFileSync(
