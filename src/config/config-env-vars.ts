@@ -211,6 +211,11 @@ export function captureConfigReadEnvMutation<T>(
   }
 }
 
+/**
+ * Windows snapshots use a Proxy and cannot be passed to structuredClone or worker postMessage.
+ * Capture only the facts the worker needs; session transcript workers use
+ * captureSessionTranscriptStorageEnvironment from sessions/transcript-target-binding.ts.
+ */
 export function cloneEnvWithPlatformSemantics(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   let cloned: NodeJS.ProcessEnv = { ...fsSafeEnvInput(env) };
   // A plain spread loses Windows process.env's case-insensitive lookup and assignment semantics.
