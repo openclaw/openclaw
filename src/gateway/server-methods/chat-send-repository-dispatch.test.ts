@@ -6,7 +6,8 @@ import type {
 import type { RepositoryIntegration } from "../../plugins/repository-integration.types.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 const policy = vi.hoisted(() => ({ integration: undefined as RepositoryIntegration | undefined }));
-vi.mock("../../plugins/repository-integration-runtime.js", () => ({
+vi.mock("../../plugins/repository-integration-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/repository-integration-runtime.js")>()),
   getRepositoryIntegration: () => policy.integration,
 }));
 import { handleGatewayRequest } from "../server-methods.js";
