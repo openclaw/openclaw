@@ -305,4 +305,40 @@ describe("Client gateway event queue", () => {
     releases.shift()?.();
     await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
   });
+
+  it("does not warn on a fast listener when the wall clock steps forward", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let monotonic = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => monotonic);
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(1_700_000_000_000)
+      .mockReturnValue(1_700_000_000_000 + 3_600_000);
+    const fast = listener(async () => {
+      monotonic += 1_000;
+    });
+    const client = createQueuedClient([fast]);
+
+    await client.dispatchGatewayEvent("READY", {});
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("still warns on a slow listener when the wall clock steps backward", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let monotonic = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => monotonic);
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(1_700_000_000_000)
+      .mockReturnValue(1_700_000_000_000 - 3_600_000);
+    const slow = listener(async () => {
+      monotonic += 31_000;
+    });
+    const client = createQueuedClient([slow]);
+
+    await client.dispatchGatewayEvent("READY", {});
+
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("[EventQueue] Slow listener detected"),
+    );
+  });
 });
