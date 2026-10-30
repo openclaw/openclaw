@@ -8,6 +8,7 @@ import type { ProviderPlugin, WebFetchProviderPlugin, WebSearchProviderPlugin } 
 import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../web-provider-public-artifacts.explicit.js";
 import {
   BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
+  buildBundledPluginContractSnapshot,
   type BundledPluginContractSnapshot,
 } from "./inventory/bundled-capability-metadata.js";
 import { normalizeContractStringValues } from "./shared.js";
@@ -44,36 +45,14 @@ function resolvePluginProviderEnvVars(plugin: {
 }): Record<string, string[]> {
   const envVars: Record<string, string[]> = {};
   for (const provider of plugin.setup?.providers ?? []) {
-    envVars[provider.id] = normalizeContractStringValues(provider.envVars ?? []);
+    envVars[provider.id] = provider.envVars ?? [];
   }
   return normalizeProviderEnvVars(envVars);
 }
 
-function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
+export function getPluginRegistrationContracts(): PluginRegistrationContractEntry[] {
   if (process.env.VITEST) {
-    return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => ({
-      pluginId: entry.pluginId,
-      cliBackendIds: [...entry.cliBackendIds],
-      providerIds: [...entry.providerIds],
-      providerEnvVars: normalizeProviderEnvVars(entry.providerEnvVars),
-      workerProviderIds: [...entry.workerProviderIds],
-      storageProviderIds: [...entry.storageProviderIds],
-      embeddingProviderIds: [...entry.embeddingProviderIds],
-      speechProviderIds: [...entry.speechProviderIds],
-      realtimeTranscriptionProviderIds: [...entry.realtimeTranscriptionProviderIds],
-      realtimeVoiceProviderIds: [...entry.realtimeVoiceProviderIds],
-      mediaUnderstandingProviderIds: [...entry.mediaUnderstandingProviderIds],
-      transcriptSourceProviderIds: [...entry.transcriptSourceProviderIds],
-      documentExtractorIds: [...entry.documentExtractorIds],
-      imageGenerationProviderIds: [...entry.imageGenerationProviderIds],
-      videoGenerationProviderIds: [...entry.videoGenerationProviderIds],
-      musicGenerationProviderIds: [...entry.musicGenerationProviderIds],
-      webContentExtractorIds: [...entry.webContentExtractorIds],
-      webFetchProviderIds: [...entry.webFetchProviderIds],
-      webSearchProviderIds: [...entry.webSearchProviderIds],
-      migrationProviderIds: [...entry.migrationProviderIds],
-      toolNames: [...entry.toolNames],
-    }));
+    return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => structuredClone(entry));
   }
   return loadPluginManifestRegistryCore({})
     .plugins.filter(
@@ -99,53 +78,13 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
           (plugin.contracts?.migrationProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.tools?.length ?? 0) > 0),
     )
-    .map((plugin) => ({
-      pluginId: plugin.id,
-      cliBackendIds: normalizeContractStringValues(plugin.cliBackends),
-      providerIds: normalizeContractStringValues(plugin.providers),
-      providerEnvVars: resolvePluginProviderEnvVars(plugin),
-      workerProviderIds: normalizeContractStringValues(plugin.contracts?.workerProviders ?? []),
-      storageProviderIds: normalizeContractStringValues(plugin.contracts?.storageProviders ?? []),
-      embeddingProviderIds: normalizeContractStringValues(
-        plugin.contracts?.embeddingProviders ?? [],
+    .map((plugin) =>
+      buildBundledPluginContractSnapshot(
+        plugin,
+        normalizeContractStringValues,
+        resolvePluginProviderEnvVars(plugin),
       ),
-      speechProviderIds: normalizeContractStringValues(plugin.contracts?.speechProviders ?? []),
-      realtimeTranscriptionProviderIds: normalizeContractStringValues(
-        plugin.contracts?.realtimeTranscriptionProviders ?? [],
-      ),
-      realtimeVoiceProviderIds: normalizeContractStringValues(
-        plugin.contracts?.realtimeVoiceProviders ?? [],
-      ),
-      mediaUnderstandingProviderIds: normalizeContractStringValues(
-        plugin.contracts?.mediaUnderstandingProviders ?? [],
-      ),
-      transcriptSourceProviderIds: normalizeContractStringValues(
-        plugin.contracts?.transcriptSourceProviders ?? [],
-      ),
-      documentExtractorIds: normalizeContractStringValues(
-        plugin.contracts?.documentExtractors ?? [],
-      ),
-      imageGenerationProviderIds: normalizeContractStringValues(
-        plugin.contracts?.imageGenerationProviders ?? [],
-      ),
-      videoGenerationProviderIds: normalizeContractStringValues(
-        plugin.contracts?.videoGenerationProviders ?? [],
-      ),
-      musicGenerationProviderIds: normalizeContractStringValues(
-        plugin.contracts?.musicGenerationProviders ?? [],
-      ),
-      webContentExtractorIds: normalizeContractStringValues(
-        plugin.contracts?.webContentExtractors ?? [],
-      ),
-      webFetchProviderIds: normalizeContractStringValues(plugin.contracts?.webFetchProviders ?? []),
-      webSearchProviderIds: normalizeContractStringValues(
-        plugin.contracts?.webSearchProviders ?? [],
-      ),
-      migrationProviderIds: normalizeContractStringValues(
-        plugin.contracts?.migrationProviders ?? [],
-      ),
-      toolNames: normalizeContractStringValues(plugin.contracts?.tools ?? []),
-    }));
+    );
 }
 
 export let providerContractLoadError: Error | undefined;
@@ -308,37 +247,6 @@ export function resolveWebSearchProviderContractEntriesForPluginId(
   });
 }
 
-function createLazyArrayView<T>(load: () => T[]): T[] {
-  return new Proxy([] as T[], {
-    get(_target, prop) {
-      const actual = load();
-      const value = Reflect.get(actual, prop, actual);
-      return typeof value === "function" ? value.bind(actual) : value;
-    },
-    has(_target, prop) {
-      return Reflect.has(load(), prop);
-    },
-    ownKeys() {
-      return Reflect.ownKeys(load());
-    },
-    getOwnPropertyDescriptor(_target, prop) {
-      const actual = load();
-      const descriptor = Reflect.getOwnPropertyDescriptor(actual, prop);
-      if (descriptor) {
-        return descriptor;
-      }
-      if (Reflect.has(actual, prop)) {
-        return {
-          configurable: true,
-          enumerable: true,
-          writable: false,
-          value: Reflect.get(actual, prop, actual),
-        };
-      }
-      return undefined;
-    },
-  });
-}
 export function resolveProviderContractProvidersForPluginIds(
   pluginIds: readonly string[],
 ): ProviderPlugin[] {
@@ -352,5 +260,3 @@ export function resolveProviderContractProvidersForPluginIds(
     ).values(),
   ];
 }
-export const pluginRegistrationContractRegistry: PluginRegistrationContractEntry[] =
-  createLazyArrayView(resolveBundledManifestContracts);

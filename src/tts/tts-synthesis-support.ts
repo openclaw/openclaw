@@ -311,7 +311,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         }
         const providerConfig = getResolvedSpeechProviderConfigForVoiceModel({
           config,
-          providerId: candidateProvider.id,
+          provider: candidateProvider,
           cfg,
           voiceModel,
           registry: providerRegistry,

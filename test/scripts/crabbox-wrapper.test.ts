@@ -54,7 +54,7 @@ const repoRoot = process.cwd();
 const bundledWrapperPath = path.join(repoRoot, ".tmp", `crabbox-wrapper-test-${process.pid}.mjs`);
 const realBundledWrapperPath = bundledWrapperPath.replace(".mjs", "-real.mjs");
 const bundledOutputPaths = new Set<string>();
-let realWrapperOutputPaths: string[];
+let bundledChunkPaths: string[];
 let bundledSetupPath: string;
 let preparedDependencyRoot: string | undefined;
 const fakeCrabboxBinDirs = new Map<string, string>();
@@ -834,7 +834,7 @@ async function runWrapperCleanupProof(
     async ({ checkoutRoot: producer, fixtureRoot, implementationPath, wrapperPath }) => {
       // Keep the real TSX entrypoint without transforming the compiled dependency bundle again.
       const compiledWrapperPath = implementationPath.replace(/\.mts$/u, ".compiled.mjs");
-      copyRealWrapper(compiledWrapperPath);
+      copyBundledScript(compiledWrapperPath);
       writeFileSync(
         implementationPath,
         `import ${JSON.stringify(pathToFileURL(compiledWrapperPath).href)};\n`,
@@ -1649,14 +1649,17 @@ function copyDependencyFingerprint(directory: string) {
   }
 }
 
-function copyRealWrapper(destination: string) {
-  for (const output of realWrapperOutputPaths) {
-    copyFileSync(
-      output,
-      output === realBundledWrapperPath
-        ? destination
-        : path.join(path.dirname(destination), path.basename(output)),
-    );
+function copyBundledScript(destination: string, entry = realBundledWrapperPath) {
+  // Compiled outputs stay immutable until afterAll; each fixture owns its directory entries.
+  for (const output of [entry, ...bundledChunkPaths]) {
+    const target =
+      output === entry ? destination : path.join(path.dirname(destination), path.basename(output));
+    try {
+      linkSync(output, target);
+    } catch {
+      // Temp directories can be on another volume or disallow hard links.
+      copyFileSync(output, target);
+    }
   }
 }
 
@@ -1767,24 +1770,15 @@ describe("scripts/crabbox-wrapper", () => {
     for (const output of outputs) {
       bundledOutputPaths.add(output);
     }
-    realWrapperOutputPaths = outputs.filter(
-      (output) => output !== setupOutput && output !== bundledWrapperPath,
+    bundledChunkPaths = outputs.filter(
+      (output) => ![setupOutput, bundledWrapperPath, realBundledWrapperPath].includes(output),
     );
     bundledSetupPath = path.join(
       makeTempDir(tempDirs, "openclaw-crabbox-setup-"),
       "openclaw/scripts/crabbox-setup.mjs",
     );
     mkdirSync(path.dirname(bundledSetupPath), { recursive: true });
-    for (const output of outputs) {
-      if (output !== realBundledWrapperPath && output !== bundledWrapperPath) {
-        copyFileSync(
-          output,
-          output === setupOutput
-            ? bundledSetupPath
-            : path.join(path.dirname(bundledSetupPath), path.basename(output)),
-        );
-      }
-    }
+    copyBundledScript(bundledSetupPath, setupOutput);
   });
 
   it("prepares the supported executable for later workflow steps", () => {
@@ -4188,7 +4182,7 @@ esac
       const sourceMode = lstatSync(path.join(producer, sourcePath)).mode;
       const wrapper = path.join(producer, ".tmp", "wrapper.mjs");
       mkdirSync(path.dirname(wrapper));
-      copyRealWrapper(wrapper);
+      copyBundledScript(wrapper);
       const preload = path.join(root, "write-failure.cjs");
       writeFileSync(
         preload,
@@ -4629,7 +4623,7 @@ process.on("exit", () => {
       }
       const fixtureWrapper = path.join(producer, ".tmp", "crabbox-wrapper.mjs");
       mkdirSync(path.dirname(fixtureWrapper), { recursive: true });
-      copyRealWrapper(fixtureWrapper);
+      copyBundledScript(fixtureWrapper);
       const sourceCommand =
         provider === "blacksmith-testbox" || scenario === "arbitrary"
           ? "scripts/source-fixture.mjs"
@@ -6041,7 +6035,7 @@ cp.spawnSync = (command, args, options) => {
       git(["update-ref", "refs/remotes/origin/main", git(["rev-parse", "HEAD"])]);
       const wrapper = path.join(producer, ".tmp", "crabbox-wrapper.mjs");
       mkdirSync(path.dirname(wrapper));
-      copyRealWrapper(wrapper);
+      copyBundledScript(wrapper);
       const result = spawnSync(
         process.execPath,
         [wrapper, "run", "--provider", "aws", "--target", "linux", "--", "pnpm", "check:changed"],
@@ -6435,7 +6429,7 @@ cp.spawnSync = (command, args, options) => {
       const syncRoot = path.join(root, "sync");
       const fixtureWrapper = path.join(producer, ".tmp", "crabbox-wrapper.mjs");
       mkdirSync(path.dirname(fixtureWrapper), { recursive: true });
-      copyRealWrapper(fixtureWrapper);
+      copyBundledScript(fixtureWrapper);
       const env = {
         ...sourceFixtureEnv(path.join(root, "home"), syncRoot),
         XDG_STATE_HOME: path.join(root, "home", ".local", "state"),

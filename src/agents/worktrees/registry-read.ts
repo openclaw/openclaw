@@ -37,7 +37,7 @@ export async function readWorktreeRegistryCommand<
   const reply = await executeExistingOpenClawStateRead<Command>(
     { env: context.environment, path: context.admission.databasePath },
     command,
-    { context, current: true, signal },
+    { context, current: true, signal, preferIndependentWarmRead: true },
   );
   context.admission.assertCurrent();
   return reply;

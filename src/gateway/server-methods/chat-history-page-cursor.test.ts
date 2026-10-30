@@ -193,14 +193,15 @@ it.each(["anchor", "tail", "offset"] as const)(
   },
 );
 
-it("terminates an ordinary all-hidden tail without manufacturing a continuation", async () => {
+it.each([false, true])("terminates a hidden prefix with tool-only tail=%s", async (toolOnly) => {
   await withHistoryState(async () => {
-    const { read } = await seedHistory(
-      Array.from({ length: 50 }, () => makeMessage("Hidden", { display: false })),
-    );
-    expect(await read({ limit: 1 })).toMatchObject({ messages: [], hasMore: false });
-    const tail = await read({ limit: 1, offset: 0 });
-    expect(tail.messages).toEqual([]);
+    const { read } = await seedHistory([
+      ...Array.from({ length: 50 }, () => makeMessage("Hidden", { display: false })),
+      ...(toolOnly ? [makeMessage("Synthetic file contents", { role: "toolResult" })] : []),
+    ]);
+    const tail = await read({ limit: 2 });
+    expect(tail).toMatchObject({ hasMore: false });
+    expect(tail.messages).toHaveLength(toolOnly ? 1 : 0);
     expect([tail.olderCursor, tail.newerCursor, tail.nextOffset]).toEqual([
       undefined,
       undefined,

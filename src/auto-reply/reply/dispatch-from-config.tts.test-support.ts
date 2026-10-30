@@ -1,23 +1,11 @@
 import type { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { ReplyPayload } from "../types.js";
 
 export function createDispatchTtsMocks(mock: Pick<typeof vi, "fn">) {
   const state = {
     synthesizeFinalAudio: false,
     synthesizeToolAudio: false,
-    statusSnapshot: {
-      autoMode: "always",
-      provider: "auto",
-      maxLength: 1500,
-      summarize: true,
-    } as {
-      autoMode: TtsAutoMode;
-      provider: string;
-      maxLength: number;
-      summarize: boolean;
-    },
   };
   const applyTtsToPayload = async (paramsUnknown: unknown) => {
     const params = paramsUnknown as {

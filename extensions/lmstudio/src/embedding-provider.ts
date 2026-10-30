@@ -40,19 +40,6 @@ import {
 const log = createSubsystemLogger("memory/embeddings");
 
 type LmstudioEmbeddingClient = Omit<RemoteEmbeddingClient, "fetchImpl">;
-type MemoryCoreAcquireLocalService = (
-  target: {
-    providerId: string;
-    baseUrl: string;
-    headers?: HeadersInit;
-    /** Reports managed-companion readiness waits; request work stays outside. */
-    onReadinessWait?: (waiting: boolean) => void;
-  },
-  signal?: AbortSignal | null,
-) => Promise<{ release: () => void } | undefined>;
-type LocalServiceAwareEmbeddingOptions = MemoryEmbeddingProviderCreateOptions & {
-  acquireLocalService?: MemoryCoreAcquireLocalService;
-};
 export const DEFAULT_LMSTUDIO_EMBEDDING_MODEL = LMSTUDIO_DEFAULT_EMBEDDING_MODEL;
 
 /** Normalizes LM Studio embedding model refs and accepts `lmstudio/` prefix. */
@@ -124,7 +111,7 @@ function resolveLmstudioEmbeddingBaseUrl(configuredBaseUrl?: string): string {
 
 /** Creates the LM Studio embedding provider client and preloads the target model before return. */
 export async function createLmstudioEmbeddingProvider(
-  options: LocalServiceAwareEmbeddingOptions,
+  options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: LmstudioEmbeddingClient }> {
   const resolvedProvider = resolveConfiguredLmstudioProvider(options);
   const providerConfig = resolvedProvider?.config;

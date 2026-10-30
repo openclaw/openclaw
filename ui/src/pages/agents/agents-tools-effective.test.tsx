@@ -8,6 +8,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
 import type { AgentsPanel } from "../../lib/agents/panels.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
@@ -47,6 +48,7 @@ function effective(label: string): ToolsEffectiveResult {
 async function mountEffective(
   read: () => Promise<ToolsEffectiveResult>,
   panel: AgentsPanel = "tools",
+  scopes: string[] = ["operator.admin"],
 ) {
   const request = vi.fn(async (method: string) => {
     if (method === "agents.list") {
@@ -65,6 +67,10 @@ async function mountEffective(
   });
   const client = createTestGatewayClient(request);
   const currentGateway = gateway(snapshot(client));
+  currentGateway.snapshot.hello = gatewayHelloForMethods(
+    currentGateway.snapshot.hello?.features?.methods ?? [],
+    scopes,
+  );
   const listeners = new Set<() => void>();
   const modelOverrides: Record<string, string | null> = {};
   // SAFETY: This fixture supplies the session state and subscription consumed by the Agents page.
@@ -134,6 +140,21 @@ const preview = (container: HTMLElement) =>
   container.querySelector(".agent-tools-runtime-chip")?.textContent;
 
 describe("Agents effective-tools read", () => {
+  it.each([{ scopes: [] }, { scopes: ["operator.sessions.read"] }])(
+    "honors the active read grant $scopes",
+    async ({ scopes }) => {
+      const view = await mountEffective(async () => effective("Readable preview"), "tools", scopes);
+      await view.settleEffective();
+      expect(view.calls()).toHaveLength(scopes.length ? 1 : 0);
+      expect(view.request.mock.calls.filter(([method]) => method === "tools.catalog")).toHaveLength(
+        0,
+      );
+      expect(preview(view.container)?.includes("Readable preview") ?? false).toBe(
+        scopes.length > 0,
+      );
+    },
+  );
+
   it("loads only on demand, joins pending receipts, and retains the accepted result across panel visits", async () => {
     const pending = deferred<ToolsEffectiveResult>();
     const view = await mountEffective(() => pending.promise, "files");

@@ -286,6 +286,8 @@ async function fixture({
     "../../plugins/clawhub-error-codes",
     "../../plugins/install-types",
     "../../logging/diagnostic-support-redaction",
+    "../../logging/diagnostic-support-causes",
+    "../../infra/sqlite-snapshot-diagnostics",
     "../../logging/diagnostic-support-key-check",
     "../../logging/redact",
     "../../logging/redact-linear-matchers",

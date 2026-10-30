@@ -355,6 +355,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "agent-id"),
     sourcePackageAlias("normalization-core", "code-points"),
     sourcePackageAlias("normalization-core", "error-coercion"),
+    sourcePackageAlias("normalization-core", "expect"),
     sourcePackageAlias("normalization-core", "grapheme"),
     sourcePackageAlias("normalization-core", "json-coercion"),
     sourcePackageAlias("normalization-core", "json-schema"),

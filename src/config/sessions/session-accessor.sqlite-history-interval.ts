@@ -1,6 +1,9 @@
 import { sql, type Expression, type RawBuilder, type SqlBool } from "kysely";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../agents/internal-runtime-context.js";
-import { SOURCE_PAGE_MAX_BYTES } from "../../gateway/session-transcript-source-pages.js";
+import {
+  assertUnboundedAnchorPageUsable,
+  SOURCE_PAGE_MAX_BYTES,
+} from "../../gateway/session-transcript-source-pages.js";
 import { engineIndexHint } from "../../infra/database-engine/index-hint.js";
 import { jsonArrayElements } from "../../infra/database-engine/json-values.js";
 import {
@@ -291,29 +294,22 @@ function readHistoricalDisplayEventRange(
     assertTranscriptNavigationValid(row.navigation_valid);
     return Object.assign(row, { displaySeq: start + index + 1 });
   });
-  let selected = ranged;
-  if (
-    maxBytes === undefined &&
-    ranged.reduce((bytes, row) => bytes + row.serialized_bytes, 2) > SOURCE_PAGE_MAX_BYTES
-  ) {
-    throw new Error(
-      `Transcript history page exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte limit; request a smaller limit`,
-    );
-  }
-  if (maxBytes !== undefined) {
-    const limit = Math.min(SOURCE_PAGE_MAX_BYTES, Math.max(1_024, Math.floor(maxBytes)));
-    let bytes = 2;
-    let selectedStart = ranged.length;
-    while (selectedStart > 0) {
-      const nextBytes = ranged[selectedStart - 1]!.serialized_bytes;
-      if (bytes + nextBytes > limit) {
-        break;
-      }
-      bytes += nextBytes;
-      selectedStart--;
+  // Oversized ranges return their newest byte-bounded slice; callers page from the oldest returned event.
+  const limit = Math.min(
+    SOURCE_PAGE_MAX_BYTES,
+    Math.max(1_024, Math.floor(maxBytes ?? SOURCE_PAGE_MAX_BYTES)),
+  );
+  let bytes = 2;
+  let selectedStart = ranged.length;
+  while (selectedStart > 0) {
+    const nextBytes = ranged[selectedStart - 1]!.serialized_bytes;
+    if (bytes + nextBytes > limit) {
+      break;
     }
-    selected = ranged.slice(selectedStart);
+    bytes += nextBytes;
+    selectedStart--;
   }
+  const selected = ranged.slice(selectedStart);
   if (selected.length === 0) {
     return [];
   }
@@ -420,18 +416,27 @@ export function readHistoricalHistoryAnchorPage(
     excludeClosingReset ? total - 1 : anchorPosition,
     options,
   );
+  const requested = range.endExclusive - range.readStart;
+  const events = readHistoricalDisplayEventRange(
+    projection,
+    displaySource,
+    interval,
+    range.readStart,
+    requested,
+    { activePosition: row.active_position, displayPosition: anchorPosition },
+    options.maxBytes,
+  );
+  // Trimming keeps the newest events, so the returned page starts at endExclusive - events.length.
+  assertUnboundedAnchorPageUsable(options, {
+    start: range.endExclusive - events.length,
+    readStart: range.readStart,
+    endExclusive: range.endExclusive,
+  });
   return {
-    events: readHistoricalDisplayEventRange(
-      projection,
-      displaySource,
-      interval,
-      range.readStart,
-      range.endExclusive - range.readStart,
-      { activePosition: row.active_position, displayPosition: anchorPosition },
-      options.maxBytes,
-    ),
+    events,
     found: true,
-    hasOverreadContext: range.hasOverreadContext,
+    // Byte trimming drops the oldest events first, so a short page no longer carries the overread context.
+    hasOverreadContext: range.hasOverreadContext && events.length === requested,
     offset: range.offset,
     displaySource,
     totalMessages: total,

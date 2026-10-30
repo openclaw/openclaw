@@ -769,6 +769,12 @@ slot does not consume it. For example, a 267.5 MiB database without sidecars get
 startup recovery described here; installed releases can have shorter budgets
 and different concurrency.
 
+Stopping the Gateway cancels its startup inspection and writable preparation.
+Long integrity reads run in disposable subprocesses so shutdown can stop the read
+without waiting for a full database scan. The database owner joins the reader's
+exit before releasing its handle and lease. Cancelling startup does not certify
+the unchecked database; the next start still requires normal admission.
+
 Session startup certification reuses up to two worker threads for databases that
 need fresh session-validation proof. Valid receipts retain their existing fast path. Each
 certification task has fresh admission, its own commit gate, and full session

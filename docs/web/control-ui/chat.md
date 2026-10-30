@@ -12,6 +12,11 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: session controls, the composer, and how the transcript renders.
 
+An existing session with an empty transcript shows **No messages yet** and keeps
+the composer available. The agent welcome and recent chats appear only on the
+**New session** page. If no model is configured, the existing session's composer
+banner still offers **Connect an AI provider**.
+
 Click a session-menu submenu, such as **Assign to…**, to open it immediately.
 Hovering still uses a short delay so moving across the menu does not open every submenu.
 

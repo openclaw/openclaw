@@ -241,12 +241,22 @@ describe("session transcript reader facade", () => {
     await expectHistoryOverflow(readAround(scope, { messageId: "oversized", maxMessages: 1 }));
   });
 
-  test("refuses unbounded anchor windows and caps payloads before decoding", async () => {
+  test("bounds unbounded anchor windows and caps payloads before decoding", async () => {
     const sessionId = "reader-anchor-page-bytes";
     const scope = await writeTranscript(
       sessionId,
       chain(3, "large", () => "a".repeat(3 * 1024 * 1024)),
     );
+    // Earlier-history paging anchors on older windows; an oversized window must still page.
+    const older = await readAround(scope, {
+      messageId: "large-2",
+      maxMessages: 3,
+      direction: "older",
+    });
+    expect(older.messages).toMatchObject([
+      { __openclaw: { id: "large-1" } },
+      { __openclaw: { id: "large-2" } },
+    ]);
     await expect(readAround(scope, { messageId: "large-1", maxMessages: 3 })).rejects.toThrow(
       "Transcript history page exceeds the 8388608-byte limit; request a smaller limit",
     );

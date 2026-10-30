@@ -7,6 +7,7 @@ import type {
   SessionTranscriptSourceCursor,
 } from "../../gateway/session-transcript-read.types.js";
 import {
+  assertUnboundedAnchorPageUsable,
   SessionTranscriptSourceMessageTooLargeError,
   SOURCE_PAGE_MAX_BYTES,
   SOURCE_PAGE_MAX_MESSAGES,
@@ -451,8 +452,8 @@ export function readSessionActorMemoryProjection(
         Infinity,
         options.maxBytes === undefined,
         2,
-        options.maxBytes === undefined,
       );
+      assertUnboundedAnchorPageUsable(options, { start, ...range });
       let selected = rows.slice(start, range.endExclusive);
       let selectedStart = start;
       if (options.maxBytes !== undefined) {
