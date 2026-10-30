@@ -31,14 +31,18 @@ function normalizeThinkingLevel(raw?: string | null) {
       : undefined;
 }
 
-const tool = createLlmTaskTool({
-  config: { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
-  pluginConfig: {},
-  runtime: {
-    agent: { defaults: { provider: "openai", model: "gpt-5.5" }, normalizeThinkingLevel },
-    llm: { complete },
-  },
-} as unknown as LlmTaskApi);
+function createTool(config: unknown) {
+  return createLlmTaskTool({
+    config,
+    pluginConfig: {},
+    runtime: {
+      agent: { defaults: { provider: "openai", model: "gpt-5.5" }, normalizeThinkingLevel },
+      llm: { complete },
+    },
+  } as unknown as LlmTaskApi);
+}
+
+const tool = createTool({ agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } });
 
 function mockCompletion(text: string) {
   complete.mockImplementationOnce(async (params) => completionResult(params, text));
@@ -114,6 +118,14 @@ it("accepts model overrides that already include the selected provider prefix", 
     model: "anthropic/claude-4-sonnet",
   });
   expect(isolatedCompletionCall().model).toBe("anthropic/claude-4-sonnet");
+});
+
+it.each([
+  ["per-agent models", { agents: { entries: { chat: { model: "anthropic/claude-sonnet-4-6" } } } }],
+  ["an alias primary", { agents: { defaults: { model: { primary: "Sonnet" } } } }],
+] as const)("leaves default model selection to the runtime with %s", async (_name, config) => {
+  await createTool(config).execute("id", { prompt: "x" });
+  expect(isolatedCompletionCall().model).toBeUndefined();
 });
 
 it("throws on invalid thinking level", async () => {
