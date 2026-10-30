@@ -719,12 +719,12 @@ export function createModelAccountConnectService(options: {
           const agents = await listKnownSessionStoreAgentIdsAsync(cfg);
           // Incognito namespaces are memory-only, so their agents never appear in
           // durable discovery; live owners still pin the removed credential.
-          const removedByAgent = new Map(agents.map((agent) => [agent, new Set([authProfileId])]));
-          for (const { agentId } of memorySessionActorOwners.list()) {
-            if (!removedByAgent.has(agentId)) {
-              removedByAgent.set(agentId, new Set([authProfileId]));
-            }
-          }
+          const removedIds = new Set([authProfileId]);
+          const agentIds = new Set([
+            ...agents,
+            ...memorySessionActorOwners.list().map(({ agentId }) => agentId),
+          ]);
+          const removedByAgent = new Map([...agentIds].map((agentId) => [agentId, removedIds]));
           clearedSessions = await clearRemovedSessionAuthProfiles({
             cfg,
             removedByAgent,
