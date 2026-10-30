@@ -493,7 +493,7 @@ suite.define(() => {
 
     await plainRow.waitFor();
     for (const size of badgeSizes) {
-      expect(size).toEqual({ height: 12, width: 12 });
+      expect(size).toEqual({ height: 14, width: 14 });
     }
   });
 
