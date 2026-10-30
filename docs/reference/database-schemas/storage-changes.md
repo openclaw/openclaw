@@ -2567,9 +2567,11 @@ The host retains refresh locks, current write authority, and pricing context.
 Incognito usage reads committed memory actor facts and allocates no database
 worker; its namespace is never reopened as a database.
 Cancellation and database closure join native worker work, accepted host effects,
-and refresh-lock cleanup before releasing custody. Atomic pruning retains all
-obsolete-row comparison bytes on the host until its transaction settles; bounded
-SQL batches do not impose an aggregate memory limit. Cache formats, schemas,
+and refresh-lock cleanup before releasing custody. Pruning retains only the current
+bounded snapshot batch on the host until its transaction settles, releasing the
+ordinary writer between batches. Each obsolete row and its partitions remain
+atomic; interrupted cleanup rediscovers remaining rows on the next refresh.
+Cache formats, schemas,
 retention, and update behavior are unchanged.
 
 Shared-state database drainage also joins resources registered while an earlier
@@ -3021,18 +3023,20 @@ other cache scopes, including durable voice sessions, remain unchanged.
 Usage-bearing transcript publications schedule advancement through the existing
 usage worker queue. Each dirty session waits for 30 seconds without another
 usage publication or an active agent turn. Its oldest pending change survives
-back-to-back turns: after five minutes, it can refresh in the next idle gap.
+back-to-back turns: after five minutes, it becomes eligible even during an active
+turn. This bounds coalescing delay; an existing refresh, retry backoff, scanning,
+and draining the ordinary writer queue still take additional time.
 A turn starting during a refresh may overlap its already-admitted bounded batch.
-User and metadata rows join the next usage scan. Cost and overview reads flush
-and await pending publication batches, bypassing the idle delay, so a completed
-turn's usage is visible immediately. Goal budgets and provider billing limits
+User and metadata rows join the next usage scan. Exact cost reads flush and await
+pending publication batches, bypassing the idle delay. Reports use their separate
+reader lane and wait up to 10 seconds for freshness before serving committed
+partial or stale totals. Goal budgets and provider billing limits
 use their own current accounting, independently of this display projection.
 Shutdown cancels pending delays without flushing; committed transcripts remain
 the source of truth. Startup and topology changes backfill in bounded batches,
 yielding between batches. Cache writes wait outside the agent writer FIFO until
-foreground work drains, then commit one session at a time. Report reads use their
-separate worker lane and return partial or stale totals during backfill. Restart
-rediscovers unfinished sessions from their committed checkpoints.
+foreground work drains, then commit a bounded batch. Restart rediscovers
+unfinished sessions from their committed checkpoints.
 Refresh or cleanup failures still warn.
 After in-process DDL, worker admission publishes its validated schema even if a
 retained reader adopted another wrapper of the previous shared receipt while it
