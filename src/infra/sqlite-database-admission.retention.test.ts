@@ -884,6 +884,7 @@ function postgresConnection(anchor: DatabaseSync): PostgresSqlConnection {
       throw new Error("Admission facts must not query PostgreSQL");
     },
     close() {},
+    releaseIdleTransport() {},
     runTransaction(operation, options, ...modes) {
       return runPostgresTransactionSync(this, operation, options, ...modes);
     },

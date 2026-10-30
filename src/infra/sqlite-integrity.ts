@@ -12,6 +12,7 @@ import {
   type SqliteIntegrityCheckOptions,
 } from "./sqlite-maintenance-integrity.js";
 import { readSqliteSchemaObjects } from "./sqlite-schema-admission.js";
+import { readSqlitePageHeader } from "./sqlite-schema-catalog.js";
 import { findSqlClosingParenthesis, normalizeSchemaSql } from "./sqlite-schema-sql.js";
 import { getMaintenanceSqliteTableChecks } from "./sqlite-table-integrity-cache.js";
 
@@ -226,6 +227,24 @@ export function isTerminalSqliteIntegrityError(error: Error): boolean {
   }
   // Only proven corruption latches; transient lock/busy pragma failures must not.
   return isSqliteCorruptionError(error.cause);
+}
+
+/** SQLite recovers committed WAL frames on open; these probes only check header sanity.
+ * They never walk data pages or publish a full-verification receipt or clean-close seal.
+ */
+export function assertSqliteDatabaseHeader(database: DatabaseSync, databaseLabel: string): void {
+  const { pages, free } = readSqlitePageHeader(database);
+  if (
+    typeof pages !== "number" ||
+    !Number.isSafeInteger(pages) ||
+    pages < 1 ||
+    typeof free !== "number" ||
+    !Number.isSafeInteger(free) ||
+    free < 0 ||
+    free >= pages
+  ) {
+    throw new SqliteIntegrityError(`SQLite database header is inconsistent for ${databaseLabel}`);
+  }
 }
 
 /** Check structure and foreign keys, plus all indexes or the migration's selected tables. */

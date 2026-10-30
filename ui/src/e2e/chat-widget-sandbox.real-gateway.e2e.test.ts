@@ -13,10 +13,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import {
-  controlUiE2eWaitTimeoutMs as timeout,
-  waitForControlUiGatewayReady,
-} from "../test-helpers/control-ui-e2e-readiness.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
@@ -162,16 +159,9 @@ suite.define(() => {
         await page.addInitScript(installWarmConnectSocketTrace);
         await page.addInitScript(installWarmConnectIdentityGate);
         await page.goto(url);
+        // The entry probe reveals login or redirects into the app asynchronously.
         const login = page.getByRole("link", { name: "Log in", exact: true });
-        await expect
-          .poll(
-            async () =>
-              (await login.isVisible()) || (await page.locator("openclaw-app").isVisible()),
-            {
-              timeout,
-            },
-          )
-          .toBe(true);
+        await login.or(page.locator("openclaw-app")).first().waitFor();
         if (await login.isVisible()) {
           await enterControlUiSession(page);
         }
@@ -208,12 +198,8 @@ suite.define(() => {
               await page.waitForFunction(() => window.warmConnectIdentityPending === true);
               await transcript.waitFor();
               await page.getByRole("link", { name: "Linked mission", exact: true }).waitFor();
-              observations.push({
-                face,
-                reload,
-                stage: "cached-before-connect",
-                trace: await page.evaluate(() => window.warmConnectSocketTrace),
-              });
+              const trace = await page.evaluate(() => window.warmConnectSocketTrace);
+              observations.push({ face, reload, stage: "cached-before-connect", trace });
             } finally {
               await page.evaluate(() => window.releaseWarmConnectIdentity?.());
             }

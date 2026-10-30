@@ -229,12 +229,12 @@ export function prepareChatHistoryResponsePage(
         : Math.max(pagination.offset + 1, pagination.totalMessages - oldestSeq + 1);
   }
   const cursors = resolveChatHistoryPageCursors(historyPage.anchor, capped, normalized);
-  // Numeric pages can begin without an explicit offset or a native message ID.
-  // The reader still owns exhaustion after consuming a hidden prefix.
-  const hasMore = historyPage.anchor
-    ? Boolean(cursors.olderCursor) || (pagination !== undefined && historyPage.anchor.hasOlder)
-    : pagination !== undefined && candidateNextOffset !== undefined
-      ? candidateNextOffset < pagination.totalMessages
+  // Numeric pages may have no encodable IDs. Honor reader exhaustion unless
+  // response budgeting dropped older source rows from this page.
+  const hasMore =
+    pagination !== undefined && candidateNextOffset !== undefined
+      ? candidateNextOffset < pagination.totalMessages &&
+        (!historyPage.anchor || historyPage.anchor.hasOlder || capped.length < messages.length)
       : undefined;
   const survivors = new Set(capped);
   const omittedCount = normalized.reduce<number>(

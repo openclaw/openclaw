@@ -977,4 +977,4 @@ it("settles peer native leases when close revokes a shared worker's opening exec
   }
 });
 
-registerRestartRecoveryAdmissionTests({ makeEnv, holdIntegrity });
+registerRestartRecoveryAdmissionTests({ makeEnv });
