@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   cleanup: vi.fn(),
   tail: vi.fn(),
   compact: vi.fn(),
+  diff: vi.fn(),
   lifecycle: vi.fn(),
   exportTrajectory: vi.fn(),
   ownerLoaded: vi.fn(),
@@ -38,6 +39,11 @@ vi.mock("../../commands/sessions-tail.js", () => {
 vi.mock("../../commands/sessions-compact.js", () => {
   mocks.ownerLoaded();
   return { sessionsCompactCommand: mocks.compact };
+});
+// mock-isolation: Capture lazy loading without reading session checkout state.
+vi.mock("../../commands/sessions-diff.js", () => {
+  mocks.ownerLoaded();
+  return { sessionsDiffCommand: mocks.diff };
 });
 vi.mock("../../commands/sessions-lifecycle.js", async (importOriginal) => {
   mocks.ownerLoaded();
@@ -96,6 +102,11 @@ it.each([
     `sessions --store /tmp/other.sqlite --all-agents --limit 25 --verbose compact ${key}`,
     mocks.compact,
     "`sessions compact` does not support the parent `sessions` options --store, --all-agents, --limit, --verbose; the gateway resolves the target store from <key> and --agent.",
+  ],
+  [
+    `sessions --store /tmp/other.sqlite diff ${key}`,
+    mocks.diff,
+    "`sessions diff` does not support the parent `sessions` option --store; the gateway resolves the checked-out workspace from <key> and --agent.",
   ],
   [`sessions delete ${key} --timeout 0 --json`, mocks.lifecycle, timeoutError],
   [
@@ -179,6 +190,16 @@ it.each([
 it("compact inherits parent agent and JSON options (#91378)", async () => {
   await run(`sessions --agent work --json compact ${key}`);
   expectOptions(mocks.compact, { key, agent: "work", json: true });
+});
+it("forwards sessions diff selectors and scope to the command", async () => {
+  await run(`sessions --json diff ${key} --agent work --scope uncommitted --summary`);
+  expectOptions(mocks.diff, {
+    key,
+    agent: "work",
+    scope: "uncommitted",
+    summary: true,
+    json: true,
+  });
 });
 it("forwards archive keys, inherited scope and RPC options", async () => {
   await run(

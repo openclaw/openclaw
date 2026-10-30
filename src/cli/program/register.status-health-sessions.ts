@@ -512,4 +512,62 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         );
       });
     });
+
+  addSessionsGatewayOptions(sessionsCmd.command("diff <key>"))
+    .description("Show the branch and working-tree changes a session produced")
+    .option("--scope <scope>", "Diff target: all (default), uncommitted, or commit")
+    .option("--commit <sha>", "Diff against this commit (requires --scope commit)")
+    .option("--summary", "Skip patches and branch history; report file counts only", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            'openclaw sessions diff "agent:main:main"',
+            "Show what the session changed in its checkout.",
+          ],
+          [
+            'openclaw sessions diff "agent:main:main" --scope uncommitted --summary',
+            "Count only the uncommitted files, without patches.",
+          ],
+          [
+            'openclaw sessions diff "agent:work:main" --agent work --scope commit --commit HEAD~1 --json',
+            "Diff one commit back and emit the raw response.",
+          ],
+        ])}\n\n${theme.muted(
+          "Backed by the sessions.diff gateway RPC; exits non-zero when the workspace has no diff to report.",
+        )}`,
+    )
+    .action(async (key: string, opts, command) => {
+      // The Gateway resolves the checkout from <key> and --agent; list selectors cannot apply.
+      const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined; // SAFETY: the sessions parent registers the list options rejected below.
+      rejectUnsupportedSessionsParentOptions(
+        "diff",
+        parentOpts,
+        ["store", "allAgents", "active", "limit", "verbose"],
+        "the gateway resolves the checked-out workspace from <key> and --agent",
+      );
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
+      if (opts.timeout !== undefined && timeoutMs === undefined) {
+        throwExpectedCliError("--timeout must be a positive integer (milliseconds).");
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsDiffCommand } = await import("../../commands/sessions-diff.js");
+        await sessionsDiffCommand(
+          {
+            key,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent, // SAFETY: Commander parses --agent as a string.
+            scope: opts.scope as string | undefined, // SAFETY: Commander parses --scope as a string; the command validates values.
+            commit: opts.commit as string | undefined, // SAFETY: Commander parses --commit as a string; the command pairs it with --scope commit.
+            summary: Boolean(opts.summary),
+            timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
+            url: opts.url as string | undefined, // SAFETY: Commander parses transport options as strings.
+            token: opts.token as string | undefined, // SAFETY: Commander parses transport options as strings.
+            password: opts.password as string | undefined, // SAFETY: Commander parses transport options as strings.
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
 }
