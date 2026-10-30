@@ -6729,19 +6729,23 @@ jobs:
             exit "$status"
           }
           trap cleanup EXIT
+          # Bound boot, root reconnection and trust admission together; cleanup stays in the parent.
           /usr/bin/timeout --signal=TERM --kill-after=2s 180s bash -c '
+            set -euo pipefail
+            trust_evidence=$1
+            EXPECTED_PAGE_SIZE=$2
             adb -s emulator-5554 wait-for-device
             until [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d "\r")" == 1 ]]; do sleep 2; done
-          '
-          test "$(adb -s emulator-5554 shell getconf PAGE_SIZE | tr -d '\r')" = "$EXPECTED_PAGE_SIZE"
-          if [[ "$EXPECTED_PAGE_SIZE" == 16384 ]]; then
-            # ps16k simulates 16 KiB pages on x86_64; compat mode must not hide loader failures.
-            adb -s emulator-5554 shell setprop bionic.linker.16kb.app_compat.enabled false
-            adb -s emulator-5554 shell setprop pm.16kb.app_compat.disabled true
-            test "$(adb -s emulator-5554 shell getprop bionic.linker.16kb.app_compat.enabled | tr -d '\r')" = false
-            test "$(adb -s emulator-5554 shell getprop pm.16kb.app_compat.disabled | tr -d '\r')" = true
-          fi
-          bash scripts/android-native-tls-trust.sh prepare "$trust_evidence"
+            test "$(adb -s emulator-5554 shell getconf PAGE_SIZE | tr -d "\r")" = "$EXPECTED_PAGE_SIZE"
+            if [[ "$EXPECTED_PAGE_SIZE" == 16384 ]]; then
+              # ps16k simulates 16 KiB pages on x86_64; compat mode must not hide loader failures.
+              adb -s emulator-5554 shell setprop bionic.linker.16kb.app_compat.enabled false
+              adb -s emulator-5554 shell setprop pm.16kb.app_compat.disabled true
+              test "$(adb -s emulator-5554 shell getprop bionic.linker.16kb.app_compat.enabled | tr -d "\r")" = false
+              test "$(adb -s emulator-5554 shell getprop pm.16kb.app_compat.disabled | tr -d "\r")" = true
+            fi
+            bash scripts/android-native-tls-trust.sh prepare "$trust_evidence"
+          ' bash "$trust_evidence" "$EXPECTED_PAGE_SIZE"
           node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
             :app:connectedPlayDebugAndroidTest --info \
             -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE" \
