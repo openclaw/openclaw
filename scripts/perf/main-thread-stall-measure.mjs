@@ -30,7 +30,7 @@ if (mode === "native-spawn") {
   assert.equal(typeof globalThis.gc, "function", "Run with --expose-gc");
   const { spawnProcess } = await import("../../src/process/spawn-utils.ts");
   const retained = Array.from({ length: 220 }, (_, index) =>
-    new Array(1_000_000).fill(index + 0.5),
+    Array.from({ length: 1_000_000 }, () => index + 0.5),
   );
   globalThis.gc();
   const monitor = createMainThreadStallMonitor();
