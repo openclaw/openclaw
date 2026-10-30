@@ -10,7 +10,10 @@ function BootComposer() {
   const textarea = bootComposerElement();
   onSettled(settleBootComposer);
   return (
-    <div class="skeleton loading-skeleton__composer" aria-hidden={textarea ? undefined : "true"}>
+    <div
+      class={["loading-skeleton__composer", { skeleton: !textarea }]}
+      aria-hidden={textarea ? undefined : "true"}
+    >
       {textarea}
     </div>
   );

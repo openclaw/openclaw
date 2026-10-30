@@ -205,6 +205,22 @@ suite.define(() => {
       ).toBe(true);
       expect(await original?.evaluate((element) => element.isConnected)).toBe(true);
       expect(await retained.inputValue()).toBe("Send this only if the session opens");
+      // A resolved route must not leave a loading animation intercepting the editor.
+      expect(
+        await retained.evaluate(async (element) => {
+          let intercepted = 0;
+          for (let frame = 0; frame < 120; frame += 1) {
+            await new Promise(requestAnimationFrame);
+            const box = element.getBoundingClientRect();
+            if (
+              document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) !== element
+            ) {
+              intercepted += 1;
+            }
+          }
+          return intercepted;
+        }),
+      ).toBe(0);
       await retained.fill("");
       expect(await retained.inputValue()).toBe("");
       await retained.fill("Still only for the original session");
