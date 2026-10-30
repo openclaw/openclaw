@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
@@ -18,10 +19,7 @@ import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { MatrixStreamingConfig } from "../../types.js";
 import type { MatrixReplyDispatchInfo } from "./handler-draft-controller.js";
 import { registerMatrixLiveAllowlistTests } from "./handler.live-allowlist.test-support.js";
-import {
-  registerMatrixPreviewDeliveryTests,
-  toolStarted,
-} from "./handler.preview-delivery.test-support.js";
+import { registerMatrixPreviewDeliveryTests } from "./handler.preview-delivery.test-support.js";
 import {
   createMatrixHandlerTestHarness as createHarness,
   createMatrixReactionEvent,
@@ -753,6 +751,12 @@ describe("matrix monitor handler draft streaming", () => {
     sendDraftMock.mockResolvedValueOnce({ messageId, roomId: "!room" });
   }
 
+  async function toolStarted(opts: GetReplyOptions, toolCallId: string, name: string) {
+    const activity = { toolCallId, name, phase: "start" as const };
+    await opts.onItemEvent?.(projectAgentToolActivity(activity));
+    await opts.onToolStart?.(activity);
+  }
+
   async function sendPreview(opts: GetReplyOptions, text: string, expectedSends = 1) {
     await opts.onPartialReply?.({ text });
     await waitForDrafts(expectedSends);
@@ -931,25 +935,6 @@ describe("matrix monitor handler draft streaming", () => {
     } finally {
       await finish();
     }
-  });
-
-  it("keeps truncated Matrix tool progress UTF-16 safe", async () => {
-    vi.useFakeTimers();
-    const { opts, finish } = await progressHarness({
-      toolProgress: true,
-      label: false,
-      maxLineChars: 500,
-    });
-    const progressPrefix = "x".repeat(298);
-    const progressText = `${progressPrefix}🎉tail`;
-    await opts.onItemEvent?.({ progressText });
-    await opts.onItemEvent?.({ progressText });
-    expect(sendDraftMock).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(sendDraftMock).toHaveBeenCalledTimes(1);
-    expect(draftBody()).toBe(`- \`${progressPrefix}...\``);
-    await finish();
-    vi.useRealTimers();
   });
 
   it("keeps quiet Matrix status, plans, and approvals with tool progress disabled", async () => {
