@@ -565,10 +565,10 @@ describe("public-session post-deploy app handoff", () => {
         gatewayContext.agentDatabaseStartup = undefined;
         readReady.resolve();
         completion.resolve();
-        // A failing assertion may precede navigation commit. Close its page before
-        // disposing the context, after retiring the fixture-held startup work.
-        await page.close();
+        // A failing assertion may precede navigation commit. Retire held startup
+        // work and settle navigation before closing its page or context.
         await Promise.allSettled([navigation, documentRequest, probeRequest]);
+        await page.close();
         cfg = originalConfig;
         auth = originalAuth;
         setRuntimeConfigSnapshot(cfg, cfg);
