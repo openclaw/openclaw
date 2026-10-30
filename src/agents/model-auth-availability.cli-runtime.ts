@@ -126,6 +126,7 @@ export function createCliRuntimeModelAuthEvaluator(
       const profile = selectCliExecutionAuthProfile({
         cliExecutionProvider: runtimeProvider,
         authProfileProvider: provider,
+        model: ref.modelId,
         config: params.cfg,
         store: params.authStore,
         readinessMode: "read-only",

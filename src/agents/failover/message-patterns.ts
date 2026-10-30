@@ -157,6 +157,7 @@ const ERROR_PATTERNS = {
     /\bresource[_ -]?exhausted\b/i,
     /\bquota[_ -]?exceeded\b/i,
     "usage limit",
+    /\breached your [^\r\n]{1,80} limit\.\s*switch to another model\b/i,
     /\btpm\b/i,
     "tokens per minute",
     "tokens per day",

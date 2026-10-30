@@ -283,3 +283,7 @@ export function resolveCliSessionReuse(params: {
   }
   return { mode: "reuse" as const, sessionId };
 }
+
+export function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
+  return Object.entries(binding).some(([key, value]) => key !== "sessionId" && value !== undefined);
+}

@@ -34,6 +34,33 @@ it("preserves a sibling model cooldown until that model succeeds", () => {
   });
 });
 
+it.each([
+  ["model", "fallback", true],
+  ["model", "primary", false],
+  ["model", undefined, false],
+  [undefined, "fallback", false],
+] as const)(
+  "resets %s block after %s success with preservation=%s",
+  (blockedScope, successfulModel, preserved) => {
+    const block: Stats = {
+      blockedUntil: 31_000,
+      blockedModel: "primary",
+      blockedScope,
+      blockedReason: "subscription_limit",
+      blockedSource: "wham",
+    };
+    const result = resetAuthProfileFailureState(block, { lastUsed: 2_000 }, successfulModel);
+    expect(result).toMatchObject({
+      blockedUntil: preserved ? block.blockedUntil : undefined,
+      blockedModel: preserved ? block.blockedModel : undefined,
+      blockedScope: preserved ? block.blockedScope : undefined,
+      blockedReason: preserved ? block.blockedReason : undefined,
+      blockedSource: preserved ? block.blockedSource : undefined,
+      lastUsed: 2_000,
+    });
+  },
+);
+
 const now = 1_700_000_000_000;
 const until = now + 60_000;
 const later = now + 120_000;

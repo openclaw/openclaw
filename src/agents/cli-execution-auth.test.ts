@@ -46,6 +46,7 @@ function resolve(
 ) {
   return resolveCliExecutionAuthProfileId({
     cliExecutionProvider,
+    model: "test-model",
     authProfileProvider,
     config: {},
     agentDir: "/tmp/unused-agent",

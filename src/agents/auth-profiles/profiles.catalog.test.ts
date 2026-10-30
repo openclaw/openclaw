@@ -36,6 +36,7 @@ afterEach(() => {
 function resolveCliProfile(agentDir: string, profileId: string) {
   return resolveCliExecutionAuthProfileId({
     cliExecutionProvider: "claude-cli",
+    model: "test-model",
     authProfileProvider: "claude-cli",
     config: {},
     agentDir,

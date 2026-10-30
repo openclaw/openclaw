@@ -97,6 +97,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../auth-profiles/store-runtime.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { resolveBootstrapContextForRun as loadBootstrapContext } from "../bootstrap-files.js";
 import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
@@ -145,6 +146,7 @@ import {
   createJsonlStdinBackendConfig,
   registerCliMcpPreparationTests,
   setRawCliBackendForPrepareTest,
+  setCliBackendForPrepareTest,
 } from "./prepare-mcp.test-support.js";
 import { registerCliThinkingPreparationTests } from "./prepare-thinking.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
@@ -249,56 +251,6 @@ function createBundledMessageToolConfig(): OpenClawConfig {
     })),
   });
   return createCliBackendConfig({ bundleMcp: true });
-}
-
-function setCliBackendForPrepareTest(
-  params: {
-    authEpochMode?: CliBackendPlugin["authEpochMode"];
-    autoSelectAuthProfile?: boolean;
-    bundleMcp?: boolean;
-    command?: string;
-    id?: string;
-    liveSession?: boolean;
-    modelAliases?: Record<string, string>;
-    modelProvider?: string;
-    pluginId?: string;
-    prepareExecution?: CliBackendPlugin["prepareExecution"];
-    sessionMode?: "always" | "existing" | "none";
-    reseedFromRawTranscriptWhenUncompacted?: boolean;
-  } = {},
-) {
-  const id = params.id ?? "claude-cli";
-  // Keep preparation behind the same runtime resolver seam that production
-  // uses; direct backend constants would bypass provider ownership.
-  cliBackendsTesting.setDepsForTest({
-    resolvePluginSetupCliBackend: () => undefined,
-    resolveRuntimeCliBackends: () => [
-      {
-        id,
-        pluginId: params.pluginId ?? "anthropic",
-        modelProvider: params.modelProvider ?? "anthropic",
-        bundleMcp: params.bundleMcp ?? false,
-        ...(params.authEpochMode ? { authEpochMode: params.authEpochMode } : {}),
-        ...(params.bundleMcp ? { bundleMcpMode: "claude-config-file" as const } : {}),
-        ...(params.autoSelectAuthProfile !== undefined
-          ? { autoSelectAuthProfile: params.autoSelectAuthProfile }
-          : {}),
-        ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
-        config: {
-          ...createJsonlStdinBackendConfig(params.command ?? "claude"),
-          systemPromptFileArg: "--append-system-prompt-file",
-          systemPromptWhen: "always",
-          resumeArgs: ["--resume", "{sessionId}"],
-          sessionMode: params.sessionMode ?? "existing",
-          ...(params.modelAliases ? { modelAliases: params.modelAliases } : {}),
-          ...(params.liveSession ? { liveSession: "claude-stdio" as const } : {}),
-          ...(params.reseedFromRawTranscriptWhenUncompacted
-            ? { reseedFromRawTranscriptWhenUncompacted: true }
-            : {}),
-        },
-      },
-    ],
-  });
 }
 
 function createArgBackendConfig(
@@ -1211,6 +1163,49 @@ describe("prepareCliRunContext", () => {
     expect(context.effectiveAuthProfileId).toBe(testCase.expectedAuthProfileId);
     expect(prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({ authProfileId: testCase.expectedAuthProfileId }),
+    );
+  });
+
+  it.each([
+    ["limited", "claude-cli:backup"],
+    ["sibling", "claude-cli:stored"],
+  ])("selects an available implicit profile for model %s", async (model, expectedAuthProfileId) => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const prepareExecution = vi.fn(async () => ({}));
+    const profiles = {
+      "claude-cli:stored": { type: "api_key" as const, provider: "claude-cli", key: "stored-key" },
+      "claude-cli:backup": { type: "api_key" as const, provider: "claude-cli", key: "backup-key" },
+    };
+    const store: AuthProfileStore = createAuthProfileStoreFixture(profiles);
+    store.order = { "claude-cli": Object.keys(profiles) };
+    store.usageStats = {
+      "claude-cli:stored": {
+        blockedUntil: Date.now() + 60_000,
+        blockedScope: "model",
+        blockedModel: "limited",
+      },
+    };
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(store, agentDir);
+    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:main",
+      agentDir,
+      provider: "claude-cli",
+      model,
+      config: {
+        auth: {
+          profiles: {
+            "claude-cli:stored": { provider: "claude-cli", mode: "api_key" },
+            "claude-cli:backup": { provider: "claude-cli", mode: "api_key" },
+          },
+        },
+      },
+    });
+    expect(context.effectiveAuthProfileId).toBe(expectedAuthProfileId);
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileId: expectedAuthProfileId }),
     );
   });
 

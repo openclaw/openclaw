@@ -471,6 +471,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         await expect(
           inference.resolveCliAuthProfile((selected) =>
             resolveCliExecutionAuthProfileId({
+              model: claudeModel,
               cliExecutionProvider: "claude-cli",
               authProfileProvider: "anthropic",
               config: cfg,
@@ -512,6 +513,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         await expect(
           inference.resolveCliAuthProfile((selected) =>
             resolveCliExecutionAuthProfileId({
+              model: claudeModel,
               cliExecutionProvider: "claude-cli",
               authProfileProvider: "anthropic",
               config: cfg,

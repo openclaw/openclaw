@@ -36,6 +36,7 @@ export function cliBackendAcceptsAuthProfileForwarding(params: {
 export function selectCliExecutionAuthProfile(params: {
   cliExecutionProvider: string;
   authProfileProvider: string;
+  model?: string;
   config: OpenClawConfig;
   store: AuthProfileStore;
   selected?: {
@@ -111,6 +112,7 @@ export function selectCliExecutionAuthProfile(params: {
       store,
       provider,
       preferredProfile: selectedAuthProfileId,
+      forModel: params.model,
       readinessMode: params.readinessMode,
       authAliasLookupParams: { metadataSnapshot: params.metadataSnapshot },
     });
@@ -133,6 +135,7 @@ export function selectCliExecutionAuthProfile(params: {
 
 export async function resolveCliExecutionAuthProfileId(
   params: Omit<Parameters<typeof selectCliExecutionAuthProfile>[0], "store" | "readinessMode"> & {
+    model: string;
     agentDir: string;
     loadAuthProfileStoreForRuntimeAsync?: typeof loadAuthProfileStoreForRuntimeAsync;
   },

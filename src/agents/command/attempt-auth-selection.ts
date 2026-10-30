@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStoreAsync } from "../auth-profiles/store-runtime.js";
+import type { resolveCliExecutionAuthProfileId } from "../cli-execution-auth.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentAttemptParams } from "./attempt-execution.types.js";
 
@@ -125,4 +126,20 @@ export async function resolveHarnessAuthProfileSelection(params: {
         authProfileProvider: harnessAuthProvider,
       }
     : { authProfileProvider: params.authProfileProvider };
+}
+
+/** Keep requested model identity with the command's CLI account selection. */
+export function buildCommandCliAuthContext(
+  params: Pick<AgentAttemptParams, "modelOverride" | "authProfileProvider" | "cfg" | "agentDir">,
+  cliExecutionProvider: string,
+  selected: HarnessAuthProfileSelection,
+): Parameters<typeof resolveCliExecutionAuthProfileId>[0] {
+  return {
+    cliExecutionProvider,
+    model: params.modelOverride,
+    authProfileProvider: params.authProfileProvider,
+    config: params.cfg,
+    agentDir: params.agentDir,
+    selected,
+  };
 }

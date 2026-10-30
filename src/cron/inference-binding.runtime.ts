@@ -114,6 +114,7 @@ export async function captureCronInferenceBinding(params: {
     const selectedProfileId = model.configuredProfileId ?? creatorSession?.authProfileOverride;
     const profileId = await resolveCliExecutionAuthProfileId({
       cliExecutionProvider,
+      model: model.model,
       authProfileProvider: model.provider,
       config: cfg,
       agentDir,

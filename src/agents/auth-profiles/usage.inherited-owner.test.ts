@@ -187,6 +187,55 @@ describe("inherited auth-profile usage persistence", () => {
     },
   );
 
+  it.each(["shared", "personal"] as const)(
+    "preserves a %s model block after sibling success",
+    async (owner) => {
+      writeMainStore();
+      const profileId =
+        owner === "shared"
+          ? PRIMARY_ID
+          : connectPersonalAccount(ensureProfileForEmail("quota@example.test").id);
+      const store = ensureAuthProfileStore(mainAgentDir, { profileId });
+      const blockedUntil = Date.now() + 60_000;
+      await markAuthProfileBlockedUntil({
+        store,
+        profileId,
+        agentDir: mainAgentDir,
+        blockedUntil,
+        source: "wham",
+        modelId: "limited",
+      });
+      const readStats = () =>
+        owner === "shared"
+          ? loadPersistedAuthProfileStore(mainAgentDir)?.usageStats?.[profileId]
+          : readUserModelAuthProfile(profileId)?.usageStats;
+      const block = readStats();
+      expect(block).toMatchObject({ blockedUntil, blockedModel: "limited", blockedScope: "model" });
+      await markAuthProfileSuccess({
+        store,
+        profileId,
+        agentDir: mainAgentDir,
+        provider: owner === "shared" ? "openai" : "anthropic",
+        modelId: "sibling",
+      });
+      expect(readStats()).toMatchObject({
+        blockedUntil,
+        blockedModel: "limited",
+        blockedScope: "model",
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+      });
+      await markAuthProfileSuccess({
+        store,
+        profileId,
+        agentDir: mainAgentDir,
+        provider: owner === "shared" ? "openai" : "anthropic",
+        modelId: "limited",
+      });
+      expect(readStats()?.blockedUntil).toBeUndefined();
+    },
+  );
+
   it("keeps selected personal health in its owner without publishing credentials or selection", async () => {
     writeMainStore();
     const owner = ensureProfileForEmail("alice@example.test");
