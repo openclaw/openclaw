@@ -30,7 +30,10 @@ import {
 } from "./bootstrap-timeouts.js";
 import type { DeviceWorkerAvailability } from "./device-provider.js";
 import type { NodeBootstrapArtifact } from "./node-bootstrap-artifact-contract.js";
-import { DEFAULT_NODE_TOOLCHAIN_SETUP_SH, NPM_NODE_TOOLCHAIN_SETUP_SH } from "./node-toolchain.js";
+import {
+  DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
+  BUNDLE_NODE_TOOLCHAIN_SETUP_SH,
+} from "./node-toolchain.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import type { WorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
@@ -206,8 +209,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
       manifestSha256: prepared.artifact.manifestSha256,
       enabledPluginIds: prepared.artifact.enabledPluginIds,
       linuxToolchainSetup:
-        prepared.artifact.install === "npm"
-          ? NPM_NODE_TOOLCHAIN_SETUP_SH
+        prepared.artifact.install === "bundle"
+          ? BUNDLE_NODE_TOOLCHAIN_SETUP_SH
           : DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
       ...(prepared.artifact.installLock
         ? {

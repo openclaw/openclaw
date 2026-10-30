@@ -327,7 +327,7 @@ childProcess.spawn = (command, args, options) => {
 }
 
 describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
-  it("installs and reuses a bundle without npm or lifecycle scripts", async () => {
+  it("installs and reuses a bundle beside a retained npm runtime without rerunning npm", async () => {
     const bytes = await createNodePackageFixture(
       (prefix) => tempDirs.make(prefix),
       "offline",
@@ -344,20 +344,26 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       manifestSha256: await runtimeManifestSha256(bytes),
     };
     const { home, stateDir } = testHome();
+    const retained = await servePackage("retained-npm-runtime");
+    await expectSetupPhases(
+      enroll(home, retained.nodeBootstrap, undefined, true, workerBundleFor(worker.nodeBootstrap)),
+    );
+    const npmCalls = readText(home, "npm-calls");
+    const retainedInstallation = readText(
+      runtimePackage(home, retained.nodeBootstrap.sha256),
+      "installed.json",
+    );
     const prepare = () =>
       enroll(home, bootstrap, undefined, true, workerBundleFor(worker.nodeBootstrap));
     await expectSetupPhases(prepare());
-    expectAbsent(
-      path.join(home, "npm-calls"),
-      path.join(runtimePackage(home, bootstrap.sha256), "installed.json"),
-      stateDir,
-    );
+    expect(readText(home, "npm-calls")).toBe(npmCalls);
+    expectAbsent(path.join(runtimePackage(home, bootstrap.sha256), "installed.json"), stateDir);
     expect(
       readText(runtimePackage(home, bootstrap.sha256), "node_modules/runtime-fixture/index.js"),
     ).toContain("2026.8.1");
     await expectSetupPhases(prepare());
     expect(served.authorizations).toHaveLength(1);
-    expect(worker.authorizations).toHaveLength(1);
+    expect(worker.authorizations).toHaveLength(2);
     const failed = await enroll(
       home,
       { ...bootstrap, manifestSha256: "0".repeat(64) },
@@ -366,7 +372,11 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       workerBundleFor(worker.nodeBootstrap),
     );
     expectFailure(failed, "inventory does not match");
-    expectAbsent(path.join(home, "npm-calls"), stateDir);
+    expect(readText(home, "npm-calls")).toBe(npmCalls);
+    expect(readText(runtimePackage(home, retained.nodeBootstrap.sha256), "installed.json")).toBe(
+      retainedInstallation,
+    );
+    expectAbsent(stateDir);
   });
 
   it.each(["present", "absent", "rejected", "download failure"])(
