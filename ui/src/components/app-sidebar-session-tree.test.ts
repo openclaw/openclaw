@@ -18,6 +18,7 @@ function present(row: GatewaySessionRow, isChild = false): SidebarRecentSession 
     label: row.label ?? row.key,
     isChild,
     hasActiveRun: row.hasActiveRun === true,
+    backgroundProcessCount: row.backgroundProcessCount,
     active: row.key === conversationKey,
     unread: row.unread === true,
     status: row.status,
@@ -105,6 +106,23 @@ it("reattaches a persistent session through hidden runs and reveals its visible 
   expect(fallback).toMatchObject([{ key: conversationKey, isChild: false }]);
   run.spawnedBy = workerKey;
   expect(project([run, child]).map((row) => row.key)).toEqual([conversationKey]);
+});
+
+it("counts background work once per descendant without marking its parent active", () => {
+  const rows = [
+    makeRow(homeKey),
+    makeRow(workerKey, { spawnedBy: homeKey, backgroundProcessCount: 2 }),
+    makeRow(conversationKey, {
+      spawnedBy: workerKey,
+      hasActiveRun: true,
+      backgroundProcessCount: 1,
+    }),
+  ];
+  expect(project(rows)[0]).toMatchObject({
+    hasActiveRun: false,
+    runningChildCount: 2,
+    subagentSummary: { runningChildCount: 1 },
+  });
 });
 
 it("keeps independent conversations outside Home while a worker runs", () => {

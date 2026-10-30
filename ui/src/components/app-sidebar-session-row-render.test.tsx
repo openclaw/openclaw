@@ -289,6 +289,31 @@ it("keeps the unread badge on an idle child with an icon", () => {
   expect(dom.query('.session-glyph__badge[aria-label="Unread"]')).not.toBeNull();
 });
 
+it("shows quiet background work on the own glyph and gives an active run precedence", () => {
+  const { dom, session, setCurrent } = mountRow({ backgroundProcessCount: 1, icon: "book" });
+  const indicator = () => dom.query('.session-glyph__ring[role="img"]');
+  expect(indicator()?.getAttribute("aria-label")).toBe("Background work running");
+  expect(indicator()?.classList.contains("session-glyph__ring--background")).toBe(true);
+  setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true });
+  flush();
+  expect(indicator()?.getAttribute("aria-label")).toBe("Active run");
+  expect(indicator()?.classList.contains("session-glyph__ring--background")).toBe(false);
+  setCurrent({ ...session, backgroundProcessCount: undefined });
+  flush();
+  expect(indicator()).toBeNull();
+});
+
+it("keeps hidden child background activity off the idle parent's own glyph", () => {
+  const { dom } = mountRow(
+    { icon: "book", unread: true },
+    { runningChildCount: 1, childSessionKeys: ["agent:main:child"] },
+  );
+  expect(dom.query(".sidebar-session-indicator .session-glyph__ring")).toBeNull();
+  expect(dom.query(".sidebar-child-session-toggle .session-run-spinner")).not.toBeNull();
+  expect(dom.all('[aria-label="Unread"]')).toHaveLength(1);
+  expect(dom.query(".sidebar-recent-session__link")?.getAttribute("aria-describedby")).toBeNull();
+});
+
 it("keeps an idle child owner's glyph hidden until the run starts", () => {
   const { dom, session, setCurrent } = mountRow(
     {

@@ -140,11 +140,13 @@ suite.define(() => {
       await initialToggle.waitFor();
       expect(await initialToggle.getAttribute("aria-expanded")).toBe("false");
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
-      // Delegated work keeps the idle parent's ring visible even with children collapsed.
+      // Hidden work belongs to the child toggle; the idle parent's own glyph stays idle.
       await expect
         .poll(() => parent.locator(".sidebar-child-session-toggle--running").count())
         .toBe(1);
-      await parent.getByRole("img", { name: "Subagents working", exact: true }).waitFor();
+      expect(await parent.locator(".sidebar-session-indicator .session-glyph__ring").count()).toBe(
+        0,
+      );
       const accessibility = await context.newCDPSession(page);
       const collapsedTree = await accessibility.send("Accessibility.getFullAXTree");
       const collapsedToggle = collapsedTree.nodes.find(

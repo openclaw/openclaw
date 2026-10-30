@@ -756,6 +756,7 @@ const startupEnglish = {
     provider: "Provider",
     lastActive: "Last active {time}",
     activeRun: "Active run",
+    backgroundWorkRunning: "Background work running",
     subagentsWorking: "Subagents working",
     showChildSessions: "Show {count} child sessions for {session}",
     hideChildSessions: "Hide {count} child sessions for {session}",

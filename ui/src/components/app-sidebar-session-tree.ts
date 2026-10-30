@@ -41,7 +41,9 @@ function summarizeChildren(
     childAttention.push(attention);
     unreadChildCount += Number(child.unread) + (descendants?.unreadChildCount ?? 0);
     const visuallyActive = child.isRunVisuallyActive ?? child.hasActiveRun;
-    runningChildCount += (visuallyActive ? 1 : 0) + (descendants?.runningChildCount ?? 0);
+    runningChildCount +=
+      Number(visuallyActive || (child.backgroundProcessCount ?? 0) > 0) +
+      (descendants?.runningChildCount ?? 0);
     queuedChildCount +=
       Number(visuallyActive && child.status === "queued") + (descendants?.queuedChildCount ?? 0);
     workspaceConflictCount += onlySubagents

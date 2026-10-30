@@ -454,12 +454,15 @@ function RailSessionGlyph(props: { session: SidebarRecentSession; label: string 
       }
       running={
         (props.session.isRunVisuallyActive ?? props.session.hasActiveRun) ||
-        props.session.runningChildCount > 0
+        (props.session.backgroundProcessCount ?? 0) > 0
       }
       queued={
         (props.session.isRunVisuallyActive ?? props.session.hasActiveRun) &&
-        props.session.status === "queued" &&
-        props.session.runningChildCount === 0
+        props.session.status === "queued"
+      }
+      background={
+        !(props.session.isRunVisuallyActive ?? props.session.hasActiveRun) &&
+        (props.session.backgroundProcessCount ?? 0) > 0
       }
       badge={props.session.unread ? renderSessionUnreadBadge() : undefined}
     />

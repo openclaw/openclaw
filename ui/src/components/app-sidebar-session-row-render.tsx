@@ -327,7 +327,12 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           onClick={() => host().toggleSessionChildren(actionSession())}
         >
           <span class="sidebar-child-session-toggle__icon" aria-hidden="true">
-            <Icon name={childrenExpanded() ? "chevronDown" : "chevronRight"} />
+            <Show
+              when={!childrenExpanded() && session().runningChildCount > 0}
+              fallback={<Icon name={childrenExpanded() ? "chevronDown" : "chevronRight"} />}
+            >
+              <span class="session-run-spinner" />
+            </Show>
           </span>
           <span class="sidebar-child-session-toggle__count">
             {session().childSessionKeys.length}
@@ -335,6 +340,18 @@ function renderRecentSessionRow(params: RecentSessionParams) {
         </button>
       </Show>
       <span class="sidebar-recent-session__aside session-row-aside">
+        <Show
+          when={
+            (!hasChildren() || childrenExpanded()) &&
+            (session().subagentSummary?.runningChildCount ?? 0) > 0
+          }
+        >
+          <span
+            class="session-run-spinner"
+            role="img"
+            aria-label={t("sessionsView.subagentsWorking")}
+          />
+        </Show>
         <span class="session-row-actions">
           <Show when={pinnable()}>
             <button
