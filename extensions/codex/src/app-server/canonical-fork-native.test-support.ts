@@ -9,9 +9,16 @@ import { CodexAppServerClient } from "./client.js";
 import { createCodexDesktopGenerationOwner } from "./desktop-generation-owner.js";
 import * as desktopGenerationRuntime from "./desktop-generation.js";
 import * as managedBinary from "./managed-binary.js";
-import { appInfo } from "./plugin-inventory.test-helpers.js";
+import {
+  appInfo,
+  appSummary,
+  pluginDetail,
+  pluginInstalled,
+  pluginSummary,
+} from "./plugin-inventory.test-helpers.js";
 import {
   isJsonObject,
+  type CodexAppServerRequestParams,
   type CodexThread,
   type CodexTurn,
   type JsonObject,
@@ -170,6 +177,29 @@ export async function createCanonicalForkNativeFixture(
           return { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}`, codexHome: home };
         case "initialized":
           return {};
+        case "plugin/installed":
+          return pluginInstalled([pluginSummary("synthetic", { installed: true, enabled: true })]);
+        case "plugin/read":
+          return pluginDetail("synthetic", [appSummary("synthetic-app")]);
+        case "mcpServerStatus/list":
+          return {
+            data: [
+              {
+                name: "codex_apps",
+                tools: {
+                  "synthetic.lookup": {
+                    title: "lookup",
+                    annotations: { readOnlyHint: true },
+                    _meta: {
+                      connector_id: "synthetic-app",
+                      _codex_apps: { resource_uri: "/synthetic-app/link/lookup" },
+                    },
+                  },
+                },
+              },
+            ],
+            nextCursor: null,
+          };
         case "skills/list":
           return { data: [] };
         case "configRequirements/read":
@@ -185,12 +215,26 @@ export async function createCanonicalForkNativeFixture(
         }
         const apps = threads.get(String(params.threadId))?.config?.apps;
         const app = isJsonObject(apps) ? apps["synthetic-app"] : undefined;
-        return codexAppInventoryResponse(method, [
-          {
-            ...appInfo("synthetic-app", true, isJsonObject(app) && app.enabled === true),
-            name: "Synthetic App",
-          },
-        ]);
+        return codexAppInventoryResponse(
+          method,
+          [
+            {
+              ...appInfo("synthetic-app", true, isJsonObject(app) && app.enabled === true),
+              name: "Synthetic App",
+              toolSummaries: [
+                {
+                  name: "lookup",
+                  title: null,
+                  description: "",
+                  isReadOnly: true,
+                  isEnabled: true,
+                  disabledReason: null,
+                },
+              ],
+            },
+          ],
+          params as CodexAppServerRequestParams<typeof method>,
+        );
       }
       if (method === "thread/list") {
         return {

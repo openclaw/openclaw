@@ -808,9 +808,11 @@ describe("scripts/changed-lanes", () => {
       const diagnostics = failed.stdout + failed.stderr;
       expect(failed.error, diagnostics).toBeUndefined();
       expect(failed.status, diagnostics).toBe(1);
-      expect(diagnostics).toContain("eslint(curly)");
+      expect(diagnostics).toMatch(/(?:eslint\(curly\)|(?:^|\s)curly(?:\s|$))/u);
       expect(
-        diagnostics.match(/typescript\(no-floating-promises\)/gu) ?? [],
+        diagnostics.match(
+          /(?:typescript\(no-floating-promises\)|@typescript-eslint\/no-floating-promises)/gu,
+        ) ?? [],
         diagnostics,
       ).toHaveLength(4);
       expect(diagnostics).toContain(broken);

@@ -25,6 +25,7 @@ import { createExtensionRuntime } from "../../src/agents/sessions/extensions/loa
 import type { Extension } from "../../src/agents/sessions/extensions/types.js";
 import type { ModelRegistry } from "../../src/agents/sessions/model-registry.js";
 import type { SessionManager } from "../../src/agents/sessions/session-manager.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -96,12 +97,7 @@ await setImmediate();
 globalThis.gc();
 const inspector = new Session();
 if (values.allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 const hostLoad = loadavg();
 const cpuStart = process.threadCpuUsage();

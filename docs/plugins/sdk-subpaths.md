@@ -629,6 +629,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/memory-core-host-engine-storage` | Private-local after July 2026; Memory host storage engine exports |
     | `plugin-sdk/memory-core-host-secret` | Private-local after July 2026; Memory host secret helpers |
     | `plugin-sdk/memory-core-host-status` | Private-local after July 2026; Memory host status helpers |
+    | `plugin-sdk/memory-core-host-transcript-stats` | Private-local JavaScript-only grouped read-only transcript statistics for indexing workers; preserves incognito access guards without loading the broader session runtime |
     | `plugin-sdk/memory-core-host-runtime-cli` | Private-local after July 2026; Memory host CLI runtime helpers |
     | `plugin-sdk/memory-core-host-runtime-core` | Private-local after July 2026; Memory host core runtime helpers |
     | `plugin-sdk/memory-core-host-runtime-files` | Private-local after July 2026; Memory host file/runtime helpers |

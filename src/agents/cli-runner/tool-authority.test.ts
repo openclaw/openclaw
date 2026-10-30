@@ -137,7 +137,11 @@ describe("CLI question creator binding", () => {
         try {
           expect(projectedReads).toEqual(legacyReads);
           expect(
-            new Set(projectedReads.filter((read) => !read.present).map((read) => read.key)),
+            new Set(
+              projectedReads
+                .filter((read) => typeof read.key === "string" && !read.present)
+                .map((read) => read.key),
+            ),
           ).toEqual(new Set(absentKeys));
           expect(projected.personalToolOwner).toEqual(legacy.personalToolOwner);
           expect(projected.requesterPrincipalKey).toBe(legacy.requesterPrincipalKey);

@@ -33,6 +33,7 @@ function createChatComposerState(): ChatComposerState {
     restoreComposerFocus: false,
     composerInput: null,
     composerTextarea: null,
+    composerContext: null,
     microphonePicker: null,
     textareaRef: null,
     composerInputRef: null,

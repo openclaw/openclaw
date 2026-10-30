@@ -4,11 +4,14 @@ import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
+import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import { restartResumeConfig } from "./gateway-restart-resume.test-support.js";
 import {
@@ -324,10 +327,10 @@ async function providerFixture(signal: AbortSignal) {
   };
 }
 
-it.skipIf(process.platform === "win32")(
-  "resumes only running roots after graceful replacement, preserves FIFO inputs, and treats SIGKILL as lossy",
+it.skipIf(process.platform === "win32").for([true, false])(
+  "restart markers survive graceful shutdown (suspend/reopen and blocked store: %s)",
   { timeout: 180_000 },
-  async ({ signal }) => {
+  async (suspended, { signal }) => {
     const provider = await providerFixture(signal);
     const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
     model.config.models[0].params = { responsesCompactEndpoint: false };
@@ -348,10 +351,7 @@ it.skipIf(process.platform === "win32")(
     // Two logical agents share one physical store; resume must retain the session's agent.
     const sharedStore = path.join(instance.stateDir, "shared.sqlite");
     const config = asRecord(JSON.parse(await readFile(instance.configPath, "utf8")));
-    await instance.state.writeConfig({
-      ...config,
-      session: { ...asRecord(config.session), store: sharedStore },
-    });
+    await instance.state.writeConfig({ ...config, ...restartResumeConfig(model, sharedStore) });
     let client: GatewayClient | undefined;
     const connectClient = () => connectRestartClient(instance, {}, signal);
     const race = <T>(promise: Promise<T>) =>
@@ -381,7 +381,12 @@ it.skipIf(process.platform === "win32")(
     ) =>
       client!.request<{ runId: string }>(
         "chat.send",
-        { sessionKey, message, idempotencyKey: randomUUID(), ...(queueMode ? { queueMode } : {}) },
+        {
+          sessionKey,
+          message,
+          idempotencyKey: randomUUID(),
+          ...(queueMode ? { queueMode } : {}),
+        },
         { expectFinal: false, ...(timeoutMs ? { timeoutMs } : {}) },
       );
     await runQaGatewayFixture(
@@ -390,8 +395,13 @@ it.skipIf(process.platform === "win32")(
         client = await connectClient();
         const { profile } = await client.request<{ profile: { id: string } }>("users.self", {});
         expect(profile.id).toBeTruthy();
-        for (const [cycle, mode] of ["SIGTERM", "managed"].entries()) {
-          const cases = CASES.filter((name) => name !== "compact" || cycle === 1);
+        for (const [cycle, mode] of (suspended
+          ? ["suspend-reopened"]
+          : ["SIGTERM", "managed"]
+        ).entries()) {
+          const cases: readonly Case[] = suspended
+            ? ["stream"]
+            : CASES.filter((name) => name !== "compact" || cycle === 1);
           provider.prepare();
           await Promise.all(
             cases.map(async (name) => {
@@ -418,16 +428,21 @@ it.skipIf(process.platform === "win32")(
             }),
           );
           await race(
-            Promise.all([
-              provider.wait(`ready:${cycle}:stream`),
-              provider.wait(`/tool/${cycle}/tool`),
-              provider.wait(`/tool/${cycle}/background`),
-              provider.wait(`child:${cycle}`),
-              waitFinal(key(cycle, "background"), `FINISHED_${cycle}_background`),
-              waitFinal(key(cycle, "parent"), `FINISHED_${cycle}_parent`),
-              waitFinal(key(cycle, "idle"), `FINISHED_${cycle}_idle`),
-              ...(cycle === 1 ? [provider.wait(`ready:${cycle}:compact`)] : []),
-            ]),
+            Promise.all(
+              cases.map(async (name) => {
+                if (name === "tool" || name === "background") {
+                  await provider.wait(`/tool/${cycle}/${name}`);
+                }
+                if (name === "stream" || name === "compact") {
+                  await provider.wait(`ready:${cycle}:${name}`);
+                } else if (name !== "tool") {
+                  if (name === "parent") {
+                    await provider.wait(`child:${cycle}`);
+                  }
+                  await waitFinal(key(cycle, name), `FINISHED_${cycle}_${name}`);
+                }
+              }),
+            ),
           );
           await client.request(
             "chat.send",
@@ -503,7 +518,36 @@ it.skipIf(process.platform === "win32")(
               }),
             ).toMatchObject({ status: "committed", suspensionId });
           }
-          expect(child.kill("SIGTERM")).toBe(true);
+          if (mode === "suspend-reopened") {
+            const held = await client.request<{ suspensionId: string }>("gateway.suspend.prepare", {
+              requestId: "restart-resume-reopened",
+              drain: true,
+              terminalPolicy: "terminate",
+            });
+            expect(
+              await client.request("gateway.suspend.resume", {
+                suspensionId: held.suspensionId,
+              }),
+            ).toMatchObject({ ok: true, resumed: true });
+          }
+          await closeOpenClawStateDatabaseAsync();
+          const blockedStore =
+            mode === "suspend-reopened"
+              ? new DatabaseSync(resolveOpenClawStateSqlitePath(instance.env))
+              : undefined;
+          try {
+            blockedStore?.exec("BEGIN IMMEDIATE");
+            expect(child.kill("SIGTERM")).toBe(true);
+            if (blockedStore) {
+              await vi.waitFor(
+                () =>
+                  expect(instance.logs()).toContain("restart signal settlement exceeded 1000ms"),
+                { timeout: 2_500 },
+              );
+            }
+          } finally {
+            blockedStore?.close();
+          }
           const exit = await race(closed);
           const shutdownMs = Date.now() - started;
           const markerAndAbortMs = [
@@ -516,30 +560,20 @@ it.skipIf(process.platform === "win32")(
           expect
             .soft(shutdownMs, `busy shutdown must finish within ten seconds\n${instance.logs()}`)
             .toBeLessThan(10_000);
+          expect(
+            readRestartSession(instance.state.agentDir(), key(cycle, "stream"), sharedStore)
+              ?.resumeAfterRestart,
+          ).toBeDefined();
           await client.stopAndWait();
           client = undefined;
+          if (suspended) {
+            return;
+          }
           if (cycle === 1) {
-            const restartConfig = asRecord(JSON.parse(await readFile(instance.configPath, "utf8")));
-            const models = asRecord(restartConfig.models);
-            const providers = asRecord(models.providers);
-            const configured = asRecord(providers[model.providerId]);
-            const entries = Array.isArray(configured.models) ? configured.models : [];
+            model.config.models[0].contextWindow = 16_000;
             await instance.state.writeConfig({
-              ...restartConfig,
-              models: {
-                ...models,
-                providers: {
-                  ...providers,
-                  [model.providerId]: {
-                    ...configured,
-                    models: entries.map((entry) =>
-                      isRecord(entry) && entry.id === model.modelId
-                        ? Object.assign({}, entry, { contextWindow: 16_000 })
-                        : entry,
-                    ),
-                  },
-                },
-              },
+              ...config,
+              ...restartResumeConfig(model, sharedStore),
             });
           }
           await instance.startGateway();
@@ -597,18 +631,18 @@ it.skipIf(process.platform === "win32")(
             .soft(secondQueued, "the second pre-restart queued input must follow the first")
             .toBeGreaterThan(firstQueued);
           for (const name of cases) {
+            const calls = provider.calls.filter(
+              (call) => call.cycle === cycle && call.name === name,
+            );
+            const resumes = calls.filter((call) => call.resumeInput);
             if (name === "background") {
-              expect(
-                provider.calls.find(
-                  (call) => call.cycle === cycle && call.name === name && call.resumeInput,
-                )?.current,
-              ).toContain("Background exec processes were stopped; rerun them if still needed.");
+              expect(resumes[0]?.current).toContain(
+                "Background exec processes were stopped; rerun them if still needed.",
+              );
             }
             expect(
-              provider.calls.filter(
-                (call) => call.cycle === cycle && call.name === name && call.resumeInput,
-              ),
-              `${name}: ${JSON.stringify(provider.calls.filter((call) => call.cycle === cycle && call.name === name).map((call) => call.current.slice(-4_000)))}`,
+              resumes,
+              `${name}: ${JSON.stringify(calls.map((call) => call.current.slice(-4_000)))}`,
             ).toHaveLength(name === "idle" ? 0 : 1);
             const result = await history(key(cycle, name));
             expect(

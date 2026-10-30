@@ -29,6 +29,7 @@ import { setActivePluginRegistry } from "../../src/plugins/runtime.js";
 import { createPluginRecord } from "../../src/plugins/status.test-helpers.js";
 import { buildTrajectoryRunMetadata } from "../../src/trajectory/metadata.js";
 import { toTrajectoryToolDefinitions } from "../../src/trajectory/runtime.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -169,12 +170,7 @@ for (const [name, capture] of [
     }
   });
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 8192,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 8192);
   }
   observer.observe({ entryTypes: ["gc"] });
   const memoryBefore = process.memoryUsage();

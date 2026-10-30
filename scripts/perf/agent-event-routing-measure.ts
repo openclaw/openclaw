@@ -18,6 +18,7 @@ import {
   clearAgentRunContext,
   registerAgentRunContext,
 } from "../../src/infra/agent-run-registry.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -84,12 +85,7 @@ await withAgentRunLifecycleGeneration(getAgentEventLifecycleGeneration(), async 
   globalThis.gc?.();
   const inspector = new Session();
   if (values.allocation) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 1024,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 1024);
   }
   const cpuStart = process.threadCpuUsage();
   const started = performance.now();

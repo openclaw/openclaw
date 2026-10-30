@@ -264,6 +264,23 @@ ${auditMarkdownTable}`,
     expect(sticky.scrolled).toBeGreaterThan(100);
     expect(sticky).toMatchObject({ pinned: true, painted: true });
     expect(sticky.background).not.toBe("rgba(0, 0, 0, 0)");
+    const close = dialog.getByRole("button", { name: "Close expanded table" });
+    await expect
+      .poll(() =>
+        close.evaluate((button) => {
+          const bounds = button.getBoundingClientRect();
+          return [4, 20, 36].every((x) =>
+            [4, 20, 36].every((y) =>
+              button.contains(document.elementFromPoint(bounds.x + x, bounds.y + y)),
+            ),
+          );
+        }),
+      )
+      .toBe(true);
+    await close.click({ position: { x: 4, y: 20 } });
+    await expectFocused(expand);
+    await expand.click();
+    await dialog.waitFor({ state: "visible" });
     await page.keyboard.press("Escape");
     await expectFocused(expand);
   });
