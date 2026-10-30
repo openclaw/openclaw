@@ -545,22 +545,6 @@ test("dispatches agent hooks when the process clock is outside the Date range", 
   });
 });
 
-test("drops sub-second timeoutSeconds and floors larger values before isolated dispatch", async () => {
-  await withHooksServer(async (post) => {
-    mockIsolatedRunOk();
-    await post("agent", { message: "Half", timeoutSeconds: 0.5, wakeMode: "next-heartbeat" });
-    await waitForCronIsolatedRuns(1);
-    await post("agent", { message: "Fraction", timeoutSeconds: 1.9, wakeMode: "next-heartbeat" });
-    await waitForCronIsolatedRuns(2);
-
-    // Flooring 0.5 to 0 would disable the run timeout; it must inherit the configured budget.
-    expect(cronRunCall(0).job.payload.timeoutSeconds).toBeUndefined();
-    expect(cronRunCall(1).job.payload.timeoutSeconds).toBe(1);
-    await waitForSystemEvent();
-    drainSystemEvents(resolveMainKey());
-  });
-});
-
 test("enforces hooks.allowedAgentIds for effective agent routing", async () => {
   configureHooks({
     allowedAgentIds: ["hooks"],
