@@ -486,12 +486,23 @@ export function renderSessionLeadingState(props: {
   runVisibility?: SessionRunVisibility;
 }) {
   const session = () => props.session;
+  const subagentsWorking = createMemo(
+    () =>
+      !props.trailingState &&
+      (session().subagentSummary?.runningChildCount ?? session().runningChildCount) > 0,
+  );
   const ownRunActive = () => session().isRunVisuallyActive ?? session().hasActiveRun;
-  const background = () => !ownRunActive() && (session().backgroundProcessCount ?? 0) > 0;
-  const running = createMemo(() => ownRunActive() || background());
+  const background = () =>
+    !ownRunActive() && !subagentsWorking() && (session().backgroundProcessCount ?? 0) > 0;
+  const running = createMemo(() => ownRunActive() || subagentsWorking() || background());
   const ownRunQueued = createMemo(() => ownRunActive() && session().status === "queued");
   const showRun = createMemo(
     () => running() && !props.trailingState && session().attention.kind !== "question",
+  );
+  const runningLabel = createMemo(() =>
+    subagentsWorking() && (!ownRunActive() || ownRunQueued())
+      ? t("sessionsView.subagentsWorking")
+      : undefined,
   );
   const icon = createMemo(() => session().icon);
   const attentionIcon = createMemo(
@@ -577,7 +588,8 @@ export function renderSessionLeadingState(props: {
       <SessionGlyph
         content={hasContent() ? content : undefined}
         running={showRun()}
-        queued={ownRunQueued()}
+        queued={ownRunQueued() && !subagentsWorking()}
+        runningLabel={runningLabel()}
         background={background()}
         runVisibility={props.runVisibility}
         circular={!hasIcon() && Boolean(channelAvatarUrl() || hasOwner())}

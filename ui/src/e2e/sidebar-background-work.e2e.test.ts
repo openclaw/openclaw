@@ -77,7 +77,7 @@ suite.define(() => {
       },
     ));
 
-  it("keeps a background child beyond the quiet cap and confines hidden work to its toggle", () =>
+  it("keeps a background child beyond the quiet cap and preserves the hidden subagent ring", () =>
     suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const now = Date.now();
       const parentKey = "agent:main:build-plan";
@@ -95,6 +95,7 @@ suite.define(() => {
       });
       const descendants = [...children, hiddenRun];
       const parent = sessionRow(parentKey, "Build plan", now, {
+        backgroundProcessCount: 1,
         childSessions: descendants.map((child) => child.key),
         worktree: { branch: "build/checks", repoRoot: "/workspace/demo" },
       });
@@ -124,7 +125,9 @@ suite.define(() => {
       await ui.visible(toggle);
       expect(await toggle.getAttribute("aria-expanded")).toBe("false");
       expect(
-        await parentRow.locator(".sidebar-session-indicator .session-glyph__ring").count(),
+        await parentRow
+          .locator(".sidebar-session-indicator .session-glyph__ring--background")
+          .count(),
       ).toBe(0);
       await ui.visible(toggle.locator(".session-run-spinner"));
       expect(await toggle.getAttribute("aria-description")).toBe("Active run");
@@ -141,14 +144,19 @@ suite.define(() => {
           .count(),
       ).toBe(0);
       expect(
-        await parentRow.locator(".sidebar-session-indicator .session-glyph__ring").count(),
+        await parentRow
+          .locator(".sidebar-session-indicator .session-glyph__ring--background")
+          .count(),
       ).toBe(0);
       await ui.visible(
-        parentRow.locator(".session-row-aside").getByRole("img", {
+        parentRow.locator(".sidebar-session-indicator").getByRole("img", {
           name: "Subagents working",
           exact: true,
         }),
       );
+      expect(
+        await parentRow.locator('.session-row-aside [aria-label="Subagents working"]').count(),
+      ).toBe(0);
       expect(await page.locator(`[data-session-key="${hiddenRun.key}"]`).count()).toBe(0);
     }));
 });

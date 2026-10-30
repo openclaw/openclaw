@@ -303,10 +303,43 @@ it("shows quiet background work on the own glyph and gives an active run precede
   expect(indicator()).toBeNull();
 });
 
+it.each([undefined, 1])(
+  "preserves the Subagents working leading ring with background count %s",
+  (backgroundProcessCount) => {
+    const { dom, session, setCurrent } = mountRow(
+      { icon: "book", unread: true, backgroundProcessCount },
+      { runningChildCount: 1 },
+    );
+    const ring = () => dom.query('.sidebar-session-indicator [role="img"]');
+    expect(ring()?.getAttribute("aria-label")).toBe("Subagents working");
+    expect(ring()?.classList.contains("session-glyph__ring--background")).toBe(false);
+    expect(dom.query('.session-row-aside [aria-label="Subagents working"]')).toBeNull();
+    expect(dom.all('[aria-label="Unread"]')).toHaveLength(0);
+    expect(dom.query(".sidebar-recent-session__link")?.getAttribute("aria-describedby")).toContain(
+      "state",
+    );
+
+    setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true, status: "running" });
+    flush();
+    expect(ring()?.getAttribute("aria-label")).toBe("Active run");
+    expect(ring()?.classList.contains("session-glyph__ring--background")).toBe(false);
+
+    // Preserve the existing queued-parent signal while its subagents are running.
+    setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true, status: "queued" });
+    flush();
+    expect(ring()?.getAttribute("aria-label")).toBe("Subagents working");
+    expect(ring()?.classList.contains("session-glyph__ring--queued")).toBe(false);
+  },
+);
+
 it("keeps hidden child background activity off the idle parent's own glyph", () => {
   const { dom } = mountRow(
     { icon: "book", unread: true },
-    { runningChildCount: 1, childSessionKeys: ["agent:main:child"] },
+    {
+      runningChildCount: 1,
+      childSessionKeys: ["agent:main:child"],
+      subagentSummary: { runningChildCount: 0, attention: { kind: "none" } },
+    },
   );
   expect(dom.query(".sidebar-session-indicator .session-glyph__ring")).toBeNull();
   expect(dom.query(".sidebar-child-session-toggle .session-run-spinner")).not.toBeNull();

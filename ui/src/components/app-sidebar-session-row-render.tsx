@@ -340,18 +340,6 @@ function renderRecentSessionRow(params: RecentSessionParams) {
         </button>
       </Show>
       <span class="sidebar-recent-session__aside session-row-aside">
-        <Show
-          when={
-            (!hasChildren() || childrenExpanded()) &&
-            (session().subagentSummary?.runningChildCount ?? 0) > 0
-          }
-        >
-          <span
-            class="session-run-spinner"
-            role="img"
-            aria-label={t("sessionsView.subagentsWorking")}
-          />
-        </Show>
         <span class="session-row-actions">
           <Show when={pinnable()}>
             <button
