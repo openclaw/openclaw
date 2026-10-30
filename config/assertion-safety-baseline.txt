@@ -248,7 +248,7 @@ extensions/fal/video-generation-provider.ts	3
 extensions/feishu/src/accounts.ts	2
 extensions/feishu/src/bitable.ts	1
 extensions/feishu/src/bot-content.ts	1
-extensions/feishu/src/bot.ts	7
+extensions/feishu/src/bot.ts	6
 extensions/feishu/src/card-action.ts	1
 extensions/feishu/src/card-interaction.ts	1
 extensions/feishu/src/channel.ts	4

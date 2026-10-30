@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { parse } from "@babel/parser";
+import traverse from "@babel/traverse";
 
 function relativeSpecifier(fromFile, targetFile) {
   const relative = path
@@ -207,25 +209,6 @@ function computedCheckoutNamespaceMemberEdges(source) {
   return edges;
 }
 
-function preloadedNamespaceMemberEdges(source, consumerFile) {
-  const edges = new Map();
-  for (const match of source.matchAll(
-    /^[ \t]*([A-Za-z_$][\w$]*)\s*=\s*[^;]*?\?\s*await\s+import\(\s*["']([^"'\r\n]+)["']\s*\)\.catch\(\(\)\s*=>\s*undefined\)\s*:\s*undefined\s*;/gmu,
-  )) {
-    const [, namespace, specifier] = match;
-    const escapedNamespace = namespace.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-    const memberCall = new RegExp(
-      `^[ \\t]*(?:[A-Za-z_$][\\w$]*\\s*=\\s*)?${escapedNamespace}\\s*\\.\\s*([A-Za-z_$][\\w$]*)\\s*\\(`,
-      "gmu",
-    );
-    const names = new Set([...source.matchAll(memberCall)].map((member) => member[1]));
-    if (names.size > 0) {
-      edges.set(path.resolve(path.dirname(consumerFile), specifier), names);
-    }
-  }
-  return edges;
-}
-
 function emittedNamedImportEdges(source) {
   const transforms = new Map(
     [
@@ -344,6 +327,68 @@ function namedImport(names, targetFile, consumerFile, index) {
     (name, bindingIndex) => `${name} as __dynamic${index}_${bindingIndex}`,
   );
   return `import { ${bindings.join(", ")} } from ${JSON.stringify(relativeSpecifier(consumerFile, targetFile))};`;
+}
+
+function optionalImportMemberEdges(source, consumerFile) {
+  const edges = new Map();
+  const ast = parse(source, {
+    sourceType: "module",
+    plugins: ["typescript"],
+    createImportExpressions: true,
+  });
+  // Link the optional prelaunch import to calls on that same retained binding.
+  // Syntax and binding identity exclude types, text and shadowed namespaces.
+  traverse(ast, {
+    AssignmentExpression(assignment) {
+      const { left, right, operator } = assignment.node;
+      if (
+        operator !== "=" ||
+        left.type !== "Identifier" ||
+        right.type !== "ConditionalExpression"
+      ) {
+        return;
+      }
+      const awaited = right.consequent;
+      if (awaited.type !== "AwaitExpression" || awaited.argument.type !== "CallExpression") {
+        return;
+      }
+      const caught = awaited.argument.callee;
+      if (
+        caught.type !== "MemberExpression" ||
+        caught.computed ||
+        caught.property.type !== "Identifier" ||
+        caught.property.name !== "catch" ||
+        caught.object.type !== "ImportExpression" ||
+        caught.object.source.type !== "StringLiteral" ||
+        !caught.object.source.value.startsWith(".")
+      ) {
+        return;
+      }
+      const binding = assignment.scope.getBinding(left.name);
+      if (!binding) {
+        return;
+      }
+      const targetFile = path.resolve(path.dirname(consumerFile), caught.object.source.value);
+      const names = edges.get(targetFile) ?? new Set();
+      for (const reference of binding.referencePaths) {
+        const member = reference.parentPath;
+        if (
+          member.isMemberExpression() &&
+          !member.node.computed &&
+          member.node.object === reference.node &&
+          member.node.property.type === "Identifier" &&
+          member.parentPath.isCallExpression() &&
+          member.parentPath.node.callee === member.node
+        ) {
+          names.add(member.node.property.name);
+        }
+      }
+      if (names.size > 0) {
+        edges.set(targetFile, names);
+      }
+    },
+  });
+  return edges;
 }
 
 function sideEffectImport(targetFile, consumerFile) {
@@ -581,9 +626,8 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     addNamedImport([...names], targetFile);
   }
 
-  // The anchor preloads its optional host-only writer before cleanup can signal the loader.
   const anchorPath = "src/process/supervisor/service-child-group-anchor.ts";
-  for (const [targetFile, names] of preloadedNamespaceMemberEdges(
+  for (const [targetFile, names] of optionalImportMemberEdges(
     fs.readFileSync(anchorPath, "utf8"),
     anchorPath,
   )) {

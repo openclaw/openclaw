@@ -35,6 +35,7 @@ import {
 } from "./lifecycle-audit.js";
 import { createServiceRestartIntent } from "./lifecycle-restart-intent.js";
 import { buildDaemonServiceSnapshot, createDaemonActionContext } from "./response.js";
+import type { GatewayRestartSnapshot } from "./restart-health.types.js";
 import { filterContainerGenericHints, resolveDaemonInstallBlockMessage } from "./shared.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
@@ -476,7 +477,9 @@ export async function runServiceRestart(params: {
   repairLoadedService?: (
     ctx: ServiceStartRepairContext,
   ) => Promise<ServiceRecoveryResult<"restarted"> | null>;
-  postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<GatewayServiceRestartResult | void>;
+  postRestartCheck?: (
+    ctx: RestartPostCheckContext,
+  ) => Promise<(GatewayServiceRestartResult & { readiness?: GatewayRestartSnapshot }) | void>;
   onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult<"restarted"> | null>;
   restartOwnedProcess?: (
     ctx: ServiceRecoveryContext,
@@ -696,30 +699,29 @@ export async function runServiceRestart(params: {
     if (restartStatus.scheduled) {
       return emitScheduledRestart(restartStatus, loaded || recoveredLoadedState === true);
     }
-    if (params.postRestartCheck) {
-      const postRestartResult = await params.postRestartCheck({
-        json,
-        stdout,
-        warnings,
-        warn,
-        // Definition repair alone does not record native activation.
-        activationAccepted: restartResult?.outcome === "completed" || Boolean(handledRecovery),
-        preserveDefinition: configIssue ? true : params.opts?.preserveDefinition,
-        fail: (message, hints, result) => {
-          postCheckFailed = true;
-          fail(message, hints, result);
-        },
-      });
-      if (postRestartResult) {
-        restartStatus = describeGatewayServiceRestart(params.serviceNoun, postRestartResult);
-        if (restartStatus.scheduled) {
-          return emitScheduledRestart(restartStatus, loaded || recoveredLoadedState === true);
-        }
+    const postRestartResult = await params.postRestartCheck?.({
+      json,
+      stdout,
+      warnings,
+      warn,
+      // Definition repair alone does not record native activation.
+      activationAccepted: restartResult?.outcome === "completed" || Boolean(handledRecovery),
+      preserveDefinition: configIssue ? true : params.opts?.preserveDefinition,
+      fail: (message, hints, result) => {
+        postCheckFailed = true;
+        fail(message, hints, result);
+      },
+    });
+    if (postRestartResult) {
+      restartStatus = describeGatewayServiceRestart(params.serviceNoun, postRestartResult);
+      if (restartStatus.scheduled) {
+        return emitScheduledRestart(restartStatus, loaded || recoveredLoadedState === true);
       }
     }
     emitMessage({
       ok: true,
       result: "restarted",
+      readiness: postRestartResult ? postRestartResult.readiness : undefined,
       message: handledRecovery?.message ?? handledRepair?.message,
       service: buildDaemonServiceSnapshot(params.service, loaded || recoveredLoadedState === true),
       warnings: warnings.length ? warnings : undefined,
