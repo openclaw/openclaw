@@ -146,6 +146,11 @@ the PR author is the publisher account recorded for this conversation's
 publication. Assigning a new session owner does not change who can prepare it:
 only the person who started the conversation can.
 
+For this recorded publication in public base and head repositories, a personal
+GitHub link is not required; the currently selected publisher must still match
+the recorded publisher. Private repositories and imports of other PRs retain
+their linked-account and repository-access requirements.
+
 To import your own existing PR into a local conversation, use `github_publish` with
 `action: "prepare_pr"` and `pullRequestUrl`. This action is offered only in
 sessions with a writable managed sandbox or an ordinary local Docker or Podman

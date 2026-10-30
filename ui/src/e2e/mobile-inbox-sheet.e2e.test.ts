@@ -213,7 +213,8 @@ suite.define(() => {
       await suite.closeBrowserContext(context);
       expect(result.startTop).toBeGreaterThan(result.finalTop + 100);
       expect(result.duration).toBeGreaterThanOrEqual(200);
-      expect(result.duration).toBeLessThan(300);
+      // The shared sheet spring: ~0.3 s perceptual pace plus its settle tail.
+      expect(result.duration).toBeLessThan(500);
       expect(result).toMatchObject({
         closeWidth: 36,
         closeHeight: 36,

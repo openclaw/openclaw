@@ -26,7 +26,13 @@ export function hasCodexAppServerNaturalExit(child: CodexAppServerTransport): bo
 }
 
 export type CodexAppServerTransport = {
+  /** External transport closure does not imply a native process exit or signal. */
+  closed?: boolean;
+  /** Duplex facades retain close origin/cause rather than pretending to observe a local process. */
+  exitError?: Error;
   startupFailure?: { error?: Error; complete(): void };
+  /** External duplex owners retain credential cleanup until physical close settlement. */
+  waitForCleanup?: () => Promise<void>;
   maxFrameBytes?: number;
   stdin: {
     write: (data: string | Uint8Array, callback?: (error?: Error | null) => void) => unknown;
@@ -168,9 +174,13 @@ export async function closeCodexAppServerTransportAndWait(
     drained,
   );
   if (settled) {
-    await waitForCodexAppServerProcessRegistrationCleanup(child);
+    await Promise.all([
+      waitForCodexAppServerProcessRegistrationCleanup(child),
+      child.waitForCleanup?.(),
+    ]);
   }
-  closure.naturalExit = containment === "natural" && settled;
+  closure.naturalExit =
+    containment === "natural" && settled && (child.exitCode != null || child.signalCode != null);
   if (options.drainStdio) {
     // Share the existing exit budget with pipe draining. A timed-out drain is
     // not a complete natural-exit diagnostic and must not authorize a retry.
@@ -198,7 +208,7 @@ export async function closeCodexAppServerTransportAndWait(
 }
 
 function hasCodexAppServerTransportExited(child: CodexAppServerTransport): boolean {
-  return child.exitCode != null || child.signalCode != null;
+  return child.closed === true || child.exitCode != null || child.signalCode != null;
 }
 
 async function waitForCodexAppServerTransportExit(

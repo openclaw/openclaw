@@ -220,6 +220,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/session-catalog-native-performance.test.ts",
   "extensions/codex/src/session-catalog-cold-native.test.ts",
   "extensions/codex/src/session-catalog-ephemeral.test.ts",
+  "extensions/codex/src/node-app-server.runtime.test.ts",
   "extensions/codex/src/node-exec-server.test.ts",
   "extensions/codex/src/node-exec-server.readiness.test.ts",
   "extensions/codex/src/app-server/dynamic-tool-build.test.ts",

@@ -175,6 +175,12 @@
   cursor: var(--cursor-action);
 }
 
+/* Text link: outranks the shared Details button hover background. */
+.chat-details .chat-details-processes__view-all:is(:hover, :focus-visible) {
+  background: none;
+  color: var(--text);
+}
+
 .chat-details-processes__envelope {
   min-width: 0;
 }

@@ -6,6 +6,7 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { resolveRuntimeScriptPosition } from "../daemon/runtime-binary.js";
 import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
 import { tightenPrivateDirRootSync } from "../infra/private-dir-mode.js";
+import type { OpenClawPluginNodeWorkspaceLease } from "../plugins/types.node-host.js";
 import type { NodeWorkerWorkspaceRetainInput } from "../worker/node-workspace-retain-protocol.js";
 import type { NodeWorkerPreparedWorkspaceRow } from "./node-worker-prepared-workspace-store.js";
 
@@ -159,7 +160,7 @@ export function parseNodeWorkerWorkspaceTransferGeneration(name: string): number
 export function resolveNodeManagedWorkspaceIdentity(
   root: string,
   request: NodeWorkerManagedWorkspaceRequest,
-): { workspaceDir: string; gatewayNamespace: string; generationKey: string } {
+): { workspaceDir: string; homeDir: string; gatewayNamespace: string; generationKey: string } {
   const fail = () => {
     throw new Error("INVALID_REQUEST: node placement does not own the requested workspace");
   };
@@ -213,6 +214,8 @@ export function resolveNodeManagedWorkspaceIdentity(
   }
   return {
     workspaceDir,
+    // Workspace commands already use the session root as their retained HOME.
+    homeDir: path.dirname(workspaceDir),
     gatewayNamespace,
     generationKey: nodeWorkerWorkspaceGenerationKey({
       gatewayNamespace,
@@ -362,9 +365,6 @@ export function buildNodeWorkerWorkspaceRetainSnapshot(input: NodeWorkerWorkspac
   };
 }
 
-export type NodeWorkerWorkspaceAcquisition = {
-  workspaceDir: string;
-  homeDir?: string;
+export type NodeWorkerWorkspaceAcquisition = OpenClawPluginNodeWorkspaceLease & {
   assertCurrent?: () => void;
-  release: () => void;
 };
