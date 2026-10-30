@@ -33,6 +33,7 @@ import {
   drainAgentDatabaseResources,
   hasOpenClawAgentDatabaseAsyncResources,
   matchesAgentDatabaseClose,
+  registerAgentDatabaseResourceReleaseHandler,
   revokeAgentDatabaseResources,
   withAgentDatabaseCloseFence,
 } from "./openclaw-agent-db-resources.js";
@@ -94,6 +95,17 @@ const cache = resolveGlobalSingleton<AgentDatabaseLifecycle>(
 
 // Install the activity owner before publishing handles, including reads with no timer yet.
 agentDatabaseBorrowers.refreshIdleTimer = refreshAgentDatabaseIdleTimer;
+registerAgentDatabaseResourceReleaseHandler((resource) => {
+  if (!getGatewayShutdownCleanupSignal().aborted) {
+    return;
+  }
+  // Resource owners settle their accepted work before waking deferred idle writers.
+  for (const database of cache.databases.values()) {
+    if (matchesAgentDatabaseClose({ path: database.path }, resource)) {
+      cache.idleTimers.get(database.db)?.refresh();
+    }
+  }
+});
 
 export const closeCachedOpenClawAgentDatabase = createAgentDatabaseHandleCloser(cache);
 
@@ -233,16 +245,16 @@ export function refreshAgentDatabaseIdleTimer(database: OpenClawAgentDatabase): 
     if (getOpenClawDatabaseMaintenanceResourceScope(database.db)) {
       return;
     }
-    // The ordered drain closes readers first; closing their last writer here strands the WAL.
-    if (cleanupSignal.aborted && hasOpenClawAgentDatabaseAsyncResources({ path: database.path })) {
-      return;
-    }
     // Awaiting operations own the exact connection; final release rearms eviction.
     if (database.db.isOpen && cache.borrowers.get(database.db)?.size) {
       return;
     }
     if (database.db.isOpen && database.db.isTransaction) {
       timer.refresh();
+      return;
+    }
+    // Their owners retire readers/workers; revoking here would cancel accepted native writes.
+    if (cleanupSignal.aborted && hasOpenClawAgentDatabaseAsyncResources({ path: database.path })) {
       return;
     }
     try {

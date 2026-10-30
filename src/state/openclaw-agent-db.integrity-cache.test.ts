@@ -96,9 +96,8 @@ it("certifies shutdown handles after dependent readers and final borrowers relea
     await vi.advanceTimersByTimeAsync(0);
     expect(idle.db.isOpen).toBe(true);
     reader.database.close();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(idle.db.isOpen).toBe(false));
     expect(reader.database.db.isOpen).toBe(false);
-    expect(idle.db.isOpen).toBe(false);
     expect(readSqliteDatabaseCleanClose(idle.path)).toBe(true);
     expect(logger.info).toHaveBeenCalledWith(
       "agent database clean-close receipt: written; agent=idle",

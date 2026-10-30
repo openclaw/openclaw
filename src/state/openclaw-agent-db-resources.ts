@@ -6,12 +6,10 @@ import {
   registerAgentDatabaseReaderCloser,
 } from "../infra/agent-database-readers.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { getGatewayShutdownCleanupSignal } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { reserveAgentCreationClaimAdmission } from "./agent-creation-claim.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
 import { captureAgentDeletionResourceOwner } from "./agent-deletion-cleanup.js";
-import { agentDatabaseBorrowers } from "./openclaw-agent-db-borrower.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 
@@ -40,14 +38,16 @@ export type AgentDatabaseCloseSelection = {
   agentId?: string;
 };
 
-const resources = resolveGlobalSingleton(
-  Symbol.for("openclaw.agentDatabaseAsyncResources"),
-  () => ({
-    active: new Set<AgentDatabaseResource>(),
-    closing: new Map<AgentDatabaseResource, Promise<void> | undefined>(),
-    selections: new Map<AgentDatabaseCloseSelection, Promise<unknown> | undefined>(),
-  }),
-);
+const resources = resolveGlobalSingleton<{
+  active: Set<AgentDatabaseResource>;
+  closing: Map<AgentDatabaseResource, Promise<void> | undefined>;
+  selections: Map<AgentDatabaseCloseSelection, Promise<unknown> | undefined>;
+  onRelease?: (resource: AgentDatabaseResource) => void;
+}>(Symbol.for("openclaw.agentDatabaseAsyncResources"), () => ({
+  active: new Set<AgentDatabaseResource>(),
+  closing: new Map<AgentDatabaseResource, Promise<void> | undefined>(),
+  selections: new Map<AgentDatabaseCloseSelection, Promise<unknown> | undefined>(),
+}));
 
 /** Query existing close custody without admitting or revoking another resource. */
 export function hasOpenClawAgentDatabaseAsyncResources(
@@ -60,16 +60,11 @@ export function hasOpenClawAgentDatabaseAsyncResources(
     : resources.active.size > 0 || resources.closing.size > 0;
 }
 
-function refreshReleasedAgentDatabase(resource: AgentDatabaseResource): void {
-  if (!getGatewayShutdownCleanupSignal().aborted) {
-    return;
-  }
-  // A deferred idle writer must resume when its last independent reader or worker settles.
-  for (const database of agentDatabaseBorrowers.databases.values()) {
-    if (matchesAgentDatabaseClose({ path: database.path }, resource)) {
-      agentDatabaseBorrowers.idleTimers.get(database.db)?.refresh();
-    }
-  }
+/** The writable lifecycle owns idle handles; retirement only notifies that owner. */
+export function registerAgentDatabaseResourceReleaseHandler(
+  onRelease: (resource: AgentDatabaseResource) => void,
+): void {
+  resources.onRelease = onRelease;
 }
 
 /** Observe a full close without admitting a reader into its retiring lifetime. */
@@ -178,7 +173,7 @@ function registerAgentDatabaseResource(
   const unregister = () => {
     resources.active.delete(owned);
     releaseCreation?.();
-    refreshReleasedAgentDatabase(owned);
+    resources.onRelease?.(owned);
   };
   getOpenClawDatabaseMaintenanceScope()?.own(unregister, "agent-resources", () =>
     closeAgentDatabaseResource(owned),
@@ -224,7 +219,7 @@ function closeAgentDatabaseResource(
       resource.closeSync();
       resources.active.delete(resource);
       resources.closing.delete(resource);
-      refreshReleasedAgentDatabase(resource);
+      resources.onRelease?.(resource);
       return Promise.resolve();
     } catch (error) {
       if (onCloseError) {
@@ -244,7 +239,7 @@ function closeAgentDatabaseResource(
         () => {
           resources.active.delete(resource);
           resources.closing.delete(resource);
-          refreshReleasedAgentDatabase(resource);
+          resources.onRelease?.(resource);
         },
         () => {
           // Keep exact custody even if the actor unregisters while its close fails.
