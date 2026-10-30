@@ -46,7 +46,12 @@ declare global {
   }
 }
 
-async function selectSession(page: Page, key: string, reader?: { id: string; offset: number }) {
+async function selectSession(
+  page: Page,
+  key: string,
+  reader?: { id: string; offset: number },
+  lastEntryId?: string,
+) {
   if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
     await page
       .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
@@ -150,7 +155,7 @@ async function selectSession(page: Page, key: string, reader?: { id: string; off
       .toBeLessThanOrEqual(2);
   } else {
     const settled = frames.at(-1)!;
-    const lastId = key + ":message:" + (key === first ? 179 : 24);
+    const lastId = lastEntryId ?? key + ":message:" + (key === first ? 179 : 24);
     expect
       .soft(
         frames.every((frame) => frame.lastId === lastId),
@@ -262,6 +267,60 @@ async function withSessions(
 }
 
 suite.define(() => {
+  it.each([429, 1280])(
+    "opens a cold long-Markdown conversation at its measured end (%ipx viewport)",
+    async (width) => {
+      await suite.withPage(
+        { ...createControlUiE2eContextOptions(), viewport: { width, height: 700 } },
+        async ({ page }) => {
+          const markdown = (part: number) =>
+            Array.from({ length: 6 }, (_, index) => {
+              const checkpoint = `Part ${part}, station ${index + 1}`;
+              return (
+                `## ${checkpoint}\n\n` +
+                "The train followed the coast past the old station and its sheltered garden. ".repeat(
+                  7 + (index % 3),
+                ) +
+                "\n\n- A clear signal\n- A sheltered platform\n- An onward journey\n\n" +
+                "| Stop | Arrival |\n| --- | --- |\n| Harbour | 09:10 |\n| Garden | 09:25 |\n\n"
+              );
+            }).join("\n");
+          const messages = [
+            { role: "user", content: "Describe the outward journey." },
+            { role: "assistant", content: [{ type: "text", text: markdown(1) }] },
+            { role: "user", content: "Continue with the return journey." },
+            { role: "assistant", content: [{ type: "text", text: markdown(2) }] },
+          ].map(({ role, content }, index) => ({
+            role,
+            content,
+            timestamp: 1_000 + index,
+            __openclaw: { id: second + ":long:" + index, seq: index + 1 },
+          }));
+          await installMockGateway(page, {
+            sessionKey: first,
+            sessions,
+            sessionTranscripts: {
+              [first]: { messages: history(first, 180) },
+              [second]: { messages },
+            },
+          });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, first));
+          await page.getByText("Checkpoint 179.", { exact: false }).waitFor();
+          await waitForChatScrollIdle(page);
+          await selectSession(page, second, undefined, second + ":long:3");
+          expect(await thread(page).evaluate((element) => element.scrollHeight)).toBeGreaterThan(
+            4 * 700,
+          );
+          expect(
+            await thread(page).evaluate(
+              (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+            ),
+          ).toBeLessThanOrEqual(2);
+        },
+      );
+    },
+  );
+
   // Fixed scrollHeight mocks cannot exercise fresh virtual row estimates after eviction.
   for (const [position, compact] of [
     ["middle", false],

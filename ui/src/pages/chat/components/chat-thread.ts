@@ -52,6 +52,7 @@ function renderTranscriptShell(
   // Empty/loading shells do not commit virtual rows. Record that baseline so
   // the first submitted turn animates, but initial loaded history stays still.
   if (projection.isEmpty || projection.showLoadingSkeleton) {
+    transcript.clearRows();
     transcript.entryAnimations.sync(
       EMPTY_ENTRY_KEYS,
       props.announceTranscript !== false && !projection.searchOpen && !props.loading,

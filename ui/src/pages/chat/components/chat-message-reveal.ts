@@ -1,7 +1,19 @@
 import type { Virtualizer } from "@tanstack/virtual-core";
+import type { createTranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 
 export class ChatMessageReveal {
   private highlight: { element: HTMLElement; timer: number } | null = null;
+
+  constructor(
+    private readonly owner: () => {
+      root: ParentNode | null;
+      state: Pick<ReturnType<typeof createTranscriptOffsetState>, "scrollCommand">;
+      virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
+      messageRows: ReadonlyMap<string, string>;
+      rowIndexes: ReadonlyMap<string, number>;
+      requestUpdate: () => void;
+    },
+  ) {}
 
   reveal(
     root: ParentNode | null,
@@ -35,6 +47,25 @@ export class ChatMessageReveal {
     };
     return true;
   }
+
+  complete = (): void => {
+    const { root, state, virtualizer, messageRows, rowIndexes, requestUpdate } = this.owner();
+    const command = state.scrollCommand;
+    if (command?.target !== "message") {
+      return;
+    }
+    if (this.reveal(root, command, virtualizer)) {
+      state.scrollCommand = { behavior: command.behavior, target: "index" };
+      return;
+    }
+    // Expanding folded work can move the target beyond the initially mounted rows.
+    const rowKey = messageRows.get(command.messageId);
+    const rowIndex = rowKey ? rowIndexes.get(rowKey) : undefined;
+    if (rowIndex !== undefined) {
+      virtualizer.scrollToIndex(rowIndex, { align: "center" });
+      requestUpdate();
+    }
+  };
 
   clear(): void {
     if (!this.highlight) {
