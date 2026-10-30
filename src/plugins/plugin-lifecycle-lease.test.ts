@@ -155,6 +155,20 @@ async function runLeaseChild(
 }
 
 describe("plugin lifecycle lease", () => {
+  it("keeps ownership when synchronous plugin work blocks past the lease duration", async () => {
+    await withOpenClawTestState({ label: "plugin-lifecycle-blocked-parent" }, async (state) => {
+      await withPluginLifecycleLease({ env: state.env, leaseMs: 1_000 }, async (lease) => {
+        // Finalize/repair can synchronously admit a large database while holding this lease.
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_500);
+        lease.assertOwned();
+        expect(lease.signal.aborted).toBe(false);
+      });
+      await expect(
+        withPluginLifecycleLease({ env: state.env, waitMs: 0 }, async () => "released"),
+      ).resolves.toBe("released");
+    });
+  });
+
   it.each(["native", "worker"] as const)(
     "releases retired cache facts while %s resources retain the expired lease",
     async (kind) => {
@@ -724,6 +738,7 @@ if (process.versions.bun) {
               }
               try {
                 lease.assertCurrent();
+                lease.assertOwned();
                 publish();
               } finally {
                 clock?.mockRestore();
