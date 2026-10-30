@@ -3,6 +3,14 @@
   "description": "Self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI coding agents. Run one Gateway process on your own machine and message your AI assistant from anywhere.",
   "redirects": [
     {
+      "source": "/start/teams",
+      "destination": "/start/multiplayer"
+    },
+    {
+      "source": "/gateway/team-server",
+      "destination": "/start/multiplayer"
+    },
+    {
       "source": "/cli/claws",
       "destination": "/cli/templates"
     },
@@ -1365,7 +1373,7 @@
                 "group": "Setup guides and reference",
                 "pages": [
                   "start/openclaw",
-                  "start/teams",
+                  "start/multiplayer",
                   "start/wizard-cli-reference",
                   "start/wizard-cli-automation"
                 ]
@@ -2688,8 +2696,7 @@
                   "gateway/remote",
                   "gateway/stable-https-url",
                   "gateway/tailscale",
-                  "gateway/cloudflare-access",
-                  "gateway/team-server"
+                  "gateway/cloudflare-access"
                 ]
               },
               {

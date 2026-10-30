@@ -1,27 +1,23 @@
 ---
-summary: "Deploy a shared team Gateway with Cloudflare Access, verified GitHub identities, roles, session sharing, and recoverable operations"
+summary: "Run OpenClaw as a multiplayer claw: one shared Gateway for a trusted team, from first setup to an always-on production deployment"
 read_when:
+  - Setting up OpenClaw for a team or shared workspace
+  - Adding teammates to an existing gateway
+  - Deciding between a personal claw, one multiplayer claw, or separate gateways
   - Deploying an always-on OpenClaw server for a trusted team
   - Connecting Cloudflare sign-in to Gateway profiles and GitHub identities
   - Operating separate collaboration and release Gateways
-title: "Deploy a team server"
+title: "Multiplayer"
 doc-schema-version: 1
 ---
 
-This guide connects the pieces of a production team deployment: a persistent
-Gateway, Cloudflare Tunnel and Access, individual sign-in, GitHub identity,
-operator roles, and optional read-only sharing from another Gateway. Start with
-one server. Add a separate release or staging server when it needs different
-credentials, update timing, or operators.
+OpenClaw runs in one of two shapes. A **personal claw** is one person's assistant on their own machine - see [Personal assistant setup](/start/openclaw). A **multiplayer claw** is one Gateway that a whole team shares: a bot in the workspace chat you already have, shared sessions everyone can open and steer in the Control UI, and roles that bound what each person can do. Both are the same product - multiplayer is configuration, not a separate edition.
 
-For the shorter collaboration walkthrough, see [Team setup](/start/teams).
-This guide uses `team.example.com` for collaboration and
-`release.example.com` for an optional second Gateway. Replace them with your
-own hostnames; each Gateway needs its own configuration and state.
+This page covers both halves of running a multiplayer claw. [Quick setup](#quick-setup) gets a team working together on any always-on host. [Production deployment](#production-deployment) adds the always-on Linux pieces: Cloudflare Tunnel and Access, individual sign-in, verified GitHub identity, role bootstrap, read-only sharing from another Gateway, and recoverable operations.
 
 ## How we build OpenClaw with OpenClaw
 
-We use [team.openclaw.ai](https://team.openclaw.ai) as a shared development
+We use [team.openclaw.ai](https://team.openclaw.ai) as a multiplayer claw and shared development
 workspace for OpenClaw itself. Maintainers and agents work through repository
 changes in the same conversations:
 
@@ -37,16 +33,30 @@ changes in the same conversations:
    [GitHub publication account](/concepts/user-model#github-connections).
    The linked pull request and its CI details stay available in the conversation.
 
-![An OpenClaw development task on the Team server, with analysis, test results, and a published pull request](https://github.com/user-attachments/assets/b64f4d3a-3988-4f59-ac73-27552b6bdd30)
+![An OpenClaw development task on our multiplayer claw, with analysis, test results, and a published pull request](https://github.com/user-attachments/assets/b64f4d3a-3988-4f59-ac73-27552b6bdd30)
 
 The screenshot shows a live repository task, cropped to its conversation.
 See [Chat and code review](/web/control-ui/chat) for the diff, file, and PR controls.
 
 Building the next version does not replace the running server. We keep
 deployment under its own approval and lifecycle owner, with coordinated
-activation and verification. See [Keep operations recoverable](/gateway/team-server#keep-operations-recoverable).
+activation and verification. See [Keep operations recoverable](#keep-operations-recoverable).
+
+## One trust boundary
+
+A gateway is one trust domain. Everyone who can message a tool-enabled agent shares that agent's delegated tool authority, and everyone with operator access shares one control plane. That is the right model for a team whose members already trust each other - session ownership, presence, and [roles](/gateway/operator-scopes#named-operator-roles) are collaboration guardrails inside the boundary, not isolation between adversaries. Keep untrusted code in sandboxes or remote workers.
+
+If you need to serve mutually untrusted people or organizations, run one gateway per tenant instead, ideally on separate OS users or hosts: [Security trust model](/gateway/security/trust-model).
 
 ## Before you begin
+
+- A host for the Gateway that stays on: a small VPS, an office Mac, or any [supported install target](/install).
+- OpenClaw installed and onboarded on that host - see [Getting started](/start/getting-started).
+- A chat workspace the team already uses (Discord, Google Chat, Mattermost, Microsoft Teams, Slack, Telegram, ...) - see [Channels](/channels).
+- A strong latest-generation model. Shared gateways see more varied input than a solo setup, and modern models are substantially more resistant to prompt injection - see [Security](/gateway/security/prompt-injection).
+- Optional: teammates' GitHub accounts, if you want verified identity and commit credit.
+
+A [production deployment](#production-deployment) additionally needs:
 
 - A Linux host with persistent storage and a dedicated service account. Use a
   [supported Node runtime](/install/node) and an [OpenClaw installation](/install).
@@ -57,14 +67,159 @@ activation and verification. See [Keep operations recoverable](/gateway/team-ser
 - Administrative SSH access, a private secret store, and a backup destination
   outside the server's failure domain.
 
-A Gateway is one trust boundary. Roles and session ownership support
-collaboration; they do not isolate hostile users from each other. Keep untrusted
-code in sandboxes or remote workers. Use separate Gateways, OS users, or hosts
-for mutually untrusted teams. See [Security trust model](/gateway/security/trust-model).
+## Quick setup
 
-## Optimal setup
+These steps work on any host that stays on. For the full Linux and Cloudflare deployment, continue with [Production deployment](#production-deployment) afterwards.
 
-A busy team server runs many agents, managed worktrees, and SQLite databases on
+### Step 1: Give the team access to the Gateway
+
+The Gateway binds to loopback by default. Give teammates access through authenticated ingress instead of a public bind:
+
+- **Tailnet (recommended):** put the host on your tailnet and enable [Tailscale Serve](/gateway/tailscale). With `gateway.auth.allowTailscale`, Control UI sign-in can use each person's Tailscale identity - no shared secret to distribute.
+- **Trusted proxy:** front the Gateway with an identity-aware proxy such as Cloudflare Access - see [Trusted proxy auth](/gateway/trusted-proxy-auth).
+- **Shared secret:** token or password auth works for small teams, but everyone uses one owner profile instead of per-person identity - see [Authentication](/gateway/authentication).
+
+The identity-backed options are worth the setup: they are what turns "someone did something" into "who did what" in the session UI and commit credit below.
+
+### Step 2: Connect the team chat
+
+Connect the channel your team lives in. Example: a Slack bot, allowed in one team channel, that replies when mentioned:
+
+```json5
+{
+  channels: {
+    slack: {
+      enabled: true,
+      mode: "socket",
+      appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      groupPolicy: "allowlist",
+      channels: {
+        "<SLACK_CHANNEL_ID>": { requireMention: true },
+      },
+    },
+  },
+}
+```
+
+Group chats are a first-class deployment. The defaults are already team-shaped. Group access is allowlisted per room, and replies require a mention. DMs stay on the pairing default: the first time a teammate DMs the bot they get a pairing code. Approve it with `openclaw pairing approve slack <code>`. So the bot participates when addressed and stays quiet otherwise. In a private room whose members you trust, that is all the gating you need. For broad or public rooms, add sender allowlists and `contextVisibility` - see [Groups](/channels/groups).
+
+If the same people should be allowed across several channels, define the list once as an [access group](/channels/access-groups) and reference it from each channel's allowlist.
+
+### Step 3: Sign the team in to the Control UI
+
+With per-person sign-in, each teammate opens the [Control UI](/web/control-ui) through the ingress from step 1. Each one gets a durable Gateway profile: display name, avatar, and per-person appearance preferences. Shared-secret connections use the same owner profile. With Cloudflare Access or Tailscale Serve, GitHub-backed sign-in verifies the account behind the profile - see [User model](/concepts/user-model).
+
+Teammates can also create and import [personal skills](/tools/skills#personal-skills-on-a-shared-gateway) under **Plugins → Skills** without permission to change shared Gateway configuration. Skills stay personal until explicitly shared with the team. A session retains its selected revisions when another teammate joins; changing its assignee does not replace its skills. Your existing workspace skills remain in place, and extra channel identities for one operator do not enable the team-specific guidance.
+
+### Step 4: Work in shared sessions
+
+A conversation that starts in the team channel can continue as a session the whole team can open, steer, and take over. [Multi-user mode](/concepts/multi-user) gives every session three layers of attribution: an immutable creator, an assignable owner, and the history of people who actually prompted. Assign sessions like GitHub issues from the session context menu. Multi-user mode also adds live [presence](/concepts/presence). Presence shows who is viewing and who is typing, with drafts that never reach the model or the transcript.
+
+For coding work, verified GitHub identity pays off at the commit: with **Git co-author credit** enabled, commits from a shared session carry `Co-authored-by` trailers for the people who steered it, and generated pull requests link back to the session so reviewers can read the conversation that produced the diff.
+
+Teammates can add their own provider accounts under **Settings → Profile → Connected accounts**, using the sign-in methods offered by each provider. Their new sessions prefer that account without making it a Gateway-wide default. Collaborators use the session's selected account, and shared same-provider failover can still apply - see [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
+
+To let teammates read selected sessions from a personal Gateway without controlling that machine, use [Session Share](/plugins/session-share). The source operator chooses session groups and pairs a node that advertises only the two read-only session commands. Shared transcripts appear under that node in the team Control UI; viewing requires permission to view others' sessions, and does not allow continuing the source session.
+
+### Step 5: Bound what each person can do
+
+Named operator roles bind authenticated profiles to a policy: which sessions they can touch, which agents they can use, a maximum set of operator scopes, and whether their new sessions must be sandboxed:
+
+```json5
+{
+  gateway: {
+    roles: {
+      default: "guest",
+      definitions: {
+        maintainer: {
+          sessions: { others: "write" },
+          agents: ["roboclaw"],
+          scopes: ["operator.read", "operator.write", "operator.approvals"],
+        },
+        guest: {
+          sessions: { others: "view" },
+          agents: ["roboclaw"],
+          scopes: ["operator.sessions.write"],
+          sandbox: "required",
+        },
+      },
+    },
+  },
+}
+```
+
+Give guests the session-only `operator.sessions.write` scope, which also permits reading. `operator.read` and `operator.write` are Gateway-wide: they add channel sends, node and computer control, logs, the user directory, and other shared surfaces that a guest does not need. With `sessions.others: "view"`, guests can still read every shared session, including tool output. Keep sensitive work in draft sessions.
+
+Assign roles with the `users.setRole` Gateway method; see [Named operator roles](/gateway/operator-scopes#named-operator-roles) for the full policy surface and [Permission modes](/gateway/permission-modes) for per-session tool posture. To admit and expire individual outside guests, see [Invite guests](#invite-guests).
+
+#### Coding as a guest
+
+A sandbox-required guest can work without an administrator role. With the default
+`workspaceAccess: "none"`, file and shell tools use a writable private workspace,
+not the shared agent workspace. Managed skill instructions stay read-only.
+Child sessions inherit the parent's sandbox requirement, even when the agent's
+default sandbox mode is off.
+
+Local container sandboxes have no network by default. If guests need to clone
+public repositories or install project-local dependencies, explicitly enable
+outbound networking for the coding agent, for example:
+
+```json5
+{
+  agents: {
+    entries: {
+      roboclaw: {
+        sandbox: {
+          workspaceAccess: "none",
+          docker: { network: "bridge" },
+        },
+      },
+    },
+  },
+}
+```
+
+Network access does not grant host execution or inject shared credentials. Use a
+sandbox image with the required runtimes already installed; the read-only root
+filesystem still prevents system package installation. Enabling egress allows
+requests to destinations reachable from the container, so use a restricted
+container network when that access needs tighter controls. See
+[Sandboxing](/gateway/sandboxing#workspace-access) for workspace and network policy.
+
+Guests publish through **Publish PR** from sessions they created. Publication
+uses the shared GitHub account and opens a pull request by default. To create a
+draft, ask the agent to publish with `draft: true` on `github_publish`. Updating an
+existing PR preserves its draft or open state. Publication does not merge the PR. Protect the
+base branch with GitHub rules so the shared account cannot
+merge or bypass review. If the checkout's `origin` is the upstream repository,
+guest branches live in that repository and its pull request workflows receive
+repository secrets. Point `origin` at a fork owned by the shared account so
+guest pull requests come from the fork, where GitHub withholds secrets from
+`pull_request` workflows by default. See
+[Workflow and CI changes](/gateway/config-tools/github-identity#workflow-and-ci-changes).
+
+### Verify the quick setup
+
+- Mention the bot in the allowed team channel and confirm it replies there.
+- Open the Control UI as two different people: both should see the session, its owner avatar, and each other's presence.
+- Run `openclaw security audit` on the host and resolve anything it flags about inbound access or exposure.
+
+## Production deployment
+
+This section connects the pieces of a production multiplayer deployment: a persistent
+Gateway, Cloudflare Tunnel and Access, individual sign-in, GitHub identity,
+operator roles, and optional read-only sharing from another Gateway. Start with
+one server. Add a separate release or staging server when it needs different
+credentials, update timing, or operators.
+
+It uses `team.example.com` for collaboration and
+`release.example.com` for an optional second Gateway. Replace them with your
+own hostnames; each Gateway needs its own configuration and state.
+
+### Optimal setup
+
+A busy multiplayer claw runs many agents, managed worktrees, and SQLite databases on
 one host. Its storage layout decides how responsive it stays under that load.
 
 **Keep OpenClaw state off the worktree filesystem.** Put the state directory
@@ -110,7 +265,7 @@ from Btrfs so recorded worktree paths stay valid. If the new filesystem lives in
 space released from Btrfs, never grow that Btrfs filesystem again
 (`btrfs filesystem resize max`): it would overwrite the new filesystem.
 
-## 1. Install under one service account
+### 1. Install under one service account
 
 Complete [Getting started](/start/getting-started) as the account that will run
 the Gateway, including model setup and managed-service installation:
@@ -136,7 +291,7 @@ bindings and role agent lists. The examples below assume that agent already
 exists. Keep shared workspace instructions concise and keep deployment secrets
 out of `AGENTS.md`, `IDENTITY.md`, and personal instructions.
 
-## 2. Configure the public URL and authenticated ingress
+### 2. Configure the public URL and authenticated ingress
 
 Create an Access application for `team.example.com` before exposing the tunnel.
 Initially admit only the administrators who will finish setup. Choose an Access
@@ -232,7 +387,7 @@ requirements.
 
 <a id="set-both-url-settings" />
 
-### Set the public URL once
+#### Set the public URL once
 
 `publicOrigin` tells OpenClaw which external URL to advertise and supplies the
 default browser-origin allowlist. For a Control UI served from that same origin,
@@ -269,7 +424,7 @@ remove the list with `openclaw config unset gateway.controlUi.allowedOrigins` if
 you want it to follow `publicOrigin`; check that no additional UI origin is needed
 first. Startup and Doctor leave the inherited default out of saved config.
 
-## 3. Bootstrap administrators and assign roles
+### 3. Bootstrap administrators and assign roles
 
 Have the administrator sign in through Access once. Their durable Gateway
 profile is created, initially with the observer role. From the local maintenance
@@ -302,7 +457,7 @@ For a release Gateway, keeping the observer default and assigning only a few
 release operators is useful. Role assignments are local to each Gateway;
 admission to the collaboration server does not grant release authority.
 
-### Invite guests
+#### Invite guests
 
 To admit individual people outside the team for a limited time, use the
 [Visitor Access plugin](/plugins/reference/visitor-access), available from a
@@ -343,7 +498,7 @@ required sandbox does not contain, listed under
 [Workflow and CI changes](/gateway/config-tools/github-identity#workflow-and-ci-changes)
 for publication.
 
-## 4. Synchronize people with verified GitHub identities
+### 4. Synchronize people with verified GitHub identities
 
 Keep these responsibilities separate:
 
@@ -365,7 +520,7 @@ organization member. Profiles and roles are local to each Gateway. The same
 verified GitHub account can identify a person on two servers without making
 their local profile IDs equal.
 
-### Use an OIDC provider without losing existing profiles
+#### Use an OIDC provider without losing existing profiles
 
 OIDC sign-in can retain an existing profile through its verified email. Before
 changing providers or email addresses, link the new verified address to the
@@ -400,7 +555,7 @@ GitHub IdP does not automatically cover a separate OIDC IdP. Understand when
 eligibility is rechecked and revoke existing Access sessions when removal must
 take effect before their normal expiry.
 
-### Configure GitHub access for repository work
+#### Configure GitHub access for repository work
 
 Install `gh` for the Gateway service account. In **Settings → Profile → GitHub
 connections**, an administrator chooses **For the system** to connect the shared
@@ -425,9 +580,9 @@ Keep it in a dedicated SecretRef instead of accidentally selecting a
 publisher through a process-wide `GH_TOKEN` or `GITHUB_TOKEN`. Read credentials,
 publication credentials, and each person's sign-in identity have different jobs.
 
-## 5. Connect chat and remote clients
+### 5. Connect chat and remote clients
 
-Follow [Team setup](/start/teams#step-2-connect-the-team-chat) for channel
+Follow [Step 2: Connect the team chat](#step-2-connect-the-team-chat) for channel
 allowlists, mention requirements, and DM pairing. Website admission does not
 configure the bot's channel allowlist. If a channel sender should resolve to an
 existing person, use the explicit administrator-attested channel identity links
@@ -455,7 +610,7 @@ the same live grant; the plugin and relay own expiry and revocation. Ingress
 reconnects are tokenless and issue no reusable device token. This SDK capability
 does not itself install or configure a relay service.
 
-## 6. Give widgets a separate sandbox origin
+### 6. Give widgets a separate sandbox origin
 
 Inline Canvas widgets and MCP Apps use a separate sandbox listener. Behind HTTPS
 ingress, configure a second hostname that reaches that listener instead of
@@ -487,7 +642,7 @@ Enable MCP Apps separately only if you need that capability; see
 [MCP Apps](/cli/mcp/apps). Test a real widget after setup: a healthy chat page
 does not prove its iframe can load.
 
-## 7. Share selected sessions from another Gateway
+### 7. Share selected sessions from another Gateway
 
 To show release-server conversations on the collaboration server, configure
 [Session Share](/plugins/session-share). On the source, enable the plugin with
@@ -543,7 +698,7 @@ it does not authorize continuing the source session or executing commands there.
 An ordinary source session URL still points to that source's own `publicOrigin`
 and requires source access.
 
-## 8. Verify the complete flow
+### 8. Verify the complete flow
 
 Use both host checks and two real user accounts:
 
@@ -618,3 +773,16 @@ to establish that the service can complete work.
 | Node join receives HTTP 302                                   | Supply machine Access authentication on every required route.                                                    |
 | Shared sessions are missing or names do not link              | Check source group, node account/state, two-command allowlist, receiver role, and verified numeric GitHub IDs.   |
 | Update fails despite free disk                                | Check service temporary-space quota, filesystem metadata, and retained snapshots before retrying.                |
+
+## When to split things up
+
+- **Separate workspaces or personas** (projects that must not share memory or files): use multiple agents on one gateway - see [Multi-agent routing](/concepts/multi-agent).
+- **Mutually untrusted users, customers, or organizations:** separate gateways, ideally separate OS users or hosts - see [Security trust model](/gateway/security/trust-model) and [Security](/gateway/security).
+
+## Related
+
+- [Why OpenClaw: working together](/start/why-openclaw#working-together) - the team collaboration surfaces in one place
+- [Multi-user mode](/concepts/multi-user) - ownership, participants, and owner filtering in depth
+- [Operator scopes](/gateway/operator-scopes) - connection roles, scopes, and role assignment
+- [Groups](/channels/groups) - group behavior, mention gating, and context visibility
+- [Security](/gateway/security) - the trust model behind the one-boundary rule

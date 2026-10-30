@@ -169,7 +169,7 @@ skill. Different owners can use the same friendly name without one skill
 silently replacing another.
 
 <Warning>
-A shared Gateway remains [one trust domain](/start/teams#one-trust-boundary).
+A shared Gateway remains [one trust domain](/start/multiplayer#one-trust-boundary).
 Skills attached to a shared session are inputs to that session, not secret
 storage. Library ownership governs management and discovery; it does not grant
 new tools, credentials, host installation rights, or isolation from the Gateway

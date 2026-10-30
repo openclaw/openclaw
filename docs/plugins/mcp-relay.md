@@ -139,7 +139,7 @@ with Gateway** opens the Gateway's Control UI behind its usual sign-in, and you
 approve the request as yourself. The grant is a person grant tied to your
 verified profile, so **Full role access** carries your role into the app,
 including administrator access if your role has it. A later role change also
-limits the grant. See [Team server](/gateway/team-server) for Gateway setup.
+limits the grant. See [Multiplayer](/start/multiplayer#production-deployment) for Gateway setup.
 
 ## Show the full Control UI in ChatGPT
 

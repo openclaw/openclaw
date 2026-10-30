@@ -5124,8 +5124,8 @@
     "target": "Telnyx（AI 推理）"
   },
   {
-    "source": "Deploy a team server",
-    "target": "部署团队服务器"
+    "source": "Multiplayer",
+    "target": "多人协作"
   },
   {
     "source": "Worker-local inference",

@@ -181,7 +181,7 @@ the only path for external traffic.
 browser-origin default when `controlUi.allowedOrigins` is omitted. You only need
 an explicit allowlist for a different browser policy; that list replaces the
 default rather than adding to it. For profile, role, GitHub, and operations setup,
-see [Deploy a team server](/gateway/team-server).
+see [Multiplayer: production deployment](/start/multiplayer#production-deployment).
 
 ## Step 4: Decide how nodes and workers get in
 
