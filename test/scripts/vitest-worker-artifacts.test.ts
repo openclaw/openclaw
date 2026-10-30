@@ -538,30 +538,30 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       }),
   );
 
-  it.for(["failed observation", "cancellation", "timeout"])(
-    "joins complete bodies before input disposal after %s in real Vitest",
-    (fault, { workerArtifacts }) =>
-      workerArtifacts.fixtureLifetime.run(async () => {
-        const { node } = workerArtifacts.createFixtureCommands();
-        const directory = workerArtifacts.fixtureDirectory();
-        const receipt = path.join(directory, "lifetime.json");
-        const test = writeFixture(
-          directory,
-          "lifetime.test.ts",
-          `
+  it("joins complete bodies before input disposal in real Vitest", ({ workerArtifacts }) =>
+    workerArtifacts.fixtureLifetime.run(async () => {
+      const { node } = workerArtifacts.createFixtureCommands();
+      const directory = workerArtifacts.fixtureDirectory();
+      const receipt = path.join(directory, "lifetime.json");
+      const faults = ["failed observation", "cancellation", "timeout"];
+      const test = writeFixture(
+        directory,
+        "lifetime.test.ts",
+        `
         import fs from 'node:fs';
         import path from 'node:path';
         import {setTimeout as tick} from 'node:timers/promises';
-        import {aroundEach,it,expect} from 'vitest';
+        import {aroundEach,describe,it,expect} from 'vitest';
         import {createFixtureLifetime} from ${JSON.stringify(pathToFileURL(path.join(root, "test/helpers/fixture-lifetime.ts")).href)};
         import {createDeferred} from ${JSON.stringify(pathToFileURL(path.join(root, "test/helpers/promise.ts")).href)};
         import {runNodeScript} from ${JSON.stringify(pathToFileURL(path.join(root, "test/helpers/run-node-script.ts")).href)};
         import {inspectManagedProcessGroup} from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/managed-child-process.mts")).href)};
+        describe.each(${JSON.stringify(faults)})('after %s',fault=>{
         const lifetime=createFixtureLifetime(), events=[];
         let inputRoot, pid, leafPid, commandResult, lateResult, readyObserved=false, closed=false;
-        const lateMarker=${JSON.stringify(path.join(directory, "late-launch"))};
+        const lateMarker=${JSON.stringify(path.join(directory, "late-launch"))}+'-'+fault;
         aroundEach(async runTest=>{try {await runTest();} finally {await lifetime.cleanup();}});
-        it.fails('failed body with an unfinished sibling',${fault === "timeout" ? "{timeout:1500}," : ""}({signal,onTestFinished})=>lifetime.run(async()=>{
+        it.fails('failed body with an unfinished sibling',fault==='timeout'?{timeout:1500}:{},({signal,onTestFinished})=>lifetime.run(async()=>{
           inputRoot=lifetime.createTempDir('body-input-',${JSON.stringify(directory)});
           const input=path.join(inputRoot,'input');fs.writeFileSync(input,'still owned');
           const readyFile=path.join(inputRoot,'ready'), script=path.join(inputRoot,'child.mjs');
@@ -611,15 +611,14 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
                 await tick(5);
               }
               ({pid,leafPid}=JSON.parse(fs.readFileSync(readyFile,'utf8')));readyObserved=true;
-              if(${JSON.stringify(fault)}==='cancellation') abort.abort();
-              if(${JSON.stringify(fault)}!=='failed observation') await command;
+              if(fault==='cancellation') abort.abort();
+              if(fault!=='failed observation') await command;
               throw new Error('observation failed');
             }),
           ]);
         }));
         it('next fixture sees completed teardown',()=>{
           // Expected failure must not invert any cancellation or cleanup proof.
-          console.log('command lifetime observation',JSON.stringify({fault:${JSON.stringify(fault)},readyObserved,pid,leafPid,closed,commandStatus:commandResult?.status,commandErrorCode:commandResult?.error?.code,lateLaunched:fs.existsSync(lateMarker),events}));
           expect(readyObserved).toBe(true);
           expect(commandResult).toMatchObject({error:{code:'ABORT_ERR'}});
           expect(lateResult.error).toBeInstanceOf(Error);
@@ -633,25 +632,26 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             expect(inspectManagedProcessGroup({pid,exitCode:0},{errorPolicy:'indeterminate'})).toBe('dead');
             expect(commandResult.stdout).toContain('leaf read: still owned');
           } else expect(()=>process.kill(leafPid,0)).toThrow();
-          fs.writeFileSync(${JSON.stringify(receipt)},JSON.stringify({fault:${JSON.stringify(fault)},events,closed,inputRemoved:!fs.existsSync(inputRoot)}));
+          fs.writeFileSync(${JSON.stringify(receipt)}+'-'+fault,JSON.stringify({fault,events,closed,inputRemoved:!fs.existsSync(inputRoot)}));
+        });
         });
       `,
-        );
-        const config = writeFixture(
-          directory,
-          "vitest.config.mts",
-          `
+      );
+      const config = writeFixture(
+        directory,
+        "vitest.config.mts",
+        `
         import {sharedVitestConfig as shared} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.shared.config.ts")).href)};
         export default {...shared,test:{...shared.test,include:[${JSON.stringify(convertPathToPattern(test))}]}};
       `,
-        );
-        const result = await node(["scripts/run-vitest.mjs", "run", "--config", config]);
-        expect(result.code, result.stderr + result.stdout).toBe(0);
-        const observed = JSON.parse(fs.readFileSync(receipt, "utf8"));
+      );
+      const result = await node(["scripts/run-vitest.mjs", "run", "--config", config]);
+      expect(result.code, result.stderr + result.stdout).toBe(0);
+      for (const fault of faults) {
+        const observed = JSON.parse(fs.readFileSync(`${receipt}-${fault}`, "utf8"));
         expect(observed).toMatchObject({ fault, closed: true, inputRemoved: true });
-        console.log("whole-body lifetime", observed);
-      }),
-  );
+      }
+    }));
 
   it("keeps standalone configured Vitest on source without a subprocess owner", ({
     workerArtifacts,

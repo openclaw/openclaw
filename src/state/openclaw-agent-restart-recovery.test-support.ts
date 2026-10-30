@@ -36,16 +36,9 @@ import { ensureProfileForEmail } from "./user-profiles.js";
 
 type NativeIntegrityFixture = {
   makeEnv: (prefix: string) => { OPENCLAW_STATE_DIR: string };
-  holdIntegrity: (pathname: string) => {
-    entered: () => Promise<unknown>;
-    release: () => void;
-  };
 };
 
-export function registerRestartRecoveryAdmissionTests({
-  makeEnv,
-  holdIntegrity,
-}: NativeIntegrityFixture): void {
+export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegrityFixture): void {
   it.for(["ready", "read-pending", "shared", "refused", "aborted"] as const)(
     "recovers retained inputs without holding unrelated ready stores (%s)",
     async (outcome, { signal }) => {
@@ -155,7 +148,8 @@ export function registerRestartRecoveryAdmissionTests({
           { env },
         );
         const owner = admission.adopt();
-        const integrity = holdIntegrity(pathname);
+        const openingEntered = createDeferredCore();
+        const openingReady = createDeferredCore();
         const recovery = new AbortController();
         const recoverySignal = AbortSignal.any([signal, recovery.signal]);
         const readyRecovered = createDeferredCore();
@@ -181,6 +175,13 @@ export function registerRestartRecoveryAdmissionTests({
             activate({
               ...activation,
               publishAgent: async () => {},
+              openAgent: async (input) => {
+                if (input.agentId === "main") {
+                  openingEntered.resolve();
+                  await openingReady.promise;
+                }
+                return activation.openAgent(input);
+              },
               migrateAgent: async (input) => {
                 if (input.agentId === "main" && outcome === "refused") {
                   throw new Error("fixture startup preparation failed");
@@ -216,7 +217,7 @@ export function registerRestartRecoveryAdmissionTests({
           if (outcome === "read-pending") {
             expect(readAgentDatabaseReadAdmissionRefusal("main", { env })).toBeDefined();
           } else {
-            await withinTest(integrity.entered(), signal);
+            await withinTest(openingEntered.promise, signal);
             expect(readAgentDatabaseReadAdmissionRefusal("main", { env })).toBeUndefined();
           }
           await admission.waitForAgentPreparation("ready", { signal });
@@ -244,7 +245,7 @@ export function registerRestartRecoveryAdmissionTests({
           const pendingPreparation = admission.pendingPreparation;
           expect(pendingPreparation).toBeDefined();
           preparationReady.resolve();
-          integrity.release();
+          openingReady.resolve();
           if (outcome !== "refused") {
             await withinTest(
               awaitGateBeforeSettlement(
@@ -323,7 +324,7 @@ export function registerRestartRecoveryAdmissionTests({
           recovery.abort();
           preparationReady.resolve();
           inputRecoveryReady.resolve();
-          integrity.release();
+          openingReady.resolve();
           await owner.stop();
           await Promise.allSettled([resuming]);
         }

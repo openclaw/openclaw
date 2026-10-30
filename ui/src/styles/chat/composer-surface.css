@@ -159,15 +159,11 @@
 
 .agent-chat__input {
   --chat-box-inset: 8px;
-  --chat-composer-secondary: var(
-    --control-secondary-text,
-    color-mix(in srgb, var(--text-strong) 65%, var(--chat-composer-surface))
-  );
-  --chat-composer-tertiary: color-mix(
-    in srgb,
-    var(--text-strong) 48%,
-    var(--chat-composer-surface)
-  );
+  /* Rest, glyph and disabled ink are steps of this surface (see base.css), so
+     an enabled control can never render at or below its own disabled state. */
+  --chat-composer-secondary: var(--chat-composer-control-text);
+  --chat-composer-tertiary: var(--chat-composer-control-disabled);
+  --icon-interactive: var(--chat-composer-control-icon);
   --chat-composer-hover: var(--surface-hover);
   --chat-composer-group-hover: var(--surface-hover);
   --chat-composer-popover-border: var(--overlay-border);

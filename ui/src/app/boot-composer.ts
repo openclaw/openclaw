@@ -1,4 +1,5 @@
 import { listen } from "../lib/reactive/listener.ts";
+import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 
 /**
  * A chat link's static boot frame ships a real composer, so typing starts before
@@ -21,6 +22,7 @@ const BOOT_COMPOSER_ID = "openclaw-boot-composer";
 
 let element: HTMLTextAreaElement | null = null;
 let stopHistory: (() => void) | undefined;
+let stopReloadGuard: (() => void) | undefined;
 
 /** Takes the static element before the first app commit replaces the boot frame. */
 export function adoptBootComposer(applicationRoute: boolean): void {
@@ -33,6 +35,21 @@ export function adoptBootComposer(applicationRoute: boolean): void {
     return;
   }
   element = candidate;
+  // Until the chat pane takes this element, its text has no durable draft owner.
+  const releaseGuard = registerControlUiReloadGuard(
+    () => candidate.value.length === 0,
+    () => candidate.focus({ preventScroll: true }),
+  );
+  const stopBeforeUnload = listen(window, "beforeunload", (event) => {
+    if (candidate.value.length > 0) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+  });
+  stopReloadGuard = () => {
+    releaseGuard();
+    stopBeforeUnload();
+  };
   // History navigation leaves the linked session; its unsent text must not follow.
   stopHistory = listen(globalThis, "popstate", retireBootComposer);
 }
@@ -71,6 +88,8 @@ export function takeBootComposer(): BootComposerDraft | null {
 
 /** Leaving the linked session discards the boot composer before any pane can take it. */
 export function retireBootComposer(): void {
+  stopReloadGuard?.();
+  stopReloadGuard = undefined;
   stopHistory?.();
   stopHistory = undefined;
   element?.remove();

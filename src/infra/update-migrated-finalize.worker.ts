@@ -89,6 +89,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
         mutationProtocol: POST_CORE_MUTATION_PROTOCOL,
         retainedOwnerBinding: true,
         doctorConfigWrites: "pid-start-v1",
+        doctorRetirementOnly: true,
         gatewayRestartCompletion: true,
         state: OPENCLAW_STATE_SCHEMA_VERSION,
         agent: OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -364,6 +365,7 @@ async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void
         },
         {
           inputHash: input.configInputHash,
+          retirementOnly: input.retirementOnly,
           assertCurrent,
           commandAuthority,
           originalRecoveryCapture: {

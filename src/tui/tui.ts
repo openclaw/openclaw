@@ -21,7 +21,6 @@ import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-a
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import { throwSettledAggregate } from "../infra/error-graph-internal.js";
-import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
 import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
@@ -30,12 +29,6 @@ import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { runCommandWithTimeout } from "../process/exec.js";
-import {
-  buildWindowsCmdExeCommandLine,
-  isWindowsBatchCommand,
-  resolveTrustedWindowsCmdExe,
-} from "../process/windows-command.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
@@ -52,6 +45,7 @@ import {
   type TuiRunOutcome,
 } from "./tui-activity-status.js";
 import { createTuiAuthChildOwner } from "./tui-auth-child.js";
+import { resolveCodexCliBin, resolveLocalAuthSpawnInvocation } from "./tui-auth-invocation.js";
 import { createTuiAutocompleteProvider } from "./tui-autocomplete.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
@@ -94,7 +88,6 @@ import type {
 import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.js";
 
 const OPENAI_CODEX_PROVIDER = "openai";
-const CODEX_CLI_LOOKUP_TIMEOUT_MS = 5_000;
 const TUI_AUTH_COMMAND_MAX_CHARS = 320;
 const SESSION_SUBSCRIPTION_MAX_ATTEMPTS = 5;
 const SESSION_SUBSCRIPTION_RETRY_DELAY_MS = 25;
@@ -111,52 +104,6 @@ type RunTuiOptions = TuiOptions & {
   config?: OpenClawConfig;
   title?: string;
 };
-
-/** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
-export async function resolveCodexCliBin(): Promise<string | null> {
-  if (process.platform === "win32") {
-    const pathEnv = process.env.PATH ?? process.env.Path ?? "";
-    // Prefer npm's runnable PATHEXT launcher, but retain bare-only native installs.
-    return (
-      resolveExecutableFromPathEnv("codex", pathEnv, process.env, {
-        includeExtensionless: false,
-      }) ??
-      resolveExecutableFromPathEnv("codex", pathEnv, process.env, {
-        includeExtensionless: true,
-      }) ??
-      null
-    );
-  }
-  try {
-    const result = await runCommandWithTimeout(["which", "codex"], {
-      killSignal: "SIGKILL",
-      maxOutputBytes: 64 * 1024,
-      timeoutMs: CODEX_CLI_LOOKUP_TIMEOUT_MS,
-    });
-    if (result.code !== 0 || result.termination !== "exit") {
-      return null;
-    }
-    return result.stdout.trim().split(/\r?\n/)[0]?.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-export function resolveLocalAuthSpawnInvocation(params: { command: string; args: string[] }): {
-  args: string[];
-  command: string;
-  options: { windowsHide?: true; windowsVerbatimArguments?: true };
-} {
-  const platform = process.platform;
-  if (!isWindowsBatchCommand(params.command.trim(), platform)) {
-    return { command: params.command, args: params.args, options: {} };
-  }
-  return {
-    command: resolveTrustedWindowsCmdExe(platform),
-    args: ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(params.command, params.args)],
-    options: { windowsHide: true, windowsVerbatimArguments: true },
-  };
-}
 
 export function resolveTuiLocalAuthCliInvocation(params: { provider?: string }) {
   const provider = params.provider?.trim();

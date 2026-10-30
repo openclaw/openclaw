@@ -1,4 +1,5 @@
 // Memory Core plugin module owns manager cache and close serialization.
+import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
@@ -11,10 +12,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import {
-  resolveMemoryCoreLocalServiceHostIdentity,
-  type MemoryCoreAcquireLocalService,
-} from "./embedding-local-service.js";
+import { resolveMemoryCoreLocalServiceHostIdentity } from "./embedding-local-service.js";
 import {
   MemoryManagerReloadError,
   type MemoryManagerLifecycle,
@@ -53,7 +51,7 @@ export function resolveMemoryIndexManagerCacheKey(params: {
   settings: ResolvedMemorySearchConfig;
   providerRequirement: unknown;
   purpose: MemoryIndexManagerPurpose;
-  acquireLocalService?: MemoryCoreAcquireLocalService;
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
 }): string {
   return [
     params.agentId,

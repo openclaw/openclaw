@@ -17,7 +17,7 @@ import type { ChatState } from "./chat-state-contract.ts";
  * both server rows, so filling the gap never trusts held live rows. Gaps larger
  * than one older page keep the lazy boundary.
  */
-export function heldHistoryGapCursor(options: {
+function heldHistoryGapCursor(options: {
   result: ChatHistoryResult;
   previousMessages: unknown[];
   previousPagination: ChatHistoryPagination;

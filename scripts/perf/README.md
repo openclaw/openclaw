@@ -5878,3 +5878,32 @@ to disappear (`PGCENSUS_EXPECT_COUNT_STATEMENTS=0` enforces this). Request windo
 and worker events use the same monotonic nanosecond clock, including submillisecond
 searches. Wall samples include instrumentation and incidental background work;
 this small workload does not establish latency or relevance at scale.
+
+## Backup archive verification
+
+`backup-verify-fixture.mjs` adds 5.5 GiB of deterministic SQLite payload and 768 MiB
+across 12,288 workspace files to a disposable installation with initialized
+`main`, `worker`, and `research` agents. Initialize a PostgreSQL Workboard store
+through its normal owner to cover mixed-engine archives. Never use a real state
+directory with this fixture writer.
+
+```sh
+node scripts/perf/backup-verify-fixture.mjs <synthetic-state> <synthetic-workspace>
+node --import ./scripts/tsx.mjs scripts/build-all.mts qaRuntime
+node scripts/perf/backup-verify-measure.mjs instrument dist
+BACKUP_MEASUREMENT=<absolute-results.jsonl> node --import ./scripts/perf/backup-verify-measure.mjs openclaw.mjs backup create --verify --output <archive> --json
+BACKUP_MEASUREMENT=<absolute-results.jsonl> node --import ./scripts/perf/backup-verify-measure.mjs openclaw.mjs backup verify <archive> --json
+```
+
+Instrument only disposable builds. Keep each source revision's runtime, use the
+same isolated state, and alternate baseline/candidate runs. The instrumentation
+wraps existing phase boundaries without replacing their implementations. Phase
+records are inclusive; subtract nested extraction records when reporting database
+verification separately. `archiveReadBytes` counts full compressed archive reads.
+
+On macOS, compile `backup-verify-rusage.c` with `clang` and set
+`BACKUP_MEASURE_RUSAGE` to that executable to include exited-child CPU and the
+CLI process's physical disk-read bytes. Those disk bytes exclude child processes
+and cached reads; they are distinct from logical archive bytes. Record host load,
+archive size, and complete CLI wall/CPU with `/usr/bin/time -l` as well. Keep
+compression-level experiments separate from the default-settings comparison.

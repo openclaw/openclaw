@@ -980,7 +980,7 @@ ${readFileSync(gitShim, "utf8")}
     (fault) => {
       const f = fixture();
       f.enableReviewTests();
-      expect(f.run("review-checkout-main").status).toBe(0);
+      expect(f.shell("review_checkout_main 42").status).toBe(0);
       const modePath = join(f.local, "review-mode.env");
       let mode = readFileSync(modePath, "utf8");
       if (fault === "missing" || fault === "inherited") {
@@ -1027,7 +1027,7 @@ ${readFileSync(gitShim, "utf8")}
     const f = fixture();
     f.enableReviewTests();
     if (mode === "main") {
-      expect(f.run("review-checkout-main").status).toBe(0);
+      expect(f.shell("review_checkout_main 42").status).toBe(0);
     }
     const metaPath = join(f.local, "pr-meta.env");
     let meta = readFileSync(metaPath, "utf8");
@@ -1078,7 +1078,7 @@ ${readFileSync(gitShim, "utf8")}
     const f = fixture();
     if (command === "review_tests") {
       f.enableReviewTests();
-      expect(f.run("review-checkout-main").status).toBe(0);
+      expect(f.shell("review_checkout_main 42").status).toBe(0);
     }
     const result = f.shell(`
 printf() {

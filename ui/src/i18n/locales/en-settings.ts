@@ -1242,6 +1242,7 @@ const enSettings = {
       noModels: "Configure a chat provider to select a primary, utility, or fallback model.",
       discoveringMore: "Discovering more models…",
       discoverFailed: "More models could not be discovered.",
+      discoverFailedFor: "Models from {providers} could not be discovered.",
       retryDiscover: "Retry",
       thinkingHelpLabel: "About thinking defaults",
       thinkingHelp:

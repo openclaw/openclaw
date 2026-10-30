@@ -458,9 +458,7 @@ function createDiffReadCache(
           type: "checkout.diff",
           input: {
             ...input,
-            ...(preparedRevision?.cleanWorktree
-              ? { cleanWorktree: preparedRevision.cleanWorktree }
-              : {}),
+            worktreeStatus: preparedRevision?.worktreeStatus,
           },
         },
         { signal, diffTiming },

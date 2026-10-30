@@ -8,6 +8,9 @@ import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "./agent-run-registry.js";
 import { refreshCostUsageCacheForAgent as refreshAgent } from "./session-cost-usage-aggregation.js";
@@ -194,11 +197,15 @@ async function withRefreshFixture(
       .map((file, index) => fs.writeFile(file, index === 0 ? firstRecord : userLine)),
   );
   await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-    if (fakeTimers) {
-      vi.useFakeTimers();
-    }
     const fixture = makeRefreshFixture(agentId, sessionFiles);
     try {
+      // Prepare real admission before fake time controls the refresh deadlines.
+      // A missing shared-state file requires an asynchronous filesystem probe on every batch.
+      openOpenClawStateDatabase();
+      await readAgentDeletionJournalStatusInWorker(agentId);
+      if (fakeTimers) {
+        vi.useFakeTimers();
+      }
       await run(fixture);
     } finally {
       try {
@@ -206,6 +213,7 @@ async function withRefreshFixture(
       } finally {
         fixture.refresh.mockReset();
         vi.useRealTimers();
+        await closeStateDatabaseForTest();
       }
     }
   });
@@ -239,7 +247,7 @@ test("keeps per-session quiet gaps across wall-clock rollback and unrelated read
   expectNoTimers();
 });
 
-test("preserves oldest dirty age across turns and refreshes overdue work in the next idle gap", async ({
+test("preserves oldest dirty age across turns and refreshes at its deadline while busy", async ({
   usage: { agentId, refresh, dirty },
 }) => {
   refresh.mockResolvedValue("refreshed");
@@ -256,15 +264,20 @@ test("preserves oldest dirty age across turns and refreshes overdue work in the 
     expect(refresh).toHaveBeenCalledTimes(1);
     dirty();
     claim = claimAgentRunContext("usage-batch-turn", { agentId }, { trackOwner: true });
-    await tick(360_000, 1);
+    await tick(299_999, 1);
+    dirty();
+    await tick(1, 2);
+    dirty();
+    await tick(299_999, 2);
+    await tick(1, 3);
     releaseAgentRunContext("usage-batch-turn", claim);
-    await tick(0, 2);
+    await tick(0, 3);
   } finally {
     releaseAgentRunContext("usage-batch-turn", claim);
   }
 });
 
-test("wakes a busy retry when an overlapping turn becomes idle", async ({
+test("keeps eligible retries bounded across overlapping turns and publications", async ({
   usage: { agentId, refresh, hold, dirty },
 }) => {
   const held = hold("busy");
@@ -274,8 +287,10 @@ test("wakes a busy retry when an overlapping turn becomes idle", async ({
     dirty();
     await tick(30_000, 1);
     claim = claimAgentRunContext("usage-busy-turn", { agentId }, { trackOwner: true });
+    dirty();
     held.resolve("busy");
-    await tick(1_000, 1);
+    await tick(49, 1);
+    await tick(1, 2);
     releaseAgentRunContext("usage-busy-turn", claim);
     await tick(0, 2);
   } finally {

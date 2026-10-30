@@ -146,6 +146,22 @@ it("keeps attachment chips at the editing inset in the one-line mobile composer"
   expect(resting.remove).toBeGreaterThanOrEqual(0);
 });
 
+it("keeps the mobile composer 10px above the bottom edge while resting and editing", async () => {
+  await page.viewport(390, 844);
+  const { container } = renderComposerFixture({ mobileComposer: true, draft: "Bottom gap" });
+  document.body.append(container);
+  container.style.cssText = "position:fixed;bottom:0;left:16px;width:358px";
+  const shell = container.querySelector<HTMLElement>(".agent-chat__composer-shell")!;
+  const gap = () => container.getBoundingClientRect().bottom - shell.getBoundingClientRect().bottom;
+  await expect
+    .element(page.elementLocator(shell))
+    .toHaveAttribute("data-composer-editing", "false");
+  expect(gap()).toBeCloseTo(10, 1);
+  container.querySelector("textarea")!.focus();
+  await expect.element(page.elementLocator(shell)).toHaveAttribute("data-composer-editing", "true");
+  expect(gap()).toBeCloseTo(10, 1);
+});
+
 it.each([
   ["rail", "iPhone", "enter"],
   ["rail", "iPhone", "modifier-enter"],

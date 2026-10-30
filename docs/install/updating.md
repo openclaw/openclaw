@@ -45,6 +45,15 @@ backup.
 
 ## Update implementation contract
 
+Durable background exec adds an optional, first-use `durable_background_processes`
+table through the existing shared-state worker and schema owner. The candidate
+contains this addition; the installed updater needs no new protocol. Existing
+databases keep their schema version and records, and startup reads do not create
+the table. Candidate startup re-adopts retained user units without restarting
+their commands. Rollback binaries leave the additive table and systemd units
+alone; inspect and stop those units with the systemd user manager before returning
+to a binary without durable-process support.
+
 Linux managed updates run in a separate user service and slice, so an agent exec's
 descendant cleanup, Gateway restarts, and the Gateway unit's memory limit do not
 own the handoff. If its recorded helper and updater die, update status or startup
@@ -174,6 +183,13 @@ findings in update history. If readiness, inspection, or history recording fails
 the update stays accepted and the pending checks remain retryable with
 `openclaw update finish`; the result reports the next action. Migration admission,
 repairs, backup verification, and recovery fences still complete before startup.
+
+During a native update, when plugins are unchanged and only deferred model retirement
+remains, a supporting candidate completes the second Doctor pass with the required
+config, auth, session, and cron repairs and final validation. Startup, database admission, and config
+preparation still run in full. Other pending work or incomplete discovery selects
+the full Doctor flow; older candidates and standalone `openclaw update repair`
+continue using the full pass.
 
 Stopped update and Doctor database snapshots tolerate concurrent read-only SQLite
 probes. The transient `-shm` WAL index is rebuilt privately, never copied or used
@@ -451,6 +467,12 @@ Before post-core plugin work, the updater releases its temporary Doctor database
 ownership before rechecking profile-backed requester authority. Service custody
 remains with the updater; the next Doctor acquires its own database ownership.
 This avoids refusing the updater's own policy reads during its maintenance window.
+
+Plugin lifecycle work in update finalization and repair renews its lease from a
+worker, so a blocked main thread cannot expire the lease. Native Doctor and plugin
+install/update operations share this renewal behavior. Ownership checks,
+cancellation, and release still apply. The runtime holding the lease must contain
+this fix; a newer candidate cannot change an already-running lease owner.
 
 After a Doctor child settles, the updater drains its retained handles for the
 affected shared-state database and revokes their schema admission, even when

@@ -117,6 +117,16 @@ type MediaSnapshot = {
   }>;
   blobs: Array<{ source: string; revoked: boolean; live: boolean; attached: boolean }>;
 };
+type MediaFetchAttempt = {
+  url: string;
+  method: string;
+  cache: RequestCache;
+  mode: RequestMode;
+  credentials: RequestCredentials;
+  authorizationContext: number;
+  outcome: "pending" | "fulfilled" | "rejected";
+  status?: number;
+};
 type GeometryNode = {
   id: number;
   node: string;
@@ -165,6 +175,16 @@ type Result = {
   steadyRequests?: Record<string, number>;
   bootDuplicates?: Array<[string, number]>;
   duplicates?: Array<[string, number]>;
+  cacheProbe?: {
+    transport: "synthetic-route";
+    browserHttpCache: "disabled-by-playwright-routing";
+    routeFulfillments: Record<string, number>;
+    fetchAttempts: {
+      cacheOnly: MediaFetchAttempt[];
+      networkEligible: MediaFetchAttempt[];
+    } | null;
+    networkDownloads: null;
+  };
   before?: Metrics;
   loaded?: Metrics;
   beforeScroll?: Metrics;
@@ -206,6 +226,7 @@ try {
         page.setDefaultTimeout(30_000);
         const cdp = engine === "chromium" ? await context.newCDPSession(page) : undefined;
         const requests = new Map<string, number>();
+        const routeFulfillments = new Map<string, number>();
         const authContexts = new Map<string, number>();
         let pendingMedia = 0;
         let mediaTransferAt = 0;
@@ -240,9 +261,48 @@ try {
           await page.addInitScript(() => {
             const sources = new WeakMap<Blob, string>();
             const blobs = new Map<string, { source: string; revoked: boolean }>();
+            const fetchAttempts: MediaFetchAttempt[] = [];
+            const authorizationContexts = new Map<string, number>();
             const fetch = window.fetch;
             window.fetch = async (...args) => {
-              const response = await fetch(...args);
+              const [input, init] = args;
+              const request = input instanceof Request ? input : undefined;
+              const url = new URL(input instanceof Request ? input.url : input, location.href);
+              let attempt: MediaFetchAttempt | undefined;
+              if (
+                /\/(?:__openclaw__\/(?:assistant-media|link-favicon)|api\/users\/[^/]+\/avatar)/u.test(
+                  url.pathname,
+                )
+              ) {
+                const authorization =
+                  new Headers(init?.headers ?? request?.headers).get("authorization") ?? "";
+                if (!authorizationContexts.has(authorization)) {
+                  authorizationContexts.set(authorization, authorizationContexts.size + 1);
+                }
+                attempt = {
+                  url: url.href,
+                  method: init?.method ?? request?.method ?? "GET",
+                  cache: init?.cache ?? request?.cache ?? "default",
+                  mode: init?.mode ?? request?.mode ?? "cors",
+                  credentials: init?.credentials ?? request?.credentials ?? "same-origin",
+                  authorizationContext: authorizationContexts.get(authorization)!,
+                  outcome: "pending",
+                };
+                fetchAttempts.push(attempt);
+              }
+              let response: Response;
+              try {
+                response = await fetch(...args);
+              } catch (error) {
+                if (attempt) {
+                  attempt.outcome = "rejected";
+                }
+                throw error;
+              }
+              if (attempt) {
+                attempt.outcome = "fulfilled";
+                attempt.status = response.status;
+              }
               const readBlob = response.blob.bind(response);
               response.blob = async () => {
                 const blob = await readBlob();
@@ -423,6 +483,7 @@ try {
               geometryFrame = requestAnimationFrame(sampleFrame);
             };
             Reflect.set(window, "__mediaBench", {
+              readFetches: () => fetchAttempts,
               reset: () => {
                 observer?.takeRecords();
                 shifts = [];
@@ -582,6 +643,8 @@ try {
                         headers: { "Cache-Control": "public, max-age=3600" },
                       },
                 );
+                const fulfillment = `${route.request().resourceType()}:${resource}`;
+                routeFulfillments.set(fulfillment, (routeFulfillments.get(fulfillment) ?? 0) + 1);
               } finally {
                 pendingMedia -= 1;
               }
@@ -852,6 +915,26 @@ try {
           if (tracing && cdp) {
             await cdp.send("Tracing.end").catch(() => undefined);
           }
+          const fetchAttempts = await page
+            .evaluate<MediaFetchAttempt[] | null>(
+              () => Reflect.get(window, "__mediaBench")?.readFetches() ?? null,
+            )
+            .catch(() => null);
+          result.cacheProbe = {
+            transport: "synthetic-route",
+            browserHttpCache: "disabled-by-playwright-routing",
+            routeFulfillments: Object.fromEntries(routeFulfillments),
+            fetchAttempts: fetchAttempts
+              ? {
+                  cacheOnly: fetchAttempts.filter((attempt) => attempt.cache === "only-if-cached"),
+                  networkEligible: fetchAttempts.filter(
+                    (attempt) => attempt.cache !== "only-if-cached",
+                  ),
+                }
+              : null,
+            // Every media response is fulfilled in-process; this run does not measure downloads.
+            networkDownloads: null,
+          };
           results.push(result);
           await writeFile(
             path.join(artifactDir, `${prefix}.json`),
@@ -917,9 +1000,9 @@ try {
         timing,
         results,
         acceptance:
-          "Zero stable-viewport media CLS; <=1 request per unique media resource and kind; inspect live blobs after native app-host disconnection without document reload. >=10 AB/BA pairs: median <=5% regression and p95 not worse; noisy hosts require a separate A/A control and 20 pairs judged by CDP CPU plus structural counters.",
+          "Zero stable-viewport media CLS; inspect repeated route admissions alongside cache-only fetch attempts before attributing application reuse; inspect live blobs after native app-host disconnection without document reload. Route admissions and fulfillments are not network downloads or browser-cache hits. >=10 AB/BA pairs: median <=5% regression and p95 not worse; noisy hosts require a separate A/A control and 20 pairs judged by CDP CPU plus structural counters.",
         limitations:
-          "Synthetic Gateway RPC has no RTT. Chromium static HTTP uses CDP 100ms/10Mbps throttling; WebKit static HTTP is unthrottled. Both engines use equivalent explicit routed-media delay because Playwright fulfillment bypasses network emulation. WebKit has no CDP CPU/heap/trace metrics. Unsupported native Layout Instability is reported as null, not zero; geometry changes are diagnostic rectangles, not CLS. Playwright routing disables HTTP cache; duplicate fetch counters test application ownership. CDP durations include media load and scroll, not navigation or disposal; heap metrics are JS heap only, not native decoded-image memory. No total decoded-memory claim.",
+          "Synthetic Gateway RPC has no RTT. Chromium static HTTP uses CDP 100ms/10Mbps throttling; WebKit static HTTP is unthrottled. Both engines use equivalent explicit routed-media delay because Playwright fulfillment bypasses network emulation. WebKit has no CDP CPU/heap/trace metrics. Unsupported native Layout Instability is reported as null, not zero; geometry changes are diagnostic rectangles, not CLS. Playwright routing disables HTTP cache; duplicate route-admission counters test application ownership. Fulfillments are synthetic responses, not network downloads; browser cache effectiveness and real download counts are unmeasured. CDP durations include media load and scroll, not navigation or disposal; heap metrics are JS heap only, not native decoded-image memory. No total decoded-memory claim.",
       },
       null,
       2,

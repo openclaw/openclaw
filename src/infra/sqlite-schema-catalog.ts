@@ -25,6 +25,14 @@ export type SqliteTableContractReader = ((tableName: string) => SqliteTableContr
   readView?: (viewName: string) => SqliteViewCatalog | undefined;
 };
 
+/** Read bounded native header facts without walking the freelist or any table. */
+export function readSqlitePageHeader(database: DatabaseSync) {
+  return {
+    pages: database.prepare("PRAGMA page_count").get()?.page_count,
+    free: database.prepare("PRAGMA freelist_count").get()?.freelist_count,
+  };
+}
+
 /** Reuse actual catalog facts only within one unchanged read transaction on this connection. */
 export function createSqliteTableContractReader(
   database: DatabaseSync,

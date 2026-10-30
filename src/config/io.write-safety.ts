@@ -16,6 +16,7 @@ import { hashConfigRaw, parseConfigJson5 } from "./io.read-helpers.js";
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type { ConfigWriteOptions } from "./io.types.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import { resolveStateDir } from "./paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { createConfigWriteAuthorityGuard } from "./write-authority.js";
 
@@ -141,6 +142,41 @@ export function captureConfigFileWritePathProof(
   const assertCurrent = () => assertConfigFileWritePathSnapshot(snapshot, ioFs);
   assertCurrent();
   return { path: filePath, snapshot, assertCurrent };
+}
+
+/** Resolve the operator-selected directory, retaining its logical-path identity. */
+export function captureConfigRootWriteTarget(filePath: string, ioFs: typeof fs) {
+  const directory = path.dirname(filePath);
+  let realDirectory: string;
+  try {
+    realDirectory = ioFs.realpathSync(directory);
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      throw error;
+    }
+    realDirectory = resolvePathViaExistingAncestorSync(directory);
+  }
+  // Resolve the parent only; a config-file symlink must not redirect publication.
+  const targetPath = path.join(realDirectory, path.basename(filePath));
+  return {
+    path: targetPath,
+    pathProof: captureConfigFileWritePathProof(filePath, targetPath, ioFs),
+  };
+}
+
+export function resolveConfigWriteDirectory(
+  configPath: string,
+  publicationPath: string,
+  deps: NormalizedConfigIoDeps,
+) {
+  const stateRoot = resolveStateDir(deps.env, deps.homedir);
+  return {
+    path:
+      path.resolve(path.dirname(configPath)) === path.resolve(stateRoot)
+        ? path.dirname(publicationPath)
+        : stateRoot,
+    warn: (message: string) => deps.logger.warn(message),
+  };
 }
 
 type ConfigFileWriteIdentity = Pick<fs.BigIntStats, "dev" | "ino">;

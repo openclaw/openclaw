@@ -163,14 +163,21 @@ it("keeps recursive handles outside replaceable subtrees and filters their event
 it("repairs failed watches within 30 seconds and resumes healthy recovery", () => {
   const directory = timedDirectory("repair");
   const watch = vi.spyOn(fs, "watch");
-  const listener = observe(directory);
+  const listener = vi.fn();
+  const observation = observeOwnedDirectory(directory, listener);
+  subscriptions.push(observation);
+  expect(observation.isWatching()).toBe(true);
   watch.mock.results[0]!.value.emit("error", new Error("lost watch"));
+  expect(observation.isWatching()).toBe(false);
   listener.mockClear();
   vi.advanceTimersByTime(30_000);
   expect(listener).toHaveBeenCalledOnce();
   expect(watch).toHaveBeenCalledTimes(2);
+  expect(observation.isWatching()).toBe(true);
   vi.advanceTimersByTime(30_000);
   expect(listener).toHaveBeenCalledTimes(2);
+  observation.close();
+  expect(observation.isWatching()).toBe(false);
 });
 
 it("creates long-lived observations outside importer and caller authority", () => {

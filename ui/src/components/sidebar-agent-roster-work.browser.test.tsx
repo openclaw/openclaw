@@ -1,4 +1,5 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { patchSettings } from "../app/settings.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import {
   mountRoster,
@@ -9,7 +10,7 @@ import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
-import { getAppSidebarOwner } from "./app-sidebar.tsx";
+import { AppSidebarOwner, getAppSidebarOwner } from "./app-sidebar.tsx";
 import { SidebarAgentRoster } from "./sidebar-agent-roster.tsx";
 import { SidebarScrollContext } from "./sidebar-context-controller.ts";
 import "../test-helpers/load-styles.ts";
@@ -143,4 +144,78 @@ it("restores focus when unpinning an agent outside the roster viewport", async (
     expect(document.activeElement).toBe(row);
     expect(pinned.isConnected).toBe(false);
   });
+});
+
+it("retires inactive session body work across roster and chip mode changes", async () => {
+  patchSettings({ gatewayUrl: "ws://gateway.test", sidebarAgentsMode: "roster" });
+  const creates = vi.spyOn(AppSidebarOwner.prototype, "sessionCreateDisplay");
+  const { sidebar, context } = await mountRoster(roster);
+  await settleRoster(sidebar);
+  await waitForSolid(() => expect(sidebar.querySelector("[data-agent-group]")).not.toBeNull());
+  const owner = getAppSidebarOwner(sidebar.hostElement)!;
+  const groups = vi.spyOn(owner, "personalGroupSessionRows");
+  const body = sidebar.querySelector(".sidebar-shell__body");
+  expect(body).not.toBeNull();
+  const initialRoster = sidebar.querySelector("openclaw-sidebar-agent-roster");
+  const record = (phase: string) =>
+    console.log(
+      "inactive-sidebar-counts",
+      JSON.stringify({
+        phase,
+        creates: creates.mock.calls.length,
+        groups: groups.mock.calls.length,
+      }),
+    );
+  record("cold-roster");
+  expect.soft(creates).not.toHaveBeenCalled();
+  const update = async (phase: string, expectedCreates: number, expectedGroups: number) => {
+    creates.mockClear();
+    groups.mockClear();
+    for (let i = 0; i < 10; i++) {
+      sidebar.devGitBranch = `${phase}-${i}`;
+      await settleRoster(sidebar);
+      expect(sidebar.textContent).toContain(`${phase}-${i}`);
+    }
+    record(phase);
+    expect.soft(creates).toHaveBeenCalledTimes(expectedCreates);
+    expect.soft(groups).toHaveBeenCalledTimes(expectedGroups);
+  };
+  await update("ten-cold-roster-updates", 0, 0);
+
+  sidebar.sidebarEntries = ["session:agent:main:pinned"];
+  context.navigation.update({
+    personalSessionGroups: [
+      { id: "project", label: "Project", sessionKeys: ["agent:main:recent"] },
+    ],
+  });
+  const expectRows = () => {
+    expect(sidebar.querySelectorAll('[data-session-section="pinned"]')).toHaveLength(1);
+    expect(sidebar.querySelectorAll('[data-personal-session-group="project"]')).toHaveLength(1);
+    expect(sidebar.querySelectorAll('[data-session-key="agent:main:pinned"]')).toHaveLength(1);
+    expect(
+      sidebar.querySelectorAll(
+        '[data-personal-session-group="project"] [data-session-key="agent:main:recent"]',
+      ),
+    ).toHaveLength(1);
+  };
+  await settleRoster(sidebar);
+  await waitForSolid(expectRows);
+  // The active pinned section reads create state; each group also has owner bookkeeping.
+  await update("ten-roster-updates-with-pins", 10, 40);
+  for (const [index, mode] of (["chip", "roster", "chip", "roster"] as const).entries()) {
+    creates.mockClear();
+    groups.mockClear();
+    sidebar.sidebarAgentsMode = mode;
+    await settleRoster(sidebar);
+    await waitForSolid(expectRows);
+    expect(sidebar.querySelector(".sidebar-shell__body")).toBe(body);
+    expect(Boolean(sidebar.querySelector("openclaw-sidebar-agent-roster"))).toBe(mode === "roster");
+    record(`switch-${index}-${mode}`);
+    await update(
+      `ten-${index}-${mode}-updates-with-pins`,
+      mode === "roster" ? 10 : 30,
+      mode === "roster" ? 40 : 50,
+    );
+  }
+  expect(initialRoster?.isConnected).toBe(false);
 });

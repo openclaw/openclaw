@@ -88,6 +88,7 @@ export function ChatContextBreakdown(
               }}
             </Show>
           </Show>
+          <Show when={result().blockedReason}>{(reason) => <p class="muted">{reason()}</p>}</Show>
         </div>
       )}
     </ChatContextReport>

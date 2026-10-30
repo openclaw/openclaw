@@ -10,6 +10,7 @@ import {
 import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { managedWorktrees, WORKTREE_GC_INTERVAL_MS } from "../agents/worktrees/service.js";
+import type { WorktreeWarmPoolRequest } from "../agents/worktrees/template-registry.js";
 import type {
   ManagedWorktreeGcReceipt,
   ManagedWorktreeGcResult,
@@ -80,6 +81,83 @@ export function startWorktreeMaintenance(params: {
       );
     }
   };
+  const warmPending = new Map<
+    string,
+    { request: WorktreeWarmPoolRequest; inputs: ReturnType<typeof captureCleanupInputs> }
+  >();
+  let warmScheduled = false;
+  const scheduleWarmPool = () => {
+    if (warmScheduled) {
+      return;
+    }
+    warmScheduled = true;
+    inOwnerContext(() =>
+      scheduler.schedule({
+        id: "maintenance:worktrees:warm-pool",
+        delayMs: 0,
+        run: () =>
+          runWithGatewayIndependentRootWorkAdmission(
+            async () => {
+              await previousDrain;
+              while (warmPending.size && isActive()) {
+                const [key, next] = warmPending.entries().next().value!;
+                warmPending.delete(key);
+                let checkedConfig: OpenClawConfig | undefined;
+                let checkedPublication = getRuntimeConfigSnapshotMetadata();
+                const commitGuard = () => {
+                  assertActive();
+                  const config = params.getRuntimeConfig();
+                  const publication = getRuntimeConfigSnapshotMetadata();
+                  if (
+                    config !== checkedConfig ||
+                    publication !== checkedPublication ||
+                    config.worktreeAcceleration === false
+                  ) {
+                    if (
+                      config.worktreeAcceleration === false ||
+                      !isDeepStrictEqual(captureCleanupInputs(config), next.inputs)
+                    ) {
+                      throw new Error("Worktree warm pool configuration changed");
+                    }
+                    checkedConfig = config;
+                    checkedPublication = publication;
+                  }
+                };
+                try {
+                  commitGuard();
+                  await managedWorktrees.prewarm(next.request, {
+                    signal: scheduler.signal,
+                    commitGuard,
+                  });
+                } catch (error) {
+                  params.onError(`Worktree warm pool refill failed: ${String(error)}`);
+                }
+              }
+            },
+            "runtime:worktree-warm-pool",
+            scheduler.signal,
+          ).finally(() => {
+            warmScheduled = false;
+            if (warmPending.size && isActive()) {
+              scheduleWarmPool();
+            }
+          }),
+      }),
+    );
+  };
+  const stopWarmPool = managedWorktrees.onWarmPoolNeeded((request) => {
+    const config = params.getRuntimeConfig();
+    if (!isActive() || config.worktreeAcceleration === false) {
+      return;
+    }
+    const key = request.template.cacheKey;
+    if (!warmPending.has(key) && warmPending.size >= 32) {
+      params.onError("Worktree warm pool refill skipped: maintenance queue is full");
+      return;
+    }
+    warmPending.set(key, { request, inputs: captureCleanupInputs(config) });
+    scheduleWarmPool();
+  });
   const owner: MaintenanceOwner = {
     request: (options = {}) => {
       const { jobId, retryDeferred } = options;
@@ -204,6 +282,8 @@ export function startWorktreeMaintenance(params: {
       }
     },
     stop: async () => {
+      stopWarmPool();
+      warmPending.clear();
       // Aborting also wakes a paused batch before joining worker settlement.
       await scheduler.stop();
       await previousDrain;

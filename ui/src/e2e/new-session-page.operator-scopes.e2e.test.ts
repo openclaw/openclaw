@@ -19,6 +19,7 @@ import {
   installMockGateway,
   pollLocatorText,
   captureUiProof,
+  controlUiSessionUrl,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -128,6 +129,87 @@ async function useFolderAndSubmit(page: Page, message: string) {
 }
 
 suite.define(() => {
+  it("keeps session-only browsing free of forbidden optional discovery", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const key = "agent:main:scoped-reader";
+      const forbidden = ["sessions.catalog.list", "plugins.list", "sessions.usage"];
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.sessions.read"],
+        featureMethods: [...chatMethods, ...forbidden, "sessions.create", "tools.effective"],
+        sessionKey: key,
+        sessions: [
+          {
+            key,
+            sessionId: "scoped-reader",
+            kind: "direct",
+            label: "Scoped reader",
+            model: "demo",
+            modelProvider: "example",
+            contextTokens: 100000,
+            totalTokens: 50000,
+            totalTokensFresh: true,
+          },
+        ],
+        agentModel: "example/demo",
+        models: [{ id: "demo", provider: "example", name: "Demo model", contextWindow: 100000 }],
+        historyMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "lookup", name: "example_lookup", arguments: {} }],
+            timestamp: 1,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "lookup",
+            toolName: "example_lookup",
+            content: [{ type: "text", text: "Synthetic result" }],
+            timestamp: 2,
+          },
+          { role: "assistant", content: "The scoped conversation remains readable.", timestamp: 3 },
+        ],
+        methodResponses: Object.fromEntries(
+          forbidden.map((method) => [
+            method,
+            {
+              __mockError: { code: "FORBIDDEN", message: "missing scope: operator.read" },
+            },
+          ]),
+        ),
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      const submit = page.getByRole("button", { name: "Start session" });
+      await pollDisabled(submit).toBe(true);
+      expect(await tooltipTitleText(submit)).toContain("operator.sessions.write");
+      const picker = page.locator(".chat-controls__model-picker > summary");
+      await picker.click();
+      await page.locator(".chat-controls__model-search").waitFor();
+      expect(await page.locator('[data-chat-model-target-group="cliAgents"]').count()).toBe(0);
+      await page.keyboard.press("Escape");
+      for (const method of [...forbidden, "sessions.create"]) {
+        expect(await gateway.getRequests(method), method).toHaveLength(0);
+      }
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+      await page.getByText("The scoped conversation remains readable.", { exact: true }).waitFor();
+      await page.locator(".context-ring").filter({ visible: true }).click();
+      const summary = page.locator(".context-usage__popover").filter({ visible: true });
+      await summary.getByRole("meter").waitFor();
+      expect(await summary.getByRole("meter").getAttribute("aria-valuenow")).toBe("50000");
+      await summary.getByRole("button", { name: "View context", exact: true }).click();
+      const panel = page.locator("openclaw-chat-context-panel");
+      await panel.getByText(/Ask the person who manages OpenClaw for access/).waitFor();
+      expect(await panel.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
+      for (const method of [...forbidden, "sessions.create"]) {
+        expect(await gateway.getRequests(method), method).toHaveLength(0);
+      }
+      await captureUiProof(suite, page, "scoped-reader-context.png");
+      await page.goto(`${suite.server.baseUrl}usage`);
+      await page.getByText(/Ask the person who manages OpenClaw for access/).waitFor();
+      for (const method of ["sessions.usage", "usage.status"]) {
+        expect(await gateway.getRequests(method), method).toHaveLength(0);
+      }
+    });
+  });
+
   it.each(["read-only", "missing-method", "disconnected"] as const)(
     "blocks new-session entry and submission when %s",
     async (reason) => {
