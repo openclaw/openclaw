@@ -1,8 +1,15 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { readRegularFile, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import {
+  readRegularFile,
+  readRegularFileSync,
+  resolvePathPrefixSync,
+  sameFileIdentity,
+} from "@openclaw/fs-safe/advanced";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -12,7 +19,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { isErrno } from "../infra/errors.js";
 import { decodeUtf8Input, Utf8InputError } from "../infra/utf8-input.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
-import { pathExists } from "../utils.js";
+import { escapeRegExp, pathExists } from "../utils.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
 import { quotePowerShellArg } from "./quote-cli-arg.js";
 
@@ -52,7 +59,8 @@ async function readCompletionProfile(
   shell: CompletionShell,
   mode: "inspect" | "mutate" = "mutate",
 ) {
-  const { buffer } = await readRegularFile({ filePath: await fs.realpath(profilePath) });
+  const filePath = await fs.realpath(profilePath);
+  const { buffer, stat, exactIdentity } = await readRegularFile({ filePath });
   let encoding: CompletionProfileEncoding = "utf8";
   if (shell === "powershell" && process.platform === "win32") {
     const [first, second, third] = buffer;
@@ -69,7 +77,14 @@ async function readCompletionProfile(
       ? decodeUtf8Input(buffer, `Shell profile ${profilePath}`)
       : buffer.toString("utf8")
     : decodeWindowsTextFileBuffer({ buffer });
-  return { content: encoding === "utf8bom" ? content.slice(1) : content, encoding };
+  return {
+    content: encoding === "utf8bom" ? content.slice(1) : content,
+    encoding,
+    filePath,
+    mode: stat.mode & 0o7777,
+    buffer,
+    exactIdentity,
+  };
 }
 
 function encodeCompletionProfile(content: string, encoding: CompletionProfileEncoding): Buffer {
@@ -106,10 +121,14 @@ export function resolveShellFromEnv(): CompletionShell {
 }
 
 /** Returns the per-shell cached completion script path for a sanitized CLI binary name. */
-export function resolveCompletionCachePath(shell: CompletionShell, binName: string): string {
+export function resolveCompletionCachePath(
+  shell: CompletionShell,
+  binName: string,
+  stateDir = resolveStateDir(process.env, os.homedir),
+): string {
   const basename = (binName.trim() || "openclaw").replace(/[^a-zA-Z0-9._-]/g, "-");
   return path.join(
-    resolveStateDir(process.env, os.homedir),
+    stateDir,
     "completions",
     `${basename}.${shell === "powershell" ? "ps1" : shell}`,
   );
@@ -169,17 +188,20 @@ export function formatCompletionReloadCommand(shell: CompletionShell, scriptPath
 }
 
 function isCompletionProfileLine(line: string, binName: string, cachePath: string): boolean {
-  if (isSlowDynamicCompletionLine(line, binName)) {
-    return true;
-  }
-  const trimmed = line.trim();
   return (
-    // Stable releases wrote these paths without escaping shell expansion characters.
-    trimmed === `source "${cachePath}"` ||
-    trimmed === `[ -f "${cachePath}" ] && source "${cachePath}"` ||
-    trimmed === `test -f "${cachePath}"; and source "${cachePath}"` ||
-    COMPLETION_SHELLS.some((shell) => trimmed === formatCompletionSourceLine(shell, cachePath))
+    isSlowDynamicCompletionLine(line, binName) ||
+    cachedCompletionSourceLines(cachePath).includes(line.trim())
   );
+}
+
+function cachedCompletionSourceLines(cachePath: string): string[] {
+  return [
+    // Stable releases wrote these paths without escaping shell expansion characters.
+    `source "${cachePath}"`,
+    `[ -f "${cachePath}" ] && source "${cachePath}"`,
+    `test -f "${cachePath}"; and source "${cachePath}"`,
+    ...COMPLETION_SHELLS.map((shell) => formatCompletionSourceLine(shell, cachePath)),
+  ];
 }
 
 function isPreviousCompletionSourceLine(
@@ -417,6 +439,110 @@ export function resolveCompletionProfilePath(shell: CompletionShell): string {
     "powershell",
     "Microsoft.PowerShell_profile.ps1",
   );
+}
+
+/** Remove only literal cache registrations owned by state being uninstalled. */
+export async function removeCompletionRegistrations(
+  opts: {
+    stateDirs: readonly string[];
+    preservePaths: readonly string[];
+  } & ({ dryRun: true } | { dryRun?: false; assertCurrent: () => void }),
+): Promise<string[]> {
+  const affected: string[] = [];
+  const visited = new Set<string>();
+  const pathApi = process.platform === "win32" ? path.win32 : path.posix;
+  const home = process.env.HOME || os.homedir();
+  const cachePaths = COMPLETION_SHELLS.flatMap((shell) =>
+    opts.stateDirs.map((stateDir) => resolveCompletionCachePath(shell, "openclaw", stateDir)),
+  ).filter((cachePath) => !opts.preservePaths.some((kept) => isPathInside(kept, cachePath)));
+  const sources = [...new Set(cachePaths.flatMap(cachedCompletionSourceLines))];
+  if (sources.length === 0) {
+    return affected;
+  }
+  for (const shell of COMPLETION_SHELLS) {
+    const profiles =
+      shell === "bash"
+        ? [".bashrc", ".bash_profile"].map((name) =>
+            appendCompletionProfilePath(home, pathApi, name),
+          )
+        : shell === "powershell" && process.platform === "win32"
+          ? ["PowerShell", "WindowsPowerShell"].map((directory) =>
+              appendCompletionProfilePath(
+                process.env.USERPROFILE || home,
+                pathApi,
+                "Documents",
+                directory,
+                "Microsoft.PowerShell_profile.ps1",
+              ),
+            )
+          : [resolveCompletionProfilePath(shell)];
+    for (const profilePath of profiles) {
+      let profile: Awaited<ReturnType<typeof readCompletionProfile>>;
+      try {
+        profile = await readCompletionProfile(profilePath, shell, "inspect");
+      } catch (error) {
+        if (isErrno(error) && error.code === "ENOENT") {
+          continue;
+        }
+        throw error;
+      }
+      if (visited.has(profile.filePath)) {
+        continue;
+      }
+      // UTF-8 cache commands can coexist with locale-encoded user bytes.
+      const utf16 = profile.encoding === "utf16le" || profile.encoding === "utf16be";
+      const content = utf16 ? profile.content : profile.buffer.toString("latin1");
+      const pattern = sources
+        .map((line) => escapeRegExp(utf16 ? line : Buffer.from(line).toString("latin1")))
+        .join("|");
+      const start = utf16 ? "^" : "(?:^|(?<=^\\xEF\\xBB\\xBF))";
+      const registration = new RegExp(
+        `${start}(?:[\\t ]*# OpenClaw Completion[\\t ]*\\r?\\n)?[\\t ]*(?:${pattern})[\\t ]*(?:\\r?\\n|$)`,
+        "gm",
+      );
+      const next = content.replace(registration, "");
+      if (next === content) {
+        continue;
+      }
+      if (utf16 && !encodeCompletionProfile(content, profile.encoding).equals(profile.buffer)) {
+        throw new Error(
+          terminalText`Cannot safely update malformed PowerShell profile ${profilePath}. Repair its encoding and retry uninstall.`,
+        );
+      }
+      visited.add(profile.filePath);
+      if (!opts.dryRun) {
+        const directory = await fs.stat(path.dirname(profile.filePath));
+        await replaceFileAtomic({
+          filePath: profile.filePath,
+          content: utf16
+            ? encodeCompletionProfile(next, profile.encoding)
+            : Buffer.from(next, "latin1"),
+          mode: profile.mode,
+          dirMode: directory.mode & 0o7777,
+          tempPrefix: ".openclaw-completion-profile",
+          syncTempFile: true,
+          syncParentDir: true,
+          assertBeforeMutation: () => {
+            // Editors do not share state ownership; retain their exact profile snapshot too.
+            const filePath = realpathSync(profilePath);
+            const current = readRegularFileSync({ filePath });
+            if (
+              filePath !== profile.filePath ||
+              !sameFileIdentity(current.exactIdentity, profile.exactIdentity) ||
+              !current.buffer.equals(profile.buffer) ||
+              (current.stat.mode & 0o7777) !== profile.mode ||
+              (statSync(path.dirname(filePath)).mode & 0o7777) !== (directory.mode & 0o7777)
+            ) {
+              throw new Error("Completion profile changed during cleanup; retry uninstall.");
+            }
+            opts.assertCurrent();
+          },
+        });
+      }
+      affected.push(profilePath);
+    }
+  }
+  return affected;
 }
 
 /** Formats the resolved startup profile relative to HOME when that preserves its actual location. */

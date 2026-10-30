@@ -209,17 +209,24 @@ it.each([
   async (_command, nixMode, serviceChecks, uninstall) => {
     const state = await makeState();
     configState.isNixMode = nixMode;
-    const workspacePath = path.join(state.workspaceDir, "project.bin");
-    await state.writeConfig({ agents: { entries: { main: { workspace: state.workspaceDir } } } });
+    const workspaceDir = uninstall ? state.root : state.workspaceDir;
+    const workspacePath = path.join(workspaceDir, "project.bin");
+    await state.writeConfig({ agents: { entries: { main: { workspace: workspaceDir } } } });
     const markerPath = await state.writeText("keep.txt", "preserved");
     await fs.mkdir(path.dirname(workspacePath), { recursive: true });
     await fs.writeFile(workspacePath, Buffer.from([0, 1, 2, 3, 255]));
+    const cachePath = await state.writeText("completions/openclaw.bash", "# cached completion\n");
+    const profilePath = path.join(state.home, ".bashrc");
+    const retainedProfile = '# User settings\r\nexport PATH="$HOME/.local/bin:$PATH"\n';
+    const completionHook = `# OpenClaw Completion\nsource "${cachePath}"\n`;
+    await fs.mkdir(state.home, { recursive: true });
+    await fs.writeFile(profilePath, completionHook + retainedProfile);
 
     const databasePath = state.statePath("state", "openclaw.sqlite");
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
     const owner = await startLiveStateOwner(state);
     const livePaths = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
-    const preservedPaths = [...livePaths, state.configPath, markerPath];
+    const preservedPaths = [...livePaths, state.configPath, markerPath, profilePath];
     const liveBytes = await readFiles(preservedPaths);
 
     const blockedRuntime = quietRuntime();
@@ -242,6 +249,9 @@ it.each([
 
     await stopLiveStateOwner(owner);
     await expect(runCleanup(uninstall, quietRuntime())).resolves.toBeUndefined();
+    await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(
+      uninstall ? retainedProfile : completionHook + retainedProfile,
+    );
 
     if (uninstall) {
       await expect(fs.readFile(workspacePath)).resolves.toEqual(Buffer.from([0, 1, 2, 3, 255]));

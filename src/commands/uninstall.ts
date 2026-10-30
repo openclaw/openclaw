@@ -167,6 +167,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
       removeStateAndLinkedPaths(cleanupPlan, runtime, {
         dryRun,
         preservePaths: scopes.has("workspace") ? [] : workspaceDirs,
+        removeCompletionHooks: true,
       }),
     );
     stateRemoved = state ?? false;
