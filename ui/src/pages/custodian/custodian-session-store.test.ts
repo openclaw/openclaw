@@ -4,12 +4,13 @@ import type {
   SystemAgentChatResult as ChatResult,
   SystemAgentChatHistoryResult as History,
 } from "@openclaw/gateway-protocol";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSystemAgentSessionInvalidatedErrorDetails } from "../../../../packages/gateway-protocol/src/system-agent-error-details.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasSensitiveConfigData } from "../../components/config-form.shared.ts";
+import { createAgentCapability } from "../../lib/agents/index.ts";
 import { QUICK_ACTIONS_QUESTION } from "../../test-helpers/custodian-quick-actions.ts";
 import { installSafeLocalStorageForTesting } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -79,6 +80,92 @@ function healthFixture(healthRequest: Parameters<typeof createContext>[0], onboa
   const request = vi.fn().mockResolvedValue({ sessionId: "health-session", action: "none" });
   const variant = onboarding ? "onboarding" : "caretaker";
   return setupStore(request, variant, undefined, { healthRequest });
+}
+
+/**
+ * Drops sockets the way the real stack does: the client rejects pending requests,
+ * then publishes the phase change. A socket close keeps the client instance; a
+ * Safari wake replaces it, which makes the real agent capability reload its list.
+ */
+async function flakyGateway() {
+  const stored: History["turns"] = [];
+  const inFlight = new Set<(error: Error) => void>();
+  const heldRejoins: Array<ReturnType<typeof deferred<void>>> = [];
+  let historyFailure: Error | null = null;
+  let rejoinFailure: Error | null = null;
+  const request = vi.fn((method: string, params: ChatParams) => {
+    if (method === "agents.list") {
+      return Promise.resolve({
+        defaultId: "main",
+        mainKey: "main",
+        scope: "global",
+        agents: [{ id: "main", model: { primary: "openai/gpt-5.5" } }],
+      });
+    }
+    if (method === historyMethod || method === "health") {
+      const failure = method === historyMethod ? historyFailure : null;
+      historyFailure = method === historyMethod ? null : historyFailure;
+      return failure
+        ? Promise.reject(failure)
+        : Promise.resolve(method === "health" ? { channels: {} } : { turns: [...stored] });
+    }
+    if (rejoinFailure && params.message === undefined) {
+      const failure = rejoinFailure;
+      rejoinFailure = null;
+      return Promise.reject(failure);
+    }
+    const held = params.message === undefined ? heldRejoins.shift() : deferred<void>();
+    if (!held) {
+      return Promise.resolve(chatReply(params.sessionId, "Welcome."));
+    }
+    return new Promise((resolve, reject) => {
+      inFlight.add(reject);
+      void held.promise.then(() => {
+        inFlight.delete(reject);
+        resolve(chatReply(params.sessionId, "Welcome."));
+      });
+    });
+  });
+  const harness = createContext(request, historyMethods);
+  const agents = createAgentCapability(harness.context.gateway);
+  Object.assign(harness.context, { agents });
+  await agents.ensureList();
+  const store = new CustodianSessionStore();
+  store.connect(harness.context, "caretaker");
+  await waitForFast(() => expect(store.canSend).toBe(true));
+  return {
+    store,
+    finishTurn: () =>
+      stored.push(...history(["user", "Install it", 30], ["assistant", "Done.", 31]).turns),
+    failNextHistoryRead: () => {
+      historyFailure = new Error("history request timed out");
+    },
+    failNextRejoin: (error: Error) => {
+      rejoinFailure = error;
+    },
+    holdNextRejoin: () => {
+      const rejoin = deferred<void>();
+      heldRejoins.push(rejoin);
+      return rejoin;
+    },
+    drop: (wake = false) => {
+      for (const reject of inFlight) {
+        reject(new Error("gateway closed (1006): "));
+      }
+      inFlight.clear();
+      harness.setGatewaySnapshot({
+        phase: "reconnecting",
+        ...(wake ? { client: { request } as unknown as GatewayBrowserClient } : {}),
+      });
+    },
+    reconnect: () => {
+      harness.setGatewaySnapshot({ phase: "connected" });
+      // The app shell reloads a list the capability cleared for a replaced client.
+      void agents.ensureList();
+    },
+    chatCalls: () => request.mock.calls.filter(([method]) => method === "openclaw.chat"),
+    historyReads: () => request.mock.calls.filter(([method]) => method === historyMethod).length,
+  };
 }
 
 beforeEach(() => installSafeLocalStorageForTesting(window).clear());
@@ -379,6 +466,118 @@ it("rejoins abandoned turns with authoritative history and controls", async () =
   expect(store).toMatchObject({ abandonedTurnOutcomeUnknown: false, wizardInputPending: true });
   expect(text(store)).toContain("Repair complete");
   expect(reconnectRequest.mock.calls.some(([method]) => method === "openclaw.chat")).toBe(true);
+});
+
+describe.each([
+  ["socket close", false],
+  ["Safari wake", true],
+])("reconnect catch-up after a %s", (_name, wake) => {
+  it("shows a reply that finished while disconnected without resubmitting it", async () => {
+    const gateway = await flakyGateway();
+    const { store } = gateway;
+    const chatsBefore = gateway.chatCalls().length;
+    void store.send("Install it");
+    await waitForFast(() => expect(store.sending).toBe(true));
+    gateway.drop(wake);
+    gateway.finishTurn();
+    gateway.reconnect();
+
+    await waitForFast(() => expect(store.canSend).toBe(true));
+    expect(text(store)).toContain("Done.");
+    expect(store).toMatchObject({ error: null, abandonedTurnOutcomeUnknown: false });
+    const recovery = gateway.chatCalls().slice(chatsBefore + 1);
+    expect(recovery).toHaveLength(1);
+    expect(recovery[0]?.[1]).not.toHaveProperty("message");
+  });
+
+  it("shows a reply that finishes while the rejoin waits behind the running turn", async () => {
+    const gateway = await flakyGateway();
+    const { store } = gateway;
+    const rejoin = gateway.holdNextRejoin();
+    void store.send("Install it");
+    await waitForFast(() => expect(store.sending).toBe(true));
+    gateway.drop(wake);
+    gateway.reconnect();
+    await waitForFast(() => expect(gateway.chatCalls().length).toBeGreaterThan(2));
+    // Turns persist only when they finish, so the running turn has no stored rows yet.
+    expect(text(store)).toContain("Install it");
+
+    gateway.finishTurn();
+    rejoin.resolve();
+    await waitForFast(() => expect(store.canSend).toBe(true));
+    expect(text(store)).toContain("Done.");
+    expect(store.error).toBeNull();
+  });
+
+  it("restarts catch-up when a second drop interrupts the rejoin", async () => {
+    const gateway = await flakyGateway();
+    const { store } = gateway;
+    gateway.holdNextRejoin();
+    void store.send("Install it");
+    await waitForFast(() => expect(store.sending).toBe(true));
+    gateway.drop(wake);
+    gateway.reconnect();
+    await waitForFast(() => expect(gateway.chatCalls().length).toBeGreaterThan(2));
+
+    gateway.drop(wake);
+    expect(store).toMatchObject({ error: null, abandonedTurnOutcomeUnknown: true });
+    gateway.finishTurn();
+    gateway.reconnect();
+
+    await waitForFast(() => expect(store.canSend).toBe(true));
+    expect(text(store)).toContain("Done.");
+    expect(store).toMatchObject({ error: null, abandonedTurnOutcomeUnknown: false });
+  });
+
+  it("retries a failed transcript read after the rejoin", async () => {
+    const gateway = await flakyGateway();
+    const { store } = gateway;
+    void store.send("Install it");
+    await waitForFast(() => expect(store.sending).toBe(true));
+    gateway.drop(wake);
+    gateway.finishTurn();
+    gateway.failNextHistoryRead();
+    gateway.reconnect();
+
+    await waitForFast(() => expect(text(store)).toContain("Done."));
+    expect(store).toMatchObject({ abandonedTurnOutcomeUnknown: false, canSend: true });
+  });
+
+  it("still reads the transcript when the rejoin finds its session invalidated", async () => {
+    const gateway = await flakyGateway();
+    const { store } = gateway;
+    void store.send("Install it");
+    await waitForFast(() => expect(store.sending).toBe(true));
+    gateway.drop(wake);
+    gateway.finishTurn();
+    gateway.failNextRejoin(
+      new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "OpenClaw session belongs to another caller.",
+        details: buildSystemAgentSessionInvalidatedErrorDetails(),
+      }),
+    );
+    gateway.reconnect();
+    await waitForFast(() => expect(store.canRetry()).toBe(true));
+
+    await store.retry();
+    await waitForFast(() => expect(store.canSend).toBe(true));
+    expect(text(store)).toContain("Done.");
+    expect(store).toMatchObject({ error: null, abandonedTurnOutcomeUnknown: false });
+  });
+
+  it("reads the transcript on an idle reconnect without a rejoin", async () => {
+    const gateway = await flakyGateway();
+    const { store } = gateway;
+    const chatsBefore = gateway.chatCalls().length;
+    gateway.drop(wake);
+    gateway.finishTurn();
+    gateway.reconnect();
+
+    await waitForFast(() => expect(text(store)).toContain("Done."));
+    expect(gateway.chatCalls()).toHaveLength(chatsBefore);
+    expect(store.canSend).toBe(true);
+  });
 });
 
 it.each([

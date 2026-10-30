@@ -456,6 +456,10 @@ openclaw-custodian-page {
   animation-delay: 300ms;
 }
 
+.custodian__catch-up {
+  color: var(--muted);
+}
+
 .custodian__error {
   display: flex;
   align-items: center;
