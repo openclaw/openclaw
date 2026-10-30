@@ -16,7 +16,6 @@ import { Icon, sessionIcon } from "./solid/icon.tsx";
 import {
   renderSessionLeadingState,
   sessionRunVisibility,
-  TeamSessionSlots,
   SessionRowBadges,
 } from "./solid/session-presentation.tsx";
 import { EMPTY_VIEWER_IDENTITIES } from "./solid/viewer-facepile.tsx";
@@ -116,9 +115,6 @@ export function renderSidebarSessionIndicators(
     get avatarAuth() {
       return channelAvatarAuth();
     },
-    get trailingState() {
-      return team();
-    },
     get icon() {
       return readIcon?.();
     },
@@ -143,7 +139,7 @@ export function renderSidebarSessionIndicators(
     hasTrail() ? sidebarSessionMetaId(readSession().key) : undefined,
   );
   const stateId = createMemo(() =>
-    !team() && stateDescription() ? sidebarSessionStateId(readSession().key) : undefined,
+    stateDescription() ? sidebarSessionStateId(readSession().key) : undefined,
   );
   const persistentIndicator = (
     <span class="sidebar-session-indicator">
@@ -237,30 +233,6 @@ export function renderSidebarSessionIndicators(
             prop:overflowInSlots={true}
             variant="session"
           />
-          {team() ? originIndicators : undefined}
-          {team() &&
-          (readSession().workSession || readSession().acpSession) &&
-          !readSession().workspaceKind &&
-          !pullRequest() ? (
-            <span
-              class="session-row-badge"
-              role="img"
-              aria-label={t("chat.sidebar.coding")}
-              title={readSession().subtitle ?? t("chat.sidebar.coding")}
-            >
-              {sessionIcon("terminal", 12, 1.6)}
-            </span>
-          ) : undefined}
-          {team() && readSession().hasAutomation ? (
-            <span
-              class="session-row-badge"
-              role="img"
-              aria-label={t("tabs.cron")}
-              title={t("tabs.cron")}
-            >
-              {sessionIcon("clock", 12, 1.6)}
-            </span>
-          ) : undefined}
           <SessionRowBadges
             {...readSession()}
             hasComposerDraft={readSession().hasComposerDraft === true}
@@ -268,21 +240,12 @@ export function renderSidebarSessionIndicators(
             pullRequestCount={badges().pullRequestCount}
             hasApproval={badges().hasApproval}
           />
-          {team() ? trail() : undefined}{" "}
-          <Show when={team()}>
-            <TeamSessionSlots
-              rows={[readSession()]}
-              includeChildren={!childrenExpanded()}
-              childCount={readSession().childSessionKeys.length}
-              runVisibility={sessionRunVisibility}
-            />
-          </Show>
-          {!team() && stateDescription() ? (
+          {stateDescription() ? (
             <span class="sr-only" id={stateId()} aria-hidden="true">
               {stateDescription()}
             </span>
           ) : undefined}
-          {team() ? undefined : trail()}
+          {trail()}
         </span>
       </>
     ),
