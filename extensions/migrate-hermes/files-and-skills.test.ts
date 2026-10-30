@@ -312,6 +312,40 @@ describe("Hermes files and skills", () => {
     });
   });
 
+  it.each(["hermes", "opencode"])(
+    "rejects malformed %s credential JSON without exposing it",
+    async (source) => {
+      await h.write("config.yaml", {});
+      const file =
+        source === "hermes"
+          ? path.join(h.source, "auth.json")
+          : path.join(h.root, ".local", "share", "opencode", "auth.json");
+      const marker = "synthetic-private-marker-do-not-echo";
+      const broken = `{"providers":{"anthropic":{}},"secret":"${marker}",`;
+      await writeFile(file, broken);
+      const failure: unknown = await Promise.resolve(h.plan()).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      if (!(failure instanceof Error)) {
+        throw new Error("Expected invalid JSON to stop migration planning");
+      }
+      expect(failure.message).toContain(file);
+      expect(failure.message).toMatch(/JSON.*retry migration/);
+      expect(failure.stack).not.toContain(marker);
+      expect(failure.cause).toBeUndefined();
+      expect(await read(file)).toBe(broken);
+      await h.write("memories/MEMORY.md", "Imported memory\n");
+      expect((await h.plan({ itemKinds: ["memory"] })).items).toHaveLength(1);
+      await writeFile(file, "{}");
+      expect((await h.plan()).summary.errors).toBe(0);
+    },
+  );
+
+  it.each(["", " \n"])("keeps empty credential files optional (%j)", async (content) => {
+    await h.write("config.yaml", {});
+    await h.write("auth.json", content);
+    expect((await h.plan()).summary.errors).toBe(0);
+  });
+
   it("archives unsupported state, never raw auth", async () => {
     const files = {
       "logs/session.log": "log line\n",
