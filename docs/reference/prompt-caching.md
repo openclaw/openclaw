@@ -67,6 +67,17 @@ including Control UI formatting, without borrowing its delivery route or authori
 Scheduled turns inside an existing conversation retain its full automations
 definition; job-scoped execution still rejects actions outside the current job.
 
+For authenticated, profile-bound Gateway conversations, the session also records
+the Workshop declaration's default target and profile-selection shape, alongside
+the independent ordinary or management Automations declaration. Internal and
+recovery turns can reuse these declarations after storage reopens. A new human
+request replaces or clears the saved presentation; changes to the profile,
+role configuration, session audience, or session incarnation invalidate it.
+Sessions without a valid saved presentation use their existing tool-discovery
+behavior. The saved facts carry no execution authority: personal Workshop calls
+still require current authoring authority, and Automations calls retain their
+current execution checks.
+
 Restart and scheduled-turn orphan recovery use the same bounded model-history
 selection as session startup. Transcript-only metadata does not replace that
 history with a shorter navigation window or remove its earlier provider inputs.

@@ -63,6 +63,8 @@ export type RunEmbeddedAgentParams = Pick<
   | "terminalReplyExpectation"
   | "suppressTranscriptOnlyAssistantPersistence"
   | "skillLibraryAuthoring"
+  | "toolDiscoveryCapture"
+  | "toolDiscovery"
 > & {
   /** Settles the session's initial workspace attribution before tools can act. */
   awaitSessionDiffBaseline?: () => Promise<void>;

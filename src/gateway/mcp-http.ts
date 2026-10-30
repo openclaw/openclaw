@@ -346,6 +346,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                   ...(boundClientGrant?.skillLibraryAuthoring
                     ? { skillLibraryAuthoring: boundClientGrant.skillLibraryAuthoring }
                     : {}),
+                  toolDiscovery: boundClientGrant?.toolDiscovery,
                   ...(boundClientGrant?.bundledTools
                     ? { bundledTools: boundClientGrant.bundledTools }
                     : {}),

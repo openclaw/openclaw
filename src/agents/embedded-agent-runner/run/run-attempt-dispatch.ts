@@ -37,7 +37,7 @@ import { resolveAttemptDispatchApiKey } from "./auth-store.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import type { PreparedEmbeddedAttemptDispatchInput } from "./execution-context.js";
 import { resolveEmbeddedAttemptBasePrompt } from "./helpers.js";
-import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
+import type { DispatchedEmbeddedRunAttemptParams } from "./internal-params.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 import { projectEmbeddedMessageContext } from "./shared-run-context.js";
 import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
@@ -376,11 +376,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
           }),
         }
       : undefined;
-  const attemptParams: EmbeddedRunAttemptInternalParams & {
-    agentId: string;
-    sessionKey: string;
-    agentHarnessId: string;
-  } = {
+  const attemptParams: DispatchedEmbeddedRunAttemptParams = {
     modelCallSequence: (runInput.modelCallSequence ??= { value: 0 }),
     bindWatchdogAttempt: attemptControls.bindWatchdogAttempt,
     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
@@ -623,6 +619,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     disableTrajectory: params.disableTrajectory,
     skillWorkshopReviewOf: params.skillWorkshopReviewOf,
     skillLibraryAuthoring: params.skillLibraryAuthoring,
+    toolDiscoveryCapture: params.toolDiscoveryCapture,
     promptMode: params.promptMode,
     ownerNumbers: params.ownerNumbers,
     enforceFinalTag: params.enforceFinalTag,

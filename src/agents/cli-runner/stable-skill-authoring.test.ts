@@ -1,39 +1,63 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expireSkillLibraryAuthoring } from "../../auto-reply/reply/transcript-followup-run.js";
+import type { SessionToolDiscoveryPresentation } from "../../config/sessions/tool-discovery.types.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
+import { createConfiguredSkillWorkshopTool } from "../tools/skill-workshop-tool-factory.js";
+import { resolveCliToolDiscovery } from "./stable-skill-authoring.js";
 
-let resolveStableCliSkillAuthoring: typeof import("./stable-skill-authoring.js").resolveStableCliSkillAuthoring;
+const presentation: SessionToolDiscoveryPresentation = {
+  workshop: { defaultTarget: "workspace", multipleProfiles: true },
+  automations: "management",
+};
 
-const human = (
-  defaultTarget: "workspace" | "personal",
-  multipleProfiles = true,
-): SkillLibraryAuthoringCapability => ({
+// The executor fixture fails if passive presentation ever becomes a live grant.
+const authoring: SkillLibraryAuthoringCapability = {
   target: "personal",
-  defaultTarget,
-  multipleProfiles,
-  bind: () => {},
+  defaultTarget: "workspace",
+  multipleProfiles: true,
+  bind() {},
   invoke: async () => {
-    throw new Error("live grant must not be reached from an internal turn");
+    throw new Error("unexpected live invocation");
   },
-});
+};
 
-beforeEach(async () => {
-  vi.resetModules();
-  ({ resolveStableCliSkillAuthoring } = await import("./stable-skill-authoring.js"));
-});
-
-describe("resolveStableCliSkillAuthoring", () => {
-  it("passes through sessions that never had a human authoring grant", () => {
-    expect(resolveStableCliSkillAuthoring("agent:main:main", undefined)).toBeUndefined();
-    expect(resolveStableCliSkillAuthoring(undefined, undefined)).toBeUndefined();
+const tool = (libraryAuthoring?: SkillLibraryAuthoringCapability, saved = presentation.workshop) =>
+  createConfiguredSkillWorkshopTool({
+    config: {},
+    agentId: "main",
+    sessionKey: "agent:main:continuity",
+    run: { libraryAuthoring, presentation: saved },
   });
 
-  it("follows the latest human shape and keeps sessions separate", () => {
-    resolveStableCliSkillAuthoring("agent:main:a", human("workspace", false));
-    resolveStableCliSkillAuthoring("agent:main:a", human("personal", true));
-    expect(resolveStableCliSkillAuthoring("agent:main:a", undefined)).toMatchObject({
-      defaultTarget: "personal",
-      multipleProfiles: true,
+describe("Workshop presentation without retained authority", () => {
+  it("keeps schema and description after authority expires, and refuses personal and recovery workspace writes", async () => {
+    const human = tool(authoring);
+    const recovered = tool(
+      expireSkillLibraryAuthoring(authoring, "Recovery requires a fresh request."),
+    );
+    const cold = tool();
+    for (const resumed of [recovered, cold]) {
+      expect(resumed.parameters).toEqual(human.parameters);
+      expect(resumed.description).toBe(human.description);
+      await expect(
+        resumed.execute("personal", { action: "list", target: "personal" }),
+      ).rejects.toMatchObject({ code: "AUTHORITY_EXPIRED" });
+    }
+    await expect(recovered.execute("workspace", { action: "list" })).rejects.toMatchObject({
+      code: "AUTHORITY_EXPIRED",
     });
-    expect(resolveStableCliSkillAuthoring("agent:main:b", undefined)).toBeUndefined();
+  });
+
+  it("projects node Workshop to personal while retaining the independent Automations variant", async () => {
+    expect(resolveCliToolDiscovery(undefined, true)).toBeUndefined();
+    const node = resolveCliToolDiscovery(presentation, true);
+    expect(node).toEqual({
+      workshop: { defaultTarget: "personal", multipleProfiles: true },
+      automations: "management",
+    });
+    await expect(
+      tool(undefined, node!.workshop).execute("workspace", { action: "list" }),
+    ).rejects.toMatchObject({ code: "AUTHORITY_EXPIRED" });
+    expect(presentation.workshop?.defaultTarget).toBe("workspace");
   });
 });

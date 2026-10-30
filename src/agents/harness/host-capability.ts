@@ -32,7 +32,6 @@ import {
   createOpenClawCodingToolsInternalAsync,
 } from "../agent-tools.js";
 import { log } from "../embedded-agent-runner/logger.js";
-import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
@@ -65,6 +64,7 @@ import {
   registerAgentHarnessTtsProvenanceTransferCapability,
   resolveAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
+  type AgentHarnessHostCreationOptions,
 } from "./host-private-capabilities.js";
 import { buildHarnessHostRequester } from "./host-requester.js";
 import { bindBoundedSeed } from "./host-seed.js";
@@ -80,8 +80,6 @@ import { bindHarnessTrajectory } from "./host-trajectory.js";
 import { formatHarnessApprovalPresentation } from "./native-hook-relay-approval-presentation.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
 
-type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptInternalParams> &
-  Pick<EmbeddedRunAttemptInternalParams, "admittedRunContext" | "runId">;
 type AgentHarnessHostApprovalResult = NonNullable<
   Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>
 >;
@@ -90,13 +88,7 @@ type HostToolSurfaceOptions = Parameters<
 >[0];
 
 /** Creates a closure-bound capability before plugin invocation. */
-export function createAgentHarnessHostCapabilities(params: {
-  attempt: AgentHarnessHostAttempt;
-  pluginId: string;
-  requiredNodeCommands?: readonly string[];
-  nativeModelPolicySupport?: "exact";
-  toolCalls?: "deny";
-}): {
+export function createAgentHarnessHostCapabilities(params: AgentHarnessHostCreationOptions): {
   capabilities: AgentHarnessHostCapabilities;
   close: () => void;
   setInputAttachmentReadAllowed: (allowed: boolean) => void;
@@ -411,6 +403,7 @@ export function createAgentHarnessHostCapabilities(params: {
     assertCurrent: () => void = assertActive,
   ) => {
     assertCurrent();
+    attempt.assertToolDiscoveryCurrent?.();
     const effectiveOptions = { ...options, ...requiredWorkspace?.apply(options) };
     return {
       options: {
@@ -421,6 +414,9 @@ export function createAgentHarnessHostCapabilities(params: {
         // overrides cannot replace the identity captured before its handoff.
         exec: { ...effectiveOptions.exec, preparedRunEnvironment },
         runtimePluginToolGrant,
+        toolPolicyScope: params.readToolPolicyScope?.(),
+        sessionEventSourcePolicy: undefined,
+        toolDiscovery: attempt.toolDiscovery,
         skillsSnapshot: options?.skillsSnapshot ?? skillsSnapshot,
         installedSkills: getInstalledSkills(
           effectiveOptions.sandbox,

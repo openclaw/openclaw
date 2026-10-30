@@ -67,6 +67,18 @@ function isDirectGatewayUserTurn(params: DirectOperatorAuthorityParams): boolean
   );
 }
 
+/** Passive discovery variant; this does not issue or retain a management grant. */
+export function resolveGatewayAutomationDiscovery(
+  client: GatewayClient | null | undefined,
+): "ordinary" | "management" | undefined {
+  if (!isDirectGatewayUserClient(client)) {
+    return undefined;
+  }
+  return hasGatewayAdminScope(client) && client?.internal?.controlUiAdmin === true
+    ? "management"
+    : "ordinary";
+}
+
 function resolveDirectOperatorAuthority(
   params: DirectOperatorAuthorityParams,
 ): GatewayCronCreatorAuthorityAdmission | undefined {
@@ -91,7 +103,7 @@ function resolveDirectOperatorAuthority(
           isDirectOperator && internal?.isLocalClient === true
             ? { kind: "local" as const }
             : { kind: "unknown" as const },
-        ...(isDirectOperator && internal?.controlUiAdmin === true
+        ...(isDirectOperator && resolveGatewayAutomationDiscovery(params.client) === "management"
           ? { managementEntitlement: { source: "control-ui-admin" as const } }
           : {}),
         ...(!isDirectOperator || internal?.isLocalClient !== true

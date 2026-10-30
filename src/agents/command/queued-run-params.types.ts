@@ -104,4 +104,6 @@ export type QueuedAgentRunParams = {
   terminalReplyExpectation?: ReplyExpectation;
   suppressTranscriptOnlyAssistantPersistence?: boolean;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+  toolDiscoveryCapture?: import("../../config/sessions/tool-discovery.types.js").SessionToolDiscoveryCapture;
+  toolDiscovery?: import("../../config/sessions/tool-discovery.types.js").SessionToolDiscoveryPresentation;
 };

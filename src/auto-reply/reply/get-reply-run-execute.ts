@@ -645,6 +645,7 @@ export async function executePreparedReplyRun(
       terminalReplyExpectation,
       suppressTranscriptOnlyAssistantPersistence: isRoomEvent,
       ...(opts?.skillLibraryAuthoring ? { skillLibraryAuthoring: opts.skillLibraryAuthoring } : {}),
+      ...(opts?.toolDiscoveryCapture ? { toolDiscoveryCapture: opts.toolDiscoveryCapture } : {}),
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, { config: cfg, workspaceDir, modelId: model })
         ? { enforceFinalTag: true }

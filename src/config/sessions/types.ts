@@ -642,6 +642,8 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Incarnation- and audience-bound presentation, never a retained tool grant. */
+  toolDiscovery?: import("./tool-discovery.types.js").SessionToolDiscovery;
   /** Original unbound files, private to this conversation's adopted workspace. */
   priorWorkspace?: {
     worktreeId: string;

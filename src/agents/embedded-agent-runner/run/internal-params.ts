@@ -123,6 +123,7 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
     | "joinObservation"
   > & {
     bindWatchdogAttempt?: (attempt: SessionControllerWatchdogAttempt) => void;
+    assertToolDiscoveryCurrent?: () => void;
     /** The dispatch owner already selected this target, including any compaction successor. */
     preparedSessionTarget?: {
       readonly target: Readonly<BoundAgentRunSessionTarget & SessionTranscriptTargetBinding>;
@@ -139,4 +140,10 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
 
 export type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {
   sessionFile: string;
+};
+
+export type DispatchedEmbeddedRunAttemptParams = EmbeddedRunAttemptInternalParams & {
+  agentId: string;
+  sessionKey: string;
+  agentHarnessId: string;
 };

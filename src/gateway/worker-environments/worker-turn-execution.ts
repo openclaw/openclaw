@@ -13,7 +13,6 @@ import { admitEmbeddedContextEngine } from "../../agents/embedded-agent-runner/r
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
-import { createLibrarySkillWorkshopTool } from "../../agents/tools/skill-workshop-tool-library.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
 import { logInfo } from "../../logger.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
@@ -55,6 +54,7 @@ import {
   windowInitialMessages,
 } from "./worker-turn-payload.js";
 import { prepareWorkerTurnPrompt, WORKER_CONTEXT_ENGINE_HOST } from "./worker-turn-prompt.js";
+import { prepareWorkerTurnToolDiscovery } from "./worker-turn-tool-discovery.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 import {
   createWorkerTurnInputAdmission,
@@ -277,6 +277,7 @@ export async function executeWorkerTurn(
       assertSourceCurrent,
     });
     assertActive();
+    using discovery = await prepareWorkerTurnToolDiscovery(turn, transcriptTarget, assertActive);
     const authority = runtimeIdentity.approvalAuthority;
     const authorityAbort = new AbortController();
     const signal = turn.abortSignal
@@ -304,6 +305,7 @@ export async function executeWorkerTurn(
       turnClaim: params.turnClaim,
     };
     const assertToolSurfaceCurrent = () => {
+      discovery.assertCurrent();
       if (!toolRuntime || getWorkerTurnToolSurface(toolIdentity) !== toolRuntime) {
         throw new Error("Worker tool surface owner changed");
       }
@@ -320,12 +322,7 @@ export async function executeWorkerTurn(
           return false;
         }
       };
-      const skillWorkshop = turn.skillLibraryAuthoring
-        ? createLibrarySkillWorkshopTool({
-            ...turn.skillLibraryAuthoring,
-            defaultTarget: "personal",
-          })
-        : undefined;
+      const skillWorkshop = discovery.createSkillWorkshop();
       toolRuntime = createWorkerGatewayToolRuntime({
         assertCurrent: assertToolSurfaceCurrent,
         signal,
@@ -354,6 +351,7 @@ export async function executeWorkerTurn(
                 const prepared = await createOpenClawCodingToolsInternalAsync(
                   {
                     ...turn,
+                    toolDiscovery: discovery.codingToolDiscovery,
                     authProfileStoreSource,
                     agentId: placement.agentId,
                     conversationCapabilityProfile: capabilityProfile,

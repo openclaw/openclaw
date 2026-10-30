@@ -47,6 +47,7 @@ export function buildCommonCommandRunParams(
     inputProvenance: params.opts.inputProvenance,
     privateCompletion: params.opts.privateCompletion,
     skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
+    toolDiscoveryCapture: params.opts.toolDiscoveryCapture,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.opts.taskSuggestionDeliveryMode,
     clientCaps: params.opts.clientCaps,

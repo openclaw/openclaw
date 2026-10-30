@@ -152,6 +152,15 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   const selfRemoveOnly =
     Boolean(readCronSelfRemoveOnlyJobId(opts)) &&
     (!opts?.agentSessionKey?.trim() || isCronSessionKey(opts.agentSessionKey));
+  // A recorded conversation audience selects declarations, never the executing grant.
+  // Standalone scheduled sessions retain their existing self-scoped surface.
+  const discovery = selfRemoveOnly ? undefined : opts?.discovery;
+  const management =
+    discovery !== undefined
+      ? discovery === "management"
+        ? "also"
+        : undefined
+      : managementAuthority && (managementAuthority.managementOnly ? "only" : "also");
   const tool: AnyAgentTool = {
     label: "Automations",
     name: AUTOMATIONS_TOOL_NAME,
@@ -162,7 +171,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       selfRemoveOnly,
       activeRun,
       nextCheckEnabled,
-      managementOnly: managementAuthority?.managementOnly,
+      managementOnly: management === "only",
       allowCommandJobs,
     }),
     outputSchema: CronToolOutputSchema,
@@ -173,7 +182,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       selfRemoveOnly,
       activeRun,
       nextCheckEnabled,
-      management: managementAuthority && (managementAuthority.managementOnly ? "only" : "also"),
+      management,
     }),
     prepareArguments: prepareCronToolArguments,
     execute: async (_toolCallId, args, operationSignal) => {

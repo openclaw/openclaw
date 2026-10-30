@@ -62,9 +62,11 @@ export async function createAdmittedHostCapabilityTestFixture(
   const admittedRunContext = await admission.admit("plugin-harness", `harness-${attempt.runId}`);
   bindGateway?.(admittedRunContext);
   const hostAttempt = { ...attempt, admittedRunContext };
+  let toolPolicyScope: "conversation" | "turn" | undefined;
   const host = runWithGatewayScope(() =>
     createAgentHarnessHostCapabilities({
       attempt: hostAttempt,
+      readToolPolicyScope: () => toolPolicyScope,
       pluginId: "codex",
       nativeModelPolicySupport: options.nativeModelPolicySupport,
       toolCalls: options.toolCalls,
@@ -86,6 +88,9 @@ export async function createAdmittedHostCapabilityTestFixture(
       }),
     }),
     closeHost: host.close,
+    setToolPolicyScope: (scope: "conversation" | "turn" | undefined) => {
+      toolPolicyScope = scope;
+    },
     closeAdmission: admission.close,
     runWithGatewayScope,
     closeGateway,

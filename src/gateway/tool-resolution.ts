@@ -126,6 +126,7 @@ export async function resolveGatewayScopedTools(
     nodeExecAvailable?: (node?: string) => boolean;
     pairedNodeComputerUse?: import("../agents/computer-use-node-capabilities.js").PreparedPairedComputerUse;
     skillWorkshop?: SkillWorkshopRunOptions;
+    toolDiscovery?: import("../config/sessions/tool-discovery.types.js").SessionToolDiscoveryPresentation;
     /**
      * Run-owned configured MCP tools for an exclusive CLI grant. They enter the
      * same policy pipeline as Gateway tools; core names always win collisions.
@@ -433,6 +434,7 @@ export async function resolveGatewayScopedTools(
     inputProvenance: params.inputProvenance,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     skillWorkshop: params.skillWorkshop,
+    toolDiscovery: params.toolDiscovery,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
     disablePluginTools: params.disablePluginTools,
     agentDir: params.agentDir,

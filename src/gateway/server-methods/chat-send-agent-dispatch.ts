@@ -34,6 +34,7 @@ import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/age
 import { updateChatRunProvider } from "../chat-abort.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { prepareGatewaySkillLibraryTurn } from "../skill-library-authoring.js";
+import { captureGatewayToolDiscovery } from "../tool-discovery.js";
 import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatDelta } from "./chat-broadcast.js";
@@ -310,6 +311,14 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
             () => phase?.mark("authoring"),
           );
           admission.assertWorkAdmissionCurrent();
+          const toolDiscoveryCapture = captureGatewayToolDiscovery(
+            {
+              ...skillLibrary.owner,
+              sessionMutationCommitGuard: admission.assertWorkAdmissionCurrent,
+            },
+            skillLibrary.isHumanTurn,
+            skillLibraryAuthoring,
+          );
           phase?.mark("preparation");
           const pluginBoundMedia = await pluginBoundMediaPromise;
           assertWorkspaceRunOwnership?.();
@@ -369,6 +378,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   providerReviewAcknowledgment: request.providerReviewAcknowledgment,
                   dashboardReadAdmission,
                   skillLibraryAuthoring,
+                  toolDiscoveryCapture,
                   ...(cronCreatorAuthority
                     ? { cronCreatorAuthorityCapability: cronCreatorAuthority }
                     : {}),

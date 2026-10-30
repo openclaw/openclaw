@@ -105,6 +105,7 @@ type AgentHarnessAttemptParamsBase = Omit<
   InternalEmbeddedRunAttemptParams,
   | "thinkingExplicit"
   | "admittedRunContext"
+  | "toolDiscoveryCapture"
   | "disableToolSearch"
   | "sessionReadScopeKey"
   | "blindPrompt"

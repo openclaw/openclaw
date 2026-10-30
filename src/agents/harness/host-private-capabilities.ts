@@ -18,10 +18,22 @@ import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transc
 import { AsyncContext } from "../../shared/async-context.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
 import type { ModelFallbackAvailability } from "../model-fallback.types.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+
+/** Host construction inputs never become public harness capabilities. */
+export type AgentHarnessHostCreationOptions = {
+  attempt: Partial<EmbeddedRunAttemptInternalParams> &
+    Pick<EmbeddedRunAttemptInternalParams, "admittedRunContext" | "runId">;
+  pluginId: string;
+  requiredNodeCommands?: readonly string[];
+  nativeModelPolicySupport?: "exact";
+  toolCalls?: "deny";
+  readToolPolicyScope?: () => "conversation" | "turn" | undefined;
+};
 
 /** Translation for current bundled sinks; this fact grants no input authority. */
 export type ReplyQueueInputAdapter = "human-and-question-permission" | "legacy-question-category";

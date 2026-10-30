@@ -48,6 +48,8 @@ export type CronCreatorToolAuthoritySnapshot = Omit<
 };
 
 export type CronToolOptions = {
+  /** Validated conversation presentation only; execution still requires current authority. */
+  discovery?: "ordinary" | "management";
   agentSessionKey?: string;
   agentId?: string;
   /** Authenticated source account; authority must not be inferred from delivery. */

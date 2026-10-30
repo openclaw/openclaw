@@ -360,6 +360,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             resolveWebSearchRoute().kind === "managed";
         },
         githubPublicationAvailable: attempt.githubPublicationAvailable,
+        toolDiscovery: attempt.toolDiscovery,
         abortSignal,
         skillWorkshop: {
           ...(attempt.skillWorkshopReviewOf ? { reviewOf: attempt.skillWorkshopReviewOf } : {}),

@@ -166,6 +166,11 @@ export function buildSessionEventContext(params: {
 }): MsgContext {
   const { agentId, sessionKey, text, options, occurrenceId, deliveryContext, target } = params;
   const automation = options.scheduledAutomation;
+  const sessionRoute =
+    channelRouteTargetsMatchExact({ left: deliveryContext, right: target.deliveryContext }) ||
+    (!target.deliveryContext &&
+      deliveryContext?.channel === INTERNAL_MESSAGE_CHANNEL &&
+      deliveryContext.to === sessionKey);
   const ctx: MsgContext = {
     AgentId: agentId,
     SessionKey: sessionKey,
@@ -189,12 +194,7 @@ export function buildSessionEventContext(params: {
           ? { runId: options.sourceRunId }
           : {}),
     },
-    ChatType: channelRouteTargetsMatchExact({
-      left: deliveryContext,
-      right: target.deliveryContext,
-    })
-      ? target.chatType
-      : undefined,
+    ChatType: sessionRoute ? target.chatType : undefined,
     Surface: deliveryContext?.channel ?? INTERNAL_MESSAGE_CHANNEL,
     Provider: deliveryContext?.channel ?? INTERNAL_MESSAGE_CHANNEL,
     OriginatingChannel: deliveryContext?.channel,
