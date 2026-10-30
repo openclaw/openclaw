@@ -244,6 +244,23 @@ Set `cron.skipMissedJobs: true` to skip recurring (`cron` and `every`) slots mis
 
 Disable automatic runs: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`. These settings do not prevent manual runs.
 
+Set `cron.defaultTools: ["read"]` to add common prerequisites when the agent's
+automations tool creates or explicitly revises a nonempty `payload.toolsAllow`
+selection. For example, `["execute_code"]` becomes `["execute_code", "read"]`
+before creator-policy checks and approval. The setting accepts any tool names;
+it does not grant unavailable tools or change filesystem, provider, or recurring
+approval enforcement. Unset or `[]` adds nothing.
+
+Use the request-level `toolsAllowMode: "exact"` beside `action` and `job` to opt
+out when the supplied list is an intentional restriction. An explicit
+`payload.toolsAllow: []` always remains tool-less. Omitted or cleared selections
+keep their existing native semantics. The mode is not stored in the job.
+Saved jobs and edits that leave `toolsAllow` alone are unchanged; intentionally
+revise a job's tool selection to adopt new defaults. CLI and direct Gateway
+writes retain their explicit selections. Hosts that construct approval proposals
+use the [shared SDK helper](/plugins/sdk-subpaths) before binding the proposal;
+already approved shapes must be replayed unchanged.
+
 A caller who can define a host-executed automation can make the Gateway start a process with its host privileges. That process can access credentials readable by the Gateway or alter configuration files writable by it. Direct file writes bypass Gateway API restrictions such as `OPENCLAW_CONFIG_READONLY` even when local terminals are disabled.
 
 To block this execution path, start the Gateway with `OPENCLAW_DISABLE_CRON_HOST_EXECUTION=1` in its launch environment. The Gateway refuses command and script payloads, condition triggers, `on-exit` schedules, and Gateway-hosted `stream` sources, including persisted and manually requested jobs. Scheduled agent turns and authorized sandbox-backed stream sources remain available. Existing blocked jobs can still be disabled or removed. Gateway configuration cannot change this control; change the launch environment and restart the Gateway to change it. The control does not govern tools used by agent turns or provide filesystem isolation.

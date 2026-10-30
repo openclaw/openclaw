@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
+import { mockDocumentVisibility } from "../test-helpers/mock-cleanup.ts";
 import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
 import {
@@ -30,6 +31,7 @@ const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execComma
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   restorePropertyDescriptor(document, "execCommand", originalExecCommand);
   document.body.replaceChildren();
@@ -75,6 +77,93 @@ async function copy(button: HTMLButtonElement, elapsed = 0) {
   button.click();
   await vi.advanceTimersByTimeAsync(elapsed);
 }
+
+it.each(["visible", "hidden"] as const)(
+  "gates direct Markdown owners on tab visibility without losing pane intent (initially %s)",
+  async (initial) => {
+    const show = mockDocumentVisibility(initial);
+    const observations: Set<Element>[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        private readonly targets = new Set<Element>();
+        constructor() {
+          observations.push(this.targets);
+        }
+        observe = (target: Element) => this.targets.add(target);
+        unobserve = (target: Element) => this.targets.delete(target);
+        disconnect = () => this.targets.clear();
+      },
+    );
+    const { section, blocks } = mountBlocks();
+    const code = section.querySelector("code")!;
+    const observed = () => observations.flatMap((targets) => Array.from(targets));
+    blocks.update(true);
+    await Promise.resolve();
+    expect(observed().includes(code)).toBe(initial === "visible");
+
+    show("hidden");
+    expect(observed()).toHaveLength(0);
+    // Custodian republishes active content; it must not restart hidden work.
+    blocks.update(true);
+    blocks.update(true);
+    await Promise.resolve();
+    expect(observed()).toHaveLength(0);
+    show("visible");
+    await Promise.resolve();
+    expect(observed()).toContain(code);
+    expect(section.querySelector("code")).toBe(code);
+
+    show("hidden");
+    blocks.update(false);
+    show("visible");
+    await Promise.resolve();
+    expect(observed()).toHaveLength(0);
+
+    blocks.update(true);
+    blocks.dispose();
+    await Promise.resolve();
+    expect(observed()).toHaveLength(0);
+    show("hidden");
+    show("visible");
+    await Promise.resolve();
+    expect(observed()).toHaveLength(0);
+  },
+);
+
+it("follows the rendering tab when a template reader is adopted after activation", async () => {
+  const show = mockDocumentVisibility("visible");
+  const observed = new Set<Element>();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe = (target: Element) => observed.add(target);
+      unobserve = (target: Element) => observed.delete(target);
+      disconnect = () => observed.clear();
+    },
+  );
+  const template = document.createElement("template");
+  template.innerHTML =
+    '<article><div class="code-block-wrapper"><pre class="code-block-viewport"><code>const answer = 42;</code></pre></div></article>';
+  const root = template.content.firstElementChild as HTMLElement;
+  expect(root.ownerDocument).not.toBe(document);
+  expect(root.ownerDocument.defaultView).toBeNull();
+  const blocks = ownBlocks(root);
+  blocks.update(true);
+  document.body.append(root);
+  await Promise.resolve();
+  const code = root.querySelector("code")!;
+  expect(observed).toContain(code);
+
+  show("hidden");
+  expect(observed.size).toBe(0);
+  show("visible");
+  await Promise.resolve();
+  expect(observed).toContain(code);
+  expect(root.querySelector("code")).toBe(code);
+  blocks.dispose();
+  expect(observed.size).toBe(0);
+});
 
 it("reobserves retained Markdown DOM while fencing scans queued before hide or disposal", async () => {
   const observed = new Set<Element>();

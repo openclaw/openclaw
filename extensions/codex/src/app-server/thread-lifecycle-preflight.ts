@@ -24,6 +24,7 @@ import {
   getCodexInferenceThread,
   prepareCodexInferenceThreadConfig,
 } from "./inference-routing.js";
+import { assertCodexNativeCommandAuthConfig } from "./native-auth-validation.js";
 import {
   assertCodexNativeHookRelayAllowed,
   CodexManagedHooksOnlyError,
@@ -137,6 +138,14 @@ export async function prepareCodexThreadRequestContext(
     config: params.params.config,
   });
   const startModelProvider = startModelSelection.modelProvider;
+  if (params.params.runtimePlan?.auth.selectedAuthMode === "native-command") {
+    assertCodexNativeCommandAuthConfig({
+      provider: params.params.provider,
+      baseUrl: params.params.model?.baseUrl,
+      effectiveConfig: options.preflight.effectiveConfig.config,
+      threadConfig: options.config,
+    });
+  }
   const nativeProvider = options.preflight.effectiveConfig.config.model_provider;
   const fastMode =
     typeof params.params.fastMode === "function"

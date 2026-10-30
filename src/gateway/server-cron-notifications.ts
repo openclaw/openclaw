@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -33,9 +34,9 @@ import {
   runWithGatewayDetachedWorkContinuation,
   runWithGatewayIndependentRootWorkContinuation,
 } from "../process/gateway-work-admission.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
-import { waitForAgentJob } from "./agent-turn/agent-job.js";
-import { dispatchGatewayLifecycleMethod } from "./server-lifecycle-runtime-context.js";
+import { captureCronJobTurnTarget } from "./cron-job-turn-target.js";
 import type { GatewayContextResolver } from "./server-methods/shared-types.js";
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
@@ -76,49 +77,64 @@ export function createGatewayCronFailureRepair(
 }
 
 /**
- * The owner conversation receives the repair request as an ordinary turn: its own session,
- * workspace, and tool policy, with the reply delivered to its last route (thread included).
- * Only its authored reply reaches the chat: runtime failure payloads (timeouts, provider
- * errors) are not posted, and the job's next failure alert owns escalation.
+ * The owner conversation receives the repair request as a host system turn, with the reply
+ * delivered to its last route (thread included). The turn acts for the job's requester, as
+ * the job's own runs do, so an owner requester can inspect and update the job it repairs.
+ * Runtime error payloads (timeouts, provider errors) are not posted; the job's next failure
+ * alert owns escalation.
  */
 async function runGatewayCronFailureRepair(
   request: CronFailureRepairRequest,
   resolveGatewayContext: GatewayContextResolver | undefined,
 ): Promise<void> {
-  const runId = `cron-failure-repair:${request.repairId}`;
   const deadlineAtMs = performance.now() + request.timeoutMs;
   // The cron run may retire its async scope before this independent repair settles.
   await runWithGatewayDetachedWorkContinuation(async () => {
-    await dispatchGatewayLifecycleMethod(
-      {
-        ...(request.agentId ? { agentId: request.agentId } : {}),
-        sessionKey: request.sessionKey,
-        message: request.message,
-        timeout: Math.ceil(request.timeoutMs / 1000),
-        deliver: true,
-        bestEffortDeliver: true,
-        inputProvenance: {
-          kind: "internal_system",
-          sourceTool: "cron_failure_repair",
-          jobId: request.jobId,
-        },
-        idempotencyKey: runId,
-      },
-      {
-        // The scheduler's repair brief permits silence; public provenance does not grant it.
-        replyExpectation: "optional",
-        internalDeliverySuppressErrors: true,
-        timeoutMs: request.timeoutMs,
-        ...(resolveGatewayContext ? { resolveGatewayContext } : {}),
-      },
-    );
-    const settled = await waitForAgentJob({
-      runId,
-      source: "agent",
-      timeoutMs: Math.max(0, deadlineAtMs - performance.now()),
+    const context = resolveGatewayContext?.();
+    const job = context?.cron.getJob(request.jobId);
+    if (!context || !job) {
+      throw new Error("Cron failure repair job or Gateway is unavailable.");
+    }
+    const agentId = request.agentId ?? parseAgentSessionKey(request.sessionKey)?.agentId;
+    if (!agentId) {
+      throw new Error("Cron failure repair owner conversation names no agent.");
+    }
+    const { target, release } = await captureCronJobTurnTarget({
+      job,
+      agentId,
+      sessionKey: request.sessionKey,
+      context,
     });
-    if (!settled || settled.timeoutPhase === "gateway_draining") {
-      throw new Error("Cron failure repair did not settle before its agent timeout or shutdown.");
+    let receipt: ReturnType<typeof enqueueSessionEventForHost>;
+    try {
+      receipt = enqueueSessionEventForHost(request.message, {
+        agentId,
+        sessionKey: request.sessionKey,
+        source: "cron_failure_repair",
+        contextKey: `cron-failure-repair:${request.repairId}`,
+        expectedTarget: target,
+        // Only the agent's authored reply reaches the chat; the next alert owns escalation.
+        suppressErrorDelivery: true,
+      });
+      const accepted = await receipt.accepted;
+      if (!accepted.ok) {
+        throw new Error(`Cron failure repair was not accepted: ${accepted.error}`);
+      }
+    } finally {
+      // The accepted event retains its own custody of the restored operator source.
+      release();
+    }
+    const outcome = await withTimeout(
+      receipt.settled,
+      Math.max(1, deadlineAtMs - performance.now()),
+      "cron failure repair",
+    ).catch((error: unknown) => {
+      receipt.cancel();
+      throw error;
+    });
+    // A turn that ran settles the repair whatever it concluded; the next run verifies it.
+    if (outcome.status === "cancelled" || !outcome.executionStarted) {
+      throw new Error(`Cron failure repair did not run: ${outcome.error ?? outcome.status}`);
     }
   }, "cron:failure-repair");
 }

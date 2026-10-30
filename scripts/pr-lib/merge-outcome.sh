@@ -595,6 +595,8 @@ merge_rest() {
       mode=observe-admission
     fi
   fi
+  # Merge stdin belongs to the dispatch envelope, not repository discovery.
+  [ "$mode" != merge ] || [ -n "$repo" ] || return 1
   [ -n "$repo" ] || repo=$(pr_gh_plain repo view --json id,nameWithOwner,url) || return 1
   node "${BASH_SOURCE[0]%/*}/merge-rest.mjs" "$mode" "$repo" "$pr" "$@"
 }
@@ -617,7 +619,10 @@ merge_outcome_dispatch_squash() (
 
 merge_outcome_dispatch_async() {
   local result
-  result=$(merge_rest merge "$1" "$2" "$3" "$MERGE_OBSERVATION") || return 1
+  result=$(printf '%s\n%s\n' "$3" "$MERGE_OBSERVATION" | jq -cse '
+    if length != 2 then error("merge dispatch envelope requires 2 JSON texts")
+    else {bodySnapshot:.[0],expectedObservation:.[1]} end
+  ' | merge_rest merge "$1" "$2") || return 1
   # Recovery retains this child's capture with the acknowledgement, so finish
   # stdout before recording it; later writes would invalidate retained evidence.
   printf '%s\n' "$result"

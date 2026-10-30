@@ -9,6 +9,7 @@ import {
 } from "../infra/http-content-encoding.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { buildPdfPreviewWorkerCspHeader } from "./control-ui-csp.js";
 import type { ControlUiRootAsset } from "./control-ui-file.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 import { matchesHttpIfModifiedSince } from "./http-conditional.js";
@@ -93,7 +94,7 @@ export function resolveControlUiAssetEncodings(params: {
   );
 }
 
-export function resolveControlUiRepresentation(
+function resolveControlUiRepresentation(
   asset: ControlUiRootAsset,
   encodings: readonly ControlUiRepresentationEncoding[],
 ): ControlUiRepresentation | null {
@@ -130,13 +131,18 @@ function setControlUiEncodingHeaders(
 function setControlUiFileHeaders(
   res: ServerResponse,
   filePath: string,
-  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding; lastModifiedMs?: number },
+  options?: {
+    immutable?: boolean;
+    cacheControl?: string;
+    encoding?: ControlUiContentEncoding;
+    lastModifiedMs?: number;
+  },
 ) {
   const extension = path.extname(filePath).toLowerCase();
   res.setHeader("Content-Type", CONTROL_UI_CONTENT_TYPES[extension] ?? "application/octet-stream");
   res.setHeader(
     "Cache-Control",
-    options?.immutable ? CONTROL_UI_IMMUTABLE_CACHE_CONTROL : "no-cache",
+    options?.cacheControl ?? (options?.immutable ? CONTROL_UI_IMMUTABLE_CACHE_CONTROL : "no-cache"),
   );
   if (options?.lastModifiedMs !== undefined) {
     res.setHeader("Last-Modified", new Date(options.lastModifiedMs).toUTCString());
@@ -145,7 +151,7 @@ function setControlUiFileHeaders(
 }
 
 /** Revalidate no-cache static assets without generating entity tags. */
-export function isControlUiFileUnmodified(
+function isControlUiFileUnmodified(
   req: IncomingMessage,
   lastModifiedMs: number,
   nowMs = Date.now(),
@@ -161,16 +167,16 @@ export function isControlUiFileUnmodified(
   return matchesHttpIfModifiedSince(req, lastModifiedMs, nowMs);
 }
 
-export function respondControlUiNotModified(
+function respondControlUiNotModified(
   res: ServerResponse,
-  options: { immutable?: boolean; lastModifiedMs: number },
+  options: { immutable?: boolean; cacheControl?: string; lastModifiedMs: number },
 ) {
   res.statusCode = 304;
   // A 304 repeats the caching headers of the 200 it stands in for so caches
   // refresh their freshness metadata alongside the validator.
   res.setHeader(
     "Cache-Control",
-    options.immutable ? CONTROL_UI_IMMUTABLE_CACHE_CONTROL : "no-cache",
+    options.cacheControl ?? (options.immutable ? CONTROL_UI_IMMUTABLE_CACHE_CONTROL : "no-cache"),
   );
   res.setHeader("Last-Modified", new Date(options.lastModifiedMs).toUTCString());
   res.setHeader("Vary", "Accept-Encoding");
@@ -182,6 +188,7 @@ export function respondHeadForControlUiFile(
   filePath: string,
   options?: {
     immutable?: boolean;
+    cacheControl?: string;
     encoding?: ControlUiContentEncoding;
     contentLength?: number;
     lastModifiedMs?: number;
@@ -195,14 +202,72 @@ export function respondHeadForControlUiFile(
   res.end();
 }
 
-export function serveControlUiAsset(
+function serveControlUiAsset(
   res: ServerResponse,
   filePath: string,
   body: Buffer,
-  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding; lastModifiedMs?: number },
+  options?: {
+    immutable?: boolean;
+    cacheControl?: string;
+    encoding?: ControlUiContentEncoding;
+    lastModifiedMs?: number;
+  },
 ) {
   setControlUiFileHeaders(res, filePath, options);
   res.end(body);
+}
+
+/** Return false only when the selected representation still needs its body read. */
+export function respondControlUiStaticAsset(
+  req: IncomingMessage,
+  res: ServerResponse,
+  asset: ControlUiRootAsset,
+  options: {
+    fileRel: string;
+    encodings: readonly ControlUiRepresentationEncoding[];
+    immutable: boolean;
+  },
+): boolean {
+  const originatedAtMs = Date.now();
+  const lastModifiedMs = Math.floor(Math.min(asset.file.mtimeMs, originatedAtMs) / 1_000) * 1_000;
+  const representation = resolveControlUiRepresentation(asset, options.encodings);
+  if (!representation) {
+    respondControlUiNotAcceptable(res);
+    return true;
+  }
+  let cacheControl: string | undefined;
+  if (options.fileRel === "pdf-preview-worker.js") {
+    const ingress = getRemoteControlUiIngressContext(req);
+    assertRemoteControlUiIngressCurrent(ingress);
+    res.setHeader("Content-Security-Policy", buildPdfPreviewWorkerCspHeader(ingress));
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+    // Remote ancestor policy belongs to this ingress, not a shared immutable asset.
+    if (ingress) {
+      cacheControl = "private, no-store";
+    }
+  }
+  const headers = {
+    immutable: options.immutable,
+    cacheControl,
+    encoding: representation.encoding,
+    lastModifiedMs,
+  };
+  if (isControlUiFileUnmodified(req, lastModifiedMs, originatedAtMs)) {
+    respondControlUiNotModified(res, headers);
+    return true;
+  }
+  if (req.method === "HEAD") {
+    respondHeadForControlUiFile(res, options.fileRel, {
+      ...headers,
+      contentLength: representation.file.size,
+    });
+  } else if (representation.file.body) {
+    serveControlUiAsset(res, options.fileRel, representation.file.body, headers);
+  } else {
+    return false;
+  }
+  return true;
 }
 
 function cachedCompressedControlUiHtml(

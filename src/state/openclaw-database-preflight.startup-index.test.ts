@@ -12,6 +12,7 @@ import {
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activateGatewayAgentDatabaseStartup } from "../gateway/server-agent-database-startup.js";
+import { createContext } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { prepareGatewayStartupSessions } from "../gateway/server-startup-session-migration.js";
 import {
   readSqliteDatabaseCleanClose,
@@ -149,8 +150,11 @@ function activateStartup(
   vi.spyOn(admission, "activate").mockImplementation((activation) =>
     activate({ ...activation, publishAgent: async () => {} }),
   );
+  const context = createContext([], () => config);
+  context.agentDatabaseStartup = admission.observation;
   activateGatewayAgentDatabaseStartup({
     admission,
+    context,
     preparationReady: Promise.resolve(),
     waitForPostReadyWork: async () => {},
     getConfig: () => config,

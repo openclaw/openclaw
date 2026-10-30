@@ -206,6 +206,8 @@ export type CronServiceDeps = {
       expectedTarget?: SessionEventTarget;
       createIfMissing?: true;
       assertAcceptanceCurrent?: () => void;
+      /** The job a notice is about; its turn acts for that job's requester. */
+      jobId?: string;
     },
   ) => void | Promise<{ ok: true } | { ok: false; error: string }>;
   deferSessionEvent?: (

@@ -222,6 +222,11 @@ export async function resolveApiKeyForProviderCore(input: {
   /** Keep SecretRef-backed model credentials opaque until a sentinel-aware transport boundary. */
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
+  if (resolveMergedModelProviderConfig(input.cfg, input.provider)?.auth === "native-command") {
+    throw new Error(
+      "Native command auth requires the Codex runtime; host credentials cannot be used.",
+    );
+  }
   input.signal?.throwIfAborted();
   const ownership = {
     provider: input.provider,

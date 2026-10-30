@@ -10,13 +10,14 @@
  * whole-Gateway latency proof. Encoded response segments stay unflattened while timed.
  */
 import assert from "node:assert/strict";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { projectOperatorModelRead } from "../../src/gateway/operator-model-presentation.js";
 import { SerializedJsonArray, serializeGatewayFrame } from "../../src/gateway/serialized-json.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: { allocations: { type: "boolean", default: false } },
@@ -140,9 +141,6 @@ function run(rounds: number): number {
   }
   return wireBytes;
 }
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
-}
 run(2);
 const inspector = new Session();
 const operationsPerPass = viewers.length * 10;
@@ -170,7 +168,7 @@ try {
     const used = process.threadCpuUsage(cpu);
     const memoryAfter = process.memoryUsage();
     const allocationBytes = values.allocations
-      ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+      ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
       : undefined;
     samples.push({
       operations: operationsPerPass,

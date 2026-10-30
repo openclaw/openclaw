@@ -231,6 +231,13 @@ final content. Raw provider copies cannot restore text that Codex removed. Messa
 marked for asynchronous delivery remain separate from the final reply when
 Codex repeats them in the turn-completion summary.
 
+Reasoning streams to the Control UI as separate native items while a turn runs.
+Completed items retain their place among commentary and tools in saved history;
+OpenClaw does not combine the turn's reasoning into one message. The existing
+`/reasoning on|off|stream` and **View → Reasoning** controls select visibility.
+These are the reasoning summaries exposed by Codex, separate from assistant
+commentary. Previously saved aggregate summaries remain in their original form.
+
 ## Cyber safety notices
 
 The Control UI shows a notice above the composer when Codex reports cyber

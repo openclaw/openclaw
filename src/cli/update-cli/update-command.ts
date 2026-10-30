@@ -218,6 +218,8 @@ async function updateCommandInternal(
   if (!target) {
     return;
   }
+  const { createUpdateCommandExecutionGuards } = await import("./update-execution.runtime.js");
+  const executionGuards = createUpdateCommandExecutionGuards(opts, target.root);
   const runResolvedUpdate = async (stagedPackage?: StagedPackageInstallUpdate): Promise<void> => {
     const {
       startedAt,
@@ -349,6 +351,7 @@ async function updateCommandInternal(
       refuseUpdate,
     };
     const activateCurrentCore = async () => {
+      executionGuards.assertCurrent();
       run.executorFence = await executor.enter(root, {
         preflight: true,
         serviceRoot: managedServiceRoot,
@@ -393,6 +396,8 @@ async function updateCommandInternal(
     if (updateInstallKind === "package") {
       const runtimePreflight = await preparePackageUpdateRuntime({
         ...target,
+        assertCurrent: executionGuards.assertCurrent,
+        assertBoundChildCurrent: executionGuards.assertBoundChildCurrent,
         managedService: schemaPreflight.service,
         shouldRestart,
         opts,
@@ -421,10 +426,8 @@ async function updateCommandInternal(
       inspectActivatedUpdateState,
       restoreFailedUpdateDatabases,
       createUpdateCommandFinalizationFence,
-      createUpdateCommandExecutionGuards,
     } = await import("./update-execution.runtime.js");
 
-    const executionGuards = createUpdateCommandExecutionGuards(opts, root);
     const progress = createUpdateRunProgress(
       run,
       presentation.progress,
@@ -446,7 +449,9 @@ async function updateCommandInternal(
       }
       const fence = await executor.enter(root, {
         serviceRoot: managedServiceRoot,
-        activationTimeoutMs: run.deadline?.remainingMs() ?? activationTimeoutMs,
+        // Preparation can time out without revoking the owner that must record
+        // its joined failure. Only the activation caller starts this clock.
+        activationTimeoutMs,
       });
       admitExecutor(fence);
       run.activationTimeoutMs ??= activationTimeoutMs;
@@ -476,7 +481,7 @@ async function updateCommandInternal(
         env,
         timeoutMs: updateStepTimeoutMs,
         signal: run.deadline?.signal,
-        assertCurrent: () => fence.assertCurrent(),
+        assertCurrent: executionGuards.assertCurrent,
       });
       retainedRuntimeStep = {
         name: retentionStep.name,
@@ -634,6 +639,7 @@ async function updateCommandInternal(
       presentation,
       stagedPackage: initialization?.stagedPackage,
       candidateAdmission: initialization?.candidateAdmission,
+      assertCurrent: executionGuards.assertCurrent,
     },
     runResolvedUpdate,
   );

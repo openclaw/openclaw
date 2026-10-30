@@ -1,12 +1,12 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   assistantMessageIsInterrupted,
-  assistantMessageCanCompleteTurn,
   assistantMessageKind,
   groupEndsRunInFailure,
   isProviderVoiceTranscript,
@@ -17,8 +17,9 @@ import {
   chatItemStartsUserTurn,
   hasForwardedSource,
 } from "./chat-turn-boundary.ts";
-import { chunkContiguousWork, splitMixedWorkGroup } from "./chat-work-chunks.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
+
+const TERMINAL_WORK_STATUSES = new Set(["done", "failed", "timeout", "killed"]);
 
 type RenderChatItem = ChatItem | MessageGroup;
 export type StreamRunRenderItem = {
@@ -67,7 +68,7 @@ export function coalesceStreamRuns(
   return result;
 }
 
-/** Collapsed contiguous stretch of completed tools and reasoning. */
+/** Collapsed rollup of a completed turn's activity (tools, commentary, reasoning). */
 export type WorkGroupRenderItem = {
   kind: "work-group";
   key: string;
@@ -92,8 +93,7 @@ function isTurnOutputGroup(item: TurnRenderItem): item is MessageGroup {
   return (
     item.kind === "group" &&
     (item.role === "assistant" || item.role === "tool") &&
-    !assistantGroupIsIndependentBoundary(item) &&
-    !hasForwardedSource(item)
+    !assistantGroupIsIndependentBoundary(item)
   );
 }
 
@@ -101,20 +101,18 @@ function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
   if (
     item.kind !== "group" ||
     item.isStreaming ||
-    groupHasVisibleReplyContent(item, item.role.toLowerCase() !== "tool") ||
-    // Markdown-context fallbacks retain the tool role and the whole assistant
-    // envelope. Its narration still bounds completed work.
-    (item.visibleContent === "text" &&
-      item.messages.some(
-        ({ message, hasVisibleContent }) =>
-          asRecord(message)?.role === "assistant" && hasVisibleContent,
-      )) ||
+    groupHasVisibleReplyContent(item, false) ||
     item.messages.some(({ message }) => isProviderVoiceTranscript(message))
   ) {
     return false;
   }
   const role = item.role.toLowerCase();
-  return role === "tool" || (role === "assistant" && !assistantGroupIsIndependentBoundary(item));
+  return (
+    role === "tool" ||
+    (role === "assistant" &&
+      !assistantGroupIsIndependentBoundary(item) &&
+      assistantMessageKind(item.messages[0]?.message, item.visibleContent) !== "final_answer")
+  );
 }
 
 function groupHasFailedResult(group: MessageGroup): boolean {
@@ -133,11 +131,7 @@ function isFinalReplyGroup(item: TurnRenderItem): item is MessageGroup {
   return (
     item.kind === "group" &&
     !item.isStreaming &&
-    !groupEndsRunInFailure(item) &&
     assistantGroupCanOwnActiveRunStatus(item) &&
-    item.messages.some(({ actionMessage, message }) =>
-      assistantMessageCanCompleteTurn(actionMessage ?? message),
-    ) &&
     assistantMessageKind(item.messages[0]?.message, item.visibleContent) !== "commentary"
   );
 }
@@ -156,9 +150,9 @@ function turnUserMessages(turn: TurnRenderItem[]): unknown[] {
 }
 
 /**
- * Once a turn is done, fold only contiguous activity at its original position.
- * Visible text/media and structural markers bound every chunk. Live turns stay
- * expanded; history and source action identities are not changed.
+ * Once a turn is done, collect its activity above the preserved answers in one
+ * "Worked for X" disclosure. Each partition retains source order without changing
+ * the stored transcript. Live turns stay expanded; structural markers stay anchored.
  */
 export function collapseCompletedTurnWork(
   items: TurnRenderItem[],
@@ -167,6 +161,7 @@ export function collapseCompletedTurnWork(
     runWorking: boolean;
     bubbleMode?: boolean;
     searchActive?: boolean;
+    session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
   },
 ): Array<TurnRenderItem | WorkGroupRenderItem> {
   const [scope, agentId, kind, sessionId, ...extraParts] = normalizeLowercaseStringOrEmpty(
@@ -180,15 +175,14 @@ export function collapseCompletedTurnWork(
     extraParts.length === 0;
   // Channel sessions can also be opened in the Control UI, but their full
   // transcript remains the canonical presentation on message surfaces.
-  if (!isDashboardSession || opts.searchActive) {
+  // Bubble mode keeps commentary in place and lets contiguous tool activity
+  // use the existing activity disclosure instead of folding narration into work.
+  if (!isDashboardSession || opts.searchActive || opts.bubbleMode) {
     return items;
   }
   const turns: TurnRenderItem[][] = [];
   let currentTurn: TurnRenderItem[] = [];
-  const projected = items.flatMap<TurnRenderItem>((item) =>
-    item.kind === "group" ? splitMixedWorkGroup(item) : [item],
-  );
-  for (const item of projected) {
+  for (const item of items) {
     if (item.kind !== "stream-run" && chatItemStartsUserTurn(item) && currentTurn.length > 0) {
       turns.push(currentTurn);
       currentTurn = [];
@@ -234,38 +228,44 @@ export function collapseCompletedTurnWork(
       result.push(...turn);
       continue;
     }
-    // Structural and forwarded boundaries cannot lend an answer to work in
-    // another output segment, even though both belong to one user turn.
-    const segmentReplies = new Map<string, { reply: MessageGroup; index: number }>();
-    let segmentStart = 0;
-    const closeSegment = (end: number) => {
-      const reply = turn.slice(segmentStart, end).findLast(isFinalReplyGroup);
-      if (reply) {
-        const owner = { reply, index: turn.lastIndexOf(reply) };
-        for (let index = segmentStart; index < end; index += 1) {
-          segmentReplies.set(turn[index]!.key, owner);
-        }
-      }
-    };
-    let previousReplyIndex: number | undefined;
-    for (let index = 0; index < turn.length; index += 1) {
-      const item = turn[index]!;
-      if (!isTurnOutputGroup(item)) {
-        closeSegment(index);
-        segmentStart = index + 1;
-        previousReplyIndex = undefined;
-      } else if (isFinalReplyGroup(item)) {
-        if (previousReplyIndex !== undefined) {
-          const previousReply = turn[previousReplyIndex];
-          if (previousReply?.kind === "group" && previousReply.runId !== item.runId) {
-            closeSegment(previousReplyIndex + 1);
-            segmentStart = previousReplyIndex + 1;
-          }
-        }
-        previousReplyIndex = index;
-      }
+    const finalReplyIndex = turn.lastIndexOf(terminalReply);
+    // Partition the answer's output segment, including work after the last answer.
+    // Never move activity across a user, forwarded input, or structural marker.
+    let segmentStart = finalReplyIndex;
+    let segmentEnd = segmentStart;
+    while (segmentStart > 0 && isTurnOutputGroup(turn[segmentStart - 1]!)) {
+      segmentStart -= 1;
     }
-    closeSegment(turn.length);
+    // A turn that handed off keeps its work in place: while it waits, between
+    // the wait ending and the resume, and once the resumed run has answered in
+    // the same block. Its closing line reports the whole request instead of a
+    // rollup timed for the last run.
+    if (turn.some((item) => item.kind === "notice" && item.handoffBoundary)) {
+      // Work the answering run recorded after its answer, such as the step
+      // that sent it, still goes above that answer, where a rollup puts it, so
+      // the answer stays last. Nothing moves past a handoff, which keeps a
+      // handoff's own sentence above its work, and nothing moves when any of
+      // it failed or ended the run: that stays where it happened.
+      const trailing = turn.slice(finalReplyIndex + 1);
+      const answerLast =
+        terminalReply.runId !== undefined &&
+        trailing.length > 0 &&
+        trailing.every(
+          (item) =>
+            isCollapsibleWorkGroup(item) &&
+            item.runId === terminalReply.runId &&
+            !groupHasFailedResult(item) &&
+            !groupEndsRunInFailure(item),
+        );
+      result.push(
+        ...(answerLast ? [...turn.slice(0, finalReplyIndex), ...trailing, terminalReply] : turn),
+      );
+      continue;
+    }
+    // Independent reply-less runs retain their own activity rollup, rather than
+    // becoming work for an earlier answer merely because no user spoke between them.
+    // Completed work may include activity after an answer only when that activity
+    // belongs to a run with a visible reply, not an independent background wake.
     const replyRunIds = new Set<string>();
     for (const item of turn) {
       if (item.kind === "stream-run") {
@@ -284,48 +284,80 @@ export function collapseCompletedTurnWork(
         replyRunIds.add(item.runId);
       }
     }
-    // A handoff owns request-wide footer timing and keeps its activity exposed.
-    // Do not move even post-answer work across the visible answer.
-    const handoff = turn.some((item) => item.kind === "notice" && item.handoffBoundary);
-    const parts = turn.map((item, index) => {
-      const segmentReply = segmentReplies.get(item.key);
-      const eligible =
-        segmentReply !== undefined &&
-        !handoff &&
-        isTurnOutputGroup(item) &&
-        isCollapsibleWorkGroup(item) &&
-        !groupEndsRunInFailure(item) &&
-        (index < segmentReply.index ||
-          ((!item.runId || replyRunIds.has(item.runId)) && !groupHasFailedResult(item)));
-      return {
-        id: item.key,
-        kind: eligible ? ("work" as const) : ("boundary" as const),
-        value: item,
-      };
-    });
-    const chunks = chunkContiguousWork(parts);
-    for (const [chunkIndex, chunk] of chunks.entries()) {
-      if (chunk.kind === "visible") {
-        result.push(...chunk.parts.map((part) => part.value));
-        continue;
+    while (segmentEnd + 1 < turn.length) {
+      const next = turn[segmentEnd + 1]!;
+      if (!isTurnOutputGroup(next) || (next.runId && !replyRunIds.has(next.runId))) {
+        break;
       }
-      // SAFETY: only isTurnOutputGroup-narrowed MessageGroups are classified as work above.
-      const groups = chunk.parts.map((part) => part.value as MessageGroup);
-      // The segment's reply owns presentation even when continuations or
-      // untagged tools have different execution identities. Segment boundaries
-      // already exclude forwarded deliveries and independent replies.
-      const replyRunId = segmentReplies.get(groups[0]!.key)?.reply.runId;
-      result.push({
-        kind: "work-group",
-        // Older pages can prepend work; the following visible boundary survives.
-        key: `work:${chunks[chunkIndex + 1]?.parts[0]?.id ?? groups.at(-1)!.key}`,
-        groups,
-        ...(replyRunId ? { replyRunId } : {}),
-        // Lifecycle runtime measures the whole run, not this bounded stretch.
-        // Without authoritative per-chunk timing, keep the disclosure untimed.
-        durationMs: null,
-      });
+      segmentEnd += 1;
     }
+    const groups: MessageGroup[] = [];
+    const answers: TurnRenderItem[] = [];
+    const previewAfterGroup = new Map<string, string>();
+    let precedingAnswerKey: string | undefined;
+    for (let index = segmentStart; index <= segmentEnd; index += 1) {
+      const item = turn[index]!;
+      // Only a later answer can put a failed result inside completed work.
+      // Share the renderer's error classification, including structured results.
+      if (
+        index !== finalReplyIndex &&
+        isCollapsibleWorkGroup(item) &&
+        (index < finalReplyIndex || (!groupHasFailedResult(item) && !groupEndsRunInFailure(item)))
+      ) {
+        groups.push(item);
+        if (precedingAnswerKey) {
+          previewAfterGroup.set(item.key, precedingAnswerKey);
+        }
+      } else {
+        answers.push(item);
+        precedingAnswerKey = item.key;
+      }
+    }
+    if (groups.length === 0) {
+      result.push(...turn);
+      continue;
+    }
+    // Message timestamps describe creation, not completion of the final model
+    // request. Only the lifecycle owner can supply elapsed time for this run.
+    // Older history without matching lifecycle facts keeps an untimed disclosure.
+    const session = opts.session;
+    const runtimeMs = session?.runtimeMs;
+    const durationMs =
+      session?.key === opts.sessionKey &&
+      terminalReply.runId !== undefined &&
+      session.lastRunId === terminalReply.runId &&
+      TERMINAL_WORK_STATUSES.has(session.status ?? "") &&
+      typeof runtimeMs === "number" &&
+      Number.isFinite(runtimeMs) &&
+      runtimeMs >= 0
+        ? runtimeMs
+        : null;
+    // A completed rollup may span automatic resumptions. Its reply owns the
+    // display only when earlier answers belong to that same run.
+    const replyRunId =
+      !hasForwardedSource(terminalReply) &&
+      !groups.some(hasForwardedSource) &&
+      answers
+        .slice(0, answers.indexOf(terminalReply))
+        .every(
+          (answer) =>
+            answer.kind === "group" &&
+            !hasForwardedSource(answer) &&
+            answer.runId === terminalReply.runId,
+        )
+        ? terminalReply.runId
+        : undefined;
+    result.push(...turn.slice(0, segmentStart));
+    result.push({
+      kind: "work-group",
+      // The final reply survives older-history prepends; the first work row does not.
+      key: `work:${terminalReply.key}`,
+      groups,
+      ...(replyRunId ? { replyRunId } : {}),
+      ...(previewAfterGroup.size > 0 ? { previewAfterGroup } : {}),
+      durationMs,
+    });
+    result.push(...answers, ...turn.slice(segmentEnd + 1));
   }
   return result;
 }

@@ -57,8 +57,10 @@ const MEMORY_CORE_BRIDGES = [
     .map((name) => `openclaw-runtime-${name}`),
   // Standalone transcript readers use narrow core read owners.
   "session-entry-render",
+  "session-memory-authority",
   "session-reset-recall-read.worker",
   "session-transcript-corpus.worker",
+  "session-transcript-stats-read",
 ].map((name) => `packages/memory-host-sdk/src/host/${name}.ts`);
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe JSON file shape.

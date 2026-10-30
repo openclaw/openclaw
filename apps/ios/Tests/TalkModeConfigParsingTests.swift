@@ -3,6 +3,7 @@ import Foundation
 import OpenClawChatUI
 import OpenClawKit
 import Testing
+import XCTest
 @testable import OpenClaw
 
 @MainActor
@@ -506,9 +507,19 @@ struct TalkModeManagerTests {
     }
 
     @Test(arguments: [false, true])
-    func `relay close recovers disconnections but preserves explicit stop`(explicitStop: Bool) {
+    func `relay close recovers disconnections but preserves explicit stop`(explicitStop: Bool) async {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         manager._test_prepareEnabledRealtimeSessionForClose()
+        let restarted = XCTestExpectation(description: "Remote close admits the scheduled replacement start")
+        manager._test_setStartEntryHandler {
+            restarted.fulfill()
+            // Admission is the regression boundary; do not request permissions or contact a provider.
+            manager.stop()
+        }
+        defer {
+            manager._test_setStartEntryHandler(nil)
+            manager.stop()
+        }
 
         manager._test_handleRealtimeRelayStatus("Listening (Realtime)")
         manager._test_handleRealtimeRelayStatus("Ready")
@@ -519,7 +530,10 @@ struct TalkModeManagerTests {
         #expect(manager.statusText == (explicitStop ? "Off" : "Reconnecting"))
         #expect(manager.isEnabled == !explicitStop)
         #expect(manager._test_rapidRealtimeRestartCount() == (explicitStop ? 0 : 1))
-        manager.isEnabled = false
+        if !explicitStop {
+            let result = await XCTWaiter.fulfillment(of: [restarted], timeout: 3)
+            #expect(result == .completed)
+        }
     }
 
     @Test func `recurring realtime ready status preserves push to talk capture`() {

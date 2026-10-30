@@ -222,23 +222,25 @@ export function createFollowupRunner(
             turn.session.current(),
           );
       }
-      const initialGoalId = turn.session.current()?.goal?.id;
+      const initialSessionEntry = turn.session.current();
+      const initialGoalId = initialSessionEntry?.goal?.id;
       const runWithGoalReturn = createGoalContinuationReturn(
         turn.session.kind === "session" &&
           turn.session.storePath &&
-          initialGoalId &&
-          (turn.session.current()?.agentHarnessId === undefined ||
-            turn.session.current()?.agentHarnessId === "openclaw")
+          initialSessionEntry &&
+          (initialSessionEntry.agentHarnessId === undefined ||
+            initialSessionEntry.agentHarnessId === "openclaw")
           ? {
               base: turn.queued,
-              initialGoalId,
-              expectedSession: turn.session.current()!,
+              initialGoalId:
+                initialSessionEntry.goal?.status === "active" ? initialGoalId : undefined,
+              expectedSession: initialSessionEntry,
               sessionKey: turn.session.key,
               storePath: turn.session.storePath,
               queueKey: turn.queued.run.sessionKey ?? turn.session.key,
               settings: resolveQueueSettings({
                 cfg: turn.config,
-                sessionEntry: turn.session.current(),
+                sessionEntry: initialSessionEntry,
                 channel: turn.queued.originatingChannel,
               }),
               operation: turn.operation,

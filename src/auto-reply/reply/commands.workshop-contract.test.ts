@@ -7,6 +7,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { closeSkillsWatchers } from "../../skills/runtime/refresh.js";
+import { historicalWorkshopChangesSchema } from "../../skills/test-support/workshop-schema.test-support.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -172,23 +173,7 @@ async function seedReview() {
   // Bootstrap the surviving core schema owner, then write a historical persisted feed offline.
   openOpenClawStateDatabase();
   await withRawDatabase((db) => {
-    db.exec(`CREATE TABLE IF NOT EXISTS skill_workshop_changes (
-      cursor_id INTEGER NOT NULL,
-      change_id TEXT NOT NULL PRIMARY KEY,
-      agent_id TEXT NOT NULL,
-      skill_name TEXT NOT NULL,
-      action TEXT NOT NULL CHECK (action IN ('create', 'patch', 'write_file', 'remove_file', 'archive', 'restore')),
-      actor TEXT NOT NULL CHECK (actor IN ('agent', 'review', 'curator', 'user')),
-      summary TEXT NOT NULL,
-      version_id TEXT,
-      session_key TEXT,
-      run_id TEXT,
-      created_at_ms INTEGER NOT NULL
-    ) STRICT;
-    CREATE UNIQUE INDEX IF NOT EXISTS skill_workshop_changes_cursor_id_idx
-      ON skill_workshop_changes(cursor_id);
-    CREATE INDEX IF NOT EXISTS idx_skill_workshop_changes_agent_time
-      ON skill_workshop_changes(agent_id, created_at_ms);`);
+    db.exec(historicalWorkshopChangesSchema);
     const insert = db.prepare(
       `INSERT INTO skill_workshop_changes
        (cursor_id, change_id, agent_id, skill_name, action, actor, summary, version_id,

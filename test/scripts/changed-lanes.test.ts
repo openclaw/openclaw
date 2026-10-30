@@ -808,9 +808,11 @@ describe("scripts/changed-lanes", () => {
       const diagnostics = failed.stdout + failed.stderr;
       expect(failed.error, diagnostics).toBeUndefined();
       expect(failed.status, diagnostics).toBe(1);
-      expect(diagnostics).toContain("eslint(curly)");
+      expect(diagnostics).toMatch(/(?:eslint\(curly\)|(?:^|\s)curly(?:\s|$))/u);
       expect(
-        diagnostics.match(/typescript\(no-floating-promises\)/gu) ?? [],
+        diagnostics.match(
+          /(?:typescript\(no-floating-promises\)|@typescript-eslint\/no-floating-promises)/gu,
+        ) ?? [],
         diagnostics,
       ).toHaveLength(4);
       expect(diagnostics).toContain(broken);
@@ -1236,6 +1238,15 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("runs the npm package-lock guard for dependency package surfaces", () => {
+    for (const file of [
+      "scripts/lib/npm-lock-package-selection.mjs",
+      "scripts/lib/npm-lock-package-selection.d.mts",
+      "scripts/lib/record-shared.mjs",
+      "scripts/lib/record-shared.d.mts",
+    ]) {
+      expect(shouldRunNpmLockGuard([file])).toBe(true);
+      expect(createNpmLockGuardCommand([file])).not.toBeNull();
+    }
     expect(
       shouldRunNpmLockGuard([
         "extensions/slack/package.json",

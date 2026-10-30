@@ -101,6 +101,11 @@ and result order can differ from SQLite. See
 [PostgreSQL search](/reference/database-engines#search-on-postgresql) for extension
 requirements and supported modes.
 
+Agent namespace prefixes are literal, including underscores in agent IDs.
+The default-agent PostgreSQL RPC search uses a planner-selective prefix predicate
+so selective text queries can start from the full-text index. Explicit session
+selections and other search scopes can use different plans.
+
 ## Session search vs. memory search
 
 Use `sessions_search` for exact words or phrases from raw session transcripts. Use

@@ -105,6 +105,7 @@ import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-p
 import { AGENT_MEMORY_REVISION_SQL } from "./openclaw-agent-memory-revision-migration.js";
 import { migrateOutboxEnqueueSequenceInTransaction } from "./openclaw-agent-outbox-sequence-migration.js";
 import { migrateSessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
+import { interruptHistoricalPendingInputs } from "./openclaw-agent-pending-inputs-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { migrateSessionEntrySnapshotsInTransaction } from "./openclaw-agent-session-snapshots-migration.js";
 import {
@@ -337,6 +338,9 @@ function ensureAgentSchema(
         });
       };
       assertMigration();
+      if (previousVersion < targetVersion) {
+        interruptHistoricalPendingInputs(db, previousVersion);
+      }
       if (isEmptyDatabase && targetVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
         // Canonical creation has no legacy rows or definitions to converge or repair.
         db.exec(schemaSql);
