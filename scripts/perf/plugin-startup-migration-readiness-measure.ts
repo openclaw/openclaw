@@ -21,6 +21,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
+import { isPostgresSqlConnection } from "../../src/infra/sql-connection.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -92,6 +93,7 @@ let backupCount = 0;
 let backupBytes = 0;
 try {
   const database = state.openOpenClawStateDatabase({ env });
+  assert(!isPostgresSqlConnection(database.db), "This benchmark requires SQLite");
   if (!values.reuse) {
     // Unique deterministic ciphertext prevents compression/deduplication from hiding I/O.
     const cipher = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16));
