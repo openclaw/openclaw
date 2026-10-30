@@ -25,6 +25,7 @@ type Entry = {
   expiresAt: number;
   startedAt: number;
   failed?: boolean;
+  signature?: string;
   promise?: Promise<ControlUiSessionPullRequest>;
   lastGood?: ControlUiSessionPullRequest;
 };
@@ -62,10 +63,7 @@ export async function readSessionPullRequestMetadata(
   ]);
   let entry = metadata.get(key);
   const now = Date.now();
-  const matches =
-    !options.expected ||
-    !entry?.lastGood ||
-    pullRequestMetadataSignature(entry.lastGood) === options.expected;
+  const matches = !options.expected || entry?.signature === options.expected;
   const reusable =
     entry &&
     !entry.access.signal.aborted &&
@@ -73,8 +71,15 @@ export async function readSessionPullRequestMetadata(
     entry.expiresAt > now &&
     (entry.failed || matches) &&
     (entry.failed || !options.refresh || entry.startedAt + 10_000 > now);
-  if (!entry || entry.access.signal.aborted) {
-    entry = { access: createGitHubReadGroup(), expiresAt: 0, startedAt: 0 };
+  if (!entry || !reusable) {
+    // Pending metadata belongs to its prepared observation; older completions retain their own entry.
+    entry = {
+      access: createGitHubReadGroup(),
+      expiresAt: 0,
+      startedAt: 0,
+      signature: options.expected,
+      lastGood: entry?.access.signal.aborted ? undefined : entry?.lastGood,
+    };
   }
   const active = entry;
   const release = active.access.add(read.assertCurrent, options.signal);
@@ -91,6 +96,7 @@ export async function readSessionPullRequestMetadata(
       active.promise = load(transport).then(
         (result) => {
           active.lastGood = result;
+          active.signature = pullRequestMetadataSignature(result);
           return result;
         },
         (error: unknown) => {

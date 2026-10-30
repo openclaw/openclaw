@@ -157,11 +157,12 @@ it("shows the bound original PR before any publication, independent of the check
   }
 });
 
-it.for(["publication first", "display first", "refresh queued"])(
+it.for(["publication first", "display first", "refresh queued", "head changed"])(
   "reconciles a fourth merged PR without awaiting display details (%s)",
   async (order, { signal }) => {
     const head = "a".repeat(40);
     const tree = "b".repeat(40);
+    const changedHead = order === "head changed" ? "c".repeat(40) : head;
     vi.spyOn(gitHubPublicApi, "resolveGitHubApiCredentialScope").mockReturnValue({
       token: undefined,
       cacheScope: `publication-${order}`,
@@ -180,15 +181,18 @@ it.for(["publication first", "display first", "refresh queued"])(
     );
     const detailsStarted = createDeferred();
     const details = createDeferred();
+    const refreshedDetails = createDeferred();
+    let detailCalls = 0;
     const refreshStarted = createDeferred();
     const fetchImpl = routedFetch([
       { match: "/pulls?head=", response: () => githubJson(items) },
       {
         match: "/pulls/5",
         response: async () => {
+          const first = ++detailCalls === 1;
           detailsStarted.resolve();
-          await details.promise;
-          return githubJson({ additions: 4 });
+          await (first ? details.promise : refreshedDetails.promise);
+          return githubJson({ additions: first ? 4 : 8 });
         },
       },
       { match: "/check-runs", response: () => githubJson({ total_count: 0, check_runs: [] }) },
@@ -206,7 +210,13 @@ it.for(["publication first", "display first", "refresh queued"])(
       prepareRead,
       load: (params, cacheSignal, read) => {
         const refresh =
-          order === "refresh queued" && read.projection !== "publication" && ++displayLoads === 2;
+          (order === "refresh queued" || order === "head changed") &&
+          read.projection !== "publication" &&
+          ++displayLoads >= 2 &&
+          (order === "head changed" || displayLoads === 2);
+        if (refresh) {
+          items[0] = { ...items[0], head: { sha: changedHead } };
+        }
         const result = loadControlUiSessionPullRequests(
           { ...params, refresh },
           {
@@ -230,7 +240,10 @@ it.for(["publication first", "display first", "refresh queued"])(
     if (displaying) {
       await withinTest(detailsStarted.promise, signal);
     }
-    const refreshing = order === "refresh queued" ? owner.read(target, current) : undefined;
+    const refreshing =
+      order === "refresh queued" || order === "head changed"
+        ? owner.read(target, current)
+        : undefined;
     if (refreshing) {
       await withinTest(refreshStarted.promise, signal);
     }
@@ -247,13 +260,22 @@ it.for(["publication first", "display first", "refresh queued"])(
             ),
         signal,
       );
+      if (order === "head changed" && refreshing) {
+        expect(candidates.pullRequests[0]?.headSha).toBe(changedHead);
+        refreshedDetails.resolve();
+        expect((await withinTest(refreshing, signal)).pullRequests[0]).toMatchObject({
+          headSha: changedHead,
+          additions: 8,
+        });
+      }
     } finally {
       details.resolve();
+      refreshedDetails.resolve();
       await Promise.all([reading, displaying, refreshing]);
     }
-    const displayed = await (displaying ?? owner.read(target, current));
+    const displayed = await (refreshing ?? displaying ?? owner.read(target, current));
     expect(displayed.pullRequests.map((pr) => pr.number)).toEqual([5, 4, 3]);
-    expect(displayed.pullRequests[0]?.additions).toBe(4);
+    expect(displayed.pullRequests[0]?.additions).toBe(order === "head changed" ? 8 : 4);
     expect(candidates.pullRequests.map((pr) => pr.number)).toEqual([5, 4, 3, 2]);
     const snapshot = {
       repository: "openclaw/openclaw",
@@ -274,6 +296,14 @@ it.for(["publication first", "display first", "refresh queued"])(
       ),
     ).toBe(false);
     expect((await owner.read(target, current)).pullRequests).toEqual(displayed.pullRequests);
+    if (order === "head changed") {
+      expect(detailCalls).toBe(2);
+      expect(
+        fetchImpl.mock.calls.some(
+          ([url]) => typeof url === "string" && url.includes(`/commits/${changedHead}/check-runs`),
+        ),
+      ).toBe(true);
+    }
     expect(displayed).not.toHaveProperty("publicationCandidates");
     expect(candidates).not.toHaveProperty("publicationCandidates");
     expect(displayed).not.toHaveProperty("enrichment");
@@ -282,7 +312,7 @@ it.for(["publication first", "display first", "refresh queued"])(
       fetchImpl.mock.calls.filter(
         ([url]) => typeof url === "string" && url.includes("/pulls?head="),
       ),
-    ).toHaveLength(refreshing ? 2 : 1);
+    ).toHaveLength(order === "head changed" ? 3 : refreshing ? 2 : 1);
     expect(broadcastToConnIds).not.toHaveBeenCalled();
   },
 );
