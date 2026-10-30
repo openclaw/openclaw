@@ -5,7 +5,10 @@ import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.j
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createRetainedCache } from "../infra/retained-cache.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
-import type { ControlUiSessionPullRequest } from "./control-ui-contract.js";
+import type {
+  ControlUiSessionPullRequest,
+  ControlUiSessionPullRequests,
+} from "./control-ui-contract.js";
 import {
   createGitHubReadGroup,
   prepareSessionPullRequestGitHubRead,
@@ -128,6 +131,55 @@ export function pullRequestMetadataSignature(
   return JSON.stringify([pull.state, pull.title, pull.headSha]);
 }
 
+/** Display enrichment retains matching prior details when quota ends after a proven list read. */
+export async function readSessionPullRequestDisplay(
+  pullRequests: readonly ControlUiSessionPullRequest[],
+  read: Read,
+  options: {
+    refresh: boolean;
+    previous?: readonly ControlUiSessionPullRequest[];
+    limit: number;
+  },
+): Promise<Pick<ControlUiSessionPullRequests, "pullRequests" | "rateLimited">> {
+  try {
+    return {
+      pullRequests: await Promise.all(
+        pullRequests.map((item) =>
+          readSessionPullRequestMetadata(
+            item,
+            read,
+            (transport) => finishPullRequest(item, item.branch, transport),
+            { refresh: options.refresh, expected: pullRequestMetadataSignature(item) },
+          ),
+        ),
+      ),
+      rateLimited: false,
+    };
+  } catch (error) {
+    read.assertCurrent();
+    if (!(error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429)) {
+      throw error;
+    }
+    const identity = (item: ControlUiSessionPullRequest) =>
+      `${item.owner}/${item.repo}#${item.number}`.toLowerCase();
+    const retained = new Map(options.previous?.map((item) => [identity(item), item]));
+    const fresh = pullRequests.map((item) => {
+      const prior = retained.get(identity(item));
+      retained.delete(identity(item));
+      return prior &&
+        item.state === prior.state &&
+        item.headSha === prior.headSha &&
+        (item.state === "open" || item.state === "draft")
+        ? { ...prior, ...item }
+        : item;
+    });
+    return {
+      pullRequests: [...fresh, ...retained.values()].slice(0, options.limit),
+      rateLimited: true,
+    };
+  }
+}
+
 function derivePullState(value: Record<string, unknown>): ControlUiSessionPullRequest["state"] {
   if (readNonBlankString(value.merged_at)) {
     return "merged";
@@ -174,7 +226,10 @@ export function parsePullListItem(value: unknown) {
   };
 }
 
-type PullListItem = NonNullable<ReturnType<typeof parsePullListItem>>;
+type PullRequestChipInput = Pick<
+  ControlUiSessionPullRequest,
+  "number" | "author" | "owner" | "repo" | "title" | "url" | "state" | "headSha"
+>;
 
 // Sub-fetch degradation: quota errors abort the whole refresh (so the caller
 // serves stale chips with the rate-limit flag); anything else just drops the
@@ -191,7 +246,7 @@ function rethrowRateLimit(error: unknown): undefined {
  * rate-limited path renders exactly this, so both callers share one shape.
  */
 export function stateOnlyPullRequestChip(
-  item: PullListItem,
+  item: PullRequestChipInput,
   branch: string,
 ): ControlUiSessionPullRequest {
   return {
@@ -210,7 +265,7 @@ export function stateOnlyPullRequestChip(
 }
 
 export async function finishPullRequest(
-  item: PullListItem,
+  item: PullRequestChipInput,
   branch: string,
   read: ReturnType<typeof prepareSessionPullRequestGitHubRead>,
   preparedDetails?: unknown,
