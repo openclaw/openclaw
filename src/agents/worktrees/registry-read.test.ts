@@ -270,6 +270,7 @@ it("reads registry records without retiring a temporarily unavailable worktree",
 
 it("creates, resolves, lists, and publishes activity without caller-thread registry SQL", async () => {
   const { env, service, params } = await serviceFixture();
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   await service.listRegistryRecords();
   const { db } = openOpenClawStateDatabase({ env });
   const sql = observeHostDataSql();
@@ -285,7 +286,7 @@ it("creates, resolves, lists, and publishes activity without caller-thread regis
       { sessionEntry: { worktree: { id: record.id } }, candidatePaths: [] },
       { candidatePaths: [path.join(record.path, "README.md")] },
     ]) {
-      expect((await resolveWorktreeForPath({ env, ...selection }))?.record).toEqual(record);
+      expect((await resolveWorktreeForPath(selection))?.record).toEqual(record);
     }
     expect(await service.list()).toEqual([record]);
     expect(registryQueries()).toEqual([]);

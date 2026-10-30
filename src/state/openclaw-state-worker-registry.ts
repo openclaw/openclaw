@@ -5,6 +5,8 @@ import type {
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
 const loaders = {
+  durableProcess: () =>
+    import("../agents/bash-durable-process-store.js").then((m) => m.durableProcessOperations),
   sandboxPersistentExec: () =>
     import("../agents/sandbox/persistent-exec-store.worker.js").then(
       (m) => m.sandboxPersistentExecOperations,
@@ -34,9 +36,13 @@ const loaders = {
     ),
   sessionGroups: () =>
     import("../gateway/session-group-catalog.kernel.js").then((m) => m.sessionGroupOperations),
-  claws: () =>
-    import("../claws/provenance-runtime-read.worker.js").then((m) => m.clawInstallSchemaOperations),
+  templates: () =>
+    import("../templates/provenance-runtime-read.worker.js").then(
+      (m) => m.templateInstallSchemaOperations,
+    ),
   backup: () => import("./backup-run-records.worker.js").then((m) => m.backupRunOperations),
+  quarantine: () =>
+    import("./openclaw-quarantine-store.worker.js").then((m) => m.quarantineOperations),
   machineState: () =>
     import("./config-machine-state.worker.js").then((m) => m.machineStateOperations),
   localOnboarding: () =>

@@ -327,7 +327,7 @@ export function createConfigWriteCoordinator({
             ? currentConfigRead(state)
             : null;
         if (reconnectRead) {
-          await Promise.race([reconnectRead.completion.promise, reconnectRead.invalidated.promise]);
+          await reconnectRead.settled;
         }
         // The updater can claim suspension while the preceding write drains.
         const connected = client && isCurrentConfigConnection(state, client, connectionEpoch);

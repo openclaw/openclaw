@@ -1,45 +1,9 @@
-import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { runCopilotIsolatedCompletion } from "./isolated-completion.js";
+import { createCopilotIsolatedCompletionParams } from "./isolated-completion.test-support.js";
 import type { CopilotClientPool } from "./runtime.js";
 
-type AgentHarnessIsolatedCompletionParams = Parameters<
-  NonNullable<AgentHarness["runIsolatedCompletionV2"]>
->[0];
-
-const ISOLATED_COMPLETION_PARAMS = {
-  provider: "github-copilot",
-  modelId: "gpt-4.1",
-  authorization: {
-    owner: "host",
-    model: {
-      id: "gpt-4.1",
-      name: "GPT-4.1",
-      api: "openai-responses",
-      provider: "github-copilot",
-      baseUrl: "https://api.githubcopilot.com",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
-      maxTokens: 8_192,
-    },
-    auth: {
-      apiKey: "prepared-github-token",
-      profileId: "github:work",
-      source: "profile",
-      mode: "oauth",
-    },
-    sourceAuthFingerprint: "prepared-owner-fingerprint",
-  },
-  config: {},
-  agentId: "test",
-  agentDir: "/tmp/agent",
-  workspaceDir: "/workspace",
-  systemPrompt: "Answer only from the supplied prompt.",
-  prompt: "What is two plus two?",
-  timeoutMs: 1000,
-} satisfies AgentHarnessIsolatedCompletionParams;
+const ISOLATED_COMPLETION_PARAMS = createCopilotIsolatedCompletionParams({ timeoutMs: 1000 });
 
 describe("runCopilotIsolatedCompletion deadline clock", () => {
   // Fake only Date/setTimeout/clearTimeout so performance.now() stays

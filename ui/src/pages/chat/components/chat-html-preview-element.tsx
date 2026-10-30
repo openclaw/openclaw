@@ -1,14 +1,17 @@
 import type {
   CanvasDocumentViewResult,
   SessionsFilesAssetsResult,
+  SessionsFilesPreviewResult,
 } from "@openclaw/gateway-protocol";
+import { defaultTreeAdapter, html, parse, type DefaultTreeAdapterTypes } from "parse5";
 import { Errored, Show, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveSandboxHostUrl } from "../../../components/sandbox-host.ts";
 import { registerBoardEnglish } from "../../../i18n/locales/en-board.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
+import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useApplication } from "../../../lib/reactive/context.ts";
@@ -16,13 +19,74 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { WidgetSandboxHost, WIDGET_LOAD_TIMEOUT_MS } from "../../../lib/widget-sandbox-host.ts";
-import { prepareHtmlPreviewAssets } from "./chat-html-preview-assets.ts";
-import { prepareHtmlPreviewLinks } from "./chat-html-preview-links.ts";
+import { inspectHtmlPreviewSource, prepareHtmlPreviewAssets } from "./chat-html-preview-assets.ts";
+import { applyHtmlPreviewEdits, type HtmlPreviewEdit } from "./chat-html-preview-source.ts";
 import { HtmlPreviewLoading } from "./chat-html-preview-view.tsx";
 import type { SessionFileSource } from "./chat-sidebar-content-types.ts";
 
+registerEnglishCatalog(registerChatComposerEnglish);
+
 registerEnglishCatalog(registerFilePreviewEnglish);
 registerEnglishCatalog(registerBoardEnglish);
+
+/** Prepare display bytes without serializing the author's document or changing its base URL. */
+function prepareHtmlPreviewLinks(source: string, allowScripts: boolean): string {
+  if (!source.includes("#") && !source.includes("&")) {
+    return source;
+  }
+  const document = parse(source, {
+    scriptingEnabled: allowScripts,
+    sourceCodeLocationInfo: true,
+  });
+  const links: DefaultTreeAdapterTypes.Element[] = [];
+  const pending: DefaultTreeAdapterTypes.Node[] = document.childNodes.toReversed();
+  let baseTarget: string | undefined;
+  while (pending.length > 0) {
+    const node = pending.pop()!;
+    if (!defaultTreeAdapter.isElementNode(node)) {
+      continue;
+    }
+    // Template contents are inert and are not in childNodes. Foreign links keep their own semantics.
+    if (node.namespaceURI === html.NS.HTML) {
+      if (node.tagName === "base") {
+        if (node.attrs.some((attribute) => attribute.name === "href")) {
+          return source;
+        }
+        baseTarget ??= node.attrs.find((attribute) => attribute.name === "target")?.value;
+      } else if (node.tagName === "a" || node.tagName === "area") {
+        links.push(node);
+      }
+    }
+    pending.push(...node.childNodes.toReversed());
+  }
+  const replacements: HtmlPreviewEdit[] = [];
+  for (const link of links) {
+    // URL parsing ignores leading C0 controls and space, but not other Unicode whitespace.
+    const authoredHref = link.attrs.find((attribute) => attribute.name === "href")?.value ?? "";
+    let fragmentStart = 0;
+    while (fragmentStart < authoredHref.length && authoredHref.charCodeAt(fragmentStart) <= 0x20) {
+      fragmentStart += 1;
+    }
+    const href = authoredHref.slice(fragmentStart);
+    const target = link.attrs.find((attribute) => attribute.name === "target")?.value ?? baseTarget;
+    const location = link.sourceCodeLocation?.attrs?.href;
+    if (
+      !href.startsWith("#") ||
+      !location ||
+      (target && target.toLowerCase() !== "_self") ||
+      link.attrs.some((attribute) => attribute.name === "download")
+    ) {
+      continue;
+    }
+    const escapedHref = href.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+    replacements.push({
+      start: location.startOffset,
+      end: location.endOffset,
+      text: `href="about:srcdoc${escapedHref}"`,
+    });
+  }
+  return applyHtmlPreviewEdits(source, replacements);
+}
 
 type HtmlPreviewProps = {
   desktop: boolean;
@@ -40,6 +104,7 @@ type PreviewBinding = {
   html: string;
   sourceIdentity: string;
   sessionFileSource?: SessionFileSource;
+  cspMode?: EmbedSandboxMode;
 };
 
 type PreviewView = {
@@ -47,6 +112,8 @@ type PreviewView = {
   binding: PreviewBinding;
   url: string;
   origin: string;
+  preparedCsp?: SessionsFilesPreviewResult;
+  release: () => void;
 };
 
 /** Only transfers document bytes. Ordinary files never receive widget host APIs. */
@@ -70,15 +137,20 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
         candidate.generation === getCanvasWidgetFrameConnectionGeneration() &&
         candidate.html === host.html &&
         candidate.sourceIdentity === host.sourceIdentity &&
+        (candidate.cspMode === undefined || candidate.cspMode === host.embedSandboxMode) &&
         candidate.sessionFileSource?.sessionKey === host.sessionFileSource?.sessionKey &&
         candidate.sessionFileSource?.agentId === host.sessionFileSource?.agentId &&
         candidate.sessionFileSource?.path === host.sessionFileSource?.path &&
         candidate.sessionFileSource?.messageEntryId === host.sessionFileSource?.messageEntryId,
       );
 
+    const sourceFacts = createMemo(() =>
+      inspectHtmlPreviewSource(props.html, props.embedSandboxMode !== "strict"),
+    );
     const sourceInput = createMemo(
       () => {
         const snapshot = gateway?.read().snapshot;
+        const facts = sourceFacts();
         return [
           props.html,
           props.sourceIdentity,
@@ -90,6 +162,8 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
           snapshot?.phase === "connected",
           getCanvasWidgetFrameConnectionGeneration(),
           retry(),
+          facts.hasAuthoredCsp ? props.embedSandboxMode : undefined,
+          facts.hasAuthoredCsp && facts.hasRelativeAssets,
         ] as const;
       },
       { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
@@ -115,14 +189,16 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
     const renderFrame = (preview: PreviewView, mode: EmbedSandboxMode) => {
       const [frameError, setFrameError] = createSignal("");
       const [rendered, setRendered] = createSignal(false);
-      const [omittedAssets, setOmittedAssets] = createSignal(0);
+      const [omittedAssets, setOmittedAssets] = createSignal(preview.preparedCsp?.omitted ?? 0);
       const generation = ++frameGeneration;
       let frame!: HTMLIFrameElement;
       let transport: WidgetSandboxHost | undefined;
+      const source = preview.binding.sessionFileSource;
       const currentFrame = () =>
         isCurrent(preview.binding) && host.embedSandboxMode === mode && sandboxHost === transport;
       const release = () => {
         transport?.dispose();
+        preview.release();
         if (sandboxHost === transport) {
           sandboxHost = undefined;
         }
@@ -141,22 +217,29 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
           sandboxOrigin: preview.origin,
           documentKey: String(generation),
           allowScripts,
-          loadDocument: async () => {
+          loadDocument: async (signal) => {
+            const ensureCurrent = () => {
+              if (!currentFrame() || signal.aborted) {
+                throw new DOMException("Preview changed", "AbortError");
+              }
+            };
+            ensureCurrent();
+            if (preview.preparedCsp) {
+              return preview.preparedCsp.status === "ready"
+                ? prepareHtmlPreviewLinks(preview.preparedCsp.html, allowScripts)
+                : prepareHtmlPreviewLinks(preview.binding.html, allowScripts);
+            }
             let content = prepareHtmlPreviewLinks(preview.document.html, allowScripts);
-            const source = preview.binding.sessionFileSource;
             if (source) {
               const prepared = await prepareHtmlPreviewAssets(content, allowScripts, (refs) => {
-                if (!currentFrame()) {
-                  throw new DOMException("Preview changed", "AbortError");
-                }
+                ensureCurrent();
                 return preview.binding.client.request<SessionsFilesAssetsResult>(
                   "sessions.files.assets",
                   { ...source, refs },
                 );
               });
-              if (currentFrame()) {
-                setOmittedAssets(prepared.omitted);
-              }
+              ensureCurrent();
+              setOmittedAssets(prepared.omitted);
               content = prepared.html;
             }
             return content;
@@ -191,6 +274,11 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
       });
       return (
         <Show when={!frameError()} fallback={<ErrorNotice message={frameError()} />}>
+          <Show when={preview.preparedCsp?.status === "unsupported"}>
+            <div class="file-view__save-notice" role="status">
+              {t("chat.detailPanel.cspPreviewUnsupported")}
+            </div>
+          </Show>
           <Show when={omittedAssets()}>
             <div class="file-view__save-notice" role="status">
               {t("chat.detailPanel.assetsUnavailable", { count: String(omittedAssets()) })}
@@ -224,11 +312,29 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
         sourceIdentity: input[1],
         sessionFileSource: host.sessionFileSource && { ...host.sessionFileSource },
         generation: input[8],
+        cspMode: input[10],
       };
       const view = createMemo<PreviewView | undefined>(
         async () => {
           binding = current;
+          let previewId: string | undefined;
+          const release = () => {
+            const id = previewId;
+            previewId = undefined;
+            if (id && current.sessionFileSource) {
+              // The original connection/source own this grant, even after replacement.
+              void client
+                .request("sessions.files.preview.release", {
+                  ...current.sessionFileSource,
+                  previewId: id,
+                })
+                .catch(() => {
+                  // Connection teardown and grant expiry retain the server-side fallback.
+                });
+            }
+          };
           onCleanup(() => {
+            release();
             if (binding === current) {
               binding = undefined;
             }
@@ -247,15 +353,40 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
             if (!isCurrent(current)) {
               return undefined;
             }
+            let preparedCsp: SessionsFilesPreviewResult | undefined;
+            if (current.cspMode !== undefined) {
+              preparedCsp = current.sessionFileSource
+                ? await client.request<SessionsFilesPreviewResult>("sessions.files.preview", {
+                    ...current.sessionFileSource,
+                    html: current.html,
+                    allowScripts: current.cspMode !== "strict",
+                  })
+                : { status: input[11] ? "unsupported" : "ready", html: current.html, omitted: 0 };
+              previewId = preparedCsp.previewId;
+              if (!isCurrent(current)) {
+                release();
+                return undefined;
+              }
+            }
             const url = resolveSandboxHostUrl(
-              document.sandboxUrl,
+              preparedCsp?.sandboxPath ?? document.sandboxUrl,
               document.sandboxPort,
               document.sandboxOrigin,
               context.gateway.connection.gatewayUrl,
               window.location.origin,
+              undefined,
+              preparedCsp?.sandboxPath,
             );
-            return { document, binding: current, url, origin: new URL(url).origin };
+            return {
+              document,
+              binding: current,
+              url,
+              origin: new URL(url).origin,
+              preparedCsp,
+              release,
+            };
           } catch (reason) {
+            release();
             if (isCurrent(current)) {
               throw reason;
             }

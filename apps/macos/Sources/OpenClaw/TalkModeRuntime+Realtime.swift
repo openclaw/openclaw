@@ -337,6 +337,10 @@ extension TalkModeRuntime {
         realtimeSession = session
         do {
             try await session.start()
+            // A cancelled startup can return normally without a ready relay.
+            guard await MainActor.run(body: { session.isReady }) else {
+                throw CancellationError()
+            }
         } catch {
             await MainActor.run { session.stop() }
             if realtimeSession === session {
@@ -348,6 +352,8 @@ extension TalkModeRuntime {
             else {
                 throw CancellationError()
             }
+            // Only the current startup may reset the phase.
+            self.phase = .idle
             throw error
         }
         guard isCurrent(lifecycleGeneration), !isPaused,
@@ -431,10 +437,9 @@ extension TalkModeRuntime {
         let activeDuration = realtimeSessionReadyAt.map { Date().timeIntervalSince($0) } ?? 0
         realtimeRelayGeneration &+= 1
         let terminalGeneration = realtimeRelayGeneration
-        // Session-owned terminations close before signalling; runtime-initiated ones do not.
-        // stop() is idempotent, so closing here keeps a dead relay and its event subscription
-        // from outliving their owner while recovery starts a replacement session.
-        await MainActor.run { session.stop() }
+        // Session-owned terminations already closed; a failed microphone restart leaves the relay
+        // open. Retire it before recovery without cancelling accepted agent work.
+        await MainActor.run { session.stopAfterFailure() }
         guard self.ownsRealtimeRelay(terminalGeneration, session) else { return }
         realtimeSession = nil
         realtimeSessionReadyAt = nil
@@ -470,6 +475,10 @@ extension TalkModeRuntime {
 
     func handleRealtimeSpeakingChanged(_ speaking: Bool, relayGeneration: UInt64) async {
         guard let session = self.activeRealtimeRelay(relayGeneration) else { return }
+        // Closing an unready startup reports speaking false without becoming ready.
+        guard await MainActor.run(body: { session.isReady }),
+              self.activeRealtimeRelay(relayGeneration) === session
+        else { return }
         let phase: TalkModePhase = speaking ? .speaking : .listening
         self.phase = phase
         _ = await self.projectRealtimeRelay(relayGeneration, session) {

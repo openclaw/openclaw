@@ -59,6 +59,7 @@ import {
   setupWorkerEnvironmentServiceSuite,
   SSH_ENDPOINT,
   testState,
+  type WorkerLifecycleLease,
 } from "./worker-environments/service.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./worker-environments/workspace-recovery.test-support.js";
@@ -110,20 +111,25 @@ describe("worker placement startup cleanup ownership", () => {
     runtimeFactoryMocks.createDiskSpace.mockReturnValue(createIdleDiskSpace());
   });
 
-  it("pauses both reconciliation schedulers during a reversible suspension", async ({ signal }) => {
-    await seedReadyNodeDesktop("suspended-reconciliation");
+  it("pauses reconciliation on suspension, resumes, then aborts and joins inspection during restart", async ({
+    signal,
+  }) => {
+    const environmentId = "suspended-reconciliation";
+    await seedReadyNodeDesktop(environmentId);
     const time = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(time.clock);
-    const inspect = vi.fn(async () => ({ status: "active" as const }));
+    const inspect = vi.fn(async (_input: WorkerLifecycleLease) => ({ status: "active" as const }));
     const environments = createEnvironments({ inspect }, { scheduler });
     const placements = createPlacements();
     const sidecar = await startRuntime(createRuntime({ placements, environments, scheduler }));
+    const release = createDeferredCore();
+    let stopping: Promise<void> | undefined;
     await time.advanceBy(60_000);
     await environments.reconcileOnce();
-    inspect.mockClear();
     const suspended = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspended).not.toBeNull();
     try {
+      inspect.mockClear();
       await time.advanceBy(60_000);
       await environments.reconcileOnce();
       expect(inspect).not.toHaveBeenCalled();
@@ -134,45 +140,37 @@ describe("worker placement startup cleanup ownership", () => {
         return { status: "active" };
       });
       await time.advanceBy(60_000);
-      // Scheduled environment inspection is detached from the scheduler's tick.
       await withinTest(resumed.promise, signal);
       expect(inspect).toHaveBeenCalled();
-    } finally {
-      suspended?.rollback();
-      await sidecar.stop();
-      await scheduler.stop();
-    }
-  });
 
-  it("cancels a pre-existing environment inspection when restart drain begins", async () => {
-    await seedReadyNodeDesktop("preexisting-reconciliation");
-    const entered = createDeferredCore();
-    const remote = createDeferredCore<{ status: "active" }>();
-    let holdInspection = false;
-    let inspectionSignal: AbortSignal | undefined;
-    const environments = createEnvironments({
-      inspect: async ({ signal }) => {
-        if (!holdInspection) {
-          return { status: "active" };
-        }
-        inspectionSignal = signal;
-        entered.resolve();
-        return racePromiseWithAbortSignal(remote.promise, signal);
-      },
-    });
-    const placements = createPlacements();
-    const sidecar = await startRuntime(createRuntime({ placements, environments }));
-    holdInspection = true;
-    const sweeping = environments.reconcileOnce();
-    try {
-      await entered.promise;
+      const entered = createDeferredCore<AbortSignal | undefined>();
+      const heldInspect = async (input: WorkerLifecycleLease) => {
+        entered.resolve(input.signal);
+        await release.promise;
+        return { status: "active" as const };
+      };
+      inspect.mockImplementation(heldInspect);
+      void time.advanceBy(60_000);
+      const inspectionSignal = await withinTest(entered.promise, signal);
+      expect(inspectionSignal?.aborted).toBe(false);
       markGatewayRestartDraining();
       expect(inspectionSignal?.aborted).toBe(true);
-      await sweeping;
+      const stopped = vi.fn();
+      stopping = sidecar.stop().then(stopped);
+      await Promise.resolve();
+      expect(stopped).not.toHaveBeenCalled();
+      expect(testState.store.get(environmentId)).toMatchObject({
+        state: "ready",
+        leaseId: `lease:${environmentId}`,
+      });
+      release.resolve();
+      await stopping;
+      expect(stopped).toHaveBeenCalledOnce();
     } finally {
-      remote.resolve({ status: "active" });
-      await sweeping;
-      await sidecar.stop();
+      suspended?.rollback();
+      release.resolve();
+      await (stopping ?? sidecar.stop());
+      await scheduler.stop();
       resetGatewayWorkAdmission();
     }
   });
@@ -183,18 +181,18 @@ describe("worker placement startup cleanup ownership", () => {
     }
     const time = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(time.clock);
-    const entered = createDeferredCore();
-    const remote = createDeferredCore<{ status: "active" }>();
     const blockedStore = createDeferredCore();
-    let holdInspection = false;
+    const entered = createDeferredCore();
+    const release = createDeferredCore<{ status: "active" }>();
+    let held = false;
     const environments = createEnvironments(
       {
-        inspect: async ({ signal }) => {
-          if (!holdInspection) {
-            return { status: "active" };
+        inspect: ({ signal }) => {
+          if (!held) {
+            return Promise.resolve({ status: "active" as const });
           }
           entered.resolve();
-          return racePromiseWithAbortSignal(remote.promise, signal);
+          return racePromiseWithAbortSignal(release.promise, signal);
         },
       },
       { scheduler },
@@ -223,7 +221,7 @@ describe("worker placement startup cleanup ownership", () => {
     let stopping: Promise<void> | undefined;
     let sweeping: void | Promise<void> = undefined;
     try {
-      holdInspection = true;
+      held = true;
       sweeping = time.advanceBy(60_000);
       await entered.promise;
       stopping = sidecar.stop();
@@ -233,7 +231,7 @@ describe("worker placement startup cleanup ownership", () => {
       expect(testState.store.list()).toHaveLength(3);
     } finally {
       blockedStore.resolve();
-      remote.resolve({ status: "active" });
+      release.resolve({ status: "active" });
       await (stopping ?? sidecar.stop());
       await sweeping;
       await scheduler.stop();
@@ -291,53 +289,6 @@ describe("worker placement startup cleanup ownership", () => {
       release.resolve();
       await (stopping ?? sidecar.stop());
       recording.mockRestore();
-      await scheduler.stop();
-    }
-  });
-
-  it("aborts in-flight inspection before joining placement reconciliation and retains producer custody", async () => {
-    await seedReadyNodeDesktop("worker-close-inspection");
-    const inspectionStarted = createDeferredCore();
-    const producerSettled = createDeferredCore();
-    const time = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(time.clock);
-    let holdInspection = false;
-    let inspectionSignal: AbortSignal | undefined;
-    const environments = createEnvironments(
-      {
-        inspect: async ({ signal }) => {
-          if (holdInspection) {
-            inspectionSignal = signal;
-            inspectionStarted.resolve();
-            await producerSettled.promise;
-          }
-          return { status: "active" };
-        },
-      },
-      { scheduler },
-    );
-    const placements = createPlacements();
-    const sidecar = await startRuntime(createRuntime({ placements, environments, scheduler }));
-    let stopping: Promise<void> | undefined;
-    const stopped = vi.fn();
-    try {
-      holdInspection = true;
-      void time.advanceBy(60_000);
-      await inspectionStarted.promise;
-      stopping = sidecar.stop().then(stopped);
-      expect(inspectionSignal?.aborted).toBe(true);
-      await Promise.resolve();
-      expect(stopped).not.toHaveBeenCalled();
-      expect(testState.store.get("worker-close-inspection")).toMatchObject({
-        state: "ready",
-        leaseId: "lease:worker-close-inspection",
-      });
-      producerSettled.resolve();
-      await stopping;
-      expect(stopped).toHaveBeenCalledOnce();
-    } finally {
-      producerSettled.resolve();
-      await (stopping ?? sidecar?.stop());
       await scheduler.stop();
     }
   });
@@ -504,7 +455,9 @@ describe("worker placement startup cleanup ownership", () => {
     },
   );
 
-  it("becomes ready before failed-placement lease adoption and drains its exact teardown", async () => {
+  it("cancels a stalled allocation lookup on shutdown and preserves its cleanup intent", async ({
+    signal,
+  }) => {
     const environmentId = "worker-startup-indeterminate";
     const operationId = "provision:startup-indeterminate";
     const releaseResolution = createDeferredCore();
@@ -520,13 +473,7 @@ describe("worker placement startup cleanup ownership", () => {
     await requestProvisioningTeardown(environmentId, operationId);
     const placements = createPlacements(true);
     const provisioning = await seedProvisioningPlacement(placements, environmentId, "remote-exec");
-    const failed = await failPlacement(placements, provisioning);
-    expect(failed).toMatchObject({
-      state: "failed",
-      environmentId,
-      turnClaim: null,
-      activeOwnerEpoch: null,
-    });
+    await failPlacement(placements, provisioning);
     const runtime = createRuntime({
       placements,
       environments,
@@ -553,12 +500,14 @@ describe("worker placement startup cleanup ownership", () => {
         leaseId: null,
         destroyRequestedAtMs: expect.any(Number),
       });
-
-      const stopped = vi.fn();
-      const stopping = sidecar.stop().then(stopped);
-      await Promise.resolve();
-      expect(stopped).not.toHaveBeenCalled();
+      const intent = testState.store.get(environmentId);
+      const stopping = sidecar.stop();
+      const pending = formatGatewayPendingCloseSteps();
+      await withinTest(stopping, signal);
       expect(destroy).not.toHaveBeenCalled();
+      expect(pending).toContain("environment=worker-startup-indeterminate");
+      expect(pending).toContain("provider=fake");
+      expect(pending).toContain("step=resolve-allocation");
 
       releaseResolution.resolve();
       await stopping;
@@ -566,18 +515,12 @@ describe("worker placement startup cleanup ownership", () => {
       expect(provision).not.toHaveBeenCalled();
       expect(testState.prepareInstallation).not.toHaveBeenCalled();
       expect(testState.bootstrapWorker).not.toHaveBeenCalled();
-      expect(destroy).toHaveBeenCalledExactlyOnceWith({
-        leaseId: "lease-startup-adopted",
-        profile: { region: "test" },
-      });
-      expect(testState.store.get(environmentId)).toMatchObject({
-        state: "destroyed",
-        leaseId: "lease-startup-adopted",
-      });
+      expect(destroy).not.toHaveBeenCalled();
+      expect(testState.store.get(environmentId)).toEqual(intent);
     } finally {
       releaseResolution.resolve();
       await starting.catch(() => undefined);
       await registeredSidecar?.stop();
     }
-  });
+  }, 10_000);
 });

@@ -39,7 +39,7 @@ import {
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
-import { resolveSlackMonitorEventScope } from "../event-scope.js";
+import { resolveSlackInteractionEventScope } from "../event-scope.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import {
   captureSlackInteractionEventRoute,
@@ -466,20 +466,8 @@ export function registerSlackBlockActionHandler(params: {
     const { ack, body, action, respond } = args;
     await ack();
     const runtimeContext = await params.ctx.readRuntimeContext();
-    const eventScope = resolveSlackMonitorEventScope({
-      ctx: runtimeContext,
-      body,
-      context: args.context,
-      client: args.client,
-      onDrop: (reason) => runtimeContext.runtime.log?.(`slack:interaction drop action ${reason}`),
-    });
+    const eventScope = resolveSlackInteractionEventScope(runtimeContext, args, "action");
     if (eventScope === null) {
-      return;
-    }
-    if (runtimeContext.shouldDropMismatchedSlackEvent?.(body)) {
-      runtimeContext.runtime.log?.(
-        "slack:interaction drop block action payload (mismatched app/team)",
-      );
       return;
     }
     const parsed = parseSlackBlockAction({ body, action, log: runtimeContext.runtime.log });

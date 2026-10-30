@@ -1,7 +1,9 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   isPairedDeviceNodeBindingCurrent,
   resolveCurrentPairedDeviceNodeBinding,
 } from "../infra/device-pairing-node-state.js";
+import { recordPairedNodeHostStats } from "../infra/device-pairing-node.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import { GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED } from "./events.js";
@@ -23,7 +25,6 @@ import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
-import { hasConnectedTalkNode } from "./talk/nodes.js";
 
 export function createGatewayNodeSessionRuntime(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
@@ -378,11 +379,12 @@ export function createGatewayNodeSessionRuntime(params: {
           }),
     );
   };
-  const { nodeRegistry, nodeWorkerSupervisorTransport } = createNodeRegistryRuntime(
+  const { nodeRegistry, nodeWorkerSupervisorTransport, closeHostStats } = createNodeRegistryRuntime(
     () =>
       new NodeRegistry({
         listRegisteredNodePluginToolCommands: params.listRegisteredNodePluginToolCommands,
         getConfig: params.getConfig,
+        persistHostStats: recordPairedNodeHostStats,
         resolveCurrentPairingState:
           params.resolveCurrentPairingState ?? resolveCurrentPairedDeviceNodeBinding,
         isPairingStateCurrent: params.isPairingStateCurrent ?? isPairedDeviceNodeBindingCurrent,
@@ -486,11 +488,22 @@ export function createGatewayNodeSessionRuntime(params: {
     params.broadcast("voicewake.routing.changed", { config }, { dropIfSlow: true });
     sendVoiceWakeEventToCurrentNodes("voicewake.routing.changed", { config });
   };
-  const hasTalkNodeConnected = () => hasConnectedTalkNode(nodeRegistry);
+  // Talk node detection accepts either the explicit talk capability or talk.*
+  // commands so older and newer node clients both enable talk routing.
+  const hasTalkNodeConnected = async () => {
+    return (await nodeRegistry.listCurrentConnected()).some(
+      (node) =>
+        node.caps.some((capability) => normalizeOptionalLowercaseString(capability) === "talk") ||
+        node.commands.some((command) =>
+          normalizeOptionalLowercaseString(command)?.startsWith("talk."),
+        ),
+    );
+  };
 
   return {
     nodeRegistry,
     nodeWorkerSupervisorTransport,
+    closeHostStats,
     sessionEventSubscribers,
     sessionMessageSubscribers,
     nodeHasSessionSubscribers: (sessionKey: string) => sessionSubscribers.has(sessionKey.trim()),

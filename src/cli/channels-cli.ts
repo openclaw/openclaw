@@ -127,10 +127,6 @@ async function resolveChannelsAddChannelFromArgv(argv: string[]): Promise<string
 const optionNamesRemove = ["channel", "account", "delete"] as const;
 const CHANNEL_ADD_SELECTION_OPTION_NAMES = new Set(["agent", "channel"]);
 
-type RegisterChannelsCliOptions = {
-  includeSetupOptions?: boolean;
-};
-
 const LEGACY_CHANNEL_SETUP_OPTIONS: readonly ChannelSetupCliOption[] = [
   { flags: "--token <token>", description: "Channel token or credential payload" },
   {
@@ -190,7 +186,7 @@ function addChannelSetupOption(
 export async function registerChannelsCli(
   program: Command,
   argv: string[] = process.argv,
-  options: RegisterChannelsCliOptions = {},
+  options: { includeSetupOptions?: boolean } = {},
 ) {
   const channelNames = formatCliChannelOptions();
   const channels = program

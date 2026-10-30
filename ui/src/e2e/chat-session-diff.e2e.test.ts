@@ -286,10 +286,13 @@ suite.define(() => {
   });
 
   it("requests the default session diff once across subsequent pane renders", async () => {
-    const { page, gateway } = await openDiff({
-      "sessions.files.list": emptyWorkspace(),
-      "sessions.diff": SESSION_DIFF_RESPONSE,
-    });
+    const { page, gateway } = await openDiff(
+      {
+        "sessions.files.list": emptyWorkspace(),
+        "sessions.diff": SESSION_DIFF_RESPONSE,
+      },
+      { extraMethods: ["sessions.companion.state"] },
+    );
 
     await openChatSidePanelType(page, "Files");
     await openChatSidePanelType(page, "Review");

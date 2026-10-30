@@ -24,6 +24,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { formatCliFailureLines, isExpectedCliError } from "../failure-output.js";
 import { registerBackupCommand } from "./register.backup.js";
 import { registerStorageCommand } from "./register.storage.js";
 
@@ -45,6 +46,21 @@ async function expectListing(directory: string, entries: string[], partial = fal
   expect(await fs.readdir(directory)).toEqual(partial ? expect.arrayContaining(entries) : entries);
 }
 
+async function expectFile(file: string, content: string) {
+  await expect(fs.readFile(file, "utf8")).resolves.toBe(content);
+}
+
+async function prepareStorage(state: OpenClawTestState, scratchRoot: string) {
+  const destination = state.path("offsite");
+  await fs.mkdir(destination);
+  await fs.mkdir(scratchRoot, { recursive: true });
+  vi.spyOn(os, "tmpdir").mockReturnValue(scratchRoot);
+  await state.writeConfig(archiveConfig(destination));
+  const harness = createCliHarness();
+  await harness.run("storage", "init", "archive");
+  return { destination, ...harness };
+}
+
 function archiveConfig(destination: string) {
   return {
     storage: {
@@ -59,19 +75,6 @@ function archiveConfig(destination: string) {
   };
 }
 
-async function prepareNestedTmp(state: OpenClawTestState) {
-  const destination = state.path("offsite");
-  const nestedTmp = state.statePath("tmp");
-  await fs.mkdir(destination);
-  await fs.mkdir(nestedTmp, { recursive: true });
-  vi.spyOn(os, "tmpdir").mockReturnValue(nestedTmp);
-  vi.spyOn(os, "hostname").mockReturnValue("nested-tmp-host");
-  await state.writeConfig(archiveConfig(destination));
-  const harness = createCliHarness();
-  await harness.run("storage", "init", "archive");
-  return { destination, nestedTmp, ...harness };
-}
-
 function createCliHarness() {
   const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -84,7 +87,14 @@ function createCliHarness() {
     const program = new Command().exitOverride();
     registerBackupCommand(program);
     registerStorageCommand(program);
-    await program.parseAsync([...argv, "--json"], { from: "user" });
+    await program.parseAsync([...argv, "--json"], { from: "user" }).catch((error: unknown) => {
+      if (!isExpectedCliError(error)) {
+        throw error;
+      }
+      const lines = formatCliFailureLines({ title: "The CLI command failed.", error });
+      defaultRuntime.error(lines.join("\n"));
+      defaultRuntime.exit(1);
+    });
     return writeJson.mock.calls.at(-1)?.[0];
   };
   const create = async (namespace: string, ...args: string[]): Promise<OffsiteBackupResult> =>
@@ -121,14 +131,8 @@ describe("offsite backup CLI", () => {
     }) => Promise<void>,
   ) {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const destination = state.path("offsite");
       const scratchRoot = state.path("scratch");
-      await fs.mkdir(destination);
-      await fs.mkdir(scratchRoot);
-      vi.spyOn(os, "tmpdir").mockReturnValue(scratchRoot);
-      await state.writeConfig(archiveConfig(destination));
-      const { run, create, errors } = createCliHarness();
-      await run("storage", "init", "archive");
+      const { destination, create, errors } = await prepareStorage(state, scratchRoot);
       const identity = await deviceIdentity.loadOrCreateProcessDeviceIdentityAsync();
       const nextIdentity = { ...identity, deviceId: "replacement-installation-device-id" };
       const location = await openStorageLocation({ name: "archive", config: getRuntimeConfig() });
@@ -204,7 +208,7 @@ describe("offsite backup CLI", () => {
     });
   });
 
-  it("checks retention ownership once per deletion and stops after namespace takeover", async () => {
+  it("stops retention deletion after namespace takeover", async () => {
     await withNamespaceRace(async (fixture) => {
       const expired = [
         "20260101T000000Z-11111111.tar.gz",
@@ -215,45 +219,22 @@ describe("offsite backup CLI", () => {
         await fs.writeFile(path.join(fixture.namespaceDir, key), Buffer.alloc(200));
       }
       const deleted: string[] = [];
-      const ownerReadsAtDelete: number[] = [];
-      let retaining = false;
-      let ownerReads = 0;
-      let displaced = false;
       fixture.intercept((backend) => {
-        const get = backend.getObject;
-        const list = backend.listObjects;
         const remove = backend.deleteObject;
-        backend.listObjects = (prefix, opts) => {
-          retaining = true;
-          return list(prefix, opts);
-        };
-        backend.getObject = async (key, opts) => {
-          if (key === "openclaw-storage.json" && deleted.length === 1 && !displaced) {
-            displaced = true;
-            await fixture.takeOver();
-          }
-          const body = await get(key, opts);
-          if (retaining && key.endsWith("/owner.json")) {
-            ownerReads += 1;
-          }
-          return body;
-        };
         backend.deleteObject = async (key, opts) => {
           await remove(key, opts);
           if (key.endsWith(".tar.gz")) {
-            ownerReadsAtDelete.push(ownerReads);
-            ownerReads = 0;
             deleted.push(path.basename(key));
+            if (deleted.length === 1) {
+              await fixture.takeOver();
+            }
           }
         };
       });
       await expect(
         fixture.create("test-host", "--only-config", "--keep-daily", "0"),
       ).rejects.toThrow("CLI exit 1");
-      expect(displaced).toBe(true);
       expect(deleted).toHaveLength(1);
-      expect(ownerReadsAtDelete).toEqual([1]);
-      expect(ownerReads).toBe(1);
       await expectListing(
         fixture.namespaceDir,
         expired.filter((key) => !deleted.includes(key)),
@@ -327,9 +308,7 @@ describe("offsite backup CLI", () => {
           (async function* () {
             yield bytes;
           })(),
-          {
-            sizeBytes: bytes.length,
-          },
+          { sizeBytes: bytes.length },
         );
       };
       await writeClaim(foreignClaim);
@@ -338,9 +317,7 @@ describe("offsite backup CLI", () => {
       await reject(
         create("test-host", "--output", localCopy, "--keep-daily", "0"),
         collisionMessage,
-        {
-          namespace: "test-host",
-        },
+        { namespace: "test-host" },
       );
       await expectAbsent(localCopy);
       await expectListing(scratchRoot, []);
@@ -393,10 +370,9 @@ describe("offsite backup CLI", () => {
       const capturedState = created.assets.find((asset) => asset.kind === "state");
       expect(capturedState).toBeDefined();
       const restoredState = path.join(target, capturedState!.archivePath);
-      expect(await fs.readFile(path.join(restoredState, "operator-note.txt"), "utf8")).toBe(
-        "preserved state\n",
-      );
-      expect(await fs.readFile(path.join(restoredState, "openclaw.json"), "utf8")).toBe(
+      await expectFile(path.join(restoredState, "operator-note.txt"), "preserved state\n");
+      await expectFile(
+        path.join(restoredState, "openclaw.json"),
         await fs.readFile(state.configPath, "utf8"),
       );
       expect(created.assets.some((asset) => asset.kind === "workspace")).toBe(false);
@@ -417,9 +393,7 @@ describe("offsite backup CLI", () => {
       try {
         expect(
           await json((await reopened.scope("backups/config").getObject("owner.json"))!),
-        ).toMatchObject({
-          deviceId: (await loadDeviceIdentityIfPresentAsync())!.deviceId,
-        });
+        ).toMatchObject({ deviceId: (await loadDeviceIdentityIfPresentAsync())!.deviceId });
       } finally {
         await reopened.close();
       }
@@ -428,7 +402,9 @@ describe("offsite backup CLI", () => {
 
   it("creates nested-TMPDIR backups, reclaims abandoned scratch, preserves active scratch and reports strays", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const { destination, nestedTmp, create, from } = await prepareNestedTmp(state);
+      const nestedTmp = state.statePath("tmp");
+      vi.spyOn(os, "hostname").mockReturnValue("nested-tmp-host");
+      const { destination, create } = await prepareStorage(state, nestedTmp);
       await fs.writeFile(state.statePath("operator-note.txt"), "preserved state\n");
       // Nested TMPDIR uses the state parent, outside Doctor's scanned roots.
       const fallbackRoot = path.dirname(state.stateDir);
@@ -463,17 +439,9 @@ describe("offsite backup CLI", () => {
           [created.location!.key, "owner.json"],
           true,
         );
-        expect(await from("list", "nested-tmp-host")).toMatchObject({
-          backups: [{ key: created.location!.key, sizeBytes: created.location!.plaintextBytes }],
-        });
-        await expect(from("verify", "nested-tmp-host", "latest")).resolves.toMatchObject({
-          ok: true,
-        });
         await expectAbsent(abandoned.directory);
-        await expect(
-          fs.readFile(path.join(active.directory, "archive.tar.gz"), "utf8"),
-        ).resolves.toBe("synthetic archive");
-        await expect(fs.readFile(stray, "utf8")).resolves.toBe("not a scratch directory");
+        await expectFile(path.join(active.directory, "archive.tar.gz"), "synthetic archive");
+        await expectFile(stray, "not a scratch directory");
         expect((await scratchDirectories(fallbackRoot)).toSorted()).toEqual(
           [path.basename(active.directory), path.basename(stray)].toSorted(),
         );

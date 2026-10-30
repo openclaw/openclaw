@@ -1,5 +1,6 @@
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createAsyncGate as barrier } from "../../test-support/async-gate.test-support.js";
 import {
   createRuntime,
   createTalkDriver,
@@ -19,19 +20,6 @@ import {
 const { helper, startTalk } = mocks;
 
 const deferred = () => Promise.withResolvers<void>();
-
-function barrier() {
-  const entered = deferred();
-  const release = deferred();
-  return {
-    entered: entered.promise,
-    release: release.resolve,
-    wait: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
-}
 
 function suspendNextWrite(state: ReturnType<typeof emptyState>) {
   const pause = barrier();

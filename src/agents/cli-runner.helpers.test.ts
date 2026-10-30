@@ -1,4 +1,5 @@
 /** Tests CLI runner prompt/image/system-prompt helper utilities. */
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -152,7 +153,9 @@ describe("prepareCliPromptImagePayload prompt references", () => {
 });
 
 describe("writeCliImages", () => {
-  it("uses stable hashed file paths so repeated image hydration reuses the same path", async () => {
+  it("uses stable hashed file paths without synchronous fsync when rehydrating images", async ({
+    onTestFinished,
+  }) => {
     const image = pngImage("c29tZS1pbWFnZQ==");
     const params = {
       backend: { command: "codex" },
@@ -160,6 +163,8 @@ describe("writeCliImages", () => {
       workspaceDir: imageWorkspace(),
       images: [image],
     };
+    const fsync = vi.spyOn(fsSync, "fsyncSync");
+    onTestFinished(() => fsync.mockRestore());
     const first = await prepareCliPromptImagePayload(params);
     const second = await prepareCliPromptImagePayload(params);
 
@@ -175,6 +180,7 @@ describe("writeCliImages", () => {
       await expect(
         fs.readFile(expectDefined(first.imagePaths?.[0], "first image path test invariant")),
       ).resolves.toEqual(Buffer.from(image.data, "base64"));
+      expect(fsync).not.toHaveBeenCalled();
     } finally {
       await fs.rm(expectDefined(first.imagePaths?.[0], "first image path test invariant"), {
         force: true,

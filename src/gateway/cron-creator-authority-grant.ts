@@ -13,6 +13,7 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../infra/exec-approvals-core.js";
 import type {
   CronAuthenticatedChannelRequester,
@@ -32,6 +33,7 @@ export const CRON_MANAGEMENT_METHODS = [
   "cron.update",
   "cron.run",
   "cron.remove",
+  "cron.bind",
 ] as const;
 type CronManagementBinding = { method: string; authority: AgentRunDelegatedAuthority };
 type CronManagementCaller = {
@@ -124,7 +126,11 @@ export function createCronCreatorAuthorityRunScope(
     },
     ...(isCurrent ? { isCurrent } : {}),
     active: true,
-    abort: () => abortController.abort(expiredAuthorityError()),
+    abort: () => {
+      const reason = expiredAuthorityError();
+      materializeErrorStack(reason);
+      abortController.abort(reason);
+    },
   };
   if (requester) {
     channelRequestersByScope.set(scope, Object.freeze(requester));

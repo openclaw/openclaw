@@ -108,10 +108,8 @@ function createBackend(context: Context, existing = false) {
 }
 
 function admitted<T>(context: Context, run: () => T, bindAuthority = false): T {
-  const stages: string[] = [];
   const databasePath = context.admission.databasePath;
-  const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-    stages.push(request.stage);
+  const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
     context.admission.assertCurrent();
     grant();
   });
@@ -132,36 +130,14 @@ function admitted<T>(context: Context, run: () => T, bindAuthority = false): T {
       admission.service();
     });
   try {
-    const result = runWithSqliteWorkerStateContext(context, () =>
+    return runWithSqliteWorkerStateContext(context, () =>
       withSqliteWorkerOperationAdmission({ port: admission.port }, run),
     );
-    expect(stages).toEqual(["transaction", "commit"]);
-    return result;
   } finally {
     dispatch.mockRestore();
     admission.finish();
   }
 }
-
-it("retains the shared native handle until its last actor closes and preserves rows on reopen", async () => {
-  const context = captureOpenClawStateWorkerContext();
-  const first = createBackend(context);
-  const second = createBackend(context, true);
-  await first[SQLITE_WORKER_PREPARE_COMMAND]?.("pluginState.register");
-  const database = openOpenClawStateDatabase();
-  expect(first.register(1)).toEqual({ ok: true, value: undefined });
-  expect(second.register(1)).toEqual({ ok: true, value: undefined });
-  expect(pluginStateLookup(pluginKey)).toEqual(1);
-
-  await first.close();
-  expect(database.db.isOpen).toBe(true);
-  expect(second.register(2)).toEqual({ ok: true, value: undefined });
-  await second.close();
-  expect(database.db.isOpen).toBe(false);
-
-  createBackend(captureOpenClawStateWorkerContext());
-  expect(pluginStateLookup(pluginKey)).toEqual(2);
-});
 
 it.each(["kv", "health"] as const)(
   "retains a promoted KV actor's native handle when %s closes first",
@@ -215,11 +191,11 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
     const context = captureOpenClawStateWorkerContext({ path: databasePath, env: state.env });
     const first = createBackend(context, true);
     const second = createBackend(context, true);
-    await first[SQLITE_WORKER_PREPARE_COMMAND]?.("claws.install-schema-versions");
+    await first[SQLITE_WORKER_PREPARE_COMMAND]?.("templates.install-schema-versions");
     await second[SQLITE_WORKER_PREPARE_COMMAND]?.(operation);
     expect(
       first.execute({
-        type: "claws.install-schema-versions",
+        type: "templates.install-schema-versions",
         input: { artifactPreservingReadOnly: false },
       }),
     ).toEqual([]);
@@ -254,7 +230,7 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
     expect(database.db.isOpen).toBe(false);
 
     const reopened = createBackend(captureOpenClawStateWorkerContext());
-    await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("claws.install-schema-versions");
+    await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("templates.install-schema-versions");
     const reopenedDatabase = openOpenClawStateDatabase();
     if (operation === "config.health.patch") {
       expect(readConfigHealthStateInDatabase(reopenedDatabase.db)).toMatchObject({

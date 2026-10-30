@@ -28,6 +28,7 @@ import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { captureTurnHandoverRequest } from "./plugin-turn-handover.js";
 import { PreparedModelRuntimePluginGenerationRetiredError } from "./prepared-model-runtime.errors.js";
 import {
   registerPreparedPluginRetirement,
@@ -45,12 +46,16 @@ import { releaseRuntimePluginWork, retainRuntimePluginWork } from "./runtime-plu
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 type Lifetime = ReturnType<typeof createLifetime>;
+type PreparedPluginGenerationResources = Pick<
+  PreparedModelRuntimePluginGeneration,
+  "pluginMetadataSnapshot" | "pluginRegistry" | "inboundPluginRegistry"
+>;
 // Source and compiled consumers can share the same generation and registry objects.
 // Share only cleanup ownership; model/auth snapshots keep their existing module identity.
 const { generations, active, retirements, publications } = resolveGlobalSingleton(
   Symbol.for("openclaw.preparedPluginLifetimes"),
   () => ({
-    generations: new WeakMap<PreparedModelRuntimePluginGeneration, Lifetime>(),
+    generations: new WeakMap<PreparedPluginGenerationResources, Lifetime>(),
     active: new Set<Lifetime>(),
     retirements: new Set<Promise<void>>(),
     publications: new WeakMap<object, { release: () => Promise<void> }>(),
@@ -167,7 +172,7 @@ export function registerPreparedPluginLifetime(): void {
 }
 
 export function ownPreparedPluginGeneration(
-  generation: PreparedModelRuntimePluginGeneration,
+  generation: PreparedPluginGenerationResources,
 ): Lifetime {
   const existing = generations.get(generation);
   if (existing) {
@@ -198,7 +203,12 @@ export function ownPreparedPluginGeneration(
         );
       }
     },
-    () => retainRuntimePluginWork(selectedRegistries, "prepared-generation-lease"),
+    () =>
+      retainRuntimePluginWork(
+        selectedRegistries,
+        "prepared-generation-lease",
+        captureTurnHandoverRequest(selectedRegistries),
+      ),
   );
   try {
     for (const registry of selectedRegistries) {

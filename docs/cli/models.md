@@ -162,6 +162,11 @@ Chat model menus, the Control UI, and `models list` display the catalog's refres
 warning. The CLI writes the warning to stderr, keeping JSON and plain stdout
 machine-readable.
 
+Shared model-list HTTP requests honor `models.providers.<id>.timeoutSeconds`,
+including plugin providers using shared model discovery. The admitted catalog acquisition
+deadline remains the upper bound: a provider timeout cannot extend it. Unset
+timeouts keep the existing discovery defaults and refresh budgets.
+
 Successful Ollama, LM Studio, and shared OpenAI-compatible discovery can flag a
 configured model ID that the server did not list. `models list` warns to pull or
 download the model on that server,
@@ -367,6 +372,8 @@ openclaw models accounts list --timeout 45000 --json
 ```
 
 ## Auth profiles
+
+`models auth list` escapes control characters in terminal output. Its `--json` output preserves the original field values.
 
 These commands manage **System / agent** credentials, not personal Gateway accounts. Before provider sign-in, `models auth login` shows the selected agent and that it is operating on the machine running OpenClaw.
 

@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocket, WebSocketServer, type RawData } from "ws";
+import { WebSocketServer } from "ws";
 import { runGatewaySmoke } from "../../../../scripts/dev/gateway-smoke.js";
 
 let server: Server | undefined;
@@ -24,7 +25,6 @@ afterEach(async () => {
 });
 
 describe("gateway-smoke", () => {
-  const smokeOptions = { token: "secret-token", urlRaw: "ws://127.0.0.1:12345" };
   function expectCliError(args: string[], message: string) {
     const result = spawnSync(
       process.execPath,
@@ -64,35 +64,25 @@ describe("gateway-smoke", () => {
     };
   }
 
-  async function listenGatewaySmokeServer() {
-    const requests: Array<{ method: string; params?: unknown; timeout?: number }> = [];
+  async function listenGatewaySmokeServer(responses: Record<string, object | undefined>) {
+    const requests: Array<{ method: string; params?: unknown }> = [];
     server = createServer();
     wss = new WebSocketServer({ server });
-    wss.on("connection", (ws: WebSocket) => {
-      ws.on("message", (data: RawData) => {
-        const text = Array.isArray(data)
-          ? Buffer.concat(data).toString("utf8")
-          : data instanceof ArrayBuffer
-            ? Buffer.from(data).toString("utf8")
-            : data.toString("utf8");
-        const frame = JSON.parse(text) as {
+    const closed = new Promise<void>((resolve) => {
+      wss?.once("connection", (socket) => {
+        socket.once("close", () => resolve());
+      });
+    });
+    wss.on("connection", (ws) => {
+      ws.on("message", (data) => {
+        const frame = JSON.parse(rawDataToString(data)) as {
           id: string;
           method: string;
           params?: unknown;
           type: string;
         };
         requests.push({ method: frame.method, params: frame.params });
-        const reply = (result: Record<string, unknown>) =>
-          ws.send(JSON.stringify({ id: frame.id, type: "res", ...result }));
-        if (frame.method === "connect") {
-          reply(connectHelloResponse());
-          return;
-        }
-        if (frame.method === "health") {
-          reply(healthResponse());
-          return;
-        }
-        reply({ error: `unexpected method ${frame.method}`, ok: false });
+        ws.send(JSON.stringify({ id: frame.id, type: "res", ...responses[frame.method] }));
       });
     });
     await new Promise<void>((resolve) => {
@@ -102,51 +92,7 @@ describe("gateway-smoke", () => {
     if (!address || typeof address === "string") {
       throw new Error("test gateway smoke server did not get a TCP address");
     }
-    return { requests, url: `ws://127.0.0.1:${address.port}` };
-  }
-
-  function createSmokeDeps(
-    responses: Partial<Record<string, { error?: string; ok: boolean } & Record<string, unknown>>>,
-    calls: Array<{ method: string; timeout?: number }> = [],
-  ) {
-    const stdout: string[] = [];
-    const stderr: string[] = [];
-    let closed = 0;
-
-    return {
-      calls,
-      get closed() {
-        return closed;
-      },
-      stderr,
-      stdout,
-      deps: {
-        createClient: () =>
-          ({
-            close: () => {
-              closed += 1;
-            },
-            request: async (method: string, _params?: unknown, timeout?: number) => {
-              calls.push({ method, timeout });
-              const response = responses[method];
-              return {
-                id: method,
-                ...response,
-                ok: response?.ok ?? false,
-                error: response?.error,
-                type: "res",
-              };
-            },
-            waitOpen: async () => {},
-          }) as never,
-        stderr: (message: string) => {
-          stderr.push(message);
-        },
-        stdout: (message: string) => {
-          stdout.push(message);
-        },
-      },
-    };
+    return { requests, closed, url: `ws://127.0.0.1:${address.port}` };
   }
 
   it("rejects unknown CLI args before connecting", () => {
@@ -175,79 +121,57 @@ describe("gateway-smoke", () => {
     }
   });
 
-  it("passes against a loopback gateway websocket using the real client", async () => {
-    const stdout: string[] = [];
-    const stderr: string[] = [];
-    const loopback = await listenGatewaySmokeServer();
-
-    const code = await runGatewaySmoke(
-      { token: "secret-token", urlRaw: loopback.url },
-      {
-        stderr: (message) => {
-          stderr.push(message);
-        },
-        stdout: (message) => {
-          stdout.push(message);
-        },
-      },
-    );
-
-    expect(code).toBe(0);
-    expect(loopback.requests.map((request) => request.method)).toEqual(["connect", "health"]);
-    expect(loopback.requests[0]?.params).toMatchObject({
-      auth: { token: "secret-token" },
-      client: { id: "openclaw-ios" },
-      role: "operator",
-      scopes: ["operator.read", "operator.write", "operator.admin"],
-    });
-    expect(stdout).toEqual(["ok: connected + health"]);
-    expect(stderr).toEqual([]);
-  });
-
   it.each([
-    {
-      name: "closes the client when connect fails",
-      responses: { connect: { ok: false, error: "bad token" } },
-      code: 2,
-      methods: ["connect"],
-      error: "connect failed: bad token",
+    ["bad token", { ok: false, error: "bad token" }, undefined, 2, "connect failed: bad token"],
+    ["healthy gateway", connectHelloResponse(), healthResponse(), 0, undefined],
+    ["missing hello", { ok: true }, undefined, 2, "connect failed: missing hello-ok payload"],
+    [
+      "unpaired iOS operator scopes",
+      connectHelloResponse(["operator.read"]),
+      undefined,
+      2,
+      "connect failed: unpaired iOS smoke unexpectedly received operator scopes",
+    ],
+    [
+      "missing health summary",
+      connectHelloResponse(),
+      { ok: true },
+      3,
+      "health failed: missing health summary payload",
+    ],
+  ] as const)(
+    "checks %s and closes the real client",
+    async (_name, connect, health, code, error) => {
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const loopback = await listenGatewaySmokeServer({ connect, health });
+      expect(
+        await runGatewaySmoke(
+          { token: "secret-token", urlRaw: loopback.url },
+          {
+            stdout: (message) => {
+              stdout.push(message);
+            },
+            stderr: (message) => {
+              stderr.push(message);
+            },
+          },
+        ),
+      ).toBe(code);
+      await loopback.closed;
+      expect({ stdout, stderr }).toEqual({
+        stdout: error ? [] : ["ok: connected + health"],
+        stderr: error ? [error] : [],
+      });
+      expect(loopback.requests.map((request) => request.method)).toEqual(
+        health ? ["connect", "health"] : ["connect"],
+      );
+      expect(loopback.requests[0]?.params).toMatchObject({
+        auth: { token: "secret-token" },
+        client: { id: "openclaw-ios" },
+        role: "operator",
+        scopes: ["operator.read", "operator.write", "operator.admin"],
+      });
     },
-    {
-      name: "requires connect and health in order",
-      responses: { connect: connectHelloResponse(), health: healthResponse() },
-      code: 0,
-      methods: ["connect", "health"],
-      error: undefined,
-    },
-    {
-      name: "rejects missing hello evidence",
-      responses: { connect: { ok: true } },
-      code: 2,
-      methods: ["connect"],
-      error: "connect failed: missing hello-ok payload",
-    },
-    {
-      name: "rejects unpaired iOS operator scopes",
-      responses: { connect: connectHelloResponse(["operator.read"]) },
-      code: 2,
-      methods: ["connect"],
-      error: "connect failed: unpaired iOS smoke unexpectedly received operator scopes",
-    },
-    {
-      name: "rejects missing health summary evidence",
-      responses: { connect: connectHelloResponse(), health: { ok: true } },
-      code: 3,
-      methods: ["connect", "health"],
-      error: "health failed: missing health summary payload",
-    },
-  ])("$name", async ({ responses, code, methods, error }) => {
-    const fake = createSmokeDeps(responses);
-    expect(await runGatewaySmoke(smokeOptions, fake.deps)).toBe(code);
-    expect(fake).toMatchObject({
-      closed: 1,
-      stdout: error ? [] : ["ok: connected + health"],
-      stderr: error ? [error] : [],
-    });
-    expect(fake.calls).toEqual(methods.map((method) => ({ method, timeout: undefined })));
-  });
+  );
 });

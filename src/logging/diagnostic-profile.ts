@@ -6,11 +6,28 @@ import { fileURLToPath } from "node:url";
 import type { HeapSpaceInfo } from "node:v8";
 import * as v8 from "node:v8";
 import { isMainThread } from "node:worker_threads";
-import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
+import { parseNodeOptionsEnvVar } from "../../node-runtime-env.mjs";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 
 export const DIAGNOSTIC_PROFILE_MAX_BYTES = 1024 * 1024;
-const ENGINE_NAMES = new Set(["(root)", "(program)", "(idle)", "(garbage collector)"]);
+const ENGINE_NAMES = new Set([
+  "(root)",
+  "(program)",
+  "(idle)",
+  "(garbage collector)",
+  // V8's heap sampler names its VM state when no JavaScript frame is available.
+  "(GC)",
+  "(PARSER)",
+  "(COMPILER)",
+  "(BYTECODE_COMPILER)",
+  "(V8 API)",
+  "(EXTERNAL)",
+  "(LOGGING)",
+  "(IDLE_EXTERNAL)",
+  "(IDLE)",
+  "(JS)",
+  "(deopt)",
+]);
 let capturing = false;
 
 type FailureReason =
@@ -31,13 +48,6 @@ export type DiagnosticProfileOutcome<Result> =
   | { status: "unavailable"; reason: FailureReason; cleanupFailed: boolean };
 
 type ProfileMemoryUsage = NodeJS.MemoryUsage & { heapSpaces: HeapSpaceInfo[] };
-type ProfileMeasurement = {
-  durationMs: number;
-  startBlockedMs: number;
-  before: ProfileMemoryUsage;
-  after: ProfileMemoryUsage;
-};
-
 export class ProfileFailure extends Error {
   constructor(readonly reason: FailureReason) {
     super(reason);
@@ -65,9 +75,9 @@ export function parseNativeCpuProfile(json: string): Profiler.Profile {
   };
   // The native serializer owns this shape; inspector consumers require string IDs.
   const nodes: Profiler.ProfileNode[] = [];
-  for (const { callFrame, ...node } of profile.nodes) {
-    const { scriptId, ...frame } = callFrame;
-    nodes.push({ ...node, callFrame: { ...frame, scriptId: String(scriptId) } });
+  for (const node of profile.nodes) {
+    const frame = node.callFrame;
+    nodes.push({ ...node, callFrame: { ...frame, scriptId: String(frame.scriptId) } });
   }
   return { ...profile, nodes };
 }
@@ -170,8 +180,9 @@ function codeUrl(url: string, packageRoot: string | null): string | undefined {
   if (dependency) {
     return `node_modules/${dependency}`;
   }
-  return /^(?:src|dist)\/[a-zA-Z0-9_@./+-]+\.[cm]?js$/.test(relative) ||
-    /^src\/[a-zA-Z0-9_@./+-]+\.ts$/.test(relative)
+  return /^(?:packages\/[a-zA-Z0-9_@.+-]+\/)?(?:src|dist)\/[a-zA-Z0-9_@./+-]+\.[cm]?js$/.test(
+    relative,
+  ) || /^(?:packages\/[a-zA-Z0-9_@.+-]+\/)?src\/[a-zA-Z0-9_@./+-]+\.ts$/.test(relative)
     ? `openclaw:${relative}`
     : undefined;
 }
@@ -226,7 +237,12 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
   sanitize: (
     profile: Profile,
     packageRoot: string | null,
-    measurement: ProfileMeasurement,
+    measurement: {
+      durationMs: number;
+      startBlockedMs: number;
+      before: ProfileMemoryUsage;
+      after: ProfileMemoryUsage;
+    },
   ) => Result | Promise<Result>;
 }): Promise<DiagnosticProfileOutcome<Result>> {
   const unavailable = (
@@ -316,7 +332,9 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
         ? error.reason
         : options.signal?.aborted
           ? "cancelled"
-          : "capture-failed";
+          : error instanceof Error && error.message.startsWith("Inspector error -32601:")
+            ? "unsupported"
+            : "capture-failed";
   } finally {
     if (capture) {
       if (startAttempted && !stopAttempted) {

@@ -17,6 +17,7 @@ import {
   root as openRoot,
   writeExternalFileWithinRoot,
 } from "./fs-safe.js";
+import { expectRejectCode } from "./fs-safe.test-support.js";
 
 const tempDirs = createTrackedTempDirs();
 
@@ -25,19 +26,6 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await tempDirs.cleanup();
 });
-
-async function expectRejectCode(promise: Promise<unknown>, expected: string | RegExp) {
-  const err = await promise.catch((caught: unknown) => caught);
-  if (err === undefined) {
-    throw new Error("Expected promise to reject");
-  }
-  const code = (err as NodeJS.ErrnoException).code;
-  if (typeof expected === "string") {
-    expect(code).toBe(expected);
-  } else {
-    expect(code).toMatch(expected);
-  }
-}
 
 async function makeFile(name: string, data: string | Buffer) {
   return path.join(await makeRoot({ [name]: data }), name);

@@ -1,30 +1,32 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-browser-annotation-lifecycle.test/"} */
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import type { BrowserAnnotationDraft } from "../../components/browser/browser-annotation.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store-scope.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import "../../lib/toast-host.tsx";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
-import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
+  createSessionContext,
+} from "./chat-application-context.test-support.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
+import {
   createPaneTestHost,
   getPaneTestRuntime,
-  createSessionContext,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
-import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 
 type AnnotationPane = TestChatPane & {
   receiveBrowserAnnotation: (event: Event) => void;
@@ -63,11 +65,7 @@ function annotatedPane(sessions = createSessionCapabilityFixture(), noClient = f
 function consume(pane: TestChatPane, owner: GatewayBrowserClient) {
   const handoff = pane.context.chatAttachmentHandoff;
   const scope = resolveUiConversationIdentity(pane.state, pane.state.sessionKey);
-  const key = {
-    owner,
-    paneId: pane.paneId,
-    scopeKey: storedChatOutboxScopeKey(scope),
-  };
+  const key = { owner, paneId: pane.paneId, scopeKey: storedChatOutboxScopeKey(scope) };
   return () => handoff.consume(key);
 }
 
@@ -119,6 +117,18 @@ function composerFallback(attachments: ReturnType<typeof storedAttachment>[]) {
   return { attachments, message: "", sequence: 1, storageFailed: false };
 }
 
+function toastAction() {
+  const host = document.createElement("openclaw-toast-host");
+  document.body.append(host);
+  onTestFinished(() => host.remove());
+  return async () => {
+    await waitForSolid(() =>
+      expect(host.querySelector(".app-toast__action")?.textContent).toBe("Undo"),
+    );
+    return host.querySelector<HTMLButtonElement>(".app-toast__action")!;
+  };
+}
+
 function mountedPanes(session = "current") {
   const owner = {} as GatewayBrowserClient;
   const context = createSessionContext(owner, createSessionCapabilityFixture());
@@ -142,12 +152,11 @@ function mountedPanes(session = "current") {
 it("transfers the mounted package and releases fallback-only payloads on disconnect", () => {
   const { owner, mount } = mountedPanes();
   const pane = mount();
-  const state = pane.state;
   const shared = storedAttachment("shared-annotation", true);
   const fallback = storedAttachment("fallback-annotation", true);
   const ordinary = storedAttachment("ordinary", false);
-  state.chatAttachments = [shared, ordinary];
-  state.chatComposerFallbackByScope = {
+  pane.state.chatAttachments = [shared, ordinary];
+  pane.state.chatComposerFallbackByScope = {
     fallback: composerFallback([shared, fallback, ordinary]),
   };
   const take = consume(pane, owner);
@@ -162,7 +171,6 @@ it("transfers the mounted package and releases fallback-only payloads on disconn
   expect(transferred?.fallbacks.fallback).toMatchObject(
     composerFallback([shared, fallback, ordinary]),
   );
-  expect(transferred?.fallbacks.fallback?.attachments).toEqual([shared, fallback, ordinary]);
   [shared, fallback, ordinary].forEach(({ id }) => releaseChatAttachmentPayload(id));
 });
 
@@ -291,46 +299,33 @@ it("publishes annotation capture, removal, and Undo through the composer owner",
   const source = getPaneTestRuntime(pane).chatState.composerDraft;
   const published: ChatAttachment[][] = [];
   const unsubscribe = source.subscribe(() => published.push(source.read().attachments));
-  const toastHost = document.createElement("openclaw-toast-host");
-  document.body.append(toastHost);
+  onTestFinished(unsubscribe);
+  const undo = toastAction();
+  receive(pane);
+  const attachment = state.chatAttachments[0]!;
+  expect(published.at(-1)).toEqual([attachment]);
 
-  try {
-    receive(pane);
-    const attachment = state.chatAttachments[0]!;
-    expect(published.at(-1)).toEqual([attachment]);
+  (pane as AnnotationPane).removeBrowserAnnotation(attachment);
+  expect(published.at(-1)).toEqual([]);
+  (await undo()).click();
 
-    (pane as AnnotationPane).removeBrowserAnnotation(attachment);
-    expect(published.at(-1)).toEqual([]);
-    await waitForSolid(() =>
-      expect(toastHost.querySelector(".app-toast__action")?.textContent).toBe("Undo"),
-    );
-    toastHost.querySelector<HTMLButtonElement>(".app-toast__action")!.click();
-
-    expect(published.at(-1)).toEqual([attachment]);
-    expect(state.chatAttachments[0]).toBe(attachment);
-    pane.discardStagedAttachments?.();
-  } finally {
-    unsubscribe();
-    toastHost.remove();
-  }
+  expect(published.at(-1)).toEqual([attachment]);
+  expect(state.chatAttachments[0]).toBe(attachment);
+  pane.discardStagedAttachments?.();
 });
 
 it("invalidates annotation Undo when the logical Gateway client is replaced", async () => {
   const { pane, state, annotation, ordinary } = annotatedPane();
-  const toastHost = document.createElement("openclaw-toast-host");
-  document.body.append(toastHost);
+  const undo = toastAction();
 
   (pane as AnnotationPane).removeBrowserAnnotation(annotation);
-  await waitForSolid(() =>
-    expect(toastHost.querySelector(".app-toast__action")?.textContent).toBe("Undo"),
-  );
+  const button = await undo();
   expect(state.chatAttachments).toEqual([ordinary]);
   expect(getChatAttachmentDataUrl(annotation)).not.toBeNull();
 
   reconnect(pane, {} as GatewayBrowserClient);
-  toastHost.querySelector<HTMLButtonElement>(".app-toast__action")!.click();
+  button.click();
 
   expect(state.chatAttachments).toEqual([ordinary]);
   expectPayloads([ordinary], [annotation]);
-  toastHost.remove();
 });

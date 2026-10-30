@@ -65,8 +65,7 @@ export function requireVisibleSuggestionRole(params: {
   sharing: ReturnType<typeof prepareProjectedSessionSharing>;
 }) {
   const { target, client, cfg, sharing } = params;
-  const entryFilter = hasOperatorBoundary(client, cfg) ? sharing.entryFilter : undefined;
-  if (!target || entryFilter?.(target.storeKey, target.entry) === false) {
+  if (!target || (hasOperatorBoundary(client, cfg) && !sharing.canReadTarget(target))) {
     params.respond(
       false,
       undefined,
@@ -95,6 +94,20 @@ export function requireVisibleSuggestionRole(params: {
   return null;
 }
 
+/** Shared permission decision; live writes additionally check their current lifecycle below. */
+export function sessionSuggestionAddPermissionError(
+  role: NonNullable<ReturnType<typeof requireVisibleSuggestionRole>>,
+  sessionCap: ReturnType<typeof operatorSessionCap>,
+  visibility: ReturnType<typeof resolveSessionVisibility>,
+): ErrorShape | null {
+  if (role === "viewer" && sessionCap === "view") {
+    return errorShape(ErrorCodes.FORBIDDEN, "your operator role permits viewing sessions only");
+  }
+  return visibility === "suggest"
+    ? null
+    : errorShape(ErrorCodes.INVALID_REQUEST, "session is not accepting suggestions");
+}
+
 export function authorizeSessionSuggestionMutation(
   params: Parameters<typeof requireVisibleSuggestionRole>[0] & { target: SessionSharingTarget },
   action: "add" | SessionSuggestionResolution,
@@ -105,20 +118,13 @@ export function authorizeSessionSuggestionMutation(
     return false;
   }
   if (action === "add") {
-    if (role === "viewer" && operatorSessionCap(client, cfg) === "view") {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.FORBIDDEN, "your operator role permits viewing sessions only"),
-      );
-      return false;
-    }
-    if (resolveSessionVisibility(target.entry) !== "suggest") {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "session is not accepting suggestions"),
-      );
+    const error = sessionSuggestionAddPermissionError(
+      role,
+      operatorSessionCap(client, cfg),
+      resolveSessionVisibility(target.entry),
+    );
+    if (error) {
+      respond(false, undefined, error);
       return false;
     }
   } else if (role !== "owner" && role !== "admin") {

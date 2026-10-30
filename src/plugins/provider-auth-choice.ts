@@ -19,7 +19,7 @@ import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capabili
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginWithCapabilityConsent } from "./enable.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 import {
   applyProviderAuthConfigPatchWithNormalization,
   restoreAgentsDefaultsModel,
@@ -269,7 +269,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
     signal: params.signal,
     assertCurrent: params.assertCurrent,
   };
-  const prepared = await withPluginLifecycleLease(leaseOptions, async () =>
+  const prepared = await withPluginLifecycleLeaseAsync(leaseOptions, async () =>
     withPluginCache(initialCache, async () => {
       let nextConfig = params.config;
       let pendingPluginInstalls: Record<string, PluginInstallRecord> | undefined;

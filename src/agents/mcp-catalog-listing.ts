@@ -1,13 +1,120 @@
 import type { Client, Prompt, Resource, Tool } from "@modelcontextprotocol/client";
-import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveFiniteNumber,
+  clampPositiveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { collectMcpPaginatedItems } from "./mcp-pagination.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
-const MCP_CATALOG_LIST_LIMITS = {
-  maxPages: 128,
-  maxItems: 16_384,
-  maxBytes: 10 * 1024 * 1024,
-} as const;
+const MCP_CATALOG_MAX_PAGES = 128;
+const MCP_CATALOG_MAX_ITEMS = 16_384;
+const MCP_CATALOG_MAX_BYTES = 10 * 1024 * 1024;
+
+type McpPaginationPage<T> = {
+  items: readonly T[];
+  nextCursor?: string;
+  /** Original SDK page used for the aggregate serialized-byte budget. */
+  serializedValue?: unknown;
+};
+
+type McpPaginationRequest = {
+  cursor: string | undefined;
+  /**
+   * Full per-request safety budget. The collector signal owns the absolute list deadline,
+   * so nested transport timers cannot replace its canonical timeout error.
+   */
+  requestTimeoutMs: number;
+  signal: AbortSignal;
+};
+
+type CollectMcpPaginatedItemsParams<T> = {
+  label: string;
+  itemLabel: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+  loadPage: (request: McpPaginationRequest) => Promise<McpPaginationPage<T>>;
+};
+
+function abortError(signal: AbortSignal, label: string): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error(`${label} aborted`);
+}
+
+/** Collects one complete MCP list under a single bounded lifecycle. */
+async function collectMcpPaginatedItems<T>(
+  params: CollectMcpPaginatedItemsParams<T>,
+): Promise<T[]> {
+  const timeoutMs = clampPositiveTimerTimeoutMs(params.timeoutMs);
+  if (timeoutMs === undefined) {
+    throw new Error(`${params.label} requires a positive timeout`);
+  }
+
+  const deadlineController = new AbortController();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, deadlineController.signal])
+    : deadlineController.signal;
+  if (signal.aborted) {
+    throw abortError(signal, params.label);
+  }
+  const deadlineAtMs = performance.now() + timeoutMs;
+  const timeoutError = new Error(`${params.label} timed out after ${timeoutMs}ms`);
+  const deadlineTimer = setTimeout(() => deadlineController.abort(timeoutError), timeoutMs);
+  deadlineTimer.unref();
+  const assertActive = () => {
+    if (signal.aborted) {
+      throw abortError(signal, params.label);
+    }
+    if (performance.now() >= deadlineAtMs) {
+      deadlineController.abort(timeoutError);
+      throw timeoutError;
+    }
+  };
+
+  const items: T[] = [];
+  const seenCursors = new Set<string>();
+  let collectedBytes = 0;
+  let cursor: string | undefined;
+
+  try {
+    for (let pageNumber = 0; pageNumber < MCP_CATALOG_MAX_PAGES; pageNumber += 1) {
+      assertActive();
+      const page = await racePromiseWithAbortSignal(
+        params.loadPage({ cursor, requestTimeoutMs: timeoutMs, signal }),
+        signal,
+        () => abortError(signal, params.label),
+      );
+      assertActive();
+      const measured = boundedJsonUtf8Bytes(
+        page.serializedValue ?? { items: page.items, nextCursor: page.nextCursor },
+        MCP_CATALOG_MAX_BYTES - collectedBytes,
+      );
+      if (!measured.complete || collectedBytes + measured.bytes > MCP_CATALOG_MAX_BYTES) {
+        throw new Error(`${params.label} exceeded ${MCP_CATALOG_MAX_BYTES} bytes`);
+      }
+      collectedBytes += measured.bytes;
+
+      for (const item of page.items) {
+        if (items.length >= MCP_CATALOG_MAX_ITEMS) {
+          throw new Error(`${params.label} exceeded ${MCP_CATALOG_MAX_ITEMS} ${params.itemLabel}`);
+        }
+        items.push(item);
+      }
+
+      const nextCursor = page.nextCursor;
+      if (nextCursor === undefined) {
+        return items;
+      }
+      if (seenCursors.has(nextCursor)) {
+        throw new Error(`${params.label} returned a repeated pagination cursor`);
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    }
+    throw new Error(`${params.label} exceeded ${MCP_CATALOG_MAX_PAGES} pages`);
+  } finally {
+    clearTimeout(deadlineTimer);
+  }
+}
 
 export async function listAllMcpTools(
   client: Client,
@@ -18,7 +125,6 @@ export async function listAllMcpTools(
     label: "MCP tool listing",
     itemLabel: "tools",
     timeoutMs,
-    ...MCP_CATALOG_LIST_LIMITS,
     signal,
     loadPage: async ({ cursor, requestTimeoutMs, signal: requestSignal }) => {
       const page = await client.request(
@@ -57,7 +163,6 @@ export function listMcpServerItems(
     label: `MCP ${kind === "resources" ? "resource" : "prompt"} listing`,
     itemLabel: kind,
     timeoutMs,
-    ...MCP_CATALOG_LIST_LIMITS,
     signal: callerSignal ? AbortSignal.any([signal, callerSignal]) : signal,
     loadPage: ({ cursor, requestTimeoutMs: timeout, signal: pageSignal }) =>
       runRequest(async (requestSignal) => {

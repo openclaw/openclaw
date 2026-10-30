@@ -248,7 +248,7 @@ export async function prepareManagedServiceBoundaryFiles({
     import fs from "node:fs";
     import { createRequire } from "node:module";
     const require = createRequire(import.meta.url);
-    export async function waitForGatewayUpdateRecovery(expectedVersion, expectedBuildId) {
+    export async function waitForGatewayUpdateRecovery(expectedVersion, expectedBuildId, timeoutMs) {
       ${managedServiceStateUpdateScript(
         statePath,
         `
@@ -256,6 +256,7 @@ export async function prepareManagedServiceBoundaryFiles({
       state.healthProbeCount = (state.healthProbeCount || 0) + 1;
       state.expectedVersion = expectedVersion;
       state.expectedBuildId = expectedBuildId;
+      state.recoveryProbeTimeoutMs = timeoutMs;
       `,
       )};
       ${options?.updaterNotification === "consumed" ? consumeNotification : ""}

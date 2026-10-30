@@ -16,6 +16,7 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { withEnv } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -33,7 +34,6 @@ const WS_REJECT_TIMEOUT_MS = 2_000;
 const WS_CONNECT_TIMEOUT_MS = 5_000;
 const HTTP_REQUEST_TIMEOUT_MS = 15_000;
 const SERVER_CLOSE_TIMEOUT_MS = 5_000;
-const A2UI_PATH = "/__openclaw__/a2ui";
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 const CANVAS_WS_PATH = "/__openclaw__/test/ws";
 
@@ -304,13 +304,6 @@ async function withCanvasGatewayHarness(
     openResponsesEnabled: false,
     handleHooksRequest: async () => false,
     handlePluginRequest: async (req, res) => {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      if (url.pathname === A2UI_PATH || url.pathname.startsWith(`${A2UI_PATH}/`)) {
-        res.statusCode = 503;
-        res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.end("A2UI assets not found");
-        return true;
-      }
       return (params.handleHttpRequest ?? allowCanvasHostHttp)(req, res);
     },
   });
@@ -330,7 +323,10 @@ async function withCanvasGatewayHarness(
       return true;
     },
     ...shared,
-    preauthConnectionBudget: createPreauthConnectionBudget(8),
+    preauthConnectionBudget: withEnv(
+      { OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP: "8" },
+      createPreauthConnectionBudget,
+    ),
     desktopSessionRegistry: params.desktopSessionRegistry,
   });
 
@@ -383,10 +379,6 @@ describe("gateway plugin node capability auth", () => {
       clients.add(activeNodeClient);
       const scopedCanvas = await expectCanvasStatus(listener, activeCanvasPath, 200);
       expect(await scopedCanvas.text()).toBe("ok");
-      const scopedA2ui = await fetchCanvas(
-        canvasUrl(listener, scopedCanvasPath(activeNodeCapability, `${A2UI_PATH}/`)),
-      );
-      expect([200, 404, 503]).toContain(scopedA2ui.status);
       await expectWsConnected(canvasUrl(listener, activeWsPath, "ws"));
       clients.delete(activeNodeClient);
       await expectCanvasStatus(listener, activeCanvasPath, 401);

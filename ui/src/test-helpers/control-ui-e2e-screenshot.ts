@@ -398,7 +398,7 @@ async function inspectControlUiProofScroll(target: Locator, shouldCenter: boolea
   ).scroll;
 }
 
-async function waitForControlUiFrameLayout(targets: readonly Locator[]): Promise<void> {
+export async function waitForControlUiFrameLayout(targets: readonly Locator[]): Promise<void> {
   await expect
     .poll(async () =>
       (

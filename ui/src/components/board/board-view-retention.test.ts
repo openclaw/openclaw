@@ -3,7 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import "./board-view.ts";
+import "./board-view.tsx";
 import {
   boardWidget,
   gatewayContext,

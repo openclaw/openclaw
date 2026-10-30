@@ -13,17 +13,26 @@ import {
   write as writeFile,
 } from "./mobile-release-git.test-support.js";
 
-const api = vi.hoisted(() => ({ parse: vi.fn() }));
-vi.mock("openai", () => ({
-  default: class {
-    responses = { parse: api.parse };
-  },
-}));
+const api = vi.hoisted(() => ({ parse: vi.fn(), useSdk: false }));
+vi.mock("openai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openai")>();
+  return {
+    ...actual,
+    default: class {
+      responses: Pick<InstanceType<typeof actual.default>["responses"], "parse">;
+      constructor(options: ConstructorParameters<typeof actual.default>[0]) {
+        this.responses = api.useSdk ? new actual.default(options).responses : { parse: api.parse };
+      }
+    },
+  };
+});
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   api.parse.mockReset();
+  api.useSdk = false;
 });
 
 function fixture(platform: "ios" | "android" = "ios") {
@@ -119,6 +128,97 @@ function accept(file: string, changes = [claim], focus = "label") {
 }
 
 describe("generated mobile store notes", () => {
+  it.each(["timeout", "server", "permanent", "exhausted", "deadline"] as const)(
+    "handles %s transport failures without bypassing review or its generation deadline",
+    async (failure) => {
+      const f = fixture("android");
+      api.useSdk = true;
+      const stages: string[] = [];
+      let reviewAttempts = 0;
+      const started = Date.now();
+      let now = started;
+      if (failure === "deadline") {
+        vi.spyOn(Date, "now").mockImplementation(() => now);
+      }
+      const transport = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        if (typeof init?.body !== "string") {
+          throw new Error("Expected a serialized Responses request.");
+        }
+        const request: { instructions: string; input: string; text: { format: { name: string } } } =
+          JSON.parse(init.body);
+        const stage = request.text.format.name;
+        const isWear = request.instructions.includes("Target audience: wear.");
+        stages.push(`${isWear ? "wear" : "phone"}:${stage}`);
+        let output: unknown;
+        if (stage === "release_notes_selection") {
+          output = { files: [selection(JSON.parse(request.input), f.file)] };
+        } else if (stage === "release_notes") {
+          output = { changes: isWear ? [] : [claim] };
+          if (failure === "deadline") {
+            now = started + 299_990;
+          }
+        } else if (stage === "release_notes_review") {
+          if (!isWear) {
+            reviewAttempts++;
+          }
+          expect(fs.existsSync(f.outputPath)).toBe(false);
+          if (
+            !isWear &&
+            (failure === "permanent" || failure === "exhausted" || reviewAttempts === 1)
+          ) {
+            if (failure === "timeout" || failure === "deadline") {
+              throw new DOMException("The operation was aborted.", "AbortError");
+            }
+            return Response.json(
+              { error: { message: "Synthetic provider failure", type: "api_error" } },
+              { status: failure === "permanent" ? 401 : 503, headers: { "retry-after-ms": "1" } },
+            );
+          }
+          output = { approved: true, problems: [] };
+        } else {
+          throw new Error(`Unexpected notes stage: ${stage}`);
+        }
+        return Response.json({
+          status: "completed",
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: JSON.stringify(output), annotations: [] }],
+            },
+          ],
+        });
+      });
+      vi.stubGlobal("fetch", transport);
+      if (failure === "timeout" || failure === "server") {
+        const saved = await generateMobileReleaseNotes(f);
+        expect(saved.entries.map(({ audience, text }) => [audience, text])).toEqual([
+          ["phone", `- ${claim.text}`],
+          ["wear", "Bug fixes and improvements."],
+        ]);
+        expect(JSON.parse(readNotes(f))).toEqual(saved);
+        expect(reviewAttempts).toBe(2);
+      } else {
+        await expect(generateMobileReleaseNotes(f)).rejects.toThrow(
+          failure === "deadline" ? /aborted|budget/iu : /Synthetic provider failure/u,
+        );
+        expect(fs.existsSync(f.outputPath)).toBe(false);
+        expect(reviewAttempts).toBe(failure === "exhausted" ? 2 : 1);
+      }
+      expect(stages.slice(0, 3)).toEqual([
+        "phone:release_notes_selection",
+        "phone:release_notes",
+        "phone:release_notes_review",
+      ]);
+      expect(stages.slice(3)).toEqual([
+        ...(reviewAttempts === 2 ? ["phone:release_notes_review"] : []),
+        ...(failure === "timeout" || failure === "server"
+          ? ["wear:release_notes_selection", "wear:release_notes", "wear:release_notes_review"]
+          : []),
+      ]);
+    },
+  );
+
   it("selects bounded app evidence and freezes notes for replay with source, identity, baseline, and text validation", async () => {
     const f = fixture();
     const watchFile = "apps/shared/OpenClawWatchRTC/src/lib.rs";

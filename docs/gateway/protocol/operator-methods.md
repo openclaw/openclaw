@@ -30,6 +30,11 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - `source`: `core` or `plugin`
   - `pluginId`: plugin owner when `source="plugin"`
   - `optional`: whether a plugin tool is optional
+
+  Plugin discovery yields between registrations so other Gateway requests can
+  progress while the catalog loads. An individual synchronous plugin callback
+  still blocks for its own duration.
+
 - `tools.effective` (`operator.read`) fetches a prospective tool preview for a
   session.
   - `sessionKey` is required.
@@ -43,9 +48,23 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
     is disabled, and inclusion does not guarantee execution access.
   - The projection can use cached inventory while refreshing it. Unsaved UI
     edits are not inputs, and saved or runtime changes may not appear immediately.
+  - Managed sessions using an OpenClaw tool runtime can include the GitHub
+    identity and publication tools when saved tool policy permits, without
+    waiting for credential discovery. ACP and unsupported runtimes do not
+    acquire them. GitHub action descriptions mark
+    sandbox-dependent actions as conditional: the preview does not prepare a
+    workspace, inspect credentials, or grant publication or merge authority.
+    Codex-specific exclusions apply when Codex is the selected runtime; switching
+    runtimes selects the matching GitHub preview instead of reusing the other one.
+    Older Codex plugins without preview metadata omit these two rows with an
+    update notice; other tools remain visible and execution access is unchanged.
   - A saved `toolOverrides.webSearch=false` excludes core `web_search`. Changing
     this override selects the matching preview instead of reusing the other
     state's cached inventory.
+  - Saved sandbox policy filters both core tools and warm MCP catalogs. A session
+    that requires a sandbox keeps that policy even when local sandbox mode is
+    off. A matching active remote-exec placement also applies sandbox policy.
+    Previewing tools does not provision a sandbox or grant execution authority.
   - `tools.effective` is read-only for MCP: it may project a warm session MCP
     catalog through the final tool policy, but does not create MCP runtimes,
     connect transports, or issue `tools/list`. If no matching warm catalog
@@ -175,9 +194,12 @@ catalog consumers, retaining cancellation and any explicit request deadline.
   aliases. Unknown provider IDs return `INVALID_REQUEST` with the rejected ID.
   Omit the filter or run `openclaw models list --all` to list models and their
   provider IDs.
-- `includeDetails: true` includes available input modalities, effective
-  `contextTokens`, and a `local` endpoint classification. It does not expose
-  endpoint URLs, headers, credentials, costs or runtime request parameters.
+- Rows include `contextWindow` (the model's maximum) and the effective
+  `contextTokens` budget when those values are known, so pickers can show the
+  active budget without session metadata.
+- `includeDetails: true` also includes available input modalities and a `local`
+  endpoint classification. It does not expose endpoint URLs, headers,
+  credentials, costs or runtime request parameters.
 
 An unchanged catalog renewal emits `chat.metadata.changed` with
 `modelCatalogChanged: false` and `modelCatalogStatusChanged: true`. The Control UI

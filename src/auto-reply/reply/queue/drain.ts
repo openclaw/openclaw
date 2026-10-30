@@ -24,7 +24,11 @@ import type { SessionControllerEntry } from "../../../sessions/session-controlle
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../../state/agent-database-admission-error.js";
 import { buildCollectPrompt, previewQueueSummaryPrompt } from "../../../utils/queue-helpers.js";
-import { collectRuntimeMetadata, resolveFollowupReplyAnchor } from "./delivery-context.js";
+import {
+  collectCurrentInboundContext,
+  collectRuntimeMetadata,
+  resolveFollowupReplyAnchor,
+} from "./delivery-context.js";
 import { runOutsideAdmittedGenerationScopes } from "./drain-admission-scope.js";
 import {
   buildCollectTranscriptInput,
@@ -43,10 +47,54 @@ import {
   updateFollowupRetryHeartbeats,
 } from "./lifecycle.js";
 import { followupQueueSources, followupSourceRunners } from "./state.js";
-import { consumeQueueSummaryDelivery } from "./summary-consumption.js";
 import { isFollowupRunAborted, type FollowupRun } from "./types.js";
 
 type AdmissionSessionRebind = { from: string; to: string };
+
+function consumeQueueSummaryDelivery(
+  queue: Pick<
+    SessionControllerMailbox,
+    "summarySources" | "summaryLines" | "summaryElisions" | "droppedCount"
+  >,
+  delivery: { droppedCount: number; sources: readonly FollowupRun[] },
+  completeLifecycles = true,
+): void {
+  let consumedCount = delivery.sources.length === 0 ? delivery.droppedCount : 0;
+  for (const source of delivery.sources) {
+    const sourceIndex = queue.summarySources.indexOf(source);
+    const entry =
+      sourceIndex < 0
+        ? queue.summaryElisions.find(
+            (candidate) => candidate.sources.includes(source) || candidate.sourceRefs.has(source),
+          )
+        : undefined;
+    if (sourceIndex >= 0 || entry) {
+      const index = entry
+        ? entry.sources.indexOf(entry.sourceRefs.get(source) ?? source)
+        : sourceIndex;
+      if (index >= 0) {
+        (entry?.sources ?? queue.summarySources).splice(index, 1);
+        (entry?.summaryLines ?? queue.summaryLines).splice(index, 1);
+      }
+      consumedCount += 1;
+      if (entry) {
+        for (const [original, compact] of entry.sourceRefs) {
+          if (compact === source || original === source) {
+            entry.sourceRefs.delete(original);
+          }
+        }
+        entry.count = entry.sources.length;
+        if (entry.sources.length === 0) {
+          queue.summaryElisions.splice(queue.summaryElisions.indexOf(entry), 1);
+        }
+      }
+    }
+    if (completeLifecycles) {
+      completeFollowupRunLifecycle(source);
+    }
+  }
+  queue.droppedCount = Math.max(0, queue.droppedCount - consumedCount);
+}
 
 // Overflow retries must reuse one transcript identity, while the same provider-local
 // message ID on a different channel route remains an independent user turn.
@@ -135,7 +183,9 @@ async function executeClaim(
       queue.activeSummarySources.add(item);
     }
   }
-  const summaryLines = sources.map((item) => {
+  // A summary prompt shows only the newest cap lines; source context pairs with those lines.
+  const summarizedSources = queue.cap > 0 ? sources.slice(-queue.cap) : sources;
+  const summaryLines = summarizedSources.map((item) => {
     const index = queue.summarySources.indexOf(item);
     if (index >= 0) {
       return queue.summaryLines[index] ?? "";
@@ -149,10 +199,7 @@ async function executeClaim(
     return item.summaryLine ?? item.prompt;
   });
   const prompt = claim.summary
-    ? (previewQueueSummaryPrompt({
-        droppedCount: sources.length,
-        summaryLines: queue.cap > 0 ? summaryLines.slice(-queue.cap) : summaryLines,
-      }) ?? "")
+    ? (previewQueueSummaryPrompt({ droppedCount: sources.length, summaryLines }) ?? "")
     : buildCollectPrompt({
         title: "[Queued messages while agent was busy]",
         items: sources,
@@ -186,7 +233,9 @@ async function executeClaim(
       ...resolveOriginRoutingMetadata(sources),
       ...collectRuntimeMetadata(sources, cancellation.signal),
       ...collectQueuedPromptMedia(sources),
-      ...(claim.summary ? { currentInboundContext: undefined } : {}),
+      ...(claim.summary
+        ? { currentInboundContext: collectCurrentInboundContext(summarizedSources) }
+        : {}),
       prompt,
       transcriptPrompt: claim.summary ? prompt : buildCollectTranscriptInput(sources).text,
       userTurnTranscriptRecorder: recorder,
@@ -266,7 +315,7 @@ async function executeClaim(
       item.controllerInput!.payload = claim.summary ? "summary" : "ready";
     }
     if (retrySources.length) {
-      queue.lastEnqueuedAt = Date.now();
+      queue.lastEnqueuedAt = performance.now();
     }
     for (const item of sources) {
       queue.activeSummarySources.delete(item);
@@ -368,15 +417,6 @@ export function scheduleFollowupDrain(
   rememberFollowupDrainCallback(key, runFollowup, mailbox, admissionSessionRebind);
   mailbox.dispatchEnabled = true;
   mailbox.wake();
-}
-
-/** Wake the existing controller dispatcher without acquiring another execution owner. */
-export function kickFollowupDrainIfIdle(key: string, owner?: SessionControllerEntry): void {
-  const mailbox = owner ? owner.mailbox : getExistingSessionControllerMailbox(key);
-  if (mailbox?.dispatch) {
-    mailbox.dispatchEnabled = true;
-    mailbox.wake();
-  }
 }
 
 export async function dropAbortedFollowups(

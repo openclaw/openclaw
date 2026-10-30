@@ -21,12 +21,13 @@ import * as gatewayCall from "./call.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "./method-scopes.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
+import { bindGatewayLifecycleRequest } from "./server-lifecycle-runtime-context.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-methods/types.js";
 import {
   getInProcessGatewayRequestContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
-import { bindGatewayLifecycleRequest } from "./server-recovery-runtime-context.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 const deleteGatewaySession = vi.hoisted(() =>
   vi.fn<typeof import("./server-methods/sessions-delete.js").deleteGatewaySession>(),
@@ -76,7 +77,7 @@ function createGateway(handlers: GatewayRequestHandlers) {
     getMethodRegistry: () => registry,
     isDispatchAvailable: () => true,
   });
-  context.recoveryRuntime = runtime.recovery;
+  context.lifecycleRuntime = runtime.lifecycle;
   runtimes.push(runtime);
   return () => context;
 }
@@ -187,12 +188,7 @@ describe("hosted lifecycle Gateway dispatch", () => {
     const cleanup = () => cleanupChild(resolveContext, () => current);
     const invoke = await withOperatorToolGatewayAuthority(
       {
-        authenticatedUserProfile: {
-          profileId: "operator",
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 1,
-        },
+        authenticatedUserProfile: gatewayProfile("operator"),
         scopes: ["operator.write"],
       },
       async () => AsyncLocalStorage.snapshot(),

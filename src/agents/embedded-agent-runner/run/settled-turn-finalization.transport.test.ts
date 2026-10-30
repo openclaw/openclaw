@@ -17,6 +17,7 @@ import {
   closeOpenAICodexWebSocketSessions,
   streamOpenAICodexResponses,
 } from "../../../../packages/ai/src/providers/openai-chatgpt-responses.js";
+import { createJwt } from "../../../../packages/ai/src/providers/openai-chatgpt-responses.test-helpers.js";
 import { writeOpenAiResponsesSse } from "../../../../test/helpers/openai-responses-sse.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { useTempSessionsFixture } from "../../../config/sessions/test-helpers.js";
@@ -91,16 +92,6 @@ function responseEvents(first: boolean): Record<string, unknown>[] {
   ];
 }
 
-function syntheticLoopbackJwt(): string {
-  const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
-  return (
-    encode({ alg: "none", typ: "JWT" }) +
-    "." +
-    encode({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-loopback" } }) +
-    ".signature"
-  );
-}
-
 const fixture = useTempSessionsFixture("settled-provider-error-loopback-");
 let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
 beforeEach(() => {
@@ -110,8 +101,11 @@ afterEach(() => admission.close());
 
 it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async (failure) => {
   const websocket = failure === "WebSocket";
-  const apiKey = websocket ? syntheticLoopbackJwt() : "synthetic-loopback-key";
-  const requests: Array<{ tools?: unknown[] }> = [];
+  const apiKey = websocket
+    ? createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-loopback" } })
+    : "synthetic-loopback-key";
+  const requests: Array<{ tools?: unknown[]; prompt_cache_key?: string }> = [];
+  const conversationCacheKey = "conversation-cache-key";
   const server = createServer((request, response) => {
     request.setEncoding("utf8");
     let body = "";
@@ -170,6 +164,7 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
       input: ["text"],
       api: websocket ? "openai-chatgpt-responses" : "openai-responses",
       provider: websocket ? "openai" : "loopback-provider",
+      compat: { supportsPromptCacheKey: true },
     };
     const target = {
       agentId: "main",
@@ -205,7 +200,7 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
     const messages = await runAgentLoop(
       [{ role: "user", content: "Save the note, then summarize.", timestamp: 1 }],
       { systemPrompt: "Save once.", messages: [], tools: [tool] },
-      { model, apiKey, convertToLlm: toLlmMessages },
+      { model, apiKey, promptCacheKey: conversationCacheKey, convertToLlm: toLlmMessages },
       async (event) => {
         if (event.type === "tool_execution_start") {
           itemLifecycle.startedCount++;
@@ -267,6 +262,7 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
       agentId: target.agentId,
       sessionKey: target.sessionKey,
       sessionTarget: target,
+      promptCacheKey: conversationCacheKey,
       authProfileStore: { version: 1, profiles: {} },
     });
     const finalize = vi.fn<NonNullable<typeof input.finalization.harness.finalizeSettledTurn>>(
@@ -284,7 +280,7 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
             messages: toLlmMessages(messages),
             tools: prepared.disableTools ? [] : [tool],
           },
-          { apiKey, signal: prepared.abortSignal },
+          { apiKey, signal: prepared.abortSignal, promptCacheKey: prepared.promptCacheKey },
         );
         const answer = await response.result();
         await persist(answer);
@@ -303,6 +299,12 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
     expect(execute).toHaveBeenCalledOnce();
     expect(fs.readFileSync(note, "utf8")).toBe("saved\n");
     expect(requests.map((request) => request.tools?.length ?? 0)).toEqual([1, 1, 0]);
+    expect(requests.slice(0, 2).map((request) => request.prompt_cache_key)).toEqual([
+      conversationCacheKey,
+      conversationCacheKey,
+    ]);
+    expect(requests[2]?.prompt_cache_key).toBeTruthy();
+    expect(requests[2]?.prompt_cache_key).not.toBe(conversationCacheKey);
     expect(result.prepared.payloadsWithToolMedia).toEqual([
       expect.objectContaining({ text: "Note saved once." }),
     ]);

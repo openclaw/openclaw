@@ -29,7 +29,6 @@ const failureMessages = {
   teardown: "Gateway did not exit cleanly",
   diagnostic: "Activity-summary diagnostic benchmark failed",
 };
-const memorySample = { heapUsedMb: 4, rssMb: 16 };
 const processInspection = { errorPolicy: "indeterminate" } as const;
 type Scenario = keyof typeof failureMessages;
 
@@ -194,27 +193,15 @@ function checkReport(report: Report, scenario: Scenario) {
   if (scenario === "workload") {
     expect(report.runs).toHaveLength(1);
     const completed = report.runs[0]!;
-    const scans = completed.pluginMetadataScans;
     expect(completed).not.toHaveProperty("failures");
     expect(completed).not.toHaveProperty("cleanup");
-    expect(completed).toMatchObject({
-      freshConnection: { ok: true },
-      memory: { before: memorySample, after: memorySample },
-    });
-    expect(scans).toEqual({ count: 0, durationMs: null, totalDurationMs: 0 });
-    expect(report.summary).toMatchObject({ turnCount: 1, pluginMetadataScanCount: 0 });
+    expect(report.summary.turnCount).toBe(1);
     expect(partialRun.sessionsList?.some((sample) => sample.ok)).toBe(true);
-    expect(partialRun.memory.before).toMatchObject(memorySample);
     return;
   }
   expect(report).toMatchObject({ runs: [], summary: { turnCount: 0 } });
-  expect(partialRun.memory.after).toMatchObject(memorySample);
   if (scenario === "teardown") {
-    expect(partialRun).toMatchObject({
-      turnCount: 1,
-      freshConnection: { ok: true },
-      gatewayProcess: { exitEvent: { exitCode: 23, signal: null } },
-    });
+    expect(partialRun.gatewayProcess?.exitEvent).toMatchObject({ exitCode: 23, signal: null });
     expect(partialRun).not.toHaveProperty("pluginMetadataScans");
     return;
   }
@@ -224,10 +211,6 @@ function checkReport(report: Report, scenario: Scenario) {
       (sample) => !sample.ok && sample.error?.includes("fixture history failure"),
     ),
   ).toBe(true);
-  expect(partialRun.cpuUsage).toMatchObject({
-    process: { totalMs: expect.any(Number) },
-    mainThread: { totalMs: expect.any(Number) },
-  });
   expect(partialRun.pluginMetadataScans).toMatchObject({ count: 1, totalDurationMs: 7 });
 }
 

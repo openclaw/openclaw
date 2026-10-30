@@ -4,14 +4,6 @@ import { ClawHubRequestError } from "../../infra/clawhub-client.js";
 import { fetchClawHubPromotions, type ClawHubPromotion } from "../../infra/clawhub-promotions.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
-function formatWindowEnd(promotion: ClawHubPromotion): string {
-  const daysLeft = Math.max(0, Math.floor((promotion.endsAt - Date.now()) / 86_400_000));
-  if (daysLeft === 0) {
-    return "ends today";
-  }
-  return daysLeft === 1 ? "1 day left" : `${daysLeft} days left`;
-}
-
 export async function promosListCommand(opts: { json?: boolean }, runtime: RuntimeEnv) {
   let promotions: ClawHubPromotion[];
   try {
@@ -40,7 +32,11 @@ export async function promosListCommand(opts: { json?: boolean }, runtime: Runti
   const safe = sanitizeTerminalText;
   for (const promotion of promotions) {
     const sponsor = promotion.sponsor ? ` — ${safe(promotion.sponsor)}` : "";
-    runtime.log(`${safe(promotion.title)}${sponsor} (${formatWindowEnd(promotion)})`);
+    const title = safe(promotion.title);
+    const daysLeft = Math.max(0, Math.floor((promotion.endsAt - Date.now()) / 86_400_000));
+    const windowEnd =
+      daysLeft === 0 ? "ends today" : daysLeft === 1 ? "1 day left" : `${daysLeft} days left`;
+    runtime.log(`${title}${sponsor} (${windowEnd})`);
     runtime.log(`  ${safe(promotion.blurb)}`);
     for (const model of promotion.models) {
       const alias = model.alias ? ` (${safe(model.alias)})` : "";

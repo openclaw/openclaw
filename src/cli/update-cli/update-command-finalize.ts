@@ -4,7 +4,7 @@ import {
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { retainCurrentDeferredPluginMigrationWarnings } from "../../infra/deferred-plugin-migration-warnings.js";
+import { retainCurrentDeferredUpdateWarnings } from "../../infra/deferred-update-warnings.js";
 import { readInstallOwner } from "../../infra/install-owner.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
@@ -15,12 +15,14 @@ import {
 } from "../../infra/update-channels.js";
 import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { resolveDoctorUpdateRun } from "../../infra/update-deferred-model-retirement.js";
 import {
   DoctorMaintenanceRefusalError,
   normalizeUpdatePostInstallDoctorWarnings,
 } from "../../infra/update-doctor-result.js";
 import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
+import { readUpdateResultPolicy } from "../../infra/update-result-telemetry.js";
 import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
 import {
   acknowledgeAbandonedUpdateRun,
@@ -40,6 +42,7 @@ import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
 import { refuseHostOwnedUpdate, reportHostOwnedUpdate } from "./host-owned.js";
 import {
+  parseUpdateChannel,
   parseUpdateTimeoutMs,
   readPackageVersion,
   resolveNodeRunner,
@@ -48,7 +51,10 @@ import {
   type UpdateFinalizeOptions,
 } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
-import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
+import {
+  reportPreMutationUpdateResult,
+  withUpdateAdmissionReporting,
+} from "./update-command-admission-report.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
   capturePreUpdateSourceConfig,
@@ -58,6 +64,7 @@ import {
   readPostCorePreUpdateSourceConfig,
   readUpdateConfigFileSnapshot,
 } from "./update-command-config.js";
+import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
 import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
@@ -76,7 +83,6 @@ import {
 import {
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
-  withUpdateAdmissionReporting,
 } from "./update-command-result.js";
 import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
@@ -99,6 +105,17 @@ export async function updateFinalizeCommand(
   // Finalization can succeed while repair-retained custody still blocks the next update.
   retained?: RetainedUpdateCustodyReport,
 ): Promise<void> {
+  await withUpdateDatabaseEngine(process.env, () =>
+    finalizeUpdate(opts, recoveryRunIds, handoff, retained),
+  );
+}
+
+async function finalizeUpdate(
+  opts: UpdateFinalizeOptions,
+  recoveryRunIds?: readonly string[],
+  handoff?: ManagedHandoffRepair,
+  retained?: RetainedUpdateCustodyReport,
+): Promise<void> {
   // Refuse retained recovery before discovery; preflight rechecks before state writes.
   await assertUpdateRecoveryAdmission({ env: process.env });
   const discoveredRoot = await resolveUpdateRoot();
@@ -107,14 +124,7 @@ export async function updateFinalizeCommand(
   const invocationCwd = tryProcessCwd();
   suppressDeprecations();
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
-  const requestedChannel = normalizeUpdateChannel(opts.channel);
-  if (opts.channel !== undefined && !requestedChannel) {
-    defaultRuntime.error(
-      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
-    );
-    defaultRuntime.exit(1);
-    return;
-  }
+  const requestedChannel = parseUpdateChannel(opts.channel);
 
   let exitCode: number | undefined;
   await withCommandProcessScope(async (stopChildren) => {
@@ -137,9 +147,13 @@ export async function updateFinalizeCommand(
                   recoverOrphanedSidecars: false,
                 });
                 await retainCliProcessJobUntilExit();
+                const reportResult = await readUpdateResultPolicy(process.env);
                 phase.assertCurrent();
                 // Public repair supplies a recovery selection, even when it is empty.
-                const admittedRunId = lifecycle.attachLedger(recoveryRunIds !== undefined);
+                const admittedRunId = lifecycle.attachLedger(
+                  recoveryRunIds !== undefined,
+                  reportResult,
+                );
                 const resolvedRoot = await resolveUpdateRoot();
                 const resolvedInstallKind = await resolveUpdateInstallKind(resolvedRoot, {
                   timeoutMs: lifecycle.budget("preflight"),
@@ -379,6 +393,23 @@ async function updateFinalizeCommandInternal(
   let maintenance: Awaited<
     ReturnType<typeof import("../../commands/doctor-maintenance.js").beginDoctorMaintenance>
   >;
+  const enterMaintenance = async (serviceInspectionDeadlineAtMs: number | undefined) => {
+    if (!ownsMaintenance || maintenance) {
+      return;
+    }
+    const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
+    maintenance = await beginDoctorMaintenance({
+      root,
+      runId: invokingRunId,
+      options: { repair: true, nonInteractive: true, json: opts.json },
+      runtime: { ...defaultRuntime, log: defaultRuntime.error },
+      serviceInspectionDeadlineAtMs,
+      reportStoppedService: lifecycle.ownsUpdateRepairRun,
+    });
+    lifecycle.serviceUpdateVerdict = maintenance?.serviceUpdateVerdict;
+    // Fresh Doctor owns database fences; the parent retains service custody.
+    await maintenance?.releaseState();
+  };
   const restoreMaintenance = async (cfg: OpenClawConfig) => {
     const owned = maintenance;
     maintenance = undefined;
@@ -390,36 +421,30 @@ async function updateFinalizeCommandInternal(
   let outcome: { complete: () => Promise<void> } | { error: unknown };
   try {
     if (prepared.installKind === "git") {
-      await completeSourceUpdateRuntime({ root, timeoutMs: lifecycle.budget("plugins") });
+      const runtimeTimeoutMs = lifecycle.budget("plugins");
+      const runtimeDeadline = performance.now() + runtimeTimeoutMs;
+      await completeSourceUpdateRuntime({
+        root,
+        timeoutMs: runtimeTimeoutMs,
+        beforePublication: () =>
+          enterMaintenance(Date.now() + Math.max(0, runtimeDeadline - performance.now())),
+      });
     }
     const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
       await lifecycle.run("configSnapshot", () => createUpdateConfigSnapshot());
       await lifecycle.run(
         "doctor",
-        () =>
+        (phase) =>
           runUpdateFinalizationDoctorInFreshProcess({
             phase: "pre-plugin",
             ...doctorParams,
             workspaceSuggestions: true,
             timeoutMs: lifecycle.budget("doctor"),
+            serviceInspectionDeadlineAtMs: phase.deadlineAtMs,
           }),
         undefined,
         {
-          enter: async () => {
-            if (!ownsMaintenance) {
-              return;
-            }
-            const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
-            maintenance = await beginDoctorMaintenance({
-              root,
-              runId: invokingRunId,
-              options: { repair: true, nonInteractive: true, json: opts.json },
-              runtime: { ...defaultRuntime, log: defaultRuntime.error },
-            });
-            lifecycle.serviceUpdateVerdict = maintenance?.serviceUpdateVerdict;
-            // Fresh Doctor owns database fences; the parent retains service custody.
-            await maintenance?.releaseState();
-          },
+          enter: enterMaintenance,
         },
       );
       return await lifecycle.run(
@@ -471,10 +496,10 @@ async function updateFinalizeCommandInternal(
             warning.reason === "doctor-advisory" && warning.pluginId ? [warning.pluginId] : [],
           ),
         );
-        doctorWarnings = await retainCurrentDeferredPluginMigrationWarnings(
-          doctorWarnings,
+        doctorWarnings = await retainCurrentDeferredUpdateWarnings(doctorWarnings, {
           finallyReportedPluginIds,
-        );
+          readUpdateRun: () => resolveDoctorUpdateRun(process.env, invokingRunId),
+        });
         phase.assertCurrent();
         lifecycle.recordWarnings(doctorWarnings);
         await persistValidatedDowngradeConfig(result.configSnapshot, phase.assertCurrent);

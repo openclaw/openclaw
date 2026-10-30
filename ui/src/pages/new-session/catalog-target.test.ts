@@ -1,16 +1,49 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { resolveCreateTarget, routeKey, routeKeyFromSearch } from "./catalog-target.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../../test-helpers/application-context-fixtures.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import {
+  CatalogTargetDiscovery,
+  resolveCreateTarget,
+  routeKey,
+  routeKeyFromSearch,
+} from "./catalog-target.ts";
+import { createNewSessionRouteData } from "./location.test-support.ts";
+
+it("does not discover or retry CLI targets without a current read grant", async () => {
+  const request = vi.fn().mockRejectedValue(new Error("unavailable"));
+  const context = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      phase: "connected",
+      client: createTestGatewayClient(request),
+    }),
+  );
+  const discovery = new CatalogTargetDiscovery(() => {});
+  const setScopes = (scopes: string[]) => {
+    context.gateway.snapshot.hello = gatewayHelloForMethods(["sessions.catalog.list"], scopes);
+  };
+  setScopes(["operator.sessions.write"]);
+  discovery.load(context, "main", true);
+  expect(request).not.toHaveBeenCalled();
+  expect(discovery.groups()).toBeUndefined();
+  setScopes(["operator.read"]);
+  discovery.load(context, "main", true);
+  await discovery.groups()?.[0]?.completion?.promise.catch(() => {});
+  expect(request).toHaveBeenCalledOnce();
+  setScopes(["operator.sessions.read"]);
+  discovery.load(context, "main", true);
+  discovery.retry(context.gateway.snapshot, "main");
+  expect(discovery.groups()).toBeUndefined();
+  expect(request).toHaveBeenCalledOnce();
+  discovery.clear();
+});
 
 describe("new-session catalog target", () => {
   it("isolates model-specific drafts while retaining ordinary draft storage keys", () => {
-    const plain = {
-      agentId: "main",
-      requestedAgentId: "main",
-      catalogId: "",
-      catalogLabel: "",
-      startTerminal: false,
-    };
+    const plain = createNewSessionRouteData();
     const first = { ...plain, requestedModel: "example/first" };
     const second = { ...plain, requestedModel: "example/second" };
     expect(routeKey(plain)).toBe('["main","",""]');
@@ -32,7 +65,15 @@ describe("new-session catalog target", () => {
     }));
 
     await expect(
-      resolveCreateTarget({ request } as unknown as GatewayBrowserClient, "claude", "research"),
+      resolveCreateTarget(
+        createApplicationGatewaySnapshot({
+          client: createTestGatewayClient(request),
+          phase: "connected",
+          hello: gatewayHelloForMethods(["sessions.catalog.list"]),
+        }),
+        "claude",
+        "research",
+      ),
     ).resolves.toBeUndefined();
     expect(request).toHaveBeenCalledWith("sessions.catalog.list", {
       agentId: "research",
@@ -67,7 +108,15 @@ describe("new-session catalog target", () => {
     }));
 
     await expect(
-      resolveCreateTarget({ request } as unknown as GatewayBrowserClient, "claude", "research"),
+      resolveCreateTarget(
+        createApplicationGatewaySnapshot({
+          client: createTestGatewayClient(request),
+          phase: "connected",
+          hello: gatewayHelloForMethods(["sessions.catalog.list"]),
+        }),
+        "claude",
+        "research",
+      ),
     ).resolves.toEqual({
       catalogLabel: "Claude Code",
       startTerminal: true,

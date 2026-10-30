@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
+import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import { noteClaudeCliHealth } from "./doctor-claude-cli.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -212,16 +213,13 @@ it.each(["cyclic project", "native installation"])(
     if (scenario === "cyclic project") {
       fs.symlinkSync(projectDir, projectDir, process.platform === "win32" ? "junction" : "dir");
     }
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        agents: {
-          ownership: "explicit",
-          defaults: runtimeAgent(workspaceDir, "anthropic/fixture"),
-          entries: { main: {} },
-        },
-      }),
-    );
+    writeFixtureJsonSync(configPath, {
+      agents: {
+        ownership: "explicit",
+        defaults: runtimeAgent(workspaceDir, "anthropic/fixture"),
+        entries: { main: {} },
+      },
+    });
     const actualRuntime = await vi.importActual<
       typeof import("../agents/agent-runtime-metadata.js")
     >("../agents/agent-runtime-metadata.js");

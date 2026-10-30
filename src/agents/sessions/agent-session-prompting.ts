@@ -9,6 +9,7 @@ import type { ImageContent, TextContent } from "../../llm/types.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { readRuntimePromptImageFactIndexes } from "../../media/runtime-prompt-image-provenance.js";
+import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import {
   mergePreparedUserTurnMessageForRuntime,
@@ -510,6 +511,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     canInject?: () => boolean,
     currentInboundContext?: CurrentInboundPromptContext,
     prepareInjection?: () => Promise<void>,
+    onAccepted?: () => void,
   ): Promise<void> {
     if (text.startsWith("/")) {
       this.throwIfExtensionCommand(text);
@@ -537,6 +539,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
             throw new Error("active session is finalizing");
           }
           notify = this.queueSteer(message, expandedText);
+          onAccepted?.();
         });
       } catch (error) {
         failure = { error };
@@ -585,7 +588,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     queueIdentity?: string,
     currentInboundContext?: CurrentInboundPromptContext,
   ): AgentMessage {
-    const runtimeMessage = this.createUserMessage(text, images, transcriptContext?.message);
+    // Cold replay adds this same source envelope; include it before the first model request.
+    const runtimeMessage = this.createUserMessage(
+      annotateInterSessionPromptText(text, transcriptContext?.message.provenance),
+      images,
+      transcriptContext?.message,
+    );
     const promptMessage = media?.length
       ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
       : runtimeMessage;

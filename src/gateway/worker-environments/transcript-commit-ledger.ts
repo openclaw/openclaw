@@ -15,10 +15,9 @@ export type {
 } from "./transcript-commit-store.worker-contract.js";
 
 export function createWorkerTranscriptCommitStore(
-  options: { database?: OpenClawStateDatabase; now?: () => number } = {},
+  options: { database?: OpenClawStateDatabase } = {},
 ) {
   const context = captureOpenClawStateWorkerContext({ path: options.database?.path });
-  const now = options.now ?? Date.now;
   const execute = <Key extends keyof WorkerTranscriptCommitOperations>(
     command: { type: Key; input: WorkerTranscriptCommitOperations[Key]["input"] },
     readReceipt: (facts: unknown) => WorkerTranscriptCommitOperations[Key]["output"] | undefined,
@@ -38,7 +37,7 @@ export function createWorkerTranscriptCommitStore(
   return {
     begin(input: WorkerTranscriptCommitInput, assertCurrent?: () => void) {
       return execute(
-        { type: "placementTranscript.begin", input: { ...input, nowMs: now() } },
+        { type: "placementTranscript.begin", input: { ...input, nowMs: Date.now() } },
         (facts) => (isWorkerTranscriptCommitBeginResult(facts) ? facts : undefined),
         assertCurrent,
       );
@@ -48,7 +47,7 @@ export function createWorkerTranscriptCommitStore(
       assertCurrent?: () => void,
     ) {
       return execute(
-        { type: "placementTranscript.complete", input: { ...input, nowMs: now() } },
+        { type: "placementTranscript.complete", input: { ...input, nowMs: Date.now() } },
         (facts) => (isWorkerTranscriptCommitOutcome(facts) ? facts : undefined),
         assertCurrent,
       );
@@ -57,7 +56,7 @@ export function createWorkerTranscriptCommitStore(
       // Known rollback cleanup retains the fresh claim, even after caller revocation.
       // Physical store admission and the exact pending-row predicate still apply.
       await execute(
-        { type: "placementTranscript.discard", input: { ...input, nowMs: now() } },
+        { type: "placementTranscript.discard", input: { ...input, nowMs: Date.now() } },
         (facts) => (facts === true ? facts : undefined),
       );
     },

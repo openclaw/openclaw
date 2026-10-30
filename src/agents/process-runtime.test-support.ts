@@ -1,5 +1,15 @@
 // Prepare native process probes before their liveness, readiness, and retention deadlines.
 export const agentProcessTestEntrypoints = {
+  durableProcesses: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "bash-process-durable.test-support",
+    distWorkerPath: "agents/bash-process-durable.test-support.js",
+  },
+  durableProcessStore: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "bash-durable-process-store.test-support",
+    distWorkerPath: "agents/bash-durable-process-store.test-support.js",
+  },
   blockChunker: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "embedded-agent-block-chunker",
@@ -39,6 +49,16 @@ export const agentProcessTestEntrypoints = {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "sessions/tools/read.retention.test-support",
     distWorkerPath: "agents/sessions/tools/read.retention.test-support.js",
+  },
+  sessionManager: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "sessions/session-manager",
+    distWorkerPath: "agents/sessions/session-manager.js",
+  },
+  transcriptWrite: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../config/sessions/session-accessor.sqlite-transcript-write.test-support",
+    distWorkerPath: "config/sessions/session-accessor.sqlite-transcript-write.test-support.js",
   },
   transcriptLifecycleRetention: {
     currentModuleUrl: import.meta.url,

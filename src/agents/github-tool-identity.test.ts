@@ -21,6 +21,7 @@ import {
   installManagedGitHubProfile,
   matchesPreparedGitHubPublicationIdentity,
   prepareGitHubPublicationIdentity,
+  prepareGitHubPublicationOptionsIdentity,
   prepareGitHubToolEnvironment,
   refreshManagedGitHubProfile,
   resolveGitHubToolIdentityStatus,
@@ -168,14 +169,11 @@ describe("GitHub tool identity", () => {
         login: isAgent ? "agent-user" : "system-user",
       });
     });
-    run.mockImplementation(async (argv: string[], options: { env?: NodeJS.ProcessEnv }) => {
+    run.mockImplementation(async (argv: string[]) => {
       if (argv[0] !== "git") {
         throw new Error("Managed status must not consult gh");
       }
-      const isAgent = options.env?.GH_CONFIG_DIR === agentProfileDir;
-      return commandResult(
-        `user.name\n${isAgent ? "Agent User" : "System User"}\0user.email\n${isAgent ? "agent" : "system"}@example.test\0`,
-      );
+      return commandResult();
     });
     const config = {
       tools: { github: { profileId: systemProfileId, kind: "oauth" as const } },
@@ -321,9 +319,9 @@ describe("GitHub tool identity", () => {
         accessExpiresAtMs,
       },
     });
-    const preparing = prepareGitHubPublicationIdentity({
+    const params = {
       config: {
-        tools: { github: { profileId, kind: "oauth" } },
+        tools: { github: { profileId, kind: "oauth" as const } },
         ...previewConfig("resolved-preview-token"),
       },
       sourceConfig: {
@@ -332,7 +330,8 @@ describe("GitHub tool identity", () => {
       },
       agentId: "main",
       env,
-    });
+    };
+    const preparing = prepareGitHubPublicationIdentity(params);
     env.GIT_EDITOR = "synthetic-after-preparation";
     const identity = await preparing;
     const childEnv = resolveCommandEnv({
@@ -351,6 +350,7 @@ describe("GitHub tool identity", () => {
       PREVIEW_SERVICE_TOKEN: undefined,
     };
     expect(identity).toMatchObject({ env: expectedEnv, accessExpiresAtMs });
+    expect(oauthMocks.inspect).toHaveBeenCalledTimes(2);
     expect(Object.isFrozen(identity)).toBe(true);
     expect(Object.isFrozen(identity.env)).toBe(true);
     expect(
@@ -366,6 +366,12 @@ describe("GitHub tool identity", () => {
     expect(matches("ghp_cccccccccccccccccccccccccccccccc")).toBe(false);
     expect(run).not.toHaveBeenCalled();
     expectVerifiedToken("managed-publication-token");
+    oauthMocks.inspect.mockClear();
+    expect(await prepareGitHubPublicationOptionsIdentity(params)).toEqual({
+      source: "system-configured",
+      account: { accountId: 202, login: "managed-user", avatarUrl: null },
+    });
+    expect(oauthMocks.inspect).not.toHaveBeenCalled();
   });
 
   it("reports a managed unverified transport failure honestly", async () => {
@@ -378,7 +384,7 @@ describe("GitHub tool identity", () => {
     expect(JSON.stringify(status)).not.toContain("private diagnostics");
   });
 
-  it.each(["verification", "staging"] as const)(
+  it.each(["verification", "preparation", "staging"] as const)(
     "preserves the stable credential when refresh authority closes during %s",
     async (phase) => {
       vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
@@ -420,6 +426,12 @@ describe("GitHub tool identity", () => {
           profileDir,
           token: "replacement-credential",
           expectedAccountId: 202,
+          prepareEffect: async () => {
+            if (phase === "preparation") {
+              await Promise.resolve();
+              revoke();
+            }
+          },
           assertCurrent: () => {
             if (!authorized) {
               throw revoked;

@@ -304,16 +304,14 @@ export function buildChannelUiCatalog(plugins: Array<{ id: string; meta: Channel
   const labels: Record<string, string> = {};
   const detailLabels: Record<string, string> = {};
   const systemImages: Record<string, string> = {};
-  const byId: Record<string, ChannelUiMetaEntry> = {};
   for (const entry of entries) {
     labels[entry.id] = entry.label;
     detailLabels[entry.id] = entry.detailLabel;
     if (entry.systemImage) {
       systemImages[entry.id] = entry.systemImage;
     }
-    byId[entry.id] = entry;
   }
-  return { entries, order, labels, detailLabels, systemImages, byId };
+  return { entries, order, labels, detailLabels, systemImages };
 }
 
 /**

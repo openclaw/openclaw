@@ -10,6 +10,7 @@ import {
   collectSourceCheckoutPluginBuildEntries,
   createBundledPluginBuildInventory,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
+import { createFsSafeWindowsHelperAssetPlugin } from "./scripts/lib/fs-safe-windows-helper-asset.mts";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
 import { createManagedHandoffBuildConfigs } from "./scripts/lib/managed-handoff-build-config.mts";
 import { createPackageRuntimeUrlBuildPlugin } from "./scripts/lib/package-runtime-url-build-plugin.mts";
@@ -24,8 +25,9 @@ import {
 import { createPublicSessionCardAssetsPlugin } from "./scripts/lib/public-session-card-assets.mts";
 import { createPublicSessionLocalesPlugin } from "./scripts/lib/public-session-locales.mts";
 import { isRecord } from "./scripts/lib/record-shared.mjs";
+import { resolveRepoRoot } from "./scripts/lib/repo-root.mjs";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "./scripts/lib/runtime-dependency-ownership-build-plugin.mts";
-import { runtimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
+import { createRootRuntimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
 import {
   getStandaloneRuntimeProcessOutputOptions,
   sharedRuntimeProcessBuildEntries,
@@ -33,6 +35,7 @@ import {
   standaloneRuntimeProcessBuildEntries,
 } from "./scripts/lib/runtime-process-core-build-entries.mts";
 import { createSqliteSchemaAssetsPlugin } from "./scripts/lib/sqlite-schema-assets.mts";
+import { createStandaloneSourceModuleUrlPlugin } from "./scripts/lib/standalone-source-module-urls.mjs";
 import {
   createStateSchemaInlinePlugin,
   STATE_SCHEMA_INLINE_PLUGIN_NAME,
@@ -47,13 +50,20 @@ import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration
 import { createDeclarationInputCapture } from "./scripts/lib/tsdown-declaration-inputs.mts";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
 import { cacheTsdownRuntimeConfigs } from "./scripts/lib/tsdown-runtime-cache.mts";
-import { runtimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-declarations.mts";
+import { rootRuntimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-declarations.mts";
 import {
   createWorkerDeployBuildPlugin,
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "./scripts/lib/worker-deploy-build-plugin.mts";
 import { buildPackageDistEntriesFromExports } from "./scripts/lib/workspace-package-entries.mts";
+import {
+  runtimeProcessDeployManifest,
+  runtimeProcessHelperManifest,
+  runtimeProcessWorkerDependencies,
+} from "./src/infra/runtime-process-manifest.ts";
+import { WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH } from "./src/shared/worker-bundle-hash.ts";
 
+type OutputOptions = Exclude<NonNullable<UserConfig["outputOptions"]>, Function>;
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
 type InputOptionsArg = InputOptionsFactory extends (
   options: infer Options,
@@ -75,6 +85,8 @@ type ExternalOptionFunction = (
   parentId: string | undefined,
   isResolved: boolean,
 ) => boolean | null | undefined;
+
+const repoRoot = resolveRepoRoot(import.meta.url);
 
 const env = {
   NODE_ENV: "production",
@@ -264,7 +276,10 @@ function nodeBuildConfig(
   };
 }
 
-function workerDeployBuildConfig(entry: Record<string, string>, split = false): UserConfig {
+function workerDeployBuildConfig(
+  entry: Record<string, string>,
+  split: OutputOptions["codeSplitting"] = false,
+): UserConfig {
   return {
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry,
@@ -444,6 +459,9 @@ function shouldNeverBundleDeclarationDependency(id: string): boolean {
 
 function shouldAlwaysBundleDependency(id: string): boolean {
   return (
+    // Ship the repaired compression dependency to npm installs as well as source builds.
+    id === "tar" ||
+    id.startsWith("tar/") ||
     // Keep htmlparser2's decoder version intact instead of binding it to the root major.
     id === "entities/decode" ||
     id === "openclaw/plugin-sdk/ssrf-runtime-internal" ||
@@ -488,7 +506,7 @@ function listBundledPluginEntrySources(
   return sources;
 }
 
-function buildCoreDistEntries(): Record<string, string> {
+function buildCoreDistEntries(pluginIds: readonly string[]): Record<string, string> {
   return {
     index: "src/index.ts",
     entry: "src/entry.ts",
@@ -514,8 +532,8 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
     "config/sessions/session-transcript-reconcile":
       "src/config/sessions/session-transcript-reconcile.ts",
-    ...runtimeProcessBuildEntries,
-    ...runtimeProcessDeclarationEntries,
+    ...createRootRuntimeProcessBuildEntries(pluginIds),
+    ...rootRuntimeProcessDeclarationEntries,
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
@@ -549,7 +567,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "telegram/token": bundledPluginFile("telegram", "src/token.ts"),
     "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
-    "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
     "mcp/plugin-tools-serve": "src/mcp/plugin-tools-serve.ts",
     "mcp/openclaw-tools-serve": "src/mcp/openclaw-tools-serve.ts",
   };
@@ -661,11 +678,11 @@ function shouldExternalizeTerminalCoreDependency(id: string): boolean {
   return id === "@clack/prompts" || id.startsWith("@clack/prompts/") || id === "chalk";
 }
 
-const coreDistEntries = buildCoreDistEntries();
-const dockerE2eHarnessEntries = buildDockerE2eHarnessEntries();
 const rootBundledPluginBuildEntries = collectSourceCheckoutPluginBuildEntries(
   bundledPluginBuildInventory,
 ).filter(({ isolated }) => !isolated);
+const coreDistEntries = buildCoreDistEntries(rootBundledPluginBuildEntries.map(({ id }) => id));
+const dockerE2eHarnessEntries = buildDockerE2eHarnessEntries();
 const bundledInventoryEntries = rootBundledPluginBuildEntries.flatMap((plugin) => {
   const openclaw =
     isRecord(plugin.packageJson) && isRecord(plugin.packageJson.openclaw)
@@ -755,9 +772,6 @@ function buildUnifiedDistEntries(): Record<string, string> {
       ),
     ),
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
-    "extensions/browser/native-host-entry": "extensions/browser/native-host-entry.ts",
-    "extensions/browser/relay-daemon-entry": "extensions/browser/relay-daemon-entry.ts",
-    "extensions/browser/setup-entry": "extensions/browser/setup-entry.ts",
     ...bundledHookEntries,
   };
 }
@@ -953,7 +967,10 @@ const configs: UserConfig[] = [
       false,
     );
   }),
-  ...Object.entries(standaloneRuntimeProcessBuildEntries).map(([name, source]) => {
+  ...Object.entries(standaloneRuntimeProcessBuildEntries).flatMap(([name, source]) => {
+    if (!Object.hasOwn(unifiedDistEntries, name)) {
+      return [];
+    }
     const bundleFsSafe = [
       "infra/sqlite-readonly-location.worker",
       "state/openclaw-state-read.worker",
@@ -997,47 +1014,48 @@ const configs: UserConfig[] = [
     },
     false,
   ),
-  workerDeployBuildConfig(
-    {
-      "worker/worker": "src/worker/worker-deploy-entry.ts",
-      "worker/worker-chunk-highlight": "node_modules/highlight.js/lib/index.js",
-      "worker/worker-chunk-fs-safe-watch-io":
-        "node_modules/@openclaw/fs-safe/dist/watch-io-worker.js",
-    },
-    true,
+  ...Object.entries(runtimeProcessDeployManifest).map(([name, entry]) =>
+    workerDeployBuildConfig(
+      {
+        ["worker/" + name]: entry.source,
+        ...(name === "worker"
+          ? Object.fromEntries(
+              Object.entries(runtimeProcessWorkerDependencies).map(([key, source]) => [
+                "worker/" + key,
+                source,
+              ]),
+            )
+          : {}),
+      },
+      name === "openclaw-state-read.worker"
+        ? {
+            // Keep lazy owners separate without capturing their shared dependencies.
+            groups: [
+              {
+                name: "state-read-handlers",
+                test: /(?:^|[\\/])src[\\/]state[\\/]openclaw-state-read-handlers\.ts$/u,
+                includeDependenciesRecursively: false,
+              },
+              {
+                name: "state-read-subagent-store",
+                test: /(?:^|[\\/])src[\\/]agents[\\/]subagents[\\/]registry[\\/]subagent-registry\.store\.worker\.ts$/u,
+                includeDependenciesRecursively: false,
+              },
+              {
+                name: "state-read-subagent-restore",
+                test: /(?:^|[\\/])src[\\/]agents[\\/]subagents[\\/]registry[\\/]subagent-registry\.store\.restore\.worker\.ts$/u,
+                includeDependenciesRecursively: false,
+              },
+              {
+                name: "state-read-transcript-export",
+                test: /(?:^|[\\/])src[\\/]transcripts[\\/]store-export\.worker\.ts$/u,
+                includeDependenciesRecursively: false,
+              },
+            ],
+          }
+        : entry.split,
+    ),
   ),
-  workerDeployBuildConfig({
-    "worker/code-mode-node.worker": "src/agents/code-mode-node.worker.ts",
-  }),
-  workerDeployBuildConfig({
-    "worker/client-credential.worker": "src/worker/worker-deploy-client-credentials.ts",
-  }),
-  workerDeployBuildConfig({
-    "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
-  }),
-  workerDeployBuildConfig({
-    "worker/file-tool-read.worker": "src/worker/worker-deploy-file-tool-read.ts",
-  }),
-  workerDeployBuildConfig({
-    "worker/gateway-state-owner-heartbeat.worker":
-      "src/infra/gateway-state-owner-heartbeat.worker.ts",
-  }),
-  workerDeployBuildConfig({
-    "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
-  }),
-  workerDeployBuildConfig({
-    "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
-  }),
-  workerDeployBuildConfig({
-    "worker/sqlite-source-revision.worker": "src/worker/worker-deploy-sqlite-source-revision.ts",
-  }),
-  workerDeployBuildConfig(
-    { "worker/openclaw-state-read.worker": "src/worker/worker-deploy-state-read.ts" },
-    true,
-  ),
-  workerDeployBuildConfig({
-    "worker/worker-native-lifecycle.worker": "src/infra/worker-native-lifecycle.worker.ts",
-  }),
   ...createManagedHandoffBuildConfigs().map((config) =>
     Object.assign(config, { name: TSDOWN_UNIFIED_CONFIG_GROUP, env }),
   ),
@@ -1054,16 +1072,22 @@ const configs: UserConfig[] = [
       false,
     ),
   ),
-  workerHelperBuildConfig({
-    "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
+  ...Object.entries(runtimeProcessHelperManifest).map(([name, entry]) => {
+    const helperConfig = workerHelperBuildConfig(
+      { ["worker/" + name]: entry.source },
+      entry.sealed ? { WORKER_DEPLOY_BUILD: "true", SEALED_RUNTIME_BUILD: "true" } : undefined,
+    );
+    if (name === "github-exec-launcher") {
+      // Credential reads need fs-safe's relocated metadata/helper, but no runtime state schemas.
+      helperConfig.plugins = [
+        createFsSafeWindowsHelperAssetPlugin(
+          process.cwd(),
+          `worker/${WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH}`,
+        ),
+      ];
+    }
+    return helperConfig;
   }),
-  workerHelperBuildConfig({ "worker/github-exec-launcher": "src/agents/github-exec-launcher.ts" }),
-  ...["service-child-relay", "service-child-group-anchor"].map((name) =>
-    workerHelperBuildConfig(
-      { [`worker/${name}`]: `src/process/supervisor/${name}.ts` },
-      { WORKER_DEPLOY_BUILD: "true", SEALED_RUNTIME_BUILD: "true" },
-    ),
-  ),
   // The build wrapper must select exactly one of the full and SDK-only declaration groups.
   ...(TSDOWN_DECLARATIONS
     ? buildUnifiedDeclarationGroups(unifiedDistEntries).map(({ name, sources }) =>
@@ -1083,5 +1107,14 @@ const configs: UserConfig[] = [
       )
     : []),
 ];
+
+for (const config of configs) {
+  if (typeof config.dts === "object" && config.dts.emitDtsOnly) {
+    continue;
+  }
+  config.plugins = [config.plugins, createStandaloneSourceModuleUrlPlugin({ rootDir: repoRoot })]
+    .flat()
+    .filter(Boolean);
+}
 
 export default cacheTsdownRuntimeConfigs(configs);

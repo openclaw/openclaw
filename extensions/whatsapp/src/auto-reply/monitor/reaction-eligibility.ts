@@ -1,11 +1,11 @@
 import { resolveAgentIdentity } from "openclaw/plugin-sdk/agent-runtime";
 import { shouldAckReaction } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { getSenderIdentity } from "../../identity.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { resolveWhatsAppReactionLevel } from "../../reaction-level.js";
 import type { sendReactionWhatsApp } from "../../send.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
-import { resolveReactionParticipant } from "./reaction-participant.js";
 
 const DISABLED_REACTION = { status: "disabled" } as const;
 
@@ -62,7 +62,8 @@ export async function resolveWhatsAppReactionEligibility(params: {
     return DISABLED_REACTION;
   }
 
-  const participant = resolveReactionParticipant(params.msg);
+  const sender = getSenderIdentity(params.msg);
+  const participant = sender.jid ?? sender.lid ?? undefined;
   return {
     status: "prepared" as const,
     chatId: params.msg.platform.chatJid,

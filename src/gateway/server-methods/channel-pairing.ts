@@ -35,7 +35,7 @@ import {
 } from "../../pairing/pairing-store.js";
 import { formatForLog } from "../ws-log.js";
 import { captureLocalStateMutationGuard } from "./local-state-owner.js";
-import { respondUnavailable, respondUnavailableOnThrow } from "./response.js";
+import { respondError, respondUnavailable, respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -161,19 +161,16 @@ function publicRequest(params: {
 }
 
 function invalidPairingRequest(respond: RespondFn, message: string): void {
-  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+  respondError(respond, ErrorCodes.INVALID_REQUEST, message);
 }
 
 function respondPairingFailure(respond: RespondFn, error: unknown): void {
-  respond(
-    false,
-    undefined,
-    errorShape(
-      error instanceof InvalidPairingTargetError
-        ? ErrorCodes.INVALID_REQUEST
-        : ErrorCodes.UNAVAILABLE,
-      formatForLog(error),
-    ),
+  respondError(
+    respond,
+    error instanceof InvalidPairingTargetError
+      ? ErrorCodes.INVALID_REQUEST
+      : ErrorCodes.UNAVAILABLE,
+    formatForLog(error),
   );
 }
 

@@ -44,6 +44,7 @@ import {
   UPDATE_CAPTURE_PRIVACY_MARKER,
   UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
 } from "./update-capture-privacy-marker.js";
+import { UpdateCaptureSpaceError } from "./update-capture-space.js";
 import { createUpdateDatabaseBackup } from "./update-database-backup.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 import { canonicalEntryPath } from "./update-recovery-path.js";
@@ -237,8 +238,9 @@ export function captureUpdateRecoveryBaseline(params: {
       );
       const space = tryReadDiskSpace(store);
       if (space && space.availableBytes < requiredBytes) {
-        throw new Error(
+        throw new UpdateCaptureSpaceError(
           `Original update capture needs ${formatDiskSpaceBytes(requiredBytes)} near ${store}, but only ${formatDiskSpaceBytes(space.availableBytes)} is available. Free space on this volume, then retry; original state has not been changed.`,
+          { requiredBytes, availableBytes: space.availableBytes },
         );
       }
       if (!space) {

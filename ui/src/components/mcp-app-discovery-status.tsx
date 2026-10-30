@@ -2,15 +2,13 @@ import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
 
-type DiscoveryStatusProps = {
+export default function McpAppDiscoveryStatus(props: {
   request: { promise: Promise<void> } | undefined;
   emptyMessage?: string;
   emptyRole?: "alert";
   onRetry?: () => void;
   retryDisabled?: boolean;
-};
-
-export default function McpAppDiscoveryStatus(props: DiscoveryStatusProps) {
+}) {
   return (
     <For
       each={props.request ? [props.request] : []}

@@ -15,7 +15,7 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   hasResolvableProactiveOwnerRoute,
-  resolveHeartbeatDeliveryTargetWithSessionRoute,
+  resolveProactiveDeliveryTargetWithSessionRoute,
 } from "./targets.js";
 
 const registrySnapshot = captureActivePluginRegistrySnapshot();
@@ -46,7 +46,7 @@ it.each([
       async () => {
         expect(await hasResolvableProactiveOwnerRoute({ cfg })).toBe(true);
         expect(
-          await resolveHeartbeatDeliveryTargetWithSessionRoute({ cfg, agentId: "main" }),
+          await resolveProactiveDeliveryTargetWithSessionRoute({ cfg, agentId: "main" }),
         ).toMatchObject({ channel: "telegram", to: "telegram:1234567890", chatType: "direct" });
       },
     );

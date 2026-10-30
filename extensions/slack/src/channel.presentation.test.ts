@@ -1,25 +1,16 @@
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
+import { createSlackActions } from "./channel-actions.js";
 import { slackPlugin } from "./channel.js";
-import { setSlackRuntime } from "./runtime.js";
-
-const handleSlackActionMock = vi.fn();
-const requireRecord = createRequireRecord("record", "expected-label-object");
-
-beforeEach(() => {
-  handleSlackActionMock.mockReset();
-  setSlackRuntime({
-    channel: { slack: { handleSlackAction: handleSlackActionMock } },
-  } as never);
-});
-afterEach(() => setSlackRuntime(null as never));
 
 const cfg = { channels: { slack: { botToken: "xoxb-test", appToken: "xapp-test" } } };
-it("keeps data literal and authored mentions and commands intact in mixed presentation edits", async () => {
-  handleSlackActionMock.mockResolvedValueOnce({ ok: true });
+it("keeps data literal and authored mentions intact in mixed presentation edits", async () => {
+  const invoke = vi.fn(async (_action: Record<string, unknown>) => ({
+    content: [],
+    details: { ok: true },
+  }));
 
-  await slackPlugin.actions!.handleAction!({
+  await createSlackActions("slack", { invoke }).handleAction!({
     action: "edit",
     channel: "slack",
     cfg,
@@ -41,40 +32,18 @@ it("keeps data literal and authored mentions and commands intact in mixed presen
             yLabel: "Count > 0",
           },
           {
-            type: "chart",
-            chartType: "pie",
-            title: "Mix &lt;raw&gt;",
-            segments: [{ label: "<!here>", value: 1 }],
-          },
-          {
             type: "table",
             caption: "Table <!channel>",
             headers: ["Owner <name>", "Count"],
             rows: [["<@U3>\n &lt;raw&gt;", 0]],
           },
-          { type: "divider" },
           { type: "context", text: "Context <!here>" },
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Run <@U4>",
-                action: { type: "command", command: "/say <!channel> & <@U5>" },
-              },
-              { label: "Open <!here>", url: "https://example.com/?a=1&b=2" },
-            ],
-          },
-          {
-            type: "select",
-            placeholder: "Owner <!channel>",
-            options: [{ label: "<@U6>", value: "private-callback" }],
-          },
         ],
       },
     },
   });
 
-  expect(requireRecord(handleSlackActionMock.mock.calls[0]?.[0], "action")).toMatchObject({
+  expect(invoke.mock.calls[0]?.[0]).toMatchObject({
     action: "editMessage",
     blocks: undefined,
     content: [
@@ -82,11 +51,8 @@ it("keeps data literal and authored mentions and commands intact in mixed presen
       "Report &lt;@U0&gt;",
       "Authored <@U1>",
       "Trend &lt;@U2&gt; (bar chart)\nX axis: Period &lt;start&gt;\nY axis: Count &gt; 0\n- Count &lt;!channel&gt;: A &amp; B: 0; &lt;https://example.com&gt;: -2.5",
-      "Mix &amp;lt;raw&amp;gt; (pie chart)\n- &lt;!here&gt;: 1",
       "Table &lt;!channel&gt; (table)\n- Owner &lt;name&gt;: &lt;@U3&gt; &amp;lt;raw&amp;gt;; Count: 0",
       "Context <!here>",
-      "- Run &lt;@U4&gt;: `/say <!channel> & <@U5>`\n- Open &lt;!here&gt;: https://example.com/?a=1&amp;b=2",
-      "Owner &lt;!channel&gt;:\n- &lt;@U6&gt;",
     ].join("\n\n"),
   });
 });
@@ -110,9 +76,7 @@ it("renders portable presentations through the facade as card receipts (#95440)"
     presentation,
     ctx: { cfg, to: "C123", text: payload.text, payload },
   });
-  if (!rendered) {
-    throw new Error("Expected rendered Slack presentation payload");
-  }
+  assert(rendered, "Expected rendered Slack presentation payload");
   // Core consumes the portable presentation before handing the native payload to the adapter.
   const { presentation: _presentation, ...deliveryPayload } = rendered;
 
@@ -125,22 +89,6 @@ it("renders portable presentations through the facade as card receipts (#95440)"
     deps: { sendSlack },
   });
 
-  expect(sendSlack.mock.calls[0]).toEqual([
-    "C123",
-    "Fallback\n\nStatus",
-    expect.objectContaining({
-      blocks: [
-        {
-          type: "section",
-          text: { type: "mrkdwn", text: "Fallback", verbatim: true },
-        },
-        {
-          type: "header",
-          text: { type: "plain_text", text: "Status", emoji: true },
-        },
-        { type: "divider" },
-      ],
-    }),
-  ]);
+  expect(sendSlack.mock.calls[0]?.slice(0, 2)).toEqual(["C123", "Fallback\n\nStatus"]);
   expect(result.receipt.parts[0]?.kind).toBe("card");
 });

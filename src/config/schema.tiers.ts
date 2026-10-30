@@ -21,7 +21,7 @@ bindings commands messages session
 acp.allowedAgents
 agents.defaults.elevatedDefault agents.defaults.embeddedAgent.projectSettingsPolicy
 agents.defaults.fastModeDefault
-agents.defaults.compaction.memoryFlush.model agents.defaults.compaction.model
+agents.defaults.compaction.model
 agents.defaults.imageModel.primary agents.defaults.model
 agents.defaults.mediaModels agents.defaults.model.primary agents.defaults.modelPolicy.allow
 agents.defaults.pdfModel.primary agents.defaults.sandbox.browser.enabled

@@ -65,7 +65,7 @@ function runAccounting(kind: "memory" | "compaction", assertCurrent?: () => void
     },
     sessionKey: "main",
     storePath: path.join(followupRun.run.workspaceDir, "sessions.json"),
-    isHeartbeat: false,
+
     cfg: {
       agents: { defaults: { compaction: { maxActiveTranscriptBytes: 1000, memoryFlush: {} } } },
     },

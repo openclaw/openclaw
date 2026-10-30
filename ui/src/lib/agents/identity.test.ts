@@ -7,6 +7,7 @@ import type { ApplicationGatewayPhase, ApplicationGatewaySnapshot } from "../../
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { createGatewayHarness } from "../sessions/session-capability.test-support.ts";
 import { createAgentIdentityCapability, fetchAgentIdentity } from "./identity.ts";
 
 afterEach(() => {
@@ -231,26 +232,8 @@ it("rejects stale identities after reconnecting the same client", async () => {
     .mockImplementationOnce(() => oldRequest.promise)
     .mockImplementationOnce(() => currentRequest.promise);
   const client = createTestGatewayClient(request);
-  let snapshot: { client: GatewayBrowserClient | null; phase: ApplicationGatewayPhase } = {
-    client,
-    phase: "connected",
-  };
-  const listeners = new Set<(next: typeof snapshot) => void>();
-  const capability = createAgentIdentityCapability({
-    get snapshot() {
-      return snapshot;
-    },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  });
-  const publish = (connected: boolean) => {
-    snapshot = { client, phase: connected ? "connected" : "reconnecting" };
-    for (const listener of listeners) {
-      listener(snapshot);
-    }
-  };
+  const { gateway, publish } = createGatewayHarness(client);
+  const capability = createAgentIdentityCapability(gateway);
 
   const stale = capability.ensure(["main"]);
   publish(false);
@@ -307,9 +290,9 @@ it.each(["local", "Gateway"])(
   },
 );
 
-it("publishes each fetched snapshot once under overlapping roster and stream updates", async () => {
+it("retains a large roster across overlapping and repeated identity updates", async () => {
   const pending = createDeferred();
-  const ids = Array.from({ length: 24 }, (_, index) => `agent-${index}`);
+  const ids = Array.from({ length: 300 }, (_, index) => `agent-${index}`);
   const request = vi.fn((_method: string, params: unknown) => {
     const { agentId } = params as { agentId: string };
     return pending.promise.then(() => ({ agentId, name: agentId, avatar: "" }));
@@ -327,6 +310,7 @@ it("publishes each fetched snapshot once under overlapping roster and stream upd
   expect(capability.entries()).toHaveLength(ids.length);
   expect(publish).toHaveBeenCalledTimes(1);
   await capability.ensure(ids);
+  expect(request).toHaveBeenCalledTimes(ids.length);
   expect(publish).toHaveBeenCalledTimes(1);
 });
 

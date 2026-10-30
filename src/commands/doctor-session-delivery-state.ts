@@ -1,5 +1,6 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { scanDoctorSessionEntriesTolerant } from "../config/sessions/session-accessor.js";
+import { SESSION_ENTRY_NUMERIC_FIELDS } from "../config/sessions/session-entry-numeric-snapshot.js";
 import {
   hasLegacySessionEntryState,
   hasLegacySessionProviderState,
@@ -23,6 +24,7 @@ import {
   createLegacyStateMigrationStepReceipt,
   DoctorStateMigrationRefusalError,
 } from "../infra/state-migrations.messages.js";
+import { AgentDatabaseMaintenanceRequiredError } from "../state/openclaw-agent-db-maintenance-authority.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "../state/openclaw-agent-db-migration-required.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -36,7 +38,11 @@ import {
   rewriteDoctorSessionEntries,
   scanDoctorSessionEntryRecords,
 } from "./doctor/shared/session-entry-rewrite.js";
-import { migrateLegacySessionEntryState } from "./doctor/shared/session-entry-shape.js";
+import {
+  inspectLegacyRestartTombstone,
+  migrateLegacySessionEntryState,
+  type SessionEntryStateRepair,
+} from "./doctor/shared/session-entry-shape.js";
 
 export type SessionDeliveryStateRepairReport = ReturnType<typeof repairCanonicalSessionEntries>;
 
@@ -77,12 +83,12 @@ type PreparedSessionEntryRepairParams =
   | (SessionEntryRepairParams & { source: "canonical" })
   | (Omit<SessionEntryRepairParams, "transform"> & {
       source: "raw";
-      rawNeedsRepair: (entry: Record<string, unknown>) => boolean;
+      rawNeedsRepair: (entry: Record<string, unknown>, sessionKey: string) => boolean;
       rawTransform: (
         entry: Record<string, unknown>,
         sessionKey: string,
         updatedAt: number,
-      ) => Record<string, unknown>;
+      ) => SessionEntryStateRepair;
       deferSchemaRepair?: boolean;
       deferToMediaPreparation?: boolean;
     });
@@ -109,7 +115,7 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
         scanDoctorSessionEntryRecords(
           scope,
           ({ entry, sessionKey }) => {
-            if (params.rawNeedsRepair(entry)) {
+            if (params.rawNeedsRepair(entry, sessionKey)) {
               sessionKeys.push(sessionKey);
             }
           },
@@ -154,6 +160,7 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
         (params.deferToMediaPreparation ||
           (params.deferSchemaRepair &&
             (error instanceof SqliteSchemaMismatchError ||
+              error instanceof AgentDatabaseMaintenanceRequiredError ||
               error instanceof OpenClawAgentDatabaseMediaMigrationRequiredError)))
       ) {
         const owner = params.deferToMediaPreparation
@@ -215,6 +222,14 @@ export function repairCanonicalSessionEntries(
   };
 }
 
+function needsLegacySessionEntryRepair(entry: Record<string, unknown>): boolean {
+  return (
+    hasLegacySessionEntryState(entry) ||
+    inspectLegacyRestartTombstone(entry)?.retire ||
+    SESSION_ENTRY_NUMERIC_FIELDS.some((field) => typeof entry[field] === "string")
+  );
+}
+
 /** Raw repair and its backup precede all canonical session readers. */
 export async function repairLegacySessionEntryStates(params: {
   apply: boolean;
@@ -232,23 +247,47 @@ export async function repairLegacySessionEntryStates(params: {
   ) => void;
 }): Promise<SessionDeliveryStateRepairReport> {
   try {
+    const recoveredTombstones = new Set<string>();
+    const retainedWarnings = new Map<string, string>();
+    const reportRetained = () => {
+      for (const [sessionKey, warning] of retainedWarnings) {
+        note(`${sessionKey}: ${warning}`, "Session recovery warning");
+      }
+    };
     const plan = prepareSessionEntryRepairs({
       ...params,
       source: "raw",
-      rawNeedsRepair: hasLegacySessionEntryState,
-      rawTransform: (entry, sessionKey, updatedAt) => {
-        if (!hasLegacySessionEntryState(entry)) {
-          return entry;
+      rawNeedsRepair: (entry, sessionKey) => {
+        const tombstone = inspectLegacyRestartTombstone(entry);
+        if (tombstone && !tombstone.retire) {
+          retainedWarnings.set(sessionKey, tombstone.warning);
         }
-        const next = migrateLegacySessionEntryState(entry, updatedAt, sessionKey);
-        return hasLegacySessionProviderState(entry)
-          ? normalizeLegacySessionEntryDelivery(next)
-          : next;
+        return needsLegacySessionEntryRepair(entry);
+      },
+      rawTransform: (entry, sessionKey, updatedAt) => {
+        if (!needsLegacySessionEntryRepair(entry)) {
+          return { entry };
+        }
+        const next = migrateLegacySessionEntryState(entry, updatedAt);
+        const tombstone = inspectLegacyRestartTombstone(entry);
+        retainedWarnings.delete(sessionKey);
+        if (tombstone?.retire) {
+          recoveredTombstones.add(sessionKey);
+        } else if (tombstone) {
+          retainedWarnings.set(sessionKey, tombstone.warning);
+        }
+        return {
+          ...next,
+          entry: hasLegacySessionProviderState(entry)
+            ? normalizeLegacySessionEntryDelivery(next.entry)
+            : next.entry,
+        };
       },
       updateDeliveryProjection: true,
     });
     const report = { found: plan.found, repaired: 0, scannedStores: plan.scannedStores };
     if (!params.apply || plan.found === 0) {
+      reportRetained();
       params.onInspectedTargets?.(plan.inspectedTargets);
       return report;
     }
@@ -276,6 +315,13 @@ export async function repairLegacySessionEntryStates(params: {
       assertCurrent();
       note(backup.changes.map((change) => `- ${change}`).join("\n"), "Session SQLite backups");
       report.repaired = plan.apply(assertTargetCurrent);
+      reportRetained();
+      for (const sessionKey of recoveredTombstones) {
+        note(
+          `Recovered legacy restart tombstone for ${sessionKey}; obsolete claims and pending delivery retired (original state backed up).`,
+          "Session recovery warning",
+        );
+      }
       params.onInspectedTargets?.(plan.inspectedTargets);
       note(
         `- Canonicalized entry state for ${report.repaired} durable session row(s).`,

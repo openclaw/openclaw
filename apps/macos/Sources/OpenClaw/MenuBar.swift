@@ -101,7 +101,6 @@ struct OpenClawApp: App {
                 Button("New Gateway Window…") {
                     AppNavigationActions.newGatewayWindow()
                 }
-                .keyboardShortcut("n", modifiers: [.command, .shift])
 
                 if !self.state.nativeExperienceEnabled {
                     Button("New Thread") {

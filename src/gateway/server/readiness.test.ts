@@ -8,7 +8,7 @@ import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js"
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
-import { createReadinessChecker } from "./readiness.js";
+import { createReadinessChecker, createStartupChecker } from "./readiness.js";
 
 const FIVE_MIN_MS = 5 * 60_000;
 const THIRTY_ONE_MIN_MS = 31 * 60_000;
@@ -76,6 +76,28 @@ describe("createReadinessChecker", () => {
     vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
   });
   afterEach(() => vi.useRealTimers());
+  it("keeps traffic unready until startup releases chat admission", () => {
+    const unavailableMethods = new Set(["chat.send"]);
+    const deps = {
+      startedAt: Date.now() - FIVE_MIN_MS,
+      isChatSendAvailable: () => !unavailableMethods.has("chat.send"),
+    };
+    const { readiness, manager } = setup(undefined, deps);
+
+    expect(createStartupChecker(deps)()).toEqual({
+      ok: true,
+      status: "started",
+      uptimeMs: FIVE_MIN_MS,
+    });
+    expect(readiness()).toEqual(failingSnapshot(["chat-startup"]));
+    expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+
+    unavailableMethods.clear();
+    expect(readiness()).toEqual(readySnapshot());
+    unavailableMethods.add("chat.send");
+    expect(readiness()).toEqual(failingSnapshot(["chat-startup"]));
+  });
+
   it.each([
     ["startup-sidecars", "getStartupPending"],
     ["gateway-draining", "getGatewayDraining"],

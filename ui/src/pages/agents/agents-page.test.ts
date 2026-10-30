@@ -154,6 +154,7 @@ describe("AgentsPage gateway lifecycle", () => {
       },
     } as unknown as ApplicationContext;
     const { page } = mountPage(client, "overview", configured);
+    vi.mocked(configured.runtimeConfig.ensureLoaded).mockClear();
 
     const settingDefault = page.read().onSetDefault("research");
     expect(configured.runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();

@@ -18,10 +18,7 @@ import {
   type ReplyOperation,
 } from "../../sessions/session-controller.js";
 import { canInjectReplyMessageTarget } from "../../sessions/session-controller.message-injection.js";
-import {
-  hasReplySteeringRequesterMismatch,
-  prepareReplyMessageJoin,
-} from "../../sessions/session-controller.message-join.js";
+import { prepareReplyMessageJoin } from "../../sessions/session-controller.message-join.js";
 import {
   getSessionControllerEntryForOperation,
   isCurrentSessionControllerOperation,
@@ -66,7 +63,7 @@ type ActiveReplySteerParams = {
   queueKey: string;
   replyOperationRunState: ReplyOperationRunState | undefined;
   resolvedQueue: RunReplyAgentParams["resolvedQueue"];
-  restartRecoverySourceTurnId: string | undefined;
+  sourceTurnId: string | undefined;
   runFollowup: (run: FollowupRun) => Promise<void>;
   sessionCtx: RunReplyAgentParams["sessionCtx"];
   sessionKey: string | undefined;
@@ -79,7 +76,7 @@ type ActiveReplySteerParams = {
 function resolveAcceptedSteerRunId(params: ActiveReplySteerParams): string {
   const { followupRun, sessionCtx } = params;
   return expectDefined(
-    params.restartRecoverySourceTurnId ??
+    params.sourceTurnId ??
       buildChannelSourceTurnId({
         provider:
           followupRun.originatingChannel ?? followupRun.run.messageProvider ?? sessionCtx.Provider,
@@ -161,6 +158,7 @@ export async function runActiveReplySteer(
   const fallback = async (
     reason: ActiveReplySteerFallbackReason,
     activeRunId?: string,
+    error?: string,
   ): Promise<"handled"> => {
     assertReadCurrent();
     parked.fallback();
@@ -172,15 +170,18 @@ export async function runActiveReplySteer(
       replyOperationRunState.admission = {
         status: "accepted",
         mode: "followup",
-        ...(reason === "requester-mismatch"
-          ? { reason }
-          : isInboundUserMessage
-            ? { reason: "steering-unavailable" as const }
-            : {}),
+        ...(reason === "collaborative_steering_disabled"
+          ? { reason: "collaborative-steering-disabled" as const }
+          : reason === "requester-mismatch"
+            ? { reason }
+            : isInboundUserMessage
+              ? { reason: "steering-unavailable" as const }
+              : {}),
       };
     }
     diagnosticLogger.warn("steering rejected; applying follow-up policy", {
       reason,
+      ...(error ? { error } : {}),
       disposition: queueCapRejected ? "skipped-queue-cap" : "followup-policy",
       channel:
         followupRun.originatingChannel ??
@@ -231,26 +232,10 @@ export async function runActiveReplySteer(
       return await fallback("injection_unavailable");
     }
     assertReadCurrent();
-    if (
-      isInboundUserMessage &&
-      followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== true &&
-      hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation)
-    ) {
-      if (!canInjectReplyMessageTarget(injectionTarget)) {
-        return await fallback("injection_unavailable", injectionTarget.runId);
-      }
-      await refuseCollaborativeSteering(followupRun, replyOperationRunState, () => {
-        custodyFinished = true;
-        parked.consume("consumed");
-      });
-      return "handled";
-    }
     delivery = prepareSteeringDelivery({
       agentId: followupRun.run.agentId,
       sessionKey,
       storePath: params.storePath,
-      sessionId: steerSessionId,
-      sourceTurnId: injectionTarget.sourceTurnId,
       entry: params.sessionEntry,
       assertCurrent: assertReadCurrent,
     });
@@ -267,8 +252,6 @@ export async function runActiveReplySteer(
           operatorAuthority: followupRun.operatorAuthority,
           toolsAllow: followupRun.toolsAllow,
           disableTools: followupRun.disableTools === true,
-          forceRestartSafeTools: followupRun.forceRestartSafeTools,
-          forceCodeModeTools: followupRun.forceCodeModeTools,
         })
       : undefined;
     const collaborativeCaller =
@@ -287,11 +270,11 @@ export async function runActiveReplySteer(
       target: injectionTarget,
       assertCurrent: assertReadCurrent,
       collaborativeCaller,
+      delivery: steeringDelivery,
       continuation:
         inboundCaller && params.steeringIntent?.kind === "continue-existing"
           ? {
               kind: "continuation",
-              delivery: steeringDelivery,
               caller: {
                 ...caller,
                 senderIsOwner: inboundCaller.senderIsOwner,
@@ -309,7 +292,28 @@ export async function runActiveReplySteer(
           : undefined,
     });
     if (steeringAuthority.kind === "deferred") {
-      return await fallback(steeringAuthority.reason, injectionTarget.runId);
+      if (
+        steeringAuthority.reason === "requester-mismatch" &&
+        isInboundUserMessage &&
+        followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== true
+      ) {
+        if (!canInjectReplyMessageTarget(injectionTarget)) {
+          return await fallback("injection_unavailable", injectionTarget.runId);
+        }
+        if (followupRun.run.config.messages?.queue?.collaborativeSteeringFallback !== "reject") {
+          return await fallback("collaborative_steering_disabled", injectionTarget.runId);
+        }
+        await refuseCollaborativeSteering(followupRun, replyOperationRunState, () => {
+          custodyFinished = true;
+          parked.consume("consumed");
+        });
+        return "handled";
+      }
+      return await fallback(
+        steeringAuthority.reason,
+        injectionTarget.runId,
+        steeringAuthority.errorMessage,
+      );
     }
     releaseToolAuthority = steeringAuthority.toolAuthority.release;
     assertReadCurrent();
@@ -364,6 +368,7 @@ export async function runActiveReplySteer(
       ),
       steeringMode: "all",
       isInboundUserMessage,
+      allowPendingUserInputAnswer: steeringAuthority.allowPendingUserInputAnswer,
       terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
       toolAuthorityFingerprint: steeringAuthority.toolAuthorityFingerprint,
       ...(steeringAuthority.collaborativeCaller
@@ -393,7 +398,10 @@ export async function runActiveReplySteer(
       ...(followupRun.run.sourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
         : {}),
-      taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode,
+      // Omission inherits the captured execution; followup custody keeps the incoming setting.
+      ...(steeringAuthority.continuationKind
+        ? {}
+        : { taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode }),
       ...(followupRun.userTurnTranscriptRecorder
         ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
         : {}),

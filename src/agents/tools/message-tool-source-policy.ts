@@ -3,7 +3,6 @@ import {
   normalizeOptionalStringifiedId,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import { Type, type TObject } from "typebox";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { AgentRuntimeMessageActionContext } from "../../gateway/message-action-turn-capability.js";
@@ -52,16 +51,6 @@ const SOURCE_REPLY_ONLY_ARG_NAMES = new Set([
   "channelId",
   "final",
 ]);
-const SOURCE_REPLY_FINAL_PROPERTY = Type.Optional(
-  Type.Boolean({
-    description:
-      "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true when adding a reaction to the current source message is your complete response; omit or set false when more work follows. A confirmed final source reply ends the turn.",
-  }),
-);
-
-export function addSourceReplyFinalControl(schema: TObject): TObject {
-  return Type.Object({ ...schema.properties, final: SOURCE_REPLY_FINAL_PROPERTY });
-}
 
 export function enforceSourceReplyOnlyTextDirectives(args: Record<string, unknown>): void {
   // Preserve Markdown indentation when checking sanitizer-assembled reply/audio directives.

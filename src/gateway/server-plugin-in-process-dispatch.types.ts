@@ -68,7 +68,9 @@ export type DispatchGatewayMethodInProcessOptions = {
 };
 
 export type ResolvedInProcessGatewayDispatch = {
-  /** Source custody after an accepted transfer, independent of its authorizing invocation. */
+  /** Gateway instance lifetime; accepted execution checks its own retained principal. */
+  assertGatewayCurrent: () => void;
+  /** Original source grant and Gateway lifetime, rechecked during turn admission. */
   assertSourceCurrent: () => void;
   assertContextCurrent: () => void;
   assertCreatedInputSourceCurrent?: () => void;

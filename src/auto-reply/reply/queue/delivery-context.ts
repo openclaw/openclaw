@@ -155,8 +155,6 @@ export function resolveFollowupDeliveryStorageKey(run: FollowupRun): string {
       run.toolsAllow ? (readToolAllowlistIntersection(run.toolsAllow) ?? null) : null,
     ),
     run.disableTools === true,
-    run.forceRestartSafeTools === true,
-    run.forceCodeModeTools === true,
     execution.extraSystemPrompt ?? "",
     execution.extraSystemPromptStatic ?? "",
     execution.sourceReplyDeliveryMode ?? "",
@@ -253,33 +251,9 @@ export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined
   return hasRoutedThread ? undefined : normalizeOptionalString(run.messageId);
 }
 
-type FollowupRuntimeMetadata = Pick<
-  FollowupRun,
-  | "sourceTurnId"
-  | "createChannelCronAuthority"
-  | "readAdmissionConfig"
-  | "operatorAuthority"
-  | "personalBootstrapEligible"
-  | "currentInboundEventKind"
-  | "currentInboundAudio"
-  | "currentInboundContext"
-  | "explicitSkillSelections"
-  | "channelAdmissionEvidence"
-  | "gatewayLocalUserIngress"
-  | "toolsAllow"
-  | "disableTools"
-  | "forceRestartSafeTools"
-  | "forceCodeModeTools"
-  | "abortSignal"
-  | "queueAbortSignal"
-  | "deliveryCorrelations"
-  | "turnAdoptionLifecycle"
-  | "replyOperationRunStates"
-  | "queuedFollowupReplyDisposition"
-  | "runObservers"
->;
-
-function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["currentInboundContext"] {
+export function collectCurrentInboundContext(
+  items: FollowupRun[],
+): FollowupRun["currentInboundContext"] {
   const contexts = items.flatMap((item, index) =>
     item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
   );
@@ -351,10 +325,7 @@ function collectReplyDisposition(
   };
 }
 
-export function collectRuntimeMetadata(
-  items: FollowupRun[],
-  abortSignal?: AbortSignal,
-): FollowupRuntimeMetadata {
+export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: AbortSignal) {
   const currentTurnSource = items.find(
     (item) =>
       item.currentInboundEventKind === "room_event" ||
@@ -399,8 +370,6 @@ export function collectRuntimeMetadata(
     ),
     toolsAllow: authoritySource?.toolsAllow,
     disableTools: authoritySource?.disableTools,
-    forceRestartSafeTools: authoritySource?.forceRestartSafeTools,
-    forceCodeModeTools: authoritySource?.forceCodeModeTools,
     abortSignal,
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
@@ -412,7 +381,9 @@ export function collectRuntimeMetadata(
         ? authoritySource?.runObservers
         : {
             ...authoritySource?.runObservers,
-            onAgentRunTerminalOutcome: (outcome) => {
+            onAgentRunTerminalOutcome: (
+              outcome: Parameters<(typeof terminalObservers)[number]>[0],
+            ) => {
               const failures: unknown[] = [];
               for (const observer of terminalObservers) {
                 try {
@@ -458,8 +429,6 @@ export function createOverflowSummaryRetrySource(source: InternalFollowupRun): I
     explicitSkillSelections: source.explicitSkillSelections,
     toolsAllow: source.toolsAllow,
     disableTools: source.disableTools,
-    forceRestartSafeTools: source.forceRestartSafeTools,
-    forceCodeModeTools: source.forceCodeModeTools,
     currentTurnImagesPrepared: source.currentTurnImagesPrepared,
     images: source.images,
     imageOrder: source.imageOrder,
@@ -481,6 +450,7 @@ export function createOverflowSummaryRetrySource(source: InternalFollowupRun): I
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),
+    currentInboundContext: source.currentInboundContext,
     run: source.run,
   };
 }

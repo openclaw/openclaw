@@ -94,7 +94,7 @@ export function supersedeReplyRunByRunId(runId: string, beforeCancel: () => void
     return stopSession({
       source: "supersede",
       capture: captureSessionControllerStop({ operations: [operation] }),
-      // Supersession owns heartbeat finalization semantics beyond ordinary abortability.
+      // Supersession preserves the selected operation’s finalization semantics.
       cancelOperation: (selected) => selected.supersede(beforeCancel),
     }).aborted;
   }

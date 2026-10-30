@@ -23,20 +23,18 @@ import type {
   UsageSummary,
 } from "./provider-usage.types.js";
 
-type UsageSummaryOptions = {
-  timeoutMs?: number;
-  providers?: UsageProviderId[];
-  auth?: ProviderAuth[];
-  authStore?: AuthProfileStore;
-  agentDir?: string;
-  workspaceDir?: string;
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-};
-
 /** Loads usage snapshots from configured provider auth and plugin-backed usage hooks. */
 export async function loadProviderUsageSummary(
-  opts: UsageSummaryOptions = {},
+  opts: {
+    timeoutMs?: number;
+    providers?: UsageProviderId[];
+    auth?: ProviderAuth[];
+    authStore?: AuthProfileStore;
+    agentDir?: string;
+    workspaceDir?: string;
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+  } = {},
 ): Promise<UsageSummary> {
   const now = Date.now();
   const timeoutMs = opts.timeoutMs ?? PROVIDER_USAGE_TIMEOUT_MS;
@@ -56,7 +54,6 @@ export async function loadProviderUsageSummary(
   const displayNames = new Map(
     descriptors.map((descriptor) => [descriptor.provider, descriptor.displayName]),
   );
-  const providerOrder = new Map(descriptors.map(({ provider }, index) => [provider, index]));
   const failureSnapshot = (provider: UsageProviderId, error: string): ProviderUsageSnapshot => ({
     provider,
     displayName: displayNames.get(provider) ?? providerUsageLabel(provider) ?? provider,
@@ -155,13 +152,9 @@ export async function loadProviderUsageSummary(
     });
   });
 
-  const snapshots = (await Promise.all(tasks))
-    .filter((snapshot): snapshot is ProviderUsageSnapshot => snapshot !== undefined)
-    .toSorted(
-      (left, right) =>
-        (providerOrder.get(left.provider) ?? Number.MAX_SAFE_INTEGER) -
-        (providerOrder.get(right.provider) ?? Number.MAX_SAFE_INTEGER),
-    );
+  const snapshots = (await Promise.all(tasks)).filter(
+    (snapshot): snapshot is ProviderUsageSnapshot => snapshot !== undefined,
+  );
   const providers = snapshots.filter(
     (entry) =>
       entry.windows.length > 0 ||

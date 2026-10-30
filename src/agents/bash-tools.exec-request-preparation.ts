@@ -45,6 +45,7 @@ export type ExecToolArgs = Record<string, unknown> & {
   env?: Record<string, string>;
   yieldMs?: number;
   background?: boolean;
+  durable?: boolean;
   awaitResults?: boolean;
   timeoutSeconds?: number;
   pty?: boolean;
@@ -72,6 +73,27 @@ const resolvedExecWorkdirPreparedStates = new WeakMap<
 >();
 const XML_ARG_VALUE_EXEC_PARAM_KEYS = ["command", "workdir", "host", "ask", "node"] as const;
 
+export function assertDurableExecAvailable(
+  args: ExecToolArgs,
+  host: ExecHost,
+  allowBackground: boolean,
+  secretGrantCount = 0,
+): void {
+  if (!args.durable) {
+    return;
+  }
+  if (host !== "gateway" || !allowBackground) {
+    throw new Error(
+      "Durable exec requires Gateway-host background execution on Linux with systemd 250 or newer, a reachable user manager, and the process tool enabled. Sandbox, node, and worker execution are unsupported.",
+    );
+  }
+  if (secretGrantCount) {
+    throw new Error(
+      "Durable exec cannot use secret-egress proxy grants because they expire when the Gateway restarts. Use non-durable background execution or a directly provided credential instead.",
+    );
+  }
+}
+
 export function assertSupportedExecParams(args: unknown): void {
   if (!isRecord(args)) {
     return;
@@ -86,6 +108,23 @@ export function assertSupportedExecParams(args: unknown): void {
   }
   if (args.awaitResults === true && args.background === true) {
     throw new ToolInputError("exec with awaitResults=true cannot be detached with background=true");
+  }
+  if (args.durable !== undefined && typeof args.durable !== "boolean") {
+    throw new ToolInputError("exec durable must be a boolean");
+  }
+  if (args.durable === true) {
+    if (
+      args.background !== true &&
+      !(typeof args.yieldMs === "number" && Number.isFinite(args.yieldMs))
+    ) {
+      throw new ToolInputError("Durable exec requires background=true or yieldMs");
+    }
+    if (args.awaitResults === true) {
+      throw new ToolInputError("Durable exec cannot use awaitResults");
+    }
+    if (args.pty === true) {
+      throw new ToolInputError("Durable exec does not support interactive input or PTY");
+    }
   }
   if (Object.hasOwn(args, "timeout")) {
     throw new ToolInputError(

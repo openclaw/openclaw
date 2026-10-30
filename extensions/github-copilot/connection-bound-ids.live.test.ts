@@ -6,6 +6,7 @@ import {
   type Model,
   type Tool,
 } from "openclaw/plugin-sdk/llm";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { resolveFirstGithubToken } from "./auth.js";
@@ -27,14 +28,7 @@ type CopilotRuntimeAuth = {
   baseUrl: string;
 };
 
-const ZERO_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-} as const;
+const ZERO_USAGE = createZeroUsageFixture();
 
 function logProgress(message: string): void {
   process.stderr.write(`[github-copilot-live] ${message}\n`);

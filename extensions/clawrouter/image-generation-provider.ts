@@ -4,7 +4,6 @@ import {
   resolveInlineImageJsonResponseMaxBytes,
   sniffImageMimeType,
   type ImageGenerationProvider,
-  type ImageGenerationRequest,
 } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedImageDownloadMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -27,55 +26,6 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 
-function buildImageBody(req: ImageGenerationRequest): Record<string, unknown> {
-  if (req.inputImages?.length) {
-    throw new Error("ClawRouter image editing is not supported.");
-  }
-  if (!isSupportedClawRouterImageModel(req.model)) {
-    throw new Error(
-      "Unsupported ClawRouter image model; select a qualified flare/sunburst model from the image catalog.",
-    );
-  }
-  if (!req.prompt.trim() || Array.from(req.prompt).length > 32_000) {
-    throw new Error("ClawRouter image prompt must contain 1–32000 characters.");
-  }
-  const count = req.count ?? 1;
-  if (!Number.isInteger(count) || count < 1 || count > 10) {
-    throw new Error("ClawRouter image count must be an integer from 1 to 10.");
-  }
-  const options = req.providerOptions;
-  if (options && Object.keys(options).some((key) => key !== "openai")) {
-    throw new Error("Unsupported ClawRouter image options; only JSON generation is supported.");
-  }
-  const openai = asOptionalRecord(options?.openai);
-  if (
-    openai &&
-    Object.keys(openai).some(
-      (key) => !["background", "moderation", "outputCompression", "user"].includes(key),
-    )
-  ) {
-    throw new Error(
-      "Unsupported ClawRouter image option; edits, masks, variations and streaming are not supported.",
-    );
-  }
-  const body: Record<string, unknown> = { model: req.model, prompt: req.prompt, n: count };
-  const optional = {
-    size: req.size,
-    quality: req.quality,
-    output_format: req.outputFormat,
-    background: req.background ?? openai?.background,
-    moderation: openai?.moderation,
-    output_compression: openai?.outputCompression,
-    user: openai?.user,
-  };
-  for (const [key, value] of Object.entries(optional)) {
-    if (value !== undefined) {
-      body[key] = value;
-    }
-  }
-  return body;
-}
-
 export function buildClawRouterImageGenerationProvider(): ImageGenerationProvider {
   return {
     id: "clawrouter",
@@ -85,7 +35,55 @@ export function buildClawRouterImageGenerationProvider(): ImageGenerationProvide
     models: [],
     capabilities: CLAWROUTER_IMAGE_CAPABILITIES,
     async generateImage(req) {
-      const body = buildImageBody(req);
+      if (req.inputImages?.length) {
+        throw new Error("ClawRouter image editing is not supported.");
+      }
+      if (!isSupportedClawRouterImageModel(req.model)) {
+        throw new Error(
+          "Unsupported ClawRouter image model; select a qualified flare/sunburst model from the image catalog.",
+        );
+      }
+      if (!req.prompt.trim() || Array.from(req.prompt).length > 32_000) {
+        throw new Error("ClawRouter image prompt must contain 1–32000 characters.");
+      }
+      const requestedCount = req.count ?? 1;
+      if (!Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > 10) {
+        throw new Error("ClawRouter image count must be an integer from 1 to 10.");
+      }
+      const options = req.providerOptions;
+      if (options && Object.keys(options).some((key) => key !== "openai")) {
+        throw new Error("Unsupported ClawRouter image options; only JSON generation is supported.");
+      }
+      const openai = asOptionalRecord(options?.openai);
+      if (
+        openai &&
+        Object.keys(openai).some(
+          (key) => !["background", "moderation", "outputCompression", "user"].includes(key),
+        )
+      ) {
+        throw new Error(
+          "Unsupported ClawRouter image option; edits, masks, variations and streaming are not supported.",
+        );
+      }
+      const body: Record<string, unknown> = {
+        model: req.model,
+        prompt: req.prompt,
+        n: requestedCount,
+      };
+      const optional = {
+        size: req.size,
+        quality: req.quality,
+        output_format: req.outputFormat,
+        background: req.background ?? openai?.background,
+        moderation: openai?.moderation,
+        output_compression: openai?.outputCompression,
+        user: openai?.user,
+      };
+      for (const [key, value] of Object.entries(optional)) {
+        if (value !== undefined) {
+          body[key] = value;
+        }
+      }
       req.signal?.throwIfAborted();
       const deadline = createProviderOperationDeadline({
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,

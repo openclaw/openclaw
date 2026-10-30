@@ -2,11 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import type { BackupManifest } from "../commands/backup-verify-manifest.js";
 import { CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { buildBackupArchivePath } from "./backup-archive-path-policy.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { readIndependentClientCredentialSource } from "./client-credential-native-bootstrap.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
@@ -53,6 +53,8 @@ function portSharedIdentity(snapshotPath: string, sharedPath: string) {
   return { engine: "sqlite" as const, identity: `${sharedPath}:${createdAt}` };
 }
 
+export class PortClientCredentialMismatchError extends Error {}
+
 /** Capture only receipt metadata; credential rows remain in their existing local owner. */
 export function capturePortClientCredentialBinding(options: {
   env: NodeJS.ProcessEnv;
@@ -73,7 +75,9 @@ export function capturePortClientCredentialBinding(options: {
         stored.receipt.source.engine !== identity.engine ||
         stored.receipt.source.identity !== identity.identity))
   ) {
-    throw new Error("Database port credentials do not match the captured shared database.");
+    throw new PortClientCredentialMismatchError(
+      "Database port credentials do not match the captured shared database.",
+    );
   }
   const localFile = readClientCredentialFileIdentity(owner.path);
   if (!localFile) {

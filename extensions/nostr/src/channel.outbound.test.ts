@@ -75,12 +75,10 @@ async function startGateway({
     started.resolve(options);
     return bus;
   });
-  const statusPatchSink = vi.fn();
   const context = createStartAccountContext({
     account,
     cfg,
     abortSignal: abort.signal,
-    statusPatchSink,
   });
   context.channelRuntime = runtime.channel;
   const task = startNostrGatewayAccount(context);
@@ -92,7 +90,7 @@ async function startGateway({
   });
   const options = await started.promise;
   expect(getActiveNostrBuses().get(account.accountId)).toBe(bus);
-  return { bus, abort, task, options, context, statusPatchSink, settled };
+  return { bus, abort, task, options, context, settled };
 }
 
 const send = (text: string) =>
@@ -165,9 +163,9 @@ describe("nostr gateway lifecycle", () => {
       terminalDisconnect: undefined,
     });
     h.options.onConnect?.("wss://relay-two.example/");
-    const connectedUpdates = h.statusPatchSink.mock.calls.length;
+    const connectedStatus = { ...h.context.getStatus() };
     h.options.onDisconnect?.("wss://relay-one.example");
-    expect(h.statusPatchSink).toHaveBeenCalledTimes(connectedUpdates);
+    expect(h.context.getStatus()).toEqual(connectedStatus);
     h.options.onDisconnect?.("wss://relay-two.example");
     expect(h.context.getStatus()).toMatchObject({ lifecycle: "recovering", connected: false });
   });
@@ -223,20 +221,18 @@ describe("nostr inbound", () => {
       { eventId: "event-123", createdAt: 1_710_000_000 },
       lifecycle,
     );
-    expect(mocks.dispatchInboundDirectDm).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "nostr",
-        accountId: "default",
-        peer: { kind: "direct", id: TEST_HEX_PUBLIC_KEY },
-        senderId: TEST_HEX_PUBLIC_KEY,
-        rawBody: "hello from nostr",
-        messageId: "event-123",
-        timestamp: 1_710_000_000_000,
-        commandAuthorized: true,
-        turnAdoptionLifecycle: expect.objectContaining({ admission: "exclusive" }),
-        channelRuntime: runtime.channel,
-      }),
-    );
+    expect(mocks.dispatchInboundDirectDm.mock.lastCall?.[0]).toMatchObject({
+      channel: "nostr",
+      accountId: "default",
+      peer: { kind: "direct", id: TEST_HEX_PUBLIC_KEY },
+      senderId: TEST_HEX_PUBLIC_KEY,
+      rawBody: "hello from nostr",
+      messageId: "event-123",
+      timestamp: 1_710_000_000_000,
+      commandAuthorized: true,
+      turnAdoptionLifecycle: expect.objectContaining({ admission: "exclusive" }),
+      channelRuntime: runtime.channel,
+    });
     expect(convertMarkdownTables.mock.calls).toEqual(visible ? [[visible, "off"]] : []);
     expect(reply.mock.calls).toEqual(expected ? [[expected]] : []);
   });
@@ -271,11 +267,6 @@ describe("nostr outbound", () => {
       cfg,
       to: TEST_HEX_PUBLIC_KEY.toUpperCase(),
       text: "|a|b|",
-    });
-    expect(runtime.channel.text.resolveMarkdownTableMode).toHaveBeenCalledWith({
-      cfg,
-      channel: "nostr",
-      accountId: "work",
     });
     expect(convertMarkdownTables).toHaveBeenCalledWith("|a|b|", "off");
     expect(h.bus.sendDm).toHaveBeenCalledWith(

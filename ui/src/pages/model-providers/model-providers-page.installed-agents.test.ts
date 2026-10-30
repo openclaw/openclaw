@@ -174,7 +174,8 @@ it("enables for the selected agent through the shared consent wizard", async () 
     await waitForSolid(() =>
       expect(page.querySelector<HTMLDialogElement>("dialog.oc-modal-dialog")?.open).toBe(true),
     );
-    expect(toggle(page)).toMatchObject({ checked: true, disabled: true });
+    expect(toggle(page).checked).toBe(true);
+    expect(toggle(page).disabled).toBe(true);
     expect(agentText(page)).toContain("Saving");
     expect(request).toHaveBeenCalledWith(
       "openclaw.setup.runtime.start",
@@ -281,9 +282,12 @@ it("lists every reported agent with its installation status only when advertised
   const page = await mountAgents(context);
   await waitForSolid(() => expect(agentRow(page, "pi")).not.toBeNull());
   expect(agentText(page)).not.toContain("Models available");
-  expect(agentRow(page, "qwen")?.textContent).toContain("Not detected");
+  // A missing app has no switch to flip; it is named on the shared not-detected line.
+  expect(agentRow(page, "qwen")).toBeNull();
+  expect(page.querySelector("[data-installed-agents-missing]")?.textContent).toContain(
+    "Not detected on the Gateway computer: Qwen Code.",
+  );
   expect(agentRow(page, "pi")?.textContent).toContain("Not verified");
-  expect(agentRow(page, "qwen")?.textContent).toContain("Use Qwen Code");
   expect(agentRow(page, "kilo")?.textContent).toContain("Use Kilo");
   expect(page.renderRoot.textContent).not.toContain("Saving");
   expect(requestCount(request, "config.patch")).toBe(0);
@@ -331,7 +335,7 @@ it("distinguishes failed and pending discovery and lets Check again recover mode
     expect(agentText(page)).toMatch(/discovering models/i);
     expect(agentText(page)).not.toMatch(/sign.in/i);
   });
-  expect(toggle(page)).toMatchObject({ disabled: false });
+  expect(toggle(page).hasAttribute("aria-disabled")).toBe(false);
   refreshButton(page, ".model-providers__installed-agents").click();
   await waitForSolid(() => {
     expect(agentRow(page, "qwen")?.textContent).toMatch(/models available/i);
@@ -362,7 +366,8 @@ it("saves the enabled flag and keeps it over a list read that started earlier", 
 
   await waitForSolid(() => {
     expect(reads).toBe(3);
-    expect(toggle(page)).toMatchObject({ checked: false, disabled: false });
+    expect(toggle(page)).toMatchObject({ checked: false });
+    expect(toggle(page).hasAttribute("aria-disabled")).toBe(false);
   });
   expect(runtimeConfig.patch).toHaveBeenCalledWith(
     expect.objectContaining({ raw: nativeAgents(false) }),
@@ -403,7 +408,9 @@ it("disables at the config acknowledgement without erasing remembered consent", 
     clickAgent(page);
     await waitForSolid(() => {
       expect(agentText(page)).toContain("Saving");
-      expect(toggle(page)).toMatchObject({ checked: false, disabled: true });
+      expect(toggle(page).checked).toBe(false);
+      expect(toggle(page).hasAttribute("aria-disabled")).toBe(true);
+      expect(toggle(page).disabled).toBe(false);
     });
     acknowledgement.resolve({ config: config(false), hash: "saved" });
 
@@ -448,9 +455,10 @@ it.each([true, false])(
 
     const row = agentRow(page, "opencode");
     clickAgent(page);
-    await waitForSolid(() =>
-      expect(toggle(page)).toMatchObject({ checked: false, disabled: true }),
-    );
+    await waitForSolid(() => {
+      expect(toggle(page).checked).toBe(false);
+      expect(toggle(page).hasAttribute("aria-disabled")).toBe(true);
+    });
     expect(agentRow(page, "opencode")).toBe(row);
     patch.resolve(false);
 
@@ -494,7 +502,7 @@ it("keeps the list readable but locked without admin access", async () => {
 
   clickAgent(page);
 
-  expect(toggle(page)).toMatchObject({ disabled: true });
+  expect(toggle(page).disabled).toBe(true);
   expect(page.querySelector(".model-providers__installed-agents")?.textContent).toContain(
     "Model changes require operator.admin access.",
   );

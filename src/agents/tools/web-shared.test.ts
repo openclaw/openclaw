@@ -6,9 +6,7 @@ import {
   resolveTimeoutSeconds,
 } from "./web-shared.js";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 function responseFromReader(params: {
   chunks: string[];
@@ -43,6 +41,14 @@ async function expectDecoded(bytes: Uint8Array<ArrayBuffer>, contentType: string
   }
 }
 
+function expectRead(response: Response, maxBytes: number | undefined, text: string) {
+  return expect(readResponseText(response, { maxBytes })).resolves.toEqual({
+    text,
+    truncated: false,
+    bytesRead: new TextEncoder().encode(text).byteLength,
+  });
+}
+
 describe("web shared helpers", () => {
   it("trims cache-key framing without changing case-sensitive request components", () => {
     const key = "fetch:https://example.com/get?marker=OpenClawCase";
@@ -71,15 +77,8 @@ describe("readResponseText", () => {
   );
 
   it("uses document metadata when there is no byte-order mark or declared charset", async () => {
-    const bytes = Buffer.from('<meta charset="iso-8859-1"><p>café</p>', "latin1");
-    const response = new Response(bytes, { headers: { "content-type": "text/html" } });
-
-    await expect(readResponseText(response, { maxBytes: bytes.byteLength })).resolves.toMatchObject(
-      {
-        text: '<meta charset="iso-8859-1"><p>café</p>',
-        truncated: false,
-      },
-    );
+    const text = '<meta charset="iso-8859-1"><p>café</p>';
+    await expectDecoded(Buffer.from(text, "latin1"), "text/html", text);
   });
 
   it.each([
@@ -97,23 +96,16 @@ describe("readResponseText", () => {
   );
 
   it("keeps truncated fallback charset decoding isolated between responses", async () => {
-    const firstResponse = responseFromReader({
-      chunks: ["ab😀cd"],
-      contentType: "text/plain; charset=x-unsupported-test",
-    });
-    await expect(readResponseText(firstResponse, { maxBytes: 3 })).resolves.toMatchObject({
+    const response = (chunk: string) =>
+      responseFromReader({
+        chunks: [chunk],
+        contentType: "text/plain; charset=x-unsupported-test",
+      });
+    await expect(readResponseText(response("ab😀cd"), { maxBytes: 3 })).resolves.toMatchObject({
       text: "ab",
       truncated: true,
     });
-
-    const secondResponse = responseFromReader({
-      chunks: ["cd"],
-      contentType: "text/plain; charset=x-unsupported-test",
-    });
-    await expect(readResponseText(secondResponse, { maxBytes: 64 })).resolves.toMatchObject({
-      text: "cd",
-      truncated: false,
-    });
+    await expectRead(response("cd"), 64, "cd");
   });
 
   it("does not mark exact-limit responses as truncated when followed by zero-byte chunks", async () => {
@@ -125,32 +117,17 @@ describe("readResponseText", () => {
       releaseLock,
     });
 
-    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
-      text: "hello",
-      truncated: false,
-      bytesRead: 5,
-    });
+    await expectRead(response, 5, "hello");
     expect(cancel).not.toHaveBeenCalled();
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
   it("treats a native bodyless response as empty when maxBytes is set", async () => {
-    await expect(
-      readResponseText(new Response(null, { status: 204 }), { maxBytes: 4 }),
-    ).resolves.toEqual({
-      text: "",
-      truncated: false,
-      bytesRead: 0,
-    });
+    await expectRead(new Response(null, { status: 204 }), 4, "");
   });
 
   it("counts UTF-8 bytes in uncapped native responses", async () => {
-    const value = "中文🔥";
-    await expect(readResponseText(new Response(value))).resolves.toEqual({
-      text: value,
-      truncated: false,
-      bytesRead: new TextEncoder().encode(value).byteLength,
-    });
+    await expectRead(new Response("中文🔥"), undefined, "中文🔥");
   });
 
   it("rejects an unreadable uncapped native response", async () => {

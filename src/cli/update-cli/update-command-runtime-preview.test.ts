@@ -36,6 +36,33 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
 });
 it.each([
+  ["24.16.0", true],
+  ["26.1.0", false],
+] as const)(
+  "warns without refusing an update preview under compatible service Node %s",
+  async (version, json) => {
+    stubNodeRuntime();
+    fixture.managedServiceNodeRunner = process.execPath;
+    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockResolvedValue(
+      runtimeFixture(version, "3.53.0"),
+    );
+    vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
+      ...targetMetadata,
+      nodeEngine: ">=24.16.0 <25 || >=26.1.0",
+    });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+
+    await updateCommand({ tag: targetMetadata.version, yes: true, dryRun: true, json });
+
+    const output = json ? JSON.stringify(lastJson()) : log.mock.calls.flat().join("\n");
+    expect(output).toContain("SECURITY WARNING");
+    expect(output).toContain(`Node.js ${version}`);
+    expect(output).not.toContain("Would refuse update");
+    expectUnstaged();
+  },
+);
+
+it.each([
   { name: "no restart", restart: false, debugCapture: true },
   { name: "replacement" },
   { name: "compatible", compatible: true },
@@ -142,7 +169,7 @@ it.each([
     expect(captureNotices).toHaveLength(debugCapture ? 1 : 0);
     const preview = lastJson();
     const notes = json ? JSON.stringify(preview) : log.mock.calls.flat().join("\n");
-    const replacement = !compatible && restart && owned && (!current || (running && refresh));
+    const replacement = !compatible && restart && owned && current && running && refresh;
     if (!compatible && !replacement) {
       const recoverySteps = expectedRuntimeRecoverySteps(
         "26.12.1",
@@ -163,7 +190,7 @@ it.each([
           notes: [expect.stringContaining(message)],
           failures: [
             {
-              reason: "node-runtime-preflight",
+              reason: current ? "node-runtime-preflight" : "preflight-node-runtime-incompatible",
               message: expect.stringContaining(message),
               recoverySteps,
               failureFacts: matchingEntry({
@@ -196,13 +223,13 @@ it.each([
       await expect(
         updateCommand({ ...opts, json: true, admission: "installed" }),
       ).rejects.toBeInstanceOf(Error);
-      if (compatible || replacement) {
+      if (compatible) {
         expect(packageUpdate.stagePackageInstallUpdate).toHaveBeenCalledWith(
           expect.objectContaining({ nodeRunner: replacement ? "/current/node" : "/service/node" }),
         );
       } else {
         expect(lastJson()).toMatchObject({
-          reason: "node-runtime-preflight",
+          reason: "preflight-node-runtime-incompatible",
           steps: matchingEntry({
             stderrTail: expect.stringContaining(
               `node ${quote(path.join(fixture.root, "openclaw.mjs"))} update --tag 2026.9.2`,

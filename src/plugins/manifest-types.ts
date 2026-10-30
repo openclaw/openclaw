@@ -425,6 +425,16 @@ export type PluginManifestDecisionModel = {
   capabilities?: DecisionProviderCapabilities;
 };
 
+/** Reload behavior a plugin opts in to; absent fields keep the default reload. */
+type PluginManifestReload = {
+  /**
+   * A reload hands running turns to the new generation at their next model step
+   * instead of waiting for them to finish. Opting in promises the plugin keeps no
+   * in-memory state that a later call in the same turn depends on.
+   */
+  turnHandover?: boolean;
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
@@ -441,6 +451,10 @@ export type PluginManifest = {
   /** Provider ids that should auto-enable this plugin when referenced in auth/config/models. */
   autoEnableWhenConfiguredProviders?: string[];
   kind?: PluginKind | PluginKind[];
+  /** Context engine registration IDs owned by this plugin before runtime loading. */
+  contextEngineIds?: string[];
+  /** How a reload of this plugin treats agent turns that are running when it starts. */
+  reload?: PluginManifestReload;
   channels?: string[];
   /** Account-key selection rules available before channel runtime loads. */
   channelAccountKeyPolicies?: Record<string, ChannelAccountKeyPolicy>;

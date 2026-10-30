@@ -118,7 +118,7 @@ export class DraftGatewayState {
     }
     const request = new AbortController();
     this.gatewayNameRequest = request;
-    void readSystemInfo(gateway, request.signal, { fresh: true })
+    void readSystemInfo(gateway, request.signal)
       .then(({ value: result }) => {
         if (!request.signal.aborted) {
           this.gatewayNameValue =
@@ -177,7 +177,7 @@ export class DraftGatewayState {
           })
         : requestPlaceCatalog(client, runtimeId).then((placeCatalog) => ({
             ...placeCatalog,
-            profiles: isAdmin ? placeCatalog.profiles : [],
+            profiles: placeCatalog.profiles,
             suggestedProfile: isAdmin ? placeCatalog.suggestedProfile : undefined,
           }));
     this.cloudProfileComplete = result
@@ -406,9 +406,6 @@ export class DraftGatewayState {
     this.gatewayRecoveryScopeValue = recoveryScope;
     this.gatewayRecoveryScopeReady = snapshot.client?.recoveryScopeReady === true;
     this.gatewayConnectedValue = connected;
-    if (this.read().visibility === "draft" && !this.read().canStartAsDraft) {
-      this.callbacks.onVisibilityRetired();
-    }
     if (
       gatewayUrlChanged ||
       gatewayBootChanged ||

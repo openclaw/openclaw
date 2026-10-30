@@ -1,7 +1,9 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { loadSettings } from "../../app/settings.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -9,18 +11,12 @@ import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-suppo
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { moveQueuedChatMessage } from "./chat-send-actions.ts";
 import {
-  admitStoredChatComposerQueueItem,
-  listStoredChatOutboxes,
+  admitStoredChatComposerQueueItemResult,
   updateStoredChatComposerQueueItems,
-} from "./composer-persistence.ts";
+} from "./composer-queue-persistence.ts";
 
 const SESSION_KEY = "agent:main";
-const agentsList = {
-  defaultId: "main",
-  mainKey: "main",
-  scope: "per-sender" as const,
-  agents: [{ id: "main" }],
-};
+const agentsList = makeBootRoster();
 const queued = (id: string, createdAt = 1_000): ChatQueueItem => ({ id, text: id, createdAt });
 const admission = (host: ReturnType<typeof makeChatHost>, agentId?: string) =>
   captureChatOutboxAdmission(host, host.sessionKey, agentId);
@@ -150,7 +146,9 @@ it.each([
   "keeps the delivery barrier at the $barrier in place",
   ({ count, locked, from, to, next, expected }) => {
     const { host } = queueHost(
-      Array.from({ length: count }, (_, i) => (i === locked ? { sendState: "unconfirmed" } : {})),
+      Array.from({ length: count }, (_, i) =>
+        i === locked ? { sendState: "waiting-reconnect", sendAttempts: 1 } : {},
+      ),
     );
     const result = move(host, from, to);
     move(host, next[0]!, next[1]!);
@@ -164,11 +162,12 @@ it("keeps the equal-time delivery barrier at the tail in place", () => {
   const { host } = queueHost([]);
   for (const id of ["first", "second", "locked"]) {
     expect(
-      admitStoredChatComposerQueueItem(host, admission(host), {
+      admitStoredChatComposerQueueItemResult(host, admission(host), {
         ...queued(id),
-        sendState: id === "locked" ? "unconfirmed" : "waiting-reconnect",
+        sendState: "waiting-reconnect",
+        sendAttempts: id === "locked" ? 1 : 0,
       }),
-    ).toBe(true);
+    ).toBe("admitted");
   }
   moveQueuedChatMessage(host, "second", "first");
   expect(storedOrder(host).at(-1)).toBe("locked");

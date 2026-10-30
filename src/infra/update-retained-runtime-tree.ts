@@ -38,7 +38,6 @@ export async function linkUpdateCandidatePluginTrees(
     targetStateDir: string;
     candidateRoot: string;
     assertCurrent: () => void;
-    onProgress?: () => void | Promise<void>;
   },
 ): Promise<{ linked: number; copied: number } | { unusableReason: string }> {
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
@@ -82,7 +81,6 @@ export async function linkUpdateCandidatePluginTrees(
   let unusableReason: string | undefined;
   const directories: Array<Extract<UpdateCandidatePluginEntry, { kind: "directory" }>> = [];
   const materialize = async (entry: UpdateCandidatePluginEntry) => {
-    await params.onProgress?.();
     const destination = destinationFor(entry.path);
     const directory = entry.kind === "directory" ? destination : path.dirname(destination);
     // A file may precede its parent's inventory entry; reuse only completed creation.
@@ -105,7 +103,12 @@ export async function linkUpdateCandidatePluginTrees(
         { privateRoot, candidateRoot },
       );
     } else {
-      let copy = pluginFiles.has(entry.path) || Boolean(resolveRuntimeFileRelocator(destination));
+      // Recovery objects can also live in dist. Retaining owner-private bytes
+      // must not change the source's link count or sealed recovery fingerprint.
+      let copy =
+        (entry.mode & 0o077) === 0 ||
+        pluginFiles.has(entry.path) ||
+        Boolean(resolveRuntimeFileRelocator(destination));
       if (!copy) {
         params.assertCurrent();
         try {

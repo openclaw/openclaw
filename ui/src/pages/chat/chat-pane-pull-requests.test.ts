@@ -4,6 +4,7 @@ import { setImmediate as nextFrame } from "node:timers/promises";
 import { createEffect, createMemo, flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import {
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   type ControlUiSessionPullRequest,
   type ControlUiSessionPullRequests,
@@ -11,15 +12,16 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import {
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-  sessionPullRequestsForGateway,
-} from "../../lib/session-pull-requests.ts";
+import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createInitializationContext,
+} from "./chat-application-context.test-support.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import {
   account,
@@ -31,13 +33,8 @@ import {
 } from "./chat-github-publication.test-support.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createInitializationContext,
-  createRenderTestChatPane,
-  createTestChatPane,
-} from "./chat-pane.test-support.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { createRenderTestChatPane, createTestChatPane } from "./chat-pane.test-support.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 
 const repository = { owner: "openclaw", repo: "openclaw" };
@@ -330,6 +327,47 @@ it.each(["global", "per-sender"] as const)(
     );
   },
 );
+
+it("retires hidden publication feedback while retaining the admitted write and its result", async () => {
+  const { pane, request, responses, publications, settled } = createPublicationPane();
+  const response = Promise.withResolvers<unknown>();
+  responses.set("sessions.github.publish", response.promise);
+  const ready = await settled();
+  let retired = false;
+  void ready.readiness.retired.then(() => {
+    retired = true;
+  });
+  const completion = ready.onPublish?.();
+  let completed = false;
+  void Promise.resolve(completion).then(() => {
+    completed = true;
+  });
+  expect(publications()).toHaveLength(1);
+
+  pane.presented = false;
+  // Hiding must retire the receipt before any render of the parked frame or RPC settlement.
+  await Promise.resolve();
+  expect(retired).toBe(true);
+  expect(completed).toBe(false);
+
+  const result = {
+    requestId,
+    publisher: shared,
+    status: "published",
+    url: "https://github.com/openclaw/openclaw/pull/111532",
+    repository: "openclaw/openclaw",
+    branch: "feature/publication",
+    headCommit: "a".repeat(40),
+  };
+  response.resolve(result);
+  await completion;
+  pane.presented = true;
+  expect((await settled()).result).toEqual(result);
+  expect(publications()).toHaveLength(1);
+  expect(
+    request.mock.calls.filter(([method]) => method === "sessions.github.options"),
+  ).toHaveLength(1);
+});
 
 it.each(["shared", "personal"] as const)(
   "retains an unknown %s publication across a retained-pane navigation",

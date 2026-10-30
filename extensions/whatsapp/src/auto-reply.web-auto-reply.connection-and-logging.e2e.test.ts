@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as waitForLogTick } from "node:timers/promises";
-import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
+import { formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { extractErrorCode, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { getChildLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
@@ -29,7 +29,7 @@ import {
   createWhatsAppReplyTransportContext,
   deliverWebReply,
 } from "./auto-reply/deliver-reply.js";
-import { buildInboundLine } from "./auto-reply/monitor/message-line.js";
+import { whatsappLog } from "./auto-reply/loggers.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 import { waitForWaConnection } from "./session.js";
@@ -201,6 +201,36 @@ function expectStatus(statuses: Partial<WebChannelStatus>[], expected: Partial<W
 function blockedStatus(healthState: WebChannelStatus["healthState"]) {
   return { running: false, connected: false, healthState, lifecycle: "blocked" };
 }
+
+it.each([
+  ["open", false, "all groups; no group allowlist configured", undefined],
+  ["disabled", true, "groups disabled by groupPolicy", undefined],
+  ["allowlist", false, "group inbound blocked by empty groupPolicy allowlist", undefined],
+  ["allowlist", true, "all groups; sender allowlist configured", undefined],
+  ["allowlist", true, "all groups; wildcard configured", { "123@g.us": {}, "*": {} }],
+  ["allowlist", true, "2 configured groups", { "123@g.us": {}, "456@g.us": {} }],
+] as const)(
+  "logs listener scope for %s policy: %s, %s",
+  async (groupPolicy, hasGroupAllowFrom, scope, groups) => {
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          groupPolicy,
+          allowFrom: [],
+          groupAllowFrom: hasGroupAllowFrom ? ["+111"] : [],
+          groups,
+        },
+      },
+    });
+    const info = vi.spyOn(whatsappLog, "info").mockImplementation(() => {});
+    try {
+      await openOnce();
+      expect(info).toHaveBeenCalledWith(`Listening for WhatsApp inbound messages (DM + ${scope}).`);
+    } finally {
+      info.mockRestore();
+    }
+  },
+);
 
 it("handles helper envelope timestamps with trimmed timezones (regression)", () => {
   const d = new Date("2025-01-01T00:00:00.000Z");
@@ -572,38 +602,6 @@ it("raises the process listener budget before opening the web listener", async (
   } finally {
     process.setMaxListeners?.(originalMax);
   }
-});
-
-it("builds separate timestamped inbound envelopes without batching", () => {
-  const buildLine = (body: string, id: string, timestamp: number) =>
-    buildInboundLine({
-      envelope: { timezone: "utc" },
-      msg: createTestWebInboundMessage({
-        event: { id, timestamp },
-        payload: { body },
-        platform: { recipientJid: "+2" },
-        admission: {
-          conversation: { kind: "direct", id: "+1" },
-          sender: { id: "+1" },
-        },
-      }),
-    });
-
-  const firstBody = buildLine("first", "m1", 1735689600000);
-  const secondBody = buildLine("second", "m2", 1735693200000);
-  const firstTimestamp = formatEnvelopeTimestamp(new Date("2025-01-01T00:00:00Z"), "utc");
-  const secondTimestamp = formatEnvelopeTimestamp(new Date("2025-01-01T01:00:00Z"), "utc");
-
-  expect(firstBody).toMatch(
-    new RegExp(`\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${escapeRegExp(firstTimestamp)}\\] \\+1: first`),
-  );
-  expect(firstBody).not.toContain("second");
-  expect(secondBody).toMatch(
-    new RegExp(
-      `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${escapeRegExp(secondTimestamp)}\\] \\+1: second`,
-    ),
-  );
-  expect(secondBody).not.toContain("first");
 });
 
 it("logs outbound delivery metadata without reply content", async ({ signal }) => {

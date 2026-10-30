@@ -2,7 +2,7 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import packageManifest from "../../package.json" with { type: "json" };
 import { getAiTransportHost } from "../host.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
-import type { Context, Model } from "../types.js";
+import type { Context, Model, ModelRequestHeaders } from "../types.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import {
@@ -13,18 +13,10 @@ import {
 
 let packageVersionMemo: string | undefined;
 
-function resolvePackageVersion(): string {
-  if (!packageVersionMemo) {
-    packageVersionMemo =
-      (typeof process !== "undefined" && process.env?.OPENCLAW_VERSION) || packageManifest.version;
-  }
-  return packageVersionMemo;
-}
-
 export function resolveGoogleApiClientHeaders(params: {
   baseUrl: string;
   model: Model;
-}): Record<string, string> {
+}): ModelRequestHeaders {
   const hostHeaders = getAiTransportHost().resolveProviderRequestHeaders({
     provider: "google",
     api: "google-generative-ai",
@@ -36,7 +28,9 @@ export function resolveGoogleApiClientHeaders(params: {
   }
   return {
     ...hostHeaders,
-    "x-goog-api-client": `openclaw/${resolvePackageVersion()}`,
+    "x-goog-api-client": `openclaw/${(packageVersionMemo ||=
+      (typeof process !== "undefined" && process.env?.OPENCLAW_VERSION) ||
+      packageManifest.version)}`,
   };
 }
 

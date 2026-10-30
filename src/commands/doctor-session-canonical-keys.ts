@@ -435,7 +435,6 @@ async function repairCanonicalSessionGroup(
       writeTranscriptArchive({
         archiveDirectory,
         content: destinationContent,
-        reason: "deleted",
         sessionId,
       });
       archivedDirectories.add(archiveDirectory);

@@ -9,7 +9,7 @@ import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../components/link-reader-hovercard-registration.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
+import { sharedSessionPullRequestsProjection } from "../../lib/reactive/shared-application-projections.ts";
 import {
   orderSessionPullRequests,
   sessionPullRequestStateIcons,
@@ -100,14 +100,14 @@ function SessionGit(
   const token = {};
   const store = sessionPullRequestsForGateway(source.gateway);
   const gatewayProjection = projectGateway(source.gateway);
-  const projection = projectOwner(store, (owner) => owner.get(source.key));
+  const projection = sharedSessionPullRequestsProjection(store);
   // Each keyed Gateway/session scope owns exactly one remote watch.
   onSettled(() => {
     store.watch(token, [source.key], { foreground: true });
     return () => store.unwatch(token);
   });
   const connection = () => gatewayProjection.read().snapshot;
-  const snapshot = () => projection.read();
+  const snapshot = () => projection.read().get(source.key);
   const branch = createMemo(() => {
     const current = snapshot();
     return current?.pullRequests.some((pr) => pr.state === "open" || pr.state === "draft")

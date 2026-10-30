@@ -1,6 +1,6 @@
 import type { Message as TelegramMessage, MessageEntity } from "grammy/types";
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { describeReplyTarget, getTelegramTextParts, hasBotMention } from "./helpers.js";
 import { renderTelegramTextEntities } from "./inbound-text-entities.js";
 
@@ -21,54 +21,27 @@ function replyTarget(reply: Record<string, unknown>, extra: Record<string, unkno
     }),
   );
 }
-function externalTarget(reply: Record<string, unknown>, extra: Record<string, unknown> = {}) {
-  return replyTarget(
-    {},
-    {
-      reply_to_message: undefined,
-      external_reply: {
-        message_id: 4,
-        date: 1200,
-        chat,
-        text: "Forwarded from elsewhere",
-        ...reply,
-      },
-      ...extra,
-    },
-  );
-}
-const mentions = (text: string) =>
-  hasBotMention(asMalformedTelegramMessage({ text, chat: { id: 1, type: "supergroup" } }), "gaian");
 
 describe("describeReplyTarget", () => {
   it("handles non-string reply text gracefully (issue #27201)", () => {
     expect(replyTarget({ text: { some: "object" } })).toBeNull();
   });
 
-  it("describes a replied-to dice roll when the cache did not supply a body", () => {
-    expect(replyTarget({ dice: { emoji: "\u{1F3AF}", value: 3 } })).toMatchObject({
-      body: "[Dice \u{1F3AF} = 3]",
-      sender: "Alice",
-    });
-  });
-
-  it("drops binary reply captions with no safe fallback", () => {
-    expect(replyTarget({ caption: "PK\x00\x03\x04binary" })).toMatchObject({
-      id: "1",
-      sender: "Alice",
-      body: undefined,
-    });
-  });
-
-  it("falls back to reply text when quote text is binary", () => {
-    expect(
-      replyTarget(
-        { text: "Original message" },
-        {
-          quote: { text: "\x00\x01\x02binary quote" },
-        },
-      ),
-    ).toMatchObject({ body: "Original message", kind: "reply" });
+  it.each([
+    {
+      name: "describes uncached dice rolls",
+      reply: { dice: { emoji: "🎯", value: 3 } },
+      extra: {},
+      expected: { body: "[Dice 🎯 = 3]", sender: "Alice" },
+    },
+    {
+      name: "falls back from binary quotes to reply text",
+      reply: { text: "Original message" },
+      extra: { quote: { text: "\x00\x01\x02binary quote" } },
+      expected: { body: "Original message", kind: "reply" },
+    },
+  ])("$name", ({ reply, extra, expected }) => {
+    expect(replyTarget(reply, extra)).toMatchObject(expected);
   });
 
   it("extracts forwarded context from channel forward in reply_to_message", () => {
@@ -90,98 +63,87 @@ describe("describeReplyTarget", () => {
   });
 
   it("marks top-level quote metadata on external replies as external targets", () => {
-    const result = externalTarget(
-      { from: { id: 123, first_name: "Eve", is_bot: false } },
+    const entities = [{ type: "italic", offset: 0, length: 6 }];
+    const result = replyTarget(
+      {},
       {
-        quote: {
-          text: "quoted slice",
-          position: 4,
-          entities: [{ type: "italic", offset: 0, length: 6 }],
+        reply_to_message: undefined,
+        external_reply: {
+          message_id: 4,
+          date: 1200,
+          chat,
+          text: "Forwarded from elsewhere",
+          from: { id: 123, first_name: "Eve", is_bot: false },
         },
+        quote: { text: "quoted slice", position: 4, entities },
       },
     );
-
-    expect(result).toMatchObject({
-      id: "4",
-      kind: "quote",
-      source: "external_reply",
-      quoteText: "quoted slice",
-      quotePosition: 4,
-    });
-    expect(result?.quoteEntities).toEqual([{ type: "italic", offset: 0, length: 6 }]);
-  });
-
-  it("extracts forwarded context from external_reply", () => {
-    const result = externalTarget({
-      forward_origin: {
-        type: "user",
-        sender_user: {
-          id: 123,
-          first_name: "Eve",
-          last_name: "Stone",
-          username: "eve",
-          is_bot: false,
-        },
-        date: 700,
-      },
-    });
-    expect(result?.id).toBe("4");
-    expect(result?.forwardedFrom).toMatchObject({
-      from: "Eve Stone (@eve)",
-      fromType: "user",
-      fromId: "123",
-      date: 700,
-    });
+    expect(result).toEqual(
+      expect.objectContaining({
+        id: "4",
+        kind: "quote",
+        source: "external_reply",
+        quoteText: "quoted slice",
+        quotePosition: 4,
+        quoteEntities: entities,
+      }),
+    );
   });
 });
 
-describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
-  it("strips binary caption content to prevent token explosion", () => {
-    const binaryCaption = "PK\x03\x04\x14\x00\x08binary-ebook-data";
-    const result = getTelegramTextParts({
-      caption: binaryCaption,
+it("strips binary captions and their entities to prevent token explosion (#66647)", () => {
+  expect(
+    getTelegramTextParts({
+      caption: "PK\x03\x04\x14\x00\x08binary-ebook-data",
       caption_entities: [{ type: "mention", offset: 0, length: 5 }],
-      chat: { id: 1, type: "private" },
-      date: 1,
-      message_id: 1,
-    } as TelegramMessage);
-    expect(result.text).toBe("");
-    expect(result.entities).toStrictEqual([]);
-  });
+    }),
+  ).toStrictEqual({ text: "", entities: [] });
 });
 
-describe("hasBotMention", () => {
-  it("does not match mention prefixes from longer bot usernames", () => {
-    expect(mentions("@GaianChat_Bot what is the group id?")).toBe(false);
-  });
-
-  it("matches mention followed by punctuation", () => {
-    expect(mentions("@gaian, what's up?")).toBe(true);
-  });
-
-  it("matches a text_mention that targets the bot in a caption", () => {
-    expect(
-      hasBotMention(
-        asMalformedTelegramMessage({
-          caption: "Gaian look at this",
-          caption_entities: [
-            {
-              type: "text_mention",
-              offset: 0,
-              length: 5,
-              user: { id: 42, is_bot: true, first_name: "Gaian" },
-            },
-          ],
-          chat: { id: 1, type: "supergroup" },
-        }),
-        "gaian",
-        42,
-      ),
-    ).toBe(true);
-  });
+it.each([
+  [{ text: "@GaianChat_Bot what is the group id?" }, false],
+  [{ text: "@gaian, what's up?" }, true],
+  [
+    {
+      caption: "Gaian look at this",
+      caption_entities: [
+        {
+          type: "text_mention",
+          offset: 0,
+          length: 5,
+          user: { id: 42, is_bot: true, first_name: "Gaian" },
+        },
+      ],
+    },
+    true,
+  ],
+] as const)("matches only the target bot in %j", (content, expected) => {
+  const message = asMalformedTelegramMessage({ chat: { id: 1, type: "supergroup" }, ...content });
+  expect(hasBotMention(message, "gaian", 42)).toBe(expected);
 });
 
 describe("renderTelegramTextEntities", () => {
+  it("orders owned boundaries without copying or mutating caller entities", () => {
+    const text = "bold before\nquoted\nbold after";
+    const entities = Object.freeze([
+      Object.freeze({ type: "italic", offset: 12, length: 6 } as const),
+      Object.freeze({ type: "bold", offset: 0, length: text.length } as const),
+      Object.freeze({ type: "blockquote", offset: 12, length: 6 } as const),
+      Object.freeze({ type: "bold", offset: -1, length: 6 } as const),
+    ]);
+    const copyingSort = vi.spyOn(Array.prototype, "toSorted");
+    try {
+      for (let repeat = 0; repeat < 2; repeat++) {
+        expect(renderTelegramTextEntities(text, entities)).toBe(
+          "**bold before**\n> **_quoted_**\n\n**bold after**",
+        );
+      }
+      expect(copyingSort).not.toHaveBeenCalled();
+    } finally {
+      copyingSort.mockRestore();
+    }
+  });
+
   it("uses a pre fence that cannot close inside content", () => {
     const text = "before\n```\ninside";
     const entities = [

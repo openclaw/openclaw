@@ -9,7 +9,6 @@ import {
   isPending,
   latest,
   onSettled,
-  untrack,
 } from "solid-js";
 import type { CronCompactJob } from "../../../api/types.ts";
 import { pathForRoute } from "../../../app-route-paths.ts";
@@ -17,6 +16,7 @@ import { gatewayPresentationScope } from "../../../app/gateway-presentation-scop
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { isCronInventoryInvalidation } from "../../../lib/cron/inventory-connection.ts";
 import { loadCompactCronJobsPage, retireCronJobsRequest } from "../../../lib/cron/jobs.ts";
 import { createInitialCronState } from "../../../lib/cron/state.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
@@ -30,8 +30,12 @@ import { listen } from "../../../lib/reactive/listener.ts";
 import { resolveUiConversationIdentity } from "../../../lib/sessions/session-key.ts";
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
 import "../../../styles/chat/summary-automations.css";
+import type { DetailsAutomation, DetailsSnapshotPatch } from "../chat-details-snapshot.ts";
+import type { ChatDetailsSnapshot } from "../session-details-snapshot-schema.ts";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
-import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { automationResultData, SessionAutomationResult } from "./session-automation-result.tsx";
+import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -60,6 +64,7 @@ export function createSessionAutomationInventory(
   const sessionKey = createMemo(() => props.sessionKey);
   const presented = createMemo(() => props.presented);
   const binding = createMemo(() => ({ source: gateway(), key: sessionKey() }));
+  let loadedBinding: ReturnType<typeof binding> | undefined;
   const [revision, setRevision] = createSignal(0);
   const publish = () => setRevision((value) => value + 1);
   // The loader owns synchronous request state; Solid only observes its revision.
@@ -108,6 +113,7 @@ export function createSessionAutomationInventory(
   };
 
   function reset(source: ApplicationGateway | undefined, key: string, retain = false) {
+    loadedBinding = binding();
     retry.reset();
     retryPending = false;
     retireCronJobsRequest(cron);
@@ -154,10 +160,12 @@ export function createSessionAutomationInventory(
     append = false,
     isPresented = presented(),
     event,
+    refresh = false,
   }: {
     append?: boolean;
     isPresented?: boolean;
     event?: unknown;
+    refresh?: boolean;
   } = {}) {
     const current = cron;
     if (
@@ -173,7 +181,7 @@ export function createSessionAutomationInventory(
     retryPending = false;
     dirty = false;
     const alreadyLoading = current.cronLoading || current.cronJobsLoadingMore;
-    const pending = loadCompactCronJobsPage(current, { append, event });
+    const pending = loadCompactCronJobsPage(current, { append, event, refresh });
     // Coalesced events return early; retain the active read's completion receipt.
     if (!alreadyLoading && (current.cronLoading || current.cronJobsLoadingMore)) {
       setReceipt({ state: current, result: pending });
@@ -232,9 +240,12 @@ export function createSessionAutomationInventory(
             }
           });
           const unsubscribeEvents = source.subscribeEvents((event) => {
-            if (current() && event.event === "cron") {
+            if (
+              current() &&
+              (event.event === "cron" || isCronInventoryInvalidation(event, source.snapshot))
+            ) {
               dirty = true;
-              void load({ event: event.payload });
+              void load({ event: event.event === "cron" ? event.payload : undefined });
             }
           });
           void load();
@@ -293,13 +304,14 @@ export function createSessionAutomationInventory(
     total: () => state().cronJobsTotal,
     hasMore: () => state().cronJobsHasMore,
     loading: () => state().cronLoading || state().cronJobsLoadingMore,
-    loaded: () => state().cronJobsSnapshotRevision !== null,
+    loaded: () => state().cronJobsSnapshotRevision !== null && binding() === loadedBinding,
     connected: () => scope().connected,
     available: () => readable() && Boolean(state().cronSessionFilter),
     readable,
+    denied: () => state().cronJobsReadDenied === true,
     error: () => state().cronJobsError !== null,
     read,
-    refresh: () => load(),
+    refresh: () => load({ refresh: true }),
     loadMore: () => load({ append: true }),
   };
 }
@@ -336,10 +348,12 @@ export function SessionAutomationRead(props: {
 }
 
 export type ChatSummaryAutomationsProps = SessionAutomationInventoryProps & {
+  cached?: ChatDetailsSnapshot["automations"];
+  onDetailsSnapshot?: (patch: DetailsSnapshotPatch) => void;
+  /** Reset local reveal/focus intent without retiring the logical inventory. */
+  presentationIdentity?: object;
   /** Supplied only by the native desktop Details composition. */
   desktop?: { expanded: boolean; onExpandedChange: (expanded: boolean) => void };
-  /** Stable session-owned instance shared with mobile, when supplied by the parent. */
-  inventory?: SessionAutomationInventory;
   onNavigate?: (jobId: string) => void;
 };
 
@@ -355,33 +369,71 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       }
     };
   };
-  const initialInventory = untrack(() => props.inventory);
-  const inventory = initialInventory ?? createSessionAutomationInventory(props, () => host);
+  const inventory = createSessionAutomationInventory(props, () => host);
   const presented = createMemo(() => props.presented);
   const sessionKey = createMemo(() => props.sessionKey);
-  // Reopening or replacing the session resets only the local reveal count.
+  const presentation = createMemo(() => props.presentationIdentity);
+  // Reopening or replacing the presentation resets only the local reveal count.
   const [shown, setShown] = createSignal(() => {
+    presentation();
     presented();
     sessionKey();
     return 10;
   });
-  const jobs = () => inventory.jobs().slice(0, shown());
+  const formatSchedule = createSessionAutomationSchedule();
+  const cached = () =>
+    !inventory.loaded() &&
+    !inventory.denied() &&
+    (!props.gateway?.snapshot.hello || inventory.readable())
+      ? props.cached
+      : undefined;
+  const pending = () => (cached() ? inventory.loading() : isPending(inventory.read));
+  // Closing the row DOM must not erase the bounded offline preview.
+  const jobs = createMemo<DetailsAutomation[]>(() =>
+    inventory.loaded()
+      ? inventory
+          .jobs()
+          .slice(0, props.desktop && !props.desktop.expanded ? 10 : shown())
+          .map((job) => ({
+            id: job.id,
+            name: job.name,
+            disabled: !job.enabled || undefined,
+            autoDisabled: job.autoDisabled ? true : undefined,
+            running:
+              job.runningAtMs === undefined
+                ? undefined
+                : (inventory.connected() && job.enabled && !job.autoDisabled) || undefined,
+            state: jobState(job),
+            result: automationResultData(job),
+            timezone: job.schedule?.kind === "cron" ? job.schedule.tz : undefined,
+          }))
+      : (cached()?.rows ?? []),
+  );
   const hasCachedRows = () => inventory.jobs().length > shown();
-  const more = () => hasCachedRows() || (inventory.hasMore() && !inventory.error());
+  const unavailable = () => inventory.error() || inventory.loading() || !inventory.connected();
+  const more = () =>
+    cached()?.more ?? (hasCachedRows() || (inventory.hasMore() && !inventory.error()));
+  const receipt = createMemo(() =>
+    inventory.loaded() && props.onDetailsSnapshot
+      ? {
+          write: props.onDetailsSnapshot,
+          automations: {
+            rows: jobs().slice(0, 10),
+            more: inventory.jobs().length > 10 || inventory.hasMore(),
+          },
+        }
+      : undefined,
+  );
 
   async function reveal(button: HTMLButtonElement) {
     const key = props.sessionKey;
+    const presentationIdentity = props.presentationIdentity;
     const source = props.gateway;
     const first = jobs().length;
     const count = shown() + 10;
     // Revealing retained rows needs no network request, even during a failed refresh.
     if (!hasCachedRows()) {
-      if (
-        inventory.error() ||
-        inventory.loading() ||
-        !inventory.connected() ||
-        !inventory.hasMore()
-      ) {
+      if (unavailable() || !inventory.hasMore()) {
         return;
       }
       await inventory.loadMore();
@@ -389,7 +441,9 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
         return;
       }
     }
+    // Cancel the old presentation before reading props held by an async frame.
     if (
+      latest(() => props.presentationIdentity) !== presentationIdentity ||
       props.sessionKey !== key ||
       props.gateway !== source ||
       !props.presented ||
@@ -404,6 +458,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
         const target = firstRevealedId ? jobLinks.get(firstRevealedId) : undefined;
         const activeElement = host.ownerDocument.activeElement;
         if (
+          latest(() => props.presentationIdentity) === presentationIdentity &&
           props.sessionKey === key &&
           props.gateway === source &&
           props.presented &&
@@ -419,10 +474,12 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
 
   async function retry(button: HTMLButtonElement) {
     const key = props.sessionKey;
+    const presentationIdentity = props.presentationIdentity;
     const source = props.gateway;
     const focused = host.ownerDocument.activeElement === button;
     await inventory.refresh();
     if (
+      latest(() => props.presentationIdentity) !== presentationIdentity ||
       props.sessionKey !== key ||
       props.gateway !== source ||
       inventory.error() ||
@@ -436,6 +493,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       onSettled(() => {
         const target = jobLinks.get(inventory.jobs()[0]?.id ?? "");
         if (
+          latest(() => props.presentationIdentity) === presentationIdentity &&
           props.sessionKey === key &&
           props.gateway === source &&
           props.presented &&
@@ -459,7 +517,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     if (inventory.connected() && job.runningAtMs !== undefined) {
       return t("common.running");
     }
-    return job.schedule ? sessionAutomationSchedule(job.schedule) : "";
+    return job.schedule ? formatSchedule(job.schedule) : "";
   }
   const errorNotice = () =>
     inventory.connected() && (
@@ -482,20 +540,16 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       </div>
     );
   const content = () => (
-    <div class="chat-summary__automations" aria-busy={isPending(inventory.read) ? "true" : "false"}>
-      <For each={jobs()} keyed={(job) => job.id}>
+    <div class="chat-summary__automations" aria-busy={pending() ? "true" : "false"}>
+      <For each={props.desktop && !props.desktop.expanded ? [] : jobs()} keyed={(job) => job.id}>
         {(job) => {
           let row: HTMLAnchorElement | undefined;
           const search = () => `?${new URLSearchParams({ job: job().id })}`;
-          const running = () =>
-            inventory.connected() &&
-            job().enabled &&
-            !job().autoDisabled &&
-            job().runningAtMs !== undefined;
-          const state = createMemo(() => jobState(job()));
+          const running = () => job().running;
+          const state = () => job().state;
           const metadataTitle = () => {
             const value = job();
-            const timezone = value.schedule?.kind === "cron" ? value.schedule.tz : undefined;
+            const timezone = value.timezone;
             return timezone ? `${state()} (${timezone})` : props.desktop ? undefined : state();
           };
           return (
@@ -522,40 +576,45 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
             >
               <span class="chat-summary__automation-icon" aria-hidden="true">
                 <Icon name="clock" />
-                {!job().enabled && !job().autoDisabled && (
+                {job().disabled && !job().autoDisabled && (
                   <span class="chat-summary__automation-paused">
                     <Icon name="pause" />
                   </span>
                 )}
                 {job().autoDisabled && <span class="chat-summary__automation-attention" />}
               </span>
-              <HoverMarquee
-                class="chat-summary__automation-title"
-                content={job().name.trim() || job().id}
-                options={{ host: () => row }}
-              />
-              {state() && (
-                <span
-                  class={[
-                    "chat-summary__automation-state",
-                    { "is-attention": Boolean(job().autoDisabled) },
-                  ]}
-                  title={metadataTitle()}
-                >
-                  {running() ? (
-                    <>
-                      <span class="session-run-spinner" aria-hidden="true" />
-                      <span class="sr-only">{state()}</span>
-                    </>
-                  ) : (
-                    <HoverMarquee
-                      class="chat-summary__automation-metadata"
-                      content={state()}
-                      options={{ host: () => row, stationary: true }}
-                    />
+              <span class="chat-summary__automation-copy">
+                <span class="chat-summary__automation-heading">
+                  <HoverMarquee
+                    class="chat-summary__automation-title"
+                    content={job().name.trim() || job().id}
+                    options={{ host: () => row }}
+                  />
+                  {state() && (
+                    <span
+                      class={[
+                        "chat-summary__automation-state",
+                        { "is-attention": Boolean(job().autoDisabled) },
+                      ]}
+                      title={metadataTitle()}
+                    >
+                      {running() ? (
+                        <>
+                          <span class="session-run-spinner" aria-hidden="true" />
+                          <span class="sr-only">{state()}</span>
+                        </>
+                      ) : (
+                        <HoverMarquee
+                          class="chat-summary__automation-metadata"
+                          content={state()}
+                          options={{ host: () => row, stationary: true }}
+                        />
+                      )}
+                    </span>
                   )}
                 </span>
-              )}
+                <SessionAutomationResult data={job().result} />
+              </span>
             </a>
           );
         }}
@@ -564,7 +623,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
         <button
           type="button"
           class="chat-summary__automation-more"
-          disabled={!hasCachedRows() && (isPending(inventory.read) || !inventory.connected())}
+          aria-disabled={!hasCachedRows() && unavailable() ? "true" : undefined}
           onClick={(event) => void reveal(event.currentTarget)}
         >
           {t("chat.sessionDetails.automationShowMore")}
@@ -574,10 +633,16 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
   );
   return (
     <openclaw-chat-summary-automations ref={(element) => (host = element)}>
-      {initialInventory ? null : inventory.lifecycle}
-      <Loading>
-        <Show when={inventory.readable()}>
-          <Show when={inventory.jobs().length > 0}>
+      {inventory.lifecycle}
+      <ChatLazyBoundary>
+        <Show when={receipt()} keyed>
+          {(value) => {
+            onSettled(() => value.write({ automations: value.automations }));
+            return null;
+          }}
+        </Show>
+        <Show when={inventory.readable() || cached()}>
+          <Show when={inventory.jobs().length > 0 || (cached()?.rows.length ?? 0) > 0}>
             <Show
               when={props.desktop}
               fallback={
@@ -616,7 +681,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
             }
           />
         </Show>
-      </Loading>
+      </ChatLazyBoundary>
     </openclaw-chat-summary-automations>
   );
 }

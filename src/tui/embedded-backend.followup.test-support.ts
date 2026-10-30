@@ -1,9 +1,9 @@
 import { expect, it, vi, type Mock } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { EmbeddedTuiBackend } from "./embedded-backend.js";
 import { captureBackendEvents } from "./embedded-backend.stream.test-support.js";
 import {
-  deferred,
   flushMicrotasks,
   localSessionEntry,
   sendMainChat,

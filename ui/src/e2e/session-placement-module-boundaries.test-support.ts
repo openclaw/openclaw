@@ -157,7 +157,7 @@ export function defineSessionPlacementModuleBoundaryTests(
         },
         "sessions.delete": { ok: true, deleted: true },
         "sessions.reclaim": { ok: true },
-        "sessions.send": { runId: "run-cloud-e2e", status: "started" },
+        "chat.send": { runId: "run-cloud-e2e", status: "started" },
       },
     });
     const profileRequestCount = async () => (await gateway.getRequests("environments.list")).length;
@@ -417,7 +417,7 @@ export function defineSessionPlacementModuleBoundaryTests(
       ] as const;
       for (const [state, generation, label] of transitions) {
         await publishPlacement(state, generation, label);
-        expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       }
       await gateway.resolveDeferred("sessions.describe", undefined, {
         match: { key: sessionKey },
@@ -450,19 +450,19 @@ export function defineSessionPlacementModuleBoundaryTests(
       });
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       expect(await gateway.getRequests("sessions.delete")).toHaveLength(0);
-      const send = await gateway.waitForRequest("sessions.send");
+      const send = await gateway.waitForRequest("chat.send");
       expect(send.params).toMatchObject({
-        key: sessionKey,
+        sessionKey,
+        sessionId: "session-cloud-e2e",
+        expectedLeafEntryId: null,
         agentId: "cloud",
         message,
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       });
       const orderedMethods = (await gateway.getRequests())
         .map((request) => request.method)
-        .filter((method) =>
-          ["sessions.create", "sessions.dispatch", "sessions.send"].includes(method),
-        );
-      expect(orderedMethods).toEqual(["sessions.create", "sessions.dispatch", "sessions.send"]);
+        .filter((method) => ["sessions.create", "sessions.dispatch", "chat.send"].includes(method));
+      expect(orderedMethods).toEqual(["sessions.create", "sessions.dispatch", "chat.send"]);
       const promptBubbles = page.locator(".chat-group.user .chat-bubble", { hasText: message });
       await pollCount(promptBubbles).toBe(1);
 
@@ -492,17 +492,24 @@ export function defineSessionPlacementModuleBoundaryTests(
       const localSessionRow = page.locator('[data-session-key="agent:cloud:local-e2e"]');
       await sessionRow.waitFor();
       await localSessionRow.waitFor();
-      const cloudPlacementBadge = sessionRow.locator('[data-placement-state="active"]');
-      await cloudPlacementBadge.waitFor();
+      expect(await sessionRow.locator(".session-row-badge--cloud").count()).toBe(0);
+      expect(await localSessionRow.locator(".session-row-badge--cloud").count()).toBe(0);
+      await localSessionRow.click({ button: "right" });
+      const sessionMenu = page.getByRole("menu", {
+        name: "Actions for Local session",
+        exact: true,
+      });
+      await sessionMenu.waitFor();
+      expect(await sessionMenu.getByRole("menuitem", { name: "Stop cloud worker…" }).count()).toBe(
+        0,
+      );
+      await page.keyboard.press("Escape");
       await sessionRow.hover();
       await sessionRow.click({ button: "right" });
       const stopWorker = page
         .locator("openclaw-session-menu")
         .getByRole("menuitem", { name: "Stop cloud worker…" });
       await stopWorker.waitFor();
-      expect(await localSessionRow.locator(".session-row-badge--cloud").count()).toBe(0);
-      expect(await cloudPlacementBadge.locator("circle").count()).toBe(1);
-      expect(await cloudPlacementBadge.locator("rect").count()).toBe(0);
       await stopWorker.click();
       await (await waitForConfirmModal(page)).getByRole("button", { name: "Stop worker" }).click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");

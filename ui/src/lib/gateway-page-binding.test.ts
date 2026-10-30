@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/context.ts";
+import type { ApplicationGatewaySnapshot } from "../app/context.ts";
+import {
+  createApplicationGateway as createGateway,
+  createApplicationGatewaySnapshot,
+} from "../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { GatewayPageBinding } from "./gateway-page-binding.ts";
 
@@ -9,40 +13,7 @@ function snapshot(
   client: GatewayBrowserClient | null = {} as GatewayBrowserClient,
   phase: ApplicationGatewaySnapshot["phase"] = "connected",
 ): ApplicationGatewaySnapshot {
-  return {
-    client,
-    phase,
-    offlineStable: false,
-    hello: null,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
-    sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-}
-
-function createGateway(initial: ApplicationGatewaySnapshot) {
-  let current = initial;
-  const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
-  const gateway = {
-    get snapshot() {
-      return current;
-    },
-    subscribe(listener: (value: ApplicationGatewaySnapshot) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  } as unknown as ApplicationGateway;
-  return {
-    gateway,
-    publish(next: ApplicationGatewaySnapshot) {
-      current = next;
-      for (const listener of listeners) {
-        listener(next);
-      }
-    },
-  };
+  return createApplicationGatewaySnapshot({ client, phase, sessionKey: "agent:main:main" });
 }
 
 function bind(source = createGateway(snapshot()), getGateway = () => source.gateway) {

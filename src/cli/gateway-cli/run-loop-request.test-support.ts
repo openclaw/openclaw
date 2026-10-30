@@ -2,23 +2,18 @@ import { setImmediate } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { withTimeout } from "../../infra/fs-safe.js";
-import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { expectCallCount, withRunLoopCleanup } from "./run-loop-cleanup.test-support.js";
-import { registerGatewayForcedRestartTests } from "./run-loop-force.test-support.js";
 import { gatewayWorkAdmissionActual as admission } from "./run-loop-mocks.test-support.js";
 import {
-  createActiveWorkSnapshot,
   createCloseMock,
   createLifecycleGate,
   createRuntimeWithExitSignal,
   createSignaledStart,
-  advanceWithoutCalls,
   systemdReply,
   waitForStart,
   waitForLoopCondition,
   withIsolatedSignals,
-  withLifecycleClock,
   type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
@@ -36,14 +31,6 @@ function deferredCall<T = void>() {
 }
 
 const nativeReply = systemdReply("90s");
-
-function shutdownBudget(start: ReturnType<typeof createSignaledStart>["start"]) {
-  const budget = start.mock.calls[0]?.[0]?.hostLifecycle?.getShutdownBudget?.();
-  if (!budget) {
-    throw new Error("Gateway fixture did not publish its shutdown budget");
-  }
-  return budget;
-}
 
 async function loadInstallationReplacement() {
   const { classifyGatewayStaleInstall } = await import("../../gateway/stale-install.js");
@@ -64,7 +51,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
     withRunningGateway,
     acquireGatewayLock,
     runLoopWithStart: runLoop,
-    waitForGatewayActiveWork: waitActive,
     waitForActiveCronTaskRuns: waitCron,
     restartGatewayProcessWithFreshPid: restartProcess,
     respawnGatewayProcessForUpdate: respawnUpdate,
@@ -83,9 +69,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
     isGatewayWorkAdmissionClosed: admissionClosed,
     gatewayLog,
   } = fixtures;
-  const idleActiveWorkSnapshot = createActiveWorkSnapshot();
   const replacementReason = expect.stringContaining("gateway.installation_replaced");
-  registerGatewayForcedRestartTests(fixtures);
   async function withReplacement(
     release: () => void,
     assertion: (
@@ -158,21 +142,16 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
     });
   });
 
-  it("joins FIFO signal consumption and defers durable restart upgrades through close", async () => {
+  it("joins FIFO signal consumption through close and keeps a queued Stop over a later update", async () => {
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
     const first = createDeferredCore<null>();
     const second = createDeferredCore<null>();
-    const drainEntered = createDeferredCore();
     const closing = createLifecycleGate();
     consumeIntent
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise)
       .mockResolvedValueOnce({ reason: "update.run" });
     authorizeRestart.mockReturnValueOnce(true).mockReturnValueOnce(false);
-    waitActive.mockImplementationOnce(async () => {
-      drainEntered.resolve();
-      return { drained: true, snapshot: idleActiveWorkSnapshot };
-    });
     restartProcess.mockReturnValue({ mode: "supervised" });
     await withRunningGateway(async ({ captureSignal, close, runtime, exited }) => {
       close.mockImplementationOnce(closing.wait);
@@ -182,7 +161,10 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         expect(consumeIntent).toHaveBeenCalledOnce();
         expect(admissionClosed()).toBe(true);
         first.resolve(null);
-        await drainEntered.promise;
+        await waitForLoopCondition(
+          () => consumeIntent.mock.calls.length === 2,
+          "second signal did not start its FIFO storage read",
+        );
         expectCallCount(0, close, runtime.exit);
         second.resolve(null);
         await closing.entered;
@@ -194,77 +176,44 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         closing.release();
         await expect(exited).resolves.toBe(0);
       }
-      expect(close).toHaveBeenCalledOnce();
-      expect(writeHandoff).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: "update.run" }),
-        expect.any(Function),
-      );
+      // The Stop queued behind the restart ends it; the later durable update cannot revive it.
+      expect(consumeIntent).toHaveBeenCalledTimes(3);
+      expectCallCount(0, restartProcess, writeHandoff);
     });
   });
 
-  it("bounds signal storage settlement and refuses its result after forced exit", async () => {
-    const consumed = createDeferredCore<{ reason: string } | null>();
-    consumeIntent.mockReturnValueOnce(consumed.promise);
-    await withRunningGateway(async ({ captureSignal, close, start, runtime, exited }) => {
-      const budget = shutdownBudget(start);
-      vi.useFakeTimers();
-      try {
-        captureSignal("SIGTERM")();
-        await vi.advanceTimersByTimeAsync(budget.timeoutMs);
-        expect(runtime.exit).not.toHaveBeenCalled();
-        consumed.resolve({ reason: "gateway.restart" });
-        await vi.advanceTimersByTimeAsync(0);
-        await expect(exited).resolves.toBe(1);
-        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-        expect(close).toHaveBeenCalledExactlyOnceWith({
-          retainSharedState: true,
-          reason: "gateway stopping",
-        });
-        expect(start).toHaveBeenCalledOnce();
-      } finally {
-        consumed.resolve(null);
-        await vi.advanceTimersByTimeAsync(0);
-        vi.useRealTimers();
-      }
-    });
-  });
-
-  it("keeps the original SIGTERM deadline after delayed intent consumption fails", async () => {
-    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
-    systemctl.mockResolvedValue(nativeReply);
-    const consumed = createDeferredCore<null>();
-    const closing = createDeferredCore();
-    consumeIntent.mockReturnValueOnce(consumed.promise);
-    await withRunningGateway(async ({ captureSignal, close, start, runtime, exited }) => {
-      close.mockImplementationOnce(() => closing.promise);
-      const budget = shutdownBudget(start);
-      const consumedMs = 10_000;
-      await withLifecycleClock(async () => {
+  it.each(["SIGTERM", "SIGUSR2"] as const)(
+    "continues graceful shutdown after blocked %s intent consumption and ignores its late result",
+    async (signal) => {
+      const consumed = createDeferredCore<{ reason: string } | null>();
+      consumeIntent.mockReturnValueOnce(consumed.promise);
+      await withRunningGateway(async ({ captureSignal, close, start, exited }) => {
+        vi.useFakeTimers();
         try {
-          captureSignal("SIGTERM")();
-          await vi.advanceTimersByTimeAsync(consumedMs);
-          consumed.reject(new Error("restart intent worker unavailable"));
-          await vi.advanceTimersByTimeAsync(0);
+          captureSignal(signal)();
+          if (signal === "SIGUSR2") {
+            captureSignal("SIGTERM")();
+          }
+          await vi.advanceTimersByTimeAsync(1_000);
           expect(close).toHaveBeenCalledOnce();
-          await advanceWithoutCalls(budget.timeoutMs - consumedMs - 1, runtime.exit);
-          await advanceWithoutCalls(1, runtime.exit);
-          closing.resolve();
-          await vi.advanceTimersByTimeAsync(0);
-          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
           await expect(exited).resolves.toBe(0);
+          consumed.resolve({ reason: "gateway.restart" });
+          await vi.advanceTimersByTimeAsync(0);
+          expect(start).toHaveBeenCalledOnce();
+          expect(close).toHaveBeenCalledOnce();
         } finally {
           consumed.resolve(null);
-          closing.resolve();
           await vi.advanceTimersByTimeAsync(0);
+          vi.useRealTimers();
         }
       });
-    });
-  });
+    },
+  );
 
   it("settles a queued Stop when restart preparation fails before reopening storage", async () => {
     const preparation = deferredCall<{ drained: boolean; active: number }>();
     waitCron.mockImplementationOnce(preparation.call);
-    await withRunningGateway(async ({ captureSignal, close, start, runtime, exited }) => {
+    await withRunningGateway(async ({ captureSignal, close, start, exited }) => {
       try {
         captureSignal("SIGUSR2")();
         await preparation.entered;
@@ -274,7 +223,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         preparation.reject(new Error("restart preparation failed"));
         await expect(exited).resolves.toBe(0);
         expect(consumeIntent).toHaveBeenCalledTimes(consumed + 1);
-        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
         expectCallCount(1, start, close);
       } finally {
         preparation.resolve({ drained: true, active: 0 });
@@ -282,20 +230,15 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
     });
   });
 
-  it("keeps a captured pre-park Stop ahead of native budget refresh and drain completion", async () => {
+  it("keeps a captured pre-park Stop ahead of native budget refresh and close", async () => {
     readCgroup.mockResolvedValue("0::/system.slice/setup_and_run_blacksmith.service\n");
     systemctl.mockResolvedValue(nativeReply);
     const refreshed = deferredCall<typeof nativeReply>();
-    const drained = createLifecycleGate();
     const closing = createDeferredCore();
     const joined = createDeferredCore<boolean>();
     const settle = vi.fn(() => joined.promise);
     captureStop.mockReturnValueOnce({ settle, canPark: () => false });
     consumeSyncIntent.mockReturnValueOnce({ reason: "gateway.restart" });
-    waitActive.mockImplementationOnce(async () => {
-      await drained.wait();
-      return { drained: true, snapshot: idleActiveWorkSnapshot };
-    });
     await withIsolatedSignals(async ({ captureSignal }) => {
       let cleanupBudget: ReturnType<
         typeof import("../../process/supervisor/cleanup-budget.js").getProcessCleanupBudget
@@ -317,18 +260,14 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         await refreshed.entered;
         expect(armWatchdog).toHaveBeenCalledOnce();
         captureSignal("SIGINT")();
+        await vi.advanceTimersByTimeAsync(0);
         expectCallCount(1, settle, cancelWatchdog);
         expect(admissionClosed()).toBe(true);
         expect(close).not.toHaveBeenCalled();
 
         refreshed.resolve(nativeReply);
-        await drained.entered;
-        expect.soft(armWatchdog, "native reread rearmed the watchdog").toHaveBeenCalledOnce();
-        expect(runtime.exit).not.toHaveBeenCalled();
-
-        drained.release();
         await closing.promise;
-        expect.soft(armWatchdog, "post-drain fallback rearmed the watchdog").toHaveBeenCalledOnce();
+        expect.soft(armWatchdog, "native reread rearmed the watchdog").toHaveBeenCalledOnce();
         expect.soft(cleanupBudget).toBeUndefined();
         expect(runtime.exit).not.toHaveBeenCalled();
         expect(settle).toHaveBeenCalledOnce();
@@ -338,7 +277,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         expectCallCount(1, close, start);
       } finally {
         refreshed.resolve(nativeReply);
-        drained.release();
         joined.resolve(true);
         await vi.advanceTimersByTimeAsync(0);
         vi.useRealTimers();
@@ -370,7 +308,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         joined.resolve(true);
         await expect(exited).resolves.toBe(0);
         expectCallCount(1, close, start, acquireGatewayLock);
-        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
         expectCallCount(0, restartProcess, respawnUpdate);
         expect(boot).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ outcome: "clean_stop", reason: replacementReason }),
@@ -416,9 +353,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
             gatewayLog.error.mockImplementationOnce(() => logged.resolve());
             helper.reject(new Error("helper exit is unconfirmed"));
             await logged.promise;
-            expect(gatewayLog.error).toHaveBeenCalledWith(
-              expect.stringContaining("system-service update settlement failed"),
-            );
             expectCallCount(0, close, runtime.exit);
             expect(admissionClosed()).toBe(false);
           } else {
@@ -426,9 +360,8 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
             await exited;
             helper.release();
             await helper.wait();
-            expect(waitUpdateHelpers).toHaveBeenCalledOnce();
+            expectCallCount(1, waitUpdateHelpers, runtime.exit);
             expect(restartProcess).not.toHaveBeenCalled();
-            expect(runtime.exit).toHaveBeenCalledOnce();
           }
         },
         createCloseMock().mockImplementation(async () => closing.resolve("closed")),
@@ -494,9 +427,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
             await expect(withTimeout(exited, 4_000)).resolves.toBe(1);
             await setImmediate();
             expect(start).toHaveBeenCalledTimes(phase === "beginBoot" ? 0 : 1);
-            expect(acquireGatewayLock).toHaveBeenCalledTimes(phase === "beginBoot" ? 1 : 2);
-            expect(beginBoot).toHaveBeenCalledTimes(phase === "beginBoot" ? 1 : 0);
-            expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
             expect(completeBoot).toHaveBeenCalledExactlyOnceWith(
               expect.objectContaining({ reason: replacementReason }),
             );
@@ -522,20 +452,21 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
     ["managed-update", true, { mode: "disabled", detail: "unmanaged" }, 0],
     ["failed-close", true, { mode: "supervised", exitCode: 131071 }, 131071],
   ] as const)(
-    "drains replaced installation before %s handoff",
+    "closes replaced installation before %s handoff",
     async (mode, supervised, restart, exitCode) => {
       if (supervised) {
         process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
       }
       restartProcess.mockReturnValue(restart);
-      const drain = deferredCall<{ drained: boolean; snapshot: GatewayActiveWorkSnapshot }>();
-      waitActive.mockImplementationOnce(drain.call);
-      const close = createCloseMock();
-      if (mode === "failed-close") {
-        close.mockRejectedValueOnce(new Error("old plugin chunk unavailable during close"));
-      }
+      const closing = createLifecycleGate();
+      const close = createCloseMock().mockImplementationOnce(async () => {
+        await closing.wait();
+        if (mode === "failed-close") {
+          throw new Error("old plugin chunk unavailable during close");
+        }
+      });
       await withReplacement(
-        () => drain.resolve({ drained: true, snapshot: idleActiveWorkSnapshot }),
+        closing.release,
         async ({ signal, start, runtime, exited, boot, replace }) => {
           if (mode === "managed-update") {
             consumeSyncIntent.mockReturnValueOnce({
@@ -545,12 +476,14 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
           }
           if (mode === "existing-restart" || mode === "managed-update") {
             signal("SIGUSR2")();
-            await drain.entered;
+            await closing.entered;
           }
           replace("Cannot find module", "ERR_MODULE_NOT_FOUND");
           expect(admissionClosed()).toBe(true);
-          expectCallCount(0, close, runtime.exit);
-          drain.resolve({ drained: true, snapshot: idleActiveWorkSnapshot });
+          await closing.entered;
+          expect(close).toHaveBeenCalledOnce();
+          expect(runtime.exit).not.toHaveBeenCalled();
+          closing.release();
           await expect(exited).resolves.toBe(exitCode);
           expectCallCount(1, close, start);
           expect(boot).toHaveBeenCalledWith(

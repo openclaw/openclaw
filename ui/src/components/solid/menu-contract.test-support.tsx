@@ -36,9 +36,6 @@ export function mountControls(build: (controls: MenuControls) => Partial<MenuPro
 export function controlInput(controls: MenuControls, label: string, props: InputProps = {}) {
   return <input ref={controls.ref()} aria-label={label} {...props} />;
 }
-export function menuContent(id: string, content: JSX.Element): MenuEntry {
-  return { kind: "content", id, content };
-}
 export function submenu(id: string, label: string, items: readonly MenuEntry[], disabled = false) {
   return { id, label, children: items, disabled };
 }

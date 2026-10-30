@@ -22,6 +22,10 @@ export function usageTotals(
   };
 }
 
+export function usageMessages(): UsageAggregates["messages"] {
+  return { total: 2, user: 1, assistant: 1, toolCalls: 0, toolResults: 0, errors: 0 };
+}
+
 export function usageSession(
   key: string,
   agentId: string,
@@ -47,7 +51,7 @@ export function usageSession(
     updatedAt: Date.now(),
     usage: {
       ...totals,
-      messageCounts: { total: 2, user: 1, assistant: 1, toolCalls: 0, toolResults: 0, errors: 0 },
+      messageCounts: usageMessages(),
       modelUsage: [{ provider, model: `${provider}-model`, count: 1, totals }],
     },
   };
@@ -60,8 +64,10 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
       read: null,
       exporting: false,
       error: null,
+      partialNotice: null,
       sessions: [],
       creatorOptions: [],
+      filterOptions: undefined,
       totals: null,
       aggregates: null,
       costDaily: [],
@@ -95,20 +101,17 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
     detail: {
       context: {
         weight: undefined,
-        loading: false,
         read: null,
         status: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       },
       timeSeriesMode: "cumulative",
       timeSeriesBreakdownMode: "total",
       timeSeries: null,
-      timeSeriesLoading: false,
       timeSeriesRead: null,
       timeSeriesStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       timeSeriesCursorStart: null,
       timeSeriesCursorEnd: null,
       sessionLogs: null,
-      sessionLogsLoading: false,
       sessionLogsRead: null,
       sessionLogsStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       sessionLogsExpanded: false,
@@ -146,6 +149,7 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
   if (props.data.sessions.length && !props.data.overview) {
     props.data.overview = projectUsageData(props.data.sessions, props.filters).overview;
   }
+  props.data.filterOptions ??= props.data.overview?.filterOptions;
   return props;
 }
 
@@ -167,20 +171,26 @@ export function createUsageOverview(
 ): NonNullable<UsageProps["data"]["overview"]> {
   const overview = projectUsageData([]).overview!;
   delete overview.selectedUsageComplete;
-  delete overview.usageReport;
   return Object.assign(overview, overrides);
 }
 
 export function projectUsageData(
   sessions: UsageSessionEntry[],
   filters: Partial<UsageProps["filters"]> = {},
-): Pick<UsageProps["data"], "sessions" | "totals" | "aggregates" | "overview" | "costDaily"> {
+): Pick<
+  UsageProps["data"],
+  "sessions" | "totals" | "aggregates" | "overview" | "costDaily" | "filterOptions"
+> {
   const result = buildUsageOverview({
     rows: sessions,
     options: filters,
     dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
   });
-  return { ...result, costDaily: result.aggregates.costDaily ?? [] };
+  return {
+    ...result,
+    costDaily: result.aggregates.costDaily ?? [],
+    filterOptions: result.overview.filterOptions,
+  };
 }
 
 export const buildAggregatesFromSessions = (

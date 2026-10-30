@@ -18,11 +18,11 @@ import {
 import { canSyncAppearancePreference } from "../../app/server-prefs-profile-runtime.ts";
 import { subscribeServerUiPrefWrites } from "../../app/server-prefs.ts";
 import { patchSettings } from "../../app/settings.ts";
+import type { SessionBackground } from "../../components/session-background-host.tsx";
 import {
   backgroundImageReadIdentity,
   readBackgroundImage,
 } from "../../components/session-background-image.ts";
-import type { SessionBackground } from "../../components/session-background.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -402,7 +402,6 @@ export function createAppearanceBackground(
     }
     dismissReadStatus();
     patchSettings({ background: { ...readPreference(), ...patch } });
-    application.theme.refresh();
     mutation = null;
     setMessage(null);
   }

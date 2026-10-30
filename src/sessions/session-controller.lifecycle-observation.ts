@@ -57,11 +57,15 @@ export function captureSessionControllerSettlement(params: TargetInput): Promise
   if (!effects.length && !operations.length && !sources.length) {
     return undefined;
   }
-  return Promise.all([
+  const settled = Promise.all([
     ...sources,
     ...effects.map((effect) => effect.ref.released),
     ...operations.map((operation) => operation.ownerSettlement),
   ]).then(() => undefined);
+  // Captures may be discarded or joined later; preserve failures for callers
+  // without turning an unused settlement receipt into an unhandled rejection.
+  void settled.catch(() => {});
+  return settled;
 }
 export function isSessionControllerWorkActive(
   scope: string,

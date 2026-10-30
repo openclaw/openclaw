@@ -11,6 +11,10 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../../packages/gateway-protocol/src/version.ts";
 import { finalizeManagedChild, loadManagedChildSpawner } from "../lib/managed-child-process.mts";
 
 const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -345,8 +349,8 @@ async function startGateway() {
   client = createGatewayWsClient({ url: "ws://127.0.0.1:" + gatewayPort });
   await client.waitOpen();
   const hello = await rpc("connect", {
-    minProtocol: 4,
-    maxProtocol: 4,
+    minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
     client: {
       id: "gateway-client",
       displayName: "isolated-mcp-events-proof",

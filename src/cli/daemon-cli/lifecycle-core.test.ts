@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { GatewayRestartPreparationError } from "../../infra/restart-intent-error.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { expectNoCalls, expectPartialCall } from "./lifecycle-assertions.test-support.js";
 import {
@@ -20,6 +21,7 @@ const clearGatewayRestartIntentSync = vi.fn();
 const appendGatewayLifecycleAudit = vi.fn();
 const MISSING_SERVICE_PROGRAM = "/openclaw-test-missing-runtime/node";
 const scheduledMessage = "restart scheduled, gateway will restart momentarily";
+const interruptReason = new DOMException("Command interrupted by SIGINT.", "AbortError");
 function makeTokenConfig() {
   return { gateway: { auth: { token: "config-token" } } };
 }
@@ -85,7 +87,8 @@ vi.mock("./lifecycle-audit.js", () => ({
 
 // The runtime mock consumes the initialized lifecycle harness, not an early static import.
 const { ExitError } = await import("../../runtime.js");
-const { runServiceRestart, runServiceStart, runServiceStop } = await import("./lifecycle-core.js");
+const { runServiceRestart, runServiceStart, runServiceStop, runServiceUninstall } =
+  await import("./lifecycle-core.js");
 type StartArgs = Parameters<typeof runServiceStart>[0];
 type RestartArgs = Parameters<typeof runServiceRestart>[0];
 
@@ -390,6 +393,7 @@ it("runs a requested managed stop even when the service is not loaded", async ()
   await runServiceStop({
     serviceNoun: "Gateway",
     service,
+    renderFailureHints: () => [],
     opts: { json: true, disable: true },
     stopWhenNotLoaded: true,
     onNotLoaded,
@@ -687,3 +691,115 @@ it("never reports recovery success after a failed post-check", async () => {
   expect(lifecycleTestRuntime.writeJson).toHaveBeenCalledOnce();
   expect(service.restart).not.toHaveBeenCalled();
 });
+
+const failureHint = "Run openclaw gateway status --deep to inspect the service, then retry.";
+function failureRunArgs(json: boolean) {
+  return {
+    ...createServiceRunArgs(),
+    renderFailureHints: () => [failureHint],
+    opts: { json },
+  };
+}
+
+it.each([
+  {
+    branch: "the service manager stop fails",
+    error: "Gateway stop failed: Error: bootout failed",
+    run: (json: boolean) => {
+      service.isLoaded.mockResolvedValue(true);
+      service.stop.mockRejectedValue(new Error("bootout failed"));
+      return runServiceStop(failureRunArgs(json));
+    },
+  },
+  {
+    branch: "stop recovery for an unloaded service fails",
+    error: "Gateway stop failed: Error: signal failed",
+    run: (json: boolean) => {
+      service.isLoaded.mockResolvedValue(false);
+      return runServiceStop({
+        ...failureRunArgs(json),
+        onNotLoaded: async () => {
+          throw new Error("signal failed");
+        },
+      });
+    },
+  },
+  {
+    branch: "the service manager uninstall fails",
+    error: "Gateway uninstall failed: Error: unit busy",
+    run: (json: boolean) => {
+      service.isLoaded.mockResolvedValue(false);
+      service.uninstall.mockRejectedValue(new Error("unit busy"));
+      return runServiceUninstall({
+        ...failureRunArgs(json),
+        stopBeforeUninstall: true,
+        assertNotLoadedAfterUninstall: true,
+      });
+    },
+  },
+  {
+    branch: "the service is still loaded after uninstall",
+    error: "Gateway service still loaded after uninstall.",
+    run: (json: boolean) => {
+      service.isLoaded.mockResolvedValue(true);
+      return runServiceUninstall({
+        ...failureRunArgs(json),
+        stopBeforeUninstall: true,
+        assertNotLoadedAfterUninstall: true,
+      });
+    },
+  },
+])("names a next step when $branch", async ({ error, run }) => {
+  await expect(run(true)).rejects.toThrow("__exit__:1");
+  expect(readJsonLog()).toMatchObject({ ok: false, error, hints: [failureHint] });
+
+  resetLifecycleRuntimeLogs();
+  await expect(run(false)).rejects.toThrow("__exit__:1");
+  expect(lifecycleTestRuntime.error).toHaveBeenCalledWith(error);
+  expect(lifecycleRuntimeLogs).toContain(`Tip: ${failureHint}`);
+});
+
+it.each([
+  [
+    "start readiness",
+    (scope: AsyncWorkScope) =>
+      start({
+        postStartCheck: async () => {
+          scope.beginClose(interruptReason);
+          throw interruptReason;
+        },
+      }),
+    undefined,
+  ],
+  [
+    "restart readiness",
+    (scope: AsyncWorkScope) =>
+      restart({
+        postRestartCheck: async () => {
+          scope.beginClose(interruptReason);
+          throw interruptReason;
+        },
+      }),
+    false,
+  ],
+  [
+    "owned-process restart",
+    (scope: AsyncWorkScope) =>
+      restart({
+        restartOwnedProcess: async () => {
+          scope.beginClose(interruptReason);
+          throw interruptReason;
+        },
+      }),
+    false,
+  ],
+] as const)(
+  "never reports %s as a lifecycle failure after an accepted interrupt",
+  async (_route, run, expected) => {
+    const scope = new AsyncWorkScope();
+
+    await expect(scope.run(() => run(scope))).resolves.toBe(expected);
+    expectNoCalls(lifecycleTestRuntime.error, lifecycleTestRuntime.exit);
+    expect(lifecycleRuntimeLogs).toEqual([]);
+  },
+);

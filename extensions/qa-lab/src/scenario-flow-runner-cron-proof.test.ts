@@ -232,16 +232,10 @@ async function runSchedulingFixture(
       },
     },
   );
-  const result = pending.then(
-    (value) => ({ value }),
-    (error: unknown) => ({ error }),
-  );
+  // Observe rejection before advancing timers, then propagate it unchanged.
+  void pending.catch(() => {});
   await vi.runAllTimersAsync();
-  const outcome = await result;
-  if ("error" in outcome) {
-    throw outcome.error;
-  }
-  return { result: outcome.value, restarted, removed, historyReads };
+  return { result: await pending, restarted, removed, historyReads };
 }
 
 beforeEach(() => {

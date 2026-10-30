@@ -14,7 +14,6 @@ import type { ModelProviderCapability } from "./models-auth-status.types.js";
 
 export function resolveModelProviderCapabilities(params: {
   config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   metadataSnapshot: PluginMetadataSnapshot;
   workspaceDir: string;
 }): {
@@ -23,7 +22,7 @@ export function resolveModelProviderCapabilities(params: {
 } {
   const lookup = {
     ...params,
-    env: params.env ?? process.env,
+    env: process.env,
     includeUntrustedWorkspacePlugins: false,
   };
   const resolveProvider = (provider: string) => resolveProviderIdForAuth(provider, lookup);

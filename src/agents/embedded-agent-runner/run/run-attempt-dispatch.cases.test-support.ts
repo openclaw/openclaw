@@ -1,4 +1,60 @@
+import { assert, expect, type Mock, type MockInstance } from "vitest";
+import {
+  loadSessionEntry,
+  loadTranscriptEventsSync,
+} from "../../../config/sessions/session-accessor.js";
+import { isIndexedSessionEntry } from "../../../config/sessions/session-entry-codec.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
+import type { createAgentHarnessHostCapabilities } from "../../harness/host-capability.js";
+import type { AgentHarness, AgentHarnessAttemptParamsV2 } from "../../harness/types.js";
+import { SessionManager } from "../../sessions/session-manager.js";
+import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
+
+export async function assertDurableTranscriptRevocation(
+  attempt: Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"],
+  workspaceDir: string,
+  revoke: () => void,
+) {
+  assert(attempt.sessionId);
+  assert(attempt.sessionFile);
+  assert(attempt.preparedSessionTarget);
+  const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
+    attempt: { ...attempt, sessionId: attempt.sessionId, sessionFile: attempt.sessionFile },
+    externalAbortController: { arm() {}, async throwIfFiredAfterPrepCleanup() {} },
+  });
+  try {
+    expect(transcript.ownedTranscriptWriteContext.sessionActor?.actor.target.database.kind).toBe(
+      "file",
+    );
+    await transcript.withOwnedTranscriptWrite(async () => {
+      const target = transcript.ownedTranscriptWriteContext.sessionTarget;
+      const manager = await SessionManager.openAsync(target, workspaceDir);
+      const message = { role: "user" as const, content: "authorized append", timestamp: 1 };
+      await manager.appendMessageAsync(message);
+      const readEvents = () =>
+        runWithoutOwnedSessionTranscriptWrites(() => loadTranscriptEventsSync(target));
+      const readEntry = () =>
+        runWithoutOwnedSessionTranscriptWrites(() => loadSessionEntry(target));
+      const before = readEvents();
+      const entryBefore = readEntry();
+      expect(
+        before.filter((entry) => isIndexedSessionEntry(entry) && entry.type === "message"),
+      ).toEqual([expect.objectContaining({ message })]);
+      expect(entryBefore?.activeWriterRunId).toBe(attempt.runId);
+      revoke();
+      await expect(
+        manager.appendMessageAsync({ ...message, content: "revoked append" }),
+      ).rejects.toThrow("Session target preparation outlived its attempt");
+      expect(readEvents()).toEqual(before);
+      expect(readEntry()).toEqual(entryBefore);
+    });
+  } finally {
+    await transcript.transcriptLifecycle.dispose();
+  }
+}
+
 type DispatchCase = {
+  cyberAccessProgram?: AgentHarnessAttemptParamsV2["cyberAccessProgram"];
   agentId?: string;
   sandboxSessionKey?: string;
   remoteSkills?: boolean;
@@ -18,12 +74,57 @@ type DispatchCase = {
   cancelTrajectory?: boolean;
   preparedAuth?: "explicit-header" | "no-auth";
   finalizer?: "string" | "context" | "both";
+  transcriptTargetInvalidation?: "closed" | "replaced" | "target" | "policy";
 };
+
+export function assertPromptDispatchCallbacks(
+  finalizer: DispatchCase["finalizer"],
+  runAttempt: Mock<AgentHarness["runAttempt"]>,
+  finalize: MockInstance,
+  resolveContext: MockInstance,
+) {
+  for (const [entry] of runAttempt.mock.calls) {
+    expect(entry).not.toHaveProperty("resolveRuntimeContextForTools");
+  }
+  if (finalizer) {
+    expect(runAttempt).toHaveBeenCalledOnce();
+    const [received] = runAttempt.mock.calls[0]!;
+    if (finalizer !== "context") {
+      expect(finalize).toHaveBeenCalledBefore(runAttempt);
+    }
+    if (finalizer !== "string") {
+      expect(resolveContext).toHaveBeenCalledBefore(runAttempt);
+    }
+    expect(received.prompt).toBe(finalizer === "context" ? "hello" : "hello:finalized");
+    expect(finalize).toHaveBeenCalledTimes(finalizer === "context" ? 0 : 1);
+    expect(resolveContext).toHaveBeenCalledTimes(finalizer === "string" ? 0 : 1);
+    expect(received.transcriptPrompt).toBe("hello");
+    expect(received.finalizePromptForResolvedTools).toBeUndefined();
+    const { text, resumableText } = received.currentInboundContext ?? {};
+    if (finalizer !== "string") {
+      expect(text).toContain("Delivery context.");
+      expect(text?.match(/Delivery context/g)).toHaveLength(1);
+      expect(resumableText).toContain("Delivery context.");
+    } else {
+      expect(text).toBe("Existing inbound context.\n\nExisting context.");
+      expect(resumableText).toBe("Existing resumed context.\n\nExisting context.");
+    }
+    expect(text).toContain("Existing inbound context.");
+    expect(text?.match(/Existing context\./g)).toHaveLength(1);
+    expect(resumableText?.match(/Existing context\./g)).toHaveLength(1);
+  }
+}
 
 export const dispatchCases: DispatchCase[] = [
   { agentId: "main", finalizer: "string" },
   { agentId: "main", finalizer: "context" },
   { agentId: "main", finalizer: "both" },
+  ...(["closed", "replaced", "target", "policy"] as const).map((transcriptTargetInvalidation) => ({
+    agentId: "main",
+    transcriptTargetInvalidation,
+  })),
+  { agentId: "main", cyberAccessProgram: "standard" },
+  { agentId: "main", cyberAccessProgram: "daybreak_blue" },
   ...(["explicit-header", "no-auth"] as const).map((preparedAuth) => ({
     agentId: "main",
     preparedAuth,

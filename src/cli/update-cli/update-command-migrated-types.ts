@@ -28,12 +28,15 @@ export type UpdatePostCoreInput = {
 export type UpdateDoctorInput = Omit<UpdatePostCoreInput, "opts"> & {
   configInputHash: string;
   repair: boolean;
+  retirementOnly?: true;
   fullIntegrityCheck?: boolean;
   yes?: boolean;
   workspaceSuggestions?: boolean;
   postCoreSchemaRepair?: true;
   databaseGenerations?: UpdateDatabaseGenerations;
   databasePluginOwners?: import("../../infra/database-engine/port-descriptor.js").DatabasePortPluginOwners;
+  /** Parent Doctor phase deadline for nested managed-service inspection. */
+  serviceInspectionDeadlineAtMs?: number;
 };
 
 export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {
@@ -41,10 +44,10 @@ export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {
     FinishUpdateParams,
     "packageTransaction" | "databaseBackup" | "preManagedServiceStop" | "opts"
   > & {
-    opts: Omit<FinishUpdateParams["opts"], "run" | "recovery"> & {
+    opts: Omit<FinishUpdateParams["opts"], "run" | "recovery" | "onResult"> & {
       run?: Omit<
         NonNullable<FinishUpdateParams["opts"]["run"]>,
-        "requesterAuthority" | "executorFence" | "sourceArtifactLock"
+        "requesterAuthority" | "executorFence" | "sourceArtifactLock" | "deadline"
       > & {
         requesterAuthority?: Pick<UpdateRequesterAuthority, "requester">;
       };

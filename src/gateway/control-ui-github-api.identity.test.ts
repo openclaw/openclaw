@@ -1,3 +1,4 @@
+import { Hash } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   setRuntimeConfigSnapshot,
@@ -16,6 +17,8 @@ import {
 } from "./github-public-api.js";
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   setActiveDegradedSecretOwners([]);
   clearRuntimeConfigSnapshot();
 });
@@ -62,31 +65,65 @@ it.each([
 });
 
 it.each([
-  ["unmaterialized SecretRef", previewConfig({ token: coldToken })],
-  ["mismatched host", previewConfig({ token: "public-service-token" }, enterpriseHost)],
-] satisfies [string, OpenClawConfig][])("fails closed for %s", (_name, config) => {
-  expect(() => githubApiToken({ GH_TOKEN: "public-token" }, config)).toThrow(
-    SecretSurfaceUnavailableError,
-  );
-});
+  ["unmaterialized SecretRef", previewConfig({ token: coldToken }), true],
+  ["mismatched host", previewConfig({ token: "public-service-token" }, enterpriseHost), false],
+] satisfies [string, OpenClawConfig, boolean][])(
+  "fails closed for %s",
+  (_name, config, configured) => {
+    expect(() => githubApiToken({ GH_TOKEN: "public-token" }, config)).toThrow(
+      SecretSurfaceUnavailableError,
+    );
+    expect(hasConfiguredGitHubApiCredential({}, config)).toBe(configured);
+  },
+);
 
-it("fails closed for an explicitly configured cold SecretRef owner", () => {
-  const config = previewConfig({ token: coldToken });
-  setActiveDegradedSecretOwners([
-    {
-      ownerKind: "capability",
-      ownerId: "control-ui-github",
-      state: "unavailable",
-      degradationState: "cold",
-      paths: ["gateway.controlUi.github.token"],
-      refKeys: ["store:default:PREVIEW_TOKEN"],
-      reason: "secret reference was not found",
-    },
-  ]);
+it("does not rehash credentials during live checks for interleaved cached preview readers", async () => {
+  const hash = vi.spyOn(Hash.prototype, "update");
+  const target = { owner: "synthetic", repo: "preview", kind: "issue" as const, number: 1 };
+  const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    return Response.json(
+      url.endsWith("/issues/1")
+        ? {
+            title: new Headers(init?.headers).get("Authorization") ?? "Anonymous preview",
+            state: "open",
+            user: { login: "synthetic" },
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+            repository_url: "https://api.github.com/repos/synthetic/preview",
+          }
+        : { private: false, visibility: "public" },
+    );
+  });
+  const select = (token: string) => setRuntimeConfigSnapshot(previewConfig({ token }));
+  const read = () => gitHubPublicApi.loadControlUiGitHubPreview(target, undefined, fetchMock);
+  for (const token of ["synthetic-first", " synthetic-second "]) {
+    select(token);
+    await read();
+  }
+  hash.mockClear();
+  fetchMock.mockClear();
+  select("synthetic-first");
+  const first = read();
+  select("synthetic-second");
+  const second = read();
+  await expect(first).rejects.toThrow("GitHub credential changed");
+  await expect(second).resolves.toMatchObject({ title: "Bearer synthetic-second" });
+  expect(
+    hash.mock.calls.filter(([data]) => data === "synthetic-first" || data === "synthetic-second"),
+  ).toHaveLength(4);
+  expect(fetchMock).not.toHaveBeenCalled();
 
-  expect(() => githubApiToken({ GH_TOKEN: "ambient" }, config)).toThrow(
-    SecretSurfaceUnavailableError,
-  );
-  expect(hasConfiguredGitHubApiCredential({}, config)).toBe(true);
-  expect(githubApiToken({ GH_TOKEN: "ambient" }, {})).toBe("ambient");
+  vi.stubEnv("GH_TOKEN", "");
+  vi.stubEnv("GITHUB_TOKEN", "");
+  for (const changed of [
+    previewConfig(undefined, enterpriseHost),
+    { gateway: { github: { apiBaseUrl: "https://api.example.test" } } },
+  ]) {
+    setRuntimeConfigSnapshot({});
+    await read();
+    const anonymous = read();
+    setRuntimeConfigSnapshot(changed);
+    await expect(anonymous).rejects.toThrow("GitHub credential changed");
+  }
 });

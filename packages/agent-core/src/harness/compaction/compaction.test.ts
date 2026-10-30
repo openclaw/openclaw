@@ -36,11 +36,8 @@ import {
   toolResult,
   user,
 } from "./shard-fixtures.test-support.js";
+import { compactionEntry, modelReply, userEntry } from "./summary-capture.test-support.js";
 import { createFileOps } from "./utils.js";
-
-function userEntry(content: string, index: number) {
-  return createMessageEntry(user(content, index + 1), index);
-}
 
 function prepare(
   entries: SessionTreeEntry[],
@@ -63,26 +60,12 @@ function resetEntry(index: number, firstKeptEntryId?: string): SessionTreeEntry 
   };
 }
 
-function compactionEntry(
-  index: number,
-  summary: string,
-  firstKeptEntryId: string,
-  overrides: Partial<Extract<SessionTreeEntry, { type: "compaction" }>> = {},
-): SessionTreeEntry {
-  return {
-    type: "compaction",
-    id: `entry-${index}`,
-    parentId: `entry-${index - 1}`,
-    timestamp: new Date(index + 1).toISOString(),
-    summary,
-    firstKeptEntryId,
-    tokensBefore: 200_000,
-    ...overrides,
-  };
-}
-
 function createAssistant(value: string, usage: Usage, timestamp: number) {
   return assistant(value, { usage, timestamp });
+}
+
+function assistantEntry(value: string, index: number, tokens = 2) {
+  return createMessageEntry(createAssistant(value, createUsage(tokens), index + 1), index);
 }
 
 function createBashMessage(output: string, timestamp: number, excludeFromContext: boolean) {
@@ -106,11 +89,7 @@ function createProjectedEntry(
 
 it("skips an invalid context window of zero", () => {
   expect(
-    shouldCompact(1, 0, {
-      enabled: true,
-      reserveTokens: 16_384,
-      keepRecentTokens: 20_000,
-    }),
+    shouldCompact(1, 0, { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 }),
   ).toBe(false);
 });
 
@@ -158,13 +137,11 @@ describe("calculateContextTokens", () => {
   it("does not scan past a zero unavailable context marker", () => {
     const messages: AgentMessage[] = [
       createAssistant("old cumulative turn", createUsage(950), 0),
-      {
-        ...createAssistant("usage unavailable", createUsage(0), 1),
-        usage: {
-          ...createUsage(0),
-          contextUsage: { state: "unavailable" },
-        },
-      },
+      createAssistant(
+        "usage unavailable",
+        { ...createUsage(0), contextUsage: { state: "unavailable" } },
+        1,
+      ),
     ];
     const estimate = estimateContextTokens(messages);
 
@@ -232,9 +209,9 @@ describe("session-entry compaction budgeting", () => {
     const latestRequest = `request-start ${"x".repeat(1_000)} request-end`;
     const entries: SessionTreeEntry[] = [
       userEntry(latestRequest, 0),
-      createMessageEntry(createAssistant("earlier work", createUsage(10), 2), 1),
+      assistantEntry("earlier work", 1, 10),
       createMessageEntry(createBashMessage("private output ".repeat(6_000), 3, true), 2),
-      createMessageEntry(createAssistant("latest", createUsage(10), 4), 3),
+      assistantEntry("latest", 3, 10),
     ];
 
     expect(findCutPoint(entries, 0, entries.length, 1)).toEqual({
@@ -262,9 +239,9 @@ describe("session-entry compaction budgeting", () => {
   it("uses CJK-aware token estimates when choosing the retained tail", () => {
     const entries: SessionTreeEntry[] = [
       userEntry("start", 0),
-      createMessageEntry(createAssistant("ok", createUsage(2), 2), 1),
+      assistantEntry("ok", 1),
       userEntry("早上好", 2),
-      createMessageEntry(createAssistant("ok", createUsage(2), 4), 3),
+      assistantEntry("ok", 3),
       userEntry("你好世界", 4),
     ];
 
@@ -280,9 +257,9 @@ describe("session-entry compaction budgeting", () => {
     (entryType) => {
       const entries: SessionTreeEntry[] = [
         userEntry("hi", 0),
-        createMessageEntry(createAssistant("hello", createUsage(2), 2), 1),
+        assistantEntry("hello", 1),
         createProjectedEntry(entryType, 2, "x".repeat(4_000)),
-        createMessageEntry(createAssistant("ok", createUsage(2), 4), 3),
+        assistantEntry("ok", 3),
       ];
 
       expect(findCutPoint(entries, 0, entries.length, 1)).toMatchObject({
@@ -301,11 +278,11 @@ describe("session-entry compaction budgeting", () => {
   it("plans provider-triggered cuts in provider token units", () => {
     const entries = [
       userEntry("first", 0),
-      createMessageEntry(createAssistant("ok", createUsage(2), 2), 1),
+      assistantEntry("ok", 1),
       userEntry("second", 2),
-      createMessageEntry(createAssistant("ok", createUsage(2), 4), 3),
+      assistantEntry("ok", 3),
       userEntry("latest", 4),
-      createMessageEntry(createAssistant("done", createUsage(170_000), 6), 5),
+      assistantEntry("done", 5, 170_000),
     ];
 
     const result = prepare(entries, {
@@ -356,10 +333,7 @@ describe("session-entry compaction budgeting", () => {
       ...middle.map((message, index) => createMessageEntry(message, index + 2)),
       resetEntry(resetIndex, "entry-1"),
       userEntry("post reset", resetIndex + 1),
-      createMessageEntry(
-        createAssistant("new answer", createUsage(2), resetIndex + 3),
-        resetIndex + 2,
-      ),
+      assistantEntry("new answer", resetIndex + 2),
     ];
     const result = prepare(entries);
     const summarized = JSON.stringify(result.messagesToSummarize);
@@ -375,21 +349,13 @@ describe("session-entry compaction budgeting", () => {
 
   it("moves the cut earlier when a reset kept-tail prelude consumes the compaction budget", () => {
     const largePrelude = "kept context ".repeat(4_000);
-    const postResetEntries: SessionTreeEntry[] = [
-      userEntry("post one ".repeat(500), 3),
-      createMessageEntry(createAssistant("answer one ".repeat(500), createUsage(2), 5), 4),
-      userEntry("post two ".repeat(500), 5),
-      createMessageEntry(createAssistant("answer two ".repeat(500), createUsage(2), 7), 6),
-    ];
     const buildEntries = (firstKeptEntryId?: string): SessionTreeEntry[] => [
       userEntry(largePrelude, 0),
       resetEntry(1, firstKeptEntryId),
-      ...postResetEntries.map((entry, index) =>
-        Object.assign({}, entry, {
-          id: `entry-${index + 2}`,
-          parentId: `entry-${index + 1}`,
-        }),
-      ),
+      createMessageEntry(user("post one ".repeat(500), 4), 2),
+      createMessageEntry(createAssistant("answer one ".repeat(500), createUsage(2), 5), 3),
+      createMessageEntry(user("post two ".repeat(500), 6), 4),
+      createMessageEntry(createAssistant("answer two ".repeat(500), createUsage(2), 7), 5),
     ];
     const settings = { enabled: true, reserveTokens: 0, keepRecentTokens: 500 };
     const withoutPrelude = prepare(buildEntries(), settings);
@@ -412,9 +378,9 @@ describe("prepareCompaction when the last entry is a compaction record", () => {
       userEntry("original request", 0),
       compactionEntry(1, "earlier summary", "entry-0", { id: "compaction-1" }),
       userEntry(largeContent, 2),
-      createMessageEntry(createAssistant(largeContent, createUsage(10), 4), 3),
+      assistantEntry(largeContent, 3, 10),
       userEntry(largeContent, 4),
-      createMessageEntry(createAssistant("recent reply tail", createUsage(10), 6), 5),
+      assistantEntry("recent reply tail", 5, 10),
       compactionEntry(6, "later summary", "entry-2", { id: "compaction-2", fromHook }),
     ];
 
@@ -451,7 +417,7 @@ describe("prepareCompaction when the last entry is a compaction record", () => {
       userEntry("original request", 0),
       compactionEntry(1, "earlier summary", "entry-0", { details: { readFiles: ["src/read.ts"] } }),
       userEntry(largeContent, 2),
-      createMessageEntry(createAssistant(largeContent, createUsage(10), 4), 3),
+      assistantEntry(largeContent, 3, 10),
       userEntry("recent tail", 4),
     ];
 
@@ -470,11 +436,7 @@ describe("generateSummary progress updates", () => {
     const result = await summarize(
       [
         user("Check whether the release is approved."),
-        {
-          ...createAssistant("", createUsage(0), 2),
-          content: [{ type: "toolCall", id: "check", name: "verify", arguments: {} }],
-          stopReason: "toolUse",
-        },
+        assistant([toolCall("verify", {}, "check")], { timestamp: 2, stopReason: "toolUse" }),
         toolResult("Verification FAILED: missing release approval.", {
           toolCallId: "check",
           toolName: "verify",
@@ -518,12 +480,7 @@ describe("generateSummary thinking options", () => {
       baseUrl: "https://api.anthropic.com",
       params: { canonicalModelId: "claude-fable-5" },
     };
-    const summaryMessage: AssistantMessage = {
-      ...createAssistant("summary", createUsage(0), 1),
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-    };
+    const summaryMessage = modelReply(model, "summary");
     const streamFn = vi.fn<StreamFn>((_model, context, options) => {
       expect(options?.reasoning).toBe("low");
       expect(context.systemPrompt).toContain("user and an AI assistant");
@@ -567,7 +524,10 @@ describe("generateSummary thinking options", () => {
         name: "CompactionError",
         code: "summarization_failed",
         message: exhausted
-          ? expect.stringContaining("output budget (800 tokens) was exhausted")
+          ? expect.stringContaining(
+              "output budget (800 tokens) was exhausted without visible text for test-provider/summary-model (model maxTokens: 8000); " +
+                'set agents.defaults.compaction.thinkingLevel to "off" if supported, or use agents.defaults.compaction.model to select a model that can summarize within this budget',
+            )
           : "Summarization failed: model returned no summary text",
       });
     },
@@ -625,9 +585,7 @@ describe("split-turn compaction", () => {
       const result = await compactWith(
         {
           firstKeptEntryId: "kept-entry",
-          messagesToSummarize: history
-            ? [{ role: "user", content: "history", timestamp: 1 }, runtimeContext]
-            : [],
+          messagesToSummarize: history ? [user("history"), runtimeContext] : [],
           turnPrefixMessages: [user("prefix", 2), runtimeContext],
           isSplitTurn: true,
           tokensBefore: 100,
@@ -673,8 +631,8 @@ describe("compactWithoutSummary", () => {
   it("keeps the loss notice, source ask, and unresolved request beside a constrained foreground budget", () => {
     const result = compactWithoutSummary({
       firstKeptEntryId: "kept-entry",
-      messagesToSummarize: [{ role: "user", content: "history", timestamp: 1 }],
-      turnPrefixMessages: [{ role: "user", content: sourceAsk, timestamp: 2 }],
+      messagesToSummarize: [user("history")],
+      turnPrefixMessages: [user(sourceAsk, 2)],
       isSplitTurn: true,
       latestUnresolvedUserRequest: "finish the review",
       previousSummary: "p".repeat(MAX_COMPACTION_SUMMARY_CHARS),

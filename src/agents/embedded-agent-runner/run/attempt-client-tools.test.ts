@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { getInternalToolExecutionPreparer } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { runWithAgentToolExecutionContext } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -27,14 +28,16 @@ import {
 } from "../../code-mode.js";
 import { runUntilCompleted } from "../../code-mode.test-support.js";
 import { createAgentHarnessPromptToolPolicy } from "../../harness/prompt-tool-policy.js";
-import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { compactToolSearchCatalogEntry } from "../../tool-search-catalog.js";
+import { ToolSearchRuntime } from "../../tool-search-runtime.js";
 import {
   applyToolSearchCatalog,
+  clearToolSearchCatalog,
   createToolSearchCatalogRef,
+  resolveToolSearchConfig,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "../../tool-search.js";
 import { jsonResult } from "../../tools/common.js";
@@ -61,6 +64,19 @@ function clientTool(name: string) {
     type: "function" as const,
     function: { name, description: `client ${name}`, parameters: { type: "object" } },
   };
+}
+
+function completedSlot(toolCallId: string, name: string, params: unknown) {
+  return { toolCallId, name, completed: true, params };
+}
+
+function wrappedTool(definitions: ReturnType<typeof prepare>["clientToolDefs"], name?: string) {
+  return wrapToolDefinition(
+    expectDefined(
+      name ? definitions.find((tool) => tool.name === name) : definitions[0],
+      name ?? "client tool",
+    ),
+  );
 }
 
 function pluginTool(
@@ -151,7 +167,7 @@ function clientTurn(tool: ReturnType<typeof wrapToolDefinition>, value: number) 
 describe("prepareEmbeddedAttemptClientTools", () => {
   it("keeps reused client call ids distinct across assistant turns and stable on replay", async () => {
     const prepared = prepare();
-    const tool = wrapToolDefinition(expectDefined(prepared.clientToolDefs[0], "client tool"));
+    const tool = wrappedTool(prepared.clientToolDefs);
     for (const value of [1, 2]) {
       const execute = clientTurn(tool, value);
       await execute();
@@ -159,8 +175,8 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       expect(prepared.clientToolCallSlots).toHaveLength(value);
     }
     expect(prepared.clientToolCallSlots).toEqual([
-      { toolCallId: "lookup_0", name: "client_probe", completed: true, params: { value: 1 } },
-      { toolCallId: "lookup_0", name: "client_probe", completed: true, params: { value: 2 } },
+      completedSlot("lookup_0", "client_probe", { value: 1 }),
+      completedSlot("lookup_0", "client_probe", { value: 2 }),
     ]);
   });
 
@@ -177,13 +193,13 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     ]);
     try {
       const prepared = prepare();
-      const tool = wrapToolDefinition(expectDefined(prepared.clientToolDefs[0], "client tool"));
+      const tool = wrappedTool(prepared.clientToolDefs);
       for (const value of [1, 2]) {
         const result = await clientTurn(tool, value)();
         expect(result.details).toMatchObject({ status: value === 1 ? "pending" : "blocked" });
       }
       expect(prepared.clientToolCallSlots.filter((slot) => slot.completed)).toEqual([
-        { toolCallId: "lookup_0", name: "client_probe", completed: true, params: { value: 1 } },
+        completedSlot("lookup_0", "client_probe", { value: 1 }),
       ]);
     } finally {
       restoreHooks();
@@ -204,9 +220,8 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       const prepared = prepare({
         clientTools: [clientTool("first_tool"), clientTool("second_tool")],
       });
-      const tools = prepared.clientToolDefs.map((definition) => wrapToolDefinition(definition));
-      const firstTool = expectDefined(tools[0], "first client tool");
-      const secondTool = expectDefined(tools[1], "second client tool");
+      const firstTool = wrappedTool(prepared.clientToolDefs, "first_tool");
+      const secondTool = wrappedTool(prepared.clientToolDefs, "second_tool");
       const first = firstTool.execute("first-call", { value: 1 });
       pending.push(Promise.allSettled([first]));
       const second = secondTool.execute("second-call", { value: 2 });
@@ -214,13 +229,13 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       await withTestTimeout(second, 2_000, "second client tool did not finish");
       expect(prepared.clientToolCallSlots).toEqual([
         { toolCallId: "first-call", name: "first_tool", completed: false },
-        { toolCallId: "second-call", name: "second_tool", completed: true, params: { value: 2 } },
+        completedSlot("second-call", "second_tool", { value: 2 }),
       ]);
       firstHook.resolve();
       await withTestTimeout(first, 2_000, "first client tool did not finish");
       expect(prepared.clientToolCallSlots).toEqual([
-        { toolCallId: "first-call", name: "first_tool", completed: true, params: { value: 1 } },
-        { toolCallId: "second-call", name: "second_tool", completed: true, params: { value: 2 } },
+        completedSlot("first-call", "first_tool", { value: 1 }),
+        completedSlot("second-call", "second_tool", { value: 2 }),
       ]);
     } finally {
       firstHook.resolve();
@@ -265,7 +280,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
         clientTools: [],
         getToolAbortSignal: () => generation.signal,
       });
-      const tool = wrapToolDefinition(prepared.allCustomTools[0]!);
+      const tool = wrappedTool(prepared.allCustomTools);
       const execution =
         executionPath === "execute"
           ? tool.execute(`generation-${executionPath}`, {})
@@ -356,28 +371,17 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     result.refreshTools();
 
     const run = async (name: string) => {
-      const tool = wrapToolDefinition(
-        expectDefined(
-          result.allCustomTools.find((entry) => entry.name === name),
-          name,
-        ),
-      );
+      const tool = wrappedTool(result.allCustomTools, name);
       return (await tool.execute("call", {})).details;
     };
     expect(await run("read")).toEqual({ generation: "after" });
     expect(await run("gateway")).toEqual({ generation: "gated" });
   });
 
-  it.each(["code-mode", "tool-search"] as const)("hides client tools behind %s catalog", (mode) => {
-    const codeMode = mode === "code-mode";
-    const config = codeMode ? CODE_MODE_CONFIG : TOOL_SEARCH_CONFIG;
-    const catalogRef = seedCatalog(mode, config);
-    // Disable the other config source to prove each mode reads its owner.
+  it("hides client tools behind the Tool Search runtime catalog", () => {
     const result = prepare({
-      codeModeControlsEnabledForRun: codeMode,
-      attemptConfig: codeMode ? config : CATALOGS_DISABLED_CONFIG,
-      toolSearchRuntimeConfig: codeMode ? CATALOGS_DISABLED_CONFIG : config,
-      catalogRef,
+      toolSearchRuntimeConfig: TOOL_SEARCH_CONFIG,
+      catalogRef: seedCatalog("tool-search", TOOL_SEARCH_CONFIG),
     });
     expect(result.clientToolDefs).toEqual([]);
     expect(result.allCustomTools).toEqual([]);
@@ -435,6 +439,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       uncompactedEffectiveTools: [...skillTools, trustedPlugin, shadowedPlugin],
       clientTools: [clientTool("llm_task"), clientTool("hidden_owner")],
     });
+    expect(prepared.clientToolDefs).toEqual([]);
     const projection = createCodeModeCatalogProjection(
       (catalogRef.current?.entries ?? []).map((entry) => compactToolSearchCatalogEntry(entry)),
     );
@@ -481,12 +486,93 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     expect(providerExec?.description).toBe(initialDescription);
   });
 
+  it("partially defers client tools without losing registration, hooks, or call provenance", async () => {
+    const config: OpenClawConfig = {
+      tools: {
+        toolSearch: {
+          mode: "tools",
+          include: [{ source: "client" }],
+          exclude: [{ source: "client", name: "client_direct" }],
+        },
+      },
+    };
+    const catalogRef = seedCatalog("tool-search", config);
+    const beforeCall = vi.fn();
+    const restoreHooks = installHooks([{ hookName: "before_tool_call", handler: beforeCall }]);
+    try {
+      const result = prepare({
+        codeModeControlsEnabledForRun: false,
+        attemptConfig: config,
+        toolSearchRuntimeConfig: config,
+        catalogRef,
+        clientTools: [clientTool("client_direct"), clientTool("client_deferred")],
+      });
+      expect(result.clientToolDefs.map((tool) => tool.name)).toEqual(["client_direct"]);
+      expect(result.sessionToolAllowlist).toEqual(["client_direct"]);
+      expect(result.replaySafeToolNames.has("client_direct")).toBe(false);
+      expect(catalogRef.current?.entries.map((entry) => [entry.name, entry.source])).toEqual([
+        ["client_deferred", "client"],
+      ]);
+      const direct = wrappedTool(result.clientToolDefs);
+      await direct.execute("direct-call", { direct: true });
+      const runtime = new ToolSearchRuntime(
+        { config, catalogRef },
+        resolveToolSearchConfig(config),
+      );
+      await runtime.call("client_deferred", { deferred: true }, { parentToolCallId: "outer-call" });
+      expect(result.clientToolCallSlots).toEqual([
+        completedSlot("direct-call", "client_direct", { direct: true }),
+        completedSlot(expect.any(String), "client_deferred", { deferred: true }),
+      ]);
+      expect(beforeCall.mock.calls.map(([event]) => event.toolName)).toEqual([
+        "client_direct",
+        "client_deferred",
+      ]);
+
+      config.tools!.toolSearch = { mode: "tools", include: [] };
+      result.refreshTools();
+      expect(result.sessionToolAllowlist).toEqual(["client_deferred", "client_direct"]);
+      expect(catalogRef.current?.entries).toEqual([]);
+      await expect(runtime.call("client_deferred", {})).rejects.toThrow("Unknown tool");
+      expect(result.clientToolCallSlots).toHaveLength(2);
+    } finally {
+      clearToolSearchCatalog({ catalogRef });
+      restoreHooks();
+    }
+  });
+
+  it("ignores Tool Search selectors for independently engaged Code Mode client tools", () => {
+    const config: OpenClawConfig = {
+      tools: {
+        codeMode: true,
+        toolSearch: { enabled: false, include: [], exclude: [{ name: "*" }] },
+      },
+    };
+    const catalogRef = seedCatalog("code-mode", config);
+    try {
+      const result = prepare({
+        codeModeControlsEnabledForRun: true,
+        attemptConfig: config,
+        toolSearchRuntimeConfig: config,
+        catalogRef,
+      });
+      expect(result.clientToolDefs).toEqual([]);
+      expect(catalogRef.current?.entries.map((entry) => entry.name)).toContain("client_probe");
+    } finally {
+      clearToolSearchCatalog({ catalogRef });
+    }
+  });
+
   it("keeps client tools directly callable for directory Tool Search", () => {
     const catalogRef = seedCatalog("tool-search", TOOL_SEARCH_CONFIG);
 
     const result = prepare({
       attemptConfig: TOOL_SEARCH_CONFIG,
-      toolSearchRuntimeConfig: { tools: { toolSearch: { enabled: true, mode: "directory" } } },
+      toolSearchRuntimeConfig: {
+        tools: {
+          toolSearch: { enabled: true, mode: "directory", include: [{ source: "client" }] },
+        },
+      },
       catalogRef,
     });
 

@@ -111,6 +111,11 @@ async function collectTriageBundle(
           defaultTimeoutMs: 3000,
           sharedStateMode: "read-only",
         }),
+      readGatewayCapabilities: async () =>
+        await callGatewayFromCliWithTransport("diagnostics.capabilities", rpc, undefined, {
+          defaultTimeoutMs: 3000,
+          sharedStateMode: "read-only",
+        }),
       readStatusSnapshot: async () =>
         await gatherDaemonStatus({ rpc, probe: true, requireRpc: false, deep: false }),
     });

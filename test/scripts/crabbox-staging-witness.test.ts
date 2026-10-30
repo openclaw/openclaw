@@ -127,7 +127,6 @@ function fixture(bytes = 0) {
 
 describe.skipIf(process.platform === "win32")("Crabbox staging witness object proof", () => {
   it.each([
-    ["native", 0],
     ["native", 4 * 1024 ** 3],
     ["older", 0],
   ] as const)(

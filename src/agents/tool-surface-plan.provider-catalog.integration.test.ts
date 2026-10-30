@@ -62,9 +62,12 @@ async function resolveModel(providerId: string, route: "static" | "dynamic", mod
   );
 }
 
-function assembleSurface(model: Awaited<ReturnType<typeof resolveModel>>) {
+function assembleSurface(
+  model: Awaited<ReturnType<typeof resolveModel>>,
+  codeMode: "auto" | undefined,
+) {
   const runtime = createAgentHarnessToolSurfaceRuntimeCore({
-    config: { tools: { codeMode: "auto", toolSearch: false } },
+    config: { tools: { ...(codeMode ? { codeMode } : {}), toolSearch: false } },
     model,
     modelToolsEnabled: true,
     executeTool: async () => ({ content: [], details: {} }),
@@ -84,7 +87,12 @@ it.each([
   ["minimax-portal", "dynamic"],
 ] as const)("engages M3 Code Mode through %s %s resolution", async (providerId, route) => {
   const model = await resolveModel(providerId, route, "MiniMax-M3");
-  expect(assembleSurface(model)).toEqual({ names: ["exec", "wait"], catalogToolCount: 1 });
+  for (const codeMode of [undefined, "auto"] as const) {
+    expect(assembleSurface(model, codeMode), codeMode ?? "omitted default").toEqual({
+      names: ["exec", "wait"],
+      catalogToolCount: 1,
+    });
+  }
   expect(model.compat?.codeMode).toBe("preferred");
 });
 
@@ -93,7 +101,11 @@ it.each(["minimax", "minimax-portal"])(
   async (providerId) => {
     for (const route of ["static", "dynamic"] as const) {
       const model = await resolveModel(providerId, route, "MiniMax-M2.7");
-      expect(assembleSurface(model).names, route).toEqual(["query_records"]);
+      for (const codeMode of [undefined, "auto"] as const) {
+        expect(assembleSurface(model, codeMode).names, `${route}:${codeMode ?? "default"}`).toEqual(
+          ["query_records"],
+        );
+      }
     }
   },
 );

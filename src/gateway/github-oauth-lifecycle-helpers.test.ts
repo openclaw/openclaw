@@ -7,10 +7,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearGitHubCredentialVerificationCache } from "../agents/github-oauth-client.js";
 import * as githubOAuthRecords from "../agents/github-oauth-records.js";
 import {
-  inspectGitHubOAuthRecord,
-  writeGitHubOAuthRecord,
-} from "../agents/github-oauth-records.js";
-import {
   resolveManagedGitHubProfileDir,
   writeManagedGitHubProfileFiles,
 } from "../agents/github-tool-identity.js";
@@ -20,7 +16,6 @@ import { resolveRequestUrl } from "../plugin-sdk/request-url.js";
 import { createDeferredCore as deferred } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import * as userGitHubConnections from "../state/user-github-connections.js";
-import { readUserGitHubConnectionAsync } from "../state/user-github-connections.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -81,23 +76,19 @@ describe("GitHub OAuth maintenance inventory", () => {
 });
 
 it("never captures a GitHub App signing key in OAuth device authorization state", () => {
-  const config: OpenClawConfig = {
-    tools: {
-      github: {
-        kind: "app-installation",
-        profileId: OLD_PROFILE,
-        app: {
-          appId: 1,
-          installationId: 2,
-          accountId: 3,
-          repositories: [{ id: 4, fullName: "example/project" }],
-          permissions: { contents: "read" },
-          privateKey: "synthetic-signing-key",
-          keyVersion: "synthetic-v1",
-        },
-      },
+  const config = configForScope("system", {
+    kind: "app-installation",
+    profileId: OLD_PROFILE,
+    app: {
+      appId: 1,
+      installationId: 2,
+      accountId: 3,
+      repositories: [{ id: 4, fullName: "example/project" }],
+      permissions: { contents: "read" },
+      privateKey: "synthetic-signing-key",
+      keyVersion: "synthetic-v1",
     },
-  };
+  });
   expect(() =>
     captureGitHubOAuthAuthorizationIdentity(config, { scope: "system", agentId: "main" }),
   ).toThrow("before connecting an OAuth identity");
@@ -143,29 +134,26 @@ describe("GitHub OAuth real refresh boundary", () => {
       kind === "personal"
         ? (await ensureCanonicalUserProfileForEmail("refresh@example.test")).id
         : undefined;
-    const seed = async (refreshToken = common.refreshToken) => {
-      if (owner) {
-        updateUserGitHubConnection(
-          owner,
-          () => ({
-            version: 1,
-            generation: randomUUID(),
-            selection: { kind: "connected", profileId: OLD_PROFILE, ...common, refreshToken },
-          }),
-          () => {},
-        );
-      } else {
-        await writeGitHubOAuthRecord(
-          oauthRecord(OLD_PROFILE, { ...common, refreshToken, createdAtMs: now - 60_000 }),
-        );
-      }
-    };
+    if (owner) {
+      updateUserGitHubConnection(
+        owner,
+        () => ({
+          version: 1,
+          generation: randomUUID(),
+          selection: { kind: "connected", profileId: OLD_PROFILE, ...common },
+        }),
+        () => {},
+      );
+    } else {
+      await githubOAuthRecords.writeGitHubOAuthRecord(
+        oauthRecord(OLD_PROFILE, { ...common, createdAtMs: now - 60_000 }),
+      );
+    }
     const dir = resolveManagedGitHubProfileDir({
       scope: kind === "shared" ? "system" : "personal",
       agentId: "main",
       profileId: OLD_PROFILE,
     });
-    await seed();
     await writeManagedGitHubProfileFiles(dir, {
       login: ACCOUNT.login,
       token: "synthetic-old-access",
@@ -191,12 +179,12 @@ describe("GitHub OAuth real refresh boundary", () => {
     };
     const read = async () => {
       if (owner) {
-        return (await readUserGitHubConnectionAsync(owner))?.selection;
+        return (await userGitHubConnections.readUserGitHubConnectionAsync(owner))?.selection;
       }
-      const row = await inspectGitHubOAuthRecord(OLD_PROFILE);
+      const row = await githubOAuthRecords.inspectGitHubOAuthRecord(OLD_PROFILE);
       return row.state === "valid" ? row.record : undefined;
     };
-    return { open, read, seed, dir };
+    return { open, read, dir };
   }
 
   function tokenResponse() {
@@ -208,6 +196,22 @@ describe("GitHub OAuth real refresh boundary", () => {
       expires_in: 28_800,
       refresh_token_expires_in: 15_897_600,
     });
+  }
+
+  function stubTransport(exchange: typeof fetch = async () => tokenResponse()) {
+    const post = vi.fn(exchange);
+    const verify = vi.fn<typeof fetch>(async () =>
+      Response.json({ id: ACCOUNT.accountId, login: ACCOUNT.login }),
+    );
+    const transport = vi.fn<typeof fetch>((input, init) => {
+      if (resolveRequestUrl(input) === "https://api.github.com/user") {
+        return verify(input, init);
+      }
+      expect(resolveRequestUrl(input)).toBe("https://github.com/login/oauth/access_token");
+      return post(input, init);
+    });
+    vi.stubGlobal("fetch", transport);
+    return { post, verify, transport };
   }
 
   it("reconciles a committed shared refresh claim whose write reply is lost", async () => {
@@ -223,25 +227,14 @@ describe("GitHub OAuth real refresh boundary", () => {
         }
       },
     );
-    let posts = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async (input) => {
-        if (resolveRequestUrl(input) === "https://api.github.com/user") {
-          return Response.json({ id: ACCOUNT.accountId, login: ACCOUNT.login });
-        }
-        expect(resolveRequestUrl(input)).toBe("https://github.com/login/oauth/access_token");
-        posts++;
-        return tokenResponse();
-      }),
-    );
+    const { post } = stubTransport();
     const lifecycle = f.open();
     await lifecycle.refresh();
-    expect(posts).toBe(1);
+    expect(post).toHaveBeenCalledTimes(1);
     expect(await f.read()).toMatchObject({ refreshToken: "synthetic-rotated-refresh" });
     await lifecycle.stop();
     await f.open().refresh();
-    expect(posts).toBe(1);
+    expect(post).toHaveBeenCalledTimes(1);
   });
 
   it("restores a personal grant when preparing dispatch fails before HTTP", async () => {
@@ -249,19 +242,16 @@ describe("GitHub OAuth real refresh boundary", () => {
     vi.spyOn(userGitHubConnections, "prepareUserGitHubConnection").mockRejectedValueOnce(
       new Error("synthetic pre-dispatch preparation failure"),
     );
-    const transport = vi.fn<typeof fetch>(async (input) =>
-      resolveRequestUrl(input) === "https://api.github.com/user"
-        ? Response.json({ id: ACCOUNT.accountId, login: ACCOUNT.login })
-        : tokenResponse(),
-    );
-    vi.stubGlobal("fetch", transport);
+    const { transport } = stubTransport();
     const lifecycle = f.open();
     await lifecycle.refresh();
     expect(transport).not.toHaveBeenCalled();
     const stored = await f.read();
-    expect(stored).toMatchObject({ refreshToken: "synthetic-github-refresh-original" });
+    expect(stored).toMatchObject({
+      refreshToken: "synthetic-github-refresh-original",
+      refreshFailure: "failed",
+    });
     expect(stored).not.toHaveProperty("refresh");
-    expect(stored).toMatchObject({ refreshFailure: "failed" });
     await lifecycle.stop();
     await f.open().refresh();
     expect(await f.read()).toMatchObject({ refreshToken: "synthetic-rotated-refresh" });
@@ -275,34 +265,21 @@ describe("GitHub OAuth real refresh boundary", () => {
         const f = await fixture(kind);
         const entered = deferred();
         const release = deferred();
-        let exchanges = 0;
-        let verifications = 0;
-        vi.stubGlobal(
-          "fetch",
-          vi.fn<typeof fetch>(async (input, init) => {
-            if (resolveRequestUrl(input) === "https://api.github.com/user") {
-              verifications++;
-              expect(new Headers(init?.headers).get("authorization")).toBe(
-                "Bearer synthetic-rotated-access",
-              );
-              return Response.json({ id: ACCOUNT.accountId, login: ACCOUNT.login });
-            }
-            exchanges++;
-            expect(resolveRequestUrl(input)).toBe("https://github.com/login/oauth/access_token");
-            expect(init?.method).toBe("POST");
-            expect(init?.redirect).toBe("error");
-            expect(new Headers(init?.headers).get("content-type")).toBe(
-              "application/x-www-form-urlencoded",
-            );
-            const form = new URLSearchParams(await new Response(init?.body).text());
-            expect(form.get("grant_type")).toBe("refresh_token");
-            expect(form.get("refresh_token")).toBe("synthetic-github-refresh-original");
-            expect(form.get("client_id")).toBeTruthy();
-            entered.resolve();
-            await release.promise;
-            return tokenResponse();
-          }),
-        );
+        const { post, verify } = stubTransport(async (_input, init) => {
+          expect(init).toMatchObject({ method: "POST", redirect: "error" });
+          expect(new Headers(init?.headers).get("content-type")).toBe(
+            "application/x-www-form-urlencoded",
+          );
+          const form = new URLSearchParams(await new Response(init?.body).text());
+          expect(Object.fromEntries(form)).toMatchObject({
+            grant_type: "refresh_token",
+            refresh_token: "synthetic-github-refresh-original",
+          });
+          expect(form.get("client_id")).toBeTruthy();
+          entered.resolve();
+          await release.promise;
+          return tokenResponse();
+        });
         const lifecycle = f.open();
         const first = lifecycle.refresh();
         const second = lifecycle.refresh();
@@ -314,15 +291,18 @@ describe("GitHub OAuth real refresh boundary", () => {
           );
           release.resolve();
           await Promise.all([first, second]);
-          expect(exchanges).toBe(1);
-          expect(verifications).toBe(1);
+          expect(post).toHaveBeenCalledTimes(1);
+          expect(verify).toHaveBeenCalledTimes(1);
+          expect(new Headers(verify.mock.calls[0]![1]?.headers).get("authorization")).toBe(
+            "Bearer synthetic-rotated-access",
+          );
           expect(await f.read()).toMatchObject({ refreshToken: "synthetic-rotated-refresh" });
           expect(await fs.readFile(path.join(f.dir, "hosts.yml"), "utf8")).toContain(
             "synthetic-rotated-access",
           );
           await lifecycle.stop();
           await f.open().refresh();
-          expect(exchanges).toBe(1);
+          expect(post).toHaveBeenCalledTimes(1);
         } finally {
           release.resolve();
           await Promise.allSettled([first, second]);

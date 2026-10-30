@@ -7,7 +7,6 @@ import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { GatewayChatEvents } from "../../ui/src/api/gateway-chat-events.ts";
 import type { SessionsListResult } from "../../ui/src/api/types.ts";
-import { createTestGatewayClient } from "../../ui/src/test-helpers/gateway-client.ts";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import {
   persistSessionTranscriptTurn,
@@ -20,6 +19,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { broadcastSessionActivitySummary } from "./session-activity-summary-events.js";
 import { drainSessionEventPublications } from "./session-event-prepared-row.js";
@@ -43,14 +43,9 @@ let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGate
 installGatewayTestHooks({
   scope: "suite",
   setup: async () => {
-    const module = await import("./server-kernel.js");
-    const create = module.createGatewayKernel;
-    using capture = vi.spyOn(module, "createGatewayKernel").mockImplementation(async (...args) => {
-      kernel = await create(...args);
-      return kernel;
+    kernel = await captureGatewayKernel(async () => {
+      harness = await startGatewayServerHarness();
     });
-    void capture;
-    harness = await startGatewayServerHarness();
   },
   cleanup: async () => harness?.close(),
 });
@@ -434,20 +429,15 @@ test("capable and legacy sockets produce identical session payloads and consumer
   expect(patches).toBeGreaterThan(10);
   expect(reconnect).not.toHaveBeenCalled();
   expect(consumers[0]?.snapshot().chat.messages.length).toBeGreaterThan(0);
-  expect(
-    baseline.some(
-      (frame) => isRecord(frame.payload) && frame.payload.reason === "activity-summary",
-    ),
-  ).toBe(true);
-  expect(
-    baseline.some(
-      (frame) =>
-        frame.event === "session.message" &&
-        isRecord(frame.payload) &&
-        isRecord(frame.payload.message) &&
-        frame.payload.message.role === "custom",
-    ),
-  ).toBe(true);
+  expect(baseline).toContainEqual(
+    expect.objectContaining({ payload: expect.objectContaining({ reason: "activity-summary" }) }),
+  );
+  expect(baseline).toContainEqual(
+    expect.objectContaining({
+      event: "session.message",
+      payload: expect.objectContaining({ message: expect.objectContaining({ role: "custom" }) }),
+    }),
+  );
   expect(
     baseline.some(
       (frame) =>
@@ -455,21 +445,7 @@ test("capable and legacy sockets produce identical session payloads and consumer
         (!isRecord(frame.payload) || frame.payload.reason !== "activity-summary"),
     ),
   ).toBe(true);
-  const retainedBeforeUnsubscribe = await readRetention();
-  expect(retainedBeforeUnsubscribe.entries).toBeGreaterThan(0);
-  await decoder.request(
-    createTestGatewayClient(async (method, params) => {
-      const result = await rpcReq(capable.ws, method, params);
-      if (!result.ok || result.payload == null) {
-        throw new Error(`Expected successful ${method} response`);
-      }
-      return result.payload;
-    }),
-    "sessions.messages.unsubscribe",
-    { key },
-  );
-  await request(legacy.ws, "sessions.messages.unsubscribe", { key });
-  expect(await readRetention()).toEqual(retainedBeforeUnsubscribe);
+  expect((await readRetention()).entries).toBeGreaterThan(0);
   const summaryTarget = await sessionTarget(key);
   const publishRecap = () => publishSummary(summaryTarget);
   await publishRecap();

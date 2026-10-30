@@ -33,6 +33,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { preparePostgresBackupDiscovery } from "../backup-database-discovery.js";
+import { pluginBackupPlanInput } from "../backup-resource-plan.test-support.js";
 import { createBackupSqliteSnapshotPlan } from "../backup-sqlite-snapshot.js";
 import { resolveClientCredentialStorePath } from "../client-credential-paths.js";
 import { readClientCredentialReceipt } from "../client-credential-readiness.js";
@@ -70,6 +71,8 @@ type MatrixPaths = {
 };
 
 describe.skipIf(!connection)("Matrix declared account-root database portability", () => {
+  const schemaPrefix = "matrix_port";
+  const portNamespace = new RegExp(`^${schemaPrefix}_state_[a-f0-9]{16}$`);
   const client = new Client({ connectionString: connection });
   const namespaces = new Set<string>();
   let matrix: MatrixPaths;
@@ -87,7 +90,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
   afterAll(async () => {
     try {
       for (const namespace of namespaces) {
-        assert.match(namespace, /^(?:port|restore)_[a-f0-9]+$/);
+        assert(portNamespace.test(namespace) || /^restore_[a-f0-9]{32}$/.test(namespace));
         await client.query(`DROP SCHEMA IF EXISTS "${namespace}" CASCADE`);
       }
     } finally {
@@ -106,7 +109,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
     await withOpenClawTestState({ scenario: "minimal", prefix: "matrix-port-" }, async (state) => {
       const config: OpenClawConfig = {
         plugins: { entries: { matrix: { enabled: false } } },
-        database: { engine: "sqlite", postgres: { connection: connection! } },
+        database: { engine: "sqlite", postgres: { connection: connection!, schemaPrefix } },
       };
       await state.writeConfig(config);
       const accounts = [
@@ -301,6 +304,9 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
       expect(forward).toMatchObject({ engine: "postgres" });
       expectCredentials();
       const physical = await postgresRoots(files);
+      for (const root of physical) {
+        expect(root.anchor.namespace).toMatch(portNamespace);
+      }
       expect(physical.map((root) => root.entries)).toEqual(expected);
       expect(new Set(physical.map((root) => root.anchor.namespace)).size).toBe(files.length);
       expect(new Set(physical.map((root) => root.anchor.storeId)).size).toBe(files.length);
@@ -378,16 +384,9 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         env: state.env,
         stateDir: state.stateDir,
       });
-      const resources = await createBackupResourcePlan({
-        stateDir: state.stateDir,
-        configPaths: [],
-        oauthDirs: [],
-        workspaceDirs: [],
-        excludedWorkspaceDirs: [],
-        agentRoots: [],
-        pluginResources: inventory.resources,
-        pluginRoots: inventory.pluginRoots,
-      });
+      const resources = await createBackupResourcePlan(
+        pluginBackupPlanInput(state.stateDir, inventory),
+      );
       const tempDir = state.path("backup");
       await fs.mkdir(tempDir);
       const backup = await createBackupSqliteSnapshotPlan({

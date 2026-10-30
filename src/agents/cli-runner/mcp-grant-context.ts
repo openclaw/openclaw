@@ -4,8 +4,10 @@ import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
+import { cloneExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import {
   bindActiveCronAuthorityCurrentness,
+  bindCronManagementToolConstruction,
   captureCronRequesterGrantIssuer,
 } from "../cron-creator-authority-context.js";
 import type { DelegationCapability } from "../delegation-capability.js";
@@ -37,6 +39,7 @@ export function finalizeCliMcpGrant(
   }
   const cronRequesterGrantIssuer = captureCronRequesterGrantIssuer(context.runId);
   const cronAuthorityCheck = bindActiveCronAuthorityCurrentness(context.runId);
+  const withCronManagementToolConstruction = bindCronManagementToolConstruction(context.runId);
   const personalToolParticipants = source.toolAuthorityFingerprint
     ? source.replyOperation?.personalToolParticipants
     : undefined;
@@ -49,6 +52,7 @@ export function finalizeCliMcpGrant(
     },
     ...(cronRequesterGrantIssuer ? { cronRequesterGrantIssuer } : {}),
     ...(cronAuthorityCheck ? { cronAuthorityCheck } : {}),
+    ...(withCronManagementToolConstruction ? { withCronManagementToolConstruction } : {}),
     admittedRunContext: source.admittedRunContext,
     toolPolicyConfig: source.config,
     messageActionTurnCapability: source.messageActionTurnCapability,
@@ -114,17 +118,7 @@ function buildCliMcpBashElevated(
   if (!bashElevated) {
     return undefined;
   }
-  return {
-    enabled: bashElevated.enabled,
-    allowed: bashElevated.allowed,
-    defaultLevel: bashElevated.defaultLevel,
-    ...(bashElevated.fullAccessAvailable !== undefined
-      ? { fullAccessAvailable: bashElevated.fullAccessAvailable }
-      : {}),
-    ...(bashElevated.fullAccessBlockedReason !== undefined
-      ? { fullAccessBlockedReason: bashElevated.fullAccessBlockedReason }
-      : {}),
-  };
+  return cloneExecElevatedDefaults(bashElevated);
 }
 
 function buildCliMcpChannelContext(
@@ -164,7 +158,6 @@ export function buildCliMcpGrantContext(params: {
   runtimePolicyAgentId?: string;
   modelProvider: string;
   modelId: string;
-  toolsAllow?: string[];
 }): McpLoopbackRequestContext {
   const sessionKey = resolveCliMcpSessionKey(params.run, params.config, params.agentId);
   const runtimePolicySessionKey = normalizeOptionalString(params.run.runtimePolicySessionKey);
@@ -190,7 +183,7 @@ export function buildCliMcpGrantContext(params: {
     params.run.messageChannel ?? params.run.messageProvider,
   );
   const currentChannelId = normalizeOptionalString(params.run.currentChannelId);
-  const grantedToolsAllow = params.run.cliToolAvailability?.openClaw ?? params.toolsAllow;
+  const grantedToolsAllow = params.run.cliToolAvailability?.openClaw;
   const delegationCapability = readCliMcpDelegationCapability(params.run);
   // Trusted message-only completions stay restricted even when source routing
   // is missing; the message tool must fail closed instead of widening authority.
@@ -225,9 +218,6 @@ export function buildCliMcpGrantContext(params: {
     runId: normalizeOptionalString(params.run.runId),
     workspaceDir: params.run.workspaceDir,
     ...(normalizeOptionalString(params.run.cwd) ? { cwd: params.run.cwd?.trim() } : {}),
-    // Restricted runs get their allowlist stamped into the grant; the
-    // loopback server enforces it on tools/list and tools/call.
-    ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
     ...(params.run.toolOverrides?.webSearch === false ? { webSearchDisabled: true as const } : {}),
     // Same enforcement point for the fallback delegation gate, so an
     // unrestricted run keeps its exact prior grant shape.

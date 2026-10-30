@@ -53,7 +53,14 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           featureMethods: [...defaultControlUiFeatureMethods, "board.get"],
           sessionKey: workKey,
-          sessions: [session(workKey, "Parser work"), session(homeKey, "Personal Home")],
+          sessions: [
+            session(workKey, "Parser work"),
+            session(homeKey, "Personal Home", {
+              status: "failed",
+              endedAt: Date.now(),
+              lastRunError: "Run interrupted by a Gateway restart",
+            }),
+          ],
           historyMessages: [{ role: "assistant", content: "Home is ready to help." }],
           methodResponses: {
             "board.get": {
@@ -65,11 +72,12 @@ suite.define(() => {
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, workKey));
-        await gateway.waitForRequest("chat.startup");
-        await page.locator(".sidebar-footer-bar__home").click();
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: workKey } });
+        // Click the glyph, not the button padding: session attention must not intercept Home.
+        await page.locator(".sidebar-footer-bar__home .session-glyph__content").click();
         const panel = page.locator("openclaw-assistant-panel");
         await panel.locator("openclaw-chat-pane").waitFor();
-        await gateway.waitForRequest("chat.startup", { after: 1 });
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: homeKey } });
         const composer = panel.locator(".agent-chat__composer-combobox textarea");
         await expect.poll(() => composer.isVisible()).toBe(true);
         await composer.fill("Help with the current work");

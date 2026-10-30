@@ -16,20 +16,18 @@ export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeLowercaseStringOrEmpty(providerId) === "claude-cli";
 }
 
-export function isGeminiStreamJsonDialect(params: {
-  backend: CliBackendConfig;
-  providerId: string;
-}): boolean {
+export function isGeminiStreamJsonDialect(
+  params: Parameters<typeof supportsCliJsonlToolEvents>[0],
+): boolean {
   return (
     params.backend.jsonlDialect === "gemini-stream-json" ||
     normalizeLowercaseStringOrEmpty(params.providerId) === "google-gemini-cli"
   );
 }
 
-export function isClaudeStreamJsonDialect(params: {
-  backend: CliBackendConfig;
-  providerId: string;
-}): boolean {
+export function isClaudeStreamJsonDialect(
+  params: Parameters<typeof supportsCliJsonlToolEvents>[0],
+): boolean {
   if (params.backend.jsonlDialect) {
     return params.backend.jsonlDialect === "claude-stream-json";
   }
@@ -246,10 +244,9 @@ function normalizeCliTerminalReason(raw: string): string {
   );
 }
 
-export function describeClaudeTurnStop(failure: {
-  terminalReason: string;
-  stopReason?: string;
-}): string {
+export function describeClaudeTurnStop(
+  failure: Omit<Extract<CliTerminalFailure, { reason: "turn_stopped" }>, "reason">,
+): string {
   const stopReason = failure.stopReason ? `, stop_reason: ${failure.stopReason}` : "";
   return `Claude CLI ended the turn without a reply (terminal_reason: ${failure.terminalReason}${stopReason}).`;
 }
@@ -437,11 +434,9 @@ export function readClaudeAttributedSubagentProgressId(
   return parentToolUseId;
 }
 
-export function pickCliResumeCheckpointId(params: {
-  backend: CliBackendConfig;
-  providerId: string;
-  parsed: Record<string, unknown>;
-}): string | undefined {
+export function pickCliResumeCheckpointId(
+  params: Omit<Parameters<typeof parseClaudeCliJsonlResult>[0], "sessionId" | "usage">,
+): string | undefined {
   if (
     !isClaudeStreamJsonDialect(params) ||
     params.parsed.type !== "assistant" ||
@@ -578,12 +573,9 @@ export function missingMessageBoundarySeparator(previousText: string, nextDelta:
   return "\n".repeat(Math.max(0, 2 - trailing - leading));
 }
 
-export function parseClaudeCliStreamingDelta(params: {
-  backend: CliBackendConfig;
-  providerId: string;
-  parsed: Record<string, unknown>;
-  previousText: string;
-}): string | null {
+export function parseClaudeCliStreamingDelta(
+  params: Parameters<typeof pickCliResumeCheckpointId>[0] & { previousText: string },
+): string | null {
   if (!supportsCliJsonlToolEvents(params)) {
     return null;
   }

@@ -18,6 +18,7 @@ import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
+import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 import "../../styles/sidebar-markdown.css";
 import {
@@ -305,6 +306,7 @@ function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
 
 function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
   const updateLocked = createMemo(() => skillControlsLocked(props.view) || !props.view.canUpdate);
+  const toggleSaving = () => props.view.toggleSavingSkillKey === props.skill.skillKey;
   const active = () =>
     props.view.state.skillOperation?.kind === "skill" &&
     props.view.state.skillOperation.skillKey === props.skill.skillKey;
@@ -439,7 +441,12 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
         <div style={{ display: "flex", "align-items": "center", gap: "12px" }}>
           <SettingsToggle
             checked={!props.skill.disabled}
-            disabled={updateLocked()}
+            saving={toggleSaving()}
+            disabled={
+              !props.view.canUpdate ||
+              (props.view.toggleDisabled ?? props.view.loading) ||
+              (!toggleSaving() && skillControlsLocked(props.view))
+            }
             ariaLabel={props.skill.name}
             onChange={() => props.view.onToggle(props.skill.skillKey, props.skill.disabled)}
           />

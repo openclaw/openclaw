@@ -47,9 +47,9 @@ describe("command-registry", () => {
     expect(names).not.toContain("tasks");
   });
 
-  it("exposes Claws without a process opt-in", () => {
-    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
-    expect(getCoreCliCommandNamesCore()).toContain("claws");
+  it("exposes Templates without a process opt-in", () => {
+    expect(getCoreCliCommandNamesCore()).toContain("templates");
+    expect(getCoreCliCommandNamesCore()).not.toContain("claws");
 
     vi.unstubAllEnvs();
   });

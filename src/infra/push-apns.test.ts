@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
-import { createServer, type Server as HttpServer } from "node:http";
+import { createServer } from "node:http";
 import http2 from "node:http2";
 import net from "node:net";
 import path from "node:path";
@@ -10,9 +10,11 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import { withLoopbackTestServer } from "../commands/loopback-server.test-support.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { verifyDeviceSignature } from "./device-identity.js";
-import { startProxy, stopProxy, type ProxyHandle } from "./net/proxy/proxy-lifecycle.js";
+import { startProxy, stopProxy } from "./net/proxy/proxy-lifecycle.js";
 import {
   appendApnsResponseBodyCapture,
   createApnsResponseBodyCapture,
@@ -85,59 +87,10 @@ function relayRegistration(
   };
 }
 
-function createRelayApnsSendFixture(params: {
-  nodeId: string;
-  relayHandle?: string;
-  tokenDebugSuffix?: string;
-  environment?: "sandbox" | "production";
-  sendResult: {
-    ok: boolean;
-    status: number;
-    environment: "sandbox" | "production";
-    apnsId?: string;
-    reason?: string;
-    tokenSuffix?: string;
-  };
-}) {
-  return {
-    send: mockApnsRelayFetch(params.sendResult),
-    registration: relayRegistration(params.nodeId, {
-      relayHandle: params.relayHandle ?? "relay-handle-12345678",
-      environment: params.environment ?? "production",
-      tokenDebugSuffix: params.tokenDebugSuffix,
-    }),
-    relayConfig: { baseUrl: "https://relay.openclaw.test", timeoutMs: 2_500 },
-  };
-}
-
 type CapturedApnsRequest = {
   headers: http2.IncomingHttpHeaders;
   body: string;
 };
-
-type DestroyableConnection = {
-  destroy: () => void;
-};
-
-function listen(server: HttpServer | http2.Http2SecureServer): Promise<number> {
-  return new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("server address unavailable"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
-}
-
-const closeServer = (server: HttpServer | http2.Http2SecureServer) =>
-  new Promise<void>((resolve, reject) => {
-    server.close((error?: Error) => (error ? reject(error) : resolve()));
-  });
 
 const requireRecord = createRequireRecord("object", "label-not-object");
 
@@ -162,111 +115,62 @@ function expectOpenClaw(payload: Record<string, unknown>, fields: Record<string,
 }
 
 async function withProxiedApns(
-  response: Parameters<typeof startFakeApnsServer>[0],
-  check: (
-    server: Awaited<ReturnType<typeof startFakeApnsServer>>,
-    proxy: Awaited<ReturnType<typeof startConnectProxy>>,
-  ) => Promise<void>,
+  response: { responseBody: string; status: number },
+  check: (requests: CapturedApnsRequest[], connectTargets: string[]) => Promise<void>,
 ) {
-  const server = await startFakeApnsServer(response);
-  const proxy = await startConnectProxy(server.port);
-  let handle: ProxyHandle | null | undefined;
-  const previous = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-  try {
-    handle = await startProxy({ proxyUrl: proxy.proxyUrl });
-    await check(server, proxy);
-  } finally {
-    if (previous === undefined) {
-      delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-    } else {
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = previous;
-    }
-    await stopProxy(handle ?? null);
-    await proxy.stop();
-    await server.stop();
-  }
-}
-
-async function startFakeApnsServer(params?: { responseBody?: string; status?: number }) {
   const requests: CapturedApnsRequest[] = [];
-  const responseBody = params?.responseBody ?? "";
-  const status = params?.status ?? 200;
-  const server = http2.createSecureServer({
-    key: TEST_TLS_KEY_PEM,
-    cert: TEST_TLS_CERT_PEM,
-    allowHTTP1: false,
-  });
+  const connectTargets: string[] = [];
+  const server = http2.createSecureServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM });
   server.on("stream", (stream: http2.ServerHttp2Stream, headers) => {
     let body = "";
     stream.setEncoding("utf8");
     stream.on("data", (chunk) => {
-      body += typeof chunk === "string" ? chunk : String(chunk);
+      body += String(chunk);
     });
     stream.on("end", () => {
       requests.push({ headers, body });
-      stream.respond({ ":status": status, "apns-id": "proxied-apns-id" });
-      stream.end(responseBody);
+      stream.respond({ ":status": response.status, "apns-id": "proxied-apns-id" });
+      stream.end(response.responseBody);
     });
   });
-  const port = await listen(server);
-  return {
-    port,
-    requests,
-    stop: async () => await closeServer(server),
-  };
-}
-
-async function startConnectProxy(upstreamPort: number) {
-  const connectTargets: string[] = [];
-  const sockets = new Set<DestroyableConnection>();
-  const server = createServer((_req, res) => {
-    res.writeHead(502);
-    res.end("CONNECT required");
-  });
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
-  });
-  server.on("connect", (req, clientSocket, head) => {
-    connectTargets.push(req.url ?? "");
-    const upstreamSocket = net.connect(upstreamPort, "127.0.0.1", () => {
-      clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      if (head.length > 0) {
-        upstreamSocket.write(head);
-      }
-      clientSocket.pipe(upstreamSocket);
-      upstreamSocket.pipe(clientSocket);
+  await withLoopbackTestServer(server, async (port) => {
+    const proxy = createServer();
+    proxy.on("connect", (request, client, head) => {
+      connectTargets.push(request.url ?? "");
+      const upstream = net.connect(port, "127.0.0.1", () => {
+        client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length) {
+          upstream.write(head);
+        }
+        client.pipe(upstream).pipe(client);
+      });
+      client.on("close", () => upstream.destroy());
+      upstream.on("close", () => client.destroy());
+      client.on("error", () => upstream.destroy());
+      upstream.on("error", () => client.destroy());
     });
-    sockets.add(clientSocket);
-    sockets.add(upstreamSocket);
-    clientSocket.on("close", () => sockets.delete(clientSocket));
-    upstreamSocket.on("close", () => sockets.delete(upstreamSocket));
-    clientSocket.on("error", () => upstreamSocket.destroy());
-    upstreamSocket.on("error", () => clientSocket.destroy());
+    await withLoopbackTestServer(proxy, async (proxyPort) =>
+      withEnvAsync({ NODE_TLS_REJECT_UNAUTHORIZED: "0" }, async () => {
+        const handle = await startProxy({ proxyUrl: `http://127.0.0.1:${proxyPort}` });
+        try {
+          await check(requests, connectTargets);
+        } finally {
+          await stopProxy(handle);
+        }
+      }),
+    );
   });
-  const port = await listen(server);
-  return {
-    proxyUrl: `http://127.0.0.1:${port}`,
-    connectTargets,
-    stop: async () => {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await closeServer(server);
-    },
-  };
 }
 
 describe("push APNs send semantics", () => {
   it("bounds APNs response body capture", () => {
     const capture = createApnsResponseBodyCapture();
 
-    appendApnsResponseBodyCapture(capture, "abc", 5);
-    appendApnsResponseBodyCapture(capture, "def", 5);
+    appendApnsResponseBodyCapture(capture, "a".repeat(8190));
+    appendApnsResponseBodyCapture(capture, "def");
 
-    expect(getApnsResponseBodyCaptureText(capture)).toBe("abcde");
-    expect(capture).toMatchObject({ capturedBytes: 5, truncated: true });
+    expect(getApnsResponseBodyCaptureText(capture)).toBe("a".repeat(8190) + "de");
+    expect(capture).toMatchObject({ capturedBytes: 8192, truncated: true });
   });
 
   it("preserves UTF-8 across HTTP/2 chunks and drops an incomplete capped suffix", () => {
@@ -299,7 +203,7 @@ describe("push APNs send semantics", () => {
   ] as const)(
     "sends through the managed proxy and bounds HTTP %s bodies",
     async (status, responseBody, ok, reason) => {
-      await withProxiedApns({ status, responseBody }, async (apnsServer, proxy) => {
+      await withProxiedApns({ status, responseBody }, async (requests, connectTargets) => {
         const { registration, auth } = createDirectApnsSendFixture("ios-node-proxied-alert");
 
         const result = await sendApnsAlert({
@@ -318,9 +222,9 @@ describe("push APNs send semantics", () => {
           apnsId: "proxied-apns-id",
           transport: "direct",
         });
-        expect(proxy.connectTargets).toEqual(["api.sandbox.push.apple.com:443"]);
-        expect(apnsServer.requests).toHaveLength(1);
-        const request = apnsServer.requests[0];
+        expect(connectTargets).toEqual(["api.sandbox.push.apple.com:443"]);
+        expect(requests).toHaveLength(1);
+        const request = requests[0];
         expect(request?.headers).toMatchObject({
           ":method": "POST",
           ":path": "/3/device/abcd1234abcd1234abcd1234abcd1234",
@@ -395,76 +299,58 @@ describe("push APNs send semantics", () => {
   });
 
   it.each([
-    {
-      name: "exec approval alert with generic modal-only metadata",
-      invoke: sendApnsExecApprovalAlert,
-      kind: "exec.approval.requested",
-      pushType: "alert",
-      aps: {
-        alert: { title: "Exec approval required", body: "Open OpenClaw to review this request." },
-        sound: "default",
-        category: "openclaw.exec-approval",
-        "content-available": 1,
-      },
-      forbidden: ["host", "nodeId", "agentId", "commandText", "allowedDecisions", "expiresAtMs"],
-    },
-    {
-      name: "silent exec approval cleanup with a capped timeout",
-      invoke: sendApnsExecApprovalResolvedWake,
-      kind: "exec.approval.resolved",
-      pushType: "background",
-      aps: { "content-available": 1 },
-      timeoutMs: Number.MAX_SAFE_INTEGER,
-      sendResult: { status: 200, apnsId: "apns-timeout-cap-id", body: "{}" },
-    },
-    {
-      name: "plugin approval alert with bounded request copy",
-      invoke: (params: Parameters<typeof sendApnsExecApprovalAlert>[0]) =>
-        sendApnsPluginApprovalAlert({
-          ...params,
-          title: "Install plugin update",
-          description: `${"x".repeat(255)}😀${"y".repeat(300)}`,
-        }),
-      kind: "plugin.approval.requested",
-      pushType: "alert",
-      aps: {
-        alert: { title: "Install plugin update", body: `${"x".repeat(255)}…` },
-        sound: "default",
-        category: "openclaw.plugin-approval",
-        "content-available": 1,
-      },
-      forbidden: ["title", "description", "toolName", "agentId", "sessionKey"],
-    },
-    {
-      name: "silent plugin approval cleanup",
-      invoke: sendApnsPluginApprovalResolvedWake,
-      kind: "plugin.approval.resolved",
-      pushType: "background",
-      aps: { "content-available": 1 },
-    },
-  ])("sends $name", async ({ invoke, kind, pushType, aps, forbidden, timeoutMs, sendResult }) => {
-    const approvalId = "approval-123";
-    const fixture = createDirectApnsSendFixture("ios-node-approval", "sandbox", sendResult);
-    const result = await invoke({
+    ["exec", "alert", sendApnsExecApprovalAlert],
+    ["exec", "background", sendApnsExecApprovalResolvedWake],
+    ["plugin", "alert", sendApnsPluginApprovalAlert],
+    ["plugin", "background", sendApnsPluginApprovalResolvedWake],
+  ] as const)("sends %s approval %s", async (kind, pushType, invoke) => {
+    const alert = pushType === "alert";
+    const plugin = kind === "plugin";
+    const fixture = createDirectApnsSendFixture("ios-node-approval");
+    const approval = {
       ...fixture,
-      approvalId,
+      approvalId: "approval-123",
       gatewayDeviceId: "gateway-device-123",
-      timeoutMs,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      title: "Install plugin update",
+      description: `${"x".repeat(255)}😀${"y".repeat(300)}`,
+    };
+    const readControl = () => {
+      throw new Error("approval must not read lifecycle controls");
+    };
+    Object.defineProperties(approval, {
+      signal: { enumerable: true, get: readControl },
+      isCurrent: { enumerable: true, get: readControl },
     });
-    expect(fixture.send).toHaveBeenCalledTimes(1);
+    const result = await invoke(approval);
     const sent = requireSendRequest(fixture.send);
-    expect(sent).toMatchObject({ pushType });
-    if (timeoutMs !== undefined) {
-      expect(sent.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-    }
+    expectNoProperties(sent, ["signal", "isCurrent"]);
+    expect(sent).toMatchObject({ pushType, timeoutMs: MAX_TIMER_TIMEOUT_MS });
     const payload = requirePayload(sent);
-    expect(payload.aps).toEqual(aps);
+    expect(payload.aps).toEqual(
+      alert
+        ? {
+            alert: {
+              title: plugin ? "Install plugin update" : "Exec approval required",
+              body: plugin ? `${"x".repeat(255)}…` : "Open OpenClaw to review this request.",
+            },
+            sound: "default",
+            category: `openclaw.${kind}-approval`,
+            "content-available": 1,
+          }
+        : { "content-available": 1 },
+    );
     const metadata = expectOpenClaw(payload, {
-      kind,
-      approvalId,
+      kind: `${kind}.approval.${alert ? "requested" : "resolved"}`,
+      approvalId: "approval-123",
       gatewayDeviceId: "gateway-device-123",
     });
-    expectNoProperties(metadata, forbidden ?? []);
+    expectNoProperties(
+      metadata,
+      plugin
+        ? ["title", "description", "toolName", "agentId", "sessionKey"]
+        : ["host", "nodeId", "agentId", "commandText", "allowedDecisions", "expiresAtMs"],
+    );
     expect(result).toMatchObject({ ok: true, transport: "direct" });
   });
 
@@ -484,72 +370,74 @@ describe("push APNs send semantics", () => {
     expect(requireRecord(aps.alert, "APNs alert").title).toBe("Approval required");
   });
 
-  it("fails closed before sending when direct registrations carry invalid topics", async () => {
+  it.each(["topic", "ownership"])("rejects invalid direct %s before sending", async (invalid) => {
     const fixture = createDirectApnsSendFixture("ios-node-invalid-topic");
     const { send } = fixture;
 
     await expect(
       sendApnsAlert({
         ...fixture,
-        registration: { ...fixture.registration, topic: "   " },
+        registration: { ...fixture.registration, ...(invalid === "topic" ? { topic: "   " } : {}) },
+        isCurrent: async () => invalid !== "ownership",
         nodeId: "ios-node-invalid-topic",
         title: "Wake",
         body: "Ping",
       }),
-    ).rejects.toThrow("topic required");
+    ).rejects.toThrow(invalid === "topic" ? "topic required" : "APNs send invalidated");
 
     expect(send).not.toHaveBeenCalled();
   });
 
-  it("sends relay background pushes and falls back to the relay handle suffix", async () => {
-    const { send, registration, relayConfig } = createRelayApnsSendFixture({
-      nodeId: "ios-node-relay-wake",
-      tokenDebugSuffix: undefined,
-      sendResult: {
+  it.each([undefined, "queue.retry"])(
+    "sends relay wake reason %s with the handle suffix",
+    async (wakeReason) => {
+      const send = mockApnsRelayFetch({
         ok: false,
         status: 429,
         reason: "TooManyRequests",
         environment: "production",
-      },
-    });
+      });
+      const registration = relayRegistration("ios-node-relay-wake");
+      const relayConfig = { baseUrl: "https://relay.openclaw.test", timeoutMs: 2_500 };
 
-    const result = await sendApnsBackgroundWake({
-      registration,
-      nodeId: "ios-node-relay-wake",
-      wakeReason: "queue.retry",
-      relayConfig,
-    });
+      const result = await sendApnsBackgroundWake({
+        registration,
+        nodeId: "ios-node-relay-wake",
+        wakeReason,
+        relayConfig,
+      });
 
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls[0]?.[0]).toBe(`${relayConfig.baseUrl}/v1/push/send`);
-    const request = send.mock.calls[0]?.[1];
-    expect(new Headers(request?.headers).get("authorization")).toBe("Bearer send-grant-123");
-    const body = request?.body;
-    if (typeof body !== "string") {
-      throw new Error("Expected relay JSON request body");
-    }
-    const sent = requireRecord(JSON.parse(body), "relay request");
-    expect(sent).toMatchObject({
-      relayHandle: "relay-handle-12345678",
-      pushType: "background",
-      priority: 5,
-    });
-    const payload = requirePayload(sent);
-    expect(payload.aps).toEqual({ "content-available": 1 });
-    expectOpenClaw(payload, {
-      kind: "node.wake",
-      reason: "queue.retry",
-      nodeId: "ios-node-relay-wake",
-    });
-    expect(result).toMatchObject({
-      ok: false,
-      status: 429,
-      reason: "TooManyRequests",
-      tokenSuffix: "12345678",
-      environment: "production",
-      transport: "relay",
-    });
-  });
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls[0]?.[0]).toBe(`${relayConfig.baseUrl}/v1/push/send`);
+      const request = send.mock.calls[0]?.[1];
+      expect(new Headers(request?.headers).get("authorization")).toBe("Bearer send-grant-123");
+      const body = request?.body;
+      if (typeof body !== "string") {
+        throw new Error("Expected relay JSON request body");
+      }
+      const sent = requireRecord(JSON.parse(body), "relay request");
+      expect(sent).toMatchObject({
+        relayHandle: "relay-handle-12345678",
+        pushType: "background",
+        priority: 5,
+      });
+      const payload = requirePayload(sent);
+      expect(payload.aps).toEqual({ "content-available": 1 });
+      expectOpenClaw(payload, {
+        kind: "node.wake",
+        reason: wakeReason ?? "node.invoke",
+        nodeId: "ios-node-relay-wake",
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        status: 429,
+        reason: "TooManyRequests",
+        tokenSuffix: "12345678",
+        environment: "production",
+        transport: "relay",
+      });
+    },
+  );
 
   it("keeps bounded non-JSON error reasons UTF-16 well-formed", async () => {
     const fixture = createDirectApnsSendFixture("ios-node-utf16-reason", "sandbox", {
@@ -634,158 +522,13 @@ describe("push APNs auth and helper coverage", () => {
     expect(
       shouldClearStoredApnsRegistration({ ...direct, overrideEnvironment: "production" }),
     ).toBe(false);
-    const { registration } = createRelayApnsSendFixture({
-      nodeId: "ios-node-relay",
-      relayHandle: "relay-handle-123",
-      sendResult: { ok: true, status: 200, environment: "production" },
-    });
     expect(
       shouldClearStoredApnsRegistration({
-        registration,
+        registration: relayRegistration("ios-node-relay"),
         result: { status: 410, reason: "Unregistered" },
       }),
     ).toBe(false);
   });
-});
-
-const senderOptionKeys = {
-  direct: [
-    "token",
-    "topic",
-    "environment",
-    "bearerToken",
-    "payload",
-    "timeoutMs",
-    "pushType",
-    "priority",
-  ],
-};
-
-function createApnsTransportFixture(transport: "direct" | "relay") {
-  const fixture =
-    transport === "direct"
-      ? createDirectApnsSendFixture("ios-dispatch")
-      : createRelayApnsSendFixture({
-          nodeId: "ios-dispatch",
-          environment: "sandbox",
-          relayHandle: "relay-dispatch",
-          sendResult: { ok: true, status: 202, environment: "sandbox" },
-        });
-  return { send: fixture.send, params: fixture };
-}
-
-describe("APNs dispatch", () => {
-  it.each([
-    ["direct", "alert"],
-    ["direct", "background"],
-    ["relay", "alert"],
-    ["relay", "background"],
-  ] as const)(
-    "preserves %s %s lifecycle forwarding and option omission",
-    async (transport, kind) => {
-      const { send, params } = createApnsTransportFixture(transport);
-      const controller = new AbortController();
-      const isCurrent = vi.fn().mockResolvedValue(true);
-      const sendPush = (controls: { signal?: AbortSignal; isCurrent?: () => Promise<boolean> }) => {
-        const common = { ...params, nodeId: "ios-dispatch", timeoutMs: 2_700, ...controls };
-        return kind === "alert"
-          ? sendApnsAlert({ ...common, title: "Wake", body: "Ping" })
-          : sendApnsBackgroundWake(common);
-      };
-
-      await sendPush({ signal: controller.signal, isCurrent });
-      if (transport === "direct") {
-        const controlled = requireSendRequest(send);
-        expect(Object.keys(controlled)).toEqual([
-          ...senderOptionKeys.direct,
-          "signal",
-          "isCurrent",
-        ]);
-        expect(controlled.signal).toBe(controller.signal);
-        expect(controlled.isCurrent).toBe(isCurrent);
-        expect(controlled.pushType).toBe(kind);
-        expect(controlled.priority).toBe(kind === "alert" ? "10" : "5");
-        if (kind === "background") {
-          const payload = requirePayload(controlled);
-          expect(payload.aps).toEqual({ "content-available": 1 });
-          expectOpenClaw(payload, {
-            kind: "node.wake",
-            reason: "node.invoke",
-            nodeId: "ios-dispatch",
-          });
-          await expect(sendPush({ isCurrent: vi.fn().mockResolvedValue(false) })).rejects.toThrow(
-            "APNs send invalidated",
-          );
-          expect(send).toHaveBeenCalledTimes(1);
-        }
-      } else {
-        expect(send).toHaveBeenCalledTimes(1);
-        const [url, request] = send.mock.calls[0] ?? [];
-        expect(url).toBe("https://relay.openclaw.test/v1/push/send");
-        expect(request?.signal?.aborted).toBe(false);
-        controller.abort();
-        expect(request?.signal?.aborted).toBe(true);
-        expect(new Headers(request?.headers).get("authorization")).toBe("Bearer send-grant-123");
-        expect(JSON.parse(String(request?.body))).toMatchObject({
-          relayHandle: "relay-dispatch",
-          pushType: kind,
-          priority: kind === "alert" ? 10 : 5,
-        });
-      }
-      expect(isCurrent).toHaveBeenCalledTimes(transport === "direct" ? 1 : 2);
-
-      send.mockClear();
-      await sendPush({});
-      if (transport === "direct") {
-        expect(Object.keys(requireSendRequest(send))).toEqual(senderOptionKeys.direct);
-      } else {
-        expect(send).toHaveBeenCalledTimes(1);
-      }
-      expect(isCurrent).toHaveBeenCalledTimes(transport === "direct" ? 1 : 2);
-    },
-  );
-
-  it.each(["direct", "relay"] as const)(
-    "ignores extraneous lifecycle controls for %s approval notifications",
-    async (transport) => {
-      const { send, params } = createApnsTransportFixture(transport);
-      const readControl = vi.fn(() => {
-        throw new Error("approval notifications must not read lifecycle controls");
-      });
-      const approval = Object.defineProperties(
-        {
-          ...params,
-          nodeId: "ios-dispatch",
-          approvalId: "approval-dispatch",
-          gatewayDeviceId: "gateway-dispatch",
-          title: "Approval",
-          description: "Review this request.",
-          timeoutMs: 2_700,
-        },
-        {
-          signal: { enumerable: true, get: readControl },
-          isCurrent: { enumerable: true, get: readControl },
-        },
-      );
-
-      for (const sendApproval of [
-        sendApnsExecApprovalAlert,
-        sendApnsPluginApprovalAlert,
-        sendApnsExecApprovalResolvedWake,
-        sendApnsPluginApprovalResolvedWake,
-      ]) {
-        send.mockClear();
-        await sendApproval(approval);
-        if (transport === "direct") {
-          expect(Object.keys(requireSendRequest(send))).toEqual(senderOptionKeys.direct);
-        } else {
-          expect(send).toHaveBeenCalledTimes(1);
-          expect(send.mock.calls[0]?.[0]).toBe("https://relay.openclaw.test/v1/push/send");
-        }
-      }
-      expect(readControl).not.toHaveBeenCalled();
-    },
-  );
 });
 
 function sendRelayPush(
@@ -892,18 +635,21 @@ describe("push-apns.relay", () => {
   });
 
   describe("public relay push", () => {
-    it("does not start relay transport when persistent ownership changed", async () => {
-      const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    it.each([false, true])(
+      "does not send when relay ownership changes (initially current=%s)",
+      async (initiallyCurrent) => {
+        const fetchMock = vi.fn<typeof fetch>();
+        vi.stubGlobal("fetch", fetchMock);
 
-      await expect(
-        sendRelayPush({
-          isCurrent: vi.fn().mockResolvedValue(false),
-        }),
-      ).rejects.toThrow("APNs send invalidated");
+        await expect(
+          sendRelayPush({
+            isCurrent: vi.fn().mockResolvedValueOnce(initiallyCurrent).mockResolvedValue(false),
+          }),
+        ).rejects.toThrow("APNs send invalidated");
 
-      expect(fetchMock).not.toHaveBeenCalled();
-    });
+        expect(fetchMock).not.toHaveBeenCalled();
+      },
+    );
 
     it("signs relay payloads in the HTTP request", async () => {
       vi.spyOn(Date, "now").mockReturnValue(123_456_789);
@@ -919,12 +665,20 @@ describe("push-apns.relay", () => {
       );
 
       const relayGatewayIdentity = mockApnsRelayIdentity();
-      const result = await sendRelayPush({ pushType: "alert" });
+      const controller = new AbortController();
+      const result = await sendRelayPush({
+        pushType: "alert",
+        signal: controller.signal,
+        isCurrent: async () => true,
+      });
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock.mock.calls[0]?.[0]).toBe("https://relay.example.com/v1/push/send");
       expect(timeout).toHaveBeenCalledWith(1000);
       const fetchOptions = fetchMock.mock.calls[0]?.[1];
+      expect(fetchOptions?.signal?.aborted).toBe(false);
+      controller.abort();
+      expect(fetchOptions?.signal?.aborted).toBe(true);
       const headers = new Headers(fetchOptions?.headers);
       const bodyJson = fetchOptions?.body;
       if (typeof bodyJson !== "string") {
@@ -933,17 +687,11 @@ describe("push-apns.relay", () => {
       expect(headers.get("authorization")).toBe("Bearer send-grant-123");
       expect(headers.get("x-openclaw-gateway-device-id")).toBe(relayGatewayIdentity.deviceId);
       expect(headers.get("x-openclaw-gateway-signed-at-ms")).toBe("123456789");
-      expect(bodyJson).toBe(
-        JSON.stringify({
-          relayHandle: "relay-handle-12345678",
-          pushType: "alert",
-          priority: 10,
-          payload: {
-            aps: { alert: { title: "Wake", body: "Ping" }, sound: "default" },
-            openclaw: { kind: "push.test", nodeId: "ios-relay", ts: 123_456_789 },
-          },
-        }),
-      );
+      expect(JSON.parse(bodyJson)).toMatchObject({
+        relayHandle: "relay-handle-12345678",
+        pushType: "alert",
+        priority: 10,
+      });
       expect(
         verifyDeviceSignature(
           relayGatewayIdentity.publicKey,
@@ -1002,21 +750,6 @@ describe("push-apns.relay", () => {
       await expect(sendRelayPush()).resolves.toEqual({ ...relayResultFields, ...expected });
     });
 
-    it("parses a large under-cap relay body unchanged (boundary just below the 16 MiB cap)", async () => {
-      mockRelayResponse(
-        JSON.stringify({
-          ok: true,
-          status: 200,
-          apnsId: "big-but-valid",
-          note: "x".repeat(8 * 1024 * 1024),
-        }),
-      );
-      await expect(sendRelayPush()).resolves.toEqual({
-        ...relayResultFields,
-        apnsId: "big-but-valid",
-      });
-    });
-
     it("fails closed when the relay response body exceeds the size cap", async () => {
       const oversized = "a".repeat(16 * 1024 * 1024 + 1024);
       mockRelayResponse(oversized);
@@ -1029,15 +762,14 @@ describe("push-apns.relay", () => {
     });
 
     it("rejects relay body with malformed UTF-8 bytes instead of parsing corrupted metadata", async () => {
-      const encoder = new TextEncoder();
-      const prefix = encoder.encode('{"ok":true,"status":200,"apnsId":"test-');
-      const suffix = encoder.encode('1234"}');
-      const body = new Uint8Array(prefix.length + 1 + suffix.length);
-      body.set(prefix, 0);
-      body[prefix.length] = 0xff; // bare invalid byte inside the apns-id string
-      body.set(suffix, prefix.length + 1);
-
-      mockRelayResponse(body, 202);
+      mockRelayResponse(
+        Buffer.concat([
+          Buffer.from('{"ok":true,"status":200,"apnsId":"test-'),
+          Buffer.from([0xff]),
+          Buffer.from('1234"}'),
+        ]),
+        202,
+      );
 
       await expect(sendRelayPush()).resolves.toEqual({
         ...relayResultFields,

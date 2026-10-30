@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { PluginInstance } from "./plugin-instance.js";
@@ -33,6 +34,138 @@ async function* yieldingFinally(values: number[], finished = () => {}) {
     finished();
   }
 }
+
+it("reuses the scoped protocol callback across overlapping stream operations", async () => {
+  const instance = owner();
+  const resume = createDeferredCore();
+  const first = { done: false, value: "first" };
+  const second = { done: false, value: "second" };
+  const source = instance.wrap(
+    iterable({
+      async next(value: number) {
+        await resume.promise;
+        return value === 1 ? first : second;
+      },
+      async return() {
+        return { done: true, value: undefined };
+      },
+    }),
+  );
+  const iterator = source[Symbol.asyncIterator]();
+  const scoped = vi.spyOn(AsyncResource.prototype, "runInAsyncScope");
+  try {
+    const pending = [iterator.next(1), iterator.next(2)];
+    resume.resolve();
+    const received = await Promise.all(pending);
+    expect(received[0]).toBe(first);
+    expect(received[1]).toBe(second);
+    const callbacks = scoped.mock.calls.map(([callback]) => callback);
+    expect(callbacks).toHaveLength(2);
+    expect(new Set(callbacks).size).toBe(1);
+  } finally {
+    scoped.mockRestore();
+    resume.resolve();
+    await iterator.return();
+  }
+});
+
+it.each(["return-first", "next-first"] as const)(
+  "keeps overlapping return/next settlement separate (%s)",
+  async (order) => {
+    const instance = owner();
+    const next = createDeferredCore<IteratorResult<string>>();
+    const returned = createDeferredCore<IteratorResult<string>>();
+    const stream = instance.wrap(
+      iterable({
+        next: () => next.promise,
+        return: () => returned.promise,
+      }),
+    );
+    const iterator = stream[Symbol.asyncIterator]();
+    const pendingReturn = iterator.return();
+    const pendingNext = iterator.next();
+    const nextResult = { done: false, value: "next" };
+    const returnResult = { done: false, value: "finally" };
+    if (order === "return-first") {
+      returned.resolve(returnResult);
+      await pendingReturn;
+      next.resolve(nextResult);
+    } else {
+      next.resolve(nextResult);
+      await pendingNext;
+      returned.resolve(returnResult);
+    }
+    expect(await pendingReturn).toBe(returnResult);
+    expect(await pendingNext).toBe(nextResult);
+    expect(instance.ordinaryCallCount).toBe(0);
+  },
+);
+
+it("settles a synchronous protocol throw before returning its rejection", async () => {
+  const instance = owner();
+  const failure = Symbol("plugin failure");
+  const stream = instance.wrap(
+    iterable({
+      next(): Promise<IteratorResult<never>> {
+        // oxlint-disable-next-line typescript/only-throw-error -- Plugin rejection values must pass through unchanged.
+        throw failure;
+      },
+    }),
+  );
+  const pending = stream[Symbol.asyncIterator]().next();
+  expect(instance.ordinaryCallCount).toBe(0);
+  await expect(pending).rejects.toBe(failure);
+});
+
+it.each(["fulfilled", "rejected"] as const)(
+  "lets a release failure override a %s next result without releasing twice",
+  async (outcome) => {
+    const instance = new PluginInstance("iterator-release-failure");
+    const result = createDeferredCore<IteratorResult<string>>();
+    const sourceFailure = new Error("source failed");
+    const releaseFailure = new Error("host cleanup failed");
+    const stream = instance.wrap(iterable({ next: () => result.promise }));
+    const iterator = stream[Symbol.asyncIterator]();
+    try {
+      const pending = iterator.next();
+      const disposal = instance.dispose(() => {
+        throw releaseFailure;
+      });
+      if (outcome === "fulfilled") {
+        result.resolve({ done: true, value: "finished" });
+      } else {
+        result.reject(sourceFailure);
+      }
+      await Promise.all([
+        expect(pending).rejects.toBe(releaseFailure),
+        expect(disposal).rejects.toBe(releaseFailure),
+      ]);
+      expect(instance.ordinaryCallCount).toBe(0);
+    } finally {
+      result.resolve({ done: true, value: "finished" });
+      await instance.dispose().catch(() => {});
+    }
+  },
+);
+
+it.each(["next", "return"] as const)(
+  "shares admission when an iterable returns its own already-bound iterator (%s)",
+  async (terminal) => {
+    const instance = owner();
+    const iterator = instance.wrap(chunks("first"));
+    const source = instance.wrap(iterable(iterator));
+    const acquired = source[Symbol.asyncIterator]();
+    expect(acquired).toBe(iterator);
+    try {
+      expect(instance.ordinaryCallCount).toBe(1);
+      await expect(acquired.next()).resolves.toEqual({ done: false, value: "first" });
+      await expect(acquired[terminal]()).resolves.toEqual({ done: true, value: undefined });
+      expect(instance.ordinaryCallCount).toBe(0);
+    } finally {
+      await acquired.return();
+    }
+  },
+);
 
 it.each(["promise", "thenable"] as const)(
   "awaits a next() %s with native assimilation and live admission",
@@ -79,19 +212,7 @@ it.each(["next", "throw"] as const)(
     }
     const native = source();
     const instance = owner();
-    const raw = source();
-    let acquisitions = 0;
-    let factoryReads = 0;
-    Object.defineProperty(raw, Symbol.asyncIterator, {
-      get() {
-        factoryReads += 1;
-        return function (this: typeof raw) {
-          acquisitions += 1;
-          return this;
-        };
-      },
-    });
-    const stream = instance.wrap(raw);
+    const stream = instance.wrap(source());
     const open = stream[Symbol.asyncIterator];
     const wrapped = open();
     for (const iterator of [native, wrapped]) {
@@ -100,7 +221,6 @@ it.each(["next", "throw"] as const)(
     }
     expect(open()).toBe(wrapped);
     expect(wrapped[Symbol.asyncIterator]()).toBe(wrapped);
-    expect([instance.ordinaryCallCount, acquisitions, factoryReads]).toEqual([0, 1, 1]);
     const supplied = new Error("caller-supplied terminal reason");
     const [expected, actual] = await Promise.allSettled([
       native[method](supplied),
@@ -385,13 +505,9 @@ it.each(["missing", "done-false", "getter", "non-callable"] as const)(
   },
 );
 
-it.each([
-  { phase: "live", resume: "next" },
-  { phase: "live", resume: "iterator" },
-  { phase: "retired", resume: "next" },
-] as const)(
-  "only resumes a finally yield through $resume when its instance is $phase",
-  async ({ phase, resume }) => {
+it.each(["live", "retired"] as const)(
+  "only resumes a finally yield when its instance is %s",
+  async (phase) => {
     const instance = owner();
     const finished = vi.fn();
     const source = yieldingFinally([2], finished);
@@ -399,9 +515,6 @@ it.each([
     await expect(iterator.next()).resolves.toEqual({ done: false, value: 1 });
     await expect(iterator.return(undefined)).resolves.toEqual({ done: false, value: 2 });
     if (phase === "live") {
-      if (resume === "iterator") {
-        expect(iterator[Symbol.asyncIterator]()).toBe(iterator);
-      }
       await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
     }
     const closed = expect(instance.dispose()).resolves.toEqual({ errors: [] });

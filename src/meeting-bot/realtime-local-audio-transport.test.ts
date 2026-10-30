@@ -1,34 +1,8 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createStdin, type TestStdin } from "./audio-backend.test-support.js";
 import { createLocalMeetingRealtimeAudioTransport } from "./realtime-local-audio-transport.js";
-
-type TestStdin = EventEmitter & {
-  accept: (error?: Error) => void;
-  write: ReturnType<typeof vi.fn>;
-};
-
-function createStdin(writeResult: boolean): TestStdin {
-  const stdin = new EventEmitter() as TestStdin;
-  const callbacks: Array<(error?: Error | null) => void> = [];
-  stdin.write = vi.fn((_audio: Buffer, callback?: (error?: Error | null) => void) => {
-    if (callback) {
-      if (writeResult) {
-        queueMicrotask(() => callback());
-      } else {
-        callbacks.push(callback);
-      }
-    }
-    return writeResult;
-  });
-  stdin.accept = (error) => {
-    for (const callback of callbacks.splice(0)) {
-      callback(error);
-    }
-  };
-  stdin.on("drain", () => stdin.accept());
-  return stdin;
-}
 
 function createProcess(params: { stdin?: TestStdin | null; stdout?: EventEmitter | null }) {
   const events = new EventEmitter();
@@ -66,12 +40,12 @@ function createTransportWith(
 }
 
 function createTransport(
-  outputStdin = createStdin(true),
+  outputStdin = createStdin(true, true),
   overrides: Partial<Parameters<typeof createLocalMeetingRealtimeAudioTransport>[0]> = {},
 ) {
   const output = createProcess({ stdin: outputStdin });
   const input = createProcess({ stdout: new EventEmitter() });
-  const replacementOutput = createProcess({ stdin: createStdin(true) });
+  const replacementOutput = createProcess({ stdin: createStdin(true, true) });
   const spawn = vi.fn().mockReturnValueOnce(output).mockReturnValueOnce(input);
   spawn.mockReturnValueOnce(replacementOutput);
   const transport = createTransportWith({ spawn: spawn as never, ...overrides });
@@ -82,7 +56,7 @@ describe("local meeting realtime audio transport", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("stops output after input spawn throws even when output spawn failed", () => {
-    const output = createProcess({ stdin: createStdin(true) });
+    const output = createProcess({ stdin: createStdin(true, true) });
     output.kill.mockReturnValueOnce(false);
     const failure = new Error("input spawn failed");
     const spawn = vi
@@ -108,39 +82,30 @@ describe("local meeting realtime audio transport", () => {
     await transport.stop();
   });
 
-  it.each(["drain", "clear"] as const)(
-    "releases a backpressured write after %s",
-    async (release) => {
-      const outputStdin = createStdin(false);
-      const { replacementOutput, transport } = createTransport(outputStdin);
-      const fatal = vi.fn();
-      transport.onFatal(fatal);
-      let settled = false;
-      const writing = transport.writeOutput(Buffer.from([1, 2, 3])).then(() => {
-        settled = true;
-      });
-      await Promise.resolve();
-      expect(settled).toBe(false);
-      if (release === "drain") {
-        outputStdin.emit("drain");
-      } else {
-        await transport.clearOutput();
-      }
-      await writing;
-      expect(settled).toBe(true);
-      if (release === "clear") {
-        expect(replacementOutput.stdin?.write).not.toHaveBeenCalled();
-        outputStdin.accept(new Error("retired output write failed"));
-        await transport.writeOutput(Buffer.from([7, 8, 9]));
-        expect(replacementOutput.stdin?.write).toHaveBeenCalledOnce();
-        expect(fatal).not.toHaveBeenCalled();
-      }
-      await transport.stop();
-    },
-  );
+  it("releases a backpressured write on clear and ignores retired output failures", async () => {
+    const outputStdin = createStdin(false, true);
+    const { replacementOutput, transport } = createTransport(outputStdin);
+    const fatal = vi.fn();
+    transport.onFatal(fatal);
+    let settled = false;
+    const writing = transport.writeOutput(Buffer.from([1, 2, 3])).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    await transport.clearOutput();
+    await writing;
+    expect(settled).toBe(true);
+    expect(replacementOutput.stdin?.write).not.toHaveBeenCalled();
+    outputStdin.accept(new Error("retired output write failed"));
+    await transport.writeOutput(Buffer.from([7, 8, 9]));
+    expect(replacementOutput.stdin?.write).toHaveBeenCalledOnce();
+    expect(fatal).not.toHaveBeenCalled();
+    await transport.stop();
+  });
 
   it("signals fatal and stops when the current output write throws", async () => {
-    const outputStdin = createStdin(true);
+    const outputStdin = createStdin(true, true);
     outputStdin.write.mockImplementation(() => {
       throw new Error("output write failed");
     });
@@ -158,13 +123,13 @@ describe("local meeting realtime audio transport", () => {
   });
 
   it("preserves split UTF-8 diagnostics and logs complete fragments immediately", async () => {
-    const processes = new Map<string, ReturnType<typeof createProcess>>();
+    const processes = {
+      play: createProcess({}),
+      capture: createProcess({}),
+      barge: createProcess({}),
+    };
     const debug = vi.fn();
-    const spawn = vi.fn((command: string) => {
-      const proc = createProcess({});
-      processes.set(command, proc);
-      return proc;
-    });
+    const spawn = vi.fn((command: keyof typeof processes) => processes[command]);
     const transport = createTransportWith({
       inputCommand: ["capture", "--device", "input name", ""],
       logger: { debug, warn: vi.fn() } as never,
@@ -185,10 +150,7 @@ describe("local meeting realtime audio transport", () => {
       ["capture", "audio input"],
       ["barge", "barge-in input"],
     ] as const) {
-      const process = processes.get(command);
-      if (!process) {
-        throw new Error(`Expected ${command} process`);
-      }
+      const process = processes[command];
       const diagnostic = `诊断-${command}`;
       const line = Buffer.from(`${diagnostic}\n`, "utf8");
       const before = debug.mock.calls.length;

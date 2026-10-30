@@ -8,6 +8,7 @@ import {
   cleanupUsagePageTest,
   focusDocument,
   loadUsagePage,
+  showRecentSessions,
   queryUsagePage,
   settleUsageTimers,
   textOf,
@@ -29,25 +30,34 @@ async function loadCalendar(
 ) {
   const { result: base } = cacheSnapshot(cache);
   const totalTokens = daily.reduce((sum, day) => sum + day.totalTokens, 0);
+  const modelDaily = daily.map((day, index) => ({
+    date: day.date,
+    provider: index === 0 ? "openai" : "anthropic",
+    model: "synthetic-model",
+    tokens: day.totalTokens,
+    cost: day.totalCost,
+    count: 1,
+  }));
   const result = {
     ...base,
     ...(!pending ? { startDate: "2026-05-01", endDate: "2026-05-04" } : {}),
-    totals: { ...base.totals, totalTokens, ...(!pending ? { input: totalTokens } : {}) },
-    sessions: daily.map((day) => ({
+    totals: {
+      ...base.totals,
+      totalTokens,
+      input: pending ? base.totals.input : totalTokens,
+    },
+    sessions: daily.map((day, index) => ({
       key: `agent:main:${day.date}`,
-      label: pending
-        ? undefined
-        : day.date === "2026-05-03"
-          ? "Excluded session"
-          : `Usage on ${day.date}`,
-      agentId: pending ? undefined : "main",
+      label: day.date === "2026-05-03" ? "Excluded session" : `Usage on ${day.date}`,
+      agentId: "main",
       usage: {
         ...day,
         activityDates: [day.date],
         dailyBreakdown: [{ ...day, tokens: day.totalTokens, cost: day.totalCost }],
+        dailyModelUsage: [modelDaily[index]!],
       },
     })),
-    aggregates: { ...base.aggregates, costDaily: daily },
+    aggregates: { ...base.aggregates, costDaily: daily, modelDaily },
   };
   const unresolved = new Promise<never>(() => {});
   const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
@@ -56,7 +66,9 @@ async function loadCalendar(
     }
     return pending && Array.isArray(params?.selectedDays) ? unresolved : result;
   });
-  return { ...(await loadUsagePage(request)), request };
+  const loaded = await loadUsagePage(request);
+  await showRecentSessions(loaded.page);
+  return { ...loaded, request };
 }
 const barsIn = (page: TestUsagePage) => [
   ...page.querySelectorAll<HTMLElement>(".daily-bar-wrapper"),
@@ -65,10 +77,27 @@ const labelOf = (bar: HTMLElement) => textOf(bar, ".daily-bar-label");
 const shiftClick = (bar: HTMLElement) =>
   bar.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
 
+it("keeps calendar attribution independent of the selected summary", async () => {
+  const { page } = await loadCalendar("fresh", [
+    dailyEntry("2026-05-02", 100),
+    dailyEntry("2026-05-04", 900),
+  ]);
+  const legend = () =>
+    texts(page.element, ".daily-chart-legend li", false).map((text) => text.replace(/\s+/g, ""));
+  expect(legend()).toEqual(["Anthropic90%", "OpenAI10%"]);
+  barsIn(page)
+    .find((bar) => bar.getAttribute("aria-label")?.startsWith("May 2, 2026:"))!
+    .click();
+  await settleUsageTimers(page);
+  expect(textOf(page, ".usage-metric-badge strong")).toBe("100");
+  expect(legend()).toEqual(["Anthropic90%", "OpenAI10%"]);
+  expect(texts(page.element, ".session-bar-title", false)).toEqual(["Usage on 2026-05-02"]);
+});
+
 it.each<["fresh" | "partial", boolean, string[]]>([
   ["fresh", false, ["May 1", "May 2", "May 3", "May 4"]],
-  ["partial", false, ["May 2", "May 4"]],
-  ["partial", true, ["May 2", "May 4"]],
+  ["partial", false, ["May 1", "May 2", "May 3", "May 4"]],
+  ["partial", true, ["May 1", "May 2", "May 3", "May 4"]],
 ])(
   "selects the displayed calendar range with Shift-click for %s (filtered: %s)",
   async (cache, filtered, selectedLabels) => {
@@ -91,11 +120,23 @@ it.each<["fresh" | "partial", boolean, string[]]>([
 
     const bars = () => barsIn(page);
     expect(bars().map(labelOf)).toEqual(selectedLabels);
-    const amounts = cache === "fresh" ? [0, 100, 0, 900] : [100, 900];
+    const amounts = [0, 100, 0, 900];
     expect(bars().map((bar) => bar.getAttribute("aria-label"))).toEqual(
-      selectedLabels.map((label, index) => `${label}, 2026: ${amounts[index]} tokens, $0.00`),
+      selectedLabels.map((label, index) =>
+        cache === "partial" && amounts[index] === 0
+          ? `${label}, 2026: not loaded yet`
+          : `${label}, 2026: ${amounts[index]} tokens, $0.00`,
+      ),
     );
-    expect(page.querySelectorAll(".daily-bar--empty")).toHaveLength(cache === "fresh" ? 2 : 0);
+    expect(page.querySelectorAll(".daily-bar--empty")).toHaveLength(2);
+    expect(page.querySelectorAll(".daily-bar-wrapper--pending")).toHaveLength(
+      cache === "fresh" ? 0 : 2,
+    );
+    bars()[0]!.focus();
+    await page.updateComplete;
+    expect(textOf(page, ".daily-chart-tip strong")).toBe(
+      `May 1, 2026 · ${cache === "partial" ? "not loaded yet" : "0"}`,
+    );
     expect(textOf(page, ".daily-chart-range")).toContain("May 1, 2026");
     bars()[0]!.click();
     await settleUsageTimers(page);
@@ -135,4 +176,28 @@ it("keeps the same calendar interactive while day totals are pending", async () 
     ?.selectedDays;
   expect(days).toEqual(expect.arrayContaining(["2026-04-05", "2026-05-04"]));
   expect(Array.isArray(days) && days.length > 1).toBe(true);
+});
+
+it("retains the accepted heatmap while editing a query draft", async () => {
+  const { page, request } = await loadCalendar("fresh", [
+    dailyEntry("2026-05-02", 100),
+    dailyEntry("2026-05-04", 900),
+  ]);
+  changeUsageControl(
+    page.querySelector<HTMLInputElement>('input[aria-label="Start date"]')!,
+    "2026-01-01",
+  );
+  await settleUsageTimers(page, 400);
+  const cells = [...page.querySelectorAll(".usage-heatmap__cell")];
+  expect(cells.length).toBeGreaterThan(62);
+  const requests = request.mock.calls.length;
+  const input = page.querySelector<HTMLInputElement>(".usage-query-input")!;
+  input.value = "model:example";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await page.updateComplete;
+  const current = [...page.querySelectorAll(".usage-heatmap__cell")];
+  expect(current).toHaveLength(cells.length);
+  current.forEach((cell, index) => expect(cell).toBe(cells[index]));
+  expect(request.mock.calls).toHaveLength(requests);
+  expect(input.value).toBe("model:example");
 });

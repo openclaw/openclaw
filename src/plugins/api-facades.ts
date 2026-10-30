@@ -11,6 +11,7 @@ type PluginApiFacadeSource = OpenClawPluginApi["session"]["state"] &
   OpenClawPluginApi["session"]["workflow"] &
   OpenClawPluginApi["session"]["controls"] &
   OpenClawPluginApi["agent"]["events"] &
+  Pick<OpenClawPluginApi["agent"], "registerSubagentProfile"> &
   OpenClawPluginApi["runContext"] &
   Pick<OpenClawPluginApi["lifecycle"], "registerRuntimeLifecycle">;
 
@@ -40,6 +41,7 @@ const identitySensitiveRegistrations = new Set([
 export function attachPluginApiFacades(api: OpenClawPluginApiWithoutFacades): OpenClawPluginApi {
   const {
     emitAgentEvent,
+    registerSubagentProfile,
     setRunContext,
     getRunContext,
     clearRunContext,
@@ -68,6 +70,7 @@ export function attachPluginApiFacades(api: OpenClawPluginApiWithoutFacades): Op
       },
     },
     agent: {
+      ...(registerSubagentProfile ? { registerSubagentProfile } : {}),
       events: {
         registerAgentEventSubscription: api.registerAgentEventSubscription,
         emitAgentEvent,
@@ -91,7 +94,7 @@ export function proxyPluginApiMethods(
       workflow: proxy(api.session.workflow),
       controls: proxy(api.session.controls),
     },
-    agent: { events: proxy(api.agent.events) },
+    agent: proxy({ ...api.agent, events: proxy(api.agent.events) }),
     runContext: proxy(api.runContext),
     lifecycle: {
       ...api.lifecycle,
@@ -145,9 +148,14 @@ export function instrumentPluginInstanceApi(
           Reflect.apply(
             value,
             target,
-            args.map((arg) =>
-              identitySensitiveRegistrations.has(key) ? instance.adopt(arg) : instance.wrap(arg),
-            ),
+            // The tool registrar binds its inspected factory and executable results once.
+            key === "registerTool"
+              ? args
+              : args.map((arg) =>
+                  identitySensitiveRegistrations.has(key)
+                    ? instance.adopt(arg)
+                    : instance.wrap(arg),
+                ),
           ),
         );
     },

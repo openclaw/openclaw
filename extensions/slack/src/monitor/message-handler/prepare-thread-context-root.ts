@@ -1,16 +1,6 @@
-type SlackBotAuthorIdentity = {
-  botUserId?: string;
-  botId?: string;
-};
-
-type SlackThreadAuthorTuple = {
-  userId?: string;
-  botId?: string;
-};
-
 export function isSlackThreadAuthorCurrentBot(params: {
-  identity: SlackBotAuthorIdentity;
-  author: SlackThreadAuthorTuple;
+  identity: { botUserId?: string; botId?: string };
+  author: { userId?: string; botId?: string };
 }): boolean {
   const { identity, author } = params;
   if (identity.botUserId && author.userId && author.userId === identity.botUserId) {

@@ -43,6 +43,8 @@ const CATALOG_LIST_PHASES = new Set([
   "projection_final",
   "delivery",
 ]);
+const CHAT_STARTUP_PHASE =
+  /^chat\.startup\.(session_entry|pending_inputs|history_page|startup_projection|projection_final|session_info)$/;
 const DIFF_CACHE_MISS_REASONS = new Set([
   "cold",
   "evicted",
@@ -130,6 +132,21 @@ export function recordOperationTimingEvent(
       );
       return;
     case "diagnostic.gc":
+      if (evt.kind === "mark_sweep_compact") {
+        const labels = { thread: evt.thread ?? "main" };
+        store.gauge(
+          "openclaw_heap_used_after_major_gc_bytes",
+          "Native used heap after the latest received major collection by isolate role.",
+          labels,
+          evt.heapUsedAfterMajorGcBytes,
+        );
+        store.gauge(
+          "openclaw_heap_used_after_major_gc_timestamp_seconds",
+          "Unix observation time of the latest received native major-GC heap sample.",
+          labels,
+          evt.heapUsedAfterMajorGcTimestampSeconds,
+        );
+      }
       store.histogram(
         GC_DURATION_NAME,
         GC_DURATION_HELP,
@@ -267,6 +284,16 @@ export function recordOperationTimingEvent(
             seconds(evt.durationMs),
           );
         }
+        return;
+      }
+      const startupPhase = CHAT_STARTUP_PHASE.exec(evt.name)?.[1];
+      if (startupPhase) {
+        store.histogram(
+          "openclaw_gateway_rpc_stage_seconds",
+          "Elapsed time for completed Gateway RPC owner stages.",
+          { method: "chat.startup", phase: startupPhase },
+          seconds(evt.durationMs),
+        );
         return;
       }
       if (!evt.name.startsWith(CATALOG_LIST_PHASE_PREFIX)) {

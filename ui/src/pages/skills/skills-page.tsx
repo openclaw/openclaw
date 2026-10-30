@@ -15,7 +15,6 @@ import {
   hasOperatorWriteAccess,
 } from "../../app/operator-access.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { createPageRequest, type PageReadResult } from "../../lib/page-request.ts";
@@ -29,6 +28,7 @@ import { observeState } from "../../lib/reactive/observe-state.ts";
 import { searchClawHub } from "../../lib/skills/clawhub-search.ts";
 import {
   closeClawHubDetail,
+  createSkillsChangeReloader,
   installFromClawHub,
   installSkill,
   loadClawHubDetail,
@@ -45,11 +45,11 @@ import {
   type SkillsState,
 } from "../../lib/skills/index.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../plugins/plugin-icon-owner.ts";
-import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
 import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
 import { createSkillLibrary } from "./library-state.ts";
 import { SkillLibrary, SkillLibraryDialogs, SkillLibraryFeedback } from "./library-view.tsx";
 import { createSkillsMutationPresentation } from "./mutation-presentation.ts";
+import { SkillsHeader } from "./skills-header.tsx";
 import { createSkillsData } from "./skills-page-state.ts";
 import type {
   ClawHubDetailReceipt,
@@ -331,8 +331,14 @@ export function SkillsPage(props: SkillsPageProps) {
         ],
       );
     };
+    const changes = createSkillsChangeReloader(data);
+    const stopChanges = context.gateway.subscribeEvents(changes.onEvent);
     // Icon reconciliation waits for result/detail publication to settle.
-    const stopSkills = skills.subscribe(() => onSettled(syncIcons));
+    const stopState = skills.subscribe(() => {
+      onSettled(syncIcons);
+      changes.onStateChange();
+    });
+    const stopSkills = () => [stopChanges, stopState].forEach((stop) => stop());
     syncSelection();
     syncIcons();
     return () => {
@@ -591,23 +597,11 @@ export function SkillsPage(props: SkillsPageProps) {
 
   return (
     <openclaw-skills-page>
-      {surface() === "discovery" ? (
-        <PluginsHubHeader
-          active="skills"
-          onSelect={(tab) => {
-            if (tab !== "skills") {
-              context.navigate(tab);
-            }
-          }}
-          secondaryAction={{
-            label: t("skillDiscovery.settings"),
-            icon: <Icon name="settings" />,
-            onClick: () => navigateSkills("skill-settings"),
-          }}
-        />
-      ) : (
-        <SettingsPageHeader title={t("tabs.skills")} subtitle={t("subtitles.skills")} />
-      )}
+      <SkillsHeader
+        surface={surface()}
+        onNavigate={(tab) => context.navigate(tab)}
+        onSettings={() => navigateSkills("skill-settings")}
+      />
       <SettingsWorkspace>
         <div
           id={surface() === "discovery" ? PLUGINS_HUB_PANEL_ID : undefined}
@@ -618,6 +612,13 @@ export function SkillsPage(props: SkillsPageProps) {
             state={viewState()}
             mutationSkills={mutations.rows()}
             saving={mutations.saving()}
+            toggleSavingSkillKey={mutations.toggle()?.skillKey}
+            toggleDisabled={
+              agents.read().agentsLoading ||
+              library.state.busy ||
+              ((skills.read().skillsLoading || skills.read().skillOperation !== null) &&
+                skills.read().skillOperation !== mutations.toggle()?.operation)
+            }
             readClawHubDetail={readClawHubDetail}
             readClawHubVerdicts={readClawHubVerdicts}
             readClawHubSearch={readClawHubSearch}

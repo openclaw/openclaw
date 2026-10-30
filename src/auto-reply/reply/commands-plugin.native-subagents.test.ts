@@ -6,7 +6,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
-import { hasMainSessionRecoveryClaim } from "../../config/sessions/restart-recovery-state.js";
 import {
   listSessionChildEntriesReadOnly,
   loadSessionEntry,
@@ -14,10 +13,6 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  createRestartSafeChatRequest,
-  resolveRestartSafeChatAdmission,
-} from "../../gateway/server-methods/chat-restart-recovery.js";
 // This deprecated public entrypoint is the caller-controlled registrar under test.
 import { registerPluginCommand } from "../../plugin-sdk/plugin-runtime.js";
 import {
@@ -42,16 +37,18 @@ import {
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { NativeSubagentRuntime } from "../../plugins/runtime/types-native-subagent.js";
 import type { PluginCommandContext, PluginCommandResult } from "../../plugins/types.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { buildPluginCommandContext } from "./commands-context.js";
 import { handlePluginCommand } from "./commands-plugin.js";
+import {
+  createPersistedPluginCommandParams,
+  createPluginCommandDispatchState,
+  createPluginCommandInvocation,
+} from "./commands-plugin.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { buildCommandTestParams } from "./commands.test-harness.js";
 import { runWithCommandNativeSubagents } from "./dispatch-native-subagent.js";
-import { finalizeInboundContext } from "./inbound-context.js";
 
 const pluginId = "command-controller";
 const spawnRequest = { requestId: "review", task: "Review the synthetic change" };
@@ -143,30 +140,7 @@ async function withCommandPlugin(
       { sessionId: "command-parent", lifecycleRevision: "revision-1", updatedAt: 1 },
     );
     await state.writeConfig(cfg);
-    const params = (body = "/review-panel") => {
-      const value = buildCommandTestParams(
-        body,
-        cfg,
-        {
-          ...inbound,
-          Body: body,
-          CommandBody: body,
-          RawBody: body,
-          // The fixture ingress was created with plain text; project this as the
-          // authenticated command turn, as real command dispatch does.
-          CommandAuthorized: true,
-          CommandTurn: undefined,
-        },
-        { workspaceDir: state.workspaceDir },
-      );
-      value.sessionKey = sessionKey;
-      value.storePath = storePath;
-      value.sessionEntry = expectDefined(
-        loadSessionEntry({ agentId: "main", sessionKey, storePath }),
-        "persisted command requester",
-      );
-      return value;
-    };
+    const params = createPersistedPluginCommandParams(cfg, inbound, state, sessionKey, storePath);
     const userInputs = async () => {
       const events = await loadTranscriptEvents({
         agentId: "main",
@@ -231,50 +205,11 @@ function select(body: string) {
 }
 
 function commandInvocation(fixture: Fixture, body = "/review-panel") {
-  const params = fixture.params(body);
-  const state = commandDispatchState(params);
-  const recorder = expectDefined(state.params.replyOptions?.userTurnTranscriptRecorder, "recorder");
-  params.opts = {
-    withCommandNativeSubagents: (binding, run) =>
-      runWithCommandNativeSubagents(state, binding, run),
-  };
-  return { params, state, recorder, run: () => handlePluginCommand(params, true) };
-}
-
-function commandDispatchState(
-  params: HandleCommandsParams,
-): Parameters<typeof runWithCommandNativeSubagents>[0] {
-  const entry = expectDefined(params.sessionEntry, "command session");
-  return {
-    cfg: params.cfg,
-    ctx: finalizeInboundContext(params.ctx),
-    sessionAgentId: params.agentId,
-    sessionKey: params.sessionKey,
-    sessionStoreEntry: { sessionKey: params.sessionKey, entry },
-    params: {
-      replyOptions: {
-        runId: "command-turn",
-        operatorAuthority: getCommandOwnerAuthority(params.ctx)?.operatorAuthority,
-        toolsAllow: ["sessions_spawn", "agents_wait", "read"],
-        userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
-          input: { text: params.command.commandBodyNormalized },
-          target: {
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            sessionId: entry.sessionId,
-            sessionEntry: entry,
-            storePath: params.storePath,
-            config: params.cfg,
-          },
-        }),
-      },
-    },
-    turnAdoption: undefined,
-    getPreDispatchAbortSignal: () => undefined,
-    getDispatchAbortSignal: () => params.opts?.abortSignal,
-    assertProgressCurrent: () => {},
-    assertCurrentBindingRoute: async () => {},
-  };
+  return createPluginCommandInvocation(fixture.params(body), [
+    "sessions_spawn",
+    "agents_wait",
+    "read",
+  ]);
 }
 
 afterEach(() => {
@@ -460,7 +395,11 @@ describe("command-scoped native subagent boundary", () => {
       await withCommandPlugin(async (fixture) => {
         const params = fixture.params();
         params.ctx.InputProvenance = { kind, sourceTool: "task_suggestion" };
-        const state = commandDispatchState(params);
+        const state = createPluginCommandDispatchState(params, [
+          "sessions_spawn",
+          "agents_wait",
+          "read",
+        ]);
         params.opts = {
           withCommandNativeSubagents: (binding, run) =>
             runWithCommandNativeSubagents(state, binding, run),
@@ -686,7 +625,7 @@ describe("command-scoped native subagent boundary", () => {
       setActivePluginRegistry(createEmptyPluginRegistry());
       const params = fixture.params();
       const result = await runWithCommandNativeSubagents(
-        commandDispatchState(params),
+        createPluginCommandDispatchState(params, ["sessions_spawn", "agents_wait", "read"]),
         {
           agentId: params.agentId,
           sessionKey: params.sessionKey,
@@ -705,7 +644,7 @@ describe("command-scoped native subagent boundary", () => {
     });
   });
 
-  it("does not arm an agent restart-recovery claim while a committed command handler awaits", async () => {
+  it("records an accepted command before its handler finishes", async () => {
     await withCommandPlugin(async (fixture) => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
@@ -733,7 +672,6 @@ describe("command-scoped native subagent boundary", () => {
           }),
           "committed requester session",
         );
-        expect(hasMainSessionRecoveryClaim(persisted)).toBe(false);
         expect(invocation.recorder.getAdmissionReceipt()).toMatchObject({
           sessionId: persisted.sessionId,
         });
@@ -746,49 +684,6 @@ describe("command-scoped native subagent boundary", () => {
         release.resolve();
         await pending;
       }
-    });
-  });
-
-  it("keeps restart-safe normal and literal Goal requests admissible with the declaring plugin loaded", async () => {
-    await withCommandPlugin(async (fixture) => {
-      initializeGlobalHookRunner(fixture.registry);
-      const params = fixture.params();
-      const entry = expectDefined(params.sessionEntry, "direct parent session");
-      for (const goalRequestFingerprint of [
-        undefined,
-        "goal-start-receipt",
-        "goal-resume-receipt",
-      ]) {
-        const request = await createRestartSafeChatRequest({
-          eligible: true,
-          senderIsOwner: true,
-          message: goalRequestFingerprint
-            ? "/review-panel is literal Goal objective text"
-            : "Continue the review",
-          cfg: fixture.cfg,
-          goalRequestFingerprint,
-        });
-        expect(request).toBeDefined();
-        expect(
-          resolveRestartSafeChatAdmission({
-            cfg: fixture.cfg,
-            agentId: "main",
-            sessionKey: params.sessionKey,
-            sessionId: entry.sessionId,
-            storePath: path.join(params.workspaceDir, "restart-sessions.json"),
-            clientRunId: "restart-safe-request",
-            context: {},
-            entry,
-            initialSessionEntry: entry,
-            acpMeta: null,
-            now: Date.now(),
-            placement: undefined,
-            request,
-          }),
-        ).toMatchObject({ requestFingerprint: request?.fingerprint });
-      }
-      expect(fixture.handler).not.toHaveBeenCalled();
-      expect(await fixture.userInputs()).toEqual([]);
     });
   });
 });

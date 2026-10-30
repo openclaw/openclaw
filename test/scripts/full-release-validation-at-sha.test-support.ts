@@ -64,16 +64,15 @@ export function createDispatchFixture(
     duplicateOnSecondPage?: boolean;
     runIdentityOverrides?: Record<string, unknown>;
     runPathStyle?: "full-ref";
-    witnessOverrides?: Record<string, unknown>;
     witnessInputs?: Record<string, unknown>;
     witnessMissing?: boolean;
     witnessMissingReads?: number;
     witnessDuplicate?: boolean;
-    ghRoute?: "path" | "explicit";
+    ghRoute?: "path";
     tokenPresent?: boolean;
     artifactMetadata?: Record<string, unknown>;
     exactArtifactMetadata?: Record<string, unknown>;
-    artifactReadError?: "metadata" | "archive";
+    artifactReadError?: "archive";
     archiveEscapeFlag?: "required" | "unsupported";
     oversizedArtifactMetadata?: boolean;
     archiveFailure?: "oversized" | "corrupt" | "digest";
@@ -90,7 +89,6 @@ export function createDispatchFixture(
       attempt?: number;
       artifactReady?: boolean;
       artifacts?: unknown;
-      metadataError?: string;
       decisionState?: string;
       decisionAttempt?: number;
     }>;
@@ -101,7 +99,16 @@ export function createDispatchFixture(
     workflowSource?: string;
     targetSource?: Record<string, string>;
     omitPurpose?: boolean;
+    toolingLagFetchFailure?: boolean;
     unreachableContributionRecord?: boolean;
+    activeConcurrencyRun?: boolean;
+    completedConcurrencyHistory?: number;
+    releaseNotes?: string;
+    candidateOpenPrHead?: boolean;
+    candidateWebFlowMerge?: boolean;
+    candidateSignature?: "valid" | "missing" | "invalid";
+    candidateAuthorityActor?: string;
+    candidateAuthorityRevoked?: boolean;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-release-dispatch-"));
@@ -215,7 +222,8 @@ childProcess.execFileSync = (file, args, options) => {
   if (${JSON.stringify(options.stopBeforeDispatch ?? false)} && args?.some((arg) => arg.endsWith("/dispatches"))) {
     process.exit(77);
   }
-  if (args?.some((arg) => /\\/actions\\/workflows\\/17\\/runs$/.test(arg))) {
+  if (args?.some((arg) => /\\/actions\\/workflows\\/17\\/runs$/.test(arg)) &&
+      args.includes("per_page=20") && args.some((arg) => arg.startsWith("branch="))) {
     payloadEvent("reconcile", "");
   }
   if (args?.some((arg) => /\\/actions\\/artifacts\\/\\d+(?:\\/zip)?$/.test(arg))) {
@@ -284,7 +292,6 @@ module.exports = async () => {
     sha: process.env.MOCK_WORKFLOW_SHA,
     runId: "123", runAttempt: "1",
     inputsDigest: "sha256:" + createHash("sha256").update(canonicalInputs).digest("hex"),
-    ...${JSON.stringify(options.witnessOverrides ?? {})},
   };
   const zip = new JSZip();
   zip.file("dispatch-inputs.json", JSON.stringify(witness) + "\\n", { date: new Date("2026-01-01T00:00:00Z") });
@@ -312,6 +319,14 @@ const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.MOCK_GIT_CALLS, JSON.stringify(args) + "\\n");
+if (args[0] === "fetch" && args.includes("refs/heads/main:refs/remotes/origin/main") && ${JSON.stringify(options.toolingLagFetchFailure ?? false)}) {
+  const mainFetches = fs.readFileSync(process.env.MOCK_GIT_CALLS, "utf8").trim().split("\\n")
+    .filter((line) => line.includes("refs/heads/main:refs/remotes/origin/main"));
+  if (mainFetches.length > 1) {
+    console.error("fixture origin/main fetch failed");
+    process.exit(1);
+  }
+}
 if (args.includes("https://github.com/openclaw/openclaw.git")) {
   if (${JSON.stringify(options.bareShaFetchFailure ?? false)}) {
     console.error("fatal: remote error: upload-pack: not our ref " + args.at(-1));
@@ -397,9 +412,42 @@ if (args[0] === "api" && method === "GET" && !hasNoCache) {
 const admissionEndpoint = endpoint.includes("/actions/workflows/openclaw-release-prepare.yml") ||
   endpoint.endsWith("/actions/workflows/18/runs") || endpoint.includes("/actions/runs/321/") ||
   endpoint.includes("/actions/artifacts/9002") || endpoint.includes("/contents/") ||
-  endpoint.includes("/compare/") || endpoint.includes("/git/ref/") ||
-  endpoint === "repos/openclaw/openclaw/collaborators/release-operator/permission";
-if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && admissionEndpoint) {
+  endpoint.includes("/compare/") || endpoint.includes("/branches-where-head") ||
+  endpoint.includes("/git/ref/") ||
+  (endpoint.startsWith("repos/openclaw/openclaw/collaborators/") &&
+    endpoint.endsWith("/permission"));
+if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
+  const signature = ${JSON.stringify(options.candidateSignature ?? "valid")};
+  console.log(JSON.stringify({ data: { repository: { object: {
+    oid: fields.get("oid"),
+    signature: signature === "missing" ? null : {
+      isValid: signature === "valid",
+      state: signature === "valid" ? "VALID" : "INVALID",
+      signer: { login: ${JSON.stringify(options.candidateAuthorityActor ?? "release-operator")} },
+    },
+    associatedPullRequests: { nodes: ${JSON.stringify([
+      ...(options.candidateOpenPrHead
+        ? [
+            {
+              state: "OPEN",
+              headRefOid: targetSha,
+              headRepository: { nameWithOwner: "openclaw/openclaw" },
+            },
+          ]
+        : []),
+      ...(options.candidateWebFlowMerge
+        ? [
+            {
+              state: "MERGED",
+              baseRefName: "release/2026.8.1",
+              baseRepository: { nameWithOwner: "openclaw/openclaw" },
+              mergeCommit: { oid: targetSha },
+            },
+          ]
+        : []),
+    ])} },
+  } } } }));
+} else if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && admissionEndpoint) {
   import(${JSON.stringify(admissionFixturePath)}).then(({ respond }) => respond(args,
     ${JSON.stringify({ origin, checkout, publisherSha: workflowSha, targetSha, admissionCapturePath, admissionReceiptPath, options })})).catch((error) => {
       console.error(error.stack); process.exitCode = 1;
@@ -492,17 +540,37 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
 } else if (args[0] === "api" && endpoint.endsWith("/actions/workflows/full-release-validation.yml")) {
   console.log(JSON.stringify({ id: 17, path: ".github/workflows/full-release-validation.yml" }));
 } else if (args[0] === "api" && /\\/actions\\/workflows\\/(?:17|full-release-validation.yml)\\/runs$/.test(endpoint)) {
+  const concurrencyInventory = fields.has("status");
+  const requestDirectory = require("node:path").join(process.cwd(), ".artifacts", "full-release-validation");
+  const requestFile = fs.existsSync(requestDirectory)
+    ? fs.readdirSync(requestDirectory).find((name) => name.endsWith(".json"))
+    : undefined;
+  const request = requestFile
+    ? JSON.parse(fs.readFileSync(require("node:path").join(requestDirectory, requestFile), "utf8"))
+    : null;
   const index = Number(fs.readFileSync(runDiscoveryIndexPath, "utf8"));
-  fs.writeFileSync(runDiscoveryIndexPath, String(index + 1));
+  if (!concurrencyInventory) fs.writeFileSync(runDiscoveryIndexPath, String(index + 1));
   const ids = ${JSON.stringify(options.duplicateOnSecondPage ?? false)} ? Array.from({ length: 21 }, (_, i) => 123 + i) : [123];
-  const runs = index < ${JSON.stringify(options.runDiscoveryMisses ?? 0)} || !fs.existsSync(acceptedRunPath)
-    ? []
-    : ids.map((id) => runMetadata(id));
+  if (${JSON.stringify(options.completedConcurrencyHistory ?? 0)} > 0 && fields.get("per_page") === "100" && !fields.has("branch")) {
+    console.log(JSON.stringify({ total_count: ${JSON.stringify(options.completedConcurrencyHistory ?? 0)}, workflow_runs: [] }));
+    process.exit(0);
+  }
+  const activeConcurrencyRuns = ${JSON.stringify(options.activeConcurrencyRun ?? false)} &&
+    !fs.existsSync(acceptedRunPath) && concurrencyInventory && fields.get("status") === "in_progress"
+    ? [{ ...runMetadata(777, { conclusion: null, status: "in_progress" }), head_branch: request?.request?.workflowRef?.replace(/[0-9]{13}$/, "0000000000001") }]
+    : [];
+  const runs = activeConcurrencyRuns.length > 0
+    ? activeConcurrencyRuns
+    : index < ${JSON.stringify(options.runDiscoveryMisses ?? 0)} || !fs.existsSync(acceptedRunPath)
+      ? []
+      : ids.map((id) => runMetadata(id));
   const page = Number(fields.get("page") || "1");
   if (args.includes("--include")) {
     let headers = "HTTP/2.0 200 OK\\r\\nContent-Type: application/json\\r\\n";
     if (runs.length > page * 20 && !${JSON.stringify(options.incompletePagination ?? false)}) {
-      const query = new URLSearchParams({ page: String(page + 1), branch: fields.get("branch"), event: "workflow_dispatch", per_page: "20" });
+      const query = new URLSearchParams({ page: String(page + 1), event: "workflow_dispatch", per_page: "20" });
+      if (concurrencyInventory) query.set("status", fields.get("status"));
+      else query.set("branch", fields.get("branch"));
       headers += "Link: <https://api.github.com/repos/openclaw/openclaw/actions/workflows/17/runs?" + query + '>; rel="next"\\r\\n';
     }
     process.stdout.write(headers + "\\r\\n");
@@ -524,7 +592,7 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
   if (archive && ${JSON.stringify(options.archiveEscapeFlag ?? "")} === "required" && !args.includes("--allow-escape-sequences")) {
     fail("refusing to output binary content without --allow-escape-sequences");
   }
-  if (${JSON.stringify(options.artifactReadError ?? "")} === (archive ? "archive" : "metadata")) {
+  if (archive && ${JSON.stringify(options.artifactReadError ?? "")} === "archive") {
     fail("artifact read denied (HTTP 403)");
   }
   require(${JSON.stringify(artifactFixturePath)})().then(({ metadata, bytes }) => {
@@ -552,9 +620,6 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
 } else if (args[0] === "api" && endpoint.endsWith("/artifacts")) {
   const index = Number(fs.readFileSync(parentRunIndexPath, "utf8")) - 1;
   const state = parentRunStates[index];
-  if (state.metadataError) {
-    fail(state.metadataError);
-  }
   console.log(JSON.stringify({ artifacts: state.artifacts ?? (state.artifactReady ? [{
     name: "full-release-decision-123-" + (state.attempt ?? 1), expired: false,
   }] : []) }));
@@ -609,14 +674,8 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
     const args: string[] = [];
     if (!recoveryOnly) {
       if (options.candidateOwned) {
-        args.push(
-          "--admission-workflow-sha",
-          workflowSha,
-          "-f",
-          "provider=openai",
-          "-f",
-          "release_profile=stable",
-        );
+        args.push("--admission-workflow-sha", workflowSha);
+        args.push("-f", "provider=openai", "-f", "release_profile=stable");
       } else if (!extraArgs.includes("--trusted-workflow-ref")) {
         args.push("--trusted-workflow-ref", "main", "--workflow-sha", workflowSha);
       }

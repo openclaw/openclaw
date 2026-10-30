@@ -6,22 +6,20 @@ import {
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import { CRON_SCOPED_READ_ACTIONS, isAutomationsToolName } from "./tools/automations-tool-name.js";
 import { readToolStringParam, type AnyAgentTool } from "./tools/common.js";
+import { prepareCronToolArguments } from "./tools/cron-tool-canonicalize.js";
 
 /**
- * A scheduler notice or wake (for example "automation was auto-disabled"). The
- * session-event executor derives the `event` trigger; clients cannot set it.
- * Scheduled runs (`cron` trigger) are excluded: hook-mapped jobs carry external
- * content, and webhook wakes use the `hook` source.
+ * A host system turn: a session event the Gateway started (a scheduler notice or repair,
+ * a completion, a resume). The session-event executor derives the `event` trigger;
+ * clients cannot set it. Scheduled runs (`cron` trigger) are excluded: hook-mapped jobs
+ * carry external content. Without owner authority such a turn still reads the
+ * automations its caller scope can see.
  */
-export function isSchedulerSystemTurn(params: {
+export function isHostSystemTurn(params: {
   trigger?: string;
-  inputProvenance?: { kind?: string; sourceTool?: string };
+  inputProvenance?: { kind?: string };
 }): boolean {
-  return (
-    params.trigger === "event" &&
-    params.inputProvenance?.kind === "internal_system" &&
-    params.inputProvenance.sourceTool === "cron"
-  );
+  return params.trigger === "event" && params.inputProvenance?.kind === "internal_system";
 }
 
 /**
@@ -37,11 +35,11 @@ export function resolveTurnToolSurface(params: {
   sessionTools?: AnyAgentTool[];
   ownerOnlyDenied: ReadonlySet<string>;
   /**
-   * The scheduler started this turn (see `isSchedulerSystemTurn`), not a sender.
+   * The Gateway started this turn (see `isHostSystemTurn`), not a sender.
    * Its owner-only gate still serves the caller-scoped automation reads the
    * scheduler authorizes without an owner grant.
    */
-  schedulerSystemTurn?: boolean;
+  hostSystemTurn?: boolean;
 }) {
   const turnAuthorizedNames = new Set(
     params.turnTools
@@ -60,20 +58,24 @@ export function resolveTurnToolSurface(params: {
     const turnTool = turnPolicyTools.get(tool.name);
     const scopedReads =
       ownerOnly &&
-      params.schedulerSystemTurn === true &&
+      params.hostSystemTurn === true &&
       turnTool !== undefined &&
       isAutomationsToolName(tool.name) &&
-      // Preparation can perform work; only a plain executor can be split by action.
-      !turnTool.prepareArguments &&
+      // Cron's native preparer only repairs arguments; other preparers may perform work.
+      (!turnTool.prepareArguments || turnTool.prepareArguments === prepareCronToolArguments) &&
       !turnTool.prepareBeforeToolCallParams &&
       !turnTool.finalizeBeforeToolCallParams;
     const gated = gateAgentToolExecution(
       tool,
-      scopedReads
-        ? `On this automation-started turn, ${tool.name} runs only the ${CRON_SCOPED_READ_ACTIONS.join(", ")} actions. Other actions need the owner's authority, and this turn was not started by the owner. Do not retry them.`
-        : ownerOnly
-          ? `${tool.name} needs the owner's authority, and this turn was not started by the owner. Do not retry ${tool.name}.`
-          : `${tool.name} is outside the authority this completion turn carries from its requester. Do not retry ${tool.name}.`,
+      !turnTool
+        ? `${tool.name} is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry ${tool.name}.`
+        : scopedReads
+          ? `On this system-started turn, ${tool.name} runs only the ${CRON_SCOPED_READ_ACTIONS.join(", ")} actions. Other actions need the owner's authority, and this turn was not started by the owner. Do not retry them.`
+          : `${tool.name} needs the owner's authority, and this turn was not started by the owner. ${
+              tool.requiredClientCaps?.length
+                ? `Ask the owner to request it again from the open Control UI with ${tool.requiredClientCaps.join(", ")}.`
+                : `Do not retry ${tool.name}.`
+            }`,
     );
     // Copying hook metadata also copies the availability binding; re-mark the denial
     // so dependent affordances (for example collector spawns) never treat it as callable.

@@ -78,25 +78,19 @@ function userEntries(scope: Parameters<typeof SessionManager.open>[0], dir: stri
 }
 async function steeringFixture(sessionKey: string, alternateStore = false, updatedAt = Date.now()) {
   const dir = tempDirs.make("openclaw-steering-");
+  const store = alternateStore
+    ? path.join(dir, "agents", "{agentId}", "sessions", "sessions.json")
+    : path.join(dir, "sessions.json");
   const scope = {
     agentId: "leasing-ops",
     sessionId: "caller-active-session",
     sessionKey,
     storePath: alternateStore
       ? resolveSessionStorePathCore(undefined, { agentId: "leasing-ops" })
-      : path.join(dir, "sessions.json"),
-  };
-  const testConfig = {
-    ...config,
-    session: {
-      ...config.session,
-      store: alternateStore
-        ? path.join(dir, "agents", "{agentId}", "sessions", "sessions.json")
-        : scope.storePath,
-    },
+      : store,
   };
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt });
-  return { dir, scope, testConfig };
+  return { dir, scope, testConfig: { ...config, session: { ...config.session, store } } };
 }
 registerAgentSessionLoopTestLifecycle();
 beforeEach(() => {

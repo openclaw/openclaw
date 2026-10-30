@@ -25,7 +25,7 @@ afterEach(resetPluginRuntimeStateForTest);
 it.each([
   ...models.TURN_MODEL_DIFFERENTIAL_FIXTURES.filter(
     ({ name }) =>
-      name === "heartbeat or explicit turn override" ||
+      name === "explicit turn override" ||
       name === "parent persisted override versus channel" ||
       name === "explicit default rejects stale child and parent overrides",
   ).map((fixture) => ({ name: fixture.name, fixture })),
@@ -64,7 +64,7 @@ it.each([
     sessionAgentId: agentId,
     sessionKey,
     turnModelOverride: fixture
-      ? fixture.heartbeat
+      ? fixture.turnModelOverride
         ? models.turnModelRefLabel(models.TURN_MODEL_OVERRIDE_REF)
         : undefined
       : "fast",

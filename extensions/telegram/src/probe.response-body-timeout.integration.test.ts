@@ -1,9 +1,10 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
+import type { Socket } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as responseLimitRuntime from "openclaw/plugin-sdk/response-limit-runtime";
 import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { probeTelegram } from "./probe.js";
 
 const INITIAL_BODY = '{"ok":true,"result":{"id":123';
@@ -57,10 +58,7 @@ describe("probeTelegram cancellation and body deadlines over real sockets", () =
       liveSockets.add(socket);
       socket.once("close", () => liveSockets.delete(socket));
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    apiRoot = `http://127.0.0.1:${await listenOnLoopback(server)}`;
   });
 
   afterAll(async () => {
@@ -70,9 +68,7 @@ describe("probeTelegram cancellation and body deadlines over real sockets", () =
     for (const socket of liveSockets) {
       socket.destroy();
     }
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    await server[Symbol.asyncDispose]();
   });
 
   let probeIndex = 0;

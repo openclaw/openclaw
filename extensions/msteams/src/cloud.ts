@@ -10,12 +10,10 @@ export type MSTeamsSdkCloudOptions = {
   serviceUrl?: string;
 };
 
-type NormalizedServiceUrl = {
+function normalizeOptionalServiceUrl(value: string | undefined): {
   value: string;
   host: string;
-};
-
-function normalizeOptionalServiceUrl(value: string | undefined): NormalizedServiceUrl | null {
+} | null {
   const trimmed = value?.trim();
   const parsed = trimmed ? URL.parse(trimmed) : null;
   if (!parsed) {

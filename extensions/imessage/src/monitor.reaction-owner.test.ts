@@ -5,8 +5,8 @@ import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime
 import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, expect, it, vi } from "vitest";
 import { IMessageRpcClient, type createIMessageRpcClient } from "./client.js";
-import { monitorIMessageProvider } from "./monitor.js";
 import { createChatDbMessage } from "./monitor.last-route.test-support.js";
+import { monitorIMessageProvider } from "./monitor/monitor-provider.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 const createClient = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());

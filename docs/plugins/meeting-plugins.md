@@ -47,6 +47,8 @@ interruptions; participant audio stays open while the model speaks.
 
 In `bidi` mode, recoverable provider diagnostics are logged without stopping the audio bridge. Providers that support reconnecting own that recovery. Terminal provider closure, exhausted recovery, failed initial setup, and local audio-transport failures still stop the bridge; leaving the meeting also stops it.
 
+Realtime replies can buffer ahead of playback within bounded limits, so healthy long replies are not cut off just because the provider sends audio faster than it plays. Interruption still clears queued audio immediately, and sustained playback stalls trigger output recovery.
+
 Stopping a meeting requests cancellation of any active agent consult. In `agent` mode, OpenClaw finishes active output and turn events before closing the session, then ignores late speech synthesis and audio delivery results.
 
 Leaving also waits for audio startup already admitted by that session and stops the resulting runtime before reporting completion. If a join fails after attaching a runtime and cleanup cannot finish, status keeps the ended session visible so `leave` can retry. A replacement for the same meeting waits for pending audio startup or stop work and can reject if audio cleanup still fails; other meetings remain independent. Browser leave results remain separate: a settled browser-only leave failure remains retryable without permanently blocking another join.

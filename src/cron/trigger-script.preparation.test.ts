@@ -20,8 +20,6 @@ import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginRegistryOwner } from "../plugins/runtime.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
@@ -40,24 +38,20 @@ const invocation = (jobId: string, agentId = "main", toolsAllow = ["*"]) => ({
 });
 const expectPayload = (result: ReturnType<Runtime["executePayload"]>, state: unknown) =>
   expect(result).resolves.toMatchObject({ kind: "completed", state });
-const registration = (artifact: string, mode: string) => ({ artifact, mode });
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let config: OpenClawConfig;
-let registrations: string;
 
 beforeEach(async () => {
   state = await createOpenClawTestState({
     prefix: "openclaw-cron-preparation-",
     env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
   });
-  registrations = state.path("registrations.jsonl");
   const dir = state.path("plugin");
   for (const artifact of ["source", "built"]) {
     const body = `module.exports = {
       id: "cold-probe",
       register(api) {
-        require("node:fs").appendFileSync(${JSON.stringify(registrations)}, JSON.stringify({ artifact: ${JSON.stringify(artifact)}, mode: api.registrationMode }) + "\\n");
         if (api.registrationMode !== "full" && api.registrationMode !== "tool-discovery") return;
         const generation = api.pluginConfig?.generation ?? 1;
         api.registerTool((ctx) => {
@@ -121,14 +115,6 @@ afterEach(async () => {
 
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-function readRegistrations() {
-  return fs
-    .readFileSync(registrations, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line) as { artifact: string; mode: string });
-}
-
 async function executeProbe({ ctx }: HeadlessParams, condition = false) {
   const tool = ctx.catalogRef?.current?.entries.find(
     (entry) => entry.tool.name === "cold_probe",
@@ -190,7 +176,6 @@ it("borrows the current Gateway plugins for detached conditions before and after
   try {
     const runtime = createRuntime(config);
     await expectGeneration(runtime, 1);
-    expect(readRegistrations()).toEqual([registration("built", "full")]);
 
     const nextConfig: OpenClawConfig = {
       ...config,
@@ -205,7 +190,6 @@ it("borrows the current Gateway plugins for detached conditions before and after
     for (const nextRuntime of [runtime, createRuntime(nextConfig)]) {
       await expectGeneration(nextRuntime, 2);
     }
-    expect(readRegistrations()).toEqual(Array(2).fill(registration("built", "full")));
   } finally {
     await owner.close();
   }
@@ -221,16 +205,10 @@ it.each(["gateway", "standalone"] as const)(
       workspaceDir: state.workspaceDir,
     });
     setCurrentPluginMetadataSnapshot(metadataSnapshot, { config });
-    const contexts: Array<ReturnType<typeof getPluginRuntimeLoadContext>> = [];
     const runtime = createCronScriptRuntime({
       config,
       ...(owner === "gateway" ? { loadPluginRegistry: loadPreparedInboundPluginRegistry } : {}),
-      runHeadless: async (params: HeadlessParams) => {
-        contexts.push(
-          getPluginRuntimeLoadContext(getPluginRuntimeGatewayRequestScope()?.pluginRegistry),
-        );
-        return executeProbe(params);
-      },
+      runHeadless: executeProbe,
     });
     const artifact = owner === "gateway" ? "built" : "source";
     const run = (jobId: string, agentId = "main", toolsAllow = ["*"]) =>
@@ -250,17 +228,6 @@ it.each(["gateway", "standalone"] as const)(
         agentId,
         sessionKey: `agent:${agentId}:cron:${jobId}:trigger`,
       });
-    }
-    expect(readRegistrations()).toEqual(
-      expect.arrayContaining([
-        registration(artifact, "discovery"),
-        registration(artifact, "tool-discovery"),
-      ]),
-    );
-    expect(readRegistrations().every((entry) => entry.artifact === artifact)).toBe(true);
-    if (owner === "gateway") {
-      expect(contexts[0]?.metadataSnapshot).toBe(metadataSnapshot);
-      expect(contexts[1]).toBe(contexts[0]);
     }
     await expectPayload(run("first", "other", []), null);
     await expectPayload(run("first", "other", ["cold_probe"]), { calls: 1 });

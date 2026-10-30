@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import type { GatewayCronExitWatcherHandoff, GatewayCronState } from "./server-cron.js";
+import type { GatewayCronExitWatcherHandoff, GatewayCronState } from "./server-cron-contract.js";
 import type {
   GatewayHotReloadPublication,
   GatewayReloadHandlerParams,

@@ -1,4 +1,5 @@
 import type { TranslationMap } from "../lib/types.ts";
+import { registerRouteSubtitlesEnglish } from "./en-route-subtitles.ts";
 import { en } from "./en.ts";
 
 // Devices-page and pairing-dialog copy follows those lazy consumers, rather
@@ -273,6 +274,7 @@ const enDevices = {
 
 export const registerDevicesEnglish = Object.assign(
   () => {
+    registerRouteSubtitlesEnglish();
     const { pairing, ...pageCopy } = enDevices.devices;
     Object.assign(en.devices, pageCopy);
     Object.assign(en.devices.pairing, pairing);

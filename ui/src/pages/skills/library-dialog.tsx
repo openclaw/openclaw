@@ -1,3 +1,4 @@
+import "../../styles/skill-reader-dialog.css";
 import type { JSX } from "@solidjs/web";
 import { Icon } from "../../components/solid/icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";

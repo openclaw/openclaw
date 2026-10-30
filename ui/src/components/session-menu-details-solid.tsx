@@ -215,18 +215,7 @@ export function useSessionMenuDetails(
       </For>
     </div>
   );
-  const communicationStart: MenuEntry = {
-    kind: "content",
-    id: "communication-start",
-    content: <div class="session-menu__separator" role="separator" />,
-  };
-  const communicationEnd: MenuEntry = {
-    kind: "content",
-    id: "communication-end",
-    content: <div class="session-menu__separator" role="separator" />,
-  };
   const communication = (): MenuEntry[] => [
-    communicationStart,
     { kind: "content", id: "communication-controls", content: communicationControls },
     ...(policy()?.send !== undefined || policy()?.receive !== undefined
       ? [
@@ -240,14 +229,9 @@ export function useSessionMenuDetails(
           },
         ]
       : []),
-    communicationEnd,
   ];
   const ReadStatus = () => {
-    const consume = () => {
-      latest(actions.advanced.read);
-      return null;
-    };
-    return <>{consume()}</>;
+    return <>{(latest(actions.advanced.read), null)}</>;
   };
   const readStatus: MenuEntry = {
     id: "reload-settings",

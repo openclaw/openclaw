@@ -3,7 +3,6 @@ import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { resolveTargetsWithOptionalToken } from "openclaw/plugin-sdk/target-resolver-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 import { slackPlugin } from "./channel.js";
-import { setSlackRuntime } from "./runtime.js";
 
 const mocks = vi.hoisted(() => ({
   scopes: vi.fn(),
@@ -22,7 +21,6 @@ vi.mock("openclaw/plugin-sdk/extension-shared", async (orig) => ({
 
 beforeEach(() => {
   Object.values(mocks).forEach((mock) => mock.mockReset());
-  setSlackRuntime({ channel: { slack: {} } } as never);
 });
 
 function accountContext(tokens: { botToken?: string; userToken?: string }) {

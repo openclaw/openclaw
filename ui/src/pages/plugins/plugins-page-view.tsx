@@ -16,7 +16,10 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginCatalogDetail as PluginCatalogDetail } from "./catalog-detail.tsx";
 import { renderPluginCatalogResults as PluginCatalogResults } from "./catalog-results.tsx";
-import { renderPluginConsentDialog as PluginConsentDialog } from "./consent-dialog.tsx";
+import {
+  PluginArtTile,
+  renderPluginConsentDialog as PluginConsentDialog,
+} from "./consent-dialog.tsx";
 import "./custom-elements.ts";
 import { pluginDetailLocation, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import {
@@ -33,6 +36,7 @@ import {
   pluginHostControlsSchema,
 } from "./settings-model.ts";
 import {
+  PluginRetryError,
   renderPluginSettingsDetail as PluginSettingsDetail,
   renderPluginSettingsInventory as PluginSettingsInventory,
   type PluginSettingsTab,
@@ -366,22 +370,13 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         ) : (
           <Errored
             fallback={(error, reset) => (
-              <div
-                class="callout danger plugins-settings-error oc-banner oc-banner-error"
-                role="alert"
-              >
-                <span>{formatUiError(error())}</span>
-                <button
-                  type="button"
-                  class="btn btn--sm oc-action oc-action-secondary"
-                  onClick={() => {
-                    void page().refreshCatalog();
-                    reset();
-                  }}
-                >
-                  {t("pluginsPage.tryAgain")}
-                </button>
-              </div>
+              <PluginRetryError
+                error={formatUiError(error())}
+                onRetry={() => {
+                  void page().refreshCatalog();
+                  reset();
+                }}
+              />
             )}
           >
             <Show when={hasInventory()} fallback={<Inventory loading={page().loading} />}>
@@ -393,7 +388,23 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         )}
       </SettingsWorkspace>
       <PluginSkillPreview preview={page().skillPreview} state={page().skillPreview.state} />
-      <WizardLogin controller={props.page.mcpLogin.dialog} />
+      <WizardLogin
+        controller={props.page.mcpLogin.dialog}
+        signInIcon={
+          <Show when={detailPluginId()}>
+            {(pluginId) => (
+              <PluginArtTile
+                registerIcon={page().icons.register}
+                slug={pluginId()}
+                name={page().mcpLogin.dialog.state().authLabel ?? pluginId()}
+                iconUrl={page().state.iconUrls[pluginId()]}
+                loading={page().icons.installed.isLoading(pluginId())}
+                onIconError={() => page().icons.installed.handleError(pluginId())}
+              />
+            )}
+          </Show>
+        }
+      />
       <Show when={page().consent.read().consent}>
         {(consent) => {
           const icon = createMemo(() => {

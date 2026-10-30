@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createRunExit } from "../agents/bash-tools.exec-runtime.test-support.js";
 import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
 import {
   getProcessSupervisor,
@@ -14,16 +15,7 @@ vi.mock("../infra/openclaw-cli-invocation.js", () => ({
   resolveCurrentOpenClawCliInvocation: vi.fn(),
 }));
 
-const exit: RunExit = {
-  reason: "exit",
-  exitCode: 0,
-  exitSignal: null,
-  durationMs: 1,
-  stdout: "",
-  stderr: "",
-  timedOut: false,
-  noOutputTimedOut: false,
-};
+const exit: RunExit = createRunExit();
 
 function harness(
   options: {

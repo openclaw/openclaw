@@ -6,6 +6,8 @@ import type {
 } from "../../gateway/operator-approval-store.types.js";
 import type { ExecApprovalsFile } from "../../infra/exec-approvals-core.js";
 import type { AgentDeletionRecoveryHoldPredicate } from "../../state/agent-deletion-journal-recovery.kernel.js";
+import type { CronJobConfigRevisionResult } from "../config-revision.js";
+import type { CronRunLogEntry } from "../run-log-types.js";
 import type { CronJobScratchWriteInput, CronJobScratchWriteOutcome } from "../scratch-contract.js";
 import type {
   CronNotificationIntent,
@@ -82,7 +84,7 @@ export type CronExternalStateChange =
 
 export type CronRuntimeMutationInputs = {
   "cron.provisionDefaultProactive": {
-    storePath: string | undefined;
+    storeKey: string;
     agentId: string;
     planned: CronStoredJob;
     recoveryHoldPredicate?: AgentDeletionRecoveryHoldPredicate;
@@ -96,6 +98,7 @@ export type CronRuntimeMutationInputs = {
   "cron.writeScratch": CronJobScratchWriteInput & { createdAtMsFallback?: number };
   "cron.mutateJobs": {
     storeKey: string;
+    includeConfigRevisions?: boolean;
     streamSecurity?: {
       method: "cron.add" | "cron.update";
       sessionEntryCurrentSource?: SessionEntryCurrentSource;
@@ -148,6 +151,8 @@ export type CronRuntimeMutationInputs = {
 
 /** Completed run facts sent to the worker; live execution owners stay on the host. */
 export type CronRunFinalizationOutcome = CronJobExecutionResult & {
+  // Undefined is a completed classification, not a request for worker-side inference.
+  errorReason: CronRunLogEntry["errorReason"];
   jobId: string;
   job: CronJob;
   taskRunId?: string;
@@ -215,6 +220,7 @@ export type CronRuntimeMutationContracts = {
     snapshot: CronJobMutationSnapshot;
     outcome: {
       store: CronStoreFile;
+      configRevisions: Map<string, CronJobConfigRevisionResult>;
       consumedStreamApproval?: OperatorApprovalRecord;
       names: Map<string, string | undefined>;
       changed: boolean;

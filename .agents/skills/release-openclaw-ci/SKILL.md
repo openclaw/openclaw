@@ -15,9 +15,9 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   scope back into the active release.
 - Hold the release scope once a release branch or Code SHA exists. Validate and
   ship that exact release; do not turn moving `main` into a second work queue.
-- Record **C (candidate), Q (qualification), P (admission/verifier/publisher),
+- Record **C (candidate), Q (test qualification), P (admission/aggregate/verifier/publisher),
   rerun group, profile, effective soak, and context/transport refs**. New
-  candidate qualification defaults to Q=C, including the complete workflow,
+  candidate test qualification defaults to Q=C, including the complete workflow,
   reusable workflow, local action, script, planner, contract, and coverage closure.
   Code SHA and Release SHA remain lifecycle roles, not extra workflow identities.
 - The candidate helper accepts an absent release tag or an existing lightweight
@@ -39,10 +39,11 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   over-budget owner must be split rather than increasing the release budget.
   After the child completes, closeout runs `scripts/ci-shard-timings-refresh.mts`
   for that exact run and commits generated costs; do not hand-edit measurements.
-- Candidate qualification runs its own frozen Q closure. Main-only checks and
+- Candidate tests run their own frozen Q closure; admitted P owns FRV's aggregate
+  decision and checked-in waiver policy. Main-only checks and
   future-main scenarios are not implicit release requirements. Fixing a frozen
   qualification harness means a new C/Q, with newly bound evidence. A P-only
-  admission/verifier/publisher repair can keep C/Q and their original evidence.
+  admission/aggregate/verifier/publisher repair can keep C/Q and their original evidence.
 - Protected lightweight `release-publish/<12sha>-<provenance-run>` tags identify
   P, not Q. The suffix records tag-creation provenance, not the current parent.
   Publication helpers retain their `--workflow-sha <P>` argument; the FRV helper's
@@ -68,10 +69,12 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   access first; unset preserves ordinary routing. Shared workers inherit the
   caller group; PR/main CI and unrelated scheduled work remain outside it.
 - Check the nightly parent for the Code SHA before dispatching a fresh main validation; it seals per-child receipts that exact-target dispatches adopt when inputs match. The nightly runs this explicit trusted-main helper route (`--sha <main-sha> --workflow-sha <main-sha> --trusted-workflow-ref main`), so its parent runs on a `release-ci/<sha12>-<id>` branch, not `main`.
-- Every selected validation lane must pass; see
+- FRV must conclude success under pinned P's
+  [checked-in waiver policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers);
+  all other required lanes must pass. See
   [Publication requirements](#publication-requirements). Stable tags require stable/full
   evidence, soak, and blocking performance. Beta-profile evidence cannot qualify
-  stable. No lane or soak waiver bypasses these requirements. All-group
+  stable. Soak and performance cannot be waived. All-group
   qualification requires all nine Linux/Windows/macOS Gateway install/upgrade
   combinations. Preserve first failures, identity, and complete evidence.
 - Native macOS, Windows, Linux, and Android publication is independent of
@@ -304,9 +307,12 @@ until their dependent enforcement changes land.
   `$TMPDIR/openclaw-frv/<repo>-<parent>-reruns.jsonl`. It refuses a passed
   child, an artifact producer (use `continue --failed`), and a child past its
   attempt budget: the default 2 allows one rerun; pass `--max-attempts 3` only
-  for a confirmed flake. When a failed consumer binds a green producer's run
-  attempt (the install-smoke candidate payload, #161317), it reruns that
-  producer job and its dependents instead. Reseal with `continue --failed`.
+  for a confirmed flake. When a failed-jobs rerun would re-execute an
+  attempt-bound install-smoke payload consumer (`installer_smoke_update`,
+  `installer_smoke_nonroot`; #161317), it reruns the green
+  producer job and its dependents instead, or the whole child when another
+  failed job is outside that set. `continue --failed` applies the same choice.
+  Reseal with `continue --failed`.
 - `pnpm frv continue --failed --run <parent-run-id>` reruns each failed child
   as soon as it is terminal, even while the parent or siblings remain active.
   It adopts active attempts and preserves green children. Once every required
@@ -606,12 +612,15 @@ Mutation owners recheck live publication authority, selectors, and immutable byt
 ### Publication requirements
 
 Publish with `release_profile=from-validation` to consume the sealed profile.
-Stable publication requires stable/full evidence, soak, and blocking performance.
+The selected FRV run must conclude **success**. Stable publication requires
+stable/full evidence, soak, and blocking performance.
 Decide blocker or flake for every failed test. Rerun flakes on the same Release
-SHA at most twice and file a fix-in-parallel issue/PR on `main`. A selected job
-that remains red still blocks publication; never re-cut, change tooling, or
-start a new FRV solely to clear a flake. Skipped, cancelled, missing, and unknown
-coverage also blocks. No lane or soak waiver applies.
+SHA at most twice and file a fix-in-parallel issue/PR on `main`; never re-cut
+solely to clear a flake. An exact failed live-provider/Telegram leaf may instead
+have a reviewed [release-tooling grant](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
+Land and pin P, then run or revalidate FRV without changing C/Q. The publisher
+does not grant waivers or accept failed FRV. All unwaived failures and missing,
+skipped, cancelled, or unknown required coverage still block.
 
 ### Publish children
 

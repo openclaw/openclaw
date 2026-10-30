@@ -11,7 +11,6 @@ import {
 } from "../../agent-tool-source-execution-guard.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/tool-results.js";
-import { WRITE_DIFF_MAX_BYTES } from "./file-diff.js";
 import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeyResolution,
@@ -23,6 +22,7 @@ import {
   readPersistedFileStat,
   verifyPersistedUtf8File,
 } from "./file-write-verification.js";
+import { WRITE_DIFF_MAX_BYTES } from "./limits.js";
 import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import type { WriteToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -36,8 +36,8 @@ interface WriteOperations {
   /** Resolve the physical identity used to order this backend's file operations. */
   resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   writeFile: (absolutePath: string, content: string) => Promise<void>;
-  /** Create directory recursively */
-  mkdir: (dir: string) => Promise<void>;
+  /** Omit when writeFile owns parent-directory creation. */
+  mkdir?: (dir: string) => Promise<void>;
   /** Read persisted content before reporting success */
   readFile: (absolutePath: string) => Promise<Buffer | string>;
   /** Stat the target for prechecks and persisted-file verification */
@@ -225,7 +225,7 @@ export function createWriteTool(
         try {
           await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
             assertCurrent();
-            await ops.mkdir(dir);
+            await ops.mkdir?.(dir);
           });
           assertFileToolNotAborted(signal);
           await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {

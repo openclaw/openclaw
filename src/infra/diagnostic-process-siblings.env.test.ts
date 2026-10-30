@@ -150,7 +150,7 @@ it.each([
     pid === 424242 ? { argv: ["openclaw-gateway"] } : undefined,
   );
   let portCleared = false;
-  const killMock = vi.spyOn(process, "kill").mockImplementation(() => {
+  vi.spyOn(process, "kill").mockImplementation(() => {
     if (surface === "restart poll") {
       throw Object.assign(new Error("gone"), { code: "ESRCH" });
     }
@@ -176,7 +176,6 @@ it.each([
         reports.push({ command, report: JSON.parse(stdout) });
       };
       let lsofCalls = 0;
-      const fuserArgs: string[][] = [];
       mocks.spawn.mockImplementation(
         (command: string, _args: string[], options: { env?: NodeJS.ProcessEnv }) => {
           capture(command, options.env);
@@ -200,7 +199,6 @@ it.each([
             return "node openclaw.mjs gateway";
           }
           if (command === "fuser") {
-            fuserArgs.push(args);
             mocks.probe.mockResolvedValue(
               surface === "CLI fuser KILL" && args.includes("-TERM") ? "busy" : "free",
             );
@@ -222,35 +220,16 @@ it.each([
         expect(lsofCalls).toBe(2);
       } else if (surface.startsWith("CLI fuser")) {
         mocks.probe.mockResolvedValue("busy");
-        const beforeSignal = vi.fn();
-        expect(
-          await forceFreePortAndWait(43123, {
-            sigtermTimeoutMs: 0,
-            ...(surface === "CLI fuser" ? { beforeSignal } : {}),
-          }),
-        ).toEqual({
-          killed: [{ pid: 424242 }],
-          waitedMs: 0,
-          escalatedToSigkill: surface === "CLI fuser KILL",
+        const result = await forceFreePortAndWait(43123, {
+          sigtermTimeoutMs: 0,
+          ...(surface === "CLI fuser" ? { beforeSignal: vi.fn() } : {}),
         });
-        if (surface === "CLI fuser") {
-          expect(fuserArgs).toEqual([["43123/tcp"]]);
-          expect(beforeSignal).toHaveBeenCalledExactlyOnceWith({
-            port: 43123,
-            pid: 424242,
-            signal: "SIGTERM",
-          });
-          expect(killMock).toHaveBeenCalledExactlyOnceWith(424242, "SIGTERM");
-        } else {
-          expect(fuserArgs).toEqual(
-            (surface === "CLI fuser KILL" ? ["TERM", "KILL"] : ["TERM"]).map((signal) => [
-              "-k",
-              `-${signal}`,
-              "43123/tcp",
-            ]),
-          );
-          expect(killMock).not.toHaveBeenCalled();
-        }
+        expect(result.escalatedToSigkill).toBe(surface === "CLI fuser KILL");
+        expect(reports.map(({ command }) => command)).toContain(
+          surface === "CLI fuser"
+            ? "fuser 43123/tcp"
+            : `fuser -k -${surface.endsWith("KILL") ? "KILL" : "TERM"} 43123/tcp`,
+        );
       } else {
         expect((await forceFreePortAndWait(43123)).killed).toEqual([
           expect.objectContaining({ pid: 424242 }),

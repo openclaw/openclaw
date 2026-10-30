@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,6 +18,7 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { AsyncContext } from "../shared/async-context.js";
 import { requesterCreatorProfileId } from "./requester-origin.js";
 import type {
   CronCreatorToolAuthorityMaterialization,
@@ -62,9 +62,12 @@ export function createCronCreatorAuthorityCapability(
     : undefined;
 }
 
-const activeCronCreatorAuthority = new AsyncLocalStorage<CronCreatorAuthorityRunScope>();
-const activeCronCreatorAuthorityResolver =
-  new AsyncLocalStorage<CronCreatorAuthorityResolverScope>();
+const activeCronCreatorAuthority = new AsyncContext<CronCreatorAuthorityRunScope>(
+  Symbol("cronCreatorAuthority"),
+);
+const activeCronCreatorAuthorityResolver = new AsyncContext<CronCreatorAuthorityResolverScope>(
+  Symbol("cronCreatorAuthorityResolver"),
+);
 
 /** Retain the Cron-only fence when tools materialize outside their creator scope. */
 export function bindActiveCronAuthorityCurrentness(
@@ -72,6 +75,28 @@ export function bindActiveCronAuthorityCurrentness(
 ): (() => boolean) | undefined {
   const scope = activeCronCreatorAuthority.getStore();
   return scope?.active && scope.runId === runId?.trim() ? scope.isCurrent : undefined;
+}
+
+/** Retain only the live Cron scope; late CLI admission still supplies caller authority. */
+export function bindCronManagementToolConstruction(
+  runId: string | undefined,
+): (<T>(run: () => T) => T) | undefined {
+  const scope = activeCronCreatorAuthority.getStore();
+  if (!scope?.managementEntitlement || scope.runId !== runId?.trim()) {
+    return undefined;
+  }
+  return <T>(run: () => T): T => {
+    if (
+      !scope.active ||
+      scope.signal.aborted ||
+      scope.isCurrent?.() === false ||
+      (scope.managementEntitlement?.source === "channel-owner" &&
+        !scope.managementEntitlement.isCurrent())
+    ) {
+      return activeCronCreatorAuthority.exit(run);
+    }
+    return activeCronCreatorAuthority.run(scope, run);
+  };
 }
 
 /** Retain the exact scope for callbacks invoked outside their creation context. */
@@ -260,7 +285,7 @@ export function bindCronManagementGrant(runId: string | undefined, config?: Open
       if (!CRON_MANAGEMENT_METHODS.some((allowed) => allowed === method)) {
         if (managementOnly) {
           throw new Error(
-            "This management-only turn can only list, get, update, run, or remove automations. Use the Automations page for other actions.",
+            "This management-only turn can only list, get, update, run, remove, or bind automations. Use the Automations page for other actions.",
           );
         }
         return undefined;
@@ -321,7 +346,7 @@ export function bindCronRequesterGrant(runId: string | undefined) {
 export function isFreshChannelCronAuthorityTurn(params: {
   messageProvider?: string;
   senderId?: string;
-  isHeartbeat: boolean;
+  scheduledAutomation?: boolean;
   isRoomEvent: boolean;
   inputProvenance?: unknown;
   spawnedBy?: string;
@@ -330,7 +355,7 @@ export function isFreshChannelCronAuthorityTurn(params: {
   return (
     Boolean(params.messageProvider) &&
     Boolean(normalizeOptionalString(params.senderId)) &&
-    !params.isHeartbeat &&
+    !params.scheduledAutomation &&
     !params.isRoomEvent &&
     params.inputProvenance === undefined &&
     params.spawnedBy === undefined &&

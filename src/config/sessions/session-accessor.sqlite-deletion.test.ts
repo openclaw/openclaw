@@ -63,6 +63,7 @@ import {
 } from "./session-accessor.sqlite-deletion.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import * as sessionReferences from "./session-accessor.sqlite-references.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -191,16 +192,21 @@ describe("session deletion and native owner state", () => {
     });
   const read = (key = sessionKey) =>
     loadSessionEntry({ sessionKey: key, storePath, readConsistency: "latest" });
+  const createRepository = (
+    repositories: ReturnType<typeof createSessionRepositoryWorkspaceStore>,
+    { agentId, sessionKey: key } = { agentId: "main", sessionKey },
+  ) =>
+    repositories.create({
+      agentId,
+      sessionKey: key,
+      url: "https://github.com/openclaw/fixture.git",
+      assertCurrent: () => {},
+    });
 
   it("cleans repository state in the explicit environment and preserves the ambient same-key session", async () => {
     const ambientEnv = { ...process.env };
     const ambientRepositories = createSessionRepositoryWorkspaceStore({ env: ambientEnv });
-    const ambientRepository = await ambientRepositories.create({
-      agentId: "main",
-      sessionKey,
-      url: "https://github.com/openclaw/fixture.git",
-      assertCurrent: () => {},
-    });
+    const ambientRepository = await createRepository(ambientRepositories);
     const ambientScope = { agentId: "main", sessionKey, storePath, env: ambientEnv };
     await replaceSessionEntry(ambientScope, {
       sessionId: "ambient-sentinel",
@@ -222,12 +228,7 @@ describe("session deletion and native owner state", () => {
         const scope = { agentId: "main", sessionKey, storePath: explicitStorePath, env: state.env };
         const repositories = createSessionRepositoryWorkspaceStore({ env: state.env });
         expect(repositories.path).not.toBe(ambientRepositories.path);
-        const repository = await repositories.create({
-          agentId: "main",
-          sessionKey,
-          url: "https://github.com/openclaw/fixture.git",
-          assertCurrent: () => {},
-        });
+        const repository = await createRepository(repositories);
         await replaceSessionEntry(scope, {
           sessionId: "explicit-environment-session",
           updatedAt: 1,
@@ -278,18 +279,8 @@ describe("session deletion and native owner state", () => {
         env: state.env,
       };
       const siblingScope = { ...scope, agentId: "worker", sessionKey: "agent:worker:task" };
-      const repository = await repositories.create({
-        agentId: scope.agentId,
-        sessionKey: scope.sessionKey,
-        url: "https://github.com/openclaw/fixture.git",
-        assertCurrent: () => {},
-      });
-      const siblingRepository = await repositories.create({
-        agentId: siblingScope.agentId,
-        sessionKey: siblingScope.sessionKey,
-        url: "https://github.com/openclaw/fixture.git",
-        assertCurrent: () => {},
-      });
+      const repository = await createRepository(repositories, scope);
+      const siblingRepository = await createRepository(repositories, siblingScope);
       await replaceSessionEntry(scope, {
         sessionId: "global-session",
         updatedAt: 1,
@@ -521,6 +512,7 @@ describe("session deletion and native owner state", () => {
       const reclaimedKey = "agent:main:reclaimed-node";
       const survivorKeys = ["agent:main:survivor-a", "agent:main:survivor-b"] as const;
       const entry = { sessionId: "reclaimed-session", updatedAt: Date.now() };
+      const historicalId = "reclaimed-history";
       const retainedEvent = { type: "session", id: entry.sessionId, content: "retained history" };
       await replaceSessionEntry({ sessionKey: reclaimedKey, storePath }, entry);
       for (const survivorKey of survivorKeys.toReversed()) {
@@ -529,6 +521,7 @@ describe("session deletion and native owner state", () => {
           {
             sessionId: `${survivorKey}-session`,
             previousSessionId: entry.sessionId,
+            usageFamilySessionIds: [historicalId],
             updatedAt: entry.updatedAt,
             skillsSnapshot: { prompt: "saved skill prompt".repeat(4096), skills: [] },
             systemPromptReport: {
@@ -547,6 +540,11 @@ describe("session deletion and native owner state", () => {
         path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
       };
       const database = openOpenClawAgentDatabase(scope);
+      database.db
+        .prepare(
+          "INSERT INTO session_windows(session_id, session_key, created_at, updated_at) VALUES (?, ?, 1, 1)",
+        )
+        .run(historicalId, reclaimedKey);
       replaceTranscriptEventsSync(
         { sessionKey: reclaimedKey, sessionId: entry.sessionId, storePath },
         [retainedEvent],
@@ -566,30 +564,32 @@ describe("session deletion and native owner state", () => {
           .all(reclaimedKey);
       const survivorsBefore = readSurvivors();
       const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
-      try {
-        await withSqliteSessionDeletions(scope, [{ sessionKey: reclaimedKey, entry }], async () => {
-          runSqliteSessionDeletionTransaction((current) => {
-            deleteSessionEntryRows(current, reclaimedKey, {
-              deleteOwnedWindows: scenario === "a shared window",
-            });
-          }, scope);
-        });
-        const rows = queries.mock.results.flatMap((result) =>
-          result.type === "return" ? result.value.rows : [],
-        );
-        for (const payload of ["saved skill prompt", "saved-report-skill"]) {
-          expect(JSON.stringify(rows)).not.toContain(payload);
-        }
-      } finally {
-        queries.mockRestore();
+      const references = vi.spyOn(sessionReferences, "collectSessionStateIdsForEntry");
+      await withSqliteSessionDeletions(scope, [{ sessionKey: reclaimedKey, entry }], async () => {
+        runSqliteSessionDeletionTransaction((current) => {
+          deleteSessionEntryRows(current, reclaimedKey, {
+            deleteOwnedWindows: scenario === "a shared window",
+          });
+        }, scope);
+      });
+      const rows = queries.mock.results.flatMap((result) =>
+        result.type === "return" ? result.value.rows : [],
+      );
+      expect(JSON.stringify(rows)).not.toMatch(/saved skill prompt|saved-report-skill/);
+      for (const survivor of survivorsBefore) {
+        expect(
+          references.mock.calls.filter(([value]) => value.sessionId === survivor.current_session_id)
+            .length,
+        ).toBeLessThanOrEqual(1);
       }
       expect(loadSessionEntry({ sessionKey: reclaimedKey, storePath })).toBeUndefined();
       expect(readSurvivors()).toEqual(survivorsBefore);
-      expect(
-        database.db
-          .prepare("SELECT session_key FROM session_windows WHERE session_id = ?")
-          .get(entry.sessionId),
-      ).toEqual({ session_key: survivorKeys[0] });
+      const windowOwner = (id: string) =>
+        database.db.prepare("SELECT session_key FROM session_windows WHERE session_id = ?").get(id);
+      expect(windowOwner(entry.sessionId)).toEqual({ session_key: survivorKeys[0] });
+      expect(windowOwner(historicalId)).toEqual({
+        session_key: survivorKeys[scenario === "a placeholder successor" ? 1 : 0],
+      });
       await expect(
         loadTranscriptEvents({
           sessionKey: survivorKeys[0],

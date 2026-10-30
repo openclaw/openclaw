@@ -39,6 +39,7 @@ import { ensureReleasePublishToolingTag } from "./lib/release-publish-preflight-
 import { formatReleasePublishPreflight } from "./lib/release-publish-preflight-interface.mts";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import { sleep as wait } from "./lib/sleep.mjs";
+import { readUpgradeSurvivorScenarioCatalog } from "./lib/upgrade-survivor-policy.mjs";
 import {
   downloadFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
@@ -113,6 +114,7 @@ const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
 const RELEASE_CANDIDATE_STATE_VERSION = 2;
 const RELEASE_CANDIDATE_STATE_FILE = "release-candidate-state.json";
 const TRUSTED_TOOLING_SHA_ENV = "OPENCLAW_RELEASE_CANDIDATE_TRUSTED_TOOLING_SHA";
+const UPGRADE_SURVIVOR_CATALOG_PATH = "scripts/lib/upgrade-survivor-scenarios.json";
 // Release tooling (toolingSha and its publishWorkflowRef tag) is not candidate
 // identity: each run re-verifies the current tooling against trusted main, and
 // saved FRV/npm evidence is authenticated against its own producer run. Tooling
@@ -1135,6 +1137,54 @@ export function validateTrustedToolingPin({
   return pinnedToolingSha;
 }
 
+function releaseScenarioCatalog(source: string, owner: string) {
+  const scenarios = readUpgradeSurvivorScenarioCatalog(source, { includeAssertionOnly: false });
+  if (!scenarios) {
+    throw new Error(`${owner} has an invalid ${UPGRADE_SURVIVOR_CATALOG_PATH}`);
+  }
+  return scenarios;
+}
+
+export function validateReleaseScenarioCatalogCompatibility({
+  candidateCatalog,
+  toolingCatalog,
+  latestTrustedToolingCatalog,
+  toolingSha,
+  latestTrustedToolingSha,
+  workflowRef,
+}: {
+  candidateCatalog: string;
+  toolingCatalog: string;
+  latestTrustedToolingCatalog: string;
+  toolingSha: string;
+  latestTrustedToolingSha: string;
+  workflowRef: string;
+}) {
+  const candidateScenarios = releaseScenarioCatalog(candidateCatalog, "release candidate");
+  const toolingScenarios = new Set(releaseScenarioCatalog(toolingCatalog, `tooling ${toolingSha}`));
+  const unsupported = candidateScenarios
+    .filter((scenario) => !toolingScenarios.has(scenario))
+    .toSorted();
+  if (unsupported.length === 0) {
+    return { status: "passed" as const, unsupported };
+  }
+  const latestScenarios = new Set(
+    releaseScenarioCatalog(
+      latestTrustedToolingCatalog,
+      `trusted ${workflowRef} tooling ${latestTrustedToolingSha}`,
+    ),
+  );
+  const replacementSupportsCandidate = candidateScenarios.every((scenario) =>
+    latestScenarios.has(scenario),
+  );
+  const replacement = replacementSupportsCandidate
+    ? ` Trusted ${workflowRef} tooling ${latestTrustedToolingSha} supports this catalogue; rerun with --workflow-sha ${latestTrustedToolingSha}.`
+    : ` Trusted ${workflowRef} tip ${latestTrustedToolingSha} also lacks support; land the catalogue consumer before qualifying this candidate.`;
+  throw new Error(
+    `Pinned release tooling ${toolingSha} cannot consume candidate upgrade-survivor scenarios: ${unsupported.join(", ")}.${replacement}`,
+  );
+}
+
 export async function validateNpmPreflightRunSource(
   {
     repository,
@@ -1919,12 +1969,15 @@ async function runTelegramIfNeeded(
     (fullValidationEvidence.source === "candidate-owned-admission-v1" &&
       (qualificationManifest.releaseProfile === "stable" ||
         qualificationManifest.releaseProfile === "full"));
-  if (
-    npmUsesFullRun &&
-    coversPackageTelegram &&
-    options.telegramProviderMode === "mock-openai" &&
-    !qualificationManifest.validationInputs?.telegramWaiver
-  ) {
+  if (npmUsesFullRun && coversPackageTelegram && options.telegramProviderMode === "mock-openai") {
+    const waived = qualificationManifest.waivers?.some(
+      (waiver: JsonRecord) =>
+        waiver.jobName ===
+        "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
+    );
+    if (waived) {
+      return { status: "waived", providerMode: "mock-openai" };
+    }
     // Authentication proves package acceptance passed with Q's mock Telegram
     // harness. Reuse only its exact qualified package, not a separately packed one.
     return { status: "covered-by-full-release-validation", providerMode: "mock-openai" };
@@ -2144,6 +2197,27 @@ async function main() {
   // A new dispatch is gated by the local check; consuming existing evidence
   // defers it until the SDK acknowledgement has been checked.
   const dispatchesValidation = !options.fullReleaseRunId && !options.skipDispatch;
+  const validatesScenarioCatalog = dispatchesValidation && !hasRetainedRequest;
+  if (validatesScenarioCatalog) {
+    validateReleaseScenarioCatalogCompatibility({
+      candidateCatalog: run("git", ["show", `${targetSha}:${UPGRADE_SURVIVOR_CATALOG_PATH}`], {
+        capture: true,
+        cwd: targetRoot,
+      }),
+      toolingCatalog: run("git", ["show", `${toolingSha}:${UPGRADE_SURVIVOR_CATALOG_PATH}`], {
+        capture: true,
+        cwd: targetRoot,
+      }),
+      latestTrustedToolingCatalog: run(
+        "git",
+        ["show", `${latestTrustedToolingSha}:${UPGRADE_SURVIVOR_CATALOG_PATH}`],
+        { capture: true, cwd: targetRoot },
+      ),
+      toolingSha,
+      latestTrustedToolingSha,
+      workflowRef: options.workflowRef,
+    });
+  }
   let localGeneratedCheck = dispatchesValidation
     ? runLocalGeneratedCheckIfNeeded(options)
     : undefined;

@@ -31,6 +31,8 @@ import {
   UpdateCandidateStateSnapshotSchema,
 } from "./update-candidate-state.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
+import { UpdateCaptureSpaceError } from "./update-capture-space.js";
+import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateRunStep } from "./update-run-record.js";
 import {
@@ -114,6 +116,8 @@ type InitialSnapshotParams = {
   config: OpenClawConfig;
   stateDir: string;
   env: NodeJS.ProcessEnv;
+  /** Volume holding activation-time database backups, independent of candidate scratch. */
+  backupDirectory?: string;
 };
 
 /** Measure known SQLite families without allocating state or reading the candidate plugin inventory. */
@@ -124,7 +128,7 @@ async function measureInitialUpdateSnapshotState(params: InitialSnapshotParams) 
   );
   return {
     capacity: measureSnapshotCapacity(params.stateDir, { ...size, pluginBytes: null }, params.env),
-    families: size.families,
+    size,
   };
 }
 
@@ -138,7 +142,7 @@ export async function assessInitialUpdateSnapshotCapacity(
     cwd: params.stateDir,
   };
   try {
-    const { capacity, families } = await measureInitialUpdateSnapshotState(params);
+    const { capacity, size } = await measureInitialUpdateSnapshotState(params);
     // Refuse only at the existing allocator's data-at-risk boundary: every
     // eligible destination is known to be too small for the private state copy.
     const refused =
@@ -154,10 +158,12 @@ export async function assessInitialUpdateSnapshotCapacity(
         (candidate) =>
           `${candidate.kind} ${candidate.directory}: ${formatDiskSpaceBytes(capacity.requiredBytes)} needed; ${candidate.availableBytes === null ? "free space unknown" : `${formatDiskSpaceBytes(candidate.availableBytes)} free`}.`,
       ),
-      ...families.map(
-        (family) =>
-          `SQLite family ${family.path}: ${formatDiskSpaceBytes(family.bytes)} (database and supporting files).`,
-      ),
+      ...size.families
+        .toSorted((left, right) => right.bytes - left.bytes)
+        .map(
+          (family) =>
+            `SQLite family ${family.path}: ${formatDiskSpaceBytes(family.bytes)} (database and supporting files).`,
+        ),
     ];
     if (refused) {
       return {
@@ -172,11 +178,34 @@ export async function assessInitialUpdateSnapshotCapacity(
         snapshotCapacity: capacity,
       };
     }
+    let warnings: string[] = [];
+    if (params.backupDirectory) {
+      try {
+        const backup = await checkUpdateDatabaseBackupSpace(params.backupDirectory, size, params);
+        diagnostics.push(...backup.diagnostics);
+        warnings = backup.warnings;
+      } catch (error) {
+        if (!(error instanceof UpdateCaptureSpaceError)) {
+          throw error;
+        }
+        return {
+          ...step,
+          durationMs: Date.now() - started,
+          exitCode: 1,
+          stderrTail: [
+            "snapshot-capacity-insufficient: activation database backup or rollback cannot fit before validation.",
+            error.message,
+            ...diagnostics,
+          ].join("\n"),
+        };
+      }
+    }
     return {
       ...step,
       durationMs: Date.now() - started,
       exitCode: 0,
       diagnostics,
+      ...(warnings.length ? { warnings } : {}),
     };
   } catch {
     return {
@@ -341,6 +370,13 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
     });
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
+    const sourceSelectors =
+      params.env.OPENCLAW_STATE_DIR?.trim() || params.env.OPENCLAW_CONFIG_PATH?.trim()
+        ? {
+            OPENCLAW_STATE_DIR: params.env.OPENCLAW_STATE_DIR,
+            OPENCLAW_CONFIG_PATH: params.env.OPENCLAW_CONFIG_PATH,
+          }
+        : { OPENCLAW_STATE_DIR: params.stateDir };
     let workerTermination = "exit";
     let budgetSignal: AbortSignal | undefined;
     const outcome = await withUpdateCandidateIoBudget(
@@ -382,6 +418,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
                 HOME: params.env.HOME,
                 OPENCLAW_HOME: params.env.OPENCLAW_HOME,
                 USERPROFILE: params.env.USERPROFILE,
+                ...sourceSelectors,
                 OPENCLAW_AGENT_DIR: params.env.OPENCLAW_AGENT_DIR,
                 PI_CODING_AGENT_DIR: params.env.PI_CODING_AGENT_DIR,
                 OPENCLAW_BUNDLED_PLUGINS_DIR: params.env.OPENCLAW_BUNDLED_PLUGINS_DIR,

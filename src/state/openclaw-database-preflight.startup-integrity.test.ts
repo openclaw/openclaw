@@ -365,3 +365,16 @@ it("isolates a corrupt foreign secondary before reporting its integrity failure"
     embeddedOwnerId: "foreign",
   });
 });
+
+it("names the failing state database when startup admission hits a corrupted store", async () => {
+  const fixture = databaseFixture(tempDirs.make("startup-state-corruption-"));
+  fixture.state();
+  closeDatabases();
+  fs.writeFileSync(fixture.statePath, "corrupted store bytes");
+  const admission = fixture.ready({}, "gateway-startup");
+  await expect(admission).rejects.toMatchObject({
+    code: "ERR_SQLITE_ERROR",
+    message: expect.stringContaining(fixture.statePath),
+  });
+  await expect(admission).rejects.toThrow(/not a database|disk image is malformed/iu);
+});

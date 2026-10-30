@@ -1,7 +1,7 @@
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+import { ensureRepoBoundDirectory, resolveTimestampedQaOutputDir } from "../cli-paths.js";
 import { toQaError } from "../errors.js";
 import { resolveLiveTransportQaScenarioIds } from "../live-transports/shared/scenario-selection.js";
 import { createPhaseTimer, type MantisPhaseTimings } from "../mantis-phase-timer.runtime.js";
@@ -119,11 +119,6 @@ function normalizeHydrateMode(
   throw new Error(`Unsupported Mantis Slack desktop hydrate mode: ${value}`);
 }
 
-function defaultOutputDir(repoRoot: string, startedAt: Date) {
-  const stamp = startedAt.toISOString().replace(/[:.]/gu, "-");
-  return path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", `slack-desktop-${stamp}`);
-}
-
 function renderReport(summary: MantisSlackDesktopSmokeSummary) {
   return renderMantisCrabboxReport({
     artifactRows: [
@@ -168,7 +163,7 @@ export async function runMantisSlackDesktopSmoke(
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const outputDir = await ensureRepoBoundDirectory(
     repoRoot,
-    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ?? defaultOutputDir(repoRoot, startedAt),
+    resolveTimestampedQaOutputDir(repoRoot, opts.outputDir, startedAt, "mantis/slack-desktop"),
     "Mantis Slack desktop smoke output directory",
     { mode: 0o755 },
   );

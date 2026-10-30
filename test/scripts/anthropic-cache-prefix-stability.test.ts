@@ -11,7 +11,8 @@ const fixture = () => ({
   prompt_cache_key: "private cache affinity",
   input: [{ role: "user", content: "private synthetic transcript" }],
 });
-const responses = (payload = fixture()) => snapshotProviderPrefix("openai-responses", payload);
+const responses = (payload: Partial<ReturnType<typeof fixture>> = {}) =>
+  snapshotProviderPrefix("openai-responses", { ...fixture(), ...payload });
 const anthropic = (messages: unknown[], extra = {}) =>
   snapshotProviderPrefix("anthropic-messages", { model: "synthetic-claude", messages, ...extra });
 const textBlock = (text: string, cached = false) => ({
@@ -33,21 +34,15 @@ const stable = (
   options: Parameters<typeof assertStableProviderPrefix>[2] = { label: "test" },
 ) => expect(() => assertStableProviderPrefix(before, after, options));
 
-it.each(["system", "tools", "cacheKey", "history[0]"])(
+it.each([
+  ["system", { instructions: "private changed system" }],
+  ["tools", { tools: [{ type: "function", name: "read", description: "private changed tool" }] }],
+  ["cacheKey", { prompt_cache_key: "private changed affinity" }],
+  ["history[0]", { input: [{ role: "user", content: "private changed transcript" }] }],
+] satisfies Array<[string, Partial<ReturnType<typeof fixture>>]>)(
   "identifies a changed %s without disclosing request content",
-  (segment) => {
-    const before = responses();
-    const payload = fixture();
-    if (segment === "system") {
-      payload.instructions += " changed";
-    } else if (segment === "tools") {
-      payload.tools[0]!.description += " changed";
-    } else if (segment === "cacheKey") {
-      payload.prompt_cache_key += " changed";
-    } else {
-      payload.input[0]!.content += " changed";
-    }
-    const message = diagnostic(before, responses(payload));
+  (segment, payload) => {
+    const message = diagnostic(responses(), responses(payload));
     expect(message).toMatch(
       new RegExp(
         `segment=${segment.replace(/[[\]]/g, "\\$&")} previous=[a-f0-9]{64} next=[a-f0-9]{64} path=`,

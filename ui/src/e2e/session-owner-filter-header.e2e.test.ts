@@ -64,7 +64,7 @@ suite.define(() => {
       await expectBrowser(bobSection).toHaveCount(0);
       await expectBrowser(adaSection.getByText("Ada research", { exact: true })).toBeVisible();
       const ownerChip = page.locator("#sidebar-session-owner-title");
-      const funnel = page.getByRole("button", { name: "Filter & sort", exact: true });
+      const funnel = page.getByRole("button", { name: /^Filter & sort · /, exact: true });
       await expectBrowser(ownerChip).toBeVisible();
       await expectBrowser(ownerChip.locator(".picker-select__label")).toHaveText("Ada");
       await expectBrowser(ownerChip).toHaveAccessibleName("Owners: Ada");

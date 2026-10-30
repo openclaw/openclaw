@@ -5,7 +5,7 @@ import type {
 } from "../../auto-reply/reply/session-event-contract.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
-import { createRuntimeSystem } from "./runtime-system.js";
+import { createRuntimeBase } from "./runtime-base.js";
 
 const host = vi.hoisted(() => ({
   capture: vi.fn<(...args: unknown[]) => Promise<SessionEventTarget>>(),
@@ -23,28 +23,44 @@ const target: SessionEventTarget = {
   sessionId: "original",
   generation: "process",
 };
+const address = { agentId: "main", sessionKey: "agent:main:main" };
+const system = () => createRuntimeBase().system;
+const captureTarget = () => system().captureSessionEventTarget(address.agentId, address.sessionKey);
+let active: boolean;
+const inOwnerScope = <T>(run: () => T) =>
+  withPluginRuntimeGatewayRequestScope(
+    {
+      isWebchatConnect: () => false,
+      assertSystemOwnerCurrent: () => {
+        if (!active) {
+          throw new Error("retired owner");
+        }
+      },
+    },
+    run,
+  );
 
 beforeEach(() => {
   vi.clearAllMocks();
+  active = true;
   host.capture.mockResolvedValue(target);
 });
 
 describe("plugin session-event boundary", () => {
   it("forwards only public fields and fixes the event source", async () => {
-    const system = createRuntimeSystem();
-    const expectedTarget = await system.captureSessionEventTarget("main", "agent:main:main");
+    const expectedTarget = await captureTarget();
     expect(Object.isFrozen(expectedTarget)).toBe(true);
     expect(Object.keys(expectedTarget)).toEqual([]);
-    const abortSignal = new AbortController().signal;
-    const deliveryContext = { channel: "discord", to: "channel:123" };
-    const options = {
-      agentId: "main",
-      sessionKey: "agent:main:main",
+    const publicOptions = {
+      ...address,
       contextKey: "plugin:notice",
-      deliveryContext,
-      abortSignal,
-      expectedTarget,
+      deliveryContext: { channel: "discord", to: "channel:123" },
+      abortSignal: new AbortController().signal,
       createIfMissing: true as const,
+    };
+    const options = {
+      ...publicOptions,
+      expectedTarget,
       source: "cron",
       cfg: {},
       deps: {},
@@ -55,83 +71,44 @@ describe("plugin session-event boundary", () => {
     };
     const receipt = { id: "host-receipt" };
     host.enqueue.mockReturnValueOnce(receipt);
-    expect(system.enqueueSessionEvent("Completed", options)).toBe(receipt);
+    expect(system().enqueueSessionEvent("Completed", options)).toBe(receipt);
     expect(host.enqueue).toHaveBeenCalledExactlyOnceWith("Completed", {
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      contextKey: "plugin:notice",
-      deliveryContext,
-      abortSignal,
+      ...publicOptions,
       expectedTarget: target,
-      createIfMissing: true,
       source: "plugin",
     });
   });
 
   it("redeems handles across runtime copies and rejects copied handles", async () => {
-    const system = createRuntimeSystem();
-    const expectedTarget = await system.captureSessionEventTarget("main", "agent:main:main");
+    const expectedTarget = await captureTarget();
     vi.resetModules();
-    const { createRuntimeSystem: createDuplicate } = await import("./runtime-system.js");
-    createDuplicate().enqueueSessionEvent("Completed", {
-      agentId: "main",
-      sessionKey: "agent:main:main",
+    const { createRuntimeBase: createDuplicate } = await import("./runtime-base.js");
+    createDuplicate().system.enqueueSessionEvent("Completed", {
+      ...address,
       expectedTarget,
     });
     expect(host.enqueue.mock.calls[0]?.[1].expectedTarget).toBe(target);
     host.enqueue.mockClear();
     for (const copied of [structuredClone(expectedTarget), { ...expectedTarget }]) {
       expect(() =>
-        system.enqueueSessionEvent("Completed", {
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          expectedTarget: copied,
-        }),
+        system().enqueueSessionEvent("Completed", { ...address, expectedTarget: copied }),
       ).toThrow("not captured by this runtime");
     }
     expect(host.enqueue).not.toHaveBeenCalled();
-    expect(host.capture).toHaveBeenCalledTimes(1);
   });
 
   it("rejects capture when its owner retires during host preparation", async () => {
     const pending = createDeferredCore<SessionEventTarget>();
     host.capture.mockReturnValueOnce(pending.promise);
-    let active = true;
-    const capture = withPluginRuntimeGatewayRequestScope(
-      {
-        isWebchatConnect: () => false,
-        assertSystemOwnerCurrent: () => {
-          if (!active) {
-            throw new Error("retired owner");
-          }
-        },
-      },
-      () => createRuntimeSystem().captureSessionEventTarget("main", "agent:main:main"),
-    );
+    const capture = inOwnerScope(captureTarget);
     active = false;
     pending.resolve(target);
     await expect(capture).rejects.toThrow("retired owner");
   });
 
   it("keeps the admitted owner assertion on host event effects", () => {
-    let active = true;
-    withPluginRuntimeGatewayRequestScope(
-      {
-        isWebchatConnect: () => false,
-        assertSystemOwnerCurrent: () => {
-          if (!active) {
-            throw new Error("retired owner");
-          }
-        },
-      },
-      () =>
-        createRuntimeSystem().enqueueSessionEvent("Completed", {
-          agentId: "main",
-          sessionKey: "agent:main:main",
-        }),
-    );
+    inOwnerScope(() => system().enqueueSessionEvent("Completed", address));
     const forwarded = host.enqueue.mock.calls[0]?.[1] as SessionEventOptions;
-    expect(forwarded.assertCurrent).toBeTypeOf("function");
     active = false;
     expect(() => forwarded.assertCurrent?.()).toThrow("retired owner");
   });

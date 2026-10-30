@@ -5,7 +5,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState as withState } from "../../test-utils/openclaw-test-state.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
   readRecentSessionTranscriptActiveEvents,
@@ -24,7 +24,7 @@ import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-writ
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import {
   listSessionsNeedingTranscriptIndexReconcile,
-  sessionTranscriptIndexNeedsReconcile,
+  sessionTranscriptIndexNeedsReconcile as needsReconcile,
 } from "./session-transcript-index.js";
 import { SessionTranscriptProjectionUnavailableError as ProjectionUnavailable } from "./session-transcript-projection-error.js";
 import {
@@ -35,30 +35,25 @@ import {
   finalizePreparedSessionTranscriptProjectionInTransaction as finalizeProjection,
   type PreparedSessionTranscriptProjection,
 } from "./session-transcript-projection-rebuild.js";
-import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import { waitForSessionTranscriptIndexReconcile as reconcile } from "./session-transcript-reconcile.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 
 const sessionId = "eligibility";
-const messageEvent = <R extends "user" | "assistant" | "custom">(
-  id: string,
-  parentId: string | null,
-  role: R,
-  content: string,
-  metadata: {
-    customType?: string;
-    display?: boolean;
-    excludeFromContext?: boolean;
-    usage?: { input: number; output: number };
-  } = {},
-) => ({ type: "message" as const, id, parentId, message: { role, content, ...metadata } });
 const entries = [
   { type: "custom", id: "bootstrap", parentId: null, customType: "bootstrap-completed", data: {} },
-  messageEvent("user", "bootstrap", "user", "question"),
-  messageEvent("display", "user", "custom", "activity", {
+  messageEvent("user", "bootstrap", { role: "user", content: "question" }),
+  messageEvent("display", "user", {
+    role: "custom",
+    content: "activity",
     customType: "activity",
     display: true,
     excludeFromContext: true,
   }),
-  messageEvent("answer", "display", "assistant", "answer", { usage: { input: 100, output: 10 } }),
+  messageEvent("answer", "display", {
+    role: "assistant",
+    content: "answer",
+    usage: { input: 100, output: 10 },
+  }),
 ] as const;
 
 function projectionFixture(env: NodeJS.ProcessEnv) {
@@ -162,14 +157,13 @@ function withDirtyProjection(
   label: string,
   run: (f: Awaited<ReturnType<typeof prepareDirtyProjection>>) => Promise<void>,
 ) {
-  return withOpenClawTestState(
-    { label: "projection-catchup", scenario: "minimal" },
-    async ({ env }) => run(await prepareDirtyProjection(env, label)),
+  return withState({ label: "projection-catchup", scenario: "minimal" }, async ({ env }) =>
+    run(await prepareDirtyProjection(env, label)),
   );
 }
 
 it("converges an older current-watermark rebuild and a following append without changing history", () =>
-  withOpenClawTestState({ label: "transcript-eligibility" }, async (state) => {
+  withState({ label: "transcript-eligibility" }, async (state) => {
     const { scope, db: open, indexState, unclassify } = projectionFixture(state.env);
     runOpenClawAgentWriteTransaction((database) => {
       expect(appendEvents(database, scope, entries)).toBe(entries.length);
@@ -187,20 +181,20 @@ it("converges an older current-watermark rebuild and a following append without 
     // Older projection writers omit the new column even when they publish a current watermark.
     unclassify();
     expect(indexState("needs_rebuild, indexed_seq")).toEqual({ needs_rebuild: 0, indexed_seq: 3 });
-    expect(sessionTranscriptIndexNeedsReconcile(db, sessionId)).toBe(true);
+    expect(needsReconcile(db, sessionId)).toBe(true);
     expect(listSessionsNeedingTranscriptIndexReconcile(db)).toContain(sessionId);
     expect(() => readStats(scope)).toThrow(ProjectionUnavailable);
     runOpenClawAgentWriteTransaction((database) => {
       appendEvents(database, scope, [
         entries[3],
-        messageEvent("new", "answer", "user", "next"),
+        messageEvent("new", "answer", { role: "user", content: "next" }),
         entries[3],
       ]);
       expect(indexState()).toEqual({ needs_rebuild: 1 });
     }, scope);
-    await waitForSessionTranscriptIndexReconcile(scope);
+    await reconcile(scope);
 
-    expect(sessionTranscriptIndexNeedsReconcile(db, sessionId)).toBe(false);
+    expect(needsReconcile(db, sessionId)).toBe(false);
     expect(rawRows(db).slice(0, before.length)).toEqual(before);
     expect(projectionRows(db).slice(0, expectedRows.length)).toEqual(expectedRows);
     expect(readStats(scope).eventCount).toBe(4);
@@ -208,7 +202,7 @@ it("converges an older current-watermark rebuild and a following append without 
   }));
 
 it("reclassifies exact rewrites in both directions and deletes eligibility with the transcript", () =>
-  withOpenClawTestState({ label: "transcript-eligibility-rewrite" }, async (state) => {
+  withState({ label: "transcript-eligibility-rewrite" }, async (state) => {
     const { scope, db: open } = projectionFixture(state.env);
     await replaceTranscriptEvents(scope, [...entries]);
     const db = open();
@@ -237,7 +231,7 @@ it("reclassifies exact rewrites in both directions and deletes eligibility with 
   }));
 
 it("keeps a prepared projection unpublished after a same-sequence rewrite", () =>
-  withOpenClawTestState({ label: "transcript-eligibility-stale" }, async (state) => {
+  withState({ label: "transcript-eligibility-stale" }, async (state) => {
     const f = projectionFixture(state.env);
     await replaceTranscriptEvents(f.scope, [...entries]);
     const plan = f.plan();
@@ -247,14 +241,14 @@ it("keeps a prepared projection unpublished after a same-sequence rewrite", () =
       expect(f.finalize(plan)).toBe(false);
     });
     expect(() => readStats(f.scope)).toThrow(ProjectionUnavailable);
-    await waitForSessionTranscriptIndexReconcile(f.scope);
+    await reconcile(f.scope);
     expect(readStats(f.scope).eventCount).toBe(4);
   }));
 
 it.each(["interrupted", "rewrite", "delete"])(
   "fences partial eligibility publication after %s work",
   (change) =>
-    withOpenClawTestState({ label: "transcript-eligibility-claim" }, async (state) => {
+    withState({ label: "transcript-eligibility-claim" }, async (state) => {
       const f = projectionFixture(state.env);
       const { scope } = f;
       await replaceTranscriptEvents(scope, [...entries]);
@@ -278,8 +272,8 @@ it.each(["interrupted", "rewrite", "delete"])(
           expect(f.finalize(plan)).toBe(false);
         });
       }
-      await waitForSessionTranscriptIndexReconcile(scope);
-      expect(sessionTranscriptIndexNeedsReconcile(db, sessionId)).toBe(false);
+      await reconcile(scope);
+      expect(needsReconcile(db, sessionId)).toBe(false);
       expect(readStats(scope).eventCount).toBe(
         change === "delete" ? 0 : change === "rewrite" ? 4 : 3,
       );
@@ -315,7 +309,10 @@ it.each(["invalid-leaf", "oversized"])("keeps an unsafe $0 catch-up unpublished"
       fixture.write((database) => {
         fixture.append(
           database,
-          messageEvent("oversized-tail", "root", "assistant", "x".repeat(257 * 1024)),
+          messageEvent("oversized-tail", "root", {
+            role: "assistant",
+            content: "x".repeat(257 * 1024),
+          }),
         );
       });
     }
@@ -337,8 +334,7 @@ it.each(["append", "reset", "branch", "generation", "claim"])(
               messageEvent(
                 `racing-append-${index}`,
                 index === 0 ? "root" : `racing-append-${index - 1}`,
-                "assistant",
-                `arrived after preparation ${index}`,
+                { role: "assistant", content: `arrived after preparation ${index}` },
               ),
             );
           }
@@ -360,7 +356,7 @@ it.each(["append", "reset", "branch", "generation", "claim"])(
             database,
             label === "reset"
               ? { type: "reset", id: "racing-reset", parentId: "root", firstKeptEntryId: "root" }
-              : messageEvent("racing-branch", null, "assistant", "branch"),
+              : messageEvent("racing-branch", null, { role: "assistant", content: "branch" }),
           );
         }
         expect(finalizeProjection(database.db, fixture.plan, claimId)).toBe(label === "append");

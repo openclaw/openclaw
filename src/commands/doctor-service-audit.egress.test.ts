@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SERVICE_AUDIT_CODES } from "../daemon/service-audit.js";
 import {
   hasRepairableServiceDefinitionDrift,
-  isOperatorOwnedEnvironmentIssue,
+  isOperatorOwnedServiceIssue,
   isServiceDefinitionOnlyRepair,
 } from "./doctor-service-audit.js";
 
@@ -33,7 +33,7 @@ describe("Doctor temporary egress environment repair", () => {
 
   it("keeps operator drop-ins outside the managed repair", () => {
     expect(
-      isOperatorOwnedEnvironmentIssue(
+      isOperatorOwnedServiceIssue(
         issue,
         {
           programArguments: ["node", "gateway"],

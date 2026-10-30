@@ -274,7 +274,8 @@ function renderMcpServerHeader(server: McpApiServerDoc, tools: readonly McpApiTo
       nestedGroups.set(groupName, [tool]);
     }
   }
-  for (const [groupName, groupTools] of [...nestedGroups].toSorted((a, b) =>
+  // oxlint-disable-next-line unicorn/no-array-sort -- The Map spread is private to this header rendering pass.
+  for (const [groupName, groupTools] of [...nestedGroups].sort((a, b) =>
     a[0].localeCompare(b[0]),
   )) {
     lines.push("", `  namespace ${groupName} {`);

@@ -6,9 +6,14 @@ import { resolveZstdCodec } from "./zstd-codec.js";
 
 // Cache data is rebuildable. Semantic changes get a new version; old rows are
 // ignored and rebuilt instead of normalized through a runtime compatibility path.
-export const USAGE_COST_ROLLUP_VERSION = 8;
+export const USAGE_COST_ROLLUP_VERSION = 11;
 const USAGE_COST_ROLLUP_FORMAT_VERSION = 1;
 export const USAGE_COST_ROLLUP_SCOPE = "session-cost-usage-rollup-v3";
+/**
+ * Fingerprint of a rollup whose totals no catalog price can change: every turn with usage
+ * recorded its own cost. It stays valid when pricing changes (a new build or catalog update).
+ */
+export const USAGE_COST_UNPRICED_FINGERPRINT = "unpriced";
 const zstd = resolveZstdCodec();
 
 export type UsageCostJsonlCheckpoint = {
@@ -92,6 +97,38 @@ export type UsageCostFreshnessCheckpoint =
   | Pick<UsageCostJsonlCheckpoint, "kind" | "observedSize" | "observedMtimeMs" | "device" | "inode">
   | Pick<UsageCostSqliteCheckpoint, "kind" | "maxSeq" | "eventCount" | "size" | "mtimeMs">;
 
+export function readUsageCostDeferredMetadata(
+  envelope: UsageCostRollupEnvelope,
+): { checkpoint: UsageCostFreshnessCheckpoint; scannedAt: number } | undefined {
+  const source = envelope.checkpoint;
+  const checkpoint: UsageCostFreshnessCheckpoint =
+    source.kind === "jsonl"
+      ? {
+          kind: source.kind,
+          observedSize: source.observedSize,
+          observedMtimeMs: source.observedMtimeMs,
+          device: source.device,
+          inode: source.inode,
+        }
+      : {
+          kind: source.kind,
+          maxSeq: source.maxSeq,
+          eventCount: source.eventCount,
+          size: source.size,
+          mtimeMs: source.mtimeMs,
+        };
+  // Only numeric freshness facts fit the reserved descriptor allowance.
+  if (
+    Object.entries(checkpoint).every(
+      ([key, value]) => key === "kind" || (typeof value === "number" && Number.isFinite(value)),
+    ) &&
+    Number.isFinite(envelope.scannedAt)
+  ) {
+    return { checkpoint, scannedAt: envelope.scannedAt };
+  }
+  return undefined;
+}
+
 export function decodeUsageCostRollupEnvelope(
   valueJson: string,
   pricingFingerprint?: string,
@@ -105,7 +142,9 @@ export function decodeUsageCostRollupEnvelope(
       record.version !== USAGE_COST_ROLLUP_VERSION ||
       record.format !== USAGE_COST_ROLLUP_FORMAT_VERSION ||
       typeof record.pricingFingerprint !== "string" ||
-      (pricingFingerprint !== undefined && record.pricingFingerprint !== pricingFingerprint) ||
+      (pricingFingerprint !== undefined &&
+        record.pricingFingerprint !== pricingFingerprint &&
+        record.pricingFingerprint !== USAGE_COST_UNPRICED_FINGERPRINT) ||
       !isRecord(record.checkpoint) ||
       (record.checkpoint.kind !== "jsonl" && record.checkpoint.kind !== "sqlite") ||
       typeof record.scannedAt !== "number" ||

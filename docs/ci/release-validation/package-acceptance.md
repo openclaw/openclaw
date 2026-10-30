@@ -56,6 +56,10 @@ npm install -g --prefix "$tmp" ./openclaw.tgz
 node scripts/check-openclaw-installed-package-budget.mts "$tmp/lib/node_modules/openclaw"
 ```
 
+This check also verifies that the installed Anthropic SDK can resolve its required
+OpenTelemetry API dependency. An empty dependency directory fails even when npm
+reported a successful installation.
+
 On failure, reduce installed entries by trimming the largest dependencies or
 dist chunk and precompressed asset counts; reduce large files for a byte-budget
 failure. Do not raise the budgets: caps cannot change in already-shipped updaters.

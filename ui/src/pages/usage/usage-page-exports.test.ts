@@ -9,6 +9,7 @@ import {
   cleanupUsagePageTest,
   contextWeight,
   loadUsagePage,
+  showRecentSessions,
   queryUsagePage,
   settleUsagePage,
   usageCalls,
@@ -98,6 +99,7 @@ it.each<
     });
     const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
     const { page } = await loadUsagePage(request);
+    await showRecentSessions(page);
     // Match the fixture range so each export interaction renders only its populated day.
     page.read().callbacks.filters.onDatesChange({
       startDate: snapshot.result.startDate,

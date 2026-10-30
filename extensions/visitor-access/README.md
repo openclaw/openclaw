@@ -105,18 +105,22 @@ Guest admission or restore authority for unfinished work.
 
 ## Invite, inspect, and revoke visitors
 
-| Tool             | Input                                                            | Result                                                                                      |
-| ---------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `visitor_invite` | Exactly one of `github` or `email`; optional `days` or `forever` | Adds a grant or refreshes the same target's expiry.                                         |
-| `visitor_list`   | `{}`                                                             | Shows targets, verified GitHub identities, selection IDs, Gateway access, and policy drift. |
-| `visitor_revoke` | `profileId`, `grantId`, or `github`/`email`                      | Removes a person's recorded grants or cancels a selected invitation.                        |
+| Tool             | Input                                                                        | Result                                                                                                                |
+| ---------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `visitor_invite` | Exactly one of `github` or `email`; optional `days` or `forever`, and `note` | Adds a grant or refreshes the same target's expiry, and returns copyable invitation text.                             |
+| `visitor_list`   | `{}`                                                                         | Shows targets, verified GitHub identities, selection IDs, Gateway access, policy drift, and welcome-session progress. |
+| `visitor_revoke` | `profileId`, `grantId`, or `github`/`email`                                  | Removes a person's recorded grants or cancels a selected invitation.                                                  |
 
 Each tool also returns structured `details`, visible to Code Mode, with the same
 information as its text: invite returns `outcome`, either `email` or `githubAccountId`, `grantId`, optional `githubLogin`,
-`expiresAt`, `gatewayAccess`, and `signInUrl`; revoke returns `outcome`, `emails`,
+`expiresAt`, `gatewayAccess`, optional `signInUrl`, `noteStored`, and `invitationText`; revoke returns `outcome`, `emails`,
 and optional `githubAccountIds` and `githubLogin`; list returns `counts`, `grants`, `unmanaged`, and `omitted`.
 Recorded list rows include `grantId` when the invitation has a qualified lifetime,
-and `profileId` when its target belongs to a current profile.
+`profileId` when its target belongs to a current profile, and `welcome`
+(`state` of `pending`, `ready`, or `failed`, plus the reserved `sessionKey`) when
+the invitation records welcome-session progress. Grants recorded before
+onboarding metadata omit `welcome` until the guest's first sign-in. Setup error
+details stay in the Gateway log, not the listing.
 
 Each listed grant's optional `githubLogin` is the selected verified identity from
 its current Gateway profile. The directory is read again on every listing,
@@ -168,7 +172,7 @@ For example, invite a visitor for seven days:
 ```
 
 Invite results identify the target, grant expiry, Gateway access, and login
-URL. A repeat invite for the same email or GitHub account refreshes its expiry rather than creating
+URL when one is configured. A repeat invite for the same email or GitHub account refreshes its expiry rather than creating
 a second grant, and checks the current role again even when the target is already
 in the Access policy.
 Renewal before expiry preserves the grant attached to accepted shared GitHub
@@ -179,7 +183,8 @@ GitHub result; saved work and existing pull requests are retained.
 Permanent access requires `forever: true`. Invites beyond `maxVisitors` are
 refused; revoke an existing visitor or deliberately raise the configured cap.
 
-Visitors sign in at the normal <https://team.openclaw.ai> address through Team's
+Visitors sign in at the Gateway's configured `gateway.publicOrigin`, under
+`gateway.controlUi.basePath` when set (for Team, <https://team.openclaw.ai>), through Team's
 existing login. Invite either the email that login verifies or the GitHub account
 verified through the configured OIDC mapping. The address is a sign-in
 location, not a magic link: sharing it does not grant access and the plugin does
@@ -201,6 +206,128 @@ does not change the grant's target. Cloudflare must verify that account's ID und
 the configured provider and claim. A known profile retains its current
 role; an unknown account reports first sign-in as pending. The stored login is a
 display label, not an identity binding or GitHub authorship credit.
+
+## Invitation note and text
+
+Pass an optional `note` to `visitor_invite`: free text of at most 1000 characters
+from the inviter to the visitor, for example a session link to start from. A
+session link goes only in this note; the plugin does not share sessions itself.
+A supplied note replaces the stored one; renewal without `note` keeps it. The
+result confirms whether a note is stored but does not echo it separately.
+
+After a successful invite or renewal, `invitationText` (also at the end of the
+text result) is short plain text for the inviter to hand to the visitor. It
+names the inviter when their Gateway profile has a display name, the sign-in
+address, the email or GitHub account to sign in with, the expiry in UTC, and the
+stored note. It contains no grant IDs, tokens, or other credentials:
+
+```text
+Josh invited you to OpenClaw.
+Sign in at https://team.openclaw.ai with your GitHub account @octocat.
+Your access expires on 2026-11-07 12:00 UTC.
+
+Note from Josh:
+Start in https://team.openclaw.ai/chat/roboclaw/welcome
+```
+
+The sign-in address comes from `gateway.publicOrigin` plus
+`gateway.controlUi.basePath`, like other external Control UI links. When no
+public origin is configured or the Control UI is disabled, `signInUrl` is
+omitted, the text result names the missing setting, and the invitation text asks
+the visitor to get the OpenClaw sign-in address from the inviter.
+
+## Onboarding record
+
+Each new invitation records onboarding metadata with its grant: the inviter's
+Gateway profile (`invitedBy`, with a display label when available), an optional
+inviter note of at most 1000 characters stored as given, and welcome-session
+progress (`onboarding`) that starts as `pending`. The inviter comes only from the
+host's trusted requester context, never from tool input; when no human profile
+resolves, it stays unset.
+
+Renewal of an active grant keeps the recorded inviter, note, and onboarding
+progress unless new values are supplied, and never resets progress to
+`pending`. A new invitation after the previous grant expired or was revoked
+gets a new grant ID and starts onboarding at `pending` again; the recorded
+inviter and note carry over unless replaced. Grants recorded before this
+metadata existed keep working without it.
+
+Welcome-session setup inside this plugin uses two service methods:
+
+- `findActiveInvitation(grantId)` returns a snapshot of the current grant with
+  that ID, or `undefined` when it expired, was revoked, or was replaced.
+- `compareAndSetOnboarding({ grantId, expected, next })` replaces the onboarding
+  progress of that still-active grant only when the recorded progress matches
+  `expected` by `state` and `updatedAt` (`null` matches a grant without
+  progress). It runs on the same queue as invite, revoke, and sweep, so of
+  concurrent callers holding one snapshot exactly one applies; the others receive
+  `conflict` with the current progress. Expired, revoked, or replaced grants
+  return `inactive`; expiry during a write rejects it. Errors longer than 500 characters are truncated.
+  `updatedAt` advances monotonically, including a `pending` → `pending` reservation
+  in the same millisecond. Reserve a stable session key before creating it; retry
+  setup against that same key instead of allocating another session. This API
+  serializes the active Gateway service, not independent processes. Session
+  creation and restart recovery remain the welcome-setup owner's responsibility.
+
+## Welcome session
+
+The guest Control UI calls the Gateway method `visitor-access.welcome.ensure`
+with `{}` on load. It requires `operator.sessions.write` and a signed-in
+profile, so the restricted guest role can call it. Nothing the caller sends
+selects the invitation: the plugin uses the visitor grant the Gateway admitted
+for that connection (its `gatewayAccessGrant` reference). Staff, the Gateway
+owner, and anyone else without an admitted visitor grant get
+`{ status: "not_applicable" }`.
+
+| Response                                            | Meaning                                                                           |
+| --------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `{ status: "not_applicable" }`                      | The caller has no active visitor invitation, or its welcome session was deleted.  |
+| `{ status: "pending", retryAfterMs }`               | Another call is setting up this invitation's welcome session; call again.         |
+| `{ status: "ready", sessionKey, agentId, created }` | The welcome session exists; `created` is true only for the call that finished it. |
+| `{ status: "failed", retryable: true, message }`    | Setup failed; calling again resumes it. The message is short and has no secrets.  |
+
+The first call reserves a session key in the grant's onboarding record, then
+creates the session as the guest, so the guest owns it and the guest role's
+agent, sandbox, and session limits apply. The session uses the configured
+default agent when the guest role permits it, otherwise the role's first
+permitted agent, and is titled "Welcome, <display name>" ("Welcome" without a
+display name). The plugin then adds one agent-written message without running
+the model and records the onboarding as `ready`. Any number of calls, tabs,
+retries, reloads, or Gateway restarts yield at most one welcome session per
+grant: a retry after a failure or crash reuses the reserved key, an existing
+session is adopted, and the message is written with a stable idempotency key,
+so it is never repeated.
+
+The welcome message greets the guest, names the inviter, includes the stored
+note, and gives the access expiry in UTC. It lists what the guest can do from
+the current guest role: which agents they can start sessions with, whether work
+runs in a required sandbox, and whether they can read other people's sessions.
+The inviter appears as a mention, so the session shows up in the inviter's
+**Involving me** list and Inbox with the guest named as the sender. Grants
+recorded without an inviter get a welcome without a mention. Chat input
+normalization applies to the message text, as it does to a typed message.
+
+Renewing an active grant keeps the onboarding record as it is, including a
+reservation held mid-setup or a failed setup, so renewal never starts a second
+welcome session. Expiry or revocation leaves the session and its transcript in
+place; the guest simply loses access. Access ending during setup ends that
+setup: the Gateway refuses the guest's remaining writes, the ready record is not
+committed, and the call answers `not_applicable`. A new invitation after that
+gets a new grant, so the guest's next sign-in creates a new welcome session; the
+earlier one remains the guest's.
+
+A deleted welcome session, for example one an administrator removed, stays
+deleted. The record keeps its key, so setup never recreates it, and later calls
+answer `not_applicable`, so the Control UI does not open it. Until setup
+completes, a retry resumes against the reserved key, so a partial session removed after a
+failed setup is created again with its welcome message.
+
+Welcome sessions belong to an invitation. A person invited by both email and
+GitHub account has two grants; the Gateway admits them with the first active
+one, checking email grants before GitHub grants, so only that invitation gets a
+welcome session. If that grant ends while the other is still active, the next
+sign-in is admitted by the other grant and gets its own welcome session. Revoke
+the extra grant by `grantId` when one invitation per person is enough.
 
 ## Expiry and drift
 

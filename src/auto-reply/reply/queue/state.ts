@@ -201,6 +201,7 @@ export function refreshQueuedFollowupSession(params: {
   nextModelOverrideSource?: "auto" | "user";
   nextAuthProfileId?: string;
   nextAuthProfileIdSource?: "auto" | "user";
+  nextCyberAccessProgram?: FollowupRun["run"]["cyberAccessProgram"] | null;
   nextThinking?: {
     level?: string;
     catalog?: ModelCatalogEntry[];
@@ -222,6 +223,7 @@ export function refreshQueuedFollowupSession(params: {
     shouldRewriteModelSelection ||
     Object.hasOwn(params, "nextAuthProfileId") ||
     Object.hasOwn(params, "nextAuthProfileIdSource") ||
+    params.nextCyberAccessProgram !== undefined ||
     params.nextThinking !== undefined;
   if (!shouldRewriteSession && !shouldRewriteSelection) {
     return;
@@ -253,12 +255,28 @@ export function refreshQueuedFollowupSession(params: {
         run.hasSessionModelOverride =
           params.nextModelOverrideSource !== undefined && Boolean(run.provider || run.model);
         run.modelOverrideSource = params.nextModelOverrideSource;
+        const scheduledAutomation = run.scheduledAutomation;
+        if (scheduledAutomation?.modelFallbackPolicy) {
+          // Queued scheduled work now runs the retargeted session selection, not the admitted one.
+          run.scheduledAutomation = {
+            ...scheduledAutomation,
+            modelFallbackPolicy: {
+              ...scheduledAutomation.modelFallbackPolicy,
+              sessionModelOverrideSource: run.hasSessionModelOverride
+                ? params.nextModelOverrideSource
+                : undefined,
+            },
+          };
+        }
       }
       if (Object.hasOwn(params, "nextAuthProfileId")) {
         run.authProfileId = normalizeOptionalString(params.nextAuthProfileId);
       }
       if (Object.hasOwn(params, "nextAuthProfileIdSource")) {
         run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;
+      }
+      if (params.nextCyberAccessProgram !== undefined) {
+        run.cyberAccessProgram = params.nextCyberAccessProgram ?? undefined;
       }
       if (params.nextThinking) {
         run.thinkingCatalog = params.nextThinking.catalog;

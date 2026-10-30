@@ -137,6 +137,7 @@ describe("Pi session catalog continuation", () => {
     ]);
     expect(transcriptMocks.messages[0]?.["__openclaw"]).toEqual({
       mirrorOrigin: "pi-catalog-import",
+      catalogDisplay: { type: "userMessage" },
     });
 
     await createParams?.afterCreate?.(await createSessionEntry.mock.results[0]?.value);

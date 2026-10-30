@@ -49,7 +49,6 @@ const { createFixture, mocks } = await vi.hoisted(
 type PromptErrorCall = {
   error: unknown;
   markYieldAborted: () => void;
-  releaseLeasedSteering: (error?: unknown) => void;
   yieldAbortSettled: Promise<void> | null;
   yieldDetected: boolean;
   yieldMessage: string | null;
@@ -96,6 +95,18 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(mocks.submitPrompt).toHaveBeenCalledTimes(1);
     expect(write).not.toHaveBeenCalled();
     expect(manager.buildSessionContext().messages).toEqual([]);
+  });
+
+  it("reuses the attempt during context assembly", async () => {
+    const fixture = createFixture();
+    const attemptFragments = [{ kind: "runtime-instruction" as const, text: "Turn instruction" }];
+    fixture.input.attempt.runtimeContextFragments = attemptFragments;
+    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+
+    const [contextInput] = mocks.preparePromptContext.mock.calls[0]!;
+    expect(contextInput.attempt).toBe(fixture.input.attempt);
+    expect(fixture.input.attempt.runtimeContextFragments).toBe(attemptFragments);
+    expect(mocks.submitPrompt).toHaveBeenCalledTimes(1);
   });
 
   it("passes cloned prompt context to a policy without mutating a passing turn", async () => {
@@ -609,9 +620,6 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(fixture.readState().promptError).toBe(failure);
     expect(fixture.readState().promptErrorSource).toBe("precheck");
     expect(mocks.submitPrompt).not.toHaveBeenCalled();
-    expect(mocks.releasePendingSteering).toHaveBeenCalledWith(
-      expect.objectContaining({ error: failure.message, leaseId: "lease-1" }),
-    );
   });
 
   it("reads yield state after submission fails and publishes abort state before recovery", async () => {
@@ -630,7 +638,6 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       expect(input.yieldDetected).toBe(true);
       expect(input.yieldAbortSettled).toBe(yieldAbortSettled);
       expect(input.yieldMessage).toBe("yield context");
-      input.releaseLeasedSteering(input.error);
       input.markYieldAborted();
       expect(fixture.readState()).toMatchObject({ aborted: false, cleanupYieldAborted: true });
       return {};
@@ -645,9 +652,6 @@ describe("runEmbeddedAttemptPromptPhase", () => {
 
     expect(fixture.order.slice(-3)).toEqual(["submit", "prompt-error", "stop-steering"]);
     expect(fixture.promptState.yieldAborted).toBe(true);
-    expect(mocks.releasePendingSteering).toHaveBeenCalledWith(
-      expect.objectContaining({ leaseId: "lease-1", runIds: ["run-1"] }),
-    );
   });
 
   it.each([
@@ -705,9 +709,9 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(fixture.readState().promptErrorSource).toBe("prompt");
   });
 
-  it("releases transferred steering when prompt assembly rejects an invalidated result", async () => {
+  it("records a prompt assembly failure before context preparation", async () => {
     const fixture = createFixture();
-    const invalidationError = new Error("queued child result lost authority");
+    const invalidationError = new Error("prompt preparation failed");
     const prepareAssembly = expectDefined(
       mocks.preparePromptAssembly.getMockImplementation(),
       "prompt assembly fixture",
@@ -718,7 +722,6 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     });
     mocks.handlePromptError.mockImplementationOnce(async (input: PromptErrorCall) => {
       fixture.order.push("prompt-error");
-      input.releaseLeasedSteering(input.error);
       return { promptFailure: { error: input.error, source: "prompt" } };
     });
 
@@ -729,11 +732,6 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       transcriptLeafId: null,
     });
 
-    expect(mocks.releasePendingSteering).toHaveBeenCalledExactlyOnceWith({
-      error: invalidationError.message,
-      leaseId: "lease-1",
-      runIds: ["run-1"],
-    });
     expect(fixture.readState().promptError).toBe(invalidationError);
     expect(mocks.preparePromptContext).not.toHaveBeenCalled();
     expect(mocks.submitPrompt).not.toHaveBeenCalled();

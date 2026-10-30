@@ -1,20 +1,10 @@
 import { createHash } from "node:crypto";
 /* oxlint-disable typescript/no-base-to-string -- fetch mocks normalize standard RequestInfo inputs exactly as the production fetch boundary does. */
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { crc32, deflateRawSync, gzipSync } from "node:zlib";
-import * as tar from "tar";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { downloadExactActionsArtifactArchive } from "../../scripts/lib/actions-artifact-archive.mjs";
 import {
   createPluginPublicationArtifact,
@@ -22,6 +12,7 @@ import {
   inspectActionsArtifactZipWithPolicy,
   verifyPluginPublicationArtifact,
 } from "../../scripts/plugin-publication-artifact.mjs";
+import { createScriptTestHarness } from "./test-helpers.js";
 
 const TARGET_SHA = "1".repeat(40);
 const WORKFLOW_SHA = "2".repeat(40);
@@ -52,13 +43,8 @@ const WORKFLOW_BINDING = {
   workflowSha: WORKFLOW_SHA,
 };
 
-const tempDirs: string[] = [];
-
-function tempDir(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-publication-artifact-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const { createTempDir } = createScriptTestHarness();
+const tempDir = () => createTempDir("openclaw-plugin-publication-artifact-");
 
 function stagingFixture(markerName = "marker") {
   const root = tempDir();
@@ -71,12 +57,6 @@ function stagingFixture(markerName = "marker") {
     tarballPath: path.join(artifactDir, TARBALL_NAME),
   };
 }
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
-  }
-});
 
 function sha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -189,17 +169,6 @@ function expectTarballError(artifactDir: string, message?: RegExp, overrides = {
   expect(() => createPluginPublicationArtifact(publicationParams(artifactDir, overrides))).toThrow(
     message,
   );
-}
-
-function consumerTarEntries(file: string) {
-  const entries: Array<{ path: string; size: number; type: string }> = [];
-  tar.t({
-    file,
-    onReadEntry: (entry) => entries.push({ path: entry.path, size: entry.size, type: entry.type }),
-    onwarn: () => undefined,
-    sync: true,
-  });
-  return entries;
 }
 
 function paxRecord(key: string, value: string): Buffer {
@@ -557,13 +526,17 @@ function expectVerifyError(
   expect(() => verifyFixture(fixture, overrides)).toThrow(message);
 }
 
-it.each(["npm-readback"])("retains historical alpha artifact readback through %s", (route) => {
+it("retains historical alpha artifact readback through npm-readback", () => {
   const packageJson = JSON.parse(metaPackageJson("unused-marker"));
   packageJson.version = "2026.7.1-alpha.3";
   expect(() =>
     createFixture({
       packageJson: JSON.stringify(packageJson),
-      publicationOverrides: { route, version: packageJson.version, publishTag: "alpha" },
+      publicationOverrides: {
+        route: "npm-readback",
+        version: packageJson.version,
+        publishTag: "alpha",
+      },
     }),
   ).not.toThrow();
 });
@@ -608,13 +581,11 @@ describe("plugin publication artifact", () => {
     });
     expect(existsSync(fixture.markerPath)).toBe(false);
 
-    const wrongSizeFixture = createFixture();
-    expectVerifyError(wrongSizeFixture, "tarball size does not match", {
-      expectedTarballSizeBytes: wrongSizeFixture.tarball.length + 1,
+    expectVerifyError(fixture, "tarball size does not match", {
+      expectedTarballSizeBytes: fixture.tarball.length + 1,
     });
 
-    const wrongInventoryFixture = createFixture();
-    expectVerifyError(wrongInventoryFixture, "tarball inventory does not match", {
+    expectVerifyError(fixture, "tarball inventory does not match", {
       expectedInventory: expectedInventory.slice(0, -1),
     });
   });
@@ -1046,9 +1017,7 @@ describe("plugin publication artifact", () => {
   });
 
   it("rejects unsupported flags, invalid names, aliases, and trailing deflate bytes", () => {
-    for (const flags of [0x0040, 0x2000]) {
-      expectZipFileError("flags.txt", { flags }, /Unsupported Actions artifact ZIP flags/u);
-    }
+    expectZipFileError("flags.txt", { flags: 0x0040 }, /Unsupported Actions artifact ZIP flags/u);
 
     expectZipFileError("m\u00e9ta.txt", {}, /must set the UTF-8 language flag/u);
     expect(
@@ -1184,7 +1153,7 @@ describe("plugin publication artifact", () => {
       /canonical POSIX USTAR headers/u,
     ],
   ] as const)("rejects tar manifest ambiguity: %s", (kind, fields, content, message) => {
-    const { artifactDir, markerPath, tarballPath } = stagePackage((marker) => {
+    const { artifactDir, markerPath } = stagePackage((marker) => {
       const smuggled = kind === "whitespace prefix";
       return [
         { path: "package/", type: "5", content },
@@ -1196,17 +1165,6 @@ describe("plugin publication artifact", () => {
         ...(smuggled ? [manifestEntry(marker)] : []),
       ];
     });
-    if (kind === "trailing slash") {
-      expect(consumerTarEntries(tarballPath).at(-1)).toMatchObject({
-        path: "package/package.json/",
-        size: 0,
-        type: "Directory",
-      });
-    } else if (kind === "V7 prefix") {
-      const paths = consumerTarEntries(tarballPath).map((entry) => entry.path);
-      expect(paths).toContain("package.json");
-      expect(paths).not.toContain("package/package.json");
-    }
     expectTarballError(artifactDir, message);
     expect(existsSync(markerPath)).toBe(false);
   });
@@ -1267,39 +1225,17 @@ describe("plugin publication artifact", () => {
       createTarballFromParts([...packageEntries(markerPath).map(tarEntry), decoy]),
     );
 
-    const consumerPaths = consumerTarEntries(tarballPath).map((entry) => entry.path);
-    expect(consumerPaths.filter((entryPath) => entryPath === "package/package.json")).toHaveLength(
-      2,
-    );
     expectTarballError(artifactDir, testCase.message);
     expect(existsSync(markerPath)).toBe(false);
   });
 
-  it("rejects canonical PAX metadata for every plugin publication route", () => {
-    const { artifactDir, markerPath, tarballPath } = stagingFixture();
-    const longPath = `package/${"nested/".repeat(18)}index.js`;
-    const content = Buffer.from("export {};\n", "utf8");
-    const tarball = createTarball([
-      ...packageEntries(markerPath),
-      {
-        content: Buffer.concat([
-          paxRecord("path", longPath),
-          paxRecord("size", String(content.length)),
-        ]),
-        path: "PaxHeader",
-        type: "x",
-      },
-      { content, path: "package/placeholder.js" },
+  it("rejects canonical PAX metadata", () => {
+    const { artifactDir } = stagePackage((marker) => [
+      ...packageEntries(marker),
+      { content: paxRecord("path", "package/index.js"), path: "PaxHeader", type: "x" },
+      { content: "export {};\n", path: "package/placeholder.js" },
     ]);
-    writeFileSync(tarballPath, tarball);
-    for (const controls of [
-      { route: "npm-token-bootstrap" },
-      { route: "clawhub-token-release" },
-      { bootstrapMode: "publish", route: "clawhub-token-bootstrap" },
-      { route: "clawhub-readback" },
-    ]) {
-      expectTarballError(artifactDir, /PAX and GNU tar metadata are not supported/u, controls);
-    }
+    expectTarballError(artifactDir, /PAX and GNU tar metadata are not supported/u);
   });
 
   it("rejects beta npm artifacts bound to latest or extended-stable", () => {

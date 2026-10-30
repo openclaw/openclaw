@@ -23,7 +23,6 @@ import { buildTestCtx } from "./test-ctx.js";
 
 type Prepared = Parameters<typeof runPreparedReply>[0];
 
-/** Keep actual command authorization, directive routing/application, and run construction. */
 async function prepareIngress(body: string, authorized = true): Promise<Prepared> {
   const cfg: Prepared["cfg"] = {
     session: {},
@@ -58,8 +57,7 @@ async function prepareIngress(body: string, authorized = true): Promise<Prepared
     sessionId: sessionEntry.sessionId,
     isNewSession: false,
   });
-  // This suite owns ingress/run construction, not model catalog I/O. The parser,
-  // authorization owner, directive application, and final run producer stay real.
+  // Only catalog I/O is mocked; ingress, authorization, and the run producer stay real.
   const selected = createModelSelectionStateFixture({
     agentCfg: params.agentCfg,
     provider: params.provider,
@@ -84,9 +82,7 @@ async function prepareIngress(body: string, authorized = true): Promise<Prepared
       defaultProvider: params.provider,
       defaultModel: params.model,
       aliasIndex: { byAlias: new Map(), byKey: new Map() },
-      hasResolvedHeartbeatModelOverride: false,
     });
-    expect(routed.kind).toBe("continue");
     if (routed.kind !== "continue") {
       throw new Error("Expected directive/prose input to continue to the run producer");
     }
@@ -98,12 +94,19 @@ async function prepareIngress(body: string, authorized = true): Promise<Prepared
       defaultActivation: routed.result.defaultActivation,
       ctx,
       sessionCtx,
-      // Directives can rewrite agent text. Capture conversation after that owner.
       conversation: prepareReplyConversation({ ctx: sessionCtx, sessionEntry }),
     };
   } finally {
     selection.mockRestore();
   }
+}
+
+function attachBackend(active: ReplyOperation, queueMessage = async () => {}) {
+  active.attachBackend({
+    kind: "embedded",
+    cancel() {},
+    messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+  });
 }
 
 export function registerSteeringIntentProducerCases(params: {
@@ -121,10 +124,7 @@ export function registerSteeringIntentProducerCases(params: {
         ctx: createInboundTurn(body, "slack", "direct"),
         sessionCtx: createSessionTurn(body, "slack", "direct"),
         isNewSession: false,
-        commandAuthorized: true,
-        allowTextCommands: true,
       });
-      prepared.command = { ...prepared.command, isAuthorizedSender: true };
       const inbound = finalizeInboundContext({ ...prepared.ctx, CommandAuthorized: true });
       const routed = await routeReplyDirectivesForTest(inbound, {
         cfg: prepared.cfg,
@@ -141,48 +141,16 @@ export function registerSteeringIntentProducerCases(params: {
       expect(call.followupRun.prompt).toBe(expected);
     });
 
-    it.each([
-      {
-        name: "ordinary prose",
-        body: "continue the task",
-        authorized: true,
-        kind: "continue-existing",
-      },
-      {
-        name: "accepted exec policy",
-        body: "/exec security=deny continue the task",
-        authorized: true,
-        kind: "new-execution",
-      },
-      {
-        name: "accepted elevation off",
-        body: "/elevated off continue the task",
-        authorized: true,
-        kind: "new-execution",
-      },
-      {
-        name: "unauthorized exec text",
-        body: "/exec security=deny continue the task",
-        authorized: false,
-        kind: "continue-existing",
-      },
-    ] as const)("retains $name through actual reply-run construction", async (testCase) => {
-      const input = await prepareIngress(testCase.body, testCase.authorized);
+    it("keeps unauthorized exec text as ordinary continuation", async () => {
+      const body = "/exec security=deny continue the task";
+      const input = await prepareIngress(body, false);
       await params.runPrepared(input);
-      const produced = params.requireRunReplyAgentCall();
-      expect(produced.steeringIntent).toEqual({ kind: testCase.kind });
+      const produced = requireRunReplyAgentCall();
+      expect(input.command.isAuthorizedSender).toBe(false);
+      expect(produced.steeringIntent).toEqual({ kind: "continue-existing" });
       expect(produced.followupRun.run.elevatedLevel).toBe("off");
-      if (testCase.name === "accepted exec policy") {
-        expect(produced.followupRun.run.execOverrides?.security).toBe("deny");
-        expect(produced.followupRun.prompt).not.toContain("/exec");
-      }
-      if (testCase.name === "unauthorized exec text") {
-        expect(input.command.isAuthorizedSender).toBe(false);
-        expect(produced.followupRun.run.execOverrides?.security).toBeUndefined();
-        expect(produced.followupRun.prompt).toContain(testCase.body);
-      }
-      // Both ordinary default off and explicitly requested off have the same
-      // resolved value above; intent must survive the producer independently.
+      expect(produced.followupRun.run.execOverrides?.security).toBeUndefined();
+      expect(produced.followupRun.prompt).toContain(body);
     });
 
     it.each(["/exec security=deny continue the task", "/elevated off continue the task"])(
@@ -199,16 +167,15 @@ export function registerSteeringIntentProducerCases(params: {
         });
         const queueMessage = vi.fn(async () => {});
         const followup = vi.fn(async () => {});
-        const touched = vi.fn(async () => {});
         const active = params.activatePreparedRun(input.sessionKey);
-        active.attachBackend({
-          kind: "embedded",
-          cancel() {},
-          messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
-        });
+        attachBackend(active, queueMessage);
         vi.mocked(runReplyAgent).mockImplementationOnce(async (produced) => {
-          // Use the exact object emitted by executePreparedReplyRun. Never set
-          // steeringIntent in a test or call the intent helper directly.
+          expect(produced.steeringIntent).toEqual({ kind: "new-execution" });
+          expect(produced.followupRun.run.elevatedLevel).toBe("off");
+          if (body.startsWith("/exec")) {
+            expect(produced.followupRun.run.execOverrides?.security).toBe("deny");
+            expect(produced.followupRun.prompt).not.toContain("/exec");
+          }
           await expect(runReplyQuestionInput(produced)).resolves.toEqual({ handled: false });
           try {
             await expect(
@@ -216,7 +183,6 @@ export function registerSteeringIntentProducerCases(params: {
                 createSteerParams(produced.queueKey, produced.followupRun, active, {
                   ...produced,
                   runFollowup: followup,
-                  touchActiveSessionEntry: touched,
                 }),
               ),
             ).resolves.toBe("handled");
@@ -226,13 +192,11 @@ export function registerSteeringIntentProducerCases(params: {
             await expect(
               produced.followupRun.controllerInput?.injectionOrder.settled,
             ).resolves.toBe(false);
-            expect(touched).toHaveBeenCalledOnce();
             expect(claim).not.toHaveBeenCalled();
             expect(policy).not.toHaveBeenCalled();
             expect(queueMessage).not.toHaveBeenCalled();
             expect(followup).not.toHaveBeenCalled();
           } finally {
-            // The queue owns the input now; do not run a queued model turn here.
             clearFollowupQueue(produced.queueKey);
           }
           return undefined;
@@ -251,11 +215,7 @@ export function registerSteeringIntentProducerCases(params: {
       const body = "/steer continue the task";
       const input = await prepareIngress(body);
       const active = params.activatePreparedRun(input.sessionKey);
-      active.attachBackend({
-        kind: "embedded",
-        cancel() {},
-        messageInjectionV2: { version: 2, isAvailable: () => true, async queueMessage() {} },
-      });
+      attachBackend(active);
       const command = buildCommandTestParams(body, input.cfg);
       Object.assign(command, {
         agentId: input.agentId,

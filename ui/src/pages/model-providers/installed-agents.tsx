@@ -54,7 +54,6 @@ type InstalledAgent = {
 
 const INSTALLATION_STATUS = {
   installed: { kind: "muted", labelKey: "modelProviders.installedAgents.status.installed" },
-  missing: { kind: "muted", labelKey: "modelProviders.installedAgents.status.missing" },
   unverified: { kind: "warn", labelKey: "modelProviders.installedAgents.status.unverified" },
 } as const;
 
@@ -452,12 +451,11 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
       const enabled =
         enabling || (typeof configuredEnabled === "boolean" ? configuredEnabled : agent.enabled);
       const card = getCards().find((entry) => entry.id === agent.runtimeId);
+      // Rows render only for detected apps; missing ones share one line below the list.
       let status: { kind: "ok" | "muted" | "warn" | "danger"; labelKey: string } =
-        INSTALLATION_STATUS[agent.installation];
+        INSTALLATION_STATUS[agent.installation === "unverified" ? "unverified" : "installed"];
       let hint = "";
-      if (agent.installation === "missing") {
-        hint = t("modelProviders.installedAgents.installHint", { name: agent.name });
-      } else if (agent.installation === "unverified") {
+      if (agent.installation === "unverified") {
         hint = t("modelProviders.installedAgents.unverifiedHint");
       } else if (!enabled) {
         hint = t("modelProviders.installedAgents.disabledHint");
@@ -545,7 +543,8 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
             </Show>
           }
           checked={presentation().enabled()}
-          disabled={busy() || view().blocked}
+          disabled={view().blocked}
+          saving={busy()}
           onChange={(checked) => {
             const display = presentation();
             return setEnabled(props.agent, checked, (...args) => presentToggle(display, ...args));
@@ -618,6 +617,12 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         // Refresh may retain rows, but must not hold scope retirement or live config updates.
         const displayedInventory = createDeferred(() => read().value);
         const checking = () => isPending(displayedInventory);
+        const detected = createMemo(() =>
+          (displayedInventory().agents ?? []).filter((agent) => agent.installation !== "missing"),
+        );
+        const missing = createMemo(() =>
+          (displayedInventory().agents ?? []).filter((agent) => agent.installation === "missing"),
+        );
         const outcome = createMemo(() => {
           const failure = displayedInventory().failure;
           if (failure) {
@@ -632,7 +637,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
                 <Show when={!checking()}>
                   <div class="settings-row">
                     <div class="settings-row__text">
-                      <span class="settings-row__desc provider-usage-error" role="alert">
+                      <span class="settings-row__desc provider-usage__error" role="alert">
                         {modelProviderErrorMessage(error())}
                       </span>
                     </div>
@@ -649,12 +654,25 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
             </Errored>
             <Show when={view().agents !== null}>
               <For
-                each={displayedInventory().agents ?? []}
+                each={detected()}
                 keyed={(agent) => agent.id}
-                fallback={<SettingsEmpty message={t("modelProviders.installedAgents.empty")} />}
+                fallback={
+                  <Show when={missing().length === 0}>
+                    <SettingsEmpty message={t("modelProviders.installedAgents.empty")} />
+                  </Show>
+                }
               >
                 {(agent) => <AgentRow agent={agent()} />}
               </For>
+              <Show when={missing().length > 0}>
+                <p class="model-providers__agents-missing" data-installed-agents-missing>
+                  {t("modelProviders.installedAgents.notDetected", {
+                    names: missing()
+                      .map((agent) => agent.name)
+                      .join(", "),
+                  })}
+                </p>
+              </Show>
             </Show>
           </InventorySection>
         );

@@ -7,6 +7,7 @@ import { asOptionalObjectRecord as getToolParamsRecord } from "@openclaw/normali
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { preserveAtPrefixedRelativePath } from "./path-policy.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.types.js";
+import { normalizeLocalWindowsDrivePath } from "./sessions/tools/path-utils.js";
 
 export { getToolParamsRecord };
 
@@ -113,7 +114,8 @@ export function normalizeFileToolPathParam(
     HALLUCINATED_OFFICE_PATH_EXTENSION_RE,
     (match, family: string) => OFFICE_EXTENSION_BY_FAMILY[family.toLowerCase()] ?? match,
   );
-  return cwd ? Promise.resolve(preserveAtPrefixedRelativePath(repaired, cwd, bridge)) : repaired;
+  const filePath = cwd && !bridge ? normalizeLocalWindowsDrivePath(repaired) : repaired;
+  return cwd ? Promise.resolve(preserveAtPrefixedRelativePath(filePath, cwd, bridge)) : repaired;
 }
 
 /** Strip malformed XML suffixes from selected string fields without mutating input. */

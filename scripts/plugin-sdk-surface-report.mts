@@ -233,7 +233,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: shared database-engine host and worker adapters.
       // +1: maintainer-requested context-engine-transcript-runtime watermark subpath (2026-10-08).
       // +1: approved shared OpenAI Decisions codec used by OpenAI and ClawRouter.
-      157,
+      // +1: approved lightweight nullable request-header projection for provider transports.
+      // +1: approved shared automation tool-default selection before policy and approval.
+      // +2: reconcile the accepted public entrypoint inventory after the cron budget update.
+      161,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -293,7 +296,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: awaited web_search policy preparation for harnesses; the sync resolver stays.
       // +3: shared Decisions support/evaluation functions and the canonical capability schema.
       // +2: openRecord and ToolArgumentValidationError on the existing tool-plugin facade.
-      3815,
+      // +1: resolveManagedResourceStateDir keeps plugin-managed model caches and binaries on the operator root during redirected agent exec.
+      // +2: shared SystemOne question encoder and response decoder on the Decisions facade.
+      // +4: capability-aware auth context and transport model types in core/plugin-entry.
+      // +2: the shared automation tool-default resolver and its exact-selection mode type.
+      // +19: reconcile the accepted public export inventory after the cron budget update.
+      3843,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -338,7 +346,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same awaited web_search policy preparation.
       // +2: the same shared Decisions support predicate and evaluator.
       // +1: the same openRecord helper; ToolArgumentValidationError is construct-only.
-      2211,
+      // +1: resolveManagedResourceStateDir keeps plugin-managed model caches and binaries on the operator root during redirected agent exec.
+      // +2: the same shared SystemOne codec functions.
+      // +1: the same shared automation tool-default resolver.
+      // +12: reconcile the accepted callable export inventory after the cron budget update.
+      2227,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

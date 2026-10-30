@@ -3,6 +3,7 @@ import { createMemo, createEffect, onCleanup, For, Show } from "solid-js";
 import { AgentAvatar } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
+import { createElementRefs } from "../../lib/element-refs.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
 import { selectCardAlert, type CardAlert } from "../../lib/workboard/card-alerts.ts";
@@ -56,7 +57,7 @@ export function CardAlertView(input: { alerts: CardAlert[]; descriptionId: strin
       {(activeAlert) => (
         <>
           <div
-            class={`workboard-card__alert workboard-card__alert--${activeAlert().severity}`}
+            class={["workboard-card__alert", `workboard-card__alert--${activeAlert().severity}`]}
             title={fullText()}
           >
             <span class="workboard-truncate">{alertLabel(activeAlert())}</span>
@@ -111,6 +112,52 @@ export function CardPriority(input: { card: WorkboardCard }) {
     </>
   );
 }
+type LabelResizeOwner = {
+  observer: ResizeObserver;
+  labels: Map<Element, (entry: ResizeObserverEntry) => void>;
+};
+const labelResizeOwners = new WeakMap<Document, LabelResizeOwner>();
+
+function observeLabelWidth(
+  element: HTMLElement,
+  resized: (entry: ResizeObserverEntry) => void,
+): () => void {
+  if (typeof ResizeObserver !== "function") {
+    return () => {};
+  }
+  const doc = element.ownerDocument;
+  let owner = labelResizeOwners.get(doc);
+  if (!owner) {
+    const labels = new Map<Element, (entry: ResizeObserverEntry) => void>();
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        try {
+          labels.get(entry.target)?.(entry);
+        } catch (error) {
+          reportError(error);
+        }
+      }
+    });
+    owner = { observer, labels };
+    labelResizeOwners.set(doc, owner);
+  }
+  owner.labels.set(element, resized);
+  owner.observer.observe(element);
+  let active = true;
+  return () => {
+    if (!active) {
+      return;
+    }
+    active = false;
+    owner.labels.delete(element);
+    owner.observer.unobserve(element);
+    if (!owner.labels.size) {
+      owner.observer.disconnect();
+      labelResizeOwners.delete(doc);
+    }
+  };
+}
+
 const pendingLabelMeasurements = new Map<HTMLElement, () => (() => () => void) | undefined>();
 let labelMeasurementFrame: number | undefined;
 function flushLabelMeasurements() {
@@ -126,12 +173,17 @@ function flushLabelMeasurements() {
     update();
   }
 }
-function labelOverflowRef(labels: () => readonly string[]) {
+function labelOverflowRef(
+  labels: () => readonly string[],
+  chipsForLabels: () => HTMLElement[],
+  overflowElement: () => HTMLElement | undefined,
+) {
   let dispose = () => {};
   let refresh: (() => void) | undefined;
   onCleanup(() => dispose());
   createEffect(
-    () => labels(),
+    // Overflow copy also follows live locale and deferred catalog changes.
+    () => [labels(), t("workboard.cardMoreLabels")],
     () => refresh?.(),
   );
   return (element: Element | undefined) => {
@@ -142,8 +194,8 @@ function labelOverflowRef(labels: () => readonly string[]) {
     let measuredWidth = -1;
     const update = () => {
       pendingLabelMeasurements.set(element, () => {
-        const chips = [...element.querySelectorAll<HTMLElement>(".workboard-card__label")];
-        const overflow = element.querySelector<HTMLElement>(".workboard-card__label-overflow");
+        const chips = chipsForLabels();
+        const overflow = overflowElement();
         if (!overflow) {
           return undefined;
         }
@@ -191,16 +243,12 @@ function labelOverflowRef(labels: () => readonly string[]) {
       labelMeasurementFrame ??= requestAnimationFrame(flushLabelMeasurements);
     };
     refresh = update;
-    const observer =
-      typeof ResizeObserver === "function"
-        ? new ResizeObserver((entries) => {
-            if (entries.some((entry) => entry.contentRect.width !== measuredWidth)) {
-              update();
-            }
-          })
-        : null;
+    const stopResize = observeLabelWidth(element, (entry) => {
+      if (entry.contentRect.width !== measuredWidth) {
+        update();
+      }
+    });
     update();
-    observer?.observe(element);
     dispose = () => {
       pendingLabelMeasurements.delete(element);
       if (pendingLabelMeasurements.size === 0 && labelMeasurementFrame !== undefined) {
@@ -208,28 +256,49 @@ function labelOverflowRef(labels: () => readonly string[]) {
         labelMeasurementFrame = undefined;
       }
       refresh = undefined;
-      observer?.disconnect();
+      stopResize();
     };
   };
 }
 export function CardMeta(input: { card: WorkboardCard; archived: boolean }) {
+  const labels = createMemo(() => input.card.labels, {
+    equals: (previous, next) =>
+      previous.length === next.length && previous.every((label, index) => label === next[index]),
+  });
+  const chips = createElementRefs<HTMLElement>();
+  let overflow: HTMLElement | undefined;
+  const orderedChips = () =>
+    labels().flatMap((label) => {
+      const chip = chips.get(label);
+      return chip ? [chip] : [];
+    });
   return (
     <>
-      {!input.card.labels.length && !input.archived ? null : (
+      {!labels().length && !input.archived ? null : (
         <div class="workboard-card__meta">
-          {input.card.labels.length ? (
-            <div class="workboard-card__labels" ref={labelOverflowRef(() => input.card.labels)}>
-              <For each={input.card.labels} keyed={(label) => label}>
+          {labels().length ? (
+            <div
+              class="workboard-card__labels"
+              ref={labelOverflowRef(labels, orderedChips, () => overflow)}
+            >
+              <For each={labels()} keyed={(label) => label}>
                 {(label) => (
                   <span
                     class="workboard-chip workboard-truncate workboard-card__label"
                     title={label()}
+                    ref={chips.ref(() => label())}
                   >
                     {label()}
                   </span>
                 )}
               </For>
-              <span class="workboard-chip workboard-card__label-overflow" hidden />
+              <span
+                class="workboard-chip workboard-card__label-overflow"
+                hidden
+                ref={(element) => {
+                  overflow = element;
+                }}
+              />
             </div>
           ) : null}
           {input.archived ? (
@@ -336,7 +405,7 @@ export function CardSession(input: {
       : cardAgentLabel(input.card, input.workboard.agentsList),
   );
   return (
-    <div class={`workboard-card__session workboard-card__session--${input.status.tone}`}>
+    <div class={["workboard-card__session", `workboard-card__session--${input.status.tone}`]}>
       <AgentChip workboard={input.workboard} card={input.card} />
       <span class="workboard-card__session-name workboard-truncate" title={sessionName()}>
         {sessionName()}

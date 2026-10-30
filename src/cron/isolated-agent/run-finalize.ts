@@ -15,6 +15,7 @@ import {
 import type { AutomationResult } from "../../infra/agent-run-registry.types.js";
 import { resolveSourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { hasPendingAutomationContinuation } from "../automation-result.js";
 import {
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
@@ -55,6 +56,7 @@ export async function finalizeCronRun(params: {
   const { prepared, execution } = params;
   const finalRunResult = execution.runResult;
   const replyDisposition = finalRunResult.meta?.terminalReply?.disposition ?? "empty";
+  const pendingContinuation = hasPendingAutomationContinuation(finalRunResult.meta);
   const includeReasoning = prepared.agentPayload?.includeReasoning === true;
   const payloads = (finalRunResult.payloads ?? []).filter(
     (payload) => !shouldSuppressReasoningPayload(payload),
@@ -183,6 +185,7 @@ export async function finalizeCronRun(params: {
   }
   const cronPayloadOutcome = resolveCronPayloadOutcome({
     payloads,
+    terminalReplyDisposition: replyDisposition,
     runLevelError: finalRunResult.meta?.error,
     failureSignal: finalRunResult.meta?.failureSignal,
     finalAssistantVisibleText:
@@ -260,8 +263,22 @@ export async function finalizeCronRun(params: {
           ? { error: runError }
           : {}),
       ...output,
-      ...(params.automationResult && !hasFatalErrorPayload && !failure
-        ? { summary: `${params.automationResult.outcome}: ${params.automationResult.summary}` }
+      result:
+        pendingContinuation || spawnOnlyHandoff || disposition?.kind === "pending"
+          ? undefined
+          : params.automationResult,
+      ...(params.automationResult &&
+      !pendingContinuation &&
+      !spawnOnlyHandoff &&
+      !hasFatalErrorPayload &&
+      !failure &&
+      disposition?.kind !== "pending"
+        ? {
+            summary:
+              params.automationResult.outcome === "no_change"
+                ? undefined
+                : params.automationResult.summary,
+          }
         : {}),
       replyDisposition,
       deliveryState: result?.deliveryState,
@@ -287,26 +304,25 @@ export async function finalizeCronRun(params: {
     });
   };
   const acceptedSessionSpawn = hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns);
-  const heartbeatOnlyResponse = !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
-  const heartbeatControlOnlyResponse =
-    heartbeatOnlyResponse &&
-    (deliveryDisposition.kind === "empty" ||
-      (deliveryDisposition.kind === "heartbeat" && deliveryDisposition.controlOnly));
+  const quietResponse = !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
   const spawnOnlyHandoff =
     acceptedSessionSpawn &&
-    (heartbeatControlOnlyResponse ||
+    (quietResponse ||
       (deliveryPayloads.length === 0 && normalizeOptionalString(synthesizedText) === undefined));
-  if (spawnOnlyHandoff && heartbeatControlOnlyResponse) {
-    // Parent heartbeat acknowledgments cannot fulfill child delivery; one-shot
+  if (spawnOnlyHandoff && quietResponse) {
+    // Parent control replies cannot fulfill child delivery; one-shot
     // cleanup must wait for actual descendant output before retiring the job.
     deliveryPayloads = [];
     synthesizedText = undefined;
     summary = undefined;
     outputText = undefined;
   }
-  const skipHeartbeatDelivery =
-    prepared.deliveryRequested && heartbeatOnlyResponse && !spawnOnlyHandoff;
-  const noChange = params.automationResult?.outcome === "no_change" && !hasFatalErrorPayload;
+  const skipQuietDelivery = prepared.deliveryRequested && quietResponse && !spawnOnlyHandoff;
+  const noChange =
+    params.automationResult?.outcome === "no_change" &&
+    !hasFatalErrorPayload &&
+    !pendingContinuation &&
+    !spawnOnlyHandoff;
   const policySuppression = !prepared.resolvedDelivery.ok
     ? prepared.resolvedDelivery.deliverySuppressionReason
     : undefined;
@@ -359,7 +375,7 @@ export async function finalizeCronRun(params: {
       policySuppression ??
       (noChange
         ? "silent"
-        : skipHeartbeatDelivery
+        : skipQuietDelivery
           ? hasIntentionalSilentReply
             ? "silent"
             : deliveryDisposition.kind

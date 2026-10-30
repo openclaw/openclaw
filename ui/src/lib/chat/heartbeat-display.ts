@@ -15,29 +15,6 @@ export function stripHeartbeatTokenForDisplay(raw: string): { shouldSkip: boolea
   };
 }
 
-function resolveDisplayContent(content: unknown): {
-  text: string;
-  hasVisibleNonTextContent: boolean;
-} {
-  if (typeof content === "string") {
-    return { text: content, hasVisibleNonTextContent: false };
-  }
-  if (!Array.isArray(content)) {
-    return { text: "", hasVisibleNonTextContent: content != null };
-  }
-  let hasVisibleNonTextContent = false;
-  const text: string[] = [];
-  content.forEach((block) => {
-    const entry = asOptionalObjectRecord(block);
-    if (entry?.type === "text" && typeof entry.text === "string") {
-      text.push(entry.text);
-    } else if (entry?.type !== "thinking" && entry?.type !== "reasoning") {
-      hasVisibleNonTextContent = true;
-    }
-  });
-  return { text: text.join(""), hasVisibleNonTextContent };
-}
-
 export function isAssistantHeartbeatAckForDisplay(message: unknown): boolean {
   const entry = asOptionalObjectRecord(message);
   if (!entry || normalizeLowercaseStringOrEmpty(entry.role) !== "assistant") {
@@ -49,7 +26,24 @@ export function isAssistantHeartbeatAckForDisplay(message: unknown): boolean {
 
   const content =
     typeof entry.content === "string" || Array.isArray(entry.content) ? entry.content : entry.text;
-  const { text, hasVisibleNonTextContent } = resolveDisplayContent(content);
+  let text = "";
+  let hasVisibleNonTextContent = false;
+  if (typeof content === "string") {
+    text = content;
+  } else if (Array.isArray(content)) {
+    const parts: string[] = [];
+    content.forEach((block) => {
+      const blockEntry = asOptionalObjectRecord(block);
+      if (blockEntry?.type === "text" && typeof blockEntry.text === "string") {
+        parts.push(blockEntry.text);
+      } else if (blockEntry?.type !== "thinking" && blockEntry?.type !== "reasoning") {
+        hasVisibleNonTextContent = true;
+      }
+    });
+    text = parts.join("");
+  } else {
+    hasVisibleNonTextContent = content != null;
+  }
   if (hasVisibleNonTextContent) {
     return false;
   }

@@ -1,7 +1,6 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
-import { serializeSidebarEntry, type SidebarZoneEntry } from "../app-navigation.ts";
 import { isRouteId, pluginTabLocation } from "../app-route-paths.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
@@ -30,9 +29,14 @@ import { SidebarAttention } from "./sidebar-attention.tsx";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 import { GatewayStatus, gatewayStatusLabel } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { ShortcutHint } from "./solid/kbd.tsx";
-import { renderSessionLeadingState, SessionRowBadges } from "./solid/session-presentation.tsx";
+import {
+  renderSessionUnreadBadge,
+  SessionGlyph,
+  SessionRowBadges,
+} from "./solid/session-presentation.tsx";
 import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
@@ -105,10 +109,12 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Ele
   const environment = () => host.sessionDataContext?.config?.current?.environment ?? null;
   const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
   function AgentCard() {
+    const avatarGateway = useAvatarGatewayContext();
     const avatarLoader = createIdentityAvatars();
     onSettled(() => avatarLoader.connect());
     const avatarSource = projectOwner(avatarLoader, (owner) => owner);
     const avatar = createMemo(() => {
+      avatarGateway();
       const sourceUrl = avatarUrl();
       const pending = Boolean(sourceUrl?.startsWith("/") && !avatarAuthReady());
       return avatarSource.read().withActiveRoutes(() => ({
@@ -442,27 +448,35 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
             }}
           >
             <Show when={home()} fallback={<Icon name="home" />}>
-              {(session) => (
-                <>
-                  {
-                    renderSessionLeadingState({
-                      get session() {
-                        return session();
-                      },
-                      attribution: "owned",
-                      icon: <Icon name="home" />,
-                    }).leadingIndicator
-                  }
-                  <SessionRowBadges
-                    outboxAttentionCount={session().outboxAttentionCount}
-                    hasComposerDraft={session().hasComposerDraft}
-                  />
-                </>
-              )}
+              {(session) => {
+                const running = () =>
+                  (session().isRunVisuallyActive ?? session().hasActiveRun) ||
+                  session().runningChildCount > 0;
+                return (
+                  <>
+                    {/* Home is navigation, not an interactive session-attention target. */}
+                    <SessionGlyph
+                      content={<Icon name="home" />}
+                      running={running()}
+                      queued={session().status === "queued" && session().runningChildCount === 0}
+                      badge={
+                        <Show when={session().unread && !running()}>
+                          {renderSessionUnreadBadge()}
+                        </Show>
+                      }
+                    />
+                    <SessionRowBadges
+                      outboxAttentionCount={session().outboxAttentionCount}
+                      hasComposerDraft={session().hasComposerDraft}
+                    />
+                  </>
+                );
+              }}
             </Show>
           </button>
         </openclaw-tooltip>
         <SidebarAttention
+          cachedCount={host.sidebarSnapshot?.issuesCount}
           activeRouteId={host.activeRouteId}
           onNavigate={host.onNavigate}
           watchUpdateProgress={host.watchUpdateProgress}
@@ -521,68 +535,6 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
           </div>
         </Show>
       </div>
-    </div>
-  );
-}
-
-export function renderAppSidebarPageEntry(
-  host: AppSidebarRenderHost,
-  entry: SidebarZoneEntry,
-  sessionRows: () => ReadonlyMap<string, SidebarRecentSession>,
-  pluginTabs: () => ReadonlyMap<string, GatewayControlUiPluginTab>,
-): SolidJSX.Element {
-  if (entry.type === "person") {
-    return undefined;
-  }
-  const serialized = serializeSidebarEntry(entry);
-  const pluginTab = () => (entry.type === "plugin" ? pluginTabs().get(entry.key) : undefined);
-  const pinnedSession = () => (entry.type === "session" ? sessionRows().get(entry.key) : undefined);
-  const content =
-    entry.type === "route" ? (
-      host.sidebarMenus.renderRoute(entry.route, host)
-    ) : entry.type === "plugin" ? (
-      <Show
-        when={pluginTab()}
-        fallback={
-          <openclaw-plugin-contributions
-            prop:kind={"navigation"}
-            prop:navigationKey={entry.key}
-            prop:navigationChildren={false}
-            prop:navigationMenus={host.sidebarMenus}
-          />
-        }
-      >
-        {(tab) => renderAppSidebarPluginTab(host, tab)}
-      </Show>
-    ) : (
-      <Show when={pinnedSession()}>{(session) => host.renderPinnedSidebarSession(session)}</Show>
-    );
-  const draggable = () =>
-    !host.sidebarSnapshot && (entry.type === "route" || entry.type === "plugin");
-  return (
-    <div
-      class={[
-        "sidebar-zone-entry",
-        {
-          "sidebar-zone-entry--dragging": host.sessionOrganizer.draggingSidebarEntry === serialized,
-        },
-      ]}
-      data-sidebar-entry={serialized}
-      draggable={draggable() ? "true" : "false"}
-      onDragStart={
-        entry.type === "route"
-          ? (event: DragEvent) => host.sessionOrganizer.startSidebarRouteDrag(event, entry.route)
-          : entry.type === "plugin"
-            ? (event: DragEvent) => host.sessionOrganizer.startSidebarPluginDrag(event, entry.key)
-            : undefined
-      }
-      onDragEnd={() => {
-        if (draggable()) {
-          host.sessionOrganizer.finishSidebarEntryDrag();
-        }
-      }}
-    >
-      {content}
     </div>
   );
 }

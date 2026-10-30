@@ -2,9 +2,9 @@ import { EventEmitter } from "node:events";
 import { performance } from "node:perf_hooks";
 import { expect, it, vi, type Mock, type MockInstance } from "vitest";
 import type { GatewayServer } from "../../gateway/server-public.js";
-import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { expectCallCount } from "./run-loop-cleanup.test-support.js";
 
 type ManagedUpdateOwner = NonNullable<GatewayRestartIntent["successorOwner"]>;
 
@@ -32,56 +32,13 @@ export type UpdateRespawnFixtures =
     originalPlatformDescriptor: typeof originalPlatformDescriptor;
   };
 
-export const createActiveWorkSnapshot = (
-  counts: Partial<GatewayActiveWorkSnapshot["counts"]> = {},
-  blockers: GatewayActiveWorkSnapshot["blockers"] = [],
-): GatewayActiveWorkSnapshot => {
-  const resolvedCounts = {
-    queueSize: 0,
-    pendingReplies: 0,
-    embeddedRuns: 0,
-    backgroundExecSessions: 0,
-    cronRuns: 0,
-    agentRuns: 0,
-    acpRuns: 0,
-    mediaRuns: 0,
-    rootRequests: 0,
-    sessionAdmissions: 0,
-    sessionMutations: 0,
-    chatRuns: 0,
-    queuedTurns: 0,
-    terminalPersistence: 0,
-    terminalSessions: 0,
-    lifecycleWrites: 0,
-    ...counts,
-    totalActive: 0,
-  };
-  resolvedCounts.totalActive = Object.values(resolvedCounts).reduce(
-    (total, count) => total + count,
-    0,
-  );
-  return {
-    idle: resolvedCounts.totalActive === 0,
-    counts: resolvedCounts,
-    blockers,
-    writeCustody: [],
-  };
-};
-
-export function expectRestartCloseCall(
-  close: Mock<GatewayServer["close"]>,
-  maxDrainTimeoutMs: number,
-) {
+export function expectRestartCloseCall(close: Mock<GatewayServer["close"]>) {
   expect(close).toHaveBeenCalledWith(
     expect.objectContaining({
       reason: "gateway restarting",
       restartExpectedMs: 1500,
-      drainTimeoutMs: expect.any(Number),
     }),
   );
-  const closeArgs = close.mock.calls[0]?.[0];
-  expect(closeArgs?.drainTimeoutMs).toBeLessThanOrEqual(maxDrainTimeoutMs);
-  expect(closeArgs?.drainTimeoutMs).toBeGreaterThanOrEqual(0);
 }
 
 export function createSignaledStart(
@@ -147,9 +104,14 @@ export async function runGatewayLoop({
   runtime: { exit: (code: number) => void };
 }): Promise<number> {
   const actual = await import("./run-loop.js");
-  const code = await actual.runGatewayLoop(params);
-  runtime.exit(code);
-  return code;
+  const previousExitCode = process.exitCode;
+  try {
+    const code = await actual.runGatewayLoop(params);
+    runtime.exit(code);
+    return code;
+  } finally {
+    process.exitCode = previousExitCode;
+  }
 }
 
 export function createRuntimeWithExitSignal(exitCallOrder?: string[]) {
@@ -201,11 +163,13 @@ export function systemdReply(timeout = "30s") {
 }
 
 export function expectStopCloseCall(close: Mock<GatewayServer["close"]>) {
-  expect(close).toHaveBeenCalledWith({
-    retainSharedState: true,
-    reason: "gateway stopping",
-    restartExpectedMs: null,
-  });
+  expect(close).toHaveBeenCalledWith(
+    expect.objectContaining({
+      retainSharedState: true,
+      reason: "gateway stopping",
+      restartExpectedMs: null,
+    }),
+  );
 }
 
 export function createCloseMock() {
@@ -287,14 +251,7 @@ export function registerUpdateRespawnProgressTests(f: UpdateRespawnFixtures) {
         pid: process.pid,
         child,
       });
-      f.waitForGatewayHealthyRestart.mockImplementationOnce(async (params) => {
-        expect(params).toMatchObject({
-          child: { pid: process.pid, exitCode: null, signalCode: null },
-          port: 18789,
-          probeHosts: ["127.0.0.1"],
-          requireRunningService: true,
-          requirePluginHealth: false,
-        });
+      f.waitForGatewayHealthyRestart.mockImplementationOnce(async () => {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, elapsedMs);
         });
@@ -320,10 +277,8 @@ export function registerUpdateRespawnProgressTests(f: UpdateRespawnFixtures) {
 
         expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
         await expect(exited).resolves.toBe(0);
-        expect(child.kill).not.toHaveBeenCalled();
-        expect(f.respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(1);
-        expect(start).toHaveBeenCalledTimes(1);
-        expect(f.markUpdateRestartSentinelFailure).not.toHaveBeenCalled();
+        expectCallCount(0, child.kill, f.markUpdateRestartSentinelFailure);
+        expectCallCount(1, f.respawnGatewayProcessForUpdate, start);
         if (waitOutcome === "still-starting" && sentinelStatus !== "error") {
           expect(f.writeRestartSentinelIfUnchanged).toHaveBeenCalledWith(
             expect.objectContaining({

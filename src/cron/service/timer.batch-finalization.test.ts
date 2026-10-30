@@ -398,6 +398,7 @@ describe("cron batch outcome finalization", () => {
             sessionKey: undefined,
             createIfMissing: true,
             contextKey: `cron:${job.id}:auto-disabled`,
+            jobId: job.id,
             deliveryContext,
           },
         );
@@ -406,7 +407,9 @@ describe("cron batch outcome finalization", () => {
           sessionKey: undefined,
         });
       }
-      expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
+      const persisted = (await loadCronStore(storePath)).jobs[0];
+      expect(persisted?.state.nextRunAtMs).toBeUndefined();
+      expect(persisted).toMatchObject({
         enabled: false,
         state: {
           consecutiveErrors: 10,

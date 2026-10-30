@@ -8,6 +8,7 @@ import {
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
 import {
+  RetryAction,
   SettingsRow,
   SettingsSection,
   SettingsStatus,
@@ -30,7 +31,7 @@ registerEnglishCatalog(registerPluginManagementEnglish);
 
 registerEnglishCatalog(registerPluginConsentEnglish);
 
-export type PluginConsentIntent = { kind: "enable"; pluginId: string; rowKey: string };
+type PluginConsentIntent = { kind: "enable"; pluginId: string; rowKey: string };
 
 type PluginConsentFallback = {
   name: string;
@@ -515,16 +516,15 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
             fallback={(error, reset) => (
               <div class="plugins-consent__error" role="alert">
                 <span>{formatUiError(error())}</span>
-                <button
+                <RetryAction
                   type="button"
                   class="btn btn--sm oc-action oc-action-secondary"
-                  onClick={() => {
+                  label={t("pluginsPage.tryAgain")}
+                  onRetry={() => {
                     props.onRetry();
                     reset();
                   }}
-                >
-                  {t("pluginsPage.tryAgain")}
-                </button>
+                />
               </div>
             )}
           >

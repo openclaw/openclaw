@@ -44,27 +44,40 @@ export function snapshotActivationFiles(directory: string) {
     });
 }
 
+/** Journals record the built sealed helper; source tests seal inert bytes written under root. */
+export function mockInertSealedHelper(root: string) {
+  const resolveRuntimeWorkerUrl = runtimeWorker.resolveRuntimeWorkerUrl;
+  const helper = path.join(root, "sealed.mjs");
+  fs.writeFileSync(helper, "// inert sealed helper bytes\n");
+  vi.spyOn(runtimeWorker, "resolveRuntimeWorkerUrl").mockImplementation((entry) =>
+    entry.sourceWorkerName === "package-update-activation-sealed"
+      ? pathToFileURL(helper)
+      : resolveRuntimeWorkerUrl(entry),
+  );
+}
+
 export function createPackageActivationLifetimeFixture() {
   const lifetime = createFixtureLifetime();
-  const resolveRuntimeWorkerUrl = runtimeWorker.resolveRuntimeWorkerUrl;
   let root: string;
   let childGuardEnv: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
 
   return {
     lifetime,
+    async cleanup(this: void) {
+      try {
+        await lifetime.cleanup();
+      } finally {
+        vi.restoreAllMocks();
+        vi.unstubAllEnvs();
+      }
+    },
     setup(this: void) {
       root = fs.realpathSync(lifetime.createTempDir("activation-lifetime-"));
       const tmp = path.join(root, "private-tmp");
       fs.mkdirSync(tmp, { mode: 0o700 });
       const { databasePath, assertDatabasePath } = installPrivateUpdateHandoffStore(tmp);
       childGuardEnv = writePrivateUpdateHandoffChildGuard(databasePath, tmp);
-      const helper = path.join(root, "sealed.mjs");
-      fs.writeFileSync(helper, "// inert sealed helper bytes\n");
-      vi.spyOn(runtimeWorker, "resolveRuntimeWorkerUrl").mockImplementation((entry) =>
-        entry.sourceWorkerName === "package-update-activation-sealed"
-          ? pathToFileURL(helper)
-          : resolveRuntimeWorkerUrl(entry),
-      );
+      mockInertSealedHelper(root);
       return { root, assertDatabasePath, childGuardEnv };
     },
 
@@ -106,7 +119,7 @@ export function createPackageActivationLifetimeFixture() {
     },
 
     spawnChild(this: void, args: string[]) {
-      const worker = resolveRuntimeWorkerUrl({
+      const worker = runtimeWorker.resolveRuntimeWorkerUrl({
         ...packageActivationRuntimeEntrypoint,
         sourceWorkerName: "package-update-activation.process.test-support",
         distWorkerPath: "infra/package-update-activation.process.test-support.js",
@@ -137,35 +150,20 @@ export function createPackageActivationLifetimeFixture() {
         INSERT INTO pressure SELECT id, 'committed', zeroblob(8192) FROM rows;
       `);
       }
-      return spawnSync(
-        process.execPath,
-        [
-          "--input-type=module",
-          "-e",
-          `import { DatabaseSync } from 'node:sqlite';
+      const script = `import { DatabaseSync } from 'node:sqlite';
          const database = new DatabaseSync(process.argv[1]);
          database.exec("PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; PRAGMA cache_size = 2; PRAGMA cache_spill = ON; BEGIN IMMEDIATE; UPDATE package_activation SET phase = 'publication-complete'; UPDATE pressure SET value = 'uncommitted';");
-         process.kill(process.pid, 'SIGKILL');`,
-          journalPath,
-        ],
-        {
-          env: childGuardEnv({ ...process.env, HOME: root, USERPROFILE: root }),
-          encoding: "utf8",
-          timeout: 10_000,
-          killSignal: "SIGKILL",
-        },
-      );
+         process.kill(process.pid, 'SIGKILL');`;
+      return spawnSync(process.execPath, ["--input-type=module", "-e", script, journalPath], {
+        env: childGuardEnv({ ...process.env, HOME: root, USERPROFILE: root }),
+        encoding: "utf8",
+        timeout: 10_000,
+        killSignal: "SIGKILL",
+      });
     },
 
     snapshotControl(this: void, anchor: string) {
-      return fs
-        .readdirSync(resolvePackageActivationControl(anchor))
-        .toSorted()
-        .map((name) => {
-          const file = path.join(resolvePackageActivationControl(anchor), name);
-          const { ino, mode } = fs.lstatSync(file);
-          return { name, ino, mode, bytes: fs.readFileSync(file) };
-        });
+      return snapshotActivationFiles(resolvePackageActivationControl(anchor));
     },
 
     async writePostCoreCapability(this: void, packageRoot: string) {

@@ -1,10 +1,11 @@
-import { EventEmitter, getEventListeners } from "node:events";
+import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { listSystemPresence } from "../infra/system-presence.js";
 import { SerializedGatewayFrame } from "./serialized-json.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { createBroadcastPeer } from "./server-broadcast.test-support.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
@@ -23,36 +24,8 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-function clientFor(connId: string, socket: GatewayWsClient["socket"]): GatewayWsClient {
-  return {
-    connId,
-    socket,
-    connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
-    usesSharedGatewayAuth: false,
-  };
-}
-
-function controlledPeer(connId: string) {
-  const callbacks: Array<(error?: Error) => void> = [];
-  const frames: Array<{ seq: number; payload: unknown }> = [];
-  const socket = Object.assign(new EventEmitter(), {
-    readyState: WebSocket.OPEN as WebSocket["readyState"],
-    bufferedAmount: 0,
-    close: vi.fn(),
-    terminate: vi.fn(),
-    send: vi.fn(
-      (
-        wire: string | Buffer | SerializedGatewayFrame,
-        options?: { binary: false } | ((error?: Error) => void),
-        callback?: (error?: Error) => void,
-      ) => {
-        frames.push(JSON.parse(String(wire)));
-        callbacks.push(typeof options === "function" ? options : callback!);
-      },
-    ),
-  });
-  return { client: clientFor(connId, socket), socket, callbacks, frames };
-}
+// Array.map's index must not become the fixture's completeImmediately argument.
+const controlledPeer = (connId: string) => createBroadcastPeer(connId);
 
 const liveText = (group: AbortSignal) => ({
   group,

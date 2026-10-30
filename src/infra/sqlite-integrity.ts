@@ -1,13 +1,19 @@
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteCleanCloseSealRefusal } from "./sqlite-clean-close-seal.js";
-import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
+import { quickIntegrityVerificationKey } from "./sqlite-database-admission-seal.js";
+import {
+  publishSqliteDatabaseAdmission,
+  recordSqliteDatabaseIntegrity,
+} from "./sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
 import {
   consumeSqliteMaintenanceIntegrity,
   type SqliteIntegrityCheckOptions,
 } from "./sqlite-maintenance-integrity.js";
 import { readSqliteSchemaObjects } from "./sqlite-schema-admission.js";
+import { readSqlitePageHeader } from "./sqlite-schema-catalog.js";
+import { findSqlClosingParenthesis, normalizeSchemaSql } from "./sqlite-schema-sql.js";
 import { getMaintenanceSqliteTableChecks } from "./sqlite-table-integrity-cache.js";
 
 export type { SqliteIntegrityCheckOptions } from "./sqlite-maintenance-integrity.js";
@@ -66,10 +72,18 @@ export function* sqliteIntegrityCheckSteps(
     return;
   }
   const startedAt = performance.now();
-  const check: SqliteIntegrityCheck = { database, databaseLabel, ...options };
+  // WAL owner death alone is not corruption evidence. Explicit maintenance keeps its policy.
+  const processDeathQuick =
+    diagnostics?.integrityGateReason === "process-death" && options.check === undefined;
+  const check: SqliteIntegrityCheck = {
+    database,
+    databaseLabel,
+    ...options,
+    check: options.check ?? (processDeathQuick ? "quick" : "full"),
+  };
   if (diagnostics) {
     check.timing = {};
-    diagnostics.integrityGateMode = options.check ?? "full";
+    diagnostics.integrityGateMode = check.check;
     // A later async driver must not inherit an earlier gate's synchronous measurement.
     delete diagnostics.integrityCheckSyncMs;
     delete diagnostics.integrityOutsideCheckMs;
@@ -78,7 +92,19 @@ export function* sqliteIntegrityCheckSteps(
     delete diagnostics.integrityOutsideWorkerMs;
   }
   try {
-    yield check;
+    try {
+      yield check;
+    } catch (error) {
+      if (!processDeathQuick) {
+        throw error;
+      }
+      check.check = "full";
+      diagnostics.integrityGateMode = "full";
+      yield check;
+    }
+    if (processDeathQuick && check.check === "quick") {
+      publishSqliteDatabaseAdmission(database, quickIntegrityVerificationKey, Date.now());
+    }
     if (diagnostics) {
       diagnostics.integrityGateOutcome = "healthy";
     }
@@ -203,6 +229,24 @@ export function isTerminalSqliteIntegrityError(error: Error): boolean {
   return isSqliteCorruptionError(error.cause);
 }
 
+/** SQLite recovers committed WAL frames on open; these probes only check header sanity.
+ * They never walk data pages or publish a full-verification receipt or clean-close seal.
+ */
+export function assertSqliteDatabaseHeader(database: DatabaseSync, databaseLabel: string): void {
+  const { pages, free } = readSqlitePageHeader(database);
+  if (
+    typeof pages !== "number" ||
+    !Number.isSafeInteger(pages) ||
+    pages < 1 ||
+    typeof free !== "number" ||
+    !Number.isSafeInteger(free) ||
+    free < 0 ||
+    free >= pages
+  ) {
+    throw new SqliteIntegrityError(`SQLite database header is inconsistent for ${databaseLabel}`);
+  }
+}
+
 /** Check structure and foreign keys, plus all indexes or the migration's selected tables. */
 export function assertSqliteIntegrity(
   database: DatabaseSync,
@@ -213,13 +257,27 @@ export function assertSqliteIntegrity(
   } = {},
 ): SqliteIntegrityChecks {
   const check = options.check === "quick" ? "quick_check" : "integrity_check";
-  const integrityCheck = runSqliteCheck(
-    database,
-    databaseLabel,
-    check,
-    undefined,
-    options.allFindings,
-  );
+  let staleFts = false;
+  try {
+    // Classifying derived-only damage needs every finding, not SQLite's first 100.
+    runSqliteCheck(
+      database,
+      databaseLabel,
+      check,
+      undefined,
+      options.allFindings || options.ftsSchemas !== undefined,
+    );
+  } catch (error) {
+    if (
+      !options.ftsSchemas ||
+      !(error instanceof SqliteIntegrityError) ||
+      !error.findings ||
+      !classifySqliteFtsIntegrityFindings(database, error.findings, options.ftsSchemas)
+    ) {
+      throw error;
+    }
+    staleFts = true;
+  }
   if (check === "quick_check" && options.tables?.length) {
     const existing = new Set(
       readSqliteSchemaObjects(database)
@@ -233,10 +291,55 @@ export function assertSqliteIntegrity(
     }
   }
   runSqliteForeignKeyCheck(database, databaseLabel);
-  if (check === "integrity_check") {
+  if (check === "integrity_check" && !staleFts) {
     recordSqliteDatabaseIntegrity(database);
   }
-  return { integrityCheck };
+  return { integrityCheck: "ok" };
+}
+
+/** Only exact, owned FTS definitions may treat their inverted index as derived data. */
+export function classifySqliteFtsIntegrityFindings(
+  database: DatabaseSync,
+  findings: readonly unknown[],
+  schemas: readonly string[],
+): string[] | undefined {
+  const names = new Set<string>();
+  for (const finding of findings) {
+    if (finding === "ok") {
+      continue;
+    }
+    const match =
+      typeof finding === "string"
+        ? /^malformed inverted index for FTS5 table main\.([A-Za-z_][A-Za-z0-9_]*)$/u.exec(finding)
+        : null;
+    if (!match?.[1]) {
+      return undefined;
+    }
+    names.add(match[1]);
+  }
+  if (names.size === 0) {
+    return undefined;
+  }
+  const definitions = new Map<string, Set<string | null>>();
+  for (const schema of schemas) {
+    for (const match of schema.matchAll(
+      /CREATE VIRTUAL TABLE (?:IF NOT EXISTS )?([A-Za-z_][A-Za-z0-9_]*) USING fts5\s*\(/gu,
+    )) {
+      const name = match[1]!;
+      const end = findSqlClosingParenthesis(schema, match.index + match[0].length - 1);
+      const variants = definitions.get(name) ?? new Set<string | null>();
+      variants.add(normalizeSchemaSql(schema.slice(match.index, end + 1)));
+      definitions.set(name, variants);
+    }
+  }
+  const tables = readSqliteSchemaObjects(database).filter((row) => row.type === "table");
+  for (const name of names) {
+    const sql = tables.find((row) => row.name === name)?.sql;
+    if (typeof sql !== "string" || !definitions.get(name)?.has(normalizeSchemaSql(sql))) {
+      return undefined;
+    }
+  }
+  return [...names].toSorted();
 }
 
 /** Require table and associated index consistency before trusting indexed reads. */

@@ -1,10 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
-import {
-  EMPTY_SESSION_MENU_DATA,
-  type SessionMenuData,
-} from "../components/session-menu-actions.ts";
+import type { SessionMenuData } from "../components/session-menu-actions.ts";
+import { EMPTY_SESSION_MENU_DATA } from "../components/session-menu-data.ts";
 import "../components/session-menu-solid.tsx";
 import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import { createApplicationContextProvider } from "./application-context.ts";

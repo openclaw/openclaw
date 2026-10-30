@@ -5,7 +5,10 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { upsertAuthProfileAsync } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it } from "vitest";
-import { withClawRouterAudioFixture as fixture } from "./audio-transcription.test-support.js";
+import {
+  respondPricingRequired,
+  withClawRouterAudioFixture as fixture,
+} from "./audio-transcription.test-support.js";
 
 describe("ClawRouter registered file transcription", () => {
   it("uses the native default, scoped router auth and byte-exact multipart through the media runner", async () => {
@@ -40,23 +43,10 @@ describe("ClawRouter registered file transcription", () => {
     });
   });
   it("keeps pricing_required readable and never retries an uploaded request", async () => {
-    await fixture(
-      async ({ cfg, filePath, requests }) => {
-        await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(/pricing_required/);
-        expect(requests).toHaveLength(1);
-      },
-      (res) => {
-        res.statusCode = 400;
-        res.end(
-          JSON.stringify({
-            error: {
-              code: "pricing_required",
-              message: "No qualified arbitrary-file reserve bound",
-            },
-          }),
-        );
-      },
-    );
+    await fixture(async ({ cfg, filePath, requests }) => {
+      await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(/pricing_required/);
+      expect(requests).toHaveLength(1);
+    }, respondPricingRequired);
   });
   it("does not borrow an upstream key or substitute a model", async () => {
     await fixture(async ({ cfg, filePath, requests }) => {
@@ -339,40 +329,27 @@ describe("ClawRouter automatic transcription", () => {
   );
 
   it("stops automatic selection after a pricing_required HTTP upload without contacting another provider", async () => {
-    await fixture(
-      async ({ cfg, filePath, requests }) => {
-        delete cfg.tools!.media!.models;
-        cfg.plugins!.allow!.push("openai");
-        cfg.models!.providers!.openai = {
-          baseUrl: cfg.models!.providers!.clawrouter!.baseUrl + "/fallback",
-          apiKey: "fixture-fallback",
-          request: { allowPrivateNetwork: true },
-          models: [],
-        };
-        await expect(
-          transcribeAudioFile({
-            cfg,
-            filePath,
-            activeModel: { provider: "clawrouter", model: "chat-model" },
-          }),
-        ).rejects.toThrow(/pricing_required/);
-        expect(requests).toHaveLength(1);
-        expect(requests[0]).toMatchObject({
-          url: "/v1/native/openai/v1/audio/transcriptions",
-          authorization: "Bearer fixture-router",
-        });
-      },
-      (res) => {
-        res.statusCode = 400;
-        res.end(
-          JSON.stringify({
-            error: {
-              code: "pricing_required",
-              message: "No qualified arbitrary-file reserve bound",
-            },
-          }),
-        );
-      },
-    );
+    await fixture(async ({ cfg, filePath, requests }) => {
+      delete cfg.tools!.media!.models;
+      cfg.plugins!.allow!.push("openai");
+      cfg.models!.providers!.openai = {
+        baseUrl: cfg.models!.providers!.clawrouter!.baseUrl + "/fallback",
+        apiKey: "fixture-fallback",
+        request: { allowPrivateNetwork: true },
+        models: [],
+      };
+      await expect(
+        transcribeAudioFile({
+          cfg,
+          filePath,
+          activeModel: { provider: "clawrouter", model: "chat-model" },
+        }),
+      ).rejects.toThrow(/pricing_required/);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        url: "/v1/native/openai/v1/audio/transcriptions",
+        authorization: "Bearer fixture-router",
+      });
+    }, respondPricingRequired);
   });
 });

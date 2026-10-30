@@ -584,6 +584,14 @@ public actor GatewayNodeSession {
         return try? JSONSerialization.data(withJSONObject: connection)
     }
 
+    /// Native adapters preserve the authentication method of this exact socket.
+    public func authBinding(ifCurrentRoute route: GatewayNodeSessionRoute) async -> GatewayAuthBinding? {
+        guard self.isCurrentRoute(route), let channel else { return nil }
+        let binding = await channel.authBinding(ifCurrentConnectionGeneration: route.socketGeneration)
+        guard self.isCurrentRoute(route), self.channel === channel else { return nil }
+        return binding
+    }
+
     /// HTTP readers reuse only credentials accepted by this physical socket.
     /// Bootstrap enrollment credentials never authorize resource downloads.
     public func httpResourceAuthorization(ifCurrentRoute route: GatewayNodeSessionRoute) async -> (

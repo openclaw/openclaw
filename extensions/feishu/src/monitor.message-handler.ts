@@ -1,6 +1,7 @@
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import { normalizeFeishuCommandProbeBody } from "./bot-content.js";
 import type { handleFeishuMessage } from "./bot.js";
 import {
   claimUnprocessedFeishuMessage,
@@ -168,6 +169,8 @@ export function createFeishuMessageReceiveHandler({
       event,
       preparedContent,
       botOpenId: getBotOpenId(accountId),
+      isControlCommandMessage: (text) =>
+        channelRuntime.commands.isControlCommandMessage(text, readConfig()),
     });
     const task = async () => {
       if (turnAdoptionLifecycle?.abortSignal.aborted) {
@@ -225,6 +228,16 @@ export function createFeishuMessageReceiveHandler({
       debounceMs: resolveDebounceMs(),
       resolveDebounceMs,
       buildKey: ({ event }) => {
+        // A pending ordinary batch must not serialize controls before their own lanes.
+        if (
+          event.message.message_type === "text" &&
+          channelRuntime.commands.isControlCommandMessage(
+            normalizeFeishuCommandProbeBody(resolveDebounceText(event)),
+            readConfig(),
+          )
+        ) {
+          return null;
+        }
         const chatId = event.message.chat_id?.trim();
         const senderId =
           event.sender.sender_id.open_id?.trim() || event.sender.sender_id.user_id?.trim();
@@ -240,7 +253,7 @@ export function createFeishuMessageReceiveHandler({
           return false;
         }
         const text = resolveDebounceText(event);
-        return Boolean(text) && !channelRuntime.commands.isControlCommandMessage(text, cfg);
+        return Boolean(text);
       },
       onFlush: (entries, createFlush) => {
         const activeEntries = entries.filter((entry) => !entry.abandoned);

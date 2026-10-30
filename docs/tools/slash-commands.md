@@ -47,6 +47,9 @@ command handling is enabled for the surface.
       and an adjacent separator (or its own line ending when alone on a line)
       are removed. Text with no recognized directive is unchanged.
       Added prompt context is not scanned for text commands or stripped as directives.
+    - Ordinary prose such as `How does /queue work?` stays unchanged. Native
+      `/queue` commands and explicit `/queue:` syntax still validate their arguments;
+      a mistyped mode such as `/queue backlog` still produces an error.
     - In **directive-only** messages (the message is only directives), they
       persist to the session and reply with an acknowledgement. Both the literal
       command and its delivered acknowledgement are retained as user/assistant
@@ -118,6 +121,10 @@ do not rewrite transcript history.
   registration. Previously registered commands may stay visible until removed.
 </ParamField>
 
+The system prompt omits the `/reasoning` and `/status` hints when both text and
+native commands are disabled on the session's channel. Guidance uses channel-level
+native settings; per-account overrides may differ. Text-only surfaces keep the hints.
+
 <ParamField path="commands.nativeSkills" type='boolean | "auto"' default='"auto"'>
   Registers skill commands natively when supported. Auto: on for
   Discord/Telegram. Off for Slack. Override with
@@ -151,7 +158,7 @@ do not rewrite transcript history.
 </ParamField>
 
 <ParamField path="commands.restart" type="boolean" default="true">
-  Enables `/restart`, `/update`, and external `SIGUSR2` restart requests.
+  Enables `/restart`, `/update`, external-chat `gateway` tool restart/update actions, and external `SIGUSR2` restart requests. `gateway` cleanup does not restart and is independent of this setting.
 </ParamField>
 
 <ParamField path="commands.ownerAllowFrom" type="string[]">
@@ -343,7 +350,7 @@ list of requirements reaches the agent complete.
     | Command | Description |
     | --- | --- |
     | `/skill <name> [input]` | Run a skill by name |
-    | `/learn [request]` | Draft one reviewable skill from the current conversation or named sources through [Skill Workshop](/tools/skill-workshop) |
+    | `/learn [request]` | Learn from the current conversation or named sources: procedures become [Skill Workshop](/tools/skill-workshop) skills, and facts and preferences go to the selected memory plugin when it supports learning |
     | `/learn undo <id>` | Owner-only. Revert every skill change one background review made, as the notice's **Undo** button does |
     | `/loop [interval] <prompt>` | Owner-only. Repeat a prompt in this conversation; omit the interval for self-paced checks |
     | `/loop status` | Owner-only. List loops bound to this conversation |
@@ -445,6 +452,9 @@ conversation** — not a static config catalog.
 Results are session-scoped. Changing agent, channel, thread, sender
 authorization, or model can change the output. For profile and override editing,
 use the Control UI Tools panel or config surfaces.
+
+Managed sessions on supported runtimes include brokered GitHub tools when tool
+policy allows them. Listing a tool does not grant permission to run its actions.
 
 ## `/loop`: recurring conversation work
 

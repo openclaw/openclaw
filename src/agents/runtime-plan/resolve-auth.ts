@@ -8,13 +8,11 @@ import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
 import { getApiKeyForModelCore } from "../model-auth.js";
 import { providerModelRouteAcceptsAuthMode } from "../provider-model-route-auth.js";
 import { shouldForceDirectAuthFallbackModelResolve } from "./credential-scoped-model.js";
-import { sameAgentRuntimeAuthModelRoute } from "./model-route.js";
 import {
   canRunPreparedAgentRuntimeAuthAttempt,
   preparedAgentRuntimeProfileAttemptHasCandidate,
-  type PreparedAgentRuntimeAuthAttempt,
 } from "./prepare-auth.js";
-import type { AgentRuntimeAuthPlan } from "./types.js";
+import type { PreparedAgentRuntimeAuthAttempt, AgentRuntimeAuthPlan } from "./types.js";
 
 type PreparedRuntimeModelAuthResolution = Readonly<{
   auth: Awaited<ReturnType<typeof getApiKeyForModelCore>>;
@@ -26,6 +24,33 @@ type PreparedRuntimeAuthAttemptResolution<Model, Auth> = Readonly<{
   plan: AgentRuntimeAuthPlan;
   auth: Auth;
 }>;
+
+function normalizeRouteBaseUrl(value: string): string {
+  return value.replace(/\/+$/u, "");
+}
+
+function sameCompatibleRuntimeIds(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  const leftIds = new Set(left);
+  const rightIds = new Set(right);
+  if (leftIds.size !== rightIds.size) {
+    return false;
+  }
+  for (const id of leftIds) {
+    if (!rightIds.has(id)) {
+      return false;
+    }
+  }
+  return true;
+}
 
 function listDistinctPreparedRuntimeAuthAttempts(
   attempts: readonly PreparedAgentRuntimeAuthAttempt[],
@@ -45,7 +70,19 @@ function listDistinctPreparedRuntimeAuthAttempts(
       if (!route || !previousRoute) {
         return !route && !previousRoute;
       }
-      return sameAgentRuntimeAuthModelRoute(route, previousRoute);
+      // Compare the complete secret-free identity of the prepared model routes.
+      return (
+        route.provider.trim().toLowerCase() === previousRoute.provider.trim().toLowerCase() &&
+        route.modelId === previousRoute.modelId &&
+        route.api === previousRoute.api &&
+        route.authRequirement === previousRoute.authRequirement &&
+        route.requestTransportOverrides === previousRoute.requestTransportOverrides &&
+        sameCompatibleRuntimeIds(
+          route.runtimePolicy?.compatibleIds,
+          previousRoute.runtimePolicy?.compatibleIds,
+        ) &&
+        normalizeRouteBaseUrl(route.baseUrl) === normalizeRouteBaseUrl(previousRoute.baseUrl)
+      );
     });
   });
 }

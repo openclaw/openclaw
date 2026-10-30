@@ -1,4 +1,5 @@
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 
 export function createConfigWriteHomeFixture(makeHome: (prefix: string) => Promise<string>) {
@@ -26,20 +27,14 @@ export function createConfigWritePluginRegistry(
   return {
     diagnostics: [],
     plugins: [
-      {
+      createPluginManifestRecordFixture({
         id,
         rootDir,
         source: `${rootDir}/index.ts`,
         manifestPath: `${rootDir}/openclaw.plugin.json`,
-        origin: "bundled",
-        channels: [],
-        providers: [],
-        cliBackends: [],
-        skills: [],
-        hooks: [],
         configSchema,
         ...(enabledByDefault === undefined ? {} : { enabledByDefault }),
-      },
+      }),
     ],
   };
 }

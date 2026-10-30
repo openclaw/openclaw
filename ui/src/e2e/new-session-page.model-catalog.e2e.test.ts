@@ -1,26 +1,18 @@
-import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
-import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
-import { controlUiBundledGatewayUrl } from "../test-helpers/control-ui-e2e.ts";
-import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { catalogModel } from "./model-catalog-fixtures.test-support.ts";
 import {
   NEW_SESSION_MODEL_CATALOG,
   createNewSessionPageE2eSuite,
   installMockGateway,
-  navigateInApp,
-  pollValue,
-  pollEnabled,
   pollText,
   pollAttribute,
-  pollLocatorText,
   pollCount,
 } from "./new-session-page.test-support.ts";
 import {
-  personalModelScenario,
-  environmentProfiles,
   unavailableError,
   pollVisible,
   pollFocused,
@@ -28,59 +20,10 @@ import {
 } from "./new-session-shard.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-const luna: ModelCatalogEntry = {
-  available: true,
-  id: "gpt-5.6-luna",
-  name: "GPT-5.6 Luna",
-  provider: "openai",
-};
-
-function identityScenario(identity: boolean) {
-  return {
-    ...(identity ? { presenceUsers: [{ id: "person-a", name: "Sample Person", self: true }] } : {}),
-    featureMethods: [
-      "chat.metadata",
-      "chat.startup",
-      "sessions.create",
-      ...(identity ? ["users.prefs.get", "users.prefs.set"] : []),
-    ],
-  };
-}
-
-async function savePreference(
-  page: Page,
-  gateway: Awaited<ReturnType<typeof installMockGateway>>,
-  storageKey: string,
-  preference: object,
-  identity: boolean,
-) {
-  await page.evaluate(
-    ({ key, value }) => localStorage.setItem(key, JSON.stringify({ agents: { main: value } })),
-    { key: storageKey, value: preference },
-  );
-  if (identity) {
-    await gateway.setMethodResponse("users.prefs.get", {
-      status: "ok",
-      entries: { "new-session.migration.v1": true, "new-session.v1:main": preference },
-    });
-    await gateway.emitGatewayEvent("users.prefs.changed", { profileId: "person-a" });
-  }
-}
-
-function catalogDiscoveryRequests(
-  requests: Array<{ params?: unknown }>,
-): Array<{ params?: unknown }> {
-  return requests.filter(
-    ({ params }) =>
-      params !== null &&
-      typeof params === "object" &&
-      !Array.isArray(params) &&
-      (params as { metadataOnly?: unknown }).metadataOnly === true,
-  );
-}
+const luna: ModelCatalogEntry = catalogModel("openai", "gpt-5.6-luna", "GPT-5.6 Luna");
 
 suite.define(() => {
-  it("separates model shortcuts, search input, and composer typing by focus", async () => {
+  it("keeps picker geometry stable while shortcut visibility follows focus", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
@@ -90,15 +33,14 @@ suite.define(() => {
         const modelSelect = page.locator('[data-chat-model-select="true"]');
         const picker = page.locator(".chat-controls__model-picker");
         const search = page.locator('[data-chat-model-search="true"]');
-        const firstModel = page.locator('[data-chat-model-option="openai/gpt-5.5"]');
         const secondModel = page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]');
 
         await modelSelect.click();
         await pollAttribute(picker, "open").toBe("");
         // Opening the picker moves focus to its filter so typing filters models.
         await pollFocused(search).toBe(true);
-        await revealChatModelOption(firstModel);
-        await revealChatModelOption(secondModel);
+        await revealChatModelOption(page, "openai/gpt-5.5");
+        await revealChatModelOption(page, "anthropic/claude-sonnet-4-6");
         await modelSelect.focus();
         const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
         await pollCount(secondShortcut).toBe(1);
@@ -143,309 +85,9 @@ suite.define(() => {
         await pollFocused(search).toBe(true);
         await pollOpacity(secondShortcut).toBe("0");
         await expect.poll(menuGeometry).toEqual(geometryBeforeFocus);
-        await search.press("1");
-        await pollValue(search).toBe("1");
-        await pollAttribute(picker, "open").toBe("");
-
-        await search.fill("anthropic");
-        await pollVisible(firstModel).toBe(false);
-        await pollVisible(secondModel).toBe(true);
-        await modelSelect.focus();
-        const filteredShortcut = secondModel.locator('[data-chat-model-shortcut-number="1"]');
-        await pollOpacity(filteredShortcut).toBe("1");
-        await page.keyboard.press("1");
-        await pollAttribute(picker, "open").toBe(null);
-        await pollText(modelSelect).toContain("Claude Sonnet 4.6");
-
-        await modelSelect.focus();
-        await page.keyboard.type("1");
-        await pollValue(page.locator(".new-session-page__message")).toBe("1");
       },
     );
   });
-  it.each([
-    { name: "cloud anonymous", placement: true, identity: false, width: 1280, height: 900 },
-    { name: "cloud identity", placement: true, identity: true, width: 1280, height: 900 },
-    { name: "desktop model", placement: false, identity: true, width: 1280, height: 900 },
-    { name: "mobile model", placement: false, identity: false, width: 390, height: 844 },
-  ])(
-    "retains $name preferences during remount revalidation",
-    async ({ placement, identity, width, height }) => {
-      await suite.withPage(
-        {
-          ...createControlUiE2eContextOptions(),
-          viewport: { width, height },
-        },
-        async ({ page }) => {
-          const runtime: NonNullable<ModelCatalogEntry["agentRuntime"]> = {
-            id: "sample-runtime",
-            cloudPlacementSupported: false,
-            source: "model",
-          };
-          const model: ModelCatalogEntry = {
-            id: "one",
-            name: "Retained one",
-            provider: "fixture",
-            available: true,
-            ...(placement ? { agentRuntime: runtime } : {}),
-          };
-          const models = [model, { ...model, id: "two", name: "Retained two" }];
-          const storageKey = `openclaw.new-session.preferences.v1:${gatewayOriginScope(controlUiBundledGatewayUrl(suite.server.baseUrl))}`;
-          const preference = placement
-            ? { where: { kind: "cloud", id: "sample-cloud" } }
-            : { model: "fixture/three" };
-          const gateway = await installMockGateway(page, {
-            agentModel: "fixture/one",
-            models,
-            ...identityScenario(identity),
-            ...(placement
-              ? { operatorScopes: ["operator.admin", "operator.read", "operator.write"] }
-              : {}),
-            methodResponses: {
-              "users.prefs.get": { status: "ok", entries: { "new-session.migration.v1": true } },
-              "sessions.catalog.list": { catalogs: [] },
-              ...(placement
-                ? {
-                    "agents.list": {
-                      agents: [
-                        {
-                          id: "main",
-                          model: { primary: "fixture/one" },
-                          agentRuntime: {
-                            ...runtime,
-                            cloudPlacementSupported: true,
-                            source: "agent",
-                          },
-                        },
-                      ],
-                      defaultId: "main",
-                      mainKey: "main",
-                      scope: "agent",
-                    },
-                    "environments.list": environmentProfiles("sample-cloud"),
-                  }
-                : {}),
-            },
-          });
-          const root = page.locator("openclaw-new-session-page");
-          const trigger = root.locator(
-            '.new-session-page__composer [data-chat-model-select="true"]',
-          );
-          const rows = root.locator("[data-chat-model-option]");
-          const where = root.locator("#new-session-where-trigger");
-          await page.goto(`${suite.server.baseUrl}new?agent=main`);
-          if (placement) {
-            await pollText(trigger).toContain("Retained one");
-          }
-          await trigger.click();
-          await pollCount(rows).toBe(2);
-          if (!placement) {
-            await trigger.click();
-          }
-          const reads = (await gateway.getRequests("models.list")).length;
-          await navigateInApp(page, "sessions");
-          await pollCount(root).toBe(0);
-          if (!placement) {
-            await navigateInApp(page, "new-session", "?agent=main");
-            await trigger.click();
-            await pollCount(rows).toBe(2);
-            await trigger.click();
-            expect(await gateway.getRequests("models.list")).toHaveLength(reads);
-            await navigateInApp(page, "sessions");
-            await pollCount(root).toBe(0);
-          }
-          await savePreference(page, gateway, storageKey, preference, identity);
-          await gateway.deferNext("models.list");
-          await gateway.emitGatewayEvent("chat.metadata.changed", {});
-          await navigateInApp(page, "new-session", "?agent=main");
-          await expect
-            .poll(async () => (await gateway.getRequests("models.list")).length)
-            .toBe(reads + 1);
-          if (placement) {
-            await where.click();
-            await expect
-              .poll(() =>
-                root.getByRole("button", { name: "sample-cloud", exact: true }).isVisible(),
-              )
-              .toBe(true);
-            expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
-            expect(await page.evaluate((key) => localStorage.getItem(key), storageKey)).toBe(
-              JSON.stringify({ agents: { main: preference } }),
-            );
-            expect(await where.getAttribute("data-cloud-profile")).toBe("sample-cloud");
-            await page.keyboard.press("Escape");
-            await trigger.click();
-            await pollCount(rows).toBe(2);
-            await selectChatModelOption(root.locator('[data-chat-model-option="fixture/one"]'));
-            expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
-            await where.click();
-            expect(
-              await root.getByRole("button", { name: "sample-cloud", exact: true }).isDisabled(),
-            ).toBe(false);
-            await page.keyboard.press("Escape");
-            await trigger.click();
-            await root.getByRole("combobox", { name: "Search models" }).fill("Retained");
-            await selectChatModelOption(root.locator('[data-chat-model-option="fixture/two"]'));
-            await pollText(trigger).toContain("Retained two");
-            expect(await trigger.getAttribute("aria-busy")).toBe("false");
-            expect(await gateway.getRequests("models.list")).toHaveLength(reads + 1);
-            await where.click();
-            await expect
-              .poll(() =>
-                root
-                  .getByRole("button", { name: "sample-cloud Unavailable", exact: true })
-                  .isDisabled(),
-              )
-              .toBe(true);
-            const selectionWrites = (await gateway.getRequests("users.prefs.set")).length;
-            await gateway.resolveDeferred("models.list", {
-              models: [
-                {
-                  ...model,
-                  name: "Accepted one",
-                  agentRuntime: { ...model.agentRuntime, cloudPlacementSupported: true },
-                },
-                { ...model, id: "two", name: "Accepted two" },
-              ],
-            });
-            await pollText(root.locator('[data-chat-model-option="fixture/one"]')).toContain(
-              "Accepted one",
-            );
-            expect(await where.getAttribute("data-cloud-profile")).toBe("sample-cloud");
-            expect(await gateway.getRequests("users.prefs.set")).toHaveLength(selectionWrites);
-          } else {
-            await trigger.focus();
-            await page.keyboard.press("Enter");
-            await pollVisible(root.locator(".chat-controls__model-menu")).toBe(true);
-            await pollCount(rows).toBe(2);
-            expect(await gateway.getRequests("connect")).toHaveLength(1);
-            expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
-            const stored = await page.evaluate((key) => localStorage.getItem(key), storageKey);
-            expect(JSON.parse(stored!).agents.main).toEqual(preference);
-            const search = root.getByRole("combobox", { name: "Search models" });
-            await search.fill("Retained");
-            const composer = root.locator(".new-session-page__composer");
-            const before = await composer.boundingBox();
-            await gateway.resolveDeferred("models.list", {
-              models: [models[0], { ...models[1], id: "three", name: "Retained three" }],
-            });
-            await pollCount(root.locator('[data-chat-model-option="fixture/three"]')).toBe(1);
-            expect(await root.locator('[data-chat-model-option="fixture/two"]').count()).toBe(0);
-            expect(await search.inputValue()).toBe("Retained");
-            expect(await search.evaluate((element) => element === document.activeElement)).toBe(
-              true,
-            );
-            const menu = await root.locator(".chat-controls__model-menu").boundingBox();
-            expect(menu).not.toBeNull();
-            expect(menu!.x).toBeGreaterThanOrEqual(0);
-            expect(menu!.x + menu!.width).toBeLessThanOrEqual(width);
-            expect(menu!.y).toBeGreaterThanOrEqual(0);
-            expect(menu!.y + menu!.height).toBeLessThanOrEqual(height);
-            expect(await composer.boundingBox()).toEqual(before);
-            expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
-            await page.keyboard.press("Escape");
-            expect(await search.inputValue()).toBe("");
-            expect(await search.evaluate((element) => element === document.activeElement)).toBe(
-              true,
-            );
-            await page.keyboard.press("Escape");
-            expect(await trigger.evaluate((element) => element === document.activeElement)).toBe(
-              true,
-            );
-            expect(await search.isVisible()).toBe(false);
-          }
-        },
-      );
-    },
-  );
-
-  it("starts with a usable retained account despite a refresh failure and leaves the default cleared", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const accountFitsMenu = () =>
-        page.locator("[data-chat-account-selection]").evaluate((section) => {
-          const menu = section.closest(".chat-controls__model-menu")!;
-          const bounds = menu.getBoundingClientRect();
-          const accountBounds = section.getBoundingClientRect();
-          return (
-            accountBounds.width > 0 &&
-            accountBounds.left >= bounds.left &&
-            accountBounds.right <= bounds.right
-          );
-        });
-      const account = {
-        authProfileId: "personal:person-a:anthropic:one",
-        provider: "anthropic",
-        label: "Test Person · Personal account",
-        authType: "token",
-        selected: false,
-      };
-      const model = {
-        id: "claude-haiku-4-5",
-        name: "Claude Haiku 4.5",
-        provider: "anthropic",
-        available: true,
-      };
-      const personal = personalModelScenario(model, account, { refreshFailed: true });
-      const gateway = await installMockGateway(page, {
-        ...personal,
-        methodResponses: {
-          ...personal.methodResponses,
-          "sessions.create": { key: "agent:main:personal-account", runStarted: true },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}new?agent=main`);
-      await page.locator(".new-session-page__message").fill("Start with this saved account");
-      const start = page.getByRole("button", { name: "Start session" });
-      const startHint = start.locator("..");
-      await pollAttribute(start, "aria-disabled").toBe("true");
-      const modelTrigger = page.locator('[data-chat-model-select="true"]');
-      await modelTrigger.click();
-      const picker = page.locator("[data-chat-account-selection]");
-      const accountTrigger = picker.locator("[data-chat-account-group-toggle]");
-      const rejectSelection = async () => {
-        await accountTrigger.click();
-        await gateway.deferNext("models.list", { authProfileId: account.authProfileId });
-        await picker
-          .locator(`[data-chat-account-option="account:${account.authProfileId}"]`)
-          .click();
-        await pollAttribute(startHint, "content").toBe("Loading models…");
-        expect(await start.getAttribute("aria-disabled")).toBe("true");
-        await gateway.rejectDeferred("models.list", unavailableError("Try again"));
-        await pollAttribute(startHint, "content").toBe("Models unavailable");
-        expect(await start.getAttribute("aria-disabled")).toBe("true");
-      };
-      await pollEnabled(accountTrigger).toBe(true);
-      await pollText(page.locator(".chat-controls__model-picker")).toContain("No models available");
-      await expect.poll(accountFitsMenu).toBe(true);
-      await rejectSelection();
-
-      await modelTrigger.click();
-      await modelTrigger.click();
-      await pollText(accountTrigger).toContain(account.label);
-      await pollAttribute(start, "aria-disabled").toBe("false");
-      await pollCount(page.locator("[data-chat-model-catalog-state]")).toBe(0);
-      await expect.poll(accountFitsMenu).toBe(true);
-      await accountTrigger.click();
-      await picker.getByText("Automatic (new-chat default)", { exact: true }).click();
-      await pollAttribute(start, "aria-disabled").toBe("true");
-      await pollText(accountTrigger).toContain("Automatic");
-      await rejectSelection();
-      await accountTrigger.click();
-      await picker.locator(`[data-chat-account-option="account:${account.authProfileId}"]`).click();
-      await pollAttribute(start, "aria-disabled").toBe("false");
-      await page.keyboard.press("Escape");
-      await start.click();
-      const create = await gateway.waitForRequest("sessions.create");
-      expect(create.params).toMatchObject({
-        message: "Start with this saved account",
-        model: `anthropic/claude-haiku-4-5@${account.authProfileId}`,
-      });
-      expect(await gateway.getRequests("users.selectModelAccount")).toHaveLength(0);
-      expect(await gateway.getRequests("users.unlinkAuthProfile")).toHaveLength(0);
-      expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
-    });
-  });
-
   it("accepts a draft while keeping the default hidden until model metadata arrives", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -495,55 +137,6 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await modelTrigger.click();
       expect(await gateway.getRequests("models.list")).toHaveLength(1);
-    });
-  });
-
-  it("selects a context window before creating a session", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        agentModel: "openai/gpt-5.6-luna",
-        methodResponses: {
-          "sessions.create": { key: "agent:main:context-window", runStarted: true },
-        },
-        models: [
-          luna,
-          {
-            available: true,
-            id: "claude-fable-5",
-            name: "Claude Fable 5",
-            provider: "anthropic",
-            contextWindow: 1_000_000,
-            contextWindows: [
-              { id: "200k", label: "200K", contextWindow: 200_000 },
-              { id: "1m", label: "1M", contextWindow: 1_000_000 },
-            ],
-            contextWindowDefault: "1m",
-          },
-        ],
-      });
-
-      await page.goto(`${suite.server.baseUrl}new`);
-      const modelSelect = page.locator('[data-chat-model-select="true"]');
-      await modelSelect.click();
-      await selectChatModelOption(
-        page.locator('[data-chat-model-option="anthropic/claude-fable-5"]'),
-      );
-      await modelSelect.click();
-
-      const contextWindowToggle = page.locator('[data-chat-context-window-toggle="200k"]');
-      await pollVisible(contextWindowToggle).toBe(true);
-      expect(await contextWindowToggle.getAttribute("aria-checked")).toBe("true");
-      await contextWindowToggle.click();
-      await pollText(page.locator("[data-chat-model-context-badge]")).toContain("200K");
-
-      await page.locator(".new-session-page__message").fill("use the smaller window");
-      await page.getByRole("button", { name: "Start session" }).click();
-      const create = await gateway.waitForRequest("sessions.create");
-      expect(create.params).toMatchObject({
-        message: "use the smaller window",
-        model: "anthropic/claude-fable-5",
-        contextWindow: "200k",
-      });
     });
   });
 
@@ -604,6 +197,7 @@ suite.define(() => {
         }
         await modelSelect.click();
         await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
+        await revealChatModelOption(page, "openai/gpt-5.6-luna");
         await pollCount(page.locator("[data-chat-model-option]")).toBe(models.length);
         expect(await page.locator("[data-chat-model-catalog-state]").count()).toBe(0);
         if (startup) {
@@ -622,90 +216,4 @@ suite.define(() => {
       });
     },
   );
-
-  it("recovers a failed CLI-agent catalog without reloading model metadata for its retry", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const models = [luna];
-      const unavailable = {
-        __mockError: unavailableError("CLI-agent catalog is warming"),
-      };
-      const discoveryMatch = { agentId: "main", metadataOnly: true };
-      const discoveryResponse = (response: object) => ({
-        cases: [
-          { match: discoveryMatch, response },
-          { match: {}, response: { catalogs: [] } },
-        ],
-      });
-      const gateway = await installMockGateway(page, {
-        cliAgentsEnabled: true,
-        featureMethods: [
-          "models.list",
-          "chat.startup",
-          "sessions.create",
-          "sessions.dispatch",
-          "sessions.catalog.list",
-        ],
-        methodResponses: {
-          "sessions.catalog.list": discoveryResponse(unavailable),
-        },
-        models,
-      });
-      const pollDiscovery = () =>
-        expect.poll(async () =>
-          catalogDiscoveryRequests(await gateway.getRequests("sessions.catalog.list")),
-        );
-
-      await page.goto(`${suite.server.baseUrl}new`);
-      await pollDiscovery().toHaveLength(1);
-
-      await page.locator('[data-chat-model-select="true"]').click();
-
-      await pollDiscovery().toHaveLength(2);
-      const errorState = page.locator(
-        '[data-chat-model-target-group="cliAgents"] [data-chat-model-catalog-state="error"]',
-      );
-      await pollVisible(errorState).toBe(true);
-      await pollLocatorText(
-        errorState.locator(".chat-controls__model-catalog-state-label > span"),
-      ).toBe("CLI agents unavailable");
-      const retry = page.locator('[data-chat-model-target-retry="cliAgents"]');
-      await pollEnabled(retry).toBe(true);
-      await pollLocatorText(retry).toContain("Retry");
-      await pollLocatorText(
-        page.locator(
-          '[data-chat-model-option="openai/gpt-5.6-luna"] .chat-controls__model-option-name',
-        ),
-      ).toBe("GPT-5.6 Luna");
-      expect(await page.getByText("Models unavailable", { exact: true }).count()).toBe(0);
-      expect(await gateway.getRequests("models.list")).toHaveLength(1);
-
-      await gateway.setMethodResponse(
-        "sessions.catalog.list",
-        discoveryResponse({
-          catalogs: [
-            {
-              id: "anthropic",
-              label: "Claude Code",
-              hosts: [],
-              capabilities: { continueSession: false, archive: false, startTerminal: true },
-            },
-          ],
-        }),
-      );
-      await retry.click();
-
-      await pollDiscovery().toHaveLength(3);
-      expect(await gateway.getRequests("models.list")).toHaveLength(1);
-      await pollVisible(page.locator('[data-chat-model-target="anthropic"]')).toBe(true);
-      await pollLocatorText(
-        page.locator(
-          '[data-chat-model-target-group="cliAgents"] .chat-controls__provider-heading > span:last-child',
-        ),
-      ).toBe("CLI agents");
-      await pollLocatorText(
-        page.locator('[data-chat-model-target="anthropic"] .chat-controls__model-option-name'),
-      ).toBe("Claude Code");
-      expect(await errorState.count()).toBe(0);
-    });
-  });
 });

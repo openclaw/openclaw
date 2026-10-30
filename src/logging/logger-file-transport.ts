@@ -322,9 +322,7 @@ function startFlush(): void {
   const running = runFlushLoop().catch(() => undefined);
   flushPromise = running;
   void running.then(() => {
-    if (flushPromise === running) {
-      flushPromise = null;
-    }
+    flushPromise = null;
     if (queue.length > 0 || droppedCount > 0) {
       scheduleFlush();
     }

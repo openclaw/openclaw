@@ -3,6 +3,7 @@
  * POST /v1beta/interactions
  */
 
+import { omitNullRequestHeaders } from "@openclaw/llm-core";
 import {
   asOptionalRecord,
   asRecord,
@@ -143,7 +144,7 @@ export const streamGoogleInteractions: StreamFunction<
       });
       const response = await guardedFetch(url, {
         method: "POST",
-        headers,
+        headers: omitNullRequestHeaders(headers),
         body: JSON.stringify(body),
         signal: options?.signal,
       });

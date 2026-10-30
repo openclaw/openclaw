@@ -22,6 +22,8 @@ import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js"
 const IMAGE_ACTIVATION_MARKER_ENV = "OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER";
 const STANDALONE_CAPTURE_RUN_ID =
   /^doctor-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+// Twice the measured 258 s Doctor on slow hardware, rounded up; repair backups still apply.
+const ORIGINAL_CAPTURE_TIMEOUT_MS = 10 * 60_000;
 
 /** A marker counts only while the sealed capture it names is still retained. */
 async function readImageActivationCapture(
@@ -159,18 +161,55 @@ export async function preserveDoctorOriginalState(params: {
       throw new Error("The Doctor process could not be identified for the pre-repair capture.");
     }
     assertCurrent();
-    const standaloneRunId = `doctor-${randomUUID()}`;
-    const captured = await captureUpdateRecoveryBaseline({
-      runId: standaloneRunId,
-      installRoot,
-      env: params.env,
-      drivers: [driver],
-      assertCurrent,
-      signal: params.signal,
-      acquisition: { mode: "maintenance-owner" },
-      fullIntegrityCheck: params.fullIntegrityCheck,
-    });
-    assertCurrent();
+    const { findReusableDoctorCapture } = await import("../infra/doctor-capture-reuse.js");
+    const controller = new AbortController();
+    const deadline = performance.now() + ORIGINAL_CAPTURE_TIMEOUT_MS;
+    const timeout = new Error("Original-state capture timed out after 600 s");
+    const timer = setTimeout(() => controller.abort(timeout), ORIGINAL_CAPTURE_TIMEOUT_MS);
+    timer.unref();
+    let captured: Awaited<ReturnType<typeof captureUpdateRecoveryBaseline>>;
+    let reused: Awaited<ReturnType<typeof findReusableDoctorCapture>>;
+    let standaloneRunId: string;
+    try {
+      const assertCaptureCurrent = () => {
+        // Synchronous admission/hash work must also observe the deadline before its timer fires.
+        if (performance.now() >= deadline) {
+          controller.abort(timeout);
+        }
+        controller.signal.throwIfAborted();
+        assertCurrent();
+      };
+      const signal = AbortSignal.any([params.signal, controller.signal]);
+      // Explicit full verification keeps its database-integrity work. Ordinary
+      // repair can retain the newest standalone original only after exact proof.
+      reused = params.fullIntegrityCheck
+        ? undefined
+        : await findReusableDoctorCapture({
+            stateDir,
+            installRoot,
+            env: params.env,
+            assertCurrent: assertCaptureCurrent,
+            signal,
+          });
+      assertCaptureCurrent();
+      standaloneRunId = reused ? path.basename(reused.directory) : `doctor-${randomUUID()}`;
+      // Await cancellation settlement; racing a timeout could release repair while copies still run.
+      captured = reused
+        ? { ref: reused, warnings: [], diagnostics: { databaseWarnings: [] } }
+        : await captureUpdateRecoveryBaseline({
+            runId: standaloneRunId,
+            installRoot,
+            env: params.env,
+            drivers: [driver],
+            assertCurrent: assertCaptureCurrent,
+            signal,
+            acquisition: { mode: "maintenance-owner" },
+            fullIntegrityCheck: params.fullIntegrityCheck,
+          });
+      assertCaptureCurrent();
+    } finally {
+      clearTimeout(timer);
+    }
     warnings.push(...captured.warnings.map((warning) => warning.message));
     findings.push(
       ...captured.warnings.map((warning): HealthFinding => ({
@@ -189,7 +228,9 @@ export async function preserveDoctorOriginalState(params: {
       })),
     );
     log.debug(
-      `Recovery copy saved before repair. No action needed. For manual recovery: ${captured.ref.manifestPath}.`,
+      reused
+        ? `Unchanged original recovery copy verified and retained before repair. For manual recovery: ${captured.ref.manifestPath}.`
+        : `Recovery copy saved before repair. No action needed. For manual recovery: ${captured.ref.manifestPath}.`,
     );
     if (activationMarker) {
       try {

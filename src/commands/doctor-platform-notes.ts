@@ -14,6 +14,7 @@ import {
   launchAgentPlistExists,
   resolveLaunchAgentLabel,
 } from "../daemon/launchd.js";
+import { mergeGatewayServiceEnv } from "../daemon/service-env-merge.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { runExec } from "../process/exec.js";
 import { shortenHomePath } from "../utils.js";
@@ -73,12 +74,7 @@ async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(): Promise<string
   const baseEnv = process.env;
   const service = resolveGatewayService();
   const command = await service.readCommand(baseEnv).catch(() => null);
-  const scanEnv = command?.environment
-    ? {
-        ...baseEnv,
-        ...command.environment,
-      }
-    : baseEnv;
+  const scanEnv = mergeGatewayServiceEnv(baseEnv, command);
   const jobs = await findStaleOpenClawUpdateLaunchdJobs(scanEnv).catch(() => []);
   if (jobs.length === 0) {
     return null;
@@ -110,22 +106,20 @@ async function launchctlGetenv(name: string): Promise<string | undefined> {
   }
 }
 
-function hasConfigGatewayCreds(cfg: OpenClawConfig): boolean {
-  return [
-    cfg.gateway?.auth?.token,
-    cfg.gateway?.auth?.password,
-    cfg.gateway?.remote?.token,
-    cfg.gateway?.remote?.password,
-  ].some((credential) => hasConfiguredSecretInput(credential, cfg.secrets?.defaults));
-}
-
 async function collectMacLaunchctlGatewayEnvOverrideWarning(
   cfg: OpenClawConfig,
 ): Promise<string | null> {
   if (process.platform !== "darwin") {
     return null;
   }
-  if (!hasConfigGatewayCreds(cfg)) {
+  if (
+    ![
+      cfg.gateway?.auth?.token,
+      cfg.gateway?.auth?.password,
+      cfg.gateway?.remote?.token,
+      cfg.gateway?.remote?.password,
+    ].some((credential) => hasConfiguredSecretInput(credential, cfg.secrets?.defaults))
+  ) {
     return null;
   }
 

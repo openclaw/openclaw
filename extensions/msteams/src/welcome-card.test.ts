@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { buildMSTeamsPresentationCard } from "./presentation.js";
-import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
 
 const presentationCard = (
   block: Parameters<typeof buildMSTeamsPresentationCard>[0]["presentation"]["blocks"][number],
@@ -56,26 +55,4 @@ describe("buildMSTeamsPresentationCard", () => {
       ],
     });
   });
-});
-
-describe("buildWelcomeCard", () => {
-  it("uses custom prompt starters", () => {
-    expect(buildWelcomeCard({ promptStarters: ["Do X", "Do Y"] }).actions).toMatchObject([
-      { title: "Do X", data: { msteams: { type: "imBack", value: "Do X" } } },
-      { title: "Do Y" },
-    ]);
-  });
-
-  it("falls back to defaults when promptStarters is empty", () => {
-    const card = buildWelcomeCard({ promptStarters: [] });
-    expect(card.body).toEqual([
-      expect.objectContaining({ weight: "Bolder", size: "Medium" }),
-      expect.anything(),
-    ]);
-    expect(card.actions).toHaveLength(3);
-  });
-});
-
-it("buildGroupWelcomeText defaults to OpenClaw", () => {
-  expect(buildGroupWelcomeText()).toContain("OpenClaw");
 });

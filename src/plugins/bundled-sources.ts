@@ -18,6 +18,7 @@ export type BundledPluginSource = {
   npmSpec?: string;
   version?: string;
   configSchema?: Record<string, unknown>;
+  contextEngineIds?: readonly string[];
   requiresConfig?: boolean;
 };
 
@@ -127,6 +128,7 @@ export function resolveBundledPluginSources(params: {
       localPath: candidate.rootDir,
       npmSpec,
       version,
+      ...(manifest.contextEngineIds ? { contextEngineIds: manifest.contextEngineIds } : {}),
       ...(isRecord(manifest.configSchema) ? { configSchema: manifest.configSchema } : {}),
       requiresConfig: pluginConfigSchemaHasRequiredFields(manifest.configSchema),
     });
@@ -167,13 +169,10 @@ export function findBundledPluginSource(params: {
 export function resolveBundledPluginInstallCommandHint(params: {
   pluginId: string;
   workspaceDir?: string;
-  /** Use an explicit env when bundled roots should resolve independently from process.env. */
-  env?: NodeJS.ProcessEnv;
 }): string | null {
   const bundledSource = findBundledPluginSource({
     lookup: { kind: "pluginId", value: params.pluginId },
     workspaceDir: params.workspaceDir,
-    env: params.env,
   });
   if (!bundledSource?.localPath) {
     return null;

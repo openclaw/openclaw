@@ -76,9 +76,9 @@ const installRunEmbeddedMocks = () => {
       },
     };
   });
-  vi.doMock("./agent-bundle-mcp-tools.js", () => ({
+  vi.doMock("./agent-bundle-mcp-tools.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./agent-bundle-mcp-tools.js")>()),
     disposeSessionMcpRuntime: (sessionId: string) => disposeSessionMcpRuntimeMock(sessionId),
-    retireSessionMcpRuntimeForSessionKey: () => Promise.resolve(false),
     retireSessionMcpRuntime: ({ sessionId }: { sessionId?: string | null }) =>
       sessionId ? disposeSessionMcpRuntimeMock(sessionId) : Promise.resolve(false),
   }));
@@ -282,21 +282,26 @@ const runOpenAi = (
   config = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]),
 ) => runTestAgent({ config, provider: "openai", model: "mock-1", ...params });
 
+async function runNativeSession(
+  sessionId: string,
+  params: Partial<Parameters<TestRunEmbeddedAgent>[0]> = {},
+) {
+  const config = createEmbeddedAgentRunnerOpenAiConfig([]);
+  return runTestAgent({
+    ...(await createNativeSessionFixture(config, sessionId)),
+    config,
+    provider: "anthropic",
+    model: "retired-outer-model",
+    agentHarnessId: "codex",
+    modelSelectionLocked: true,
+    ...params,
+  });
+}
+
 describe("runEmbeddedAgent", () => {
   it("uses runtime config for blank public runtime model overrides", async () => {
-    const baseConfig = createEmbeddedAgentRunnerOpenAiConfig([]);
-    const cfg = {
-      ...baseConfig,
-      agents: {
-        ...baseConfig.agents,
-        defaults: {
-          ...baseConfig.agents?.defaults,
-          model: {
-            primary: "openrouter/runtime-default",
-          },
-        },
-      },
-    };
+    const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);
+    cfg.agents!.defaults!.model = { primary: "openrouter/runtime-default" };
     setRuntimeConfigSnapshot(cfg);
     mockSuccessfulEmbeddedAttempt();
 
@@ -445,21 +450,11 @@ describe("runEmbeddedAgent", () => {
   });
 
   it("lets a locked Codex harness own stale model resolution and context policy", async () => {
-    const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);
-    const nativeSession = await createNativeSessionFixture(cfg, "locked-codex-native-policy");
     const prompt = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
     resolveModelAsyncMock.mockRejectedValueOnce(new Error("stale outer model must not resolve"));
     mockSuccessfulEmbeddedAttempt();
 
-    await runTestAgent({
-      ...nativeSession,
-      config: cfg,
-      prompt,
-      provider: "anthropic",
-      model: "retired-outer-model",
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-    });
+    await runNativeSession("locked-codex-native-policy", { prompt });
 
     expect(resolveModelAsyncMock).not.toHaveBeenCalled();
     expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
@@ -477,8 +472,6 @@ describe("runEmbeddedAgent", () => {
   });
 
   it("does not apply outer context-overflow recovery to a locked Codex harness", async () => {
-    const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);
-    const nativeSession = await createNativeSessionFixture(cfg, "locked-codex-native-overflow");
     runEmbeddedAttemptMock.mockResolvedValueOnce(
       makeEmbeddedRunnerAttempt({
         terminal: {
@@ -489,14 +482,7 @@ describe("runEmbeddedAgent", () => {
       }),
     );
 
-    await runTestAgent({
-      ...nativeSession,
-      config: cfg,
-      provider: "anthropic",
-      model: "retired-outer-model",
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-    }).catch(() => undefined);
+    await runNativeSession("locked-codex-native-overflow").catch(() => undefined);
 
     expect(resolveModelAsyncMock).not.toHaveBeenCalled();
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);

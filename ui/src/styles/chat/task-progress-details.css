@@ -70,7 +70,6 @@
 .task-progress-details--desktop[data-desktop-details]:not([open])
   .task-progress-details__current[data-note] {
   grid-column: 1 / -1;
-  text-overflow: clip;
 }
 
 .task-progress-details--desktop[data-desktop-details]:not([open])
@@ -87,7 +86,8 @@
   height: 16px;
 }
 
-.task-progress-details__menu-group:not(:empty) ~ .task-progress-details__menu-group:not(:empty) {
+.task-progress-details__menu-group:not(:empty) ~ .task-progress-details__menu-group:not(:empty),
+.task-progress-details__clear-group {
   margin-block-start: 4px;
   padding-block-start: 4px;
   border-block-start: 1px solid var(--border);
@@ -100,10 +100,6 @@
   .task-progress-details__summary:focus-visible
   .task-progress-details__chevron {
   opacity: 1;
-}
-
-.task-progress-details--desktop[data-desktop-details] .task-progress-details__current {
-  text-overflow: clip;
 }
 
 .task-progress-details--desktop[data-desktop-details][data-details-moving] {
@@ -263,6 +259,12 @@
 }
 
 .task-progress-details--desktop[data-desktop-details] .task-progress-details__body {
+  margin-top: 2px;
+  padding: 0;
+}
+
+.task-progress-details--desktop[data-desktop-details] .task-progress-details__content {
+  display: flow-root;
   padding-block-start: 6px;
 }
 
@@ -300,24 +302,49 @@
   margin-block-start: 12px;
 }
 
+.task-progress-details__plan .session-progress-card__markdown a {
+  font-weight: 500;
+}
+
 .task-progress-details__plan .session-progress-card__steps {
   gap: 8px;
 }
 
 .task-progress-details__plan .session-progress-card__step {
+  position: relative;
+  grid-template-columns: 16px minmax(0, 1fr);
   gap: 10px;
   font-size: 13px;
+  font-weight: 400;
   line-height: 20px;
 }
 
+.task-progress-details__plan .session-progress-card__step-text {
+  color: inherit;
+}
+
 .task-progress-details__plan .session-progress-card__step-marker {
+  width: 16px;
   height: 20px;
 }
 
-/* Match the inset drawing and stroke of the sibling check and clock SVGs. */
+/* Preserve the row rhythm and leave space around each original marker. */
+.task-progress-details__plan .session-progress-card__step:not(:last-child)::after {
+  position: absolute;
+  top: calc(var(--details-row-padding-block, 0px) + 14px + var(--session-progress-marker-size) / 2);
+  left: calc(var(--details-row-padding, 0px) + 7.5px);
+  width: 1px;
+  height: calc(100% + var(--details-row-list-gap, 8px) - var(--session-progress-marker-size) - 8px);
+  background: var(--border-strong);
+  opacity: 0.4;
+  content: "";
+}
+
+/* Keep the spinner and pending circle aligned with the other inset glyphs. */
 .task-progress-details
   :is(.session-progress-card__current-marker, .session-progress-card__step-marker)
-  > .session-run-spinner {
+  > .session-run-spinner,
+.task-progress-details .session-progress-card__step-marker[data-status="pending"] > svg {
   width: calc(var(--session-progress-marker-size) - 2px);
   height: calc(var(--session-progress-marker-size) - 2px);
   border-width: 1px;
@@ -338,10 +365,9 @@
   --session-progress-marker-size: var(--details-row-icon-size, 15px);
 
   grid-template-columns: var(--details-row-icon-slot, 16px) minmax(0, 1fr);
-  align-items: center;
   min-height: var(--details-row-height, 32px);
   padding: var(--details-row-padding-block, 4px) var(--details-row-padding);
-  gap: var(--details-row-gap, 8px);
+  gap: 10px;
 }
 
 .chat-details-desktop-body
@@ -512,24 +538,6 @@
   background: var(--bg);
 }
 
-.task-progress-details__clear-group {
-  margin-block-start: 4px;
-  padding-block-start: 4px;
-  border-block-start: 1px solid var(--border);
-}
-
-.task-progress-details__empty {
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-  color: var(--muted);
-  text-align: center;
-}
-
-.task-progress-details__empty p {
-  margin: 0;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .task-progress-details__refresh[data-pending="true"] svg {
     animation: none;
@@ -546,4 +554,17 @@
   > .chat-mobile-details-page__body {
   padding: 16px 16px calc(88px + env(safe-area-inset-bottom));
   scroll-padding-bottom: calc(88px + env(safe-area-inset-bottom));
+
+  &:has(> .task-progress-details--mobile > openclaw-panel-empty-state) {
+    padding-block-start: 0;
+    padding-inline: 0;
+  }
+}
+
+.task-progress-details__summary > .session-progress-card__runtime {
+  flex-basis: 100%;
+}
+
+.task-progress-details__plan > .session-progress-card__runtime {
+  margin-bottom: var(--space-2);
 }

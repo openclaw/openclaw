@@ -10,7 +10,7 @@ import type {
   SqliteIntegrityWorkerPhase,
   SqliteIntegrityWorkerResult,
 } from "./sqlite-integrity-worker.js";
-import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { assertSqliteIntegrity, SqliteIntegrityError } from "./sqlite-integrity.js";
 import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 
 if (!process.send || !process.disconnect) {
@@ -77,7 +77,10 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
   if (failure) {
     result = {
       ok: false,
-      error: serializeNativeErrorResponse(failure),
+      error: {
+        ...serializeNativeErrorResponse(failure),
+        ...(failure instanceof SqliteIntegrityError ? { findings: failure.findings } : {}),
+      },
     };
   }
   if (checkElapsedMs !== undefined) {

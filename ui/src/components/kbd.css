@@ -5,7 +5,20 @@
   vertical-align: middle;
 }
 
-.shortcut-kbd > span + span {
+.shortcut-kbd {
+  flex: none;
+  padding-inline: 0.4em;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  color: color-mix(in srgb, var(--text) 82%, transparent);
+  font-family: var(--font-shortcut);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+/* Key parts are direct spans; avoid invalidating every span when siblings change. */
+.shortcut-kbd > span:where(:not(:first-child)) {
   margin-inline-start: 0.15em;
 }
 .kbd__text {
@@ -20,12 +33,4 @@
   display: inline-flex;
   align-items: center;
   gap: 0.5em;
-}
-
-.shortcut-hint__keys {
-  padding-inline: 0.4em;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--text) 12%, transparent);
-  color: color-mix(in srgb, var(--text) 82%, transparent);
-  font-family: var(--font-shortcut);
 }

@@ -620,6 +620,17 @@ describe("codex doctor contract", () => {
   it.each([
     { contents: "{", detail: "invalid JSON", label: "invalid JSON" },
     {
+      contents: Buffer.concat([
+        Buffer.from(
+          '{"agent:main:unknown-owner":{"sessionId":"unknown-owner","lifecycleRevision":"',
+        ),
+        Buffer.from([0xff]),
+        Buffer.from('"}}'),
+      ]),
+      detail: "UTF-8",
+      label: "malformed UTF-8",
+    },
+    {
       contents: JSON.stringify({
         "agent:main:invalid": { sessionId: "invalid", agentHarnessId: 42 },
       }),
@@ -648,7 +659,57 @@ describe("codex doctor contract", () => {
 
     expectWarning(result, "session index");
     expect(result.warnings[0]).toContain(detail);
+    if (detail === "UTF-8") {
+      expect(result.warningDisposition).toBe("recoverable");
+    }
+    expect(await fs.readFile(externalStore)).toEqual(
+      typeof contents === "string" ? Buffer.from(contents) : contents,
+    );
     await expectRetained(fixture.sidecarPath);
+    await expect(openBindingStore(fixture.env).entries()).resolves.toEqual([]);
+  });
+
+  it("retains malformed UTF-8 binding sidecars without importing replacement characters", async () => {
+    const fixture = await bindingFixture("utf8-sidecar", { threadId: "corrupt-thread" });
+    const source = await fs.readFile(fixture.sidecarPath);
+    source[source.indexOf("corrupt-thread")] = 0xff;
+    await fs.writeFile(fixture.sidecarPath, source);
+
+    const result = await fixture.migrate();
+
+    expectWarning(result, "UTF-8");
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(await fs.readFile(fixture.sidecarPath)).toEqual(source);
+    await expectRetained(fixture.sidecarPath);
+    await expect(openBindingStore(fixture.env).entries()).resolves.toEqual([]);
+  });
+
+  it("reports malformed UTF-8 external indexes when no sidecar can be discovered", async () => {
+    const fixture = await bindingFixture("utf8-external-index");
+    const externalDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-external-"));
+    fixtureDirs.push(externalDir);
+    const externalStore = path.join(externalDir, "sessions.json");
+    const externalSidecar = path.join(externalDir, path.basename(fixture.sidecarPath));
+    await fs.rename(fixture.sidecarPath, externalSidecar);
+    await fs.rename(fixture.transcriptPath, path.join(externalDir, "utf8-external-index.jsonl"));
+    const source = Buffer.concat([
+      Buffer.from(
+        '{"agent:main:external":{"sessionId":"utf8-external-index","lifecycleRevision":"',
+      ),
+      Buffer.from([0xff]),
+      Buffer.from('"}}'),
+    ]);
+    await fs.writeFile(externalStore, source);
+    const params = { ...fixture.params, config: { session: { store: externalStore } } };
+
+    const detected = await fixture.migration.detectLegacyState(params);
+    const result = await fixture.migration.migrateLegacyState(params);
+
+    expect(detected?.preview.join("\n")).toContain("UTF-8");
+    expectWarning(result, "UTF-8");
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(await fs.readFile(externalStore)).toEqual(source);
+    await expectRetained(externalSidecar);
     await expect(openBindingStore(fixture.env).entries()).resolves.toEqual([]);
   });
 

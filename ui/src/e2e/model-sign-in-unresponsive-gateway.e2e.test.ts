@@ -70,7 +70,7 @@ suite.define(() => {
           externalUrl: "https://openrouter.example/auth",
         }),
       );
-      const openSignIn = dialog.getByRole("link", { name: "Open sign-in", exact: true });
+      const openSignIn = dialog.getByRole("link", { name: "Reopen browser tab", exact: true });
       await openSignIn.waitFor();
       expect(await openSignIn.getAttribute("href")).toBe("https://openrouter.example/auth");
       expect(await notice.count()).toBe(0);

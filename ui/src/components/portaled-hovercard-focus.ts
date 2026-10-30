@@ -1,4 +1,5 @@
-import { createContext, onCleanup, useContext } from "solid-js";
+import { createContext, useContext } from "solid-js";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 
 export type HovercardControls = {
   registerSource: (read: () => readonly HTMLElement[]) => () => void;
@@ -49,10 +50,5 @@ export const HovercardControlsContext = createContext<HovercardControls | null>(
 /** Create under the control's owner; the ref itself runs without a Solid owner. */
 export function createHovercardControlRef(): (element: HTMLElement) => void {
   const controls = useContext(HovercardControlsContext);
-  let release: (() => void) | undefined;
-  onCleanup(() => release?.());
-  return (element) => {
-    release?.();
-    release = controls?.registerSource(() => [element]);
-  };
+  return elementRef((element: HTMLElement) => controls?.registerSource(() => [element]));
 }

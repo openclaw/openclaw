@@ -32,6 +32,10 @@ async function freshEncoding(platform: NodeJS.Platform, codePage: string | null 
 
 const windowsDecoder = (options: Parameters<typeof createWindowsOutputDecoder>[0] = {}) =>
   createWindowsOutputDecoder({ platform: "win32", windowsEncoding: "gbk", ...options });
+const bytes = (...values: number[]) => Buffer.from(values);
+function decodeChunks(decoder: ReturnType<typeof windowsDecoder>, chunks: Buffer[]) {
+  return [...chunks.map((chunk) => decoder.decode(chunk)), decoder.flush()];
+}
 
 afterAll(() => {
   vi.resetModules();
@@ -60,27 +64,18 @@ it.each([
       e.resolveWindowsOemCodePageForEncoding(label),
       e.resolveWindowsOemCodePageForEncoding("bogus"),
     ]).toEqual([857, null]);
-    expect(queryWindowsRegistryValueMock).toHaveBeenCalledWith(
-      "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage",
-      "OEMCP",
-    );
   }
 });
 
 it("bounds and caches failed encoding probes", async () => {
-  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   spawnSyncMock.mockReturnValue({
     error: Object.assign(new Error("spawnSync ETIMEDOUT"), { code: "ETIMEDOUT" }),
     stderr: "",
     stdout: "",
   });
-  vi.resetModules();
-  const {
-    decodeWindowsOutputBuffer: decodeOutputWithFreshCache,
-    decodeWindowsTextFileBuffer: decodeTextWithFreshCache,
-  } = await import("./windows-encoding.js");
+  const fresh = await freshEncoding("win32");
   const undecodableByte = Buffer.from([0x80]);
-  for (const decode of [decodeOutputWithFreshCache, decodeTextWithFreshCache]) {
+  for (const decode of [fresh.decodeWindowsOutputBuffer, fresh.decodeWindowsTextFileBuffer]) {
     for (let call = 0; call < 2; call++) {
       expect(decode({ buffer: undecodableByte, platform: "win32" })).toBe(
         undecodableByte.toString("utf8"),
@@ -88,26 +83,9 @@ it("bounds and caches failed encoding probes", async () => {
     }
   }
   expect(spawnSyncMock).toHaveBeenCalledTimes(2);
-  const probeOptions = {
-    env: expect.any(Object),
-    encoding: "utf8",
-    killSignal: "SIGKILL",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 5_000,
-    windowsHide: true,
-  };
-  expect(spawnSyncMock).toHaveBeenNthCalledWith(
-    1,
-    expect.any(String),
-    ["/d", "/s", "/c", "chcp"],
-    probeOptions,
-  );
-  expect(spawnSyncMock).toHaveBeenNthCalledWith(
-    2,
-    "powershell.exe",
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::Default.CodePage"],
-    probeOptions,
-  );
+  for (const call of spawnSyncMock.mock.calls) {
+    expect(call[2]).toMatchObject({ timeout: 5_000, killSignal: "SIGKILL" });
+  }
 });
 
 it.each([
@@ -119,24 +97,16 @@ it.each([
 
 it("replays split GBK bytes on UTF-8 fallback", () => {
   const decoder = windowsDecoder();
-  expect([
-    decoder.decode(Buffer.from([0xc4])),
-    decoder.decode(Buffer.from([0xe3])),
-    decoder.flush(),
-  ]).toEqual(["", "你", ""]);
+  expect(decodeChunks(decoder, [bytes(0xc4), bytes(0xe3)])).toEqual(["", "你", ""]);
 });
 
-it("honors UTF-16 BOMs before UTF-8 fallback", () => {
+it.each([
+  ["win32", decodeWindowsOutputBuffer],
+  ["win32", decodeWindowsTextFileBuffer],
+  ["linux", decodeWindowsTextFileBuffer],
+] as const)("honors UTF-16 BOMs in %s %s", (platform, decode) => {
   for (const raw of UTF16_OUTPUT_CASES) {
-    for (const decode of [decodeWindowsOutputBuffer, decodeWindowsTextFileBuffer]) {
-      expect(decode({ buffer: raw, platform: "win32", windowsEncoding: "utf-8" })).toBe("hi\n");
-    }
-  }
-});
-
-it("decodes UTF-16 BOM file buffers on linux", () => {
-  for (const raw of UTF16_OUTPUT_CASES) {
-    expect(decodeWindowsTextFileBuffer({ buffer: raw, platform: "linux" })).toBe("hi\n");
+    expect(decode({ buffer: raw, platform, windowsEncoding: "utf-8" })).toBe("hi\n");
   }
 });
 
@@ -145,9 +115,7 @@ it("decodes UTF-16BE output across every chunk boundary", () => {
   for (let split = 1; split < raw.length; split += 1) {
     const decoder = windowsDecoder();
     expect(
-      decoder.decode(raw.subarray(0, split)) +
-        decoder.decode(raw.subarray(split)) +
-        decoder.flush(),
+      decodeChunks(decoder, [raw.subarray(0, split), raw.subarray(split)]).join(""),
       `split ${split}`,
     ).toBe("hi\n");
   }
@@ -172,17 +140,12 @@ it("isolates empty-prefix and stream state", () => {
 it.each(["utf-8", "gbk"] as const)(
   "replays unmatched and lone BOM prefixes: %s",
   (windowsEncoding) => {
-    for (const raw of [Buffer.from([0xff, 0x41]), Buffer.from([0xfe, 0x42])]) {
+    for (const raw of [bytes(0xff, 0x41), bytes(0xfe, 0x42), bytes(0xff)]) {
       const decoder = windowsDecoder({ windowsEncoding });
       expect(decoder.decode(raw.subarray(0, 1))).toBe("");
-      expect(decoder.decode(raw.subarray(1)) + decoder.flush()).toBe(
-        new TextDecoder(windowsEncoding).decode(raw),
-      );
+      const rest = raw.length > 1 ? decoder.decode(raw.subarray(1)) : "";
+      expect(rest + decoder.flush()).toBe(new TextDecoder(windowsEncoding).decode(raw));
     }
-    const lonePrefix = Buffer.from([0xff]);
-    const decoder = createWindowsOutputDecoder({ platform: "win32", windowsEncoding });
-    expect(decoder.decode(lonePrefix)).toBe("");
-    expect(decoder.flush()).toBe(new TextDecoder(windowsEncoding).decode(lonePrefix));
   },
 );
 

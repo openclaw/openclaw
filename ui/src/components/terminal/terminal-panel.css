@@ -144,7 +144,9 @@ openclaw-terminal-panel {
     min-width: 0;
   }
   .tp-session-menu--inline .tp-session-refresh:where(:not(.session-panel-rail__button)),
-  .tp-rail__icon {
+  .tp-rail__icon,
+  .tp-composer__attach,
+  .tp-composer__submit {
     display: grid;
     place-items: center;
     flex: none;
@@ -152,9 +154,12 @@ openclaw-terminal-panel {
     height: 28px;
     padding: 0;
     border: 0;
-    border-radius: 6px;
     background: transparent;
     color: var(--muted);
+  }
+  .tp-session-menu--inline .tp-session-refresh:where(:not(.session-panel-rail__button)),
+  .tp-rail__icon {
+    border-radius: 6px;
   }
   .tp-rail:where(:not(.session-panel-rail)) svg,
   .tp-session-refresh:where(:not(.session-panel-rail__button)) svg {
@@ -383,16 +388,7 @@ openclaw-terminal-panel {
   }
   .tp-composer__attach,
   .tp-composer__submit {
-    display: grid;
-    place-items: center;
-    flex: none;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    border: 0;
     border-radius: 50%;
-    background: transparent;
-    color: var(--muted);
   }
   .tp-composer__submit {
     width: 44px;

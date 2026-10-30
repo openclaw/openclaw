@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { configureAcpErrorRedactor, redactSensitiveText } from "./error-format.js";
 
-function expectRedactedLines(input: string[], expected: string[]) {
-  expect(redactSensitiveText(input.join("\n"))).toBe(expected.join("\n"));
+// Mark the exact sensitive spans; keep all surrounding diagnostic bytes unchanged.
+function expectRedactedLines(lines: string[]) {
+  const fixture = lines.join("\n");
+  const spans = /<secret>(.*?)<\/secret>/gs;
+  expect(redactSensitiveText(fixture.replace(spans, "$1"))).toBe(
+    fixture.replace(spans, "[REDACTED]"),
+  );
 }
 const nested = (headers: Record<string, string>) => JSON.stringify(JSON.stringify(headers));
 describe("redactSensitiveText", () => {
@@ -18,88 +23,51 @@ describe("redactSensitiveText", () => {
   });
 
   it("redacts unquoted auth-style HTTP headers in fallback errors", () => {
-    expectRedactedLines(
-      [
-        "Authorization: token samplevalue1234567890abcd",
-        "Proxy-Authorization: Digest sampleproxyvalue1234567890",
-        'Authorization: Digest username="digest-user-example", 2fa="digest-extension-1234567890abcdef", response="digest-response-1234567890abcdef", extension="digest-tail-1234567890abcdef", cnonce="tail-nonce"; request_id=digest-example',
-        "Authorization: AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE1234567890/20260717/eu-west-1/s3/aws4_request, SignedHeaders=:authority;x_custom;x.custom, Signature=aws-signature-1234567890abcdef; status=403",
-        'Proxy-Authorization: Digest username="digest-user-example", response="digest-response-1234567890abcdef"; request_id=proxy-example',
-        "api-key: samplekeyvalue1234567890",
-        "x-goog-api-key=samplegoogvalue1234567890",
-        "x-access-token: sampleaccessvalue1234567890",
-      ],
-      [
-        "Authorization: token [REDACTED]",
-        "Proxy-Authorization: Digest [REDACTED]",
-        "Authorization: Digest [REDACTED]; request_id=digest-example",
-        "Authorization: AWS4-HMAC-SHA256 [REDACTED]; status=403",
-        "Proxy-Authorization: Digest [REDACTED]; request_id=proxy-example",
-        "api-key: [REDACTED]",
-        "x-goog-api-key=[REDACTED]",
-        "x-access-token: [REDACTED]",
-      ],
-    );
+    expectRedactedLines([
+      "Authorization: token <secret>samplevalue1234567890abcd</secret>",
+      "Proxy-Authorization: Digest <secret>sampleproxyvalue1234567890</secret>",
+      'Authorization: Digest <secret>username="digest-user-example", 2fa="digest-extension-1234567890abcdef", response="digest-response-1234567890abcdef", extension="digest-tail-1234567890abcdef", cnonce="tail-nonce"</secret>; request_id=digest-example',
+      "Authorization: AWS4-HMAC-SHA256 <secret>Credential=AKIAEXAMPLE1234567890/20260717/eu-west-1/s3/aws4_request, SignedHeaders=:authority;x_custom;x.custom, Signature=aws-signature-1234567890abcdef</secret>; status=403",
+      'Proxy-Authorization: Digest <secret>username="digest-user-example", response="digest-response-1234567890abcdef"</secret>; request_id=proxy-example',
+      "api-key: <secret>samplekeyvalue1234567890</secret>",
+      "x-goog-api-key=<secret>samplegoogvalue1234567890</secret>",
+      "x-access-token: <secret>sampleaccessvalue1234567890</secret>",
+    ]);
   });
 
   it("redacts consecutive, prefixed, and serialized auth headers", () => {
-    expectRedactedLines(
-      [
-        "Proxy-Authorization: Foo",
-        "Proxy-Authorization: Basic cHJveHk6cGFzcw==",
-        "X-Authorization: Basic Y3VzdG9tOnBhc3M=",
-        JSON.stringify({
-          "x-access-token": "sample-access-value-1234567890",
-          "x-goog-api-key": "sample-google-value-1234567890",
-        }),
-      ],
-      [
-        "Proxy-Authorization: [REDACTED]",
-        "Proxy-Authorization: Basic [REDACTED]",
-        "X-Authorization: Basic [REDACTED]",
-        JSON.stringify({
-          "x-access-token": "[REDACTED]",
-          "x-goog-api-key": "[REDACTED]",
-        }),
-      ],
-    );
+    expectRedactedLines([
+      "Proxy-Authorization: <secret>Foo</secret>",
+      "Proxy-Authorization: Basic <secret>cHJveHk6cGFzcw==</secret>",
+      "X-Authorization: Basic <secret>Y3VzdG9tOnBhc3M=</secret>",
+      JSON.stringify({
+        "x-access-token": "<secret>sample-access-value-1234567890</secret>",
+        "x-goog-api-key": "<secret>sample-google-value-1234567890</secret>",
+      }),
+    ]);
   });
 
   it("redacts later auth params and token credentials after punctuation", () => {
     const responseValue = "later-response-value-1234567890";
     const foldedValue = "Zm9sZGVkOnNlY3JldA==";
-    expectRedactedLines(
-      [
-        `Authorization: Digest username="sample",,response="${responseValue}"; status=401`,
-        `Authorization: Digest damaged,,response="${responseValue}"; status=403`,
-        `Authorization: Digest username="sample", uri=/bad, response="${responseValue}"; status=407`,
-        `Authorization: Digest username="sample",\r\n response="${responseValue}"; status=408`,
-        `Authorization: Digest uri=http://service, response="${responseValue}"; status=409`,
-        `Authorization: Digest response='${responseValue}'; status=410`,
-        `Authorization: Digest realm=sample, authorization-param=${responseValue}; status=412`,
-        `Authorization: Digest username=sample,\\r\\n response=${responseValue}; status=413`,
-        `Authorization: Digest username=sample,\\r\\n\\tresponse=${responseValue}; status=414`,
-        "(Authorization: Negotiate cHJvb2YxMjM0NTY3ODkw)",
-        `Authorization:\r\n Basic ${foldedValue}`,
-        `Authorization:\nBasic ${foldedValue}`,
-        `Authorization:\\nBasic ${foldedValue}`,
-        `Authorization:\\tBearer ${foldedValue}`,
-        `Authorization: Bearer\\t${foldedValue}`,
-        "Authorization: raw-header-value-1234567890   ",
-      ],
-      [
-        ...[401, 403, 407, 408, 409, 410, 412, 413, 414].map(
-          (code) => `Authorization: Digest [REDACTED]; status=${code}`,
-        ),
-        "(Authorization: Negotiate [REDACTED])",
-        "Authorization:\r\n Basic [REDACTED]",
-        "Authorization:\nBasic [REDACTED]",
-        "Authorization:\\nBasic [REDACTED]",
-        "Authorization:\\tBearer [REDACTED]",
-        "Authorization: Bearer\\t[REDACTED]",
-        "Authorization: [REDACTED]   ",
-      ],
-    );
+    expectRedactedLines([
+      `Authorization: Digest <secret>username="sample",,response="${responseValue}"</secret>; status=401`,
+      `Authorization: Digest <secret>damaged,,response="${responseValue}"</secret>; status=403`,
+      `Authorization: Digest <secret>username="sample", uri=/bad, response="${responseValue}"</secret>; status=407`,
+      `Authorization: Digest <secret>username="sample",\r\n response="${responseValue}"</secret>; status=408`,
+      `Authorization: Digest <secret>uri=http://service, response="${responseValue}"</secret>; status=409`,
+      `Authorization: Digest <secret>response='${responseValue}'</secret>; status=410`,
+      `Authorization: Digest <secret>realm=sample, authorization-param=${responseValue}</secret>; status=412`,
+      `Authorization: Digest <secret>username=sample,\\r\\n response=${responseValue}</secret>; status=413`,
+      `Authorization: Digest <secret>username=sample,\\r\\n\\tresponse=${responseValue}</secret>; status=414`,
+      "(Authorization: Negotiate <secret>cHJvb2YxMjM0NTY3ODkw</secret>)",
+      `Authorization:\r\n Basic <secret>${foldedValue}</secret>`,
+      `Authorization:\nBasic <secret>${foldedValue}</secret>`,
+      `Authorization:\\nBasic <secret>${foldedValue}</secret>`,
+      `Authorization:\\tBearer <secret>${foldedValue}</secret>`,
+      `Authorization: Bearer\\t<secret>${foldedValue}</secret>`,
+      "Authorization: <secret>raw-header-value-1234567890</secret>   ",
+    ]);
     const serializedLine = JSON.stringify(
       `prefix\nAuthorization: Digest response="${responseValue}"`,
     );
@@ -119,26 +87,17 @@ describe("redactSensitiveText", () => {
   });
 
   it("redacts parameterized schemes and encoded quoted-pairs", () => {
-    expectRedactedLines(
-      [
-        'Authorization: Hawk id="client", mac="hawk-credential-proof-1234567890abcdef"; status=401',
-        `Authorization: Digest realm=\\"Example \\\\\\"Realm\\\\\\"\\", response=\\"escaped-quoted-response-1234567890abcdef\\"; status=403`,
-      ],
-      [
-        "Authorization: Hawk [REDACTED]; status=401",
-        "Authorization: Digest [REDACTED]; status=403",
-      ],
-    );
+    expectRedactedLines([
+      'Authorization: Hawk <secret>id="client", mac="hawk-credential-proof-1234567890abcdef"</secret>; status=401',
+      `Authorization: Digest <secret>realm=\\"Example \\\\\\"Realm\\\\\\"\\", response=\\"escaped-quoted-response-1234567890abcdef\\"</secret>; status=403`,
+    ]);
   });
 
   it("redacts full auth-param tokens and serialized header objects", () => {
-    expectRedactedLines(
-      [
-        "Authorization: Foo id=abc'def`ghi, proof=token-grammar-proof-1234567890abcdef; status=401",
-        `{"Authorization":"Digest username=\\"example\\", response=\\"json-digest-response-1234567890abcdef\\""}`,
-      ],
-      ["Authorization: Foo [REDACTED]; status=401", `{"Authorization":"[REDACTED]"}`],
-    );
+    expectRedactedLines([
+      "Authorization: Foo <secret>id=abc'def`ghi, proof=token-grammar-proof-1234567890abcdef</secret>; status=401",
+      `{"Authorization":"<secret>Digest username=\\"example\\", response=\\"json-digest-response-1234567890abcdef\\"</secret>"}`,
+    ]);
   });
 
   it("redacts nested serialized headers and punctuated token schemes", () => {
@@ -174,46 +133,32 @@ describe("redactSensitiveText", () => {
   });
 
   it("does not confuse real marker prefixes with internal redaction state", () => {
-    expectRedactedLines(
-      [
-        "API_KEY=***-live-secret-1234567890abcdef",
-        'Authorization: Digest ***ext=one, response="marker-digest-response-1234567890abcdef"; status=401',
-      ],
-      ["API_KEY=[REDACTED]", "Authorization: Digest [REDACTED]; status=401"],
-    );
+    expectRedactedLines([
+      "API_KEY=<secret>***-live-secret-1234567890abcdef</secret>",
+      'Authorization: Digest <secret>***ext=one, response="marker-digest-response-1234567890abcdef"</secret>; status=401',
+    ]);
   });
 
   it("preserves marker-shaped input while redacting structured auth", () => {
-    const markerZero = ";__openclaw_structured_auth_redacted_0;";
-    const markerOne = ";__openclaw_structured_auth_redacted_1;";
-    expectRedactedLines(
-      [
-        markerZero,
-        markerOne,
-        'Authorization: Digest response="collision-response-1234567890abcdef"; status=401',
-      ],
-      [markerZero, markerOne, "Authorization: Digest [REDACTED]; status=401"],
-    );
+    expectRedactedLines([
+      ";__openclaw_structured_auth_redacted_0;",
+      ";__openclaw_structured_auth_redacted_1;",
+      'Authorization: Digest <secret>response="collision-response-1234567890abcdef"</secret>; status=401',
+    ]);
   });
 
   it("preserves Basic padding diagnostics and masks punctuation in header values", () => {
-    expectRedactedLines(
-      ["Authorization: Basic dXNlcg==, status=401", "api-key: prefix)sensitive-suffix"],
-      ["Authorization: Basic [REDACTED], status=401", "api-key: [REDACTED]"],
-    );
+    expectRedactedLines([
+      "Authorization: Basic <secret>dXNlcg==</secret>, status=401",
+      "api-key: <secret>prefix)sensitive-suffix</secret>",
+    ]);
   });
 
   it("redacts quoted diagnostics while preserving structural closers", () => {
-    expectRedactedLines(
-      [
-        `curl -H 'Authorization: Digest username="example", response="quoted-header-response-1234567890abcdef"'`,
-        "{Authorization: AWS4-HMAC-SHA256 Credential=scope/path, SignedHeaders=host, Signature=structural-aws-signature-1234567890abcdef}",
-      ],
-      [
-        "curl -H 'Authorization: Digest [REDACTED]'",
-        "{Authorization: AWS4-HMAC-SHA256 [REDACTED]}",
-      ],
-    );
+    expectRedactedLines([
+      `curl -H 'Authorization: Digest <secret>username="example", response="quoted-header-response-1234567890abcdef"</secret>'`,
+      "{Authorization: AWS4-HMAC-SHA256 <secret>Credential=scope/path, SignedHeaders=host, Signature=structural-aws-signature-1234567890abcdef</secret>}",
+    ]);
   });
 
   it("keeps diagnostics adjacent to single-token auth headers", () => {

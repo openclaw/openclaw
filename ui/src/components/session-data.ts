@@ -1,10 +1,8 @@
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
-import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { isGatewayAvailable } from "../lib/gateway-availability.ts";
@@ -27,7 +25,7 @@ import {
   sessionCatalogListClient,
 } from "./app-sidebar-session-catalog-live.ts";
 import type { SidebarSessionMutationScope } from "./app-sidebar-session-types.ts";
-import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
+import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status-state.ts";
 import {
   applySessionCatalogContinuation,
   archiveSessionCatalog as archiveSessionCatalogData,
@@ -59,10 +57,7 @@ import {
   subscribeSessionCatalogBrowserEvents,
 } from "./session-data-events.ts";
 import { SessionLineageOwner } from "./session-lineage.ts";
-import {
-  captureSessionMutationScope,
-  isSessionMutationScopeCurrent,
-} from "./session-mutation-scope.ts";
+import { SessionMutationOwner } from "./session-mutation-scope.ts";
 import { SidebarOwnerSessionCounts } from "./sidebar-owner-session-counts.ts";
 
 /** Gateway-backed session-list and external-catalog data ownership. */
@@ -104,6 +99,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   private agentSelectionSource: ApplicationContext["agentSelection"] | undefined;
   private agentSelectionIntentRevision: number | undefined;
   private sessionsSource: SessionCapability | null = null;
+  private observedCanonicalListError: string | null | undefined;
   private filteredSessionScope: string | null = null;
   private unsubscribeFilteredSessions: (() => void) | null = null;
   childSessionScope = {};
@@ -114,16 +110,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   private gatewayClient: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
   private gatewayAvailable = false;
-  // Bind mutation completions to one epoch so stale failures cannot cross reconnects.
-  private sessionMutationEpoch = 0;
-  // Owns the abort signal handed to every epoch-scoped destructive confirm dialog.
-  // Retiring the epoch aborts it so a dialog open across a reconnect dismisses
-  // itself instead of confirming into a mutation scope that no longer applies.
-  private sessionMutationAbortController = new AbortController();
-  // Editable dialogs belong to the identity, not to a socket request epoch.
-  private sessionDraftAbortController = new AbortController();
-  private sessionDraftOwner: number | undefined;
-  private sessionDraftAuth: { role?: string; scopes?: readonly string[] } | undefined;
+  private readonly mutations = new SessionMutationOwner();
   private readonly lineage = new SessionLineageOwner(
     this,
     () => ({ routeId: this.inputs.activeRouteId, key: this.inputs.getRouteSessionKey() }),
@@ -336,8 +323,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     this.sessionsSource = null;
     this.inputs.dismissTransientMenus();
     this.invalidateSessionMutations();
-    this.retireSessionDrafts();
-    this.sessionDraftAuth = undefined;
+    this.mutations.disconnectDrafts();
     this.gatewaySource = null;
     this.gatewayClient = null;
     this.gatewayConnected = false;
@@ -461,6 +447,10 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
 
   private readonly updateSessions = (sessions: SessionCapability) => {
     const snapshot = sessions.state;
+    const listError = sessions.canonicalListError;
+    const listErrorChanged = listError !== this.observedCanonicalListError;
+    // Observe hidden failures too, so a later filter change cannot replay them.
+    this.observedCanonicalListError = listError;
     if (sessions.presentation.resultCached) {
       return;
     }
@@ -482,6 +472,9 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       this.clearSessionCache();
     }
     publishSidebarSessionList(this, { ...snapshot, ...presentation });
+    if (listErrorChanged) {
+      publishSidebarSessionError(this, listError, "list");
+    }
     this.requestSessionDataUpdate();
   };
 
@@ -489,10 +482,11 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     const sourceChanged = sessions !== this.sessionsSource;
     if (sourceChanged) {
       this.invalidateSessionMutations();
-      this.retireSessionDrafts();
+      this.mutations.retireDrafts();
       this.retireFilteredSessions();
       this.clearSessionCache();
       this.sessionsSource = sessions;
+      this.observedCanonicalListError = undefined;
     }
     this.updateSessions(sessions);
     if (this.context.gateway.snapshot.phase === "connected") {
@@ -507,25 +501,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
 
   private synchronizeGateway(gateway: ApplicationContext["gateway"]): void {
     this.lineage.synchronize();
-    const draftOwner = gatewayPresentationScope(gateway).key;
-    const auth = gateway.snapshot.phase === "connected" ? gateway.snapshot.hello?.auth : undefined;
-    if (
-      (this.sessionDraftOwner !== undefined && this.sessionDraftOwner !== draftOwner) ||
-      (auth &&
-        auth !== this.sessionDraftAuth &&
-        this.sessionDraftAuth?.scopes &&
-        !roleScopesAllow({
-          role: auth.role ?? "operator",
-          requestedScopes: this.sessionDraftAuth.scopes,
-          allowedScopes: auth.scopes ?? [],
-        }))
-    ) {
-      this.retireSessionDrafts();
-    }
-    this.sessionDraftOwner = draftOwner;
-    if (auth) {
-      this.sessionDraftAuth = auth;
-    }
+    this.mutations.synchronizeDrafts(gateway);
     const client = gateway.snapshot.client;
     const connected = gateway.snapshot.phase === "connected";
     const sessionSourceChanged =
@@ -551,7 +527,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     }
     this.invalidateSessionMutations();
     if (sourceOrClientChanged) {
-      this.retireSessionDrafts();
+      this.mutations.retireDrafts();
     }
     this.ownerCounts.dispose();
     this.resetChildSessionState(true);
@@ -749,30 +725,19 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   retryChildSessions = retrySidebarChildSessions.bind(null, this, this.finishChildSessionLoad);
 
   private invalidateSessionMutations(): void {
-    this.sessionMutationEpoch += 1;
+    this.mutations.retireScope();
     publishSidebarSessionError(this, null, "action");
-    // Dismiss any confirm dialog still open under the retired epoch before a
-    // new one can be issued; otherwise it stays modal until manually closed.
-    this.sessionMutationAbortController.abort();
-    this.sessionMutationAbortController = new AbortController();
     this.requestSessionDataUpdate();
   }
 
   get sessionDraftSignal(): AbortSignal {
-    return this.sessionDraftAbortController.signal;
-  }
-
-  private retireSessionDrafts(): void {
-    this.sessionDraftAbortController.abort();
-    this.sessionDraftAbortController = new AbortController();
+    return this.mutations.draftSignal;
   }
 
   beginSessionMutation(allowDeferred = false): SidebarSessionMutationScope | null {
-    const scope = captureSessionMutationScope(this.context, {
-      epoch: this.sessionMutationEpoch,
+    const scope = this.mutations.capture(this.context, {
       allowDeferred,
       selectedAgentId: this.inputs.selectedAgentIdForSessions(),
-      signal: this.sessionMutationAbortController.signal,
     });
     if (scope) {
       this.dismissSessionMutationError();
@@ -781,7 +746,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   }
 
   isSessionMutationScopeCurrent(scope: SidebarSessionMutationScope): boolean {
-    return isSessionMutationScopeCurrent(this.context, scope, this.sessionMutationEpoch);
+    return this.mutations.isCurrent(this.context, scope);
   }
 
   publishSessionMutationError = publishScopedSessionError.bind(null, this);

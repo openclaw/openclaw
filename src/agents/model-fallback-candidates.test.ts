@@ -115,16 +115,7 @@ describe("resolveImageFallbackCandidates", () => {
           },
         },
       };
-      const foreignMetadata = createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "custom",
-            modelIdNormalization: {
-              providers: { custom: { aliases: { first: "shared", second: "shared" } } },
-            },
-          },
-        ],
-      });
+      const foreignMetadata = makeMetadata("custom", { first: "shared", second: "shared" }, []);
       const run = vi.fn(async (provider: string, model: string) => {
         if (kind === "fallback" && model === "first") {
           throw new Error("primary unavailable");
@@ -165,16 +156,11 @@ describe("resolveImageFallbackCandidates", () => {
       expect(resolveImageFallbackCandidates({ cfg })).toEqual([
         candidate("anthropic", "claude-sonnet-4-6", "configured-fallback"),
       ]);
-      for (const [model, origin] of [
-        ["openai/", "primary"],
-        ["/vision", "fallback"],
-      ]) {
-        expect(
-          await warnLogs.findText(
-            `Unresolved image model "${model}"; skipped configured-${origin} candidate.`,
-          ),
-        ).toBeDefined();
-      }
+      expect(
+        await warnLogs.findText(
+          'Unresolved image model "openai/"; skipped configured-primary candidate.',
+        ),
+      ).toBeDefined();
     } finally {
       warnLogs.cleanup();
     }
@@ -203,12 +189,12 @@ function configuredModels(provider: string, ids: string[]) {
   };
 }
 
-function makeMetadata(provider: string, aliases?: Record<string, string>) {
+function makeMetadata(provider: string, aliases?: Record<string, string>, providers = [provider]) {
   return createPluginMetadataSnapshotFixture({
     plugins: [
       {
         id: provider,
-        providers: [provider],
+        providers,
         ...(aliases ? { modelIdNormalization: { providers: { [provider]: { aliases } } } } : {}),
       },
     ],
@@ -421,7 +407,6 @@ describe("fallback candidates across provider generations", () => {
         [a, "model-a"],
         [b, "model-b"],
         [empty, runtimeInput],
-        [a, "model-a"],
         [a, "model-a"],
       ] as const) {
         const candidates =

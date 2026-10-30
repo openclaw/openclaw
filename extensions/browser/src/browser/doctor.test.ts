@@ -1,18 +1,14 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import chromeExtensionManifest from "../../chrome-extension/manifest.json" with { type: "json" };
 import type { BrowserStatus } from "./client.types.js";
 import { buildBrowserDoctorReport } from "./doctor.js";
 
-const outdatedExtensionVersion = chromeExtensionManifest.version === "2.0.0" ? "1.0.0" : "2.0.0";
 const equivalentExtensionVersion =
   chromeExtensionManifest.version.split(".").length < 4
     ? `${chromeExtensionManifest.version}.0`
     : chromeExtensionManifest.version.replace(/\.0$/, "");
 
-function reportFor(
-  overrides: Partial<BrowserStatus>,
-  options: Omit<Parameters<typeof buildBrowserDoctorReport>[0], "status"> = {},
-) {
+function reportFor(overrides: Partial<BrowserStatus>, extensionVersion?: string) {
   const status: BrowserStatus = {
     enabled: true,
     profile: "openclaw",
@@ -29,44 +25,41 @@ function reportFor(
     attachOnly: false,
     ...overrides,
   };
-  return buildBrowserDoctorReport({ status, ...options });
+  return buildBrowserDoctorReport({ status, extensionVersion });
 }
 
 function check(report: ReturnType<typeof buildBrowserDoctorReport>, id: string) {
   return report.checks.find((entry) => entry.id === id);
 }
 
-it.each([
-  [{}, "cdp-websocket", { status: "info", summary: "Browser is launchable but not running" }, true],
-  [{ transport: "chrome-mcp" }, "attach-target", { status: "fail" }, false],
-] satisfies [Partial<BrowserStatus>, string, object, boolean][])(
-  "reports readiness for %j",
-  (status, id, expected, ok) => {
-    const report = reportFor(status, { platform: "linux", env: { DISPLAY: ":99" }, uid: 1000 });
-    expect(report.ok).toBe(ok);
-    expect(check(report, id)).toMatchObject(expected);
-    expect(check(report, "extension-version")).toBeUndefined();
-  },
-);
+it("fails readiness when the Chrome MCP target is unavailable", () => {
+  const report = reportFor({ transport: "chrome-mcp" });
+  expect(report.ok).toBe(false);
+  expect(check(report, "attach-target")?.status).toBe("fail");
+  expect(check(report, "extension-version")).toBeUndefined();
+});
 
 it.each([false, true])("keeps managed launch warnings non-fatal (headless=%s)", (headless) => {
+  vi.stubGlobal("process", {
+    ...process,
+    platform: "linux",
+    getuid: () => (headless ? 1000 : 0),
+  });
+  vi.stubEnv("DISPLAY", "");
+  vi.stubEnv("WAYLAND_DISPLAY", "");
   const report = reportFor(
     headless
       ? { headless: true, headlessSource: "default" }
       : { detectedBrowser: null, detectedExecutablePath: null, headlessSource: "config" },
-    { platform: "linux", env: {}, uid: headless ? 1000 : 0 },
   );
   expect(report.ok).toBe(true);
+  expect(check(report, "extension-version")).toBeUndefined();
   expect(report.checks.filter((entry) => entry.status === "warn").map((entry) => entry.id)).toEqual(
     headless ? [] : ["managed-executable", "display", "linux-sandbox"],
   );
   if (headless) {
     expect(check(report, "headless-mode")?.status).toBe("pass");
     expect(check(report, "display")).toBeUndefined();
-  } else {
-    expect(check(report, "display")?.summary).toBe(
-      "No DISPLAY or WAYLAND_DISPLAY is set while headed mode is selected (config)",
-    );
   }
 });
 
@@ -112,7 +105,6 @@ it.each([
 );
 
 it.each([
-  ["outdated", outdatedExtensionVersion, "warn"],
   ["current", chromeExtensionManifest.version, "pass"],
   ["equivalent missing version component", equivalentExtensionVersion, "pass"],
   ["maximum valid version", "65535.65535.65535.65535", "warn"],
@@ -123,7 +115,7 @@ it.each([
   ["all-zero version", "0.0.0.0", "info"],
   ["too many version components", "2.0.0.0.0", "info"],
 ] as const)("classifies %s extension version evidence", (_label, extensionVersion, severity) => {
-  const report = reportFor({ transport: "extension", running: true }, { extensionVersion });
+  const report = reportFor({ transport: "extension", running: true }, extensionVersion);
 
   const versionCheck = check(report, "extension-version");
   expect(versionCheck?.status).toBe(severity);

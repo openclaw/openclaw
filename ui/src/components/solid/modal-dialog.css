@@ -117,6 +117,21 @@ openclaw-modal-dialog {
   overflow-wrap: anywhere;
 }
 
+/* Opted-in choice dialogs keep DOM, reading, and tab order aligned with the layout. */
+.oc-modal-dialog openclaw-modal-actions.confirm-dialog-actions--stacked {
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.oc-modal-dialog .confirm-dialog-choice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: inherit;
+  min-width: 0;
+  max-width: 100%;
+}
+
 openclaw-modal-dialog.fullscreen {
   --openclaw-modal-height-limit: calc(100dvh - 20px);
 }

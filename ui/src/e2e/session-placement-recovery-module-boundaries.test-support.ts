@@ -37,19 +37,29 @@ export function defineSessionPlacementRecoveryModuleBoundaryTests(
     async (recoveryKind) => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         const sessionKey = "agent:main:release-recovery";
+        const sessionId = `session:${sessionKey}`;
         const message = "original accepted turn";
         const messageId = "initial-release-attempt";
         const accepted = chatMessage("user", message, {
           __openclaw: { idempotencyKey: `${messageId}:user` },
         });
         const history = {
+          sessionId,
           messages: recoveryKind === "accepted" ? [accepted] : [],
-          sessionInfo: { hasActiveRun: false, status: "done" },
+          sessionInfo: { key: sessionKey, sessionId, hasActiveRun: false, status: "done" },
         };
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "sessions.list": createdSessionListResult(sessionKey),
             "chat.history": history,
+            "chat.send": {
+              cases: [
+                {
+                  match: { idempotencyKey: messageId },
+                  response: { runId: messageId, status: "ok" },
+                },
+              ],
+            },
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -71,6 +81,7 @@ export function defineSessionPlacementRecoveryModuleBoundaryTests(
         const recovery: SessionPlacementPendingRecovery = {
           ...owner,
           sessionKey,
+          sessionId,
           messageId,
           message,
           agentId: "main",
@@ -108,8 +119,8 @@ export function defineSessionPlacementRecoveryModuleBoundaryTests(
         await page.evaluate(() =>
           (window as unknown as { releaseRecoveryDigest: () => void }).releaseRecoveryDigest(),
         );
-        await runtime.request;
         if (recoveryKind !== "none") {
+          await runtime.request;
           expect(
             await pane.evaluate(
               ({ state }: HTMLElement & { state: ChatPageHost }) =>
@@ -118,26 +129,30 @@ export function defineSessionPlacementRecoveryModuleBoundaryTests(
           ).toBe(true);
           await expectNoRequests(gateway, "chat.send");
         }
-        const after = (await requests("chat.history")).length;
         if (recoveryKind === "accepted") {
-          await gateway.deferNext("chat.history");
+          await gateway.deferNext("chat.send");
         }
         runtime.release();
         if (recoveryKind === "accepted") {
-          expect(await gateway.waitForRequest("chat.history", { after })).toMatchObject({
-            params: { sessionKey, limit: 1000 },
+          expect(await gateway.waitForRequest("chat.send")).toMatchObject({
+            params: { sessionKey, sessionId, expectedLeafEntryId: null, idempotencyKey: messageId },
           });
-          await expectNoRequests(gateway, "chat.send");
-          await gateway.resolveDeferred("chat.history", history);
+          expect(await requests("chat.send")).toHaveLength(1);
+          await gateway.resolveDeferred("chat.send", { runId: messageId, status: "ok" });
         }
         await expect
           .poll(() => page.evaluate((key) => sessionStorage.getItem(key), storageKey))
           .toBeNull();
-        await gateway.waitForRequest("chat.send");
+        await gateway.waitForRequest("chat.send", { after: recoveryKind === "accepted" ? 1 : 0 });
         expect(await requests("chat.send")).toMatchObject([
+          ...(recoveryKind === "accepted"
+            ? [{ params: { sessionKey, sessionId, idempotencyKey: messageId } }]
+            : []),
           { params: { sessionKey, message: "queued while offline" } },
         ]);
-        await expectNoRequests(gateway, "sessions.send", "sessions.dispatch");
+        expect(await requests("chat.send")).toHaveLength(recoveryKind === "accepted" ? 2 : 1);
+        expect(runtime.requests()).toBe(recoveryKind === "none" ? 0 : 1);
+        await expectNoRequests(gateway, "sessions.dispatch");
         if (recoveryKind === "accepted") {
           expect(await page.locator(".chat-group.user", { hasText: message }).count()).toBe(1);
         }

@@ -8,20 +8,10 @@ const contributorsArgs = [
   "repos/openclaw/openclaw/contributors?per_page=100&anon=1",
   "--paginate",
 ];
-const mergedAuthorsArgs = [
-  "pr",
-  "list",
-  "-R",
-  "openclaw/openclaw",
-  "--state",
-  "merged",
-  "--limit",
-  "5000",
-  "--json",
-  "author",
-  "--jq",
-  ".[].author.login",
-];
+const mergedAuthorsArgs =
+  "pr list -R openclaw/openclaw --state merged --limit 5000 --json author --jq .[].author.login".split(
+    " ",
+  );
 const avatar = (alt: string) =>
   `<img src="https://avatars.githubusercontent.com/u/42?v=4&s=48" width="48" height="48" alt="${alt}">`;
 const credit = (login: string, alt: string) =>
@@ -202,10 +192,7 @@ it("cancels stalled avatar probe body reads at the probe timeout", async () => {
   const fixture = mockClawtributorsFixture();
   let signal: AbortSignal | undefined;
   let canceled = false;
-  let markFetchStarted!: () => void;
-  const fetchStarted = new Promise<void>((resolveStarted) => {
-    markFetchStarted = resolveStarted;
-  });
+  const { promise: fetchStarted, resolve: markFetchStarted } = Promise.withResolvers<void>();
   vi.stubGlobal("fetch", ((_url, init) => {
     signal = init?.signal ?? undefined;
     markFetchStarted();

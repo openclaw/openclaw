@@ -105,22 +105,16 @@ export async function resolveMatrixInboundContext(config: {
     }
     return true;
   };
-  const shouldIncludeRoomContextSender = (
-    kind: "thread" | "quote" | "history",
-    contextSenderId?: string,
-  ): boolean =>
+  const shouldIncludeRoomContextSender = (contextSenderId?: string): boolean =>
     evaluateSupplementalContextVisibility({
       mode: contextVisibilityMode,
-      kind,
+      kind: "thread",
       senderAllowed: isRoomContextSenderAllowed(contextSenderId),
     }).include;
   let threadContext =
     ingress.threadContext ??
     (threadRootId ? await resolveThreadContext({ roomId, eventId: threadRootId }) : undefined);
-  if (
-    threadContext?.senderId &&
-    !shouldIncludeRoomContextSender("thread", threadContext.senderId)
-  ) {
+  if (threadContext?.senderId && !shouldIncludeRoomContextSender(threadContext.senderId)) {
     logVerboseMessage(`matrix: drop thread root context (mode=${contextVisibilityMode})`);
     threadContext = undefined;
   }
@@ -138,7 +132,7 @@ export async function resolveMatrixInboundContext(config: {
   }
   const replySenderAllowed =
     !replyContext?.senderId || isRoomContextSenderAllowed(replyContext.senderId);
-  const roomInfo = isRoom ? await getRoomInfo(roomId) : undefined;
+  const roomInfo = isRoom ? await getRoomInfo(roomId, { currentName: true }) : undefined;
   const roomName = roomInfo?.name;
   const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
   const textWithId = `${bodyText}\n[matrix event id: ${messageId} room: ${roomId}]`;

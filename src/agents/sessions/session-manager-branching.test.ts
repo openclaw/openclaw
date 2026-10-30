@@ -20,17 +20,14 @@ import {
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
+import { cleanupTrackedSessionState } from "./session-state-cleanup.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    for (const stateDir of tempDirs.dirs) {
-      await cleanupSessionStateForTest({ stateDir });
-    }
-    cleanup();
+    await cleanupTrackedSessionState(tempDirs.dirs, cleanup);
   }),
 );
 afterEach(() => vi.restoreAllMocks());
@@ -129,6 +126,8 @@ it.each(["memory", "sqlite"].flatMap((mode) => [3, 4].map((version) => ({ mode, 
     ];
     expect(manager.getSessionId()).not.toBe(scope.sessionId);
     expect(manager.getPersistedEntries()).toEqual(expected);
+    // The source transcript keeps counting the copied path.
+    expect(manager.getHeader()?.inheritedThrough).toEqual(["reply"]);
     expect(manager.getLabel("user")).toBe("named");
     expect(manager.getEntry("abandoned")).toBeUndefined();
     if (mode === "sqlite") {
@@ -153,6 +152,19 @@ it.each(["memory", "sqlite"].flatMap((mode) => [3, 4].map((version) => ({ mode, 
     expect(reopened.getHeader()?.version).toBe(version);
   },
 );
+
+it("marks only the source's active path as inherited when branching from an inactive leaf", async () => {
+  const manager = SessionManager.fromEntries([
+    { type: "session", version: 3, id: "source", cwd: "/" },
+    message("root", null, "question"),
+    message("inactive", "root", "first reply"),
+    message("active", "root", "second reply"),
+  ]);
+  expect(manager.getLeafId()).toBe("active");
+  await manager.createBranchedSession("inactive");
+  // The source counts root and active; the copied inactive reply still counts in the branch.
+  expect(manager.getHeader()?.inheritedThrough).toEqual(["root"]);
+});
 
 it("creates SQLite-backed branch sessions without rewriting the source transcript", async () => {
   const { scope, userId, replyId, manager } = await branchSource("branch-source", {

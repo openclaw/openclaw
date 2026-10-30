@@ -1,15 +1,18 @@
 import { Readable } from "node:stream";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage, readErrorName } from "openclaw/plugin-sdk/error-runtime";
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getDiscordRuntime } from "../runtime.js";
 import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
 import { type DiscordVoiceIngressContext, runDiscordVoiceAgentTurn } from "./ingress.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import type { DiscordVoiceSegmentOutcome } from "./recording-types.js";
 import { logVoiceVerbose, type VoiceSessionEntry } from "./session.js";
-import { synthesizeVoiceReplyAudio, transcribeVoiceAudio } from "./tts.js";
+import { synthesizeVoiceReplyAudio } from "./tts.js";
 
 const logger = createSubsystemLogger("discord/voice");
 
@@ -73,16 +76,23 @@ export async function processDiscordVoiceSegment(
   if (!recording?.capture.isCurrent() && (!admitted || !conversationCurrent())) {
     return { status: "excluded" };
   }
-  const {
-    text: transcript,
-    processing,
-    unavailable,
-  } = await transcribeVoiceAudio({
-    cfg: params.cfg,
-    agentId: entry.route.agentId,
+  const cfg = params.cfg;
+  const agentId = entry.route.agentId;
+  const result = await getDiscordRuntime().mediaUnderstanding.transcribeAudioFile({
     filePath: wavPath,
+    cfg,
+    agentDir: resolveAgentDir(cfg, agentId),
+    mime: "audio/wav",
   });
-  if (unavailable) {
+  const transcript = normalizeOptionalString(result.text);
+  const processing = result.decision?.attachmentProcessing?.[0];
+  if (
+    result.decision?.outcome === "skipped" &&
+    result.decision.attachmentDispositions?.[0]?.kind === "no-model" &&
+    result.decision.attachmentProcessing?.[0] === "omitted" &&
+    result.decision.attachments.length > 0 &&
+    result.decision.attachments.every((attachment) => attachment.attempts.length === 0)
+  ) {
     recording?.capture.onBatchUnavailable?.();
     return { status: "unavailable" };
   }

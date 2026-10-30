@@ -30,25 +30,7 @@ import {
 } from "./session-history-budget.test-support.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 
-const evictionWarnSpy = vi.hoisted(() => vi.fn());
 const maintenance = { mode: "enforce" as const, maxDiskBytes: 1, highWaterBytes: 1 };
-const noWork = { removedFiles: 0, removedEntries: 0 };
-const contains = (facts: Record<string, unknown>) =>
-  expect.arrayContaining([expect.objectContaining(facts)]);
-vi.mock("../../logging/subsystem.js", async () => {
-  const actual = await vi.importActual<typeof import("../../logging/subsystem.js")>(
-    "../../logging/subsystem.js",
-  );
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) => {
-      const logger = actual.createSubsystemLogger(subsystem);
-      return subsystem === "sessions/history-eviction"
-        ? { ...logger, warn: evictionWarnSpy }
-        : logger;
-    },
-  };
-});
 
 describe("SQLite post-commit history maintenance", () => {
   let testState: OpenClawTestState;
@@ -163,7 +145,6 @@ describe("SQLite post-commit history maintenance", () => {
     async (operation, phase, committed, expectedSessions) => {
       const sessionKey = "agent:main:target";
       const queueSpy = vi.spyOn(queue, "runQueuedStoreWrite");
-      evictionWarnSpy.mockClear();
       for (const name of ["target", "unrelated"]) {
         await historical(name, "retained history".repeat(4096));
       }
@@ -197,9 +178,9 @@ describe("SQLite post-commit history maintenance", () => {
             "conflicting-target-old.jsonl.deleted",
           );
       }
-      const readerOperation = "fixture.session-history.lifecycle-reader";
-      const reader = withSqliteReaderOwner({ operation: readerOperation, ownerKind: "main" }, () =>
-        openNodeSqliteDatabase(owner.path, { readOnly: true }),
+      const reader = withSqliteReaderOwner(
+        { operation: "fixture.session-history.lifecycle-reader", ownerKind: "main" },
+        () => openNodeSqliteDatabase(owner.path, { readOnly: true }),
       );
       reader.exec("BEGIN");
       reader.prepare("SELECT count(*) FROM session_windows").get();
@@ -252,40 +233,21 @@ describe("SQLite post-commit history maintenance", () => {
         const swept: Promise<unknown>[] = [];
         await joinSessionHistoryBudgetSweeps(queueSpy, swept);
         expect.soft(checkpoint.mock.calls.length > 0).toBe(committed);
-        const blockedCheckpoint = {
-          state: "blocked",
-          readerDiagnostics: contains({
-            connections: contains({ operation: readerOperation, transactionOpen: true }),
-          }),
-        };
-        const deferred = {
-          reason: "checkpoint-incomplete",
-          checkpoint: expect.objectContaining(blockedCheckpoint),
-        };
+        // Detailed checkpoint diagnostics and warning deduplication live in
+        // session-history-wal-budget.test.ts; this suite owns lifecycle ordering.
         expect(await Promise.all(swept)).toEqual(
           committed
             ? [
                 expect.objectContaining({
-                  ...noWork,
-                  deferredReason: deferred.reason,
-                  checkpoint: deferred.checkpoint,
+                  removedFiles: 0,
+                  removedEntries: 0,
+                  deferredReason: "checkpoint-incomplete",
+                  checkpoint: expect.objectContaining({ state: "blocked" }),
                 }),
               ]
             : [],
         );
         expect([fs.existsSync(archive), sessionExists("unrelated-old")]).toEqual([true, true]);
-        if (committed) {
-          await expect(checkpoint.mock.results[0]?.value).resolves.toMatchObject({
-            checkpointIncomplete: 1,
-            checkpoint: blockedCheckpoint,
-          });
-          expect(evictionWarnSpy).toHaveBeenCalledWith(
-            "session history disk budget deferred until a completed WAL checkpoint is observed",
-            expect.objectContaining(deferred),
-          );
-        } else {
-          expect(evictionWarnSpy).not.toHaveBeenCalled();
-        }
         if (phase === "complete") {
           // The requested deletion is committed even while unrelated pressure cleanup is deferred.
           expect([sessionExists("target-old"), sessionExists("target-live")]).toEqual([

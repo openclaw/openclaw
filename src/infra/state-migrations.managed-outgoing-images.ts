@@ -28,6 +28,7 @@ import {
   type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
+import { decodeUtf8Input, Utf8InputError } from "./utf8-input.js";
 
 const LEGACY_RECORD_MAX_BYTES = 1024 * 1024;
 const DEFAULT_TRANSIENT_TTL_MS = 15 * 60 * 1000;
@@ -130,7 +131,9 @@ function parseLegacyManagedImageRecord(params: {
   snapshot: LegacySourceSnapshot;
   stateDir: string;
 }): ParsedLegacyRecord {
-  const raw = JSON.parse(params.snapshot.raw) as unknown;
+  const raw = JSON.parse(
+    decodeUtf8Input(params.snapshot.buffer, "Legacy managed image record"),
+  ) as unknown;
   if (!isRecord(raw) || !isRecord(raw.original)) {
     throw new Error("legacy managed image record must be an object");
   }
@@ -240,7 +243,6 @@ function readManagedImageRow(db: EngineConnection, attachmentId: string) {
 export function migrateLegacyManagedOutgoingImages(params: {
   detected: LegacyStateDetection["managedOutgoingImages"];
   stateDir: string;
-  nowMs?: number;
 }): MigrationMessages {
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -267,10 +269,14 @@ export function migrateLegacyManagedOutgoingImages(params: {
       );
   } catch (error) {
     warnings.push(`Failed reading legacy managed outgoing image state: ${String(error)}`);
-    return { changes, warnings };
+    return {
+      changes,
+      warnings,
+      ...(error instanceof Utf8InputError ? { warningDisposition: "recoverable" as const } : {}),
+    };
   }
 
-  const nowMs = params.nowMs ?? Date.now();
+  const nowMs = Date.now();
   const discardedIds = new Set<string>();
   try {
     runOpenClawStateWriteTransaction(

@@ -128,7 +128,13 @@ export const handlePluginCommand: CommandHandler = async (params, allowTextComma
   const result =
     withNative && targetSessionEntry?.sessionId
       ? await withNative(
-          { agentId: targetAgentId, sessionKey: params.sessionKey, entry: targetSessionEntry },
+          {
+            agentId: targetAgentId,
+            sessionKey: params.sessionKey,
+            entry: targetSessionEntry,
+            storePath: sessionTarget?.storePath,
+            commandBody: command.commandBodyNormalized,
+          },
           execute,
         )
       : await execute();

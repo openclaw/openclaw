@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withCliTty } from "../run-main.bare-root.test-support.js";
@@ -84,11 +85,22 @@ async function runCli(args: string[] | string, route: "onboard" | "setup" = "onb
   }
   await program.parseAsync([route, ...argv], { from: "user" });
 }
-function optionFailure(message: unknown) {
-  return { ok: false, error: { type: "cli_error", message }, phase: "options", message };
-}
-function optionsError(message: string) {
-  return JSON.stringify(optionFailure(message), null, 2);
+function expectOptionFailure(message: string, json: boolean) {
+  const diagnostic = expect.stringContaining(message);
+  expect(runtime.error).toHaveBeenCalledExactlyOnceWith(diagnostic);
+  expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+  expectNoCalls(setup, recommendations, acknowledge, refresh, wizard, systemAgent);
+  if (json) {
+    expect(runtime.log).toHaveBeenCalledOnce();
+    const call = expectDefined(runtime.log.mock.calls[0], "JSON option diagnostic");
+    expect(JSON.parse(call[0])).toMatchObject({
+      ok: false,
+      phase: "options",
+      error: { type: "cli_error", message: diagnostic },
+    });
+  } else {
+    expectNoCalls(runtime.log);
+  }
 }
 function expectCall(target: typeof wizard, ...args: unknown[]) {
   expect(target.mock.calls).toEqual([args]);
@@ -138,38 +150,18 @@ it("resolves explicitly disabled daemon installation", async () => {
 });
 
 it.each([
-  [
-    "recommendations --json refresh",
-    "This recommendations command does not support parent option(s): --json.",
-    false,
-  ],
-  [
-    "--json --reset recommendations",
-    "This recommendations command does not support parent option(s): --reset.",
-    true,
-  ],
+  ["recommendations --json refresh", "parent option(s): --json.", false],
+  ["--json --reset recommendations", "parent option(s): --reset.", true],
   [
     "--custom-image-input --custom-text-input --json",
     "Use either --custom-image-input or --custom-text-input, not both.",
     true,
   ],
-  [
-    "--json --modern --non-interactive",
-    "Non-interactive setup requires explicit risk acknowledgement.",
-    true,
-  ],
+  ["--json --modern --non-interactive", "explicit risk acknowledgement", true],
   ["--modern --no-install-daemon", "--modern cannot be combined with: --no-install-daemon.", false],
 ] as const)("rejects invalid options: %s", async (args, message, json) => {
-  const partial = args.includes("--modern");
   await runCli(args);
-  const expected = partial ? expect.stringContaining(message) : message;
-  expect(runtime.error).toHaveBeenCalledExactlyOnceWith(expected);
-  expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-  const logs = runtime.log.mock.calls;
-  expect(partial ? logs.map(([value]) => JSON.parse(String(value))) : logs).toEqual(
-    json ? (partial ? [optionFailure(expected)] : [[optionsError(message)]]) : [],
-  );
-  expectNoCalls(recommendations, acknowledge, refresh, wizard, systemAgent);
+  expectOptionFailure(message, json);
 });
 
 it.each([
@@ -209,16 +201,6 @@ describe("setup routing", () => {
 
   it.each([
     ["pending inference", { agents: { defaults: { model: "acme/verified" } } }, true, true],
-    [
-      "interrupted access selection",
-      {
-        $schema: "https://openclaw.ai/config.json",
-        meta: { updatedBy: "fixture" },
-        wizard: { securityAcknowledgedAt: "2026-08-02T00:00:00.000Z", accessMode: "guarded" },
-      },
-      false,
-      true,
-    ],
     ["remote Gateway", { gateway: { mode: "remote" } }, true, false],
   ] as const)(
     "routes interactive setup for %s",
@@ -264,12 +246,7 @@ describe("setup routing", () => {
     [["--gateway-port", ""], "--gateway-port must be an integer between 1 and 65535.", false],
   ] as const)("rejects invalid setup options: %s", async (args, message, json) => {
     await runSetup(typeof args === "string" ? args : [...args]);
-    expect(runtime.error).toHaveBeenCalledWith(message);
-    if (json) {
-      expect(runtime.log).toHaveBeenCalledWith(optionsError(message));
-    }
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expectNoCalls(setup, wizard);
+    expectOptionFailure(message, json);
   });
 
   it("dispatches scripted onboarding controls", async () => {

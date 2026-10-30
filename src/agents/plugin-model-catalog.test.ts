@@ -146,6 +146,19 @@ afterEach(async () => {
 });
 
 describe("SQLite-backed plugin model catalogs", () => {
+  it("refuses malformed UTF-8 catalogs and continues importing healthy owners", () => {
+    const source = writeLegacy(catalogContents("broken", "synthetic-key"), "broken");
+    const corrupted = Buffer.from(catalogContents("broken", "synthetic-key"));
+    corrupted[corrupted.indexOf("synthetic-key")] = 0xff;
+    writeFileSync(source, corrupted);
+    const valid = catalogContents("healthy");
+    writeLegacy(valid, "healthy");
+
+    expectMigration([1, "Could not read legacy provider catalog"]);
+
+    expectCatalogs({ healthy: valid });
+    expect(readFileSync(source)).toEqual(corrupted);
+  });
   it("reads only named catalog rows without running migration or repair", async () => {
     const zai = catalogContents("zai");
     const anthropic = catalogContents("anthropic");
@@ -212,23 +225,20 @@ describe("SQLite-backed plugin model catalogs", () => {
     };
     const removal = { candidates: [candidate], credentials: new Set([removedKey]) };
     const before = readCatalogCacheRow("zai");
-    const worker = vi.spyOn(pluginModelCatalogExecution, "withPluginModelCatalogWorker");
-    try {
-      await removePersistedPluginModelCatalogCredentials(removal);
-      expect(worker.mock.calls.length).toBe(0);
-      expect(readCatalogCacheRow("zai")).toEqual(before);
+    using worker = vi.spyOn(pluginModelCatalogExecution, "withPluginModelCatalogWorker");
 
-      await replacePersistedPluginModelCatalogs({
-        agentDir,
-        pluginCatalogWrites: { [relativePath]: catalogContents("zai", removedKey) },
-      });
-      worker.mockClear();
-      await removePersistedPluginModelCatalogCredentials(removal);
-      expect(worker.mock.calls.length).toBe(1);
-      expectCatalogs({ zai: catalogContents("zai") });
-    } finally {
-      worker.mockRestore();
-    }
+    await removePersistedPluginModelCatalogCredentials(removal);
+    expect(worker.mock.calls.length).toBe(0);
+    expect(readCatalogCacheRow("zai")).toEqual(before);
+
+    await replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: { [relativePath]: catalogContents("zai", removedKey) },
+    });
+    worker.mockClear();
+    await removePersistedPluginModelCatalogCredentials(removal);
+    expect(worker.mock.calls.length).toBe(1);
+    expectCatalogs({ zai: catalogContents("zai") });
   });
 
   it("waits for an uncommitted catalog publication before skipping a clean catalog", async () => {

@@ -122,20 +122,20 @@ describe("CommandPalette search", () => {
       methods: ["cron.list", "models.list"],
       request: catalogRequest({
         "cron.list": automations.promise,
-        "models.list": modelResult("needle", "Needle model"),
+        "models.list": modelResult("needle", "Cafe\u0301 model"),
       }),
     });
 
-    await searchPalette(palette, "needle");
-    await vi.waitFor(() => expect(findPaletteOption(palette, "Needle model")).toBeDefined());
+    await searchPalette(palette, "CAFÉ");
+    await vi.waitFor(() => expect(findPaletteOption(palette, "Cafe\u0301 model")).toBeDefined());
     expect(palette.textContent).toContain("Searching commands");
-    findPaletteOption(palette, "Needle model")?.click();
+    findPaletteOption(palette, "Cafe\u0301 model")?.click();
     expect(palette.onNavigate).toHaveBeenCalledWith("model-providers");
 
-    await searchPalette(palette, "needle");
-    automations.resolve({ jobs: [{ id: "needle-job", name: "Needle automation" }] });
-    await vi.waitFor(() => expect(findPaletteOption(palette, "Needle automation")).toBeDefined());
-    expect(findPaletteOption(palette, "Needle model")).toBeDefined();
+    await searchPalette(palette, "CAFÉ");
+    automations.resolve({ jobs: [{ id: "needle-job", name: "Café automation" }] });
+    await vi.waitFor(() => expect(findPaletteOption(palette, "Café automation")).toBeDefined());
+    expect(findPaletteOption(palette, "Cafe\u0301 model")).toBeDefined();
     expect(palette.textContent).not.toContain("Searching commands");
   });
 
@@ -315,12 +315,11 @@ describe("CommandPalette search", () => {
       };
       const { gateway } = createGateway(true, {
         methods: ["plugins.list"],
-        request: async (rpc) => {
-          if (rpc !== "plugins.list") {
-            throw new Error(`Unexpected method: ${rpc}`);
-          }
-          return { plugins: pluginId ? [plugin] : [] };
-        },
+        request: catalogRequest({
+          "plugins.list": {
+            plugins: pluginId ? [plugin] : [],
+          },
+        }),
       });
       const context = createContext(gateway, async () => null);
       const { palette, query } = await mountPalette({
@@ -341,9 +340,7 @@ describe("CommandPalette search", () => {
   it("moves the keyboard selection through catalog groups in visible order", async () => {
     const { gateway } = createGateway(true, {
       methods: ["cron.list"],
-      request: vi.fn(async () => ({
-        jobs: [{ id: "bravo", name: "Needle Bravo" }],
-      })),
+      request: vi.fn(async () => ({ jobs: [{ id: "bravo", name: "Needle Bravo" }] })),
     });
     const context = createContext(gateway);
     const { palette, query, queryAll } = await mountPalette(

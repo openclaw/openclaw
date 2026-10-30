@@ -47,3 +47,13 @@ export type NodeTunnelEntry = NodeEnvironmentOwner & {
   nativeWorkspaceLeases: Set<string>;
   readiness: Deferred<WorkerTurnTunnelHandle>;
 };
+
+export type NodeWorkerWorkspaceBinding = {
+  source:
+    | { kind: "local"; path: string }
+    | { kind: "device-folder"; deviceId: string; path: string }
+    | { kind: "repository"; baseCommit: string; baseManifestRef: string };
+  manifestRef: string;
+  remoteWorkspaceDir: string;
+  sessionKey?: string;
+};

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  collectDeliveredMediaUrls,
   hasCompletedSourceReplyDeliveryEvidence,
   getAutomaticDeliveryEvidence,
   getGatewayAgentResult,
@@ -8,10 +7,7 @@ import {
   hasVisibleOutboundDeliveryEvidence,
   resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "./delivery-evidence.js";
-import {
-  isMeaningfulTranscriptMessage,
-  isTerminalSilentAssistantMessage,
-} from "./message-visibility.js";
+import { hasVisibleAgentPayload } from "./message-visibility.js";
 
 describe("explicit final source-reply delivery evidence", () => {
   it("distinguishes progress from a delivered final reply", () => {
@@ -132,42 +128,38 @@ describe("route-checkable messaging-tool aggregate evidence", () => {
   });
 });
 
-describe("collectDeliveredMediaUrls attachment recursion", () => {
-  it("collects unique media URLs in payload, aggregate, and target order", () => {
-    const urls = collectDeliveredMediaUrls({
-      payloads: [
-        Object.assign([], { url: "https://example.com/ignored-array.png" }),
-        {
-          url: "https://example.com/root.png",
-          attachments: [
-            { mediaUrl: "https://example.com/child.png" },
-            { attachments: [{ filePath: "/tmp/grandchild.jpg" }] },
-          ],
-        },
-      ],
-      messagingToolSentMediaUrls: ["https://example.com/root.png", "/tmp/aggregate.png"],
-      messagingToolSentTargets: [
-        Object.assign([], { mediaUrl: "/tmp/ignored-target.png" }),
-        { mediaUrls: ["/tmp/aggregate.png", "/tmp/target.png"] },
-      ],
-    });
-    expect(urls).toEqual([
-      "https://example.com/root.png",
-      "https://example.com/child.png",
-      "/tmp/grandchild.jpg",
-      "/tmp/aggregate.png",
-      "/tmp/target.png",
-    ]);
+describe("hasVisibleAgentPayload attachment recursion", () => {
+  it("finds nested media while rejecting blank and malformed attachments", () => {
+    const invalidAttachments = [
+      null,
+      42,
+      { mediaUrl: " ", mediaUrls: [null, 42, "\t"], path: "", url: "\n", filePath: " " },
+      Object.assign([], { url: "https://example.com/ignored-array.png" }),
+      Object.assign([], { mediaUrl: "/tmp/ignored-array.png" }),
+    ];
+    expect(hasVisibleAgentPayload({ payloads: [{ attachments: invalidAttachments }] })).toBe(false);
+    for (const attachment of [
+      { mediaUrl: "https://example.com/child.png" },
+      { attachments: [{ filePath: "/tmp/grandchild.jpg" }] },
+    ]) {
+      expect(
+        hasVisibleAgentPayload({
+          payloads: [{ attachments: [...invalidAttachments, attachment] }],
+        }),
+      ).toBe(true);
+    }
   });
 
   it("does not overflow on a mutual attachments cycle", () => {
-    const a: Record<string, unknown> = { mediaUrl: "https://example.com/a.png" };
-    const b: Record<string, unknown> = { mediaUrl: "https://example.com/b.png" };
+    const a: Record<string, unknown> = {};
+    const b: Record<string, unknown> = {};
     a.attachments = [b];
     b.attachments = [a];
 
-    const urls = collectDeliveredMediaUrls({ payloads: [a] });
-    expect(urls.toSorted()).toEqual(["https://example.com/a.png", "https://example.com/b.png"]);
+    const result = { payloads: [{ attachments: [a] }] };
+    expect(hasVisibleAgentPayload(result)).toBe(false);
+    b.mediaUrl = "https://example.com/b.png";
+    expect(hasVisibleAgentPayload(result)).toBe(true);
   });
 });
 
@@ -194,22 +186,5 @@ describe("queued delivery evidence", () => {
       },
     };
     expect(getAutomaticDeliveryEvidence(partial).mayHaveSent).toBe(true);
-  });
-});
-
-describe("agent reply visibility", () => {
-  it("classifies terminal silent transcript messages and meaningful tails", () => {
-    expect(
-      isTerminalSilentAssistantMessage({
-        role: "assistant",
-        stopReason: "stop",
-        content: [
-          { type: "thinking", text: "internal" },
-          { type: "text", text: "NO_REPLY" },
-        ],
-      }),
-    ).toBe(true);
-    expect(isMeaningfulTranscriptMessage({ role: "system" })).toBe(false);
-    expect(isMeaningfulTranscriptMessage({ role: "toolResult" })).toBe(true);
   });
 });

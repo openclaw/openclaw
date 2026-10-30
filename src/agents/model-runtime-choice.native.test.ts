@@ -5,7 +5,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
+import {
+  createClaudeCliBackends,
+  testing as cliBackendsTesting,
+} from "./cli-backends.test-support.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { prepareModelChoice, preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
@@ -44,15 +48,7 @@ afterEach(() => {
 const request = { agentId: "main", provider: "fixture", model: "model" };
 const custom: OpenClawConfig = {
   plugins: { enabled: false },
-  models: {
-    providers: {
-      fixture: {
-        api: "openai-completions",
-        baseUrl: "https://custom.invalid/v1",
-        models: [],
-      },
-    },
-  },
+  ...configFor("fixture", "https://custom.invalid/v1", { api: "openai-completions" }),
 };
 
 it.each([
@@ -189,14 +185,7 @@ it("reports missing sign-in instead of a catalog refresh", async () => {
 it("keeps the configured Claude CLI runtime when switching models with saved setup tokens", async () => {
   vi.stubEnv("ANTHROPIC_API_KEY", "");
   cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-      },
-    ],
+    resolveRuntimeCliBackends: createClaudeCliBackends,
   });
   const entry: ModelCatalogEntry = {
     provider: "anthropic",
@@ -408,6 +397,61 @@ it("validates off-catalog host routes without granting an incompatible runtime",
   current = false;
   expect(choice.validate()).toContain("not available");
 });
+
+it.each(["implicit", "configured"] as const)(
+  "admits a %s native-only model for spawn like the turn path",
+  async (routing) => {
+    // Only the native runtime lists this model; no API row can materialize it.
+    const entry: ModelCatalogEntry = {
+      provider: "fixture",
+      id: "native-only",
+      name: "Native only",
+      reasoning: true,
+      nativeRuntime: "native-test",
+    };
+    const cfg: OpenClawConfig =
+      routing === "configured"
+        ? {
+            agents: {
+              defaults: {
+                models: { "fixture/native-only": { agentRuntime: { id: "native-test" } } },
+              },
+            },
+          }
+        : {};
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: "native-test",
+      source: "fixture",
+      harness: {
+        id: "native-test",
+        label: "Native test",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        readModelCatalogReadiness: () => ({ accountType: "oauth" }),
+        runAttempt: vi.fn(),
+      },
+    });
+    const owner = createModelRuntimeChoiceOwnerFixture(cfg, () => true, {
+      pluginRegistry: registry,
+      modelCatalog: { entries: [entry], routeVariants: [entry] },
+    });
+    bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+    published.owner = owner;
+    expect(
+      await prepareModelChoice({
+        cfg,
+        agentId: "main",
+        raw: "fixture/native-only",
+        source: "override",
+      }),
+    ).toMatchObject({
+      kind: "resolved",
+      ref: { provider: "fixture", model: "native-only" },
+      model: { provider: "fixture", id: "native-only" },
+    });
+  },
+);
 
 it("rejects a stale native observation without renewing it", async () => {
   // This choice also runs inside config write locks; native discovery there needs its own decision.

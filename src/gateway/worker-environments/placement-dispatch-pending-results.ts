@@ -10,7 +10,7 @@ import type { WorkerSessionPlacementProjection } from "./placement-read-projecti
 import { placementTurnOwner } from "./placement-record.js";
 import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
-import { isCurrentActiveWorkerEnvironment } from "./placement-target.js";
+import { isExactAttachedEnvironment } from "./placement-target.js";
 import { completeRecoveredWorkspaceTeardown } from "./placement-teardown.js";
 import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
 import {
@@ -28,6 +28,7 @@ import { boundedWorkerError } from "./worker-error.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
+  adoptReclaimedWorkspaceHistory,
   createWorkspaceResultJournal,
   finalizeWorkspaceResultConflicts,
   resolvePriorWorkspaceResultConflict,
@@ -303,7 +304,7 @@ export async function recoverPendingWorkspaceResults(
                   (finishBlockedMove
                     ? currentEnvironment?.state === "destroyed"
                     : Boolean(getRuntimeConfig().cloudWorkers?.requiredProfile) &&
-                      isCurrentActiveWorkerEnvironment(current, currentEnvironment))
+                      isExactAttachedEnvironment(currentEnvironment, current))
                 );
               }
               return (
@@ -314,7 +315,7 @@ export async function recoverPendingWorkspaceResults(
                 Boolean(currentEnvironment?.nodeDeviceId) &&
                 currentEnvironment?.nodeDeviceId === environment?.nodeDeviceId &&
                 currentEnvironment?.leaseId === environment?.leaseId &&
-                isCurrentActiveWorkerEnvironment(current, currentEnvironment) &&
+                isExactAttachedEnvironment(currentEnvironment, current) &&
                 move === null &&
                 !reclaimResult
               );
@@ -389,6 +390,14 @@ export async function recoverPendingWorkspaceResults(
                 report: recovery.reportConflict,
               });
               await deps.publishAcceptedWorkspace?.(turnClaim);
+              // Recovery may drain an ordinary turn; only a reclaim owns commit adoption.
+              if (reclaimResult) {
+                await adoptReclaimedWorkspaceHistory({
+                  ...recovery,
+                  workspace,
+                  stagedResultRef: result.stagedResultRef,
+                });
+              }
               await settleStagedWorkspaceResult({
                 assertCurrent: recovery.assertCurrent,
                 placements,
@@ -399,7 +408,10 @@ export async function recoverPendingWorkspaceResults(
                 ...completion,
               });
             };
-            if (preserveEnvironment && !sameGatewayInstance) {
+            if (
+              preserveEnvironment &&
+              (!sameGatewayInstance || pending.recoveryRequestedAtMs !== null)
+            ) {
               // Restart revokes the previous turn, not its machine. Confirm the old
               // node runtime stopped before accepting a result or reconnecting it.
               recovery.assertCurrent();
@@ -551,7 +563,8 @@ export async function recoverPendingWorkspaceResults(
               });
               return;
             }
-            if (!isCurrentActiveWorkerEnvironment(active, environment)) {
+            // File custody depends on the exact attachment, not launch compatibility.
+            if (!isExactAttachedEnvironment(environment, active)) {
               if (hasPreparedResult) {
                 // Verification did not publish this prepared snapshot before the
                 // crash. Preserve the fence for retry or operator inspection.

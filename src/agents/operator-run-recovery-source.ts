@@ -4,19 +4,16 @@ import {
   isAcpSessionKey,
   isCronSessionKey,
   isIncognitoSessionKey,
-  isSubagentSessionKey,
 } from "../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../sessions/agent-harness-session-key.js";
-import type { InputProvenance } from "../sessions/input-provenance.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
-import type { RequesterOrigin } from "./requester-origin.js";
 
-type OperatorInputRecoverySourceParams = {
+type ScheduledOperatorSourceParams = {
   authority?: AdmittedRunOperatorAuthority;
   entry: InternalSessionEntry;
   agentId: string;
@@ -24,12 +21,22 @@ type OperatorInputRecoverySourceParams = {
   sourceRunId: string;
 };
 
-/** Original admitted operator evidence; each recovery owner still re-admits its own work. */
-export function createOperatorInputRecoverySource(
-  params: OperatorInputRecoverySourceParams,
+/** Cron occurrences retain the creator turn's authenticated grant for later revalidation. */
+export function captureScheduledOperatorSource(
+  params: ScheduledOperatorSourceParams,
 ): RestartRecoveryOperatorSource | undefined {
   const { authority, entry, sessionKey } = params;
-  if (!authority || entry.incognito || isIncognitoSessionKey(sessionKey)) {
+  if (
+    !authority ||
+    entry.incognito ||
+    entry.acp ||
+    entry.pluginOwnerId ||
+    entry.cronRunContinuation ||
+    isIncognitoSessionKey(sessionKey) ||
+    isCronSessionKey(sessionKey) ||
+    isAcpSessionKey(sessionKey) ||
+    isAgentHarnessSessionKey(sessionKey)
+  ) {
     return undefined;
   }
   assertAdmittedRunOperatorAuthority(authority);
@@ -48,53 +55,11 @@ export function createOperatorInputRecoverySource(
       : {}),
     sourceRunId: params.sourceRunId,
     snapshot: {
-      ...structuredClone(snapshot),
+      ...snapshot,
       scopes: intersectOperatorScopes(snapshot.scopes, authority.scopes),
     },
   };
   return Buffer.byteLength(JSON.stringify(source), "utf8") <= 65_536
     ? freezeJsonSnapshot(source)
     : undefined;
-}
-
-/** Main-turn recovery excludes execution lineage that has a different continuation owner. */
-export function createRestartRecoveryOperatorSource(
-  params: OperatorInputRecoverySourceParams & {
-    inputProvenance?: InputProvenance;
-    requesterOrigin?: RequesterOrigin;
-  },
-): RestartRecoveryOperatorSource | undefined {
-  const { entry, sessionKey } = params;
-  const requesterSettle =
-    params.inputProvenance?.kind === "inter_session" &&
-    params.inputProvenance.sourceTool === "subagent_settle" &&
-    params.inputProvenance.sourceChannel === "internal" &&
-    params.sourceRunId.startsWith("announce:requester-settle:") &&
-    Boolean(params.inputProvenance.sourceSessionKey?.trim());
-  // Dashboard roots link to main for grouping; only execution lineage excludes
-  // recovery. Treating parentSessionKey as delegation strips real operator turns.
-  if (
-    entry.spawnedBy ||
-    entry.subagentRole ||
-    (entry.spawnDepth ?? 0) > 0 ||
-    entry.completionOwnerSessionKey ||
-    entry.acp ||
-    entry.pluginOwnerId ||
-    entry.cronRunContinuation ||
-    (params.inputProvenance &&
-      params.inputProvenance.kind !== "external_user" &&
-      !(
-        params.inputProvenance.kind === "inter_session" &&
-        (params.requesterOrigin
-          ? params.requesterOrigin.operatorProfileId === params.authority?.profileId
-          : requesterSettle)
-      )) ||
-    isCronSessionKey(sessionKey) ||
-    isSubagentSessionKey(sessionKey) ||
-    isAcpSessionKey(sessionKey) ||
-    isAgentHarnessSessionKey(sessionKey)
-  ) {
-    return undefined;
-  }
-  return createOperatorInputRecoverySource(params);
 }

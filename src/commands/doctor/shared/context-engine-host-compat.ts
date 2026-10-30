@@ -8,6 +8,7 @@ import {
   resolveAgentDir,
   resolveAmbientOwnerAgentId,
 } from "../../../agents/agent-scope-config.js";
+import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import { resolveCliBackendConfig } from "../../../agents/cli-backends.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
@@ -26,7 +27,9 @@ import {
   resolveContextEngine,
 } from "../../../context-engine/registry.js";
 import type { ContextEngine, ContextEngineInfo } from "../../../context-engine/types.js";
+import { resolveSelectedContextEnginePluginId } from "../../../plugins/config-state.js";
 import { acquirePluginRegistryForInspection } from "../../../plugins/loader.js";
+import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultSlotIdForKey } from "../../../plugins/slots.js";
@@ -178,6 +181,22 @@ function selectedContextEngineSlotId(cfg: OpenClawConfig): string {
     : defaultSlotIdForKey("contextEngine");
 }
 
+/** The selected engine may be registered by a plugin with a different ID. */
+function resolveInspectionPluginId(
+  cfg: OpenClawConfig,
+  engineId: string,
+  env?: NodeJS.ProcessEnv,
+): string {
+  const agentId = tryResolveDefaultAgentId(cfg);
+  const plugins = loadManifestMetadataSnapshot({
+    config: cfg,
+    workspaceDir: agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined,
+    env: env ?? process.env,
+  }).manifestRegistry.plugins;
+  const records = plugins.map(({ id, contextEngineIds }) => ({ id, contextEngineIds }));
+  return resolveSelectedContextEnginePluginId(cfg, records) ?? engineId;
+}
+
 async function resolveSelectedContextEngineInfo(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -204,7 +223,7 @@ async function resolveSelectedContextEngineInfo(params: {
         inspection = await acquirePluginRegistryForInspection({
           config: params.cfg,
           env: params.env,
-          onlyPluginIds: [engineId],
+          onlyPluginIds: [resolveInspectionPluginId(params.cfg, engineId, params.env)],
         });
         pluginRegistry = inspection.registry;
       } catch (error) {

@@ -133,6 +133,13 @@ migration sources. Hot transcript JSONL files are imported and archived after
 successful import; archive-tier JSONL files remain support artifacts, not
 runtime fallbacks.
 
+Session-import archive filenames stay within 255 UTF-8 bytes. Long names retain
+a readable prefix and a stable hash; migration receipts retain the original paths
+and session keys. If an older receipt names an overlong destination, Doctor treats
+that destination as absent and verifies the surviving source before archiving it
+under a bounded name. Keep the original files and receipts. After upgrading from
+an update blocked by `ENAMETOOLONG`, rerun `openclaw update repair`.
+
 Older V2 migration receipts can record completed index moves without file identity.
 Doctor compares a surviving archive with the current `sessions.json`: different
 content imports as a new legacy index. If the archive is identical or missing,
@@ -341,6 +348,20 @@ match, and the registry must remain an unaliased regular file with verified agen
 ownership. Recovery preserves current SQLite settings and the archive's protection
 and disposal status. Automatic discovery keeps its strict identity checks; changed
 contents or other metadata remain deferred.
+
+This registry-only rebind does not relocate or adopt an entire migration
+archive. If `session-sqlite-import-archive` was moved to another volume and its
+original path now resolves through a directory symlink, import and archive
+restore refuse that topology. Copying the archived files back into a regular
+directory does not by itself restore their receipt-bound identities; matching
+contents alone is not enough. There is no supported automatic CLI recovery for
+this cross-volume layout. Preserve the symlink, relocated archive, and
+`<state-dir>/session-sqlite-migration-runs/` without edits, make a verified
+backup, and contact the maintainers for assisted recovery. Include the Doctor
+warning and `openclaw doctor --session-sqlite inspect --session-sqlite-all-agents`
+output, but keep transcript contents and raw manifests private. Do not delete
+or rewrite archives or receipts to silence the warning.
+
 The identity format is the same in 2026.9.4 and 2026.9.5; 2026.9.5 added historical
 archive discovery that checks these older receipts.
 
@@ -455,6 +476,9 @@ the store's owning state directory before maintaining another installation.
 Existing hard-linked targets are rejected because another path can share the
 same database inode outside the locked state directory. The same ownership
 checks cover SQLite WAL, shared-memory, and rollback-journal sidecars.
+Automatic all-agent import still checks discovered paths of databases retained
+after agent deletion for symbolic aliases before importing or settling archives,
+while excluding those databases from mutation.
 
 Each import writes a manifest under
 `~/.openclaw/session-sqlite-migration-runs/` before moving transcript artifacts

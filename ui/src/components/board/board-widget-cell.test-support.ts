@@ -2,7 +2,10 @@ import { vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import type { BoardWidgetCellCallbacks, BoardWidgetCellProps } from "./board-widget-cell.ts";
+import type {
+  BoardWidgetCellCallbacks,
+  BoardWidgetCellProps,
+} from "./board-widget-cell-options.ts";
 
 export function callbacks(
   overrides: Partial<BoardWidgetCellCallbacks> = {},

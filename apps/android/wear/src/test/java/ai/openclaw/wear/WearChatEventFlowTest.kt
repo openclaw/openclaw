@@ -13,6 +13,8 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Bundle
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.provider.Settings
 import android.speech.RecognizerIntent
@@ -56,10 +58,28 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowTextToSpeech
+import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = WearApplication::class, sdk = [35])
 class WearChatEventFlowTest {
+  @Test
+  fun newFlowLeavesEarlierLoopersAlone() {
+    val earlierThread = HandlerThread("earlier-fixture")
+    earlierThread.start()
+    val earlierLooper = earlierThread.looper
+    val executed = AtomicInteger()
+    shadowOf(earlierLooper).pause()
+    Handler(earlierLooper).post { executed.incrementAndGet() }
+    try {
+      withFlow { flow -> flow.idle() }
+      assertEquals(0, executed.get())
+    } finally {
+      earlierThread.quitSafely()
+      earlierThread.join(5_000)
+    }
+  }
+
   @Test
   @Config(qualifiers = "en-rUS-w227dp-h227dp-round-xhdpi")
   @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -2708,6 +2728,7 @@ class WearChatEventFlowTest {
     }
 
   private class Flow {
+    private val existingLoopers = ShadowLooper.getAllLoopers().toSet()
     private val app = RuntimeEnvironment.getApplication() as WearApplication
     private var originalScale: Float? = null
     private val owner =
@@ -2771,12 +2792,12 @@ class WearChatEventFlowTest {
 
     fun idle() {
       // UI actions enqueue speech; speech callbacks publish state back to Compose.
-      // Drain both directions before asserting the resulting UI or playback state.
+      // Drain only this fixture's workers; an earlier fixture may still be shutting down.
       repeat(2) {
         shadowOf(Looper.getMainLooper()).idle()
         ShadowLooper
           .getAllLoopers()
-          .filter { it != Looper.getMainLooper() && it.thread.isAlive }
+          .filter { it != Looper.getMainLooper() && it !in existingLoopers && it.thread.isAlive }
           .forEach { shadowOf(it).idle() }
       }
     }

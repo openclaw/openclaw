@@ -24,6 +24,13 @@ function contains(text: string | undefined, ...parts: string[]) {
   parts.forEach((part) => expect(text).toContain(part));
 }
 
+async function prepareCanary(script: string) {
+  const root = await fs.realpath(dirs.make("canary-exit-"));
+  const rehearsal = await createCanaryProcessFixture(root, script);
+  vi.spyOn(rehearsals, "prepareUpdateCandidateRehearsal").mockResolvedValueOnce(rehearsal);
+  return { root, config: {}, stateDir: rehearsal.stateDir };
+}
+
 it.each([
   "doctor",
   "doctor-signal",
@@ -35,9 +42,7 @@ it.each([
 ] as const)(
   "preserves completed checks across a real child exit stall (%s)",
   async (mode) => {
-    const root = await fs.realpath(dirs.make("canary-exit-"));
-    const rehearsal = await createCanaryProcessFixture(
-      root,
+    const candidate = await prepareCanary(
       `import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -85,15 +90,12 @@ if (args.includes("--fix")) {
 }
 `,
     );
-    const { stateDir } = rehearsal;
-    vi.spyOn(rehearsals, "prepareUpdateCandidateRehearsal").mockResolvedValueOnce(rehearsal);
+    const { root } = candidate;
     const options = { env: { OPENCLAW_STATE_DIR: path.join(root, "ledger") } };
     const run =
       mode === "doctor-signal" ? ledger.createUpdateRun({ trigger: "cli" }, options) : undefined;
     const result = await validateUpdateCandidateCanary({
-      root,
-      config: {},
-      stateDir,
+      ...candidate,
       timeoutMs: 2_000,
       onStep: run
         ? (step) => {
@@ -149,8 +151,8 @@ if (args.includes("--fix")) {
       return;
     }
     const failedExit = mode === "failed-exit" || mode === "signalled-exit";
-    const step = result.steps.find((candidate) =>
-      failedExit ? candidate.name === "candidate-doctor-lint" : candidate.termination === "timeout",
+    const step = result.steps.find((entry) =>
+      failedExit ? entry.name === "candidate-doctor-lint" : entry.termination === "timeout",
     )!;
     expect(step).toBeDefined();
     const report = renderUpdateRunReport(
@@ -239,9 +241,7 @@ it.each([
   ["signal", "startup crash with signal SIGTERM"],
   ["timeout", "readiness timeout"],
 ] as const)("reports the closed startup cause for %s", async (diagnostic, expected) => {
-  const root = await fs.realpath(dirs.make("canary-public-cause-"));
-  const rehearsal = await createCanaryProcessFixture(
-    root,
+  const candidate = await prepareCanary(
     `
 const args = process.argv.slice(2);
 if (args.includes("--fix")) console.log("Doctor complete.");
@@ -265,21 +265,14 @@ else if (args.includes("gateway")) {
 }
 `,
   );
-  const { stateDir } = rehearsal;
-  vi.spyOn(rehearsals, "prepareUpdateCandidateRehearsal").mockResolvedValueOnce(rehearsal);
   const result = await validateUpdateCandidateCanary({
-    root,
-    config: {},
-    stateDir,
+    ...candidate,
     timeoutMs: diagnostic === "timeout" ? 1000 : 5000,
   });
   expect(result.status).toBe("error");
   const report = await prepareUpdateFailureReport(
-    {
-      attemptId: "startup-cause",
-      result: { ...result, mode: "npm" },
-    },
-    { env: {}, stateDir },
+    { attemptId: "startup-cause", result: { ...result, mode: "npm" } },
+    { env: {}, stateDir: candidate.stateDir },
   );
   if (expected === "[redacted-diagnostic]") {
     expect(report.body).toContain(

@@ -239,12 +239,6 @@ function rewriteAgentCompactionRefs(params: {
       path: `${params.path}.compaction.model`,
     });
   }
-  rewriteStringModelSlotIfCanonicalCodexRuntime({
-    ...params,
-    container: asMutableRecord(compaction?.memoryFlush),
-    key: "model",
-    path: `${params.path}.compaction.memoryFlush.model`,
-  });
 }
 
 function rewriteLosslessCompactionModel(

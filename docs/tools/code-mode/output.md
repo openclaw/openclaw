@@ -400,7 +400,7 @@ If even the identity cannot fit, the new save is released and the completed
 result explains that retention was unavailable. Capacity or data-allowance
 failures likewise preserve the original successful truncation semantics,
 without evicting earlier references. Small values, plain strings, emitted
-output, failures, headless execution, and restart-safe cells retain their
+output, failures, and headless execution retain their
 ordinary output behavior.
 
 Marker prefixes and omitted-byte counts describe the original compact JSON after

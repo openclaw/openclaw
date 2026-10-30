@@ -14,6 +14,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerMemoryImportEnglish } from "../../i18n/locales/en-memory-import.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
@@ -24,6 +25,8 @@ import {
   type MemoryEngineSelection,
   type MemoryTab,
 } from "./memory-schema.ts";
+
+registerRouteSubtitlesEnglish();
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -143,7 +146,8 @@ type MemoryViewProps = {
   readAddonBusy: (id: string) => boolean;
   engineSelection: MemoryEngineSelection;
   enginePending?: boolean;
-  engineBusy: boolean;
+  engineDisabled: boolean;
+  engineSaving: boolean;
   /** Distinguishes a rejected write from a committed write with a failed refresh. */
   engineOutcome: MemoryEngineOutcome | null;
   onEngineChange: (engineId: string | null) => void;
@@ -187,7 +191,7 @@ function EngineSection(props: MemoryViewProps) {
     buildMemoryEngineOptions(props.catalog, props.engineSelection),
   );
   const blocked = () =>
-    props.engineBusy || (props.catalog.kind === "ready" && !props.catalog.mutationAllowed);
+    props.engineDisabled || (props.catalog.kind === "ready" && !props.catalog.mutationAllowed);
   const defaultEngine = () =>
     engineOptions().find((option) => option.id === DEFAULT_MEMORY_ENGINE_ID)?.label ??
     t("memoryPage.engine.openClawMemory");
@@ -229,6 +233,7 @@ function EngineSection(props: MemoryViewProps) {
                 value={engineId() ?? MEMORY_ENGINE_OFF}
                 options={options()}
                 disabled={blocked()}
+                saving={props.engineSaving}
                 ariaLabel={t("memoryPage.engine.rowTitle")}
                 onChange={(value) => props.onEngineChange(value || null)}
               />
@@ -237,7 +242,7 @@ function EngineSection(props: MemoryViewProps) {
             )
           }
         />
-        {available() ? <DisabledEngineRow {...props} engineBusy={blocked()} /> : undefined}
+        {available() ? <DisabledEngineRow {...props} engineDisabled={blocked()} /> : undefined}
         {!available() || props.engineOutcome === null ? undefined : (
           <SettingsRow
             title={t(
@@ -281,7 +286,7 @@ function DisabledEngineRow(props: MemoryViewProps) {
           control={
             <button
               class="btn btn--sm"
-              disabled={props.engineBusy}
+              disabled={props.engineDisabled || props.engineSaving}
               onClick={() => props.onEngineChange(engineId())}
             >
               {t("memoryPage.engine.enable")}
@@ -323,7 +328,7 @@ function AddonRow(props: { addon: MemoryAddonRow; owner: MemoryViewProps }) {
           ariaLabel={t("memoryPage.addons.toggleAriaLabel", { plugin: props.addon.label })}
           description={props.addon.description}
           checked={props.owner.readAddonExpected(props.addon.id) ?? props.addon.state === "enabled"}
-          disabled={props.owner.readAddonBusy(props.addon.id)}
+          saving={props.owner.readAddonBusy(props.addon.id)}
           onChange={(enabled) => props.owner.onAddonChange(props.addon.id, enabled)}
         />
       ) : (

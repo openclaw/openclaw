@@ -4,14 +4,14 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-state.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import {
   TRANSCRIPT_PAYLOAD_SLICE_BYTES,
   transcriptEventReadBytesSql,
 } from "./session-transcript-read-bytes.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
+import { readTranscriptPayload } from "./transcript-payload.js";
 
 type ExportDatabase = Pick<OpenClawAgentDatabase, "db" | "path">;
 
@@ -114,7 +114,7 @@ export function readTranscriptExportInSlices<
   return { ...snapshot, events };
 }
 
-/** Captures payload text after `afterSeq`, decoded by SQLite, up to the slice budget. */
+/** Captures decoded payload text after `afterSeq` up to the slice budget. */
 function readTranscriptPayloadSlice(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
@@ -129,17 +129,14 @@ function readTranscriptPayloadSlice(
       database.db,
       getSessionKysely(database.db)
         .selectFrom("transcript_events")
-        .select([
-          "seq",
-          transcriptEventJsonSql(database.db).as("event_json"),
-          transcriptEventReadBytesSql().as("payload_bytes"),
-        ])
+        .select(["seq", "event_json", "event_zstd", "event_utf8_bytes"])
+        .select(transcriptEventReadBytesSql().as("payload_bytes"))
         .where("session_id", "=", sessionId)
         .where("seq", "<=", throughSeq)
         .$if(afterSeq !== undefined, (query) => query.where("seq", ">", afterSeq!))
         .orderBy("seq", "asc"),
     )) {
-      slice.payloads.push(row.event_json);
+      slice.payloads.push(readTranscriptPayload(row));
       bytes += row.payload_bytes;
       if (bytes >= TRANSCRIPT_PAYLOAD_SLICE_BYTES) {
         slice.resumeAfterSeq = row.seq;

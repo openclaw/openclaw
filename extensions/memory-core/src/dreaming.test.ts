@@ -217,7 +217,6 @@ function getBeforeAgentReplyHandler(onMock: ReturnType<typeof vi.fn>) {
       trigger?: string;
       workspaceDir?: string;
       sessionKey?: string;
-      heartbeatEventQueueSessionKey?: string;
     },
   ) => Promise<unknown>;
 }
@@ -558,58 +557,6 @@ describe("dreaming service reconciliation", () => {
     expect(harness.listCalls).toBe(1);
   });
 
-  it("only triggers managed dreaming when the queued cron event is still pending", async () => {
-    const { api, harness, reply } = createDreamingTestContext({
-      config: createDreamingConfig({ enabled: true, phases: { deep: { limit: 0 } } }),
-    });
-
-    await startDreaming(api, harness);
-
-    const sessionKey = "agent:main:main";
-    enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
-      sessionKey,
-      contextKey: "cron:memory-dreaming",
-    });
-
-    const first = await reply({ trigger: "heartbeat", workspaceDir: ".", sessionKey });
-
-    expect(first).toEqual({
-      handled: true,
-      reason: "memory-core: short-term dreaming disabled by limit",
-    });
-
-    resetSystemEventsForTest();
-
-    const second = await reply({ trigger: "heartbeat", workspaceDir: ".", sessionKey });
-
-    expect(second).toBeUndefined();
-  });
-
-  it("resolves queued managed dreaming cron events from the base session for isolated heartbeats", async () => {
-    const { api, harness, reply } = createDreamingTestContext({
-      config: createDreamingConfig({ enabled: true, phases: { deep: { limit: 0 } } }),
-    });
-
-    await startDreaming(api, harness);
-
-    enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
-      sessionKey: "agent:main:main",
-      contextKey: "cron:memory-dreaming",
-    });
-
-    const result = await reply({
-      trigger: "heartbeat",
-      workspaceDir: ".",
-      sessionKey: "agent:main:main:heartbeat",
-      heartbeatEventQueueSessionKey: "agent:main:main",
-    });
-
-    expect(result).toEqual({
-      handled: true,
-      reason: "memory-core: short-term dreaming disabled by limit",
-    });
-  });
-
   it("does not start background reconciliation in a host without Gateway cron access", async () => {
     vi.useFakeTimers();
     const { api, harness, logger } = createDreamingTestContext();
@@ -941,5 +888,41 @@ describe("dreaming service reconciliation", () => {
 
     await expect(fs.access(path.join(workspaceDir, "memory"))).rejects.toThrow();
     await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toThrow();
+  });
+
+  it("keeps stopped managed dreaming jobs stopped while repairing their schedule", async () => {
+    vi.useFakeTimers();
+    const { api, harness } = createDreamingTestContext();
+    await startDreaming(api, harness);
+    const created = expectDefined(harness.jobs[0], "created dreaming job");
+    created.enabled = false;
+    const failureState = {
+      consecutiveErrors: 10,
+      autoDisabled: true,
+      lastErrorReason: "timeout",
+    };
+    Object.assign(created, { state: failureState });
+
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+
+    const autoDisabled = expectDefined(harness.jobs[0], "auto-disabled dreaming job");
+    expect(autoDisabled.enabled).toBe(false);
+    expect(autoDisabled).toMatchObject({ state: failureState });
+    expect(harness.updateCalls).toEqual([]);
+
+    autoDisabled.schedule = { kind: "cron", expr: "0 3 * * *", tz: "UTC" };
+    Object.assign(autoDisabled, { state: { consecutiveErrors: 2 } });
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+
+    const paused = expectDefined(harness.jobs[0], "paused dreaming job");
+    expect(paused.enabled).toBe(false);
+    expect(paused.schedule).toEqual({ kind: "cron", expr: "15 4 * * *", tz: "UTC" });
+    expect(paused).toMatchObject({ state: { consecutiveErrors: 2 } });
+    expect(harness.updateCalls).toEqual([
+      {
+        id: paused.id,
+        patch: { schedule: { kind: "cron", expr: "15 4 * * *", tz: "UTC" } },
+      },
+    ]);
   });
 });

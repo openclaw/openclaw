@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
@@ -82,7 +81,9 @@ describe("Gateway startup lifetime", () => {
   it.each(["close", "startup failure"] as const)(
     "releases idle prepared donor custody before registry retirement during %s",
     async (entry) => {
-      const state = await createStartupTestState(`gateway-idle-donor-${entry}`);
+      await using state = await createStartupTestState(`gateway-idle-donor-${entry}`);
+      startupTraceEventLoopDelay.instances.length = 0;
+      state.envVars.OPENCLAW_GATEWAY_STARTUP_TRACE = "1";
       const port = await getFreePort();
       await configureStartup(state, port);
       const previous = captureActivePluginRegistrySnapshot();
@@ -166,6 +167,7 @@ describe("Gateway startup lifetime", () => {
         ]);
         expect(boundary).toEqual({ modelClosed: true, sdkClosed: true });
         expect(await outcome).toBe(entry === "startup failure" ? startupError : undefined);
+        expect(startupTraceEventLoopDelay.instances[0]?.disable).toHaveBeenCalledOnce();
         expect(sdkReads).toEqual([{ value: "donor available", modelClosed: false }]);
         expect(disposed).toHaveBeenCalledOnce();
       } finally {
@@ -177,7 +179,6 @@ describe("Gateway startup lifetime", () => {
         stateSpy?.mockRestore();
         bootstrapSpy.mockRestore();
         restoreActivePluginRegistrySnapshot(previous);
-        await state.cleanup();
       }
     },
   );
@@ -190,7 +191,7 @@ describe("Gateway startup lifetime", () => {
     "closes early startup owners when invalid config prevents bootstrap (SDK failure: $disposalFails, clear failure: $clearFails)",
     async ({ disposalFails, clearFails }) => {
       startupTraceEventLoopDelay.instances.length = 0;
-      const state = await createStartupTestState("gateway-invalid-config-startup-trace");
+      await using state = await createStartupTestState("gateway-invalid-config-startup-trace");
       state.envVars.OPENCLAW_GATEWAY_STARTUP_TRACE = "1";
       await state.writeConfig({ gateway: { mode: 42 } });
       state.applyEnv();
@@ -300,13 +301,12 @@ describe("Gateway startup lifetime", () => {
         for (const owner of metadataOwners) {
           await owner.close();
         }
-        await state.cleanup();
       }
     },
   );
 
   it("stops TLS renewal when the started Gateway closes", async () => {
-    const state = await createStartupTestState("gateway-tls-renewal-close");
+    await using state = await createStartupTestState("gateway-tls-renewal-close");
     const port = await getFreePort();
     const certPath = await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM);
     const keyPath = await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM);
@@ -349,147 +349,66 @@ describe("Gateway startup lifetime", () => {
         await server?.close();
       } finally {
         renewalSpy.mockRestore();
-        await state.cleanup();
       }
-    }
-  });
-
-  it.each([
-    ["TLS", "gateway tls: cert/key missing"],
-    ["bind", "another gateway instance is already listening"],
-  ] as const)("closes startup tracing after a %s failure", async (phase, message) => {
-    startupTraceEventLoopDelay.instances.length = 0;
-    const port = await getFreePort();
-    const blocker = phase === "bind" ? createServer() : undefined;
-    if (blocker) {
-      await new Promise<void>((resolve, reject) => {
-        blocker.once("error", reject);
-        blocker.listen(port, "127.0.0.1", () => {
-          blocker.off("error", reject);
-          resolve();
-        });
-      });
-    }
-    const state = await createStartupTestState(`gateway-${phase}-startup-trace`);
-    state.envVars.OPENCLAW_GATEWAY_STARTUP_TRACE = "1";
-    await configureStartup(
-      state,
-      port,
-      phase === "TLS"
-        ? {
-            tls: {
-              enabled: true,
-              autoGenerate: false,
-              certPath: state.path("missing-cert.pem"),
-              keyPath: state.path("missing-key.pem"),
-            },
-          }
-        : {},
-    );
-    const listenModule = await import("./server/http-listen.js");
-    const listen = listenModule.listenGatewayHttpServer;
-    // The owned blocker cannot leave; retry policy has its own listener tests.
-    const listenSpy = blocker
-      ? vi
-          .spyOn(listenModule, "listenGatewayHttpServer")
-          .mockImplementation((params) => listen({ ...params, retryEaddrinuse: false }))
-      : undefined;
-    try {
-      const start =
-        phase === "TLS"
-          ? createGatewayKernel
-          : (await import("./server-start.js")).startGatewayServerCore;
-      await expect(start(port, startupOptions())).rejects.toThrow(message);
-      expect(startupTraceEventLoopDelay.instances[0]?.disable).toHaveBeenCalledOnce();
-    } finally {
-      listenSpy?.mockRestore();
-      if (blocker) {
-        await new Promise<void>((resolve) => {
-          blocker.close(() => resolve());
-        });
-      }
-      await state.cleanup();
     }
   });
 
   it.for(["clean", "failed"] as const)(
     "joins deferred startup failure while reporting %s cleanup independently",
-    async (cleanup, { signal }) => {
+    async (cleanup) => {
       const port = await getFreePort();
-      const state = await createStartupTestState(`gateway-deferred-startup-${cleanup}-cleanup`);
+      await using state = await createStartupTestState(`gateway-deferred-startup-${cleanup}`);
       const startupError = new Error("deferred startup failed");
       const cleanupError = new Error("deferred startup cleanup failed");
       const startup = createDeferred();
-      const startupFailure = startup.promise.catch((error: unknown) => error);
-      const startupEntered = createDeferred();
+      const entered = createDeferred();
       const drainEntered = createDeferred();
-      const releaseStartup = () => startup.reject(startupError);
-      signal.addEventListener("abort", releaseStartup, { once: true });
       let failCleanup = cleanup === "failed";
       let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
-      let server: GatewayServer | undefined;
       let publishedStartup: Promise<void> | undefined;
-      let startupOutcome: Promise<unknown> | undefined;
       let closeOutcome: Promise<unknown> | undefined;
-      const createKernel = createGatewayKernel;
-      const kernelFactory = vi
-        .spyOn(await import("./server-kernel.js"), "createGatewayKernel")
-        .mockImplementation(async (...args) => {
-          kernel = await createKernel(...args);
-          return kernel;
-        });
       const startupModule = await import("./server-startup-finish.js");
       const finishStartup = startupModule.finishGatewayStartup;
-      const startupFactory = vi
-        .spyOn(startupModule, "finishGatewayStartup")
-        .mockImplementation(async (...args) => {
-          const result = await finishStartup(...args);
-          const operation = result.startupSettled.then(async () => {
-            startupEntered.resolve();
-            await startup.promise;
-          });
-          publishedStartup = args[0].kernelRuntime.connectionWork.track(() => operation);
-          startupOutcome = publishedStartup.catch((error: unknown) => error);
-          return { ...result, startupSettled: publishedStartup };
+      vi.spyOn(startupModule, "finishGatewayStartup").mockImplementation(async (params) => {
+        kernel = params.kernelRuntime;
+        const result = await finishStartup(params);
+        publishedStartup = kernel.connectionWork.track(async () => {
+          await result.startupSettled;
+          entered.resolve();
+          await startup.promise;
         });
-      const cleanupOwner = {
-        stop: vi.fn(async () => {
-          expect(getLegacyPluginSdkResourceHost()).toBe(kernel?.sdkResourceHost);
-          if (failCleanup) {
-            throw cleanupError;
-          }
-        }),
-      };
+        void publishedStartup.catch(() => {});
+        return { ...result, startupSettled: publishedStartup };
+      });
+      const stop = vi.fn(async () => {
+        expect(getLegacyPluginSdkResourceHost()).toBe(kernel?.sdkResourceHost);
+        if (failCleanup) {
+          throw cleanupError;
+        }
+      });
       try {
         await configureStartup(state, port);
         const { startGatewayServerCore } = await import("./server-start.js");
-        server = await startGatewayServerCore(port, startupOptions());
-        await startupEntered.promise;
-        expect(server.startupSettled).toBe(publishedStartup);
-        if (!kernel) {
-          throw new Error("Expected the real Gateway kernel");
-        }
-        const activeKernel = kernel;
-        activeKernel.registerGatewayLifetimeSidecars(cleanupOwner);
-        const terminalDispose = vi.spyOn(activeKernel.terminalSessions, "disposeAll");
-        const drain = activeKernel.connectionWork.drain.bind(activeKernel.connectionWork);
-        vi.spyOn(activeKernel.connectionWork, "drain").mockImplementation(async () => {
+        const server = await startGatewayServerCore(port, startupOptions());
+        await entered.promise;
+        const owner = kernel!;
+        owner.registerGatewayLifetimeSidecars({ stop });
+        const terminalDispose = vi.spyOn(owner.terminalSessions, "disposeAll");
+        const drain = owner.connectionWork.drain.bind(owner.connectionWork);
+        vi.spyOn(owner.connectionWork, "drain").mockImplementation(async () => {
           drainEntered.resolve();
           await drain();
         });
-        const closeSettled = vi.fn((error?: unknown) => error);
-        closeOutcome = server
-          .close({ reason: "gateway startup failed" })
-          .then(closeSettled, closeSettled);
+        const settled = vi.fn((error?: unknown) => error);
+        closeOutcome = server.close({ reason: "gateway startup failed" }).then(settled, settled);
         await drainEntered.promise;
         await nextTurn();
-        expect(closeSettled).not.toHaveBeenCalled();
-        expect(terminalDispose).not.toHaveBeenCalled();
-        expect(cleanupOwner.stop).not.toHaveBeenCalled();
-        releaseStartup();
-        expect(await startupOutcome).toBe(startupError);
+        for (const effect of [settled, terminalDispose, stop]) {
+          expect(effect).not.toHaveBeenCalled();
+        }
+        startup.reject(startupError);
         const outcome = await closeOutcome;
-        if (cleanup === "failed") {
+        if (failCleanup) {
           expect(outcome).toMatchObject({
             errors: [
               {
@@ -503,137 +422,121 @@ describe("Gateway startup lifetime", () => {
           expect(outcome).toBeUndefined();
         }
         expect(terminalDispose).toHaveBeenCalledOnce();
-        expect(cleanupOwner.stop).toHaveBeenCalled();
         await expect(server.startupSettled).rejects.toBe(startupError);
       } finally {
-        releaseStartup();
+        startup.reject(startupError);
         try {
-          await Promise.all([startupFailure, startupOutcome]);
-          const outcome = await closeOutcome;
+          await Promise.allSettled([publishedStartup, closeOutcome]);
           failCleanup = false;
-          if (kernel && (!closeOutcome || outcome !== undefined)) {
-            await kernel.closeOnStartupFailure();
-          }
-          await state.cleanup();
+          await kernel?.closeOnStartupFailure();
         } finally {
-          signal.removeEventListener("abort", releaseStartup);
-          startupFactory.mockRestore();
-          kernelFactory.mockRestore();
           vi.restoreAllMocks();
         }
       }
     },
   );
 
-  it.each([false, true])(
-    "releases post-ready startup work after failure before joining cleanup (cleanup fails: %s)",
-    async (cleanupFails) => {
+  it.each(["clean", "failed", "held-process", "held-embedded"] as const)(
+    "releases post-ready work and joins or bounds startup rollback (%s)",
+    async (mode) => {
       const port = await getFreePort();
-      const state = await createStartupTestState("gateway-post-ready-startup-failure");
+      await using state = await createStartupTestState("gateway-post-ready-startup-failure");
       const startupError = new Error("startup failed after post-attach installation");
       const cleanupError = new Error("startup cleanup failed");
-      let failCleanup = cleanupFails;
-      const cleanupOwner = {
-        stop: vi.fn(async () => {
-          if (failCleanup) {
-            throw cleanupError;
-          }
-        }),
-      };
+      const held = mode.startsWith("held-");
+      const processOwned = mode === "held-process";
+      let failCleanup = mode === "failed";
+      const stopEntered = createDeferred();
+      const releaseStop = createDeferred();
+      const stop = vi.fn(async () => {
+        stopEntered.resolve();
+        if (held) {
+          await releaseStop.promise;
+        }
+        if (failCleanup) {
+          throw cleanupError;
+        }
+      });
       const emergencyRelease = createDeferred();
-      const drainEntered = createDeferred<{ barrierReleased: boolean }>();
-      const resumed = vi.fn<(state: { closing: boolean; listening: boolean }) => void>();
+      const drainEntered = createDeferred<boolean>();
+      const resumed = vi.fn();
       let barrierReleased = false;
-      let emergencyUsed = false;
       let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
       let postReadyWork: Promise<void> | undefined;
       let startupOutcome: Promise<unknown> | undefined;
-      let unexpectedServer: GatewayServer | undefined;
       const startupModule = await import("./server-startup-finish.js");
       const finishStartup = startupModule.finishGatewayStartup;
-      const startupFactory = vi
-        .spyOn(startupModule, "finishGatewayStartup")
-        .mockImplementation(async (params) => {
-          const result = await finishStartup(params);
-          await result.startupSettled;
-          const owner = params.kernelRuntime;
-          kernel = owner;
-          owner.registerGatewayLifetimeSidecars(cleanupOwner);
-          const transport = owner.transportBridge.current();
-          if (!transport?.httpServer.listening) {
-            throw new Error("Expected the real Gateway listener before startup failure");
-          }
-          // Minimal boot skips this continuation; use the real post-attach barrier and owner.
-          const barrier = params.waitForPostReadyWork().then(() => {
-            barrierReleased = true;
-          });
-          const operation = (async () => {
-            const releasedBy = await Promise.race([
-              barrier.then(() => "gateway" as const),
-              emergencyRelease.promise.then(() => "fixture" as const),
-            ]);
-            emergencyUsed = releasedBy === "fixture";
-            resumed({
-              closing: owner.lifecycle.closePreludeStarted,
-              listening: transport.httpServer.listening,
-            });
-          })();
-          postReadyWork = owner.connectionWork.track(() => operation);
-          const drain = owner.connectionWork.drain.bind(owner.connectionWork);
-          vi.spyOn(owner.connectionWork, "drain").mockImplementation(async () => {
-            drainEntered.resolve({ barrierReleased });
-            await drain();
-          });
-          throw startupError;
+      vi.spyOn(startupModule, "finishGatewayStartup").mockImplementation(async (params) => {
+        await (
+          await finishStartup(params)
+        ).startupSettled;
+        const owner = (kernel = params.kernelRuntime);
+        owner.registerGatewayLifetimeSidecars({ stop });
+        const transport = owner.transportBridge.current()!;
+        expect(transport.httpServer.listening).toBe(true);
+        const barrier = params.waitForPostReadyWork().then(() => {
+          barrierReleased = true;
         });
+        postReadyWork = owner.connectionWork.track(async () => {
+          await Promise.race([barrier, emergencyRelease.promise]);
+          resumed({
+            closing: owner.lifecycle.closePreludeStarted,
+            listening: transport.httpServer.listening,
+          });
+        });
+        const drain = owner.connectionWork.drain.bind(owner.connectionWork);
+        vi.spyOn(owner.connectionWork, "drain").mockImplementation(async () => {
+          drainEntered.resolve(barrierReleased);
+          await drain();
+        });
+        if (held) {
+          vi.useFakeTimers();
+        }
+        throw startupError;
+      });
       try {
         await configureStartup(state, port);
         const { startGatewayServerCore } = await import("./server-start.js");
-        startupOutcome = startGatewayServerCore(port, startupOptions()).then(
-          (server) => {
-            unexpectedServer = server;
-            return undefined;
-          },
-          (error: unknown) => error,
-        );
-        const boundary = await Promise.race([drainEntered.promise, startupOutcome]);
-        expect(boundary).toEqual({ barrierReleased: true });
-        const startupFailure = await startupOutcome;
-        if (cleanupFails) {
-          const aggregate = expectStartupCleanupError(startupFailure, startupError);
-          expect(aggregate.message).toBe(startupError.message);
-          const formatted = formatErrorMessage(startupFailure);
-          expect(formatted.startsWith(startupError.message)).toBe(true);
-          expect(formatted).toContain(cleanupError.message);
-          expect(formatted.indexOf(startupError.message)).toBeLessThan(
-            formatted.indexOf(cleanupError.message),
+        startupOutcome = startGatewayServerCore(port, {
+          ...startupOptions(),
+          exitAfterStartupFailure: () => processOwned,
+        }).catch((error: unknown) => error);
+        expect(await Promise.race([drainEntered.promise, startupOutcome])).toBe(true);
+        if (held) {
+          await stopEntered.promise;
+          const settled = vi.fn();
+          void startupOutcome.then(settled);
+          await vi.advanceTimersByTimeAsync(10_000);
+          expect(settled).toHaveBeenCalledTimes(processOwned ? 1 : 0);
+          releaseStop.resolve();
+          vi.useRealTimers();
+        }
+        const failure = await startupOutcome;
+        if (processOwned || failCleanup) {
+          expectStartupCleanupError(failure, startupError);
+          expect(formatErrorMessage(failure)).toContain(
+            processOwned ? "cleanup exceeded 5000ms" : cleanupError.message,
           );
         } else {
-          expect(startupFailure).toBe(startupError);
+          expect(failure).toBe(startupError);
         }
-        await postReadyWork;
-        expect(emergencyUsed).toBe(false);
         expect(resumed).toHaveBeenCalledExactlyOnceWith({ closing: true, listening: true });
-        expect(kernel?.transportBridge.current()?.httpServer.listening).toBe(cleanupFails);
+        expect(kernel?.transportBridge.current()?.httpServer.listening).toBe(
+          failCleanup || processOwned,
+        );
         expect(getActiveGatewayRootWorkCount()).toBe(0);
-        if (!cleanupFails) {
+        if (!failCleanup && !processOwned) {
           expect(getActiveSecretsRuntimeConfigSnapshot()).toBeNull();
         }
-        expect(cleanupOwner.stop).toHaveBeenCalled();
       } finally {
-        // Release only the synthetic tail so failed cleanup can finish before state removal.
+        releaseStop.resolve();
         emergencyRelease.resolve();
+        vi.useRealTimers();
         try {
           await Promise.all([startupOutcome, postReadyWork]);
-          if (cleanupFails) {
-            failCleanup = false;
-            await kernel?.closeOnStartupFailure();
-          } else {
-            await unexpectedServer?.close();
-          }
-          await state.cleanup();
+          failCleanup = false;
+          await kernel?.closeOnStartupFailure();
         } finally {
-          startupFactory.mockRestore();
           vi.restoreAllMocks();
         }
       }

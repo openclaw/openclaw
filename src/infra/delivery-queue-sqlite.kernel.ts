@@ -270,6 +270,24 @@ export function completeDeliveryQueueEntryInDatabase(
   completeLoadedDeliveryQueueEntryInDatabase(database, queueName, id, current, now);
 }
 
+function pruneBoundedDeliveryQueueTombstones(
+  database: OpenClawStateDatabase,
+  queueName: string,
+  retention: ReturnType<typeof parseDeliveryQueueCompletionRetention>,
+): void {
+  if (typeof retention === "object") {
+    runSqliteImmediateTransactionSync(
+      database.db,
+      () =>
+        pruneDeliveryQueueTombstones(database.db, Date.now(), {
+          queueName,
+          idPrefix: retention.idPrefix,
+        }),
+      { databaseLabel: "openclaw-state", operationLabel: "read delivery queue status" },
+    );
+  }
+}
+
 /** Shared completion policy; reuse a prior read only while its write transaction remains held. */
 export function completeLoadedDeliveryQueueEntryInDatabase(
   database: OpenClawStateDatabase,
@@ -308,17 +326,7 @@ export function completeLoadedDeliveryQueueEntryInDatabase(
     }
     throw deliveryQueueEntryNotFoundError(queueName, id);
   }
-  if (typeof retention === "object") {
-    runSqliteImmediateTransactionSync(
-      database.db,
-      () =>
-        pruneDeliveryQueueTombstones(database.db, Date.now(), {
-          queueName,
-          idPrefix: retention.idPrefix,
-        }),
-      { databaseLabel: "openclaw-state", operationLabel: "read delivery queue status" },
-    );
-  }
+  pruneBoundedDeliveryQueueTombstones(database, queueName, retention);
 }
 
 export function updateDeliveryQueueEntryInDatabase(
@@ -481,16 +489,6 @@ export function terminalizePendingDeliveryQueueEntryInDatabase(
   ) {
     return { status: "not_pending" };
   }
-  if (typeof retention === "object") {
-    runSqliteImmediateTransactionSync(
-      database.db,
-      () =>
-        pruneDeliveryQueueTombstones(database.db, Date.now(), {
-          queueName,
-          idPrefix: retention.idPrefix,
-        }),
-      { databaseLabel: "openclaw-state", operationLabel: "read delivery queue status" },
-    );
-  }
+  pruneBoundedDeliveryQueueTombstones(database, queueName, retention);
   return { status: "terminalized", retained: retention !== undefined };
 }

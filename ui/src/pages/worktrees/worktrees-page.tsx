@@ -95,10 +95,6 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
   }
   const operation = () => pending().operation() ?? view().operation;
   const busy = () => operation() !== null || view().operationPending;
-  const readList = () => {
-    latest(listRead);
-    return null;
-  };
 
   const owner = (record: WorktreesModel["records"][number]) => {
     if (record.ownerKind === "session" && record.ownerId) {
@@ -262,7 +258,7 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                 on={latest(scope)}
                 fallback={<SettingsEmpty message={t("common.loading")} />}
               >
-                {readList()}
+                {(latest(listRead), null)}
                 <Show
                   when={view().records.length > 0}
                   fallback={<SettingsEmpty message={t("worktrees.empty")} />}

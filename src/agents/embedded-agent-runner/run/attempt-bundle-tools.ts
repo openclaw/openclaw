@@ -82,8 +82,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     toolsEnabled &&
     params.attempt.trigger !== "memory" &&
     !params.attempt.disableTools &&
-    !params.isRawModelRun &&
-    !params.attempt.forceRestartSafeTools;
+    !params.isRawModelRun;
   let clientTools = auxiliaryToolsEnabled ? params.attempt.clientTools : undefined;
   // Client functions share the attempt's authority; filter before their names
   // can reserve bundled tools or enter deferred catalogs and provider requests.
@@ -134,7 +133,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         agentId: params.setup.sessionAgentId,
         agentDir: params.agentDir,
         // senderId is only set from the verified inbound sender (sessionCtx.SenderId
-        // or the triggering run's sender on follow-ups). Cron/subagent/heartbeat runs
+        // or the triggering run's sender on follow-ups). Cron/subagent runs
         // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
         requesterSenderId: params.attempt.senderId,
         agentAccountId: params.attempt.agentAccountId,

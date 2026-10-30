@@ -30,6 +30,7 @@ import { formatByteSize, formatDateTimeMs } from "../../lib/format.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { createSettingsStatus } from "./settings-status.ts";
 import { SESSION_STORAGE_SETTINGS_TARGET_ID } from "./settings-targets.ts";
 
@@ -94,23 +95,14 @@ export function SessionStorageSettings(props: SettingsProps) {
   // Admission and retirement are synchronous; Solid owns the visible submission state.
   let runOperation: AbortController | null = null;
   let followingRun = false;
-  let maintenanceTimer: ReturnType<typeof setInterval> | undefined;
-  function stopPolling() {
-    clearInterval(maintenanceTimer);
-    maintenanceTimer = undefined;
-  }
-  function startPolling() {
-    if (maintenanceTimer !== undefined) {
-      return;
+  const maintenancePoll = useVisiblePoll(2_000, () => {
+    if (!client()) {
+      stopPolling();
+    } else if (!pending()) {
+      refreshStatus();
     }
-    maintenanceTimer = setInterval(() => {
-      if (!client()) {
-        stopPolling();
-      } else if (!pending()) {
-        refreshStatus();
-      }
-    }, 2_000);
-  }
+  });
+  const stopPolling = maintenancePoll.stop;
   function retireRequests(identityChanged: boolean) {
     stopPolling();
     runOperation?.abort();
@@ -129,7 +121,7 @@ export function SessionStorageSettings(props: SettingsProps) {
   function observeMaintenance(status: SessionsStorageStatusResult) {
     if (status.maintenance.running) {
       followingRun = true;
-      startPolling();
+      maintenancePoll.start();
       return;
     }
     stopPolling();
@@ -304,17 +296,17 @@ export function SessionStorageSettings(props: SettingsProps) {
         {inventoryProps.status.agents.length > 1 ? (
           <details class="settings-row settings-row--stacked">
             <summary>{t("configView.sessionStorage.byAgent")}</summary>
-            <For each={inventoryProps.status.agents}>
+            <For each={inventoryProps.status.agents} keyed={(agent) => agent.agentId}>
               {(agent) => (
                 <SettingsRow
-                  title={agent.agentId}
+                  title={agent().agentId}
                   description={t("configView.sessionStorage.agentCounts", {
-                    hot: String(agent.hotTranscripts),
-                    cold: String(agent.coldTranscripts),
-                    database: storageSize(agent.databaseBytes),
-                    wal: storageSize(agent.walBytes),
-                    archives: storageSize(agent.archiveBytes),
-                    embedded: storageSize(agent.embeddedArchiveBytes),
+                    hot: String(agent().hotTranscripts),
+                    cold: String(agent().coldTranscripts),
+                    database: storageSize(agent().databaseBytes),
+                    wal: storageSize(agent().walBytes),
+                    archives: storageSize(agent().archiveBytes),
+                    embedded: storageSize(agent().embeddedArchiveBytes),
                   })}
                 />
               )}
@@ -405,7 +397,6 @@ export function SessionStorageSettings(props: SettingsProps) {
               >
                 <Show
                   when={readStatus()?.status}
-                  keyed
                   fallback={
                     <SettingsEmpty
                       message={t(
@@ -418,7 +409,7 @@ export function SessionStorageSettings(props: SettingsProps) {
                     />
                   }
                 >
-                  {(currentStatus) => <StorageInventory status={currentStatus} />}
+                  {(currentStatus) => <StorageInventory status={currentStatus()} />}
                 </Show>
               </Loading>
             </Errored>

@@ -4,8 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import * as tar from "tar";
 import { expect, it as baseIt, vi } from "vitest";
 import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
-import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
@@ -13,6 +11,7 @@ import {
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   inspectDatabase,
+  isolateBackupScratch,
   restoreBackup,
   withBackupFixture,
 } from "./backup-create-family.test-support.js";
@@ -21,8 +20,6 @@ import { listArchiveEntries, listArchiveEntryDetails } from "./backup-create.tes
 import * as snapshots from "./backup-sqlite-snapshot.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 import { detectLegacyAuditLogs, migrateLegacyAuditLogs } from "./state-migrations.audit-logs.js";
-import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
-import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
 
 const auditPath = "logs/config-audit.jsonl";
 const rawAuditPath = `${auditPath}.migrated.raw`;
@@ -47,17 +44,10 @@ function migrateAudit(stateDir: string) {
   return migrateLegacyAuditLogs({ detected: detectAudit(stateDir), stateDir });
 }
 
-function auditEntries(stateDir: string, env = process.env) {
-  return createSqliteAuditRecordStore({
-    scope: CONFIG_AUDIT_SCOPE,
-    maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
-    env: { ...env, OPENCLAW_STATE_DIR: stateDir },
-  }).entries();
-}
-
 const it = baseIt.extend<{ state: OpenClawTestState }>({
   state: async ({ task: _task }, use) =>
     withBackupFixture({}, async (state) => {
+      await isolateBackupScratch(state);
       try {
         await use(state);
       } finally {
@@ -127,25 +117,11 @@ it.for(["completed", "quarantined"])(
     expect(detectAudit(state.stateDir).hasLegacy).toBe(false);
     const sanitizedPath = state.statePath(`${auditPath}.migrated`);
     const sanitizedBytes = await fs.readFile(sanitizedPath);
-    let retainedPath = state.statePath(rawAuditPath);
+    const retainedPath = state.statePath(
+      shape === "quarantined" ? `${rawAuditPath}.quarantined-backup-fixture` : rawAuditPath,
+    );
     if (shape === "quarantined") {
       await fs.writeFile(retainedPath, `${JSON.stringify(auditRecord("token", marker))}\n`);
-      const cfg = { plugins: { enabled: false } };
-      await state.writeConfig(cfg);
-      const doctor = await autoMigrateLegacyState({
-        cfg,
-        env: state.env,
-        homedir: () => state.home,
-        doctorOnlyStateMigrations: true,
-        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-      });
-      expect(() => throwIfDoctorStateMigrationRefused(doctor.stepReceipts)).not.toThrow();
-      const quarantines = (await fs.readdir(path.dirname(retainedPath))).filter((name) =>
-        name.startsWith("config-audit.jsonl.migrated.raw.quarantined-"),
-      );
-      expect(quarantines, doctor.warnings.join("\n")).toHaveLength(1);
-      retainedPath = path.join(path.dirname(retainedPath), quarantines[0]!);
-      expect(doctor.warnings).toContainEqual(expect.stringContaining(retainedPath));
     }
     const retainedBytes = await fs.readFile(retainedPath);
     if (shape === "quarantined") {
@@ -173,35 +149,15 @@ it.for(["completed", "quarantined"])(
   },
 );
 
-it("preserves audit ordinals for identical later appends across backup restore", async ({
-  state,
-}) => {
-  const record = auditRecord("safe", "same");
-  await writeAudit(state, record);
-  await migrateAudit(state.stateDir);
-  await fs.appendFile(state.statePath(rawAuditPath), `${JSON.stringify(record)}\n`);
-
-  const { databasePath: restoredDatabasePath } = await captureBackup(state);
-  closeOpenClawStateDatabase();
-
-  const restoredStateDir = path.dirname(path.dirname(restoredDatabasePath));
-  try {
-    const restoredDetection = detectAudit(restoredStateDir);
-    expect(restoredDetection.hasLegacy).toBe(true);
-    await migrateLegacyAuditLogs({ detected: restoredDetection, stateDir: restoredStateDir });
-    const restoredEntries = auditEntries(restoredStateDir);
-    expect(new Set(restoredEntries.map((entry) => entry.key)).size).toBe(2);
-    expect(restoredEntries.map((entry) => entry.value)).toEqual([record, record]);
-  } finally {
-    closeOpenClawStateDatabaseByPath(restoredDatabasePath);
-  }
-});
-
-it.for(["lease-duration overrun", "concurrent audit migration"] as const)(
-  "restores audit records exactly once after %s during the SQLite snapshot",
+it.for(["lease-duration overrun", "concurrent audit migration", "identical later append"] as const)(
+  "preserves audit ordinals after %s across backup restore",
   async (scenario, { state }) => {
     const record = auditRecord("safe", "preserved-audit-record");
     await writeAudit(state, record);
+    if (scenario === "identical later append") {
+      await migrateAudit(state.stateDir);
+      await fs.appendFile(state.statePath(rawAuditPath), `${JSON.stringify(record)}\n`);
+    }
     const originalSnapshot = snapshots.createBackupSqliteSnapshotPlan;
     const realNow = Date.now.bind(Date);
     const clock = vi.spyOn(Date, "now");
@@ -210,7 +166,7 @@ it.for(["lease-duration overrun", "concurrent audit migration"] as const)(
       .mockImplementationOnce(async (params) => {
         if (scenario === "lease-duration overrun") {
           clock.mockImplementation(() => realNow() + 61_000);
-        } else {
+        } else if (scenario === "concurrent audit migration") {
           const migrated = await migrateAudit(state.stateDir);
           expect(migrated.warnings).toEqual([]);
         }
@@ -233,12 +189,21 @@ it.for(["lease-duration overrun", "concurrent audit migration"] as const)(
       "restored state asset",
     );
     const restoredStateDir = path.join(restored.targetPath, stateAsset.archivePath);
+    if (scenario === "identical later append") {
+      expect(detectAudit(restoredStateDir).hasLegacy).toBe(true);
+    }
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const migrated = await migrateAudit(restoredStateDir);
       expect(migrated.warnings).toEqual([]);
     }
-    const records = auditEntries(restoredStateDir, state.env);
-    expect(records.map((entry) => entry.value)).toEqual([record]);
+    const records = createSqliteAuditRecordStore({
+      scope: CONFIG_AUDIT_SCOPE,
+      maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
+      env: { ...state.env, OPENCLAW_STATE_DIR: restoredStateDir },
+    }).entries();
+    const expected = scenario === "identical later append" ? [record, record] : [record];
+    expect(new Set(records.map((entry) => entry.key)).size).toBe(expected.length);
+    expect(records.map((entry) => entry.value)).toEqual(expected);
   },
 );
 

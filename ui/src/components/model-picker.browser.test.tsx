@@ -6,11 +6,11 @@ import type { SelectPicker } from "./select-picker.ts";
 import { ModelPicker } from "./solid/model-picker.tsx";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
-const fixture = (name: string, detail?: string) => ({
+const fixture = (name: string, description?: string) => ({
   value: `openai/fixture-${name.toLowerCase()}`,
   label: `Fixture ${name}`,
   provider: "openai",
-  detail,
+  description,
 });
 async function mountPicker(
   props: Partial<Omit<Parameters<typeof ModelPicker>[0], "label" | "onChange">>,

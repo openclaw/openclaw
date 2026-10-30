@@ -44,12 +44,6 @@ export async function settleAgentFallbackCycle(params: {
       ? cycle.state.pendingLifecycleTerminal.backstop
       : undefined;
   cycle.state.pendingLifecycleTerminal = undefined;
-  if (
-    !resolveReplyOperationAbortReason(turn.replyOperation) &&
-    (await turn.isRestartRecoveryArmed?.())
-  ) {
-    turn.replyOperation?.abortForRestart();
-  }
   const abortReason = resolveReplyOperationAbortReason(turn.replyOperation);
   if (abortReason) {
     settledLifecycleTerminal?.emit("end", runResult, terminalMetadata);
@@ -111,15 +105,7 @@ export async function settleAgentFallbackCycle(params: {
     }
     turn.replyOperation?.fail("run_failed", embeddedError);
     const text = isCompactionFailure
-      ? buildContextOverflowRecoveryText({
-          cfg: cycle.runtimeConfig,
-          agentId: turn.followupRun.run.agentId,
-          primaryProvider: turn.followupRun.run.provider,
-          primaryModel: turn.followupRun.run.model,
-          runtimeProvider: cycle.state.attemptedRuntimeProvider,
-          runtimeModel: cycle.state.attemptedRuntimeModel,
-          activeSessionEntry: turn.getActiveSessionEntry(),
-        })
+      ? buildContextOverflowRecoveryText()
       : cycle.shouldSurfaceToControlUi
         ? renderControlUiAgentFailureCopy()
         : PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE;
@@ -147,11 +133,13 @@ export async function settleAgentFallbackCycle(params: {
   const privateFinalTerminalReply =
     !hasPendingContinuation &&
     isStrandedPrivateMessageToolFinal({
-      replyExpectation: resolveReplyExpectation(turn.followupRun.run),
+      replyExpectation: resolveReplyExpectation({
+        ...turn.followupRun.run,
+        scheduledAutomation: turn.followupRun.run.scheduledAutomation !== undefined,
+      }),
       sourceReplyDeliveryMode: sourceReplyPolicy?.sourceReplyDeliveryMode,
       sendPolicyDenied: sourceReplyPolicy?.sendPolicyDenied === true,
       successfulSourceReplyDelivery,
-      isHeartbeat: turn.isHeartbeat,
       isRoomEvent: turn.sessionCtx.InboundEventKind === "room_event",
       terminalReply: runResult.meta?.terminalReply,
     })

@@ -5,12 +5,13 @@ import { describe, expect, it, onTestFinished } from "vitest";
 import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { BoardSessionSurface, type BoardSessionSurfaceProps } from "./board-session-surface.tsx";
 
 describe("board session shell", () => {
   it.each(["rendered", "parked"] as const)(
     "preserves the board while a %s parent activates and parks it",
-    (parent) => {
+    async (parent) => {
       const provider = createMockBoardProvider("agent:main:main");
       const owner = new EventTarget();
       let active = true;
@@ -45,6 +46,9 @@ describe("board session shell", () => {
       };
       let mounted = mount();
       flush();
+      await waitForSolid(() =>
+        expect(container.querySelector("openclaw-board-view")?.active).toBe(true),
+      );
       const board = container.querySelector("openclaw-board-view");
       expect(board?.active).toBe(true);
 
@@ -66,6 +70,9 @@ describe("board session shell", () => {
         expect(board?.active).toBe(true);
         mounted = mount();
         flush();
+        await waitForSolid(() =>
+          expect(container.querySelector("openclaw-board-view")?.active).toBe(false),
+        );
         const replacement = container.querySelector("openclaw-board-view");
         expect(replacement).not.toBe(board);
         expect(replacement?.active).toBe(false);

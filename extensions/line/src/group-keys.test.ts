@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { lineConfig as config } from "./channel-account.test-support.js";
+import { linePlugin } from "./channel.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
-import { resolveLineGroupRequireMention } from "./group-policy.js";
 import type { LineConfig } from "./types.js";
 
 describe("resolveLineGroupConfigEntry", () => {
@@ -45,7 +45,7 @@ describe("resolveLineGroupConfigEntry", () => {
 
     const entry = resolveLineGroupConfigEntry(groups, { groupId: "C1" });
     expect(entry?.requireMention !== false).toBe(
-      resolveLineGroupRequireMention({ cfg, accountId: null, groupId: "C1" }),
+      linePlugin.groups?.resolveRequireMention?.({ cfg, accountId: null, groupId: "C1" }),
     );
   });
 });
@@ -63,13 +63,13 @@ describe("line group policy", () => {
       },
     });
 
-    expect(resolveLineGroupRequireMention({ cfg, groupId: "same" })).toBe(false);
-    expect(resolveLineGroupRequireMention({ cfg, groupId: "room:same" })).toBe(false);
-    expect(resolveLineGroupRequireMention({ cfg, groupId: "group:same" })).toBe(false);
-    expect(resolveLineGroupRequireMention({ cfg, groupId: "typed" })).toBe(false);
-    expect(resolveLineGroupRequireMention({ cfg, groupId: "group:typed" })).toBe(false);
-    expect(resolveLineGroupRequireMention({ cfg, groupId: "room:typed" })).toBe(true);
-    expect(resolveLineGroupRequireMention({ cfg, groupId: "other" })).toBe(false);
+    expect(linePlugin.groups?.resolveRequireMention?.({ cfg, groupId: "same" })).toBe(false);
+    expect(linePlugin.groups?.resolveRequireMention?.({ cfg, groupId: "room:same" })).toBe(false);
+    expect(linePlugin.groups?.resolveRequireMention?.({ cfg, groupId: "group:same" })).toBe(false);
+    expect(linePlugin.groups?.resolveRequireMention?.({ cfg, groupId: "typed" })).toBe(false);
+    expect(linePlugin.groups?.resolveRequireMention?.({ cfg, groupId: "group:typed" })).toBe(false);
+    expect(linePlugin.groups?.resolveRequireMention?.({ cfg, groupId: "room:typed" })).toBe(true);
+    expect(linePlugin.groups?.resolveRequireMention?.({ cfg, groupId: "other" })).toBe(false);
   });
 
   it("uses account-scoped prefixed LINE group config for requireMention", () => {
@@ -80,6 +80,8 @@ describe("line group policy", () => {
       },
     });
 
-    expect(resolveLineGroupRequireMention({ cfg, groupId: "g123", accountId: "work" })).toBe(false);
+    expect(
+      linePlugin.groups?.resolveRequireMention?.({ cfg, groupId: "g123", accountId: "work" }),
+    ).toBe(false);
   });
 });

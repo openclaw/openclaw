@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
-import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import { formatDiskSpaceBytes } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { findUpdateCaptureSpaceError } from "../../infra/update-capture-space.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
@@ -10,8 +13,8 @@ import { redactSupportString } from "../../logging/diagnostic-support-redaction.
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   UpdatePreMutationError,
@@ -45,7 +48,7 @@ import {
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import { withUpdatePreviewSignals } from "./update-command-preview-signals.js";
-import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
+import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-command-result.js";
 import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas, previewUpdateCommand } from "./update-command-schema.js";
 import {
@@ -54,9 +57,25 @@ import {
   withUpdateInProgressEnv,
 } from "./update-command-service-env.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service-maintenance.js";
-import { resolveFreshUpdateMetadata, resolveUpdateCommandTarget } from "./update-command-target.js";
+import { resolveUpdateCommandTarget } from "./update-command-target.js";
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { prepareUpdateCommandFailureTriage } from "./update-command-triage.js";
+
+/** A fresh profile must be initialized by an identified, schema-declaring target. */
+async function resolveFreshUpdateMetadata(target: {
+  targetVersion: string | null;
+  packageTargetSchemaVersions?: OpenClawSchemaVersions;
+  refuseUpdate: RefuseUpdate;
+}) {
+  if (target.targetVersion && target.packageTargetSchemaVersions) {
+    return { version: target.targetVersion, schemaVersions: target.packageTargetSchemaVersions };
+  }
+  const failure = createUpdatePreflightFailure(
+    target.targetVersion ? "target-schema-metadata" : "target-registry-dist-tag",
+  );
+  await target.refuseUpdate("target-metadata-preflight", failure.message, failure.failureFacts);
+  return undefined;
+}
 
 export async function initializeAndRunUpdate(
   opts: UpdateCommandOptions,
@@ -65,7 +84,11 @@ export async function initializeAndRunUpdate(
   invocationCwd: string | undefined,
   env: NodeJS.ProcessEnv,
   runInitialized: (initialization: InitializedUpdate) => Promise<void>,
-  policy: { needsInitialization: boolean; captureOriginal: boolean },
+  policy: {
+    needsInitialization: boolean;
+    captureOriginal: boolean;
+    malformedConfig?: ConfigFileSnapshot;
+  },
   executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
   const targetEnv = resolveUpdateTargetEnv({ baseEnv: env, nodeRunner: process.execPath });
@@ -98,6 +121,7 @@ export async function initializeAndRunUpdate(
                     prepared,
                     executor,
                     prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                    policy.malformedConfig,
                   ),
               ).then(
                 (target) => (target ? { target } : undefined),
@@ -122,6 +146,7 @@ export async function initializeAndRunUpdate(
               // Candidate execution stays in the selected profile; only installed union checks
               // can need a separate caller projection.
               const callerLegacyConfigPlan =
+                !policy.malformedConfig &&
                 selectedTarget &&
                 !selectedTarget.managedServiceRootRedirect &&
                 !candidateAdmissionEnabled &&
@@ -172,10 +197,6 @@ export async function initializeAndRunUpdate(
                     recoveryState.triageTarget,
                   );
                 },
-                databasePath: resolvePathViaExistingAncestorSync(
-                  resolveOpenClawStateSqlitePath(env),
-                ),
-                configPath: resolvePathViaExistingAncestorSync(resolveConfigPath(env)),
               };
               let originalCaptureAttempted = false;
               const captureOriginal = async () => {
@@ -242,8 +263,11 @@ export async function initializeAndRunUpdate(
                   }
                   // Capture is best effort. Lead with continuation guidance because the
                   // warning is length-bounded and the nested cause can be long.
+                  const space = findUpdateCaptureSpaceError(error)?.capacity;
                   warn(
-                    `Original state capture is unavailable; the update continues without it. A running Gateway or another active writer changing state during capture is expected to cause this. Database rollback uses the pre-migration snapshots taken after the Gateway stops. A completed update does not need to be restarted because of this warning. Cause: ${formatErrorMessage(error)}`,
+                    space
+                      ? `NO ORIGINAL-STATE SNAPSHOT: insufficient disk space. Needed ${space.requiredBytes} bytes (${formatDiskSpaceBytes(space.requiredBytes)}); available ${space.availableBytes} bytes (${formatDiskSpaceBytes(space.availableBytes)}). The update continues without a complete pre-update recovery copy. Free space before a future update to allow original-state capture.`
+                      : `Original state capture is unavailable; the update continues without it. A running Gateway or another active writer changing state during capture is expected to cause this. Database rollback uses the pre-migration snapshots taken after the Gateway stops. A completed update does not need to be restarted because of this warning. Cause: ${formatErrorMessage(error)}`,
                   );
                 }
                 assertCurrent();
@@ -270,6 +294,7 @@ export async function initializeAndRunUpdate(
                     runId,
                     invocationCwd,
                     updateStepTimeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                    malformedConfig: policy.malformedConfig,
                   }),
                 );
               }

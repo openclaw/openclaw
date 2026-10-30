@@ -8,6 +8,7 @@ import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
+import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { emitJsonOrText, formatEnvelopeForText } from "./output.js";
 import { registerLocalProvidersCommand } from "./providers-command.js";
@@ -62,7 +63,6 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action((opts) =>
       runWebCommand("web.search", opts.json, async () => {
-        const { parseOptionalPositiveInteger } = await import("./shared.js");
         const query = String(opts.query);
         const provider = opts.provider as string | undefined;
         const limit = parseOptionalPositiveInteger(opts.limit, "--limit");

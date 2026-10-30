@@ -140,7 +140,7 @@ suite.define(() => {
         await page.clock.install();
         await page.goto(`${suite.server.baseUrl}chat`);
         const selectFilter = async (label: "Archived" | "All" | "Active") => {
-          await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+          await page.getByRole("button", { name: /^Filter & sort · /, exact: true }).click();
           await chooseSidebarMenuOption(page, "Status", label);
           await closeSidebarMenu(page);
         };
@@ -162,7 +162,15 @@ suite.define(() => {
         };
         const alert = page.locator("[data-sidebar-session-error]");
         const failRefresh = async () => {
-          await gateway.setMethodResponse("sessions.list", failure);
+          await gateway.setMethodResponse("sessions.list", {
+            cases: [
+              {
+                match: { archived: statusFilter === "Archived" ? true : "all" },
+                response: failure,
+              },
+              { match: {}, response: healthy },
+            ],
+          });
           await refresh();
           await expect.poll(() => alert.textContent()).toContain(failureMessage);
         };
@@ -177,6 +185,13 @@ suite.define(() => {
         await failRefresh();
 
         await selectFilter("Active");
+        await expect.poll(() => alert.count()).toBe(0);
+
+        await gateway.setMethodResponse("sessions.list", failure);
+        await refresh();
+        await expect.poll(() => alert.textContent()).toContain(failureMessage);
+        await gateway.setMethodResponse("sessions.list", healthy);
+        await refresh();
         await expect.poll(() => alert.count()).toBe(0);
       });
     },

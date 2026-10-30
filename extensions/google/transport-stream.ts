@@ -4,6 +4,7 @@ import {
   resolveProviderContext,
   type Context,
   type Model,
+  type ModelRequestHeaders,
   type ProviderCallStreamOptions,
   type ProviderContext,
   type ProviderModel,
@@ -20,6 +21,7 @@ import {
   providerOperationRetryConfig,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import {
   buildAssistantMessage,
   buildGoogleGenerationConfig,
@@ -48,6 +50,7 @@ import { parseGeminiAuth } from "./gemini-auth.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
 import { isGoogleNativeVideoModelId } from "./provider-models.js";
 import { isOfficialGoogleAiStudioBaseUrl, normalizeGoogleApiBaseUrl } from "./provider-policy.js";
+import { resolveGoogleVertexBaseUrlLocation } from "./src/google-api-base-url.js";
 import {
   isGoogleGemini3FlashModel,
   isGoogleGemini3ProModel,
@@ -63,7 +66,7 @@ type CanonicalGoogleTransportApi = "google-generative-ai" | "google-vertex";
 type GoogleTransportApi = CanonicalGoogleTransportApi | "openclaw-google-generative-ai-transport";
 
 type GoogleTransportModel = ProviderModel<GoogleTransportApi> & {
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   provider: string;
 };
 
@@ -220,13 +223,17 @@ function resolveGoogleVertexProject(options: GoogleTransportOptions | undefined)
   return project;
 }
 
-function resolveGoogleVertexLocation(options: GoogleTransportOptions | undefined): string {
+function resolveGoogleVertexLocation(
+  model: GoogleTransportModel,
+  options: GoogleTransportOptions | undefined,
+): string {
   const location =
     normalizeOptionalString((options as { location?: unknown } | undefined)?.location) ||
+    resolveGoogleVertexBaseUrlLocation(model.baseUrl) ||
     normalizeOptionalString(process.env.GOOGLE_CLOUD_LOCATION);
   if (!location) {
     throw new Error(
-      "Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options.",
+      "Vertex AI requires a location. Set a Vertex model baseUrl, GOOGLE_CLOUD_LOCATION, or pass location in options.",
     );
   }
   return location;
@@ -263,13 +270,11 @@ export function buildGoogleGenerativeAiParams(
   options?: GoogleTransportOptions,
   videoSlots?: GoogleVideoSlots,
 ): GoogleGenerateContentRequest {
-  const generationConfig: Record<string, unknown> = {
-    ...buildGoogleGenerationConfig(
-      model,
-      options?.thinking ?? buildGoogleSimpleThinking(canonicalGoogleModel(model), options),
-      options?.maxTokens,
-    ),
-  };
+  const generationConfig: Record<string, unknown> = buildGoogleGenerationConfig(
+    model,
+    options?.thinking ?? buildGoogleSimpleThinking(canonicalGoogleModel(model), options),
+    options?.maxTokens,
+  );
   if (typeof options?.temperature === "number") {
     generationConfig.temperature = options.temperature;
   }
@@ -355,7 +360,7 @@ function isGoogleOauthApiKey(apiKey: string | undefined): boolean {
   );
 }
 
-function hasGoogleAuthHeader(headers: Record<string, string> | undefined): boolean {
+function hasGoogleAuthHeader(headers: ModelRequestHeaders | undefined): boolean {
   return Object.keys(headers ?? {}).some((name) => {
     const normalized = name.trim().toLowerCase();
     return normalized === "authorization" || normalized === "x-goog-api-key";
@@ -554,7 +559,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         let requestUrl: string;
         if (kind === "google-vertex") {
           const project = encodeURIComponent(resolveGoogleVertexProject(options));
-          const location = encodeURIComponent(resolveGoogleVertexLocation(options));
+          const location = encodeURIComponent(resolveGoogleVertexLocation(model, options));
           // Mirror resolveGoogleModelPath: strip the google/ provider prefix so a
           // provider-qualified id does not become an invalid models/google%2F... path.
           const modelId = encodeURIComponent(stripGoogleProviderPrefix(model.id));
@@ -567,7 +572,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         const fetchImpl = (options as { fetch?: typeof fetch } | undefined)?.fetch;
         const openSse = async (apiKeyForRequest: string | undefined) => {
           const optionHeaders = options?.headers;
-          let requestHeaders: Record<string, string>;
+          let requestHeaders: ModelRequestHeaders;
           if (kind === "google-vertex") {
             const authHeaders = isGoogleVertexCredentialsMarker(apiKeyForRequest)
               ? await resolveGoogleVertexAuthorizedUserHeaders(fetchImpl)
@@ -615,7 +620,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
             options,
             guardedFetch,
             url: requestUrl,
-            headers: requestHeaders,
+            headers: omitNullRequestHeaders(requestHeaders) ?? {},
             request,
             videoSlots: trustedVideoSlots,
           };

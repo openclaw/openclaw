@@ -3,13 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { tryReadJson } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { isPackageDependencyName } from "../infra/package-json.js";
-import { statIfExists } from "../infra/path-existence.js";
 import {
   runInstallPolicy,
   type InstallPolicyFinding,
@@ -29,6 +26,11 @@ import type {
   InstallPolicyWarningDetails,
   InstallSafetyOverrides,
 } from "./install-security-scan.types.js";
+import {
+  collectInstalledRuntimePackageGraph,
+  type InstalledRuntimePackageGraph,
+  type InstalledRuntimePackageRoot,
+} from "./installed-package-runtime-graph.js";
 
 type InstallScanLogger = {
   warn?: (message: string) => void;
@@ -51,10 +53,10 @@ type PluginInstallRequestKind = Exclude<InstallPolicyRequestKind, "skill-install
 
 function formatInstallPolicyFinding(finding: InstallPolicyFinding): string {
   const location = finding.file
-    ? ` (${sanitizeTerminalText(finding.file)}${finding.line ? `:${finding.line}` : ""})`
+    ? ` (${finding.file}${finding.line ? `:${finding.line}` : ""})`
     : "";
-  const evidence = finding.evidence ? ` Evidence: ${sanitizeTerminalText(finding.evidence)}` : "";
-  return `[${finding.severity.toUpperCase()}] ${sanitizeTerminalText(finding.ruleId)}: ${sanitizeTerminalText(finding.message)}${location}${evidence}`;
+  const evidence = finding.evidence ? ` Evidence: ${finding.evidence}` : "";
+  return terminalText`[${finding.severity.toUpperCase()}] ${finding.ruleId}: ${finding.message}${location}${evidence}`;
 }
 
 function formatInstallPolicyNotice(params: {
@@ -69,8 +71,8 @@ function formatInstallPolicyNotice(params: {
   const lines = [
     params.decision === "warn" ? "Install requires approval" : "Install blocked by policy",
     "",
-    `  ${targetLabel}: ${sanitizeTerminalText(params.targetName)}`,
-    `  Reason: ${sanitizeTerminalText(params.reason)}`,
+    terminalText`  ${targetLabel}: ${params.targetName}`,
+    terminalText`  Reason: ${params.reason}`,
   ];
   if (params.findings?.length) {
     lines.push("  Findings:");
@@ -84,20 +86,9 @@ function formatInstallPolicyNotice(params: {
   return lines.join("\n");
 }
 
-type PackageManifest = {
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-  peerDependencies?: Record<string, string>;
-};
-
 type PackageTraversalLimits = {
   maxDepth: number;
   maxDirectories: number;
-};
-
-type InstalledPackageScanRoot = {
-  packageDir: string;
-  realPath: string;
 };
 
 function formatInstallPolicyFailure(params: {
@@ -286,25 +277,8 @@ function isSamePathOrInside(parentPath: string, candidatePath: string): boolean 
   return parentPath === candidatePath || isPathInside(parentPath, candidatePath);
 }
 
-function collectManifestRuntimeDependencyNames(manifest: PackageManifest): string[] {
-  const dependencyNames = new Set<string>();
-  for (const dependencies of [manifest.dependencies, manifest.optionalDependencies]) {
-    for (const dependencyName of Object.keys(dependencies ?? {})) {
-      if (isPackageDependencyName(dependencyName)) {
-        dependencyNames.add(dependencyName);
-      }
-    }
-  }
-  for (const dependencyName of Object.keys(manifest.peerDependencies ?? {})) {
-    if (dependencyName !== "openclaw" && isPackageDependencyName(dependencyName)) {
-      dependencyNames.add(dependencyName);
-    }
-  }
-  return [...dependencyNames].toSorted((left, right) => left.localeCompare(right));
-}
-
 async function collectNonOverlappingPackageScanRoots(packageDirs: string[]): Promise<string[]> {
-  const selectedRoots: InstalledPackageScanRoot[] = [];
+  const selectedRoots: InstalledRuntimePackageRoot[] = [];
   for (const packageDir of packageDirs) {
     const realPath = await fs.realpath(packageDir).catch(() => path.resolve(packageDir));
     if (selectedRoots.some((selectedRoot) => isSamePathOrInside(selectedRoot.realPath, realPath))) {
@@ -747,6 +721,26 @@ export async function scanPackageInstallSourceRuntime(
   });
 }
 
+async function warnPluginRuntimeCompatibility(
+  graph: InstalledRuntimePackageGraph,
+  logger: InstallScanLogger,
+): Promise<void> {
+  try {
+    const { scanPluginRuntimeCompatibility, formatPluginRuntimeCompatibilityWarning } =
+      await import("./plugin-runtime-compatibility.js");
+    const report = await scanPluginRuntimeCompatibility(graph);
+    for (const warning of report.warnings) {
+      logger.warn?.(
+        `Plugin runtime compatibility: ${formatPluginRuntimeCompatibilityWarning(warning)}`,
+      );
+    }
+  } catch (error) {
+    logger.warn?.(
+      terminalText`Plugin runtime compatibility inspection incomplete: ${formatErrorMessage(error)}. Run openclaw plugins lint --root <plugin-directory> for details.`,
+    );
+  }
+}
+
 export async function scanInstalledPackageDependencyTreeRuntime(params: {
   additionalPackageDirs?: string[];
   allowManagedNpmRootPackagePeerSymlinks?: boolean;
@@ -771,27 +765,15 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
   const boundaryDir = dependencyScanRootDir ?? installedPackageDir;
   const boundaryRealPath = await fs.realpath(boundaryDir).catch(() => path.resolve(boundaryDir));
   const trustedHostOpenClawRootRealPath = await resolveTrustedHostOpenClawRootRealPath();
-  const queue: InstalledPackageScanRoot[] = [];
-  for (const packageDir of [installedPackageDir, ...(additionalPackageDirs ?? [])]) {
-    const realPath = await fs.realpath(packageDir).catch(() => path.resolve(packageDir));
-    if (!isSamePathOrInside(boundaryRealPath, realPath)) {
-      throw new Error(
-        `installed dependency scan found package outside install root at ${packageDir}`,
-      );
-    }
-    queue.push({ packageDir, realPath });
-  }
-  const visitedRealPaths = new Set<string>();
-  const scanRoots: string[] = [];
-  const resolveDependency = async (parentPackageDir: string, dependencyName: string) => {
-    const packageDir = path.join(parentPackageDir, "node_modules", dependencyName);
-    const stats = await statIfExists(packageDir);
-    if (!stats?.isDirectory()) {
-      return undefined;
-    }
-
-    const realPath = await fs.realpath(packageDir).catch(() => path.resolve(packageDir));
-    if (!isSamePathOrInside(boundaryRealPath, realPath)) {
+  const graph = await collectInstalledRuntimePackageGraph({
+    packageDir: installedPackageDir,
+    additionalPackageDirs,
+    lookupRootDir: boundaryDir,
+    maxPackages: limits.maxDirectories,
+    admitPackage: ({ packageDir, realPath, dependencyName }) => {
+      if (isSamePathOrInside(boundaryRealPath, realPath)) {
+        return true;
+      }
       if (
         allowManagedNpmRootPackagePeerSymlinks === true &&
         dependencyName === "openclaw" &&
@@ -800,48 +782,14 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
           trustedHostOpenClawRootRealPath,
         })
       ) {
-        return undefined;
+        return false;
       }
       throw new Error(
         `installed dependency scan found package outside install root at ${packageDir}`,
       );
-    }
-    return { packageDir, realPath };
-  };
-  let queueIndex = 0;
-
-  while (queueIndex < queue.length) {
-    const current = queue[queueIndex];
-    queueIndex += 1;
-    if (!current || visitedRealPaths.has(current.realPath)) {
-      continue;
-    }
-    visitedRealPaths.add(current.realPath);
-    if (visitedRealPaths.size > limits.maxDirectories) {
-      throw new Error(
-        `installed dependency scan exceeded max packages (${limits.maxDirectories}) under ${boundaryDir}`,
-      );
-    }
-    scanRoots.push(current.packageDir);
-
-    const manifest = await tryReadJson<PackageManifest>(
-      path.join(current.packageDir, "package.json"),
-    );
-    if (!manifest) {
-      continue;
-    }
-    for (const dependencyName of collectManifestRuntimeDependencyNames(manifest)) {
-      const nestedCandidate = await resolveDependency(current.packageDir, dependencyName);
-      const candidate =
-        nestedCandidate ??
-        (dependencyScanRootDir
-          ? await resolveDependency(dependencyScanRootDir, dependencyName)
-          : undefined);
-      if (candidate && !visitedRealPaths.has(candidate.realPath)) {
-        queue.push(candidate);
-      }
-    }
-  }
+    },
+  });
+  const scanRoots = graph.packageDirs;
 
   const boundaryScanRoots = await collectNonOverlappingPackageScanRoots(scanRoots);
   for (const rootDir of boundaryScanRoots) {
@@ -850,7 +798,7 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
       allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
     });
   }
-  return await runOperatorInstallPolicy({
+  const result = await runOperatorInstallPolicy({
     ...pluginInstallPolicyRequest(params, params.pluginId),
     origin: { type: "plugin-dependency-tree" },
     source: params.source ?? resolvePolicySource({ requestKind }),
@@ -862,6 +810,10 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
       pluginId: params.pluginId,
     },
   });
+  if (!result?.blocked) {
+    await warnPluginRuntimeCompatibility(graph, params.logger);
+  }
+  return result;
 }
 
 export async function preflightPluginNpmInstallPolicyRuntime(
@@ -869,7 +821,6 @@ export async function preflightPluginNpmInstallPolicyRuntime(
     packageName: string;
     pluginId?: string;
     sourcePath: string;
-    sourcePathKind: "file" | "directory";
   },
 ): Promise<InstallSecurityScanResult | undefined> {
   const pluginId = params.pluginId ?? params.packageName;
@@ -878,7 +829,7 @@ export async function preflightPluginNpmInstallPolicyRuntime(
     origin: { type: "plugin-npm", packageName: params.packageName },
     source: params.source ?? resolvePolicySource({ requestKind: "plugin-npm" }),
     sourcePath: params.sourcePath,
-    sourcePathKind: params.sourcePathKind,
+    sourcePathKind: "file",
     requestKind: "plugin-npm",
     plugin: {
       contentType: "package",

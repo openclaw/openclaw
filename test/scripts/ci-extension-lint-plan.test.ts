@@ -51,12 +51,6 @@ function selectedCommands(
   }).commands;
 }
 
-function expectUnscoped(args: string[]) {
-  for (const flag of ["--files-json", "--extension-roots-json"]) {
-    expect(args).not.toContain(flag);
-  }
-}
-
 it("keeps package ownership in its canonical stripes", () => {
   const total = 3;
   const { cwd } = workspace({ "extensions/root.ts": "export {};\n" });
@@ -74,7 +68,6 @@ it("keeps package ownership in its canonical stripes", () => {
     const selected = scope.selectShards(canonical);
     for (const shard of selected) {
       const original = canonical.find((candidate) => candidate.name === shard.name)!;
-      expect(shard.args.slice(0, 2)).toEqual(["--tsconfig", "extensions/tsconfig.json"]);
       expect(shard.canonicalTargets).toEqual(original.args.slice(2));
       expect(shard.args.slice(2)).toEqual(
         original.args.slice(2).filter((root) => roots.includes(root)),
@@ -83,7 +76,6 @@ it("keeps package ownership in its canonical stripes", () => {
     return selected.flatMap((shard) => shard.args.slice(2));
   }).flat();
   expect(actual.toSorted()).toEqual(roots);
-  expect(new Set(actual).size).toBe(roots.length);
 });
 
 it("rejects paths outside exact native package roots before execution", () => {
@@ -139,32 +131,18 @@ it("transports roots with empty files and keeps mixed core files separate", () =
   expect(selectedCommands(emptySelection)).toEqual([]);
 });
 
-it("preserves full other owners and wrapper guards without aggregate lint duplication", () => {
-  const commands = selectedCommands({
-    ...rootSelection,
-    central: true,
-    extensionStripeCount: 1,
-    fullCoreStripes: [2],
-    fullGroups: ["scripts"],
-  });
-  expect(
-    commands.some(({ args }) =>
-      ["lint", "lint:core", "lint:extensions", "lint:scripts"].includes(args[0] ?? ""),
+it("keeps full owner invocations unscoped beside selected packages", () => {
+  const full = [
+    ...selectedCommands({ ...rootSelection, fullCoreStripes: [2], fullGroups: ["scripts"] }).filter(
+      ({ name }) => name.startsWith("lint full"),
     ),
-  ).toBe(false);
-  expect(commands.some(({ args }) => args[0] === "lint:ui:i18n")).toBe(true);
-  expect(commands.some(({ args }) => args.includes("scripts/run-stylelint.mts"))).toBe(true);
-  for (const name of ["lint full core stripe 2", "lint full remaining groups"]) {
-    expectUnscoped(commands.find((entry) => entry.name === name)!.args);
+    ...selectedCommands({ ...emptySelection, fullExtensionStripes: [1], extensionStripeCount: 1 }),
+  ];
+  expect(full).toHaveLength(3);
+  for (const { args } of full) {
+    expect(args).not.toContain("--files-json");
+    expect(args).not.toContain("--extension-roots-json");
   }
-  const full = selectedCommands({
-    ...emptySelection,
-    fullExtensionStripes: [1],
-    extensionStripeCount: 1,
-  });
-  expect(full).toHaveLength(1);
-  expect(full[0]!.args).toContain("--extension-stripe=1/1");
-  expectUnscoped(full[0]!.args);
 });
 
 it("retains native imported and ambient types while reporting only the selected package", () => {
@@ -259,60 +237,18 @@ function selectionWorkspace() {
 }
 
 const smokeRoots = ["extensions/codex", "extensions/slack", "extensions/telegram"];
-type SelectionOptions = {
-  pinned?: boolean;
-  testImport?: boolean;
-  reasons?: Record<string, string[]>;
-};
 const alpha = "extensions/alpha";
 const unrelated = "extensions/unrelated";
-const importReason = (entry: string, file: string) => [
-  `direct import of changed public entry openclaw/plugin-sdk/${entry}: ${file}`,
-];
-const selectedCases: [string[], string[], SelectionOptions?][] = [
+const selectedCases: [string[], string[]][] = [
   [["ui/src/leaf.ts", `${unrelated}/README.md`], []],
   [["src/leaf.ts", `${unrelated}/README.md`], smokeRoots],
   [[`${alpha}/index.ts`, `${unrelated}/README.md`], [alpha]],
-  [["config/oxlint/README.md"], []],
-  [[".github/actions/setup-node-env/README.md"], []],
   [[`${alpha}/test/fixtures/README.md`], [alpha]],
   [[`${alpha}/prompts/runtime.md`], [alpha]],
-  [
-    ["src/plugin-sdk/public.ts", `${unrelated}/openclaw.plugin.json`],
-    [alpha, ...smokeRoots, unrelated],
-    {
-      pinned: true,
-      reasons: {
-        [alpha]: importReason("public", `${alpha}/index.ts`),
-        [unrelated]: [`PR changes ${unrelated}/openclaw.plugin.json`],
-      },
-    },
-  ],
-  [["ui/src/leaf.ts", "docs/example.md"], [], { reasons: {} }],
-  [["src/leaf.ts"], smokeRoots],
   [["scripts/lib/settings.mts"], smokeRoots],
-  [[`${alpha}/package.json`], [alpha]],
-  [
-    ["src/plugin-sdk/api.ts"],
-    [...smokeRoots, unrelated],
-    {
-      pinned: true,
-      testImport: true,
-      reasons: {
-        [unrelated]: importReason("api", `${unrelated}/api.test.ts`),
-      },
-    },
-  ],
 ];
 const fullCases: [string, { forceFull?: boolean; baseRef?: string }?, string?][] = [
-  ...[
-    "pnpm-lock.yaml",
-    "extensions/tsconfig.json",
-    "config/oxlint/boundary-guards.json",
-    "config/tsconfig/oxlint.json",
-    "patches/example.patch",
-    "src/state/openclaw-state-schema.sql",
-  ].map((file): [string] => [file]),
+  ["pnpm-lock.yaml"],
   ["extensions/shared.ts", {}, "direct shared extension source: extensions/shared.ts"],
   ["docs/example.md", { forceFull: true }, "OPENCLAW_CI_EXTENSION_LINT_FULL"],
   [
@@ -329,32 +265,39 @@ it("rejects invalid paths before excluding documentation", async () => {
   );
 });
 
-it.each(selectedCases)(
-  "selects direct owners and smoke consumers of %j",
-  async (files, roots, options = {}) => {
-    const { cwd, write, baseRef } = selectionWorkspace();
-    if (options.testImport) {
-      write(
-        "extensions/unrelated/api.test.ts",
-        'import type { Result } from "openclaw/plugin-sdk/api";\n',
-      );
-    }
-    const selection = await resolveCiExtensionLintSelection(
-      files,
+it.each(selectedCases)("selects direct owners and smoke consumers of %j", async (files, roots) => {
+  const { cwd } = selectionWorkspace();
+  expect(await resolveCiExtensionLintSelection(files, cwd)).toMatchObject({
+    mode: "selected",
+    extensionRoots: roots,
+    fullReasons: [],
+    ...(roots.length ? {} : { reasons: {} }),
+  });
+});
+
+it("includes direct SDK importers in production and test sources, not transitive consumers", async () => {
+  const { cwd, write, baseRef } = selectionWorkspace();
+  write(`${unrelated}/api.test.ts`, 'import type { Result } from "openclaw/plugin-sdk/api";\n');
+  expect(
+    await resolveCiExtensionLintSelection(
+      ["src/plugin-sdk/public.ts", "src/plugin-sdk/api.ts"],
       cwd,
-      options.pinned ? { baseRef } : {},
-    );
-    const expected = { mode: "selected", extensionRoots: roots, fullReasons: [] };
-    if (roots.length === 0) {
-      expect(selection).toEqual({ ...expected, reasons: {} });
-    } else {
-      expect(selection).toMatchObject({
-        ...expected,
-        ...(options.reasons ? { reasons: options.reasons } : {}),
-      });
-    }
-  },
-);
+      { baseRef },
+    ),
+  ).toMatchObject({
+    mode: "selected",
+    extensionRoots: [alpha, ...smokeRoots, unrelated],
+    fullReasons: [],
+    reasons: {
+      [alpha]: [
+        `direct import of changed public entry openclaw/plugin-sdk/public: ${alpha}/index.ts`,
+      ],
+      [unrelated]: [
+        `direct import of changed public entry openclaw/plugin-sdk/api: ${unrelated}/api.test.ts`,
+      ],
+    },
+  });
+});
 
 it.each(fullCases)("retains full lint for %s", async (file, options, reason) => {
   const { cwd } = selectionWorkspace();

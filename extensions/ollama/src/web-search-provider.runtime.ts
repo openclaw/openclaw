@@ -17,9 +17,11 @@ import {
   resolveProviderWebSearchPluginConfig,
   resolveSearchCount,
   resolveSiteName,
+  resolveTimeoutSeconds,
   resolveWebSearchProviderCredential,
   truncateText,
   wrapWebContent,
+  type SearchConfigRecord,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
@@ -40,7 +42,7 @@ import {
 const OLLAMA_HOSTED_WEB_SEARCH_PATH = "/api/web_search";
 const OLLAMA_LOCAL_WEB_SEARCH_PROXY_PATH = "/api/experimental/web_search";
 const DEFAULT_OLLAMA_WEB_SEARCH_COUNT = 5;
-const DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS = 15_000;
+const DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_SECONDS = 15;
 const OLLAMA_WEB_SEARCH_SNIPPET_MAX_CHARS = 300;
 const OLLAMA_CLOUD_WEB_SEARCH_AUTH_ERROR =
   "Hosted Ollama Web Search requires an API key. Set OLLAMA_API_KEY or configure models.providers.ollama.apiKey.";
@@ -182,6 +184,8 @@ export function createOllamaWebSearchProvider(): Pick<
       execute: async (args, context) => {
         context?.signal?.throwIfAborted();
         const config = ctx.config;
+        // SAFETY: tools.web.search is config-schema-validated upstream of this cast.
+        const searchConfig = ctx.searchConfig as SearchConfigRecord | undefined;
         const query = readStringParam(args, "query", { required: true });
         const requestedCount = readPositiveIntegerParam(args, "count", {
           max: 10,
@@ -194,7 +198,15 @@ export function createOllamaWebSearchProvider(): Pick<
         // setup still reaches the Ollama Cloud fallback with OLLAMA_API_KEY after the selected-host
         // attempts fail. Gating this on configuredApiKey would drop that final authenticated attempt.
         const envApiKey = resolveEnvOllamaWebSearchApiKey();
-        const count = resolveSearchCount(requestedCount, DEFAULT_OLLAMA_WEB_SEARCH_COUNT);
+        const count = resolveSearchCount(
+          requestedCount ?? searchConfig?.maxResults,
+          DEFAULT_OLLAMA_WEB_SEARCH_COUNT,
+        );
+        const timeoutMs =
+          resolveTimeoutSeconds(
+            searchConfig?.timeoutSeconds,
+            DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_SECONDS,
+          ) * 1_000;
         const startedAt = Date.now();
         const body = JSON.stringify({ query, max_results: count });
         const hosted = isOllamaCloudBaseUrl(baseUrl);
@@ -234,7 +246,7 @@ export function createOllamaWebSearchProvider(): Pick<
               body,
             },
             // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
-            timeoutMs: DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS,
+            timeoutMs,
             ...(signal ? { signal } : {}),
             policy: buildOllamaBaseUrlSsrFPolicy(attempt.baseUrl),
             auditContext: "ollama-web-search.search",

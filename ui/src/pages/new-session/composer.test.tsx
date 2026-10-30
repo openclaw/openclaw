@@ -9,9 +9,11 @@ import {
   getSkillCommandCompletions,
   replaceSlashCommands,
 } from "../../lib/chat/commands.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
+import { prepareComposerWidthEdge } from "../chat/components/chat-composer-width-ref.tsx";
 import { createNewSessionComposerTextarea } from "./composer-textarea.ts";
 import {
   composerContext,
@@ -70,25 +72,34 @@ afterEach(() => {
   replaceSlashCommands(buildFallbackSlashCommands());
 });
 
+// First in this file, before any composer key intent has loaded the edge owner.
+describe("new-session composer width edge", () => {
+  it("leaves the edge owner out of first render and loads it on composer key intent", async () => {
+    const { composer, container } = renderComposer({
+      chatMessageMaxWidth: "600px",
+      onComposerWidthChange: () => undefined,
+    });
+    document.body.append(container);
+    flush();
+    expect(composer.querySelector('[role="separator"]')).toBeNull();
+    composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    await waitForSolid(() => expect(composer.querySelector('[role="separator"]')).not.toBeNull());
+    container.remove();
+  });
+});
+
 describe("new-session placeholder animation", () => {
   it("preserves animation progress through draft refreshes and cancels it with the input", () => {
-    let nextFrame = 0;
-    const frames = new Map<number, FrameRequestCallback>();
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-      frames.set(++nextFrame, callback);
-      return nextFrame;
-    });
-    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    const framesClock = createFrameClock();
+    const frames = framesClock.frames;
+    vi.stubGlobal("requestAnimationFrame", framesClock.request);
+    vi.stubGlobal("cancelAnimationFrame", framesClock.cancel);
     const view = renderComposer();
     document.body.append(view.container);
     const textarea = getComposerTextarea(view.composer);
     const target = textarea.getAttribute("aria-label")!;
     const advance = (timestamp: number) => {
-      const callbacks = [...frames.values()];
-      frames.clear();
-      for (const callback of callbacks) {
-        callback(timestamp);
-      }
+      framesClock.flush(timestamp);
       flush();
     };
 
@@ -397,29 +408,23 @@ describe("new-session composer keyboard submission", () => {
     expect(onSubmit).toHaveBeenCalledOnce();
   });
 
-  it("renders a reasoned submit block as an attached notice and keeps Start explanatory", () => {
+  it("keeps Start disabled and reports an attempted press to the owner", () => {
     const onSubmit = vi.fn();
+    const onBlockedSubmit = vi.fn();
     const { composer } = renderComposer({
       canSubmit: false,
       submitDisabledReason: "Restoring your last session setup…",
-      blockedSubmitNotice: "Restoring your last session setup…",
       onSubmit,
+      onBlockedSubmit,
     });
-    const notice = composer.querySelector<HTMLElement>(".new-session-page__blocked-submit");
-    const input = composer.querySelector<HTMLElement>(".agent-chat__input");
     const start = composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
 
-    expect(notice?.getAttribute("role")).toBe("status");
-    expect(notice?.classList.contains("agent-chat__composer-status")).toBe(true);
-    expect(notice?.getAttribute("data-tone")).toBe("info");
-    expect(notice?.querySelector(".agent-chat__composer-status-band")).not.toBeNull();
-    expect(notice?.textContent?.trim()).toBe("Restoring your last session setup…");
-    expect(input?.contains(notice ?? null)).toBe(false);
-    expect(notice?.querySelector("svg")).not.toBeNull();
-    expect(start?.disabled).toBe(false);
+    expect(start?.disabled).toBe(true);
     expect(start?.getAttribute("aria-disabled")).toBe("true");
     start?.click();
-    expect(onSubmit).toHaveBeenCalledOnce();
+    expect(onSubmit).not.toHaveBeenCalled();
+    start?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+    expect(onBlockedSubmit).toHaveBeenCalledOnce();
   });
 
   it("previews dictation in a locked draft and reserves the primary slot for Send", () => {
@@ -506,21 +511,42 @@ describe("new-session composer sizing lifecycle", () => {
     expect(textarea.style.height).toBe("150px");
   });
 
-  it("keeps one observer across controlled updates and remeasures programmatic drafts", async () => {
-    const observe = vi.fn();
-    const disconnect = vi.fn();
-    const resizeObserverConstructed = vi.fn();
-    class TestResizeObserver {
+  it("keeps its sizing observers across controlled updates and remeasures programmatic drafts", async () => {
+    await prepareComposerWidthEdge();
+    const observers = new Set<TestResizeObserver>();
+    class TestResizeObserver implements ResizeObserver {
+      readonly targets = new Set<Element>();
       constructor() {
-        resizeObserverConstructed();
+        observers.add(this);
       }
-      observe = observe;
-      disconnect = disconnect;
+      observe = (target: Element) => this.targets.add(target);
+      unobserve = (target: Element) => this.targets.delete(target);
+      disconnect = () => this.targets.clear();
     }
+    const observedTargets = () => {
+      const targets = new Set<Element>();
+      for (const observer of observers) {
+        for (const target of observer.targets) {
+          targets.add(target);
+        }
+      }
+      return targets;
+    };
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
     const composerTextarea = createNewSessionComposerTextarea();
     const onInput = vi.fn();
-    const first = renderComposer({ composerTextarea, onInput });
+    let savedWidth: string | undefined = "600px";
+    const first = renderComposer({
+      composerTextarea,
+      onInput,
+      get chatMessageMaxWidth() {
+        return savedWidth;
+      },
+      onComposerWidthChange: (value) => {
+        savedWidth = value;
+        first.rerender();
+      },
+    });
     document.body.append(first.container);
     const textarea = getComposerTextarea(first.composer);
     let scrollHeightReads = 0;
@@ -531,8 +557,18 @@ describe("new-session composer sizing lifecycle", () => {
         return 42;
       },
     });
-    await Promise.resolve();
+    // JSX exists before geometry settles. Capture the baseline only after both
+    // owners have bound all their targets, not merely after the edge renders.
+    const expectedTargets = new Set([
+      textarea,
+      first.composer,
+      first.composer.querySelector<HTMLElement>(".agent-chat__input")!,
+      first.container,
+    ]);
+    await waitForFast(() => expect(observedTargets()).toEqual(expectedTargets));
     const readsAfterAttach = scrollHeightReads;
+    const targetsAfterAttach = observedTargets();
+    expect(targetsAfterAttach.has(textarea)).toBe(true);
 
     textarea.value = "typed";
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -542,8 +578,7 @@ describe("new-session composer sizing lifecycle", () => {
     await Promise.resolve();
 
     expect(first.container.querySelector("textarea")).toBe(textarea);
-    expect(resizeObserverConstructed).toHaveBeenCalledOnce();
-    expect(disconnect).not.toHaveBeenCalled();
+    expect(observedTargets()).toEqual(targetsAfterAttach);
     expect(scrollHeightReads).toBe(readsAfterInput);
 
     first.rerenderWithMessage("restored programmatically");
@@ -551,10 +586,16 @@ describe("new-session composer sizing lifecycle", () => {
 
     expect(scrollHeightReads).toBeGreaterThan(readsAfterInput);
     expect(readsAfterAttach).toBeGreaterThan(0);
-    expect(resizeObserverConstructed).toHaveBeenCalledOnce();
-    expect(disconnect).not.toHaveBeenCalled();
+    expect(observedTargets()).toEqual(targetsAfterAttach);
     composerTextarea.disconnect();
-    expect(disconnect).toHaveBeenCalledOnce();
+    expect(composerTextarea.getTextarea()).toBeNull();
+    first.unmount();
+    expect(observedTargets().size).toBe(0);
+    expect(first.container.querySelector('[role="separator"]')).toBeNull();
+    const readsAfterUnmount = scrollHeightReads;
+    composerTextarea.syncDraft("late restore");
+    await Promise.resolve();
+    expect(scrollHeightReads).toBe(readsAfterUnmount);
     first.container.remove();
   });
 });

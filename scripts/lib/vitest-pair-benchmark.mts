@@ -33,7 +33,7 @@ import {
 } from "./vitest-pair-benchmark-contract.mts";
 
 const CHILD_TIMEOUT_MS = 15 * 60 * 1000;
-export const VITEST_PAIR_HARNESS_DEADLINE_MS = 165 * 60 * 1000;
+const VITEST_PAIR_HARNESS_DEADLINE_MS = 165 * 60 * 1000;
 
 type RunCommandOptions = {
   bin: string;

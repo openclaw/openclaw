@@ -1,9 +1,13 @@
 import path from "node:path";
+import type { PermissionExec as ExecFn } from "@openclaw/fs-safe/advanced";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
-import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  listAgentIds,
+  resolveAgentConfig,
+} from "../agents/agent-scope-config.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -18,11 +22,7 @@ import {
 } from "../gateway/auth-config-utils.js";
 import { isInterpreterLikeAllowlistPattern } from "../infra/command-analysis/inline-eval.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
-import {
-  type ExecApprovalsFile,
-  loadExecApprovals,
-  resolveExecModePolicy,
-} from "../infra/exec-approvals.js";
+import { type ExecApprovalsFile, loadExecApprovals } from "../infra/exec-approvals.js";
 import {
   normalizeConfiguredSafeBins,
   normalizeConfiguredTrustedSafeBinDirs,
@@ -44,6 +44,7 @@ import {
   type McporterRegistryRejectReason,
 } from "./audit-mcporter-registry.js";
 import { listConfiguredOpenInboundPolicyPaths } from "./audit-open-inbound.js";
+import { collectElevatedFindings, collectNodeRuntimeSecurityFindings } from "./audit-runtime.js";
 import type {
   SecurityAuditFinding,
   SecurityAuditReport,
@@ -52,7 +53,6 @@ import type {
 } from "./audit.types.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 import { collectExecFilesystemPolicyDriftHits } from "./exec-filesystem-policy.js";
-import type { ExecFn } from "./windows-acl.js";
 
 type ExecDockerRawFn = typeof import("../agents/sandbox/docker.js").execDockerRaw;
 type ProbeGatewayFn = typeof import("../gateway/probe.js").probeGateway;
@@ -85,7 +85,6 @@ type SecurityAuditOptions = {
   platform?: NodeJS.Platform;
   deep?: boolean;
   includeFilesystem?: boolean;
-  includeChannelSecurity?: boolean;
   /** Override where to check state (default: resolveStateDir()). */
   stateDir?: string;
   /** Override config path check (default: resolveConfigPath()). */
@@ -102,8 +101,6 @@ type SecurityAuditOptions = {
   execDockerRawFn?: ExecDockerRawFn;
   /** Optional preloaded config snapshot to skip audit-time config file reads. */
   configSnapshot?: ConfigFileSnapshot | null;
-  /** Optional cache for code-safety summaries across repeated deep audits. */
-  codeSafetySummaryCache?: import("./audit.deep.runtime.js").CodeSafetySummaryCache;
   /** Optional explicit auth for deep gateway probe. */
   deepProbeAuth?: SecurityAuditExplicitGatewayAuth;
   /** Optional explicit Gateway auth mode/secret for config-only audit checks. */
@@ -120,14 +117,12 @@ type AuditExecutionContext = Omit<SecurityAuditOptions, "config"> & {
   env: NodeJS.ProcessEnv;
   platform: NodeJS.Platform;
   includeFilesystem: boolean;
-  includeChannelSecurity: boolean;
   deep: boolean;
   deepTimeoutMs: number;
   stateDir: string;
   configPath: string;
   loadPluginSecurityCollectors: boolean;
   configSnapshot: ConfigFileSnapshot | null;
-  codeSafetySummaryCache: import("./audit.deep.runtime.js").CodeSafetySummaryCache;
 };
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
@@ -150,7 +145,6 @@ function emitSecurityAuditReportEvent(params: {
   summary: SecurityAuditSummary;
   deep: boolean;
   includeFilesystem: boolean;
-  includeChannelSecurity: boolean;
   suppressedCount: number;
 }) {
   const hasCritical = params.summary.critical > 0;
@@ -182,7 +176,7 @@ function emitSecurityAuditReportEvent(params: {
       suppressed_count: params.suppressedCount,
       deep: params.deep,
       include_filesystem: params.includeFilesystem,
-      include_channel_security: params.includeChannelSecurity,
+      include_channel_security: true,
     },
   });
 }
@@ -384,7 +378,7 @@ async function collectPluginSecurityAuditFindings(
           .map(([id]) => id),
       ]),
     );
-    if (context.includeChannelSecurity && context.plugins !== undefined) {
+    if (context.plugins !== undefined) {
       const { resolveConfiguredChannelPluginIdsAsync } =
         await import("../plugins/channel-plugin-ids.js");
       const auditedChannelPluginIds = new Set(context.plugins.map((plugin) => plugin.id));
@@ -438,36 +432,6 @@ async function collectPluginSecurityAuditFindings(
   return collectorResults.flat();
 }
 
-function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
-  const findings: SecurityAuditFinding[] = [];
-  const enabled = cfg.tools?.elevated?.enabled;
-  const allowFrom = cfg.tools?.elevated?.allowFrom ?? {};
-
-  if (enabled === false) {
-    return findings;
-  }
-  for (const [provider, list] of Object.entries(allowFrom)) {
-    const normalized = normalizeStringEntries(Array.isArray(list) ? list : []);
-    if (normalized.includes("*")) {
-      findings.push({
-        checkId: `tools.elevated.allowFrom.${provider}.wildcard`,
-        severity: "critical",
-        title: "Elevated exec allowlist contains wildcard",
-        detail: `tools.elevated.allowFrom.${provider} includes "*" which effectively approves everyone on that channel for elevated mode.`,
-      });
-    } else if (normalized.length > 25) {
-      findings.push({
-        checkId: `tools.elevated.allowFrom.${provider}.large`,
-        severity: "warn",
-        title: "Elevated exec allowlist is large",
-        detail: `tools.elevated.allowFrom.${provider} has ${normalized.length} entries; consider tightening elevated access.`,
-      });
-    }
-  }
-
-  return findings;
-}
-
 function collectExecRuntimeFindings(
   cfg: OpenClawConfig,
   openExecSurfacePaths: string[],
@@ -493,7 +457,6 @@ function collectExecRuntimeFindings(
   }
 
   const agents = listAgentEntries(cfg).filter((entry) => typeof entry.id === "string");
-  const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const riskyAgents = agents
     .filter(
       (entry) =>
@@ -516,41 +479,38 @@ function collectExecRuntimeFindings(
     });
   }
 
-  const inherited = resolveExecModePolicy({
-    mode: cfg.tools?.exec?.mode,
-    security: cfg.tools?.exec?.security ?? "deny",
-    ask: cfg.tools?.exec?.ask ?? "off",
+  // Judge host exec the way the runtime runs it: an unsandboxed scope with no
+  // exec settings runs security=full, ask=off (prepareExecDefaults), not deny.
+  const defaultsExec = cfg.tools?.exec;
+  const effectiveExecScopes = listAgentIds(cfg).map((agentId) => {
+    const exec = resolveAgentConfig(cfg, agentId)?.tools?.exec;
+    const resolved = resolveExecDefaults({
+      cfg,
+      agentId,
+      // Non-main mode leaves each agent's main session on the host.
+      sandboxAvailable: resolveSandboxConfigForAgent(cfg, agentId).mode === "all",
+      execApprovals: approvals,
+    });
+    // Explicit full trust or switched-off approvals is an operator choice worth a
+    // finding on its own; a bare default only counts once open channels reach it.
+    const configured =
+      (exec?.security ?? defaultsExec?.security) === "full" ||
+      (exec?.mode ?? defaultsExec?.mode) === "full" ||
+      (exec?.ask ?? defaultsExec?.ask) === "off";
+    return { id: agentId, security: resolved.security, host: resolved.host, configured };
   });
-  const effectiveExecScopes = Array.from(
-    new Map(
-      [
-        {
-          id: defaultAgentId ?? "global",
-          security: inherited.security,
-          host: cfg.tools?.exec?.host ?? "auto",
-        },
-        ...agents.map((entry) => ({
-          id: entry.id,
-          security: resolveExecModePolicy({
-            mode: entry.tools?.exec?.mode,
-            security: entry.tools?.exec?.security ?? inherited.security,
-            ask: entry.tools?.exec?.ask ?? inherited.ask,
-          }).security,
-          host: entry.tools?.exec?.host ?? cfg.tools?.exec?.host ?? "auto",
-        })),
-      ].map((entry) => [entry.id, entry] as const),
-    ).values(),
-  );
   const fullExecScopes = effectiveExecScopes.filter((entry) => entry.security === "full");
   const execEnabledScopes = effectiveExecScopes.filter((entry) => entry.security !== "deny");
 
-  if (fullExecScopes.length > 0) {
+  const configuredFullScopes = fullExecScopes.filter((entry) => entry.configured);
+
+  if (configuredFullScopes.length > 0) {
     findings.push({
       checkId: "tools.exec.security_full_configured",
       severity: openExecSurfacePaths.length > 0 ? "critical" : "warn",
       title: "Exec security=full is configured",
       detail:
-        `Full exec trust is enabled for: ${fullExecScopes.map((entry) => entry.id).join(", ")}.` +
+        `Full exec trust is enabled for: ${configuredFullScopes.map((entry) => entry.id).join(", ")}.` +
         (openExecSurfacePaths.length > 0
           ? ` Open channel access was also detected at:\n${openExecSurfacePaths.map((entry) => `- ${entry}`).join("\n")}`
           : ""),
@@ -971,7 +931,6 @@ async function createAuditExecutionContext(
   const env = opts.env ?? process.env;
   const platform = opts.platform ?? process.platform;
   const includeFilesystem = opts.includeFilesystem !== false;
-  const includeChannelSecurity = opts.includeChannelSecurity !== false;
   const deep = opts.deep === true;
   const deepTimeoutMs = Math.max(250, opts.deepTimeoutMs ?? 5000);
   const stateDir = opts.stateDir ?? resolveStateDir(env);
@@ -993,7 +952,6 @@ async function createAuditExecutionContext(
     env,
     platform,
     includeFilesystem,
-    includeChannelSecurity,
     deep,
     deepTimeoutMs,
     stateDir,
@@ -1005,7 +963,6 @@ async function createAuditExecutionContext(
     loadPluginSecurityCollectors: opts.loadPluginSecurityCollectors ?? deep,
     workspaceDir,
     configSnapshot,
-    codeSafetySummaryCache: opts.codeSafetySummaryCache ?? new Map(),
     deepProbeAuth: opts.deepProbeAuth,
     auditGatewayAuthOverride: opts.auditGatewayAuthOverride,
   };
@@ -1030,6 +987,8 @@ export async function runSecurityAuditCore(
         .plugins.flatMap((plugin) => (plugin.packageChannel ? [plugin.packageChannel] : []))
     : [];
   const openInboundPolicies = listConfiguredOpenInboundPolicyPaths(cfg, channelMetadata);
+
+  findings.push(...collectNodeRuntimeSecurityFindings());
 
   findings.push(
     ...(await auditNonDeep.collectAttackSurfaceSummaryFindings(cfg, openInboundPolicies)),
@@ -1102,34 +1061,31 @@ export async function runSecurityAuditCore(
         stateDir,
         deep: context.deep,
         workspaceDir: context.workspaceDir,
-        summaryCache: context.codeSafetySummaryCache,
       })),
     );
   }
 
-  let shouldAuditChannelSecurity = false;
-  if (context.includeChannelSecurity) {
-    if (context.plugins !== undefined) {
-      shouldAuditChannelSecurity = true;
-    } else {
-      const { hasConfiguredChannelsForReadOnlyScopeAsync, resolveConfiguredChannelPluginIdsAsync } =
-        await import("../plugins/channel-plugin-ids.js");
-      shouldAuditChannelSecurity =
-        (await hasConfiguredChannelsForReadOnlyScopeAsync({
+  let shouldAuditChannelSecurity: boolean;
+  if (context.plugins !== undefined) {
+    shouldAuditChannelSecurity = true;
+  } else {
+    const { hasConfiguredChannelsForReadOnlyScopeAsync, resolveConfiguredChannelPluginIdsAsync } =
+      await import("../plugins/channel-plugin-ids.js");
+    shouldAuditChannelSecurity =
+      (await hasConfiguredChannelsForReadOnlyScopeAsync({
+        config: cfg,
+        activationSourceConfig: context.sourceConfig,
+        workspaceDir: context.workspaceDir,
+        env,
+      })) ||
+      (
+        await resolveConfiguredChannelPluginIdsAsync({
           config: cfg,
           activationSourceConfig: context.sourceConfig,
           workspaceDir: context.workspaceDir,
           env,
-        })) ||
-        (
-          await resolveConfiguredChannelPluginIdsAsync({
-            config: cfg,
-            activationSourceConfig: context.sourceConfig,
-            workspaceDir: context.workspaceDir,
-            env,
-          })
-        ).length > 0;
-    }
+        })
+      ).length > 0;
   }
   if (shouldAuditChannelSecurity) {
     const channelPlugins =
@@ -1186,7 +1142,6 @@ export async function runSecurityAuditCore(
     summary,
     deep: context.deep,
     includeFilesystem: context.includeFilesystem,
-    includeChannelSecurity: context.includeChannelSecurity,
     suppressedCount: filtered.suppressedFindings.length,
   });
   return {

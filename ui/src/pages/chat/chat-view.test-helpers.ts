@@ -9,7 +9,9 @@ import {
   isUiGlobalScopeConfigured,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
+import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
 import { normalizeApplicationContext } from "../../test-helpers/application-context-fixtures.ts";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { mountSolid as mountSolidComponent } from "../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -35,6 +37,7 @@ export async function renderChatModelControls(
   props: ChatModelControlsProps,
   container: HTMLDivElement,
 ) {
+  installModelPickerLayout();
   const renderProps: ChatModelControlsProps = {
     ...props,
     modelPickerOpen: props.modelPickerOpen ?? true,
@@ -64,11 +67,11 @@ export async function renderChatModelControls(
 }
 
 export function requireElement(container: Element, selector: string, label: string): Element {
-  const element = container.querySelector(selector);
-  if (element === null) {
-    throw new Error(`expected ${label}`);
-  }
-  return element;
+  return expectDefined(container.querySelector(selector), label);
+}
+
+export function waitForElement(container: Element, selector: string, label = selector) {
+  return waitForSolid(() => requireElement(container, selector, label));
 }
 
 export function getComposerTextarea(container: Element): HTMLTextAreaElement {
@@ -152,18 +155,20 @@ export function appendChatBubble(
 }
 
 export function stubAnimationFrames() {
-  const callbacks: FrameRequestCallback[] = [];
-  vi.stubGlobal(
-    "requestAnimationFrame",
-    vi.fn((callback: FrameRequestCallback) => {
-      callbacks.push(callback);
-      return callbacks.length;
-    }),
-  );
+  const { frames: callbacks, request } = createFrameQueue();
+  vi.stubGlobal("requestAnimationFrame", vi.fn(request));
   return () => {
     for (const callback of callbacks.splice(0)) {
       callback(0);
     }
+  };
+}
+
+export function stubSettledAnimationFrames() {
+  const frame = stubAnimationFrames();
+  return () => {
+    frame();
+    flush();
   };
 }
 
@@ -206,6 +211,7 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     realtimeTalkDetail: null,
     connected: true,
     canSend: true,
+    canDismissPendingInputs: true,
     disabledReason: null,
     error: null,
     runError: null,
@@ -328,11 +334,11 @@ export function renderChatInto(container: HTMLElement, overrides: Partial<ChatPr
 }
 
 export function getChatModelSelect(container: Element): HTMLElement {
-  const select = container.querySelector<HTMLElement>('[data-chat-model-select="true"]');
+  const select = expectDefined(
+    container.querySelector<HTMLElement>('[data-chat-model-select="true"]'),
+    "chat model control",
+  );
   expect(select).toBeInstanceOf(HTMLElement);
-  if (!(select instanceof HTMLElement)) {
-    throw new Error("Expected chat model control");
-  }
   return select;
 }
 
@@ -341,11 +347,11 @@ export function getChatThinkingValue(control: HTMLElement): string {
 }
 
 export function getThinkingSelect(container: Element): HTMLElement {
-  const select = container.querySelector<HTMLElement>('[data-chat-thinking-select="true"]');
+  const select = expectDefined(
+    container.querySelector<HTMLElement>('[data-chat-thinking-select="true"]'),
+    "chat thinking control",
+  );
   expect(select).toBeInstanceOf(HTMLElement);
-  if (!(select instanceof HTMLElement)) {
-    throw new Error("Expected chat thinking control");
-  }
   return select;
 }
 

@@ -15,6 +15,8 @@ import * as runtimeProcess from "../infra/runtime-process-url.js";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { writeSealedRuntimeProcessFixture } from "../test-utils/sealed-runtime-process-fixture.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import type {
   CodeModeExecutorContinuation,
   CodeModeExecutorResumeInput,
@@ -110,13 +112,20 @@ const guestTimeout = {
   failurePhase: "guest",
 };
 
-async function runNodeProbe(body: string): Promise<unknown> {
-  const probe = `
+async function runNodeProbe(
+  body: string,
+  workerUrl = runtimeProcess.resolveRuntimeProcessEntrypointUrl("codeModeNode"),
+): Promise<unknown> {
+  return withTempDir("code-mode-probe-", async (directory) => {
+    const bootstrap = await writeSealedRuntimeProcessFixture(directory, "worker", {
+      codeModeNode: workerUrl,
+    });
+    const probe = `
       import { nodeCodeModeExecutor } from ${JSON.stringify(new URL("./code-mode-node.ts", import.meta.url).href)};
-      import { registerSealedRuntimeProcessEntrypoint } from ${JSON.stringify(new URL("../infra/runtime-process-url.ts", import.meta.url).href)};
+      import { registerSealedRuntimeProcessEntrypoints } from ${JSON.stringify(new URL("../infra/runtime-process-url.ts", import.meta.url).href)};
       import { LegacyPluginSdkResourceHost } from ${JSON.stringify(new URL("../plugins/legacy-sdk-resource-host.ts", import.meta.url).href)};
       import { createTestGatewayScheduler } from ${JSON.stringify(new URL("../test-utils/gateway-scheduler-clock.ts", import.meta.url).href)};
-      registerSealedRuntimeProcessEntrypoint("codeModeNode", new URL(${JSON.stringify(runtimeProcess.resolveRuntimeProcessEntrypointUrl("codeModeNode").href)}));
+      registerSealedRuntimeProcessEntrypoints("worker", ${JSON.stringify(bootstrap)});
       const host = new LegacyPluginSdkResourceHost();
       const scheduler = createTestGatewayScheduler();
       host.bindScheduler(scheduler);
@@ -136,35 +145,26 @@ async function runNodeProbe(body: string): Promise<unknown> {
         await scheduler.stop();
       }
     `;
-  const { stdout } = await promisify(execFile)(
-    process.execPath,
-    [
-      "--import",
-      fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
-      "--input-type=module",
-      "-e",
-      probe,
-    ],
-    { env: { ...process.env, NODE_OPTIONS: "" }, timeout: 25_000 },
-  );
-  return JSON.parse(stdout);
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      [
+        "--import",
+        fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+        "--input-type=module",
+        "-e",
+        probe,
+      ],
+      { env: { ...process.env, NODE_OPTIONS: "" }, timeout: 25_000 },
+    );
+    return JSON.parse(stdout);
+  });
 }
 
 it.each([
-  { source: "await yield_control()", phase: "host", code: "internal_error", calls: 1 },
-  {
-    source: 'throw new Error("invalid code mode continuation timeout")',
-    phase: "guest",
-    code: "internal_error",
-    calls: 0,
-  },
-  {
-    source: "await new Promise(() => {})",
-    phase: "input",
-    code: "invalid_input",
-    calls: 0,
-  },
-])("preserves $phase failure provenance without replay", async ({ source, phase, code, calls }) => {
+  ["await yield_control()", "host", "internal_error", 1],
+  ['throw new Error("invalid code mode continuation timeout")', "guest", "internal_error", 0],
+  ["await new Promise(() => {})", "input", "invalid_input", 0],
+] as const)("preserves failure provenance for %s", async (source, phase, code, calls) => {
   const onFailure = vi.fn();
   const onBoundary = vi.fn(async () => ({
     kind: "continue" as const,
@@ -207,6 +207,47 @@ it("reuses healthy workers after rejected cells without retaining guest state", 
   expect(workerStarts() - before).toBe(1);
 });
 
+it("contains dynamic imports and late guest rejections in the owning cell", async () => {
+  const sources = [
+    "await import('node:fs')",
+    `await eval("import('node:fs')")`,
+    `await new Function("return import('node:fs')")()`,
+    `await (() => {}).constructor("return import('node:fs')")()`,
+    `Promise.resolve().then(() => eval("import('node:fs')")); return 1`,
+    `setTimeout(() => eval("import('node:fs')"), 0); return 1`,
+  ];
+  const observed = await runNodeProbe(`
+    const unhandled = [];
+    process.on('unhandledRejection', error => unhandled.push(String(error)));
+    const sibling = await run('await yield_control(); return 42');
+    const failures = [];
+    for (const source of ${JSON.stringify(sources)}) {
+      failures.push(await run(source, {}, { inlineHost: { onBoundary } }));
+    }
+    const caught = await run(${JSON.stringify(`try { await eval("import('node:fs')"); } catch (error) { return error.message; }`)});
+    const late = await run('Promise.resolve().then(() => { throw new Error("late failure"); }); return 1');
+    const resumed = await sibling.continuation.resume({ kind: 'resume', config,
+      settledRequests: sibling.pendingRequests.map(({ id }) => ({ id, ok: true, json: 'null' })),
+    }, { timeoutMs: 7000 });
+    const recovered = await run('return 7');
+    console.log(JSON.stringify({ failures, caught, late, resumed, recovered, unhandled }));
+  `);
+  expect(observed).toMatchObject({
+    failures: sources.map(() => ({
+      status: "failed",
+      error: expect.stringContaining("code mode module access is disabled"),
+    })),
+    caught: {
+      status: "completed",
+      value: { json: expect.stringContaining("code mode module access is disabled") },
+    },
+    late: { status: "failed", error: expect.stringContaining("late failure") },
+    resumed: { status: "completed", value: { json: "42" } },
+    recovered: { status: "completed", value: { json: "7" } },
+    unhandled: [],
+  });
+});
+
 it("reports heap exhaustion, recovers, and bounds captured output below the heap limit", async () => {
   // Vitest runs inside a Worker whose inherited heap flags can override resourceLimits.
   // A standalone process exercises native OOM without changing the test runner's V8 flags.
@@ -216,11 +257,7 @@ it("reports heap exhaustion, recovers, and bounds captured output below the heap
         const result = await run(
           'await yield_control(); text("before allocation"); const data = []; for (let i = 0; i < 2_000_000; i++) data.push({ i, value: String(i) }); return data.length;',
           {}, { inlineHost: {
-          onBoundary: async (boundary, context) => {
-            boundaries++;
-            return { kind: "continue", timeoutMs: Math.min(1000, context.maxTimeoutMs), pendingRequests: [],
-              settledRequests: boundary.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })) };
-          },
+          onBoundary: (...args) => { boundaries++; return onBoundary(...args); },
           onFailure: (error, phase, workerId) => {
             failure = { code: error.cause?.code, phase, workerId };
           },
@@ -271,8 +308,8 @@ it.skipIf(Boolean(process.versions.bun))(
         await yield_control();
       }
     `;
-    const observed = await runNodeProbe(`
-        registerSealedRuntimeProcessEntrypoint("codeModeNode", new URL(${JSON.stringify(new URL("./code-mode-node.watchdog.test-support.ts", import.meta.url).href)}));
+    const observed = await runNodeProbe(
+      `
         const pressureConfig = { ...config, timeoutMs: 10000, memoryLimitBytes: 128 * 1024 * 1024 };
         const lowPressure = await run(
           'const until = Date.now() + 1100; while (Date.now() < until) { collectGarbage(); await yield_control(); } return 1;',
@@ -284,7 +321,9 @@ it.skipIf(Boolean(process.versions.bun))(
         const pressureMs = performance.now() - pressureStarted;
         const afterPressure = await run("return 7");
         console.log(JSON.stringify({ pressure, pressureEndedQuickly: pressureMs < 5000, afterPressure, lowPressure }));
-      `);
+      `,
+      new URL("./code-mode-node.watchdog.test-support.ts", import.meta.url),
+    );
     expect(observed).toMatchObject({
       lowPressure: { status: "completed", value: { json: "1" } },
       pressureEndedQuickly: true,
@@ -302,7 +341,7 @@ it.skipIf(Boolean(process.versions.bun))(
 
 it.each([
   ["alternating limits", 20, 1, [64, 96], 2],
-  ["concurrent continuations", 2, 4, [128, 160], 4],
+  ["concurrent continuations", 2, 8, [64, 96], 8],
 ] as const)(
   "keeps workers warm across %s",
   async (scenario, rounds, concurrency, limits, maxWorkers) => {
@@ -348,21 +387,12 @@ it("retains lexical state through one-shot waits and disposes only its owned con
   );
   const first = result.continuation;
   expect(first.retainedBytes).toBe(config.memoryLimitBytes);
-  result = waiting(
-    await resume(result, {
-      settledRequests: [{ id: result.pendingRequests[0]!.id, ok: true, json: "null" }],
-      pendingRequests: [],
-    }),
-  );
+  result = waiting(await resume(result, { pendingRequests: [] }));
   await first.dispose();
   expect(
     await first.resume({ kind: "resume", config, settledRequests: [] }, { timeoutMs: 7_000 }),
   ).toMatchObject({ status: "failed", code: "runtime_unavailable" });
-  const completed = await resume(result, {
-    settledRequests: [{ id: result.pendingRequests[0]!.id, ok: true, json: "null" }],
-    pendingRequests: [],
-  });
-  expectComplete(completed, '{"value":3}');
+  expectComplete(await resume(result, { pendingRequests: [] }), '{"value":3}');
 });
 
 it("interrupts guest execution after an async yield and recovers the worker", async () => {

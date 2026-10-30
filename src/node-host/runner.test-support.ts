@@ -1,4 +1,4 @@
-import { expect, type Mock, vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import type { loadDeviceAuthTokenReadOnly } from "../infra/device-auth-store.js";
@@ -6,16 +6,24 @@ import { VERSION } from "../version.js";
 import type { configureNodeHost, NodeHostConfig } from "./config.js";
 
 const mocks = vi.hoisted(() => {
+  const createClient = () => ({
+    request: vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async () => ({})),
+    start: vi.fn(),
+    stop: vi.fn(),
+    stopAndWait: vi.fn(async () => {}),
+    updateNodeManifest: vi.fn(),
+  });
+  const readiness = (ready: boolean) => ({
+    ready,
+    aborted: false,
+    elapsedMs: 0,
+    maxDriftMs: 0,
+    checks: Number(ready),
+  });
   const initialState = () => ({
     capturedGatewayClientOptions: [] as GatewayClientOptions[],
     capturedConfiguredGatewayConfigs: [] as Array<{ contextPath?: string }>,
-    capturedGatewayClients: [] as Array<{
-      request: Mock<(method: string, params?: unknown) => Promise<unknown>>;
-      start: ReturnType<typeof vi.fn>;
-      stop: ReturnType<typeof vi.fn>;
-      stopAndWait: ReturnType<typeof vi.fn<() => Promise<void>>>;
-      updateNodeManifest: ReturnType<typeof vi.fn>;
-    }>,
+    capturedGatewayClients: [] as ReturnType<typeof createClient>[],
     mcpDescriptors: [] as Array<Record<string, unknown>>,
     mcpDescriptorsChanged: undefined as (() => void) | undefined,
     nodePluginTools: [] as Array<Record<string, unknown>>,
@@ -34,6 +42,8 @@ const mocks = vi.hoisted(() => {
     resolvedExecutables: new Map<string, string>(),
   });
   return {
+    createClient,
+    readiness,
     ...initialState(),
     resetState(): void {
       Object.assign(mocks, initialState());
@@ -55,13 +65,7 @@ const mocks = vi.hoisted(() => {
     }),
     getRuntimeConfig: vi.fn<() => unknown>(() => ({ gateway: { handshakeTimeoutMs: 1_000 } })),
     startGatewayClientWhenEventLoopReady: vi.fn<typeof startGatewayClientWhenEventLoopReady>(
-      async () => ({
-        ready: false,
-        aborted: false,
-        elapsedMs: 0,
-        maxDriftMs: 0,
-        checks: 0,
-      }),
+      async () => readiness(false),
     ),
     resolveGatewayCredentialsWithSecretInputs: vi.fn(async (_params: { config: unknown }) => ({})),
     activeRuntime: {
@@ -95,13 +99,7 @@ vi.mock("../gateway/client.js", async (importOriginal) => {
       if (mocks.useRealGatewayClient) {
         return new actual.GatewayClient(opts);
       }
-      const client = {
-        request: vi.fn(async () => ({})),
-        start: vi.fn(),
-        stop: vi.fn(),
-        stopAndWait: vi.fn(async () => {}),
-        updateNodeManifest: vi.fn(),
-      };
+      const client = mocks.createClient();
       mocks.capturedGatewayClientOptions.push(opts);
       mocks.capturedGatewayClients.push(client);
       return client;
@@ -261,6 +259,7 @@ export function resetRunnerTestState() {
     },
   ];
   vi.clearAllMocks();
+  mocks.startGatewayClientWhenEventLoopReady.mockReset().mockResolvedValue(mocks.readiness(false));
   mocks.loadNodeHostConfig.mockReset().mockResolvedValue(null);
   mocks.loadDeviceAuthTokenReadOnly.mockReset().mockResolvedValue(null);
   mocks.loadDeviceIdentityIfPresent.mockReset().mockResolvedValue(null);
@@ -268,16 +267,6 @@ export function resetRunnerTestState() {
 }
 
 export { loadResumableNodeHostGateway, mocks, runNodeHost, startNodeHostMcpManager };
-
-export function readyNodeHost() {
-  mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
-    ready: true,
-    aborted: false,
-    elapsedMs: 0,
-    maxDriftMs: 0,
-    checks: 1,
-  });
-}
 
 export async function withReadyNodeHost(
   runTest: (host: {
@@ -288,11 +277,12 @@ export async function withReadyNodeHost(
   }) => Promise<void>,
   options: Partial<Parameters<typeof runNodeHost>[0]> = {},
   beforeStop?: () => void,
+  start = runNodeHost,
 ) {
-  readyNodeHost();
+  mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce(mocks.readiness(true));
   const on = vi.spyOn(process, "on");
   const previousExitCode = process.exitCode;
-  const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789, ...options });
+  const running = start({ gatewayHost: "127.0.0.1", gatewayPort: 18789, ...options });
   const stop = () => {
     const listener = on.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
     listener?.("SIGTERM");

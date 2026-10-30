@@ -67,6 +67,9 @@ The host resolves the secret and passes the connection to
 database workers; workers do not resolve SecretRefs. Treat the DSN as a credential
 and do not put it in logs or diagnostic captures.
 
+Connect directly or use a pooler in session mode. Transaction-mode poolers are
+not supported; see [connection poolers](/gateway/postgresql#connection-poolers).
+
 The following connection surfaces are qualified on PostgreSQL 17. See the
 [connection qualification and setup](/gateway/postgresql#tls-and-exec-connection-qualification)
 for the server and provider configuration.
@@ -123,14 +126,20 @@ The supported PostgreSQL families are:
   retained registry paths and explicit session or agent directories. Older SQLite
   schemas migrate only in the port's private copy. Compressed transcript events
   become plain JSON on PostgreSQL; transcript search is rebuilt before publication.
-  Rebuildable memory indexes are omitted. Their rebuild hook remains explicitly
-  pending the memory owner's rebuild entry point; empty metadata requests reindexing.
-  Canonical memory origins and
-  tombstones remain intact. Duplicate-key voice JSON refuses the port with a hashed
+  Rebuildable memory search projections are omitted; canonical memory origins,
+  tombstones, the embedding cache, and stored chunk vectors with their identity metadata
+  remain intact in the verified copy. After publication and port-owner release,
+  the selected memory plugin rebuilds ported agents under fresh offline ownership,
+  several agents at a time when the host's CPUs and free memory allow it.
+  Unchanged chunks reuse cached or stored embeddings only when provider, model,
+  provider settings, input format, hash, and dimensions match. Output and `--json` report
+  per-agent results; a failure leaves the port successful and warns to retry
+  `openclaw memory index --agent <id>` before starting the Gateway. Retained stores
+  need their original agent configuration to rebuild.
+  Duplicate-key voice JSON refuses the port with a hashed
   row locator. Cold archive references are retained; user backups embed their blobs.
-  PostgreSQL agent schemas support current-version
-  bootstrap and the schema 27 to 28 forward migration, and reject schema drift
-  before exposing the store.
+  PostgreSQL agent schemas support current-version bootstrap and registered
+  consecutive forward migrations, and reject schema drift before exposing the store.
 - **Workboard:** runtime storage, bidirectional database ports, and matched backups.
 - **Logbook:** runtime frames, batches, observations, cards, and standups;
   bidirectional database ports; and matched backups. Frame images remain local
@@ -294,8 +303,8 @@ selection requires `--family`.
 | PostgreSQL state and agents with either engine for plugins       | Runtime, matched backup/restore, and compatible updates.                        |
 | SQLite state with PostgreSQL agents                              | Runtime, scoped ports, matched backup/restore, and compatible updates.          |
 
-Back up a mixed installation with `openclaw backup create --verify`; any
-PostgreSQL store requires the Gateway stopped through its service owner.
+Back up a mixed installation with `openclaw backup create --verify`, with the
+Gateway running or stopped.
 `openclaw backup restore <archive> --target <directory>` extracts the archived
 config, SQLite images, and format-2 PostgreSQL envelopes into staging, imports
 all producer-declared PostgreSQL stores into fresh namespaces, and publishes
@@ -334,10 +343,24 @@ shared-state registration, leases, and commit participants. Lower latency is a
 hypothesis to measure for your workload, not a promise of a network-free agent
 critical path.
 
+## Workflow support and qualification
+
+These PostgreSQL workflows have focused regression coverage. The broader
+[support matrix](/gateway/postgresql#support-matrix) retains the platform-specific
+qualification limits, including signed macOS app and native Windows flows.
+
+| Workflow                          | Supported behavior                                                                                                                                                                                  | Evidence                                                    |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Retained `agent exec --state-dir` | Uses the effective configured engines; temporary and `--isolated` runs use SQLite. See [agent exec](/cli/agent#agent-exec).                                                                         | [#188420](https://github.com/openclaw/openclaw/pull/188420) |
+| iMessage with PostgreSQL state    | Recovery cursors use the selected shared-state engine without NUL-containing keys.                                                                                                                  | [#184919](https://github.com/openclaw/openclaw/pull/184919) |
+| Store-backed Gateway credentials  | Local CLI RPC commands resolve `gateway.auth.*` refs from the configured state engine. See the [store provider](/gateway/secrets/secretref-contract#store-provider).                                | [#185238](https://github.com/openclaw/openclaw/pull/185238) |
+| Archive backup creation           | `backup create` works while the Gateway runs; generic PostgreSQL snapshots, Git backups, and restore still require offline custody.                                                                 | [#185236](https://github.com/openclaw/openclaw/pull/185236) |
+| Retained agent creation           | Missing, uninitialized, or mismatched namespaces refuse reuse; new anchors publish after initialization commits. See [retained-store recovery](/gateway/postgresql#recover-a-retained-agent-store). | [#188350](https://github.com/openclaw/openclaw/pull/188350) |
+
 ## Search on PostgreSQL
 
 The engine search contract supports native PostgreSQL full text, literal trigram
-contains, and exact cosine search. Memory body and path retrieval, agent
+contains, and cosine search. Memory body and path retrieval, agent
 transcript text search, and standing-intent matching use this contract.
 It does not enable PostgreSQL for an unported store.
 
@@ -362,7 +385,7 @@ CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
 ```
 
 `unaccent` is required for full text, `pg_trgm` for a declared trigram index,
-and `vector` for semantic search. Extensions are database-wide; the store's
+and `vector` 0.7 or newer for semantic memory search. Extensions are database-wide; the store's
 schema declaration identifies their namespace when it differs from `public`.
 The engine checks availability and privileges once at store admission. It never
 installs extensions automatically. An unavailable capability refuses admission
@@ -372,11 +395,11 @@ administrator. The runtime role needs `CREATE` in the store schema, or database
 `CREATE` privilege when bootstrapping a new schema, plus ownership/access to its
 tables, indexes, functions, and text-search configuration.
 
-| Search mode                                                     | PostgreSQL implementation                                           | Required extensions                                                         |
-| --------------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| Memory body keywords, transcript text, standing-intent keywords | Full text with literal terms, phrases, and supported prefix queries | `unaccent`                                                                  |
-| Memory trigram tokenizer                                        | Literal contains matching with native similarity ranking            | `unaccent`, `pg_trgm`                                                       |
-| Memory semantic or hybrid retrieval                             | Exact cosine over the admitted embedding model and eligible sources | `unaccent`, `vector`; also `pg_trgm` when the trigram tokenizer is selected |
+| Search mode                                                     | PostgreSQL implementation                                           | Required extensions                                                              |
+| --------------------------------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Memory body keywords, transcript text, standing-intent keywords | Full text with literal terms, phrases, and supported prefix queries | `unaccent`                                                                       |
+| Memory trigram tokenizer                                        | Literal contains matching with native similarity ranking            | `unaccent`, `pg_trgm`                                                            |
+| Memory semantic or hybrid retrieval                             | Binary prefilter followed by exact cosine reranking                 | `unaccent`, `vector` 0.7+; also `pg_trgm` when the trigram tokenizer is selected |
 
 Missing `pg_trgm` refuses a declared trigram index; it does not silently change
 the tokenizer. Missing `unaccent` refuses full-text admission. In either case,
@@ -404,8 +427,9 @@ sizes; WAL and reusable-file bytes are zero because those are server-owned,
 not local SQLite files.
 
 The public memory search path uses the admitted PostgreSQL projections. Vector
-queries filter model aliases, sources, and any candidate IDs before exact cosine
-ordering and the result limit. Keyword queries
+queries filter model aliases, sources, exclusions, and any candidate IDs before
+the binary prefilter and exact cosine reranking. Small candidate-ID scopes stay
+on the exact path. Keyword queries
 use native full-text ranking, or literal contains predicates for the configured
 trigram tokenizer. Only bounded result payloads cross into JavaScript. Hybrid
 merging keeps the existing default weights of 0.7 vector and 0.3 text; PostgreSQL
@@ -416,25 +440,47 @@ The error names the missing extension and the installation SQL. Install it in
 the selected database, then reopen the store; use `provider: "none"` when only
 keyword search is wanted.
 
-Full text uses a named `simple` plus `unaccent` configuration, a stored generated
-`tsvector`, and GIN. Queries bind literal terms and compile conjunctions,
+Full text uses a named `simple` plus `unaccent` configuration, a stored
+`tsvector` column, and GIN. Agent schema 38 and newer keep that column as a plain
+column maintained by a `<table>_search_sync` trigger (also after the 37→38
+migration, which drops the old generated expression in place and reparses the
+rows); historical stores before 38 used a generated column. Queries bind literal terms and compile conjunctions,
 disjunctions, adjacent phrases, and final-lexeme prefixes. User text is never
-interpreted as PostgreSQL query operators. Ranking uses `ts_rank_cd` with
-normalization 2: scores are engine-local, higher is better, and ordering differs
-from SQLite BM25. Tokenization also differs for punctuation, compound words, and
-Unicode. Snippets use `ts_headline` only after a materialized, bounded candidate
-selection, with a word budget of 2–48, a character cap of 500, and empty highlight markers. Trigram
+interpreted as PostgreSQL query operators. The default full-text capability uses
+`ts_rank_cd` with normalization 2: scores are engine-local, higher is better, and ordering differs
+from SQLite BM25. Punctuation runs are replaced by spaces before indexing and before
+parsing the query, so words inside dates, paths, file names, and `a/b` pairs match
+on both engines (`08` in `2026-08-18`, `server` in `server.py`); Unicode
+normalization still differs. Snippets use `ts_headline` only after a materialized, bounded candidate
+selection, with a word budget of 2–48, a character cap of 500, and empty highlight markers. The headline
+parses the same punctuation split as the query to pick its passage, then returns that passage from
+the original text, so snippets keep their punctuation. Trigram
 contains uses its own GIN index and escaped literal `ILIKE`; it is not a universal
 fallback for full-text queries. Trigram matches rank by native `word_similarity`
 before the result limit; multi-term memory queries average their term scores.
 
-Semantic search uses exact float32 `vector(n)` cosine distance, with model and
-source eligibility in the same query before ordering and limit. The canonical
-embedding remains its original little-endian binary64 BLOB; source-transaction
-triggers maintain the derived float32 projection. Exact vectors support up to
-16,000 dimensions. A dimension change requires a matching schema and a derived
-index rebuild. There is no ANN, HNSW, IVFFlat, half-precision storage, or transfer
-of the PostgreSQL corpus into JavaScript for per-query scoring.
+Memory full-text search uses frequency ranking (`ts_rank`) with normalization 0
+and maps rank `r` to `r / (r + 0.0027)` before the shared hybrid merge. Body and
+path candidates, including the match-any fallback when every primary branch is
+empty, share one statement. This calibration is engine-local and does not add
+corpus-wide inverse document frequency; ranking may differ from SQLite BM25.
+
+PostgreSQL memory vector search is approximate: a stored binary sketch selects a
+bounded candidate set by Hamming distance, then exact float32 `vector(n)` cosine
+distance reranks those candidates. Model and source eligibility apply before
+candidate selection. This recall-tuned path is enabled by default and has no
+separate configuration option; it can return different neighbors from exact
+search. SQLite memory vector search stays exact.
+
+The canonical embedding remains its original little-endian binary64 BLOB;
+source-transaction triggers maintain the derived float32 projection, and a
+stored generated column maintains its binary sketch. Zero vectors remain
+ineligible, while valid all-negative vectors retain a non-null sketch. Vectors
+support up to 16,000 dimensions. A dimension change requires a matching schema
+and a derived-index rebuild. No HNSW build or half-precision conversion is
+required, and the PostgreSQL corpus is not transferred into JavaScript for
+per-query scoring. The agent schema migration backfills sketches in existing
+stores; ports and backups reconstruct them from canonical embeddings.
 
 Search sees committed index inserts, updates, and deletes immediately. Memory
 files must first pass through normal indexing; changing a file alone does not
@@ -513,6 +559,11 @@ or a PostgreSQL privilege probe. It creates no manifest, migrated copy, or targe
 namespace. Add `--json` for machine-readable results without connection strings
 or row payloads.
 
+Local client credentials must be bound to the exact shared state database file,
+including its device and inode. A byte-identical copy with a new inode is refused.
+When moving state from a backup archive, use `openclaw backup restore` so the
+restore owner validates the shared/local pair and rebinds the credential receipt.
+
 The real operation retains exact original database and config captures under
 `<stateDir>/recovery/database-port/<operation-id>/`. SQLite originals are verified
 snapshots with WAL changes settled. PostgreSQL originals include a matched
@@ -522,6 +573,16 @@ Keep this directory private and retain the complete set. Former PostgreSQL
 namespaces are not dropped automatically.
 
 All destination stores are privately migrated and verified before publication.
+After committing a PostgreSQL bulk copy, port and backup restore run `ANALYZE`
+only on tables in the destination namespace. Agent ports refresh statistics again
+after the memory index rebuild. The port report records the result. Statistics
+refresh uses a 10-second statement timeout and a 1-second lock timeout; a failure
+is a warning and preserves the verified data for autovacuum to analyze later.
+
+Agent and shared-state columns normally created on a feature's first use are
+completed in the private copy when absent, preserving existing rows with `NULL`
+values and leaving the original SQLite store unchanged. Unknown columns still
+refuse the port.
 The command replaces each store atomically, switches config last while preserving
 SecretRefs, environment references, and includes, then archives its completed
 manifest with the captures. After success, start the Gateway through its service
@@ -601,21 +662,42 @@ do not restrict a role's access.
 One Gateway owns each store. PostgreSQL does not enable multiple active owners of one store,
 external writers, replication management, or connection-pool management.
 
+Session-state history pruning compares sequence watermarks as integers on both
+engines. PostgreSQL batches explicitly cast bound watermark values to `bigint`;
+this does not change the schema or the existing history retention limits.
+
 Writers use `READ COMMITTED` and a transaction-scoped advisory lock derived from
 the store identity. Every PostgreSQL write, including a single statement, uses
 the adapter's `runTransaction` so it retains that lock and publishes its write
 token. A single-statement read may use autocommit; multi-statement snapshot reads
-use `REPEATABLE READ READ ONLY`. Connections
-set `synchronous_commit=off` to match SQLite WAL with `synchronous=NORMAL`: a
-server or operating-system crash can lose recently acknowledged commits. Backups
-and recovery must account for that durability policy. The adapter sets generous
-lock and statement timeouts once during connection setup; operations do not
-change timeout settings individually.
+use `REPEATABLE READ READ ONLY`. OpenClaw uses the server's `synchronous_commit`
+setting. PostgreSQL's default `on` makes acknowledged commits durable across
+PostgreSQL or operating-system crashes. For SQLite WAL `synchronous=NORMAL`-like
+throughput, operators can opt in with
+`ALTER ROLE <openclaw_role> SET synchronous_commit = off` or the equivalent
+`ALTER DATABASE` setting. This can lose recently acknowledged commits on a server
+or operating-system crash, without corruption. Ports and backups always commit
+durably. Runtime connections set session-level lock and statement timeouts to
+60 and 90 seconds, overriding role, database, and DSN startup settings. Connection
+waits allow 60 seconds and the synchronous bridge has a 120-second deadline.
+Port and restore materialization allow a one-hour statement timeout. See the
+[operator timeout guidance](/gateway/postgresql#updates-and-schema-migrations).
+
+The bridge reuses named prepared statements for parameterized SQL on each
+connection, retaining up to 256 SQL texts in least-recently-used order.
+Parameterless SQL uses the simple query protocol. Session state and statement
+names must remain bound to that connection, which requires session-mode poolers.
 
 PostgreSQL model-context navigation reads parse each selected transcript row once
 and keep intermediate projections as JSONB until the navigation and byte counts
 cross the database boundary. The read remains bounded by the context page, and
 PostgreSQL transcript writes do not precompute navigation envelopes.
+
+Clean resident-actor appends write the transcript projection and session-window
+mutation in one PostgreSQL statement. Each write still targets its own table
+inside the existing locked transaction; commit and receipt publication keep
+their original boundaries. Batch imports, dirty projections, and native callers
+retain their existing flush paths.
 
 ## Anchors and backups
 
@@ -626,6 +708,10 @@ PostgreSQL schema metadata must match the anchor's store UUID and expected schem
 version. Admission checks run once per physical store per process load, and
 workers and handles reuse the admitted facts. Confirmed commits and uncertain
 commit outcomes invalidate cached store facts through the anchor's write token.
+
+New agent anchors publish only after the server schema and agent identity commit.
+Reusing a retained anchor requires its initialized namespace to match; see
+[retained agent recovery](/gateway/postgresql#recover-a-retained-agent-store).
 
 When an agent worker is refused before opening its native writer, the host releases
 its prepared lease after native exit. The original refusal reaches its caller,
@@ -666,8 +752,11 @@ Updater admission and recovery commands retain their context, receipt, or explic
 path selection. QA fixtures, database tooling, and agent execution likewise keep
 their existing target owners.
 
-Gateway RPC commands defer local engine selection until paired-device authentication
-needs state. Loopback calls with shared credentials do not require database credentials.
+Gateway RPC commands defer local engine selection until authentication needs state.
+Loopback calls with inline or env/file/exec credentials do not require local state
+access. Store-backed `gateway.auth.*` refs use the configured state engine, so
+PostgreSQL state requires its connection SecretRef even for loopback calls.
+See the [store provider](/gateway/secrets/secretref-contract#store-provider).
 Runtime-intent service status and Gateway discovery also run without a database.
 Config validation reports source parse and include errors before selecting storage;
 valid config validation and config mutation previews still select the engine before
@@ -689,16 +778,16 @@ switch. See the canonical
 and [`engine opener`](https://github.com/openclaw/openclaw/blob/main/src/infra/database-engine/open.ts).
 
 Use `openclaw backup create` to capture PostgreSQL stores together with the
-SQLite stores that still hold the rest of the installation. PostgreSQL backup
-requires the Gateway stopped. If it is running, the command refuses: “stop
-through the service owner, then rerun.” It never stops the Gateway automatically.
-This requirement also applies to generic local snapshots and Git backups when
-their selected source is PostgreSQL. `openclaw backup sqlite` refuses a PostgreSQL
-anchor and directs you to `openclaw backup create`.
+SQLite stores that still hold the rest of the installation. It runs while the
+Gateway serves requests. Generic local snapshots and Git backups whose selected
+source is PostgreSQL require the Gateway stopped; if it is running, they refuse:
+“stop through the service owner, then rerun.” They never stop the Gateway
+automatically. `openclaw backup sqlite` refuses a PostgreSQL anchor and directs
+you to `openclaw backup create`.
 
 A PostgreSQL backup contains a portable SQLite export image, the original anchor,
 and a format-2 manifest. The export reads one `REPEATABLE READ READ ONLY` snapshot,
-then applies the existing user-backup sanitizer before compaction and hashing.
+including the store's sequence allocation facts, then applies the existing user-backup sanitizer before compaction and hashing.
 The manifest records the backup profile, engine, store UUID, schema versions,
 active fragments, allocation facts, artifact sizes, and hashes. It never records
 the connection DSN. Active optional fragments come from the source catalog,
@@ -776,6 +865,9 @@ current version. Homogeneous PostgreSQL installations include agent stores in
 preflight, exact capture, and custody-backed rollback, including retained registry
 paths. Family overrides also require successful candidate admission of the
 complete selection; global PostgreSQL support alone does not prove this.
+If PostgreSQL family lookup fails, preflight reports the database error and its
+remedy, such as the administrator SQL for missing `unaccent`. Connection details
+remain redacted; lookup failure does not imply a missing backup provider.
 
 Shared-state preflight reads registry, plugin installation, schema-version and
 retained-agent facts using the effective state engine. PostgreSQL inspection uses
@@ -832,7 +924,7 @@ engine does not add PostgreSQL support to an unported store.
 | Unreachable PostgreSQL server             | Check the DSN, network access, role permissions, and server availability.                               |
 | Store UUID mismatch                       | Restore the matching anchor and PostgreSQL schema; do not pair an anchor with another store.            |
 | Newer schema or missing forward migration | Use a compatible OpenClaw binary; reverse-port with that binary before a downgrade.                     |
-| Gateway running during PostgreSQL backup  | Stop through the service owner, then rerun the backup command.                                          |
+| Gateway running during PostgreSQL restore | Stop through the service owner, then rerun the command; `backup create` runs while the Gateway is up.   |
 | Update target lacks PostgreSQL support    | Stay on the current version or reverse-port with the current compatible binary before retrying.         |
 
 ## Observe database work

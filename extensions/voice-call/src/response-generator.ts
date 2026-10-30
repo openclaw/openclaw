@@ -38,13 +38,6 @@ type VoiceResponseParams = {
   onEarlyText?: (text: string) => Promise<boolean>;
 };
 
-type VoiceResponseResult = {
-  text: string | null;
-  /** Whether the complete response was handed to the transport before compaction. */
-  deliveredEarly: boolean;
-  error?: string;
-};
-
 type VoiceResponsePayload = {
   text?: string;
   isError?: boolean;
@@ -223,9 +216,7 @@ function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): str
   return `agent:${agentId}:${trimmed}`;
 }
 
-export async function generateVoiceResponse(
-  params: VoiceResponseParams,
-): Promise<VoiceResponseResult> {
+export async function generateVoiceResponse(params: VoiceResponseParams) {
   const {
     voiceConfig,
     callId,
@@ -265,7 +256,12 @@ export async function generateVoiceResponse(
           sessionKey: resolvedSessionKey,
         });
 
-        const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
+        const { provider, model } = resolveVoiceResponseModel({
+          cfg,
+          agentId,
+          voiceConfig,
+          agentRuntime,
+        });
         const configuredModel = resolveDefaultModelForAgent({ cfg, agentId });
 
         if (sessionEntry?.modelSelectionLocked === true && voiceConfig.responseModel) {
@@ -351,6 +347,7 @@ export async function generateVoiceResponse(
         const blockReplyPayloads: VoiceResponsePayload[] = [];
         let latestToolBoundaryMessageIndex: number | undefined;
         let blockReplyBoundariesReliable = true;
+        // Whether the complete response was handed to the transport before compaction.
         let deliveredEarly = false;
         let lastFlushedText: string | null = null;
 

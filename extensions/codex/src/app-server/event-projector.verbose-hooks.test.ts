@@ -24,14 +24,8 @@ registerCodexEventProjectorTestLifecycle();
 const hookRun = {
   id: "hook-1",
   eventName: "preToolUse",
-  handlerType: "command",
-  executionMode: "sync",
   scope: "turn",
-  source: "project",
-  sourcePath: "/repo/.codex/hooks.json",
   status: "running",
-  statusMessage: null,
-  entries: [],
 };
 
 describe("CodexAppServerEventProjector verbose output and hook projection", () => {
@@ -96,12 +90,10 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
       throw new Error("consumer failed");
     });
     const { projector } = await fixture.observe({ onAgentEvent });
-    await expect(
-      fixture.finish(projector, [
-        { type: "plan", id: "plan-1", text: "step one\nstep two" },
-        fixture.message("msg-1", "final answer"),
-      ]),
-    ).resolves.toBeUndefined();
+    await fixture.finish(projector, [
+      { type: "plan", id: "plan-1", text: "step one\nstep two" },
+      fixture.message("msg-1", "final answer"),
+    ]);
     const result = fixture.result(projector);
     expect(findAgentEvent(onAgentEvent, { stream: "plan" }).data.steps).toEqual([
       { step: "step one", status: "pending" },

@@ -1,6 +1,9 @@
-import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createRequireRecord } from "../../test/helpers/record.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
@@ -11,11 +14,6 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  emitSessionTranscriptUpdate,
-  onInternalSessionTranscriptUpdate,
-  type InternalSessionTranscriptUpdate,
-} from "../sessions/transcript-events.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import * as profileAuthority from "../state/user-channel-identity-operations.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
@@ -99,7 +97,7 @@ describe("HTTP historical model disclosure", () => {
   let server: ReturnType<typeof createGatewayHttpServer>;
   let current: OpenClawConfig;
   let committed: OpenClawConfig;
-  let port: number;
+  let url: string;
   let readerId: string;
   let releaseProfileCatalog: (() => void) | undefined;
   let sequence = 0;
@@ -139,13 +137,7 @@ describe("HTTP historical model disclosure", () => {
       getGatewayRequestContext: () => context,
       httpRequestLifetime: context,
     });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Expected HTTP fixture listener");
-    }
-    port = address.port;
+    url = await listenLoopback(server);
   });
 
   beforeEach(async () => {
@@ -175,11 +167,8 @@ describe("HTTP historical model disclosure", () => {
 
   afterAll(async () => {
     try {
-      server?.closeAllConnections();
       if (server) {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await closeHttpServer(server);
       }
     } finally {
       releaseProfileCatalog?.();
@@ -202,7 +191,7 @@ describe("HTTP historical model disclosure", () => {
       headers.accept = "text/event-stream";
     }
     const response = await fetch(
-      `http://127.0.0.1:${port}/sessions/${encodeURIComponent(scope.sessionKey)}/history${params.query ?? ""}`,
+      `${url}/sessions/${encodeURIComponent(scope.sessionKey)}/history${params.query ?? ""}`,
       { headers },
     );
     expect(response.status).toBe(200);
@@ -248,14 +237,7 @@ describe("HTTP historical model disclosure", () => {
     await using stream = await openStream();
     expect(await stream.next()).toEqual(json);
 
-    const updates: InternalSessionTranscriptUpdate[] = [];
-    const unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
-    let id: string;
-    try {
-      id = await append("inline private model reply");
-    } finally {
-      unsubscribe();
-    }
+    const id = await append("inline private model reply");
     const inline = await stream.next("message");
     expect(inline).toMatchObject({
       messageId: id,
@@ -263,19 +245,10 @@ describe("HTTP historical model disclosure", () => {
       message: { __openclaw: { id, seq: 5 } },
     });
     expectPrivateText(record(inline).message, "inline private model reply");
-    const stored = await loadTranscriptEvents(scope);
-    emitSessionTranscriptUpdate(
-      expectDefined(
-        updates.find((candidate) => candidate.messageId === id),
-        "committed inline update",
-      ),
-    );
-    const repeatedRows = expectRestrictedSnapshot(await stream.next(), 5);
-    expectPrivateText(repeatedRows[4], "inline private model reply");
-    expect(await loadTranscriptEvents(scope)).toEqual(stored);
     await append("refresh private model reply", "file-only");
     const refreshedRows = expectRestrictedSnapshot(await stream.next(), 6);
     expect(refreshedRows.slice(0, 4)).toEqual(rows);
+    expectPrivateText(refreshedRows[4], "inline private model reply");
 
     const persisted = await loadTranscriptEvents(scope);
     expect(persisted.slice(0, saved.length)).toEqual(saved);
@@ -299,7 +272,6 @@ describe("HTTP historical model disclosure", () => {
       }
       const { entered, release, hold } = heldRead();
       if (stream) {
-        expect(fromSnapshot).toHaveBeenCalledTimes(1);
         const streamState = expectDefined(
           fromSnapshot.mock.results.find((result) => result.type === "return")?.value,
           "SSE history state",

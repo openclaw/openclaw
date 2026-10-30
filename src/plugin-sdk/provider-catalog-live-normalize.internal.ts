@@ -2,6 +2,7 @@ import { normalizeUpstreamModelPricing } from "@openclaw/model-catalog-core/mode
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { commonPrefixLength } from "@openclaw/normalization-core/string-normalization";
 import { asBoolean } from "../utils/boolean.js";
 import { readParsedField } from "../utils/string-readers.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
@@ -171,15 +172,6 @@ function rowAdvertisesChatModel(
     return true;
   }
   return undefined;
-}
-
-function commonPrefixLength(left: string, right: string): number {
-  const limit = Math.min(left.length, right.length);
-  let index = 0;
-  while (index < limit && left[index] === right[index]) {
-    index += 1;
-  }
-  return index;
 }
 
 function findLiveModelTemplate(

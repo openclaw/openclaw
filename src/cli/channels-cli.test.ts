@@ -38,8 +38,10 @@ const runtimeMock = vi.hoisted(() => ({
   exit: vi.fn(),
 }));
 
-vi.mock("../plugins/bundled-package-channel-metadata.js", () => ({
-  listBundledPackageChannelMetadata: listBundledPackageChannelMetadataMock,
+vi.mock("../plugins/channel-catalog-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/channel-catalog-registry.js")>()),
+  listChannelCatalogEntries: () =>
+    listBundledPackageChannelMetadataMock().map((channel) => ({ channel })),
 }));
 
 vi.mock("../channels/plugins/catalog.js", () => ({

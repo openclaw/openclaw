@@ -83,6 +83,9 @@ async function dispatchThroughTestGateway(
     protocolRunId: runId,
     adapter: {},
   });
+  if (options?.expectFinal === true) {
+    options.onAccepted?.({ status: "accepted", runId });
+  }
   return await withSessionTurn(
     {
       sessionKey: controllerInput.mailbox.key,

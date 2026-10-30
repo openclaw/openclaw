@@ -45,9 +45,8 @@ export async function listKnownSessionStoreAgentIdsAsync(
 export async function resolveExistingAgentSessionStoreTargetsAsync(
   cfg: OpenClawConfig,
   agentId: string,
-  options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<readonly Readonly<SessionStoreTarget>[]> {
-  const request = prepareSessionStoreTargetInventory(cfg, [agentId], options.env);
+  const request = prepareSessionStoreTargetInventory(cfg, [agentId]);
   return prepareSessionStoreTargetInventoryRead(request).withRead(async (inventory) => {
     const selected = inventory.agents[0];
     if (

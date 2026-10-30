@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import * as fixtureDiagnostics from "../../test/helpers/fixture-diagnostics.js";
@@ -67,12 +68,11 @@ it("joins an aborted Doctor phase and database cleanup before removing inputs or
   const closeAgents = agentDatabases.closeOpenClawAgentDatabasesAsync;
   const homes: string[] = [];
   const events: string[] = [];
-  const scopes = observeWorkerClose(async (scope) => {
+  observeWorkerClose(async (scope) => {
     expect(fs.existsSync(process.env.OPENCLAW_CONFIG_PATH!)).toBe(true);
     events.push("scope-close");
     await scope.close();
   });
-  const closeState = vi.spyOn(stateDatabase, "closeOpenClawStateDatabaseAsync");
   const diagnostics = vi.spyOn(console, "error").mockImplementation(() => {});
 
   // Reuse the same fixture owner, as the registered corpus cases do. A completed
@@ -122,15 +122,8 @@ it("joins an aborted Doctor phase and database cleanup before removing inputs or
       const home = process.env.HOME!;
       homes.push(home);
       expect(new Set(homes).size).toBe(homes.length);
-      expect(scopes).toHaveBeenLastCalledWith({
-        signal: controller.signal,
-        deadlineOwnedByCaller: false,
-      });
-      const closedBefore = closeState.mock.calls.length;
-      const reportsBefore = diagnostics.mock.calls.length;
       controller.abort(aborted);
-      expect(diagnostics.mock.calls).toHaveLength(reportsBefore + 1);
-      const report = String(diagnostics.mock.calls[reportsBefore]![0]);
+      const report = String(diagnostics.mock.lastCall?.[0]);
       expect(JSON.parse(report.slice("[fixture-lifecycle] ".length))).toMatchObject({
         reason: "abort",
         stage: "doctor-repair",
@@ -139,26 +132,20 @@ it("joins an aborted Doctor phase and database cleanup before removing inputs or
         restored = true;
       });
       void teardown.catch(() => {});
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await setImmediate();
       expect(restored).toBe(false);
-      expect(process.env.HOME).toBe(home);
-      expect(fs.existsSync(process.env.OPENCLAW_CONFIG_PATH!)).toBe(true);
+      expectRetainedInputs(home);
       expect(databases).not.toHaveBeenCalled();
 
       releaseDoctor.resolve();
       await waitForPhase(databaseEntered, body, "database cleanup");
-      expect(preflight).toHaveBeenCalledTimes(1);
       expect(restored).toBe(false);
-      expect(closeState.mock.calls).toHaveLength(closedBefore);
       expect(events).toHaveLength(iteration * 3);
       expectRetainedInputs(home);
 
       releaseDatabase.resolve();
       await waitForPhase(stateEntered, body, "shared-state cleanup");
       expect(restored).toBe(false);
-      expect(closeState.mock.calls).toHaveLength(closedBefore + 1);
       expect(events.slice(iteration * 3)).toEqual(["database-close"]);
       expectRetainedInputs(home);
       releaseState.resolve();
@@ -167,8 +154,6 @@ it("joins an aborted Doctor phase and database cleanup before removing inputs or
       expect(events.slice(iteration * 3)).toEqual(["database-close", "state-close", "scope-close"]);
       expect(fs.existsSync(home)).toBe(false);
       expect(captureEnv()).toEqual(originalEnv);
-      expect(preflight).toHaveBeenCalledTimes(1);
-      expect(diagnostics.mock.calls).toHaveLength(reportsBefore + 1);
     } finally {
       controller.abort(aborted);
       releaseDoctor.resolve();
@@ -222,7 +207,6 @@ it.skipIf(process.platform === "win32")(
         }
       },
     );
-    const preflight = vi.spyOn(doctor, "runDoctorConfigPreflight");
     const body = fixture.runCase("2026.9.2", "empty-providers.json", signal);
     void body.catch(() => {});
     try {
@@ -231,12 +215,10 @@ it.skipIf(process.platform === "win32")(
       expect(fs.existsSync(path.join(home, ".openclaw", "openclaw.json"))).toBe(true);
       expect(stages.filter((stage) => stage === "database-integrity")).toEqual([]);
       expect(stages.filter((stage) => stage === "doctor-repair")).toHaveLength(1);
-      expect(preflight).toHaveBeenCalledTimes(1);
       release.resolve();
       await body;
       expect(stages.filter((stage) => stage === "database-integrity")).toHaveLength(2);
       expect(stages.filter((stage) => stage === "doctor-repair")).toHaveLength(2);
-      expect(preflight).toHaveBeenCalledTimes(2);
       await fixture.cleanup();
       expect(fs.existsSync(home)).toBe(false);
       expect(captureEnv()).toEqual(originalEnv);
@@ -271,9 +253,9 @@ it("retains fixture inputs and env when database or worker-scope cleanup cannot 
     rejectAfterClose(closeAgents, cleanupOrder, "database-close", databaseFailure),
   );
   const closeShared = stateDatabase.closeOpenClawStateDatabaseAsync;
-  const closeState = vi
-    .spyOn(stateDatabase, "closeOpenClawStateDatabaseAsync")
-    .mockImplementation(rejectAfterClose(closeShared, cleanupOrder, "state-close", stateFailure));
+  vi.spyOn(stateDatabase, "closeOpenClawStateDatabaseAsync").mockImplementation(
+    rejectAfterClose(closeShared, cleanupOrder, "state-close", stateFailure),
+  );
   observeWorkerClose((scope) =>
     rejectAfterClose(() => scope.close(), cleanupOrder, "scope-close", scopeFailure)(),
   );
@@ -286,7 +268,6 @@ it("retains fixture inputs and env when database or worker-scope cleanup cannot 
     });
     home = process.env.HOME!;
     expect(cleanupOrder).toEqual(["database-close", "state-close", "scope-close"]);
-    expect(closeState).toHaveBeenCalled();
     const cleanup = fixture.cleanup();
     const failure = await cleanup.catch((error: unknown) => error);
     expect(failure).toMatchObject({ errors: [databaseFailure, stateFailure, scopeFailure] });

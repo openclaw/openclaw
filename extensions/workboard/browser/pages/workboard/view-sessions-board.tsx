@@ -14,7 +14,6 @@ import type { SessionsBoardController } from "./sessions-board-controller.ts";
 import { cardRelativeTime } from "./view-card-time.tsx";
 import { boardScrollEdgesRef } from "./view-scroll-fade.ts";
 import { SessionStatusBadge, type SessionStatusPresentation } from "./view-session-status.tsx";
-import "../../styles/sessions-board.css";
 
 const PULL_REQUEST_STATE_PRIORITY = { open: 0, draft: 1, merged: 2, closed: 3 };
 

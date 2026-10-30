@@ -1,6 +1,8 @@
 import { getRuntimeConfig } from "../../../config/config.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
+import { retryAfterPluginReplacement } from "../../../plugins/plugin-replacement-retry.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import {
@@ -34,6 +36,7 @@ import type {
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
 
 export function createSubagentRegistryContextCleanup(config: {
   isEndedHookOwnerCurrent: (entry: SubagentRunRecord) => boolean;
@@ -41,13 +44,23 @@ export function createSubagentRegistryContextCleanup(config: {
   const endedHookInFlightOwners = new Set<object>();
   const endedHookEmittedOwners = new WeakSet<object>();
 
-  async function runContextEngineSubagentEnded(
+  /** Delivers once, again after a plugin reload that refused it, from the current registry. */
+  function runContextEngineSubagentEnded(
+    params: ContextEngineSubagentEndedParams,
+    options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
+  ): Promise<void> {
+    return retryAfterPluginReplacement(() => deliverContextEngineSubagentEnded(params, options));
+  }
+
+  async function deliverContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
     options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
   ): Promise<void> {
     const cfg = getRuntimeConfig();
     const registry = await loadSubagentRegistryPluginRuntimeHandle({
       config: cfg,
+      agentId: parseAgentSessionKey(params.childSessionKey)?.agentId,
+      agentDir: params.agentDir,
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       allowGatewaySubagentBinding: true,
     });
@@ -137,22 +150,24 @@ export function createSubagentRegistryContextCleanup(config: {
     if (!isCurrent()) {
       return false;
     }
-    const contextEnded = contextAlreadyEnded
-      ? true
-      : await tryContextEngineSubagentEnded(
-          {
-            childSessionKey: entry.childSessionKey,
-            reason: "deleted",
-            agentDir: entry.agentDir,
-            workspaceDir: entry.workspaceDir,
-          },
-          "context-engine collector cleanup failed",
-          { isCurrent },
-        );
-    if (!contextAlreadyEnded && contextEnded && isCurrent()) {
+    const isContextCurrent = () => isCurrent() && !shouldSuppressSubagentSessionEffects(entry);
+    const contextEnded =
+      contextAlreadyEnded || !isContextCurrent()
+        ? true
+        : await tryContextEngineSubagentEnded(
+            {
+              childSessionKey: entry.childSessionKey,
+              reason: "deleted",
+              agentDir: entry.agentDir,
+              workspaceDir: entry.workspaceDir,
+            },
+            "context-engine collector cleanup failed",
+            { isCurrent: isContextCurrent },
+          );
+    if (!contextAlreadyEnded && contextEnded && isContextCurrent()) {
       const runId = entry.runId;
       const assertCurrent = () => {
-        if (!isCurrent() || entry.runId !== runId) {
+        if (!isContextCurrent() || entry.runId !== runId) {
           throw new SubagentRegistryMutationRejectedError(
             "Collector cleanup address changed before persistence.",
           );
@@ -222,6 +237,8 @@ export function createSubagentRegistryContextCleanup(config: {
       const cfg = getRuntimeConfig();
       const registry = await loadSubagentRegistryPluginRuntimeHandle({
         config: cfg,
+        agentId: parseAgentSessionKey(entry.childSessionKey)?.agentId,
+        agentDir: entry.agentDir,
         ...(params.entry.workspaceDir ? { workspaceDir: params.entry.workspaceDir } : {}),
         allowGatewaySubagentBinding: true,
       });

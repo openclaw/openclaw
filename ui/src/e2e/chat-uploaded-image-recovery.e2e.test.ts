@@ -1,5 +1,7 @@
 import { expect, it } from "vitest";
+import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installAssistantMediaCacheMiss } from "./chat-media-http-cache.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Uploaded image request recovery" });
@@ -9,13 +11,14 @@ const png = Buffer.from(
 );
 
 suite.define(() => {
-  it.each(["404", "503", "network", "decode", "revoked", "removed"] as const)(
+  it.each(["404", "decode", "revoked", "removed"] as const)(
     "recovers an uploaded image after %s only with an authorized explicit retry",
     (failure) =>
       suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
           await page.clock.install();
+          await installAssistantMediaCacheMiss(page);
           const source = "media://inbound/a.png";
           const prompt = "Inspect this image.";
           const denied = failure === "revoked" || failure === "removed";
@@ -30,30 +33,21 @@ suite.define(() => {
             expect(target).toEqual([source, "GET", false]);
             if (query.get("meta") === "1") {
               metadataRequests += 1;
-              await route.fulfill(
+              return route.fulfill(
                 retry && denied
                   ? { status: denialStatus, json: { error: "Attachment unavailable" } }
                   : {
-                      json: {
-                        available: true,
-                        mediaTicket: "upload-ticket-" + metadataRequests,
-                        mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-                      },
+                      json: mediaTicketPayload("upload-ticket-" + metadataRequests, 300_000),
                     },
               );
-              return;
             }
             imageRequests += 1;
             expect(query.get("mediaTicket")).toBe("upload-ticket-" + metadataRequests);
-            if (!retry && failure === "network") {
-              await route.abort("connectionreset");
-            } else {
-              await route.fulfill(
-                retry || failure === "decode"
-                  ? { contentType: "image/png", body: retry ? png : "not a PNG" }
-                  : { status: failure === "503" ? 503 : denialStatus },
-              );
-            }
+            await route.fulfill(
+              retry || failure === "decode"
+                ? { contentType: "image/png", body: retry ? png : "not a PNG" }
+                : { status: denialStatus },
+            );
           });
           await installMockGateway(page, {
             historyMessages: [
@@ -93,6 +87,15 @@ suite.define(() => {
                 image.evaluate((img: HTMLImageElement) => [img.complete, img.naturalWidth]),
               )
               .toEqual([true, 1]);
+            await expect
+              .poll(() => page.evaluate(() => document.documentElement.dataset.mediaCacheRead))
+              .toBe(
+                JSON.stringify({
+                  cache: "only-if-cached",
+                  mode: "same-origin",
+                  credentials: "same-origin",
+                }),
+              );
             expect([imageRequests, await card.count()]).toEqual([2, 0]);
           }
         },

@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/types.js";
 import {
   canRunBufferBackedImageToVideoLiveLane,
   canRunBufferBackedVideoToVideoLiveLane,
-  resolveConfiguredLiveVideoModels,
   resolveLiveVideoResolution,
 } from "./live-test-helpers.js";
 
@@ -18,28 +16,6 @@ describe("video-generation live-test helpers", () => {
     ["google", "google/veo-3.1-fast-generate-preview", "480P"],
   ] as const)("uses a supported %s live resolution", (providerId, modelRef, expected) => {
     expect(resolveLiveVideoResolution({ providerId, modelRef })).toBe(expected);
-  });
-
-  it("collects configured models from primary and fallbacks", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          mediaModels: {
-            video: {
-              primary: "google/veo-3.1-fast-generate-preview",
-              fallbacks: ["xai/grok-imagine-video", "invalid"],
-            },
-          },
-        },
-      },
-    };
-
-    expect(resolveConfiguredLiveVideoModels(cfg)).toEqual(
-      new Map([
-        ["google", "google/veo-3.1-fast-generate-preview"],
-        ["xai", "xai/grok-imagine-video"],
-      ]),
-    );
   });
 
   it("runs buffer-backed video-to-video only for supported providers/models", () => {

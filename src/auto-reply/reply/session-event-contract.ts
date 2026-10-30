@@ -29,24 +29,17 @@ import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transc
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 
-type SessionEventSource =
-  | "exec"
-  | "node"
-  | "task"
-  | "hook"
-  | "restart"
-  | "session"
-  | "device"
-  | "plugin"
-  | "cron";
 export type SessionEventOutcome = {
   status: "completed" | "failed" | "cancelled";
   executionStarted: boolean;
   delivered: boolean;
+  /** The settled answer was committed by the existing conversation-result writer. */
+  conversationResultCommitted?: true;
   summary?: string;
   nextCheckMs?: number;
   sourceDeliveryOutcome?: SourceDeliveryOutcome;
-  automationResult?: CronRunTelemetry & Pick<CronRunOutcome, "replyDisposition" | "diagnostics">;
+  automationResult?: CronRunTelemetry &
+    Pick<CronRunOutcome, "replyDisposition" | "diagnostics" | "result">;
   /** Recorded controller restart outcome, before the error is flattened. */
   interruptedByRestart?: boolean;
   error?: string;
@@ -87,7 +80,20 @@ export type SessionEventTarget = {
 export type SessionEventOptions = {
   agentId: string;
   sessionKey: string;
-  source: SessionEventSource;
+  source:
+    | "exec"
+    | "node"
+    | "task"
+    | "hook"
+    | "restart"
+    | "session"
+    | "device"
+    | "plugin"
+    // A yielded tool's result resuming its own conversation; hidden from chat display.
+    | "tool_handoff"
+    | "cron"
+    // The scheduler's repair request for a failing job; hidden from chat display.
+    | "cron_failure_repair";
   contextKey?: string;
   /** Stable identity for durable host producers across restart handoffs. */
   sourceTurnId?: string;
@@ -107,10 +113,10 @@ export type SessionEventOptions = {
   scheduledAutomation?: ScheduledSessionAutomation;
   /** Failed promotion retains an existing passive occurrence until ordinary adoption begins. */
   preserveOccurrenceOnRejection?: true;
-  /** Internal: policy-change re-admission depth, bounded to stop publication storms. */
-  readmissionAttempt?: number;
   /** An explicitly silent source records its result without transport delivery. */
   deliver?: boolean;
+  /** Host-owned: runtime error payloads stay in the transcript, out of chat delivery. */
+  suppressErrorDelivery?: true;
   /** Host producer remains live through admission, execution and delivery. */
   assertCurrent?: () => void;
 };
@@ -128,6 +134,8 @@ export type ScheduledSessionAutomation = {
   modelFallbackPolicy?: {
     useSubagentFallbacks: boolean;
     inheritDefaultFallbacksForAgentStringModel: boolean;
+    /** Stored provenance when the turn uses the session's model selection. */
+    sessionModelOverrideSource?: "auto" | "user";
   };
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Original Control UI admin classification, revalidated by the restored operator source. */

@@ -48,7 +48,7 @@ const location = {
   agentId: "main",
   path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
 };
-const filter = { engineId: "test", isHeartbeat: false };
+const filter = { engineId: "test" };
 const publishLimits = { maxEvents: 10, maxBytes: 10_000 };
 const openFixture = memoryOwnerFixture(location, () => memorySessionActorOwners.reset());
 

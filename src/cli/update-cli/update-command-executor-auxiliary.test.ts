@@ -123,15 +123,19 @@ it.for(["initializing", "admitted"] as const)(
         assert(typeof options !== "number" && typeof options.input === "string");
         expect(Buffer.byteLength(options.input)).toBeGreaterThan(options.input.length);
         // Split the private frame deterministically; OS pipe writes may coalesce UTF-8 fragments.
-        const receiver = `
-          const inputParts = [];
-          for await (const part of process.stdin) inputParts.push(part);
-          const { Readable } = await import("node:stream");
-          Object.defineProperty(process, "stdin", { value: Readable.from(
-            [...Buffer.concat(inputParts)].map(byte => Buffer.from([byte]))
-          ) });
-        `;
-        return runCommand([...argv.slice(0, 3), receiver + argv[3], ...argv.slice(4)], options);
+        const receiver = path.join(root, "fragment-input.cjs");
+        fs.writeFileSync(
+          receiver,
+          `const { Readable } = require("node:stream");
+           const stdin = process.stdin;
+           const fragmented = Readable.from((async function* () {
+             for await (const part of stdin) {
+               for (const byte of part) yield Buffer.from([byte]);
+             }
+           })());
+           Object.defineProperty(process, "stdin", { value: fragmented });`,
+        );
+        return runCommand([argv[0]!, "--require", receiver, ...argv.slice(1)], options);
       });
     }
     await withOwner(async (fence, executor) => {
@@ -355,13 +359,12 @@ it.each(["empty", "extra", "malformed", "invalid-entry", "invalid-utf8", "nul"] 
       if (["malformed", "invalid-entry", "invalid-utf8"].includes(frame)) {
         expect(Buffer.byteLength(input)).toBe(Buffer.byteLength(options.input));
       }
-      const cleanup = `
-        const exitFs = await import("node:fs/promises");
-        process.once("beforeExit", async () => {
-          await exitFs.writeFile(${JSON.stringify(drained)}, "settled");
-        });
-      `;
-      return runCommand([...argv.slice(0, 3), cleanup + argv[3], ...argv.slice(4)], {
+      const cleanup = path.join(root, "observe-gate-exit.cjs");
+      fs.writeFileSync(
+        cleanup,
+        `process.once("beforeExit", () => require("node:fs").writeFileSync(${JSON.stringify(drained)}, "settled"));`,
+      );
+      return runCommand([argv[0]!, "--require", cleanup, ...argv.slice(1)], {
         ...options,
         input,
       }).then((result) => {
@@ -386,11 +389,7 @@ it.each([undefined, ""])("preserves absent or empty native payload options: %s",
   ]);
   const result = await runUtf8CommandWithTimeout(
     [
-      process.execPath,
-      "--input-type=module",
-      "-e",
-      gate.source,
-      "--",
+      ...gate.argv,
       nodeExecPath,
       "-e",
       `require('node:fs').writeFileSync(${JSON.stringify(effect)},JSON.stringify(process.env.NODE_OPTIONS ?? null));`,
@@ -475,7 +474,7 @@ it.each([
     const gate = prepareUpdateCommandNativeGate(ticket, sources, platform);
     expect(gate.env).toEqual(env);
     expect(JSON.parse(gate.input)).toEqual([ticket, entry]);
-    expect(gate.source).not.toContain("private");
+    expect(gate.argv.join(" ")).not.toContain("private");
     expect(sources).toEqual(before);
   },
 );

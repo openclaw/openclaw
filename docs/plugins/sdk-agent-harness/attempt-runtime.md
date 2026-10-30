@@ -263,7 +263,7 @@ observers. Tool execution and result middleware receive separate mutable inputs;
 terminal formatters retain their own post-execution capture so they can observe
 changes made by the tool without aliasing later middleware.
 `recordAgentHarnessToolResultTelemetry` collects host-tool delivery, media, TTS,
-cron, and heartbeat facts using the caller's prepared source-reply projection.
+and cron facts using the caller's prepared source-reply projection.
 The invocation preserves execution failures when presentation middleware
 rewrites a result. `recordAgentHarnessMessagingDelivery`
 records an already-confirmed messaging delivery, and
@@ -291,7 +291,9 @@ the private `openclaw/plugin-sdk/agent-harness-tool-runtime` around the host-bou
 before-call hooks have adjusted them, at the existing tool execution boundary.
 Use the shared schema validation helpers for the declared tool schema. Do not
 copy private validation markers or run a second before-call hook. Validation is
-scoped to the tool call and remains isolated from concurrent calls.
+scoped to the tool call and remains isolated from concurrent calls. Once `execute`
+settles, its validator is released. A later callback inheriting that completed
+call's validation scope is rejected rather than skipping validation.
 
 Retain accepted background work before middleware: `isAsyncStartedToolResult`
 and `readAsyncStartedTaskIds` from `openclaw/plugin-sdk/agent-harness-tool-runtime`

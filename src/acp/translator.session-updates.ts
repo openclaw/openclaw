@@ -1,8 +1,47 @@
 import type { AgentSideConnection, PromptRequest, SessionUpdate } from "@agentclientprotocol/sdk";
+import { THINKING_LEVELS_HELP } from "../auto-reply/thinking.shared.js";
 import { enqueueKeyedTask } from "../plugin-sdk/keyed-async-queue.js";
 import { createPendingPromiseTracker } from "../shared/pending-promises.js";
-import { getAvailableCommands } from "./commands.js";
 import type { AcpEventLedger, AcpEventLedgerReplay } from "./event-ledger.js";
+
+const AVAILABLE_COMMANDS = [
+  { name: "help", description: "Show help and common commands." },
+  { name: "commands", description: "List available commands." },
+  { name: "status", description: "Show current status." },
+  {
+    name: "context",
+    description: "Explain context usage (list|detail|json).",
+    input: { hint: "list | detail | json" },
+  },
+  { name: "whoami", description: "Show sender id (alias: /id)." },
+  { name: "id", description: "Alias for /whoami." },
+  { name: "subagents", description: "List or manage sub-agents." },
+  { name: "config", description: "Read or write config (owner-only)." },
+  { name: "debug", description: "Set runtime-only overrides (owner-only)." },
+  {
+    name: "usage",
+    description:
+      "Toggle usage footer (off|tokens|full|reset). 'reset'/'inherit'/'clear'/'default' clears the session override to re-inherit the configured default.",
+  },
+  { name: "stop", description: "Stop the current run." },
+  { name: "restart", description: "Restart the gateway (if enabled)." },
+  { name: "activation", description: "Set group activation (mention|always)." },
+  { name: "send", description: "Set send mode (on|off|inherit)." },
+  { name: "reset", description: "Reset the session (/new)." },
+  { name: "new", description: "Reset the session (/reset)." },
+  {
+    name: "think",
+    description: `Set thinking level (${THINKING_LEVELS_HELP}).`,
+  },
+  { name: "verbose", description: "Set verbose mode (on|full|off)." },
+  { name: "trace", description: "Set plugin trace mode (on|off)." },
+  { name: "reasoning", description: "Toggle reasoning output (on|off|stream)." },
+  { name: "elevated", description: "Toggle elevated mode (on|off)." },
+  { name: "model", description: "Select a model (list|status|<name>)." },
+  { name: "queue", description: "Adjust queue mode and options." },
+  { name: "bash", description: "Run a host command (if enabled)." },
+  { name: "compact", description: "Compact the session history." },
+];
 
 type AcpTranslatorSessionRef = {
   sessionId: string;
@@ -137,16 +176,24 @@ export class AcpTranslatorSessionUpdates {
         update: params.update,
       }),
     );
-    const recording =
-      params.record && params.sessionKey
-        ? this.recordLedgerUpdate({
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
-            ...(params.runId ? { runId: params.runId } : {}),
-            update: params.update,
-          })
-        : undefined;
+    let recording: Promise<void> | undefined;
+    if (params.record && params.sessionKey) {
+      const ledgerUpdate = {
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
+        ...(params.runId ? { runId: params.runId } : {}),
+        update: params.update,
+      };
+      recording = this.recordLedgerMutation(ledgerUpdate, "update", () =>
+        this.options.eventLedger.recordUpdate({
+          sessionId: resolveLedgerSessionId(ledgerUpdate),
+          sessionKey: ledgerUpdate.sessionKey,
+          ...(ledgerUpdate.runId ? { runId: ledgerUpdate.runId } : {}),
+          update: ledgerUpdate.update,
+        }),
+      );
+    }
     if (params.waitForDelivery === false) {
       void delivery.catch((err: unknown) => {
         this.options.log(`session update delivery failed for ${params.sessionId}: ${String(err)}`);
@@ -168,26 +215,9 @@ export class AcpTranslatorSessionUpdates {
       record: options.record,
       update: {
         sessionUpdate: "available_commands_update",
-        availableCommands: getAvailableCommands(),
+        availableCommands: AVAILABLE_COMMANDS,
       },
     });
-  }
-
-  private recordLedgerUpdate(params: {
-    sessionId: string;
-    sessionKey: string;
-    ledgerSessionId?: string;
-    runId?: string;
-    update: SessionUpdate;
-  }): Promise<void> {
-    return this.recordLedgerMutation(params, "update", () =>
-      this.options.eventLedger.recordUpdate({
-        sessionId: resolveLedgerSessionId(params),
-        sessionKey: params.sessionKey,
-        ...(params.runId ? { runId: params.runId } : {}),
-        update: params.update,
-      }),
-    );
   }
 
   private recordLedgerMutation(

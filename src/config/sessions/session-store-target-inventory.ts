@@ -3,6 +3,7 @@ import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
 import {
+  readDatabasePathIdentitySync,
   assertDatabasePathIdentity,
   assertExistingDatabaseIdentity,
 } from "../../infra/sqlite-worker-identity.js";
@@ -10,7 +11,12 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
+  readAgentDatabaseReadAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
+import {
+  isArtifactPreservingStateRead,
+  withArtifactPreservingStateReads,
+} from "../../state/artifact-preserving-state-reads.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawRegisteredAgentDatabase,
@@ -68,7 +74,34 @@ import {
   resolveConfiguredSessionStoreTargets,
 } from "./targets.js";
 
+export type SessionStoreTargetPreparationRequest =
+  | { storePath: string }
+  | { config: OpenClawConfig; agentIds: string[]; env: NodeJS.ProcessEnv };
+
+/** Only filesystem qualification runs before FIFO; content discovery remains ordered. */
+export function prepareSessionStoreTargetCandidates(request: SessionStoreTargetPreparationRequest) {
+  const inventory =
+    "storePath" in request
+      ? undefined
+      : prepareSessionStoreTargetInventory(request.config, request.agentIds, request.env);
+  const candidates = (
+    inventory?.candidates ??
+    captureSessionStoreReadCandidates("storePath" in request ? request.storePath : "")
+  ).map(({ path: pathname, physicalPath, scope, identity }) => ({
+    path: pathname,
+    physicalPath,
+    scope,
+    identity: scope ? identity : readDatabasePathIdentitySync(pathname),
+  }));
+  return {
+    kind: "session-target-prepare" as const,
+    candidates,
+    inventory: inventory && { ...inventory, candidates },
+  };
+}
+
 export type SessionStoreTargetReadRequest = {
+  preserveSourceArtifacts?: true;
   agentId?: string;
   defaultAgentId?: string;
   storePath: string;
@@ -101,6 +134,12 @@ class SessionStoreTargetDataReadError extends Error {
 export function readSessionStoreTargetResult(
   request: SessionStoreTargetReadRequest,
 ): Result<SessionStoreTargetReadResult, unknown> {
+  if (request.preserveSourceArtifacts) {
+    return withArtifactPreservingStateReads(
+      () => readSessionStoreTargetResult({ ...request, preserveSourceArtifacts: undefined }),
+      { agentDatabases: true },
+    );
+  }
   try {
     const target = resolveSqliteTargetFromSessionStorePath(request.storePath, {
       agentId: request.agentId,
@@ -195,13 +234,14 @@ export function captureSessionStoreWriteCandidates(storePath: string) {
 }
 
 export type SessionStoreTargetInventoryRequest = {
+  preserveSourceArtifacts?: true;
   selection?: "configured" | "recovery" | "known-owners";
   config: OpenClawConfig;
   agentIds: string[];
   env: NodeJS.ProcessEnv;
   paths: CapturedSessionStorePaths;
   candidates: SessionStoreReadCandidate[];
-  recoveryExclusions?: { agentIds: string[]; storePaths: string[] };
+  recoveryExclusions?: { agentIds: string[]; storePaths: string[]; databasePaths: string[] };
   registryDiscovery?: {
     agentIds: string[];
     roots: Array<{ path: string; physicalPath: string }>;
@@ -318,9 +358,11 @@ function isCurrentRegistrySourceGeneration(
 }
 
 type InventoryEnvironment = {
+  config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir: string;
   serialized: NodeJS.ProcessEnv;
+  configuredPaths?: CapturedSessionStorePaths;
 };
 let publishedInventoryEnvironment:
   | {
@@ -334,7 +376,7 @@ let publishedInventoryEnvironment:
 export function captureSessionStoreEnvironment(
   cfg: OpenClawConfig,
   inputEnv?: NodeJS.ProcessEnv,
-): InventoryEnvironment & { config: OpenClawConfig } {
+): InventoryEnvironment {
   const config = captureRuntimeConfig(cfg);
   const publication =
     inputEnv === undefined && cfg === getRuntimeConfigSnapshot()
@@ -352,6 +394,7 @@ export function captureSessionStoreEnvironment(
     env.OPENCLAW_STATE_DIR = stateDir;
     // Windows path resolution needs the proxy; worker requests need a plain snapshot.
     environment = {
+      config,
       env,
       stateDir,
       serialized: Object.freeze({ ...env, OPENCLAW_STATE_DIR: stateDir }),
@@ -361,7 +404,7 @@ export function captureSessionStoreEnvironment(
       publishedInventoryEnvironment = { config, publication, captured: environment };
     }
   }
-  return { config, ...environment };
+  return environment;
 }
 
 /** Capture locators and bounded families without reading SQLite or assigning an owner. */
@@ -370,14 +413,27 @@ export function prepareSessionStoreTargetInventory(
   inputAgentIds: readonly string[],
   inputEnv?: NodeJS.ProcessEnv,
   selection?: SessionStoreTargetInventoryRequest["selection"],
+  admission: "read" | "write" = "write",
 ): Omit<SessionStoreTargetInventoryRequest, "registeredDatabases"> {
-  const { config, env, stateDir, serialized } = captureSessionStoreEnvironment(cfg, inputEnv);
-  // Recovery skips unavailable stores before discovery can join their native opening.
+  const environment = captureSessionStoreEnvironment(cfg, inputEnv);
+  const { config, env, stateDir, serialized } = environment;
+  const capturePaths = (agentId: string) => ({
+    configured: resolveSessionStorePathCore(config.session?.store, { agentId, env }),
+    default: resolveSessionStorePathCore(undefined, { agentId, env }),
+  });
+  // Only logical configured paths follow config/env publication. Physical candidates
+  // and retired-owner discovery below must observe filesystem changes on every read.
+  const configuredPaths = (environment.configuredPaths ??= new Map(
+    listConfiguredSessionStoreAgentIds(config).map((agentId) => [agentId, capturePaths(agentId)]),
+  ));
+  // Background inventories skip unavailable stores before joining their native opening.
   // The preparing owner can still discover its own borrowed admission.
   const refusals =
-    selection === "recovery"
+    selection === "recovery" || selection === "configured"
       ? listAgentDatabaseAdmissionRefusals({ env }).filter((refusal) =>
-          readAgentDatabaseAdmissionRefusal(refusal.agentId, { env }),
+          admission === "read"
+            ? readAgentDatabaseReadAdmissionRefusal(refusal.agentId, { env })
+            : readAgentDatabaseAdmissionRefusal(refusal.agentId, { env }),
         )
       : [];
   const excludedAgentIds = new Set(refusals.map((refusal) => refusal.agentId));
@@ -386,14 +442,11 @@ export function prepareSessionStoreTargetInventory(
   );
   const excludedStorePaths: string[] = [];
   const agentIds = [...new Set(inputAgentIds.map(normalizeAgentId))];
-  const configured = listConfiguredSessionStoreAgentIds(config);
+  const configured = [...configuredPaths.keys()];
   const paths = new Map(
     [...new Set([...agentIds, ...configured])].map((agentId) => [
       agentId,
-      {
-        configured: resolveSessionStorePathCore(config.session?.store, { agentId, env }),
-        default: resolveSessionStorePathCore(undefined, { agentId, env }),
-      },
+      configuredPaths.get(agentId) ?? capturePaths(agentId),
     ]),
   );
   const perAgent = isPerAgentSessionStoreConfig(config.session?.store);
@@ -466,6 +519,7 @@ export function prepareSessionStoreTargetInventory(
     }
   }
   return {
+    ...(isArtifactPreservingStateRead("agent") ? { preserveSourceArtifacts: true as const } : {}),
     selection,
     config,
     agentIds,
@@ -476,6 +530,7 @@ export function prepareSessionStoreTargetInventory(
       ? {
           recoveryExclusions: {
             agentIds: [...excludedAgentIds],
+            databasePaths: [...excludedDatabasePaths],
             storePaths: excludedStorePaths,
           },
         }
@@ -526,6 +581,12 @@ function isSessionStoreRegistryDiscoveryPath(
 export function readSessionStoreTargetInventory(
   request: SessionStoreTargetInventoryRequest,
 ): SessionStoreTargetInventoryResult {
+  if (request.preserveSourceArtifacts) {
+    return withArtifactPreservingStateReads(
+      () => readSessionStoreTargetInventory({ ...request, preserveSourceArtifacts: undefined }),
+      { agentDatabases: true },
+    );
+  }
   const env = cloneEnvWithPlatformSemantics(request.env);
   const config = request.config;
   const cache: SessionStoreTargetsReadCache = new Map();
@@ -597,7 +658,9 @@ export function readSessionStoreTargetInventory(
         });
       } else {
         dedupeSessionStoreTargetsBySqliteTarget(
-          resolveConfiguredSessionStoreTargets(config, env, request.paths),
+          resolveConfiguredSessionStoreTargets(config, env, request.paths).filter(
+            (target) => !options.excludeTarget(target),
+          ),
           options,
         );
       }

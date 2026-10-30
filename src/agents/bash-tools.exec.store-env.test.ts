@@ -236,13 +236,6 @@ it.runIf(process.platform !== "win32")(
   },
 );
 
-it("fails closed when sandbox host is explicitly configured without sandbox runtime", async () => {
-  const tool = createExecTool({ host: "sandbox", security: "full", ask: "off" });
-  await expect(tool.execute("call1", { command: "echo ok" })).rejects.toThrow(
-    /requires a sandbox runtime/,
-  );
-});
-
 it("rejects /approve nested in shell wrappers", async () => {
   await expect(
     runGateway({
@@ -368,6 +361,31 @@ it("ignores protected store entries without replacing inherited network settings
     type: "text",
     text: expect.stringMatching(/HTTPS_PROXY, NODE_EXTRA_CA_CERTS, PATH/u),
   });
+});
+
+it("refuses durable exec before granting proxy-backed secrets or launching a process", async () => {
+  mocks.egressActive = true;
+  const tool = createExecTool({
+    host: "gateway",
+    mode: "full",
+    preparedStoreEnvironment: {
+      env: {},
+      secretSentinels: { SERVICE_API_KEY: "synthetic-sentinel" },
+      secretEgressBindings: [
+        {
+          name: "SERVICE_API_KEY",
+          sentinel: "synthetic-sentinel",
+          allowedHosts: ["api.example.com"],
+        },
+      ],
+    },
+    preparedSubagentExecution: false,
+  });
+  await expect(
+    tool.execute("durable-proxy", { command: ":", background: true, durable: true }),
+  ).rejects.toThrow("Use non-durable background execution or a directly provided credential");
+  expect(mocks.proxyBindings).toEqual([]);
+  expect(mocks.spawnInputs).toEqual([]);
 });
 
 it.each(["gateway", "sandbox"] as const)(

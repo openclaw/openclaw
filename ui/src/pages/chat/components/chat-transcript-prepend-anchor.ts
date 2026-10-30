@@ -11,7 +11,10 @@ export class TranscriptPrependAnchor {
   private firstMessageKey: string | undefined;
   private pending: (ChatTranscriptPrependAnchor & { measured: boolean }) | null = null;
 
-  constructor(private readonly messageElements: ReadonlyMap<string, HTMLElement>) {}
+  constructor(
+    private readonly messageElements: ReadonlyMap<string, HTMLElement>,
+    private readonly onLayoutCorrection: (before: number, after: number) => void,
+  ) {}
 
   /** Stable message identity used to resolve its row in the committed projection. */
   get messageKey(): string | null {
@@ -78,6 +81,7 @@ export class TranscriptPrependAnchor {
       element,
       virtualizer,
       this.messageElements.values(),
+      this.onLayoutCorrection,
     );
     if (anchor.measured && !changed && !moved) {
       this.pending = null;
@@ -154,6 +158,7 @@ function restoreTranscriptPrependAnchor(
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
   messageElements: Iterable<HTMLElement>,
+  onLayoutCorrection: (before: number, after: number) => void,
 ): boolean {
   if (!scrollElement) {
     return false;
@@ -171,14 +176,16 @@ function restoreTranscriptPrependAnchor(
     return false;
   }
   const maxOffset = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
-  const offset = Math.max(0, Math.min(maxOffset, scrollElement.scrollTop + delta));
+  const before = scrollElement.scrollTop;
+  const offset = Math.max(0, Math.min(maxOffset, before + delta));
   // A retained message can become unreachable at an edge when provisional rows retire.
   // Reissuing that clamped correction would keep the measurement loop alive forever.
-  if (Math.abs(offset - scrollElement.scrollTop) <= 1) {
+  if (Math.abs(offset - before) <= 1) {
     return false;
   }
   // Commit one measured message target through the scroll owner. This also
   // retires deferred row corrections already represented by the measured DOM.
   virtualizer.scrollToOffset(offset, { behavior: "instant" });
+  onLayoutCorrection(before, scrollElement.scrollTop);
   return true;
 }

@@ -19,6 +19,7 @@ import {
   admitPostgresCapabilities,
   postgresSchemaMetadataSql,
   getAdmittedPostgresSchema,
+  postgresStoreNamespace,
 } from "./postgres-schema.js";
 import { admitPostgresSearch } from "./postgres-search-schema.js";
 import type { DatabaseEngineInput } from "./types.js";
@@ -80,7 +81,7 @@ export function openEngineStore(ref: {
   /** Bind owner-local state inside the new anchor transaction before connecting. */
   onFreshAnchor?: (anchor: DatabaseSync) => void;
   admitPostgres?: (db: PostgresSqlConnection, fresh: boolean) => void;
-  beforeMigrate?: (db: EngineConnection, fromVersion: number) => void;
+  beforeMigrate?: AdmittedStore["beforeMigrate"];
   /** Family custody for schema writes; shared state defaults to its physical owner. */
   assertMigrationCurrent?: () => void;
   closeOnFailure?: (db: PostgresSqlConnection, error: unknown) => never;
@@ -145,7 +146,7 @@ export function openEngineStore(ref: {
       return { storeId: row.store_id, namespace: row.schema };
     }
     const storeId = randomUUID();
-    const namespace = `${ref.input!.schemaPrefix}_${schema.id}_${storeId.replaceAll("-", "").slice(0, 16)}`;
+    const namespace = postgresStoreNamespace(ref.input!.schemaPrefix, schema.id, storeId);
     anchor
       .prepare(
         "INSERT INTO openclaw_engine_anchor (store_id, engine, schema) VALUES (?, 'postgres', ?)",
@@ -178,7 +179,12 @@ export function openEngineStore(ref: {
   };
   try {
     const publishSearch = schema.search
-      ? admitPostgresSearch(db, schema.search, identity.namespace)
+      ? admitPostgresSearch(
+          db,
+          schema.search,
+          identity.namespace,
+          ref.existingVersion ? 1 : schema.postgresVectorSearchVersion,
+        )
       : undefined;
     if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
       admitPostgresCapabilities(db);
@@ -227,7 +233,14 @@ export function openEngineStore(ref: {
                 if (!source) {
                   throw new Error("Missing PostgreSQL source schema for inspection");
                 }
-                schema = { ...schema, ...source, version: Number(meta.version) };
+                schema = {
+                  ...schema,
+                  ...source,
+                  postgresVectorDecoderVersion: source.postgresVectorDecoderVersion,
+                  postgresVectorSearchVersion: source.postgresVectorSearchVersion,
+                  postgresTextSearchVersion: source.postgresTextSearchVersion,
+                  version: Number(meta.version),
+                };
               } else {
                 assertMigrationCurrent = ref.assertMigrationCurrent;
                 assertMigrationCurrent?.();
@@ -273,7 +286,12 @@ export function openEngineStore(ref: {
     // Publish against the committed schema revision, after bootstrap/migration settles.
     publishSearch?.();
     for (const extension of Object.values(getAdmittedPostgresSchema(db)?.searchExtensions ?? {})) {
-      admitPostgresSearch(db, extension, identity.namespace)?.();
+      admitPostgresSearch(
+        db,
+        extension,
+        identity.namespace,
+        schema.postgresVectorSearchVersion,
+      )?.();
     }
     return db;
   } catch (error) {

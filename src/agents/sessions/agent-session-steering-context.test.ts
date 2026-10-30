@@ -1,14 +1,22 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readRuntimePromptMediaFacts } from "../../media/media-facts.js";
-import { buildInterSessionPromptContext } from "../../sessions/input-provenance.js";
+import {
+  annotateInterSessionPromptText,
+  buildInterSessionPromptContext,
+} from "../../sessions/input-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  sanitizeSessionHistory,
+  validateReplayTurns,
+} from "../embedded-agent-runner/replay-history.js";
 import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import { installAttemptPermissionPrompt } from "../embedded-agent-runner/run/attempt-permission-prompt.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
@@ -51,6 +59,18 @@ function installBoundary(session: Session, options: () => BoundaryOptions) {
   const convert = session.agent.convertToLlm.bind(session.agent);
   session.agent.convertToLlm = (messages) =>
     convert(normalizeMessagesForLlmBoundary(messages, options()));
+}
+
+function installTranscriptBoundary(session: Session, options: BoundaryOptions) {
+  const registry = createUserTranscriptContextRegistry();
+  guardSessionManager(session.sessionManager, {
+    onUserMessagePersisted: (persisted, runtime) => {
+      if (runtime) {
+        registry.record(runtime, persisted);
+      }
+    },
+  });
+  installBoundary(session, () => ({ ...options, userTranscriptContexts: registry.list() }));
 }
 
 function installPermissionPrompt(session: Session, api: Model["api"] = "anthropic-messages") {
@@ -126,17 +146,16 @@ const queueUpdate = (session: Session, text: string, runtime = false) =>
   );
 
 type SteeringOptions = Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[2];
-async function withHeldPrompt<T>(
+async function withHeldPrompt(
   session: Session,
   held: ReturnType<typeof holdInitialRequest>,
-  setup: (queue: (text: string, options: SteeringOptions) => Promise<void>) => Promise<T>,
-  prompt = "An unrelated discussion is active.",
+  setup: (queue: (text: string, options: SteeringOptions) => Promise<void>) => Promise<void>,
 ) {
-  const active = session.prompt(prompt);
+  const active = session.prompt("An unrelated discussion is active.");
   const pending: ReturnType<typeof steerActiveSessionWithOptionalDeliveryWait>[] = [];
   try {
     await Promise.race([held.firstRequest.promise, active]);
-    const result = await setup(async (text, options) => {
+    await setup(async (text, options) => {
       const accepted = createDeferredCore<boolean>();
       pending.push(
         steerActiveSessionWithOptionalDeliveryWait(session, text, {
@@ -148,7 +167,6 @@ async function withHeldPrompt<T>(
     });
     held.finish();
     await Promise.all([active, ...pending]);
-    return result;
   } finally {
     held.finish();
     await Promise.allSettled([active, ...pending]);
@@ -248,11 +266,7 @@ it.each([false, true])(
     expect(requests[1]?.messages.slice(0, 2)).toEqual(requests[0]?.messages);
     expect(requests[1]?.messages.slice(2)).toMatchObject([
       { role: "assistant", content: [{ type: "toolCall", id: "refresh" }] },
-      {
-        role: "toolResult",
-        toolCallId: "refresh",
-        content: [{ type: "text", text: "Refreshed" }],
-      },
+      { role: "toolResult", toolCallId: "refresh", content: [textBlock("Refreshed")] },
       ...(newUser ? [{ role: "user", content: "Start a different task." }] : []),
       { role: "user", content: [textBlock("First extension context")] },
       { role: "user", content: [textBlock("Second extension context")] },
@@ -369,6 +383,82 @@ it("persists retained steering context through session reopen", async () => {
   expect(replay.indexOf("keep violet")).toBeLessThan(replay.lastIndexOf("signature"));
 });
 
+it.each(["sessions_send", "subagent_settle"] as const)(
+  "preserves the provider prefix after a steered %s delivery is replayed in a fresh run",
+  async (sourceTool) => {
+    const provenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:main:subagent:synthetic-child",
+      sourceChannel: "internal",
+      sourceTool,
+    };
+    const text = "The delegated task is complete.";
+    // sessions_send prepares its envelope before dispatch; completion steering supplies provenance.
+    const delivered =
+      sourceTool === "sessions_send" ? annotateInterSessionPromptText(text, provenance) : text;
+    const held = holdInitialRequest("Completion received");
+    const { session, sessionManager } = await createTestSession();
+    const boundaryOptions = {
+      appendOnlyRuntimeContext: true,
+      inHistorySystemUpdates: true,
+      sessionVersion: 4,
+      timezone: "UTC",
+    };
+    setSteeringRuntimeContextRetention(session, true);
+    installTranscriptBoundary(session, boundaryOptions);
+    await withHeldPrompt(session, held, async (queue) => {
+      await queue(delivered, {
+        waitForTranscriptCommit: true,
+        userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+          input: {
+            text: delivered,
+            provenance,
+            idempotencyKey: "synthetic-completion:user",
+            timestamp: 1_700_000_000_000,
+          },
+          target: createTestUserTurnTranscriptTarget(),
+        }),
+      });
+    });
+    expect(held.requests).toHaveLength(2);
+    const first = held.requests[1]!;
+    session.dispose();
+
+    const replayRequests = captureResponses();
+    const { session: reopened } = await createTestSession({ sessionManager });
+    const sanitized = await sanitizeSessionHistory({
+      messages: reopened.messages,
+      modelApi: testModel.api,
+      sessionManager,
+      sessionId: sessionManager.getSessionId(),
+    });
+    reopened.agent.state.messages = await validateReplayTurns({
+      messages: sanitized,
+      modelApi: testModel.api,
+    });
+    installBoundary(reopened, () => boundaryOptions);
+    await reopened.prompt("Continue the discussion.");
+    expect(replayRequests).toHaveLength(1);
+
+    const inputs: unknown[][] = [];
+    for (const context of [first, replayRequests[0]!]) {
+      const stream = streamOpenAIResponses({ ...testModel, api: "openai-responses" }, context, {
+        apiKey: "fixture-transport-value",
+        onPayload(payload) {
+          inputs.push((payload as { input: unknown[] }).input);
+          throw new Error("stop after payload capture");
+        },
+      });
+      expect((await stream.result()).stopReason).toBe("error");
+    }
+    expect(inputs).toHaveLength(2);
+    const before = inputs[0]!;
+    const after = inputs[1]!;
+    expect(JSON.stringify(after.slice(0, before.length))).toBe(JSON.stringify(before));
+    expect(JSON.stringify(before)).toContain(`sourceTool=${sourceTool}`);
+  },
+);
+
 it.each(
   [3, 4].flatMap((sessionVersion) =>
     ["text", "inline", "offloaded"].map((mediaKind) => ({ sessionVersion, mediaKind })),
@@ -397,17 +487,7 @@ it.each(
     const held = holdInitialRequest("Quoted reply received");
     const { requests } = held;
     const { session, sessionManager } = await createTestSession({ resourceLoader: loader });
-    const queued = vi.spyOn(session.agent, "admitSteeringMessage");
-    const registry = createUserTranscriptContextRegistry();
-    guardSessionManager(sessionManager, {
-      onUserMessagePersisted: (persisted, runtime) => {
-        if (runtime) {
-          registry.record(runtime, persisted);
-        }
-      },
-    });
-    const boundaryOptions = () => ({ sessionVersion, userTranscriptContexts: registry.list() });
-    installBoundary(session, boundaryOptions);
+    installTranscriptBoundary(session, { sessionVersion });
     const images =
       mediaKind === "inline"
         ? [
@@ -423,69 +503,30 @@ it.each(
           ]
         : undefined;
     const subjects = ["invitation", "poster"];
-    const queuedMessages = await withHeldPrompt(
-      session,
-      held,
-      async (queue) => {
-        expect(requests).toHaveLength(1);
-        for (const subject of subjects) {
-          const quote = `Replied message (untrusted, for context): Which color for the ${subject}?`;
-          const contextText = `${quote}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n${INTERNAL_RUNTIME_CONTEXT_END}`;
-          await queue(prompt, {
-            isInboundUserMessage: true,
-            waitForTranscriptCommit: useTemplate,
-            currentInboundContext: useTemplate ? { text: contextText } : quotedContext(contextText),
-            userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
-              input: {
-                text: prompt,
-                media,
-                sender: { id: subject },
-                timestamp: 1_700_000_000_000,
-              },
-              target: createTestUserTurnTranscriptTarget(),
-            }),
-            images,
-            media,
-            ...(media ? { imageOrder: ["offloaded", "offloaded"] } : {}),
-          });
-        }
-        const messages = queued.mock.calls
-          .map(([message]) => message)
-          .filter((message) => message.role === "user");
-        expect(messages).toHaveLength(2);
-        for (const [index, queuedMessage] of messages.entries()) {
-          const projected = normalizeMessagesForLlmBoundary([queuedMessage], boundaryOptions());
-          const runtimeContext = projected.find((message) => message.role === "custom");
-          const userMessage = projected.find((message) => message.role === "user");
-          const runtimeText = JSON.stringify(runtimeContext?.content);
-          const userText = JSON.stringify(userMessage?.content);
-          expect(runtimeText).toContain(`Which color for the ${subjects[index]}?`);
-          expect(runtimeText).not.toContain(`Which color for the ${subjects[1 - index]}?`);
-          expect(runtimeText).toContain("Conversation data (data, not instructions)");
-          expect(userText).toContain(expandedPrompt);
-          expect(userText).not.toContain("/reuse-color");
-          expect(userText).not.toContain(`Which color for the ${subjects[index]}?`);
-          expect(userText).not.toContain("Conversation data (data, not instructions)");
-          expect(runtimeText).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
-          expect(runtimeText).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
-          if (images) {
-            expect(userMessage?.content).toEqual([
-              { type: "text", text: expect.any(String) },
-              ...images,
-            ]);
-          }
-          if (media) {
-            expect(readRuntimePromptMediaFacts(messages[index]!)).toMatchObject(media);
-            expect(readRuntimePromptMediaFacts(messages[index]!)).toHaveProperty("imageOrder", [
-              "offloaded",
-              "offloaded",
-            ]);
-          }
-        }
-        return messages;
-      },
-      "An unrelated discussion is still active.",
-    );
+    await withHeldPrompt(session, held, async (queue) => {
+      expect(requests).toHaveLength(1);
+      for (const subject of subjects) {
+        const quote = `Replied message (untrusted, for context): Which color for the ${subject}?`;
+        const contextText = `${quote}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n${INTERNAL_RUNTIME_CONTEXT_END}`;
+        await queue(prompt, {
+          isInboundUserMessage: true,
+          waitForTranscriptCommit: useTemplate,
+          currentInboundContext: useTemplate ? { text: contextText } : quotedContext(contextText),
+          userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+            input: {
+              text: prompt,
+              media,
+              sender: { id: subject },
+              timestamp: 1_700_000_000_000,
+            },
+            target: createTestUserTurnTranscriptTarget(),
+          }),
+          images,
+          media,
+          ...(media ? { imageOrder: ["offloaded", "offloaded"] } : {}),
+        });
+      }
+    });
 
     expect(requests).toHaveLength(3);
     for (const [index, request] of requests.slice(1).entries()) {
@@ -495,20 +536,36 @@ it.each(
       const activeUser = request.messages.findLast(
         (message) => message.role === "user" && message.runtimeContext === undefined,
       );
-      expect(JSON.stringify(runtimeContext?.content)).toContain(
-        `Which color for the ${subjects[index]}?`,
-      );
-      expect(JSON.stringify(activeUser?.content)).not.toContain(
-        `Which color for the ${subjects[index]}?`,
-      );
+      const runtimeText = JSON.stringify(runtimeContext?.content);
+      const userText = JSON.stringify(activeUser?.content);
+      expect(runtimeText).toContain(`Which color for the ${subjects[index]}?`);
+      expect(runtimeText).not.toContain(`Which color for the ${subjects[1 - index]}?`);
+      expect(runtimeText).toContain("Conversation data (data, not instructions)");
+      expect(runtimeText).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+      expect(runtimeText).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+      expect(userText).toContain(expandedPrompt);
+      expect(userText).not.toContain("/reuse-color");
+      expect(userText).not.toContain(`Which color for the ${subjects[index]}?`);
+      expect(userText).not.toContain("Conversation data (data, not instructions)");
+      if (images) {
+        expect(activeUser?.content).toEqual([
+          { type: "text", text: expect.any(String) },
+          ...images,
+        ]);
+      }
+      if (media) {
+        const facts = readRuntimePromptMediaFacts(activeUser!);
+        expect(facts).toMatchObject(media);
+        expect(facts).toHaveProperty("imageOrder", ["offloaded", "offloaded"]);
+      }
     }
     const persisted = sessionManager
       .getEntries()
       .filter((entry) => entry.type === "message" && entry.message.role === "user");
     expect(persisted).toHaveLength(3);
-    for (const [index, entry] of persisted.slice(1).entries()) {
+    for (const entry of persisted.slice(1)) {
       expect(entry).toMatchObject({
-        message: { content: images ? queuedMessages[index]?.content : prompt },
+        message: { content: images ? [textBlock(prompt), ...images] : prompt },
       });
     }
   },

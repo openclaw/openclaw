@@ -13,11 +13,11 @@ import type {
   SessionBranchSwitchMutationResult,
   SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
-import { mutateSessionAtMessageWithPreconditions } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
+import { mutateSqliteSessionAtMessage } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
-  withSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -67,6 +67,8 @@ import { prepareRewindRepositoryEntries } from "./session-rewind-repository-entr
 import { waitForTerminalSessionRunSettlement } from "./session-run-settlement.js";
 import { listSessionBranchesForGateway } from "./sessions-branches-list.js";
 import {
+  createLocalMessageCutGuards,
+  EXTERNAL_CONVERSATION_ERROR,
   prepareUpstreamForkCurrentGuard,
   resolveUpstreamForkHarness,
 } from "./sessions-fork-runtime-guard.js";
@@ -79,9 +81,6 @@ type MessageCutMutationResult =
   | SessionMessageCutMutationResult
   | SessionBranchSwitchMutationResult
   | { status: "conflict" };
-
-const EXTERNAL_CONVERSATION_ERROR =
-  "Session history changes are unavailable because this session is owned by an external agent harness.";
 
 export const sessionRewindHandlers: GatewayRequestHandlers = {
   "sessions.branches.list": defineValidatedGatewayHandler(
@@ -502,18 +501,15 @@ async function mutatePreparedSessionAtMessage({
         sessionStoreKey: current.canonicalKey,
         storePath: current.storePath,
       };
-      const upstreamChanged = new SessionMutationAuthorizationChangedError(
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          action === "fork" ? "Session changed; retry fork." : EXTERNAL_CONVERSATION_ERROR,
-        ),
-      );
-      const assertLocalUpstreamCurrent = () => {
-        if (preparedUpstream.current()) {
-          throw upstreamChanged;
-        }
-      };
+      const localGuards = createLocalMessageCutGuards({
+        action,
+        context,
+        hasUpstream: () => preparedUpstream.current(),
+      });
       try {
+        if (action === "fork" && current.entry.visibility === "draft") {
+          localGuards.assertForkVisibilityAllowed("draft");
+        }
         if (action === "fork" && current.entry.repositoryWorkspaceId) {
           const repositories = getSessionRepositoryWorkspaceStore();
           const repositorySource = captureOpenClawStateWorkerContext({ path: repositories.path });
@@ -535,7 +531,7 @@ async function mutatePreparedSessionAtMessage({
           };
           const assertRepositoryCurrent = () => {
             assertRepositoryOwnerCurrent();
-            assertLocalUpstreamCurrent();
+            localGuards.assertUpstreamCurrent();
             const sourceEntry = repositoryEntries?.readSource();
             if (
               sourceEntry?.sessionId !== initialSessionId ||
@@ -568,19 +564,20 @@ async function mutatePreparedSessionAtMessage({
           forkWorkspace: forkWorkspace?.value,
           creation: { ...creation, sandbox },
         };
-        result = await mutateSessionAtMessageWithPreconditions(
+        result = await mutateSqliteSessionAtMessage(
           action === "fork" ? forkParams : { ...mutationParams, entryId },
           action,
           memory ? undefined : expectedState,
           {
             sourceRepositoryWorkspaceId: forkRepository?.sourceWorkspaceId,
-            assertUpstreamCurrent: assertLocalUpstreamCurrent,
+            assertUpstreamCurrent: localGuards.assertUpstreamCurrent,
+            assertForkVisibilityAllowed: localGuards.assertForkVisibilityAllowed,
           },
         );
         repositoryForkCommitted = result.status === "created";
       } catch (error) {
-        if (error === upstreamChanged) {
-          respond(false, undefined, upstreamChanged.error);
+        if (error === localGuards.upstreamChanged) {
+          respond(false, undefined, localGuards.upstreamChanged.error);
           return;
         }
         if (error instanceof SessionMutationAuthorizationChangedError) {

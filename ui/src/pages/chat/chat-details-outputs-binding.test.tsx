@@ -2,47 +2,39 @@
 
 import { createSignal, flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
-import type { ArtifactSummary } from "../../../../packages/gateway-protocol/src/schema/artifacts.js";
 import { ValueSignal } from "../../lib/board/provider-signals.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
-import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import {
   createDetailsOutputsBinding,
   projectDetailsOutputs,
 } from "./chat-details-outputs-binding.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
-import { createGatewayBrowserClientFixture, createTestChatPane } from "./chat-pane.test-support.ts";
-import type { ChatDetailsOutputs } from "./components/chat-details-types.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { ChatOutputsDesktop, ChatOutputsMobile } from "./components/chat-outputs.tsx";
 import { getSessionWorkspace } from "./components/chat-session-workspace-state.ts";
 
 function boardFixture(sessionKey: string, initiallyLoaded = false) {
-  let loaded = initiallyLoaded;
   const mock = createMockBoardProvider(sessionKey);
-  const snapshot$ = new ValueSignal<ResolvedBoardView["snapshot"]>({
-    ...mock.snapshot$.value,
-    tabs: [],
-    widgets: [],
-  });
-  const loadError$ = new ValueSignal<string | null>(null);
+  const provider = {
+    ...mock,
+    hasLoadedSnapshot: initiallyLoaded,
+    snapshot$: new ValueSignal<ResolvedBoardView["snapshot"]>({
+      ...mock.snapshot$.value,
+      tabs: [],
+      widgets: [],
+    }),
+    loadError$: new ValueSignal<string | null>(null),
+  };
   return {
-    provider: {
-      ...mock,
-      snapshot$,
-      loadError$,
-      get hasLoadedSnapshot() {
-        return loaded;
-      },
-    },
-    fail() {
-      loadError$.set("Dashboard request failed");
-    },
+    provider,
+    fail: () => provider.loadError$.set("Dashboard request failed"),
     resolve(withContent = false) {
-      loaded = true;
-      snapshot$.set(withContent ? mock.snapshot$.value : snapshot$.value);
-      loadError$.set(null);
+      provider.hasLoadedSnapshot = true;
+      provider.snapshot$.set(withContent ? mock.snapshot$.value : provider.snapshot$.value);
+      provider.loadError$.set(null);
     },
   };
 }
@@ -50,26 +42,18 @@ function boardFixture(sessionKey: string, initiallyLoaded = false) {
 function mountOutputs(
   options: { desktop?: boolean; acquired?: boolean; loaded?: boolean; files?: boolean } = {},
 ) {
-  const request = vi.fn<GatewayRequestHandler>(async () => ({}));
-  const { pane, state } = createTestChatPane({
-    client: createGatewayBrowserClientFixture({ request }),
-  });
+  const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
   const workspace = getSessionWorkspace(state);
-  const artifact: ArtifactSummary = {
-    id: "report",
-    type: "file",
-    title: "Report.txt",
-    download: { mode: "bytes" },
-  };
   workspace.assistantArtifacts = {
-    items: options.files ? [artifact] : [],
+    items: options.files
+      ? [{ id: "report", type: "file", title: "Report.txt", download: { mode: "bytes" } }]
+      : [],
     resolved: true,
     loaded: true,
     loading: false,
     error: null,
   };
   let board = boardFixture(state.sessionKey, options.loaded);
-  let acquired = options.acquired ?? true;
   const readBoard = (): ResolvedBoardView => ({
     provider: board.provider,
     snapshot: board.provider.snapshot$.value,
@@ -88,16 +72,13 @@ function mountOutputs(
     readBoard,
     showDashboard: openDashboard,
   };
-  let binding = createDetailsOutputsBinding(context, state, workspace, board.provider, acquired);
-  const icons = { renderArtifactIcon: () => null, renderViewAllIcon: () => null };
-  const read = () => projectDetailsOutputs(binding, workspace, readBoard(), icons).outputs!;
-  const openArtifact = vi.fn();
-  const [outputs, setOutputs] = createSignal<ChatDetailsOutputs>({
-    ...read(),
-    onOpenArtifact: openArtifact,
-  });
+  const bind = (acquired = true) =>
+    createDetailsOutputsBinding(context, state, workspace, board.provider, acquired);
+  let binding = bind(options.acquired);
+  const read = () => projectDetailsOutputs(binding, workspace, readBoard()).outputs!;
+  const [outputs, setOutputs] = createSignal(read());
   const draw = () => {
-    setOutputs({ ...read(), onOpenArtifact: openArtifact });
+    setOutputs(read());
     flush();
   };
   const view = mountSolid(() =>
@@ -109,9 +90,16 @@ function mountOutputs(
   });
   return {
     ...view,
-    request,
-    openArtifact,
     openDashboard,
+    button: (name: string) => view.getByRole("button", { name }),
+    status: (text?: string) =>
+      waitForSolid(() => {
+        if (text) {
+          expect(view.getByRole("status").textContent).toContain(text);
+        } else {
+          expect(view.queryByRole("status")).toBeNull();
+        }
+      }),
     fail() {
       board.fail();
       draw();
@@ -122,8 +110,7 @@ function mountOutputs(
     },
     acquire() {
       binding.stop();
-      acquired = true;
-      binding = createDetailsOutputsBinding(context, state, workspace, board.provider, acquired);
+      binding = bind();
       draw();
     },
     replace() {
@@ -131,7 +118,7 @@ function mountOutputs(
       binding.stop();
       board = boardFixture(state.sessionKey, true);
       board.resolve(true);
-      binding = createDetailsOutputsBinding(context, state, workspace, board.provider, true);
+      binding = bind();
       draw();
       return previous;
     },
@@ -143,9 +130,7 @@ function mountOutputs(
 
 it("waits for acquisition even when the initial provider reports a loaded empty snapshot", async () => {
   const view = mountOutputs({ acquired: false, loaded: true });
-  await waitForSolid(() =>
-    expect(view.getByRole("status").textContent).toContain("Loading dashboard"),
-  );
+  await view.status("Loading dashboard");
   expect(view.queryByText("No outputs yet")).toBeNull();
   view.acquire();
   await waitForSolid(() => expect(view.queryByText("Loading dashboard…")).toBeNull());
@@ -156,33 +141,26 @@ it.each([false, true])(
   "keeps files usable through dashboard failure and owner recovery (desktop=%s)",
   async (desktop) => {
     const view = mountOutputs({ desktop, files: true });
-    await waitForSolid(() => expect(view.getByRole("button", { name: "Report.txt" })).toBeTruthy());
-    view.getByRole("button", { name: "Report.txt" }).click();
-    expect(view.openArtifact).toHaveBeenCalledWith("report");
+    await waitForSolid(() => expect(view.button("Report.txt")).toBeTruthy());
     view.fail();
-    await waitForSolid(() =>
-      expect(view.getByRole("status").textContent).toContain("Dashboard request failed"),
-    );
+    await view.status("Dashboard request failed");
     expect(view.queryByRole("button", { name: "Retry" })).toBeNull();
-    expect(view.getByRole("button", { name: "Report.txt" })).toBeTruthy();
+    expect(view.button("Report.txt")).toBeTruthy();
     view.resolve(true);
-    await waitForSolid(() => expect(view.queryByRole("status")).toBeNull());
-    view.getByRole("button", { name: "Overview" }).click();
+    await view.status();
+    view.button("Overview").click();
     expect(view.openDashboard).toHaveBeenCalledOnce();
-    expect(view.request.mock.calls.filter(([method]) => method === "board.get")).toHaveLength(0);
   },
 );
 
 it("keeps dashboard readiness alive when Files demand is released and retires pending providers", async () => {
   const view = mountOutputs();
   view.retainAndReleaseFiles();
-  await waitForSolid(() =>
-    expect(view.getByRole("status").textContent).toContain("Loading dashboard"),
-  );
+  await view.status("Loading dashboard");
   const previous = view.replace();
-  await waitForSolid(() => expect(view.getByRole("button", { name: "Overview" })).toBeTruthy());
+  await waitForSolid(() => expect(view.button("Overview")).toBeTruthy());
   previous.fail();
   previous.resolve();
-  await waitForSolid(() => expect(view.queryByRole("status")).toBeNull());
-  expect(view.getByRole("button", { name: "Overview" })).toBeTruthy();
+  await view.status();
+  expect(view.button("Overview")).toBeTruthy();
 });

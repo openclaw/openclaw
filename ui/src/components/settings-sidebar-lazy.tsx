@@ -6,7 +6,6 @@ import type { SettingsSidebarProps } from "./settings-sidebar.tsx";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 
-type SettingsSidebarModule = typeof import("./settings-sidebar-shell.tsx");
 const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
   export: "ShellSettingsSidebar",
 });
@@ -21,7 +20,7 @@ export type SettingsSidebarFallbackProps = Pick<
 > & { canAdmin: boolean };
 
 export function LazySettingsSidebar(
-  props: Parameters<SettingsSidebarModule["ShellSettingsSidebar"]>[0],
+  props: Parameters<typeof import("./settings-sidebar-shell.tsx").ShellSettingsSidebar>[0],
 ) {
   // Observe the lazy content while Errored retains its fallback during a retry.
   const content = children(() => (

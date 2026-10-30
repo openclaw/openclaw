@@ -23,12 +23,46 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { mockDocumentVisibility } from "../test-helpers/mock-cleanup.ts";
 import { setStoredSessionCatalogHidden } from "./app-sidebar-session-types.ts";
 import "./app-sidebar.tsx";
 
 async function settle(sidebar: SidebarLifecycleState) {
   await vi.advanceTimersByTimeAsync(0);
   await settleLitElement(sidebar);
+}
+
+async function advance(sidebar: SidebarLifecycleState, milliseconds: number) {
+  await vi.advanceTimersByTimeAsync(milliseconds);
+  await settle(sidebar);
+}
+
+async function refresh(sidebar: SidebarLifecycleState, timers = true) {
+  await sidebar.sessionData.refreshSessionCatalogs();
+  await (timers ? settle(sidebar) : settleLitElement(sidebar));
+}
+const catalogError = (sidebar: SidebarLifecycleState) =>
+  sidebar.querySelector('[data-session-catalog-error="codex"]');
+function expectCatalogEmpty(sidebar: SidebarLifecycleState) {
+  expect(
+    sidebar.querySelector('[data-session-section="catalog:codex"] .sidebar-recent-sessions__list')
+      ?.childElementCount,
+  ).toBe(0);
+}
+
+function statusPage(scope: "host" | "catalog", status: "pending" | "error") {
+  const page = catalogPage([]);
+  const catalog = page.catalogs[0]!;
+  const target = scope === "host" ? catalog.hosts[0]! : catalog;
+  if (status === "pending") {
+    target.pending = true;
+  } else {
+    target.error = { code: "UNAVAILABLE", message: "Discovery failed" };
+  }
+  if (scope === "catalog") {
+    catalog.hosts = [];
+  }
+  return page;
 }
 
 function catalogParams(value: unknown) {
@@ -73,6 +107,93 @@ async function mountDiscovery(
 describe("AppSidebar hidden catalog discovery", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
+
+  it("retains omitted hosts through catalog failure and pending recovery", async () => {
+    const initial = catalogPage([{ threadId: "retained", name: "Retained conversation" }]);
+    const request = createGatewayRequestMock().mockResolvedValue(initial);
+    const { sidebar } = await mountDiscovery(request);
+    const failed = statusPage("catalog", "error");
+    const pending = statusPage("catalog", "pending");
+    for (const update of [
+      { result: pending, hasError: false, pending: true },
+      { result: failed, hasError: true, pending: false },
+      { result: pending, hasError: true, pending: true },
+    ]) {
+      request.mockResolvedValue(update.result);
+      await refresh(sidebar);
+      expect(sidebar.textContent).toContain("Retained conversation");
+      expect(Boolean(catalogError(sidebar))).toBe(update.hasError);
+      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.pending === true).toBe(
+        update.pending,
+      );
+    }
+    request.mockResolvedValue(
+      catalogPage([{ threadId: "replacement", name: "Replacement conversation" }]),
+    );
+    await refresh(sidebar);
+    expect(sidebar.textContent).not.toContain("Retained conversation");
+    expect(sidebar.textContent).toContain("Replacement conversation");
+    expect(catalogError(sidebar)).toBeNull();
+    request.mockResolvedValue(catalogPage([]));
+    await refresh(sidebar);
+    expect(sidebar.textContent).not.toContain("Replacement conversation");
+    expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
+  });
+  it("retains only omitted nodes when their inventory fails, while local results remain authoritative", async () => {
+    const initial = catalogPage([{ threadId: "paired", name: "Paired conversation" }]);
+    const catalog = initial.catalogs[0]!;
+    const makeHost = (hostId: string, threadId: string, name: string) => ({
+      ...catalog.hosts[0]!,
+      hostId,
+      kind: hostId.startsWith("node:") ? ("node" as const) : ("gateway" as const),
+      sessions: [{ ...catalog.hosts[0]!.sessions[0]!, threadId, name }],
+    });
+    const paired = makeHost("node:paired", "paired", "Paired conversation");
+    const removed = makeHost("node:removed", "removed", "Removed conversation");
+    const local = makeHost("gateway:local", "local", "Original local conversation");
+    catalog.hosts = [{ ...paired, pending: true }, removed, local];
+    const request = createGatewayRequestMock().mockResolvedValue(initial);
+    const { sidebar } = await mountDiscovery(request);
+    const updatedLocal = {
+      ...local,
+      sessions: [{ ...local.sessions[0]!, name: "Updated local conversation" }],
+    };
+    const registry = {
+      ...paired,
+      hostId: "node:registry",
+      label: "Paired nodes",
+      connected: false,
+      sessions: [],
+      error: { code: "NODE_LIST_FAILED", message: "Paired nodes could not be listed" },
+    };
+    request.mockResolvedValue({ catalogs: [{ ...catalog, hosts: [updatedLocal, registry] }] });
+    await refresh(sidebar);
+    expect(sidebar.textContent).toContain("Paired conversation");
+    expect(sidebar.textContent).toContain("Removed conversation");
+    expect(sidebar.textContent).toContain("Updated local conversation");
+    expect(sidebar.textContent).not.toContain("Original local conversation");
+    const retained = sidebar.sessionData.sessionCatalogs[0]?.hosts.find(
+      (host) => host.hostId === paired.hostId,
+    );
+    expect(retained?.pending).not.toBe(true);
+    expect(retained?.error?.code).toBe("NODE_LIST_FAILED");
+
+    // Failure of one known node is not failure to enumerate other nodes.
+    const failedNode = {
+      ...paired,
+      sessions: [],
+      error: { code: "NODE_INVOKE_FAILED", message: "Paired node read failed" },
+    };
+    request.mockResolvedValue({ catalogs: [{ ...catalog, hosts: [updatedLocal, failedNode] }] });
+    await refresh(sidebar);
+    expect(sidebar.textContent).toContain("Paired conversation");
+    expect(sidebar.textContent).not.toContain("Removed conversation");
+    request.mockResolvedValue({ catalogs: [{ ...catalog, hosts: [updatedLocal] }] });
+    await refresh(sidebar);
+    expect(sidebar.textContent).not.toContain("Paired conversation");
+    expect(sidebar.textContent).toContain("Updated local conversation");
+    expect(catalogError(sidebar)).toBeNull();
+  });
 
   it("keeps catalog visibility current across moves, context replacement, and remounts", async () => {
     const request = createGatewayRequestMock().mockResolvedValue(
@@ -130,14 +251,10 @@ describe("AppSidebar hidden catalog discovery", () => {
           provider.setContext(createContext(gateway.gateway, context.sessions, TWO_AGENTS));
         }
         await settleLitElement(sidebar);
-        await vi.advanceTimersByTimeAsync(200);
-        await settle(sidebar);
+        await advance(sidebar, 200);
         expect(currentRequest).toHaveBeenCalledTimes(1);
-        expect(currentRequest).toHaveBeenLastCalledWith("sessions.catalog.list", {
+        expect(currentRequest.mock.lastCall?.[1]).toMatchObject({
           agentId: scope === "agent" ? "research" : "main",
-          limitPerHost: 40,
-          progressId: expect.any(String),
-          allowPartialResults: true,
         });
 
         retiredPage.resolve(
@@ -155,8 +272,7 @@ describe("AppSidebar hidden catalog discovery", () => {
         expect(sidebar.textContent).not.toContain("Retired session");
         await vi.advanceTimersByTimeAsync(119_999);
         expect(currentRequest).toHaveBeenCalledTimes(1);
-        await vi.advanceTimersByTimeAsync(1);
-        await settle(sidebar);
+        await advance(sidebar, 1);
         expect(currentRequest).toHaveBeenCalledTimes(2);
         expect(sidebar.textContent).toContain("Current session");
       } finally {
@@ -182,13 +298,6 @@ describe("AppSidebar hidden catalog discovery", () => {
       undefined,
       ...Array.from({ length: 7 }, (_, index) => `page-${index + 2}`),
     ]);
-    expect(sidebar.sessionData.sessionCatalogPageDepths.values().next().value).toBe(7);
-    await vi.advanceTimersByTimeAsync(119_999);
-    expect(request).toHaveBeenCalledTimes(8);
-    await sidebar.sessionData.refreshSessionCatalogs();
-    await settleLitElement(sidebar);
-    expect(sidebar.textContent).toContain("Discovered session");
-    expect(request).toHaveBeenCalledTimes(16);
   });
 
   it.each(["activation", "explicit"] as const)(
@@ -260,31 +369,50 @@ describe("AppSidebar hidden catalog discovery", () => {
       });
       const { sidebar } = await mountDiscovery(request);
       expect(sidebar.sessionData.sessionCatalogs[0]!.hosts[0]!.nextCursor).toBe("page-3");
-      expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(0);
-      expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
-      expect(request).toHaveBeenCalledTimes(3);
+      expect(catalogError(sidebar)).not.toBeNull();
+      expectCatalogEmpty(sidebar);
       await vi.advanceTimersByTimeAsync(5_000);
       expect(request).toHaveBeenCalledTimes(3);
-
-      await sidebar.sessionData.refreshSessionCatalogs();
-      await settleLitElement(sidebar);
       const catalog = sidebar.sessionData.sessionCatalogs[0]!;
-      const host = catalog.hosts[0]!;
-      expect((catalog.error ?? host.error)?.code).toBe(
+      expect((catalog.error ?? catalog.hosts[0]!.error)?.code).toBe(
         failure.startsWith("missing") ? "PAGINATION_FAILED" : "UNAVAILABLE",
       );
-      expect(host.nextCursor).toBe("page-3");
-      expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(0);
-      expect(requestedCursors(request).slice(-2)).toEqual([undefined, "page-3"]);
-      expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
 
       failing = false;
-      await sidebar.sessionData.refreshSessionCatalogs();
-      await settleLitElement(sidebar);
+      await refresh(sidebar, false);
       expect(requestedCursors(request).slice(-2)).toEqual([undefined, "page-3"]);
       expect(sidebar.textContent).toContain("Recovered discovery");
       expect(sidebar.sessionData.sessionCatalogs[0]!.hosts[0]!.error).toBeUndefined();
-      expect(sidebar.sessionData.sessionCatalogPageDepths.values().next().value).toBe(2);
+    },
+  );
+
+  it.each(["host", "catalog"] as const)(
+    "pauses hidden discovery on a pending %s page and recovers on refresh",
+    async (pendingScope) => {
+      let pending = true;
+      const request = createGatewayRequestMock((_method, params) => {
+        if (!catalogParams(params).cursors) {
+          return Promise.resolve(catalogPage([], "page-2"));
+        }
+        return Promise.resolve(
+          pending
+            ? statusPage(pendingScope, "pending")
+            : catalogPage([{ threadId: "found", name: "Recovered pending discovery" }]),
+        );
+      });
+      const { sidebar } = await mountDiscovery(request);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]).toMatchObject({
+        pending: true,
+        nextCursor: "page-2",
+      });
+      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.error).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(request).toHaveBeenCalledTimes(2);
+      pending = false;
+      await advance(sidebar, 1);
+      expect(requestedCursors(request)).toEqual([undefined, "page-2", undefined, "page-2"]);
+      expect(sidebar.textContent).toContain("Recovered pending discovery");
     },
   );
 
@@ -298,26 +426,22 @@ describe("AppSidebar hidden catalog discovery", () => {
       return Promise.resolve(catalogPage([], cursor === "page-a" ? "page-b" : "page-a"));
     });
     const { sidebar } = await mountDiscovery(request);
-    await vi.advanceTimersByTimeAsync(10_000);
-    await settle(sidebar);
+    await advance(sidebar, 10_000);
     const host = sidebar.sessionData.sessionCatalogs[0]!.hosts[0]!;
     expect(host.error?.code).toBe("PAGINATION_FAILED");
     const requests = request.mock.calls.length;
     await vi.advanceTimersByTimeAsync(4_999);
     expect(request).toHaveBeenCalledTimes(requests);
-    expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
+    expect(catalogError(sidebar)).not.toBeNull();
+    expectCatalogEmpty(sidebar);
     revealed = true;
-    await sidebar.sessionData.refreshSessionCatalogs();
-    await settle(sidebar);
+    await refresh(sidebar);
     expect(requestedCursors(request).slice(requests, requests + 2)).toEqual([undefined, "page-a"]);
     expect(sidebar.textContent).toContain("Recovered session");
   });
 
   it("retains an issued discovery page while hidden and resumes from its cursor", async () => {
-    let visibility: DocumentVisibilityState = "visible";
-    const visibilitySpy = vi
-      .spyOn(document, "visibilityState", "get")
-      .mockImplementation(() => visibility);
+    const setVisibility = mockDocumentVisibility();
     const pending = deferred<ReturnType<typeof catalogPage>>();
     const request = createGatewayRequestMock((_method, params) => {
       const cursor = catalogParams(params).cursors?.["gateway:local"];
@@ -329,30 +453,18 @@ describe("AppSidebar hidden catalog discovery", () => {
               : catalogPage([], "page-2"),
           );
     });
-    try {
-      const { sidebar } = await mountDiscovery(request);
-      expect(request).toHaveBeenCalledTimes(2);
-      visibility = "hidden";
-      document.dispatchEvent(new Event("visibilitychange"));
-      pending.resolve(catalogPage([], "page-3"));
-      await settle(sidebar);
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(sidebar.sessionData.sessionCatalogs[0]!.hosts[0]!.nextCursor).toBe("page-3");
-      visibility = "visible";
-      document.dispatchEvent(new Event("visibilitychange"));
-      await vi.advanceTimersByTimeAsync(5_000);
-      await settle(sidebar);
-      expect(sidebar.textContent).toContain("Visible again");
-      expect(request).toHaveBeenLastCalledWith("sessions.catalog.list", {
-        agentId: "main",
-        catalogId: "codex",
-        hostIds: ["gateway:local"],
-        cursors: { "gateway:local": "page-3" },
-      });
-    } finally {
-      visibilitySpy.mockRestore();
-    }
+    const { sidebar } = await mountDiscovery(request);
+    expect(request).toHaveBeenCalledTimes(2);
+    setVisibility("hidden");
+    pending.resolve(catalogPage([], "page-3"));
+    await settle(sidebar);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(sidebar.sessionData.sessionCatalogs[0]!.hosts[0]!.nextCursor).toBe("page-3");
+    setVisibility("visible");
+    await advance(sidebar, 5_000);
+    expect(sidebar.textContent).toContain("Visible again");
+    expect(requestedCursors(request).at(-1)).toBe("page-3");
   });
 });
 
@@ -387,17 +499,11 @@ async function mountExpanded(request: ReturnType<typeof expandedRequest>) {
 }
 
 describe("AppSidebar expanded catalog refresh visibility", () => {
-  let visibility: DocumentVisibilityState;
-
-  const setVisibility = (next: DocumentVisibilityState) => {
-    visibility = next;
-    document.dispatchEvent(new Event("visibilitychange"));
-  };
+  let setVisibility: ReturnType<typeof mockDocumentVisibility>;
 
   beforeEach(() => {
     vi.useFakeTimers();
-    visibility = "visible";
-    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    setVisibility = mockDocumentVisibility();
   });
 
   it("stops automatic replay after hiding during an expanded response and catches up once", async () => {
@@ -430,8 +536,7 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
     const callsBeforeShow = request.mock.calls.length;
     setVisibility("visible");
     globalThis.dispatchEvent(new Event("focus"));
-    await vi.advanceTimersByTimeAsync(5_000);
-    await settle(sidebar);
+    await advance(sidebar, 5_000);
     expect(request.mock.calls.filter(([, params]) => !params.cursors)).toHaveLength(
       baseCallsBeforeShow + 1,
     );
@@ -489,8 +594,7 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
 
       document.body.append(provider);
       await settleLitElement(sidebar);
-      await vi.advanceTimersByTimeAsync(200);
-      await settle(sidebar);
+      await advance(sidebar, 200);
       expect(observed.has(sidebar.querySelector(".sidebar-shell__body")!)).toBe(true);
       expect(request).toHaveBeenCalledTimes(4);
       expect(sidebar.textContent).toContain("Original 1");

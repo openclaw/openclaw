@@ -148,7 +148,6 @@ async function prepare(
       hasBaselineTools: () => messageToolAvailable,
       applyPromptBuildToolsAllow: () => (messageToolAvailable ? ["message"] : []),
       setActiveSessionSystemPrompt: () => {},
-      setLeasedSteering: () => {},
     });
   return { attempt, assemble, resolver };
 }
@@ -278,8 +277,8 @@ describe("native cron delivery context", () => {
     },
   );
 
-  it.each(["abort"] as const)("does not finalize after %s", async (reason) => {
-    const fixture = await prepare("announce", true, reason);
+  it("does not resolve delivery context after cancellation", async () => {
+    const fixture = await prepare("announce", true, "abort");
     await expect(fixture.assemble()).rejects.toThrow();
     expect(fixture.resolver).not.toHaveBeenCalled();
   });

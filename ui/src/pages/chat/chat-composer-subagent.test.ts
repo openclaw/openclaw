@@ -2,10 +2,12 @@
 import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { disposeQuestionPromptState } from "../../app/question-prompt.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import {
   createComposerContainer,
   disposeComposer,
@@ -14,7 +16,7 @@ import {
 } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
-import { createGatewayBrowserClientFixture, createPaneTestHost } from "./chat-pane.test-support.ts";
+import { createPaneTestHost } from "./chat-pane.test-support.ts";
 import { refreshChatMetadata, retireChatMetadataRequests } from "./chat-state-refresh.ts";
 import { disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.tsx";
@@ -289,12 +291,7 @@ it.each([
       createGatewayBrowserClientFixture({ recoveryScopeReady: true }),
     );
     state.sessionKey = "agent:main:setup";
-    context.agents.state.agentsList = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "global",
-      agents: [{ id: "main" }],
-    };
+    context.agents.state.agentsList = makeBootRoster({ scope: "global" });
     state.handleSendChat = vi.fn();
     state.chatMessage = draft;
     state.chatModelCatalogInitialized = true;
@@ -304,7 +301,9 @@ it.each([
     }
     pane.render();
 
-    expect(pane.chatProps?.modelSetupRequired).toBe(!restricted);
+    expect(pane.chatProps?.disabledBanner?.actionLabel).toBe(
+      restricted ? undefined : "Connect an AI provider",
+    );
     expect(pane.chatProps?.disabledReason).toBeNull();
     expect(pane.chatProps?.canSend).toBe(true);
     void pane.chatProps?.onSend();
@@ -335,12 +334,7 @@ it.each([
       createGatewayBrowserClientFixture({ recoveryScopeReady: true }),
     );
     state.sessionKey = "agent:main:choice";
-    context.agents.state.agentsList = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "global",
-      agents: [{ id: "main" }],
-    };
+    context.agents.state.agentsList = makeBootRoster({ scope: "global" });
     state.sessionsResult = {
       ts: 1,
       path: "",
@@ -357,7 +351,7 @@ it.each([
     state.chatMessage = "Hello";
     state.handleSendChat = vi.fn();
     pane.render();
-    expect(pane.chatProps?.modelSetupRequired).toBe(false);
+    expect(pane.chatProps?.disabledBanner?.actionLabel).toBeUndefined();
     expect(pane.chatProps?.modelRequiredReason).toBe(allowed ? undefined : "Choose a model");
     void pane.chatProps?.onSend();
     expect(state.handleSendChat).toHaveBeenCalledTimes(allowed ? 1 : 0);
@@ -419,7 +413,7 @@ it.each([
         expect(container.querySelector("[data-chat-model-select]")).not.toBeNull(),
       );
       expect(state.chatModelCatalogInitialized).toBe(false);
-      expect(initial.modelSetupRequired).toBe(false);
+      expect(initial.disabledBanner).toBeUndefined();
       expect(initial.modelRequiredReason).toBeUndefined();
       expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
       expect(container.querySelector("[data-chat-model-select]")?.getAttribute("aria-busy")).toBe(
@@ -446,7 +440,9 @@ it.each([
       await pending;
       const settled = draw();
       expect(state.chatModelCatalogInitialized).toBe(true);
-      expect(settled.modelSetupRequired).toBe(!restricted && !cachedDefault);
+      expect(settled.disabledBanner?.actionLabel).toBe(
+        !restricted && !cachedDefault ? "Connect an AI provider" : undefined,
+      );
       if (restricted) {
         expect(settled.modelRequiredReason).toBe("No models are permitted by your administrator.");
         expect(container.querySelector(".agent-chat__disabled-banner button")).toBeNull();
@@ -522,11 +518,6 @@ describe("subagent composer", () => {
       row: { classification: "subagent", spawnedBy: "agent:main:parent" },
     },
     { name: "archive", key: "agent:main:reply-owner", row: { archived: true } },
-    {
-      name: "restart recovery",
-      key: "agent:main:reply-owner",
-      row: { restartRecoveryStatus: "tombstoned" },
-    },
   ] satisfies { name: string; key: string; row?: Partial<GatewaySessionRow> }[])(
     "keeps copy but not Reply when $name replaces the composer",
     ({ key, ...scenario }) => {

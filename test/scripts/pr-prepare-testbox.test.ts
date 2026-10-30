@@ -56,37 +56,24 @@ function runRemoteGate(env: NodeJS.ProcessEnv, prepareScript?: string) {
 }
 
 it.each([
-  {
-    name: "normalized integer controls with terminal colors",
-    env: {
-      FORCE_COLOR: "1",
-      OPENCLAW_TEST_PROJECTS_PARALLEL: " 02 ",
-      OPENCLAW_VITEST_MAX_WORKERS: "001",
-    },
-    expected: ["OPENCLAW_TEST_PROJECTS_PARALLEL=2", "OPENCLAW_VITEST_MAX_WORKERS=1"],
-  },
-  {
-    name: "only the worker control",
-    env: { OPENCLAW_VITEST_MAX_WORKERS: "3" },
-    expected: ["OPENCLAW_VITEST_MAX_WORKERS=3"],
-  },
-])("runs the full worktree Testbox command with $name", ({ env, expected }) => {
-  const { result, logPath } = runRemoteGate(env);
+  [" 02 ", "001", ["OPENCLAW_TEST_PROJECTS_PARALLEL=2", "OPENCLAW_VITEST_MAX_WORKERS=1"]],
+  [undefined, "3", ["OPENCLAW_VITEST_MAX_WORKERS=3"]],
+] as const)("forwards normalized Testbox controls (%s, %s)", (projects, workers, expected) => {
+  const { result, logPath } = runRemoteGate({
+    FORCE_COLOR: "1",
+    OPENCLAW_TEST_PROJECTS_PARALLEL: projects,
+    OPENCLAW_VITEST_MAX_WORKERS: workers,
+  });
   expect(result.status, result.stderr).toBe(0);
   const args = readLines(logPath)
     .filter((line) => line.startsWith("ARG:"))
     .map((line) => line.slice(4));
-  expect(args).toEqual([
-    ...`scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --blacksmith-org openclaw
-    --blacksmith-workflow .github/workflows/ci-check-high-memory-testbox.yml --blacksmith-job check --blacksmith-ref main
-    --idle-timeout 15m --ttl 240m --timing-json --label pr-424242-gates -- env CI=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false`.split(
-      /\s+/,
-    ),
-    ...expected,
-    "/bin/bash",
-    "-c",
-    `corepack pnpm build && corepack pnpm check --base ${capturedBase} && corepack pnpm test`,
+  const option = (name: string) => args[args.indexOf(name) + 1];
+  expect([option("--provider"), option("--blacksmith-org")]).toEqual([
+    "blacksmith-testbox",
+    "openclaw",
   ]);
+  expect(args).toEqual(expect.arrayContaining([...expected]));
 });
 
 it("rejects injected worker controls before remote dispatch", () => {

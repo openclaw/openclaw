@@ -107,8 +107,7 @@ export function createManagedLinuxAudio(params: {
   void serverReady.promise.catch(() => {});
   const timer = setTimeout(() => {
     unavailable(new Error("private PulseAudio startup timed out"));
-  }, STARTUP_TIMEOUT_MS);
-  timer.unref?.();
+  }, STARTUP_TIMEOUT_MS).unref();
 
   const source: DesktopAudioSource = {
     async start(signal, assertAuthority) {
@@ -160,8 +159,7 @@ export function createManagedLinuxAudio(params: {
       const captureTimer = setTimeout(
         () => failCapture(new Error("Desktop audio capture startup timed out")),
         STARTUP_TIMEOUT_MS,
-      );
-      captureTimer.unref?.();
+      ).unref();
       captures.add(stopCapture);
       signal.addEventListener("abort", abort, { once: true });
       stream.once("close", () => void stopCapture().catch(() => {}));

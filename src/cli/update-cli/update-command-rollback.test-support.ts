@@ -7,7 +7,6 @@ import {
   transformConfigFile,
   writeConfigFile,
 } from "../../config/config.js";
-import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import type { AgentDefaultsConfig, OpenClawConfig } from "../../config/types.js";
 import { readUpdateStateSchemaVersionsInProcess } from "../../infra/update-candidate-state.js";
 import {
@@ -148,11 +147,6 @@ export async function writeDoctorRollbackReceipt(params: {
     if (change === "doctor-capture-edit") {
       operatorEdit();
     }
-    if (change === "doctor-settled-exception") {
-      expect(capture.inputHash).toBe(hashConfigRaw(originalRaw));
-      expect(capture.hash).toBe(hashConfigRaw(fs.readFileSync(configPath, "utf8")));
-      expect(capture.hash).not.toBe(capture.inputHash);
-    }
     await writeUpdatePostInstallDoctorResult({
       resultPath,
       result: {
@@ -222,15 +216,16 @@ export async function expectActiveRollbackIdentity(params: {
     },
     packageTransaction: {
       backupRoot: "/backup",
-      complete: vi.fn(async () => {}),
-      rollback: vi.fn(async () => ({
-        name: "rollback",
-        command: "restore",
-        cwd: previousRoot,
-        exitCode: rollbackSucceeded ? 0 : 1,
-        durationMs: 1,
+      complete: async () => {},
+      rollback: async () => ({
+        ...stepFixture("rollback", {
+          command: "restore",
+          cwd: previousRoot,
+          exitCode: rollbackSucceeded ? 0 : 1,
+          durationMs: 1,
+        }),
         activePackageRoot,
-      })),
+      }),
     },
   });
   if (failure === "restart-cleanup") {

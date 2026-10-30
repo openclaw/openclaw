@@ -436,7 +436,6 @@ export async function handleIMessageApprovalReaction(params: {
   accountId: string;
   message: IMessagePayload;
   bodyText: string;
-  gatewayUrl?: string;
   gatewayRuntime?: IMessageApprovalGatewayRuntime;
 }): Promise<IMessageApprovalReactionHandleResult> {
   const event = readApprovalReactionEvent(params.message, params.bodyText);
@@ -475,7 +474,6 @@ export async function handleIMessageApprovalReaction(params: {
       channel: "imessage",
       accountId: params.accountId,
       senderId: event.actorHandle,
-      gatewayUrl: params.gatewayUrl,
       ...(params.gatewayRuntime ? { gatewayRuntime: params.gatewayRuntime } : {}),
     },
     approvers: getIMessageApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }),

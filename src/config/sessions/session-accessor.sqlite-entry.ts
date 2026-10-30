@@ -1,11 +1,11 @@
 import { normalizeInternalTurnContext } from "../../auto-reply/internal-turn-source.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
+import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { runOpenClawAgentWriteWithYieldingAdmission } from "../../state/openclaw-agent-db-transaction.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseRuntime,
 } from "../../state/openclaw-agent-db.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
@@ -21,10 +21,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import { listSqliteSessionEntriesFromDatabase } from "./session-accessor.sqlite-entry-list.read.js";
-import {
-  applySessionEntryPatchInDatabase,
-  replaceSessionEntryInDatabase,
-} from "./session-accessor.sqlite-entry-mutation.js";
+import { applySessionEntryPatchInDatabase } from "./session-accessor.sqlite-entry-mutation.js";
 import {
   readSessionEntryRow,
   readLifecycleTargetSnapshot,
@@ -79,20 +76,24 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 import { mergeSessionEntry } from "./types.js";
 
 export { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
+export { replaceSessionEntrySync } from "./session-accessor.sqlite-entry-replace.js";
 export { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 export { listSessionEntriesReadOnly } from "./session-accessor.sqlite-entry-list.read.js";
 export { listSessionEntryKeysReadOnly } from "./session-retirement-read.js";
 export {
-  loadExactSessionEntry,
-  loadExactSessionEntryCandidates,
   loadExactSessionEntryFromStoreReadOnly,
   loadExactSessionEntryReadOnly,
-  loadSessionEntry,
   loadSessionEntryByIdReadOnly,
   loadSessionEntryReadOnly,
   withSessionEntryReadOnlyScope,
   loadSessionEntryReadOnlyInScope,
 } from "./session-accessor.sqlite-exact-read.js";
+
+export {
+  loadExactSessionEntry,
+  loadExactSessionEntryCandidates,
+  loadSessionEntry,
+} from "./session-accessor.sqlite-entry-admitted-read.js";
 
 export { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-exact-read.js";
 
@@ -154,25 +155,6 @@ export async function replaceSessionEntry(
       replaceEntry: true,
     },
   );
-}
-
-/** Worker transcript commits use this synchronous replacement; other callers are fixtures. */
-export function replaceSessionEntrySync(scope: SessionAccessScope, entry: SessionEntry): void {
-  const resolved = resolveSqliteScope(scope);
-  assertCanonicalSessionKeyWrite(resolved.sessionKey, resolved.agentId);
-  const publish = runOpenClawAgentWriteTransaction(
-    (database) => {
-      const { previous, current } = replaceSessionEntryInDatabase(
-        database,
-        resolved.sessionKey,
-        entry,
-      );
-      return prepareSessionIdentityPublication(database, resolved.agentId, previous, current);
-    },
-    toDatabaseOptions(resolved),
-    { operationLabel: "session-entry.replace" },
-  );
-  publish();
 }
 
 /** Patches one entry in the additive SQLite session store. */
@@ -631,24 +613,33 @@ async function patchSqliteSessionEntrySnapshot(
 }
 
 export async function recordInboundSessionMeta(
-  params: RecordInboundSessionMetaParams,
+  input: RecordInboundSessionMetaParams,
 ): Promise<SessionEntry | null> {
-  normalizeInternalTurnContext(params.ctx);
-  const createIfMissing = params.createIfMissing ?? true;
+  normalizeInternalTurnContext(input.ctx);
+  const metadata = prepareSessionMetaPatch(input);
   return await applySessionEntryOperation(
-    { sessionKey: params.sessionKey, storePath: params.storePath },
+    { sessionKey: input.sessionKey, storePath: input.storePath },
     {
       kind: "inbound-metadata",
-      sessionKey: params.sessionKey,
-      metadata: prepareSessionMetaPatch(params),
-      creation: buildInboundSessionCreationStamp(params.ctx),
+      sessionKey: input.sessionKey,
+      metadata,
+      creation: buildInboundSessionCreationStamp(input.ctx),
     },
     {
       // Inbound metadata must not refresh activity timestamps; idle reset
       // evaluation relies on updatedAt from actual session turns.
       preserveActivity: true,
-      workerGuard: { assertMutationAllowed: params.assertCommitAllowed },
-      ...(createIfMissing ? { fallbackEntry: mergeSessionEntry(undefined, {}) } : {}),
+      workerGuard: { assertMutationAllowed: input.assertCommitAllowed },
+      onCommittedSource: metadata.privateTelegramTopicName
+        ? (source) =>
+            emitSessionLifecycleEvent({
+              agentId: source.agentId,
+              sessionKey: input.sessionKey,
+              reason: "metadata",
+              scope: "session-entry",
+            })
+        : undefined,
+      fallbackEntry: input.createIfMissing === false ? undefined : mergeSessionEntry(undefined, {}),
     },
   );
 }

@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, linkSync, readFileSync, unlinkSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { isSqliteDatabaseAdmissionFactCurrent } from "../infra/sqlite-database-admission-record.js";
 import {
@@ -10,17 +10,32 @@ import {
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import { getSqliteWorkerActorIdentity } from "../infra/sqlite-worker-store.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state-row.js";
 import { writeConfigMachineState } from "./config-machine-state-write.js";
-import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  registerOpenClawStateDatabaseAsyncResource,
+} from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { getOpenClawStateWorkerOwner } from "./openclaw-state-worker-owner.js";
+import { createOpenClawStateWorkerLease } from "./openclaw-state-worker-store.js";
 import * as worker from "./openclaw-state.worker.js";
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let activeBackend: ReturnType<typeof worker.createSqliteWorkerBackend> | undefined;
+const key = "tts.prefsPath";
+const expected = { value_json: '"updated"', updated_at_ms: 12_345 };
+function readPersistedRow(reader: DatabaseSync) {
+  return reader
+    .prepare("SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = ?")
+    .get(key);
+}
 async function openBackend(kind: "existing" | "native-closed" | "native" = "existing") {
   if (kind !== "native") {
     openOpenClawStateDatabase();
@@ -47,79 +62,50 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-it("publishes a single machine-state write without a transaction envelope", async () => {
-  const key = "tts.prefsPath";
-  writeConfigMachineState(key, "original");
-  const { run, backend, databasePath } = await openBackend("native");
-  const { db } = openOpenClawStateDatabase();
-  using reader = new DatabaseSync(databasePath, { readOnly: true });
-  expect(readConfigMachineStateRowInDatabase(db, key)?.value_json).toBe('"original"');
-  await backend[SQLITE_WORKER_PREPARE_COMMAND]?.("machineState.write");
-  const execute = vi.spyOn(db, "exec");
-  vi.spyOn(Date, "now").mockReturnValue(12_345);
-  const writtenAt = run(() =>
-    backend.execute({
-      type: "machineState.write",
-      input: { key: ` ${key} `, value: "updated" },
-    }),
-  );
-  const expected = { value_json: '"updated"', updated_at_ms: 12_345 };
-  expect(writtenAt).toBe(expected.updated_at_ms);
-  expect(readConfigMachineStateRowInDatabase(db, key)).toEqual(expected);
-  expect(
-    reader
-      .prepare("SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = ?")
-      .get(key),
-  ).toEqual(expected);
-  expect(() => backend.assertSettled!()).not.toThrow();
-  expect(
-    execute.mock.calls.filter(([sql]) =>
-      /\b(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(sql),
-    ),
-  ).toEqual([]);
-});
-
-it("keeps a committed machine-state write successful when admission exchange fails", async () => {
-  const key = "tts.prefsPath";
-  writeConfigMachineState(key, "original");
-  const { run, backend, databasePath } = await openBackend("native");
-  const { db } = openOpenClawStateDatabase();
-  using reader = new DatabaseSync(databasePath, { readOnly: true });
-  expect(readConfigMachineStateRowInDatabase(db, key)?.value_json).toBe('"original"');
-  await backend[SQLITE_WORKER_PREPARE_COMMAND]?.("machineState.write");
-  const [before] = captureSqliteDatabaseAdmissions(undefined, { location: databasePath });
-  const previous = before!.facts.get("state.tts-prefs-path")!;
-  expect(isSqliteDatabaseAdmissionFactCurrent(before!, previous)).toBe(true);
-  const readPersistedRow = () =>
-    reader
-      .prepare("SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = ?")
-      .get(key);
-  const rowsAtExchange: unknown[] = [];
-  const oldReceiptAtExchange: boolean[] = [];
-  vi.spyOn(Date, "now").mockReturnValue(12_345);
-  const writtenAt = withSqliteDatabaseAdmissionExchange(
-    (admissions) => {
-      const next = admissions
-        .find((record) => record.identity === before!.identity)
-        ?.facts.get("state.tts-prefs-path");
-      if (next && next.publication !== previous.publication) {
-        rowsAtExchange.push(readPersistedRow());
-        oldReceiptAtExchange.push(isSqliteDatabaseAdmissionFactCurrent(before!, previous));
-        throw new Error("synthetic admission exchange failure");
-      }
-      return [];
-    },
-    () =>
-      run(() => backend.execute({ type: "machineState.write", input: { key, value: "updated" } })),
-  );
-  const expected = { value_json: '"updated"', updated_at_ms: 12_345 };
-  expect(writtenAt).toBe(expected.updated_at_ms);
-  expect(rowsAtExchange).toEqual([expected]);
-  expect(oldReceiptAtExchange).toEqual([false]);
-  expect(readPersistedRow()).toEqual(expected);
-  expect(readConfigMachineStateRowInDatabase(db, key)).toEqual(expected);
-  expect(() => backend.assertSettled!()).not.toThrow();
-});
+it.each([false, true])(
+  "publishes a settled machine-state write (exchange failure=%s)",
+  async (failExchange) => {
+    writeConfigMachineState(key, "original");
+    const { run, backend, databasePath } = await openBackend("native");
+    const { db } = openOpenClawStateDatabase();
+    using reader = new DatabaseSync(databasePath, { readOnly: true });
+    await backend[SQLITE_WORKER_PREPARE_COMMAND]?.("machineState.write");
+    const [before] = captureSqliteDatabaseAdmissions(undefined, { location: databasePath });
+    const previous = before!.facts.get("state.tts-prefs-path")!;
+    expect(isSqliteDatabaseAdmissionFactCurrent(before!, previous)).toBe(true);
+    const rowsAtExchange: unknown[] = [];
+    const oldReceiptAtExchange: boolean[] = [];
+    vi.spyOn(Date, "now").mockReturnValue(expected.updated_at_ms);
+    const writtenAt = withSqliteDatabaseAdmissionExchange(
+      (admissions) => {
+        const next = admissions
+          .find((record) => record.identity === before!.identity)
+          ?.facts.get("state.tts-prefs-path");
+        if (next && next.publication !== previous.publication) {
+          rowsAtExchange.push(readPersistedRow(reader));
+          oldReceiptAtExchange.push(isSqliteDatabaseAdmissionFactCurrent(before!, previous));
+          if (failExchange) {
+            throw new Error("synthetic admission exchange failure");
+          }
+        }
+        return [];
+      },
+      () =>
+        run(() =>
+          backend.execute({
+            type: "machineState.write",
+            input: { key: ` ${key} `, value: "updated" },
+          }),
+        ),
+    );
+    expect(writtenAt).toBe(expected.updated_at_ms);
+    expect(rowsAtExchange).toEqual([expected]);
+    expect(oldReceiptAtExchange).toEqual([false]);
+    expect(readPersistedRow(reader)).toEqual(expected);
+    expect(readConfigMachineStateRowInDatabase(db, key)).toEqual(expected);
+    expect(() => backend.assertSettled!()).not.toThrow();
+  },
+);
 
 it("closes an existing-only actor without recreating its missing database", async () => {
   const { backend, databasePath } = await openBackend();
@@ -211,5 +197,41 @@ it("rejects leaked readers and unfinished transactions through the same actor se
     if (db.isTransaction) {
       db.exec("ROLLBACK");
     }
+  }
+});
+
+it("joins shared-state leases before actor retirement and refuses fresh shutdown admission", async () => {
+  const writer = openOpenClawStateDatabase();
+  const context = captureOpenClawStateWorkerContext({ path: writer.path });
+  const lease = createOpenClawStateWorkerLease(context);
+  await lease.ready;
+  const store = await getOpenClawStateWorkerOwner().open(context);
+  assert(store);
+  const entered = createDeferredCore();
+  const finish = createDeferredCore();
+  const unregister = registerOpenClawStateDatabaseAsyncResource({
+    async close() {
+      entered.resolve();
+      await finish.promise;
+      await lease.retire();
+    },
+  });
+  const closing = drainGlobalSingletonLifecycleState("shared-state");
+  try {
+    await entered.promise;
+    expect(() => getSqliteWorkerActorIdentity(store)).not.toThrow();
+    expect(() => captureOpenClawStateWorkerContext({ path: writer.path })).toThrow(/closed/);
+    expect(writer.db.isOpen).toBe(true);
+    finish.resolve();
+    await closing;
+    expect(() => getSqliteWorkerActorIdentity(store)).toThrow(/unavailable/);
+    expect(writer.db.isOpen).toBe(false);
+    expect(context.admission.assertCurrent).toThrow(/admission changed/);
+    expect(openOpenClawStateDatabase({ path: writer.path }).db.isOpen).toBe(true);
+  } finally {
+    finish.resolve();
+    await lease.retire();
+    await closing;
+    unregister();
   }
 });

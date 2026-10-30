@@ -1,3 +1,4 @@
+import { sanitizeTerminalText, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
@@ -13,7 +14,7 @@ import {
 import { formatPluginTrustDiagnostic } from "../plugins/plugin-trust.js";
 import type { PluginStatusReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
-import { shortenHomeInString, shortenHomePath } from "../utils.js";
+import { displayPath, shortenHomeInString } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
@@ -29,7 +30,7 @@ function failPluginInspect(message: string, json: boolean | undefined): void {
   if (json) {
     defaultRuntime.writeJson(formatCliJsonFailure(message));
   } else {
-    defaultRuntime.error(message);
+    defaultRuntime.error(terminalText`${message}`);
   }
   defaultRuntime.exit(1);
 }
@@ -42,7 +43,7 @@ function formatGlobalPluginDiagnostics(diagnostics: readonly PluginDiagnostic[])
       ({ level, message }) =>
         `${formatConsoleDiagnosticLine({
           level,
-          message: shortenHomeInString(`${level.toUpperCase()}: ${message}`),
+          message: sanitizeTerminalText(shortenHomeInString(`${level.toUpperCase()}: ${message}`)),
         })}\n`,
     )
     .join("");
@@ -109,22 +110,27 @@ export async function runPluginsInspectCommand(
       }
       const tableWidth = getTerminalTableWidth();
       const rows = inspectAll.map((inspect) => ({
-        Name: inspect.plugin.name || inspect.plugin.id,
+        Name: terminalText`${inspect.plugin.name || inspect.plugin.id}`,
         ID:
-          inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id ? inspect.plugin.id : "",
+          inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id
+            ? terminalText`${inspect.plugin.id}`
+            : "",
         Status: formatPluginStatus(inspect.plugin, runtimeInspect),
-        Shape: inspect.shape,
+        Shape: terminalText`${inspect.shape}`,
         Capabilities:
           inspect.capabilities.length > 0
-            ? inspect.capabilities.map((entry) => entry.kind).join(", ")
+            ? terminalText`${inspect.capabilities.map((entry) => entry.kind).join(", ")}`
             : "-",
         Compatibility:
           inspect.compatibility.length > 0
-            ? inspect.compatibility
+            ? terminalText`${inspect.compatibility
                 .map((entry) => (entry.severity === "warn" ? `warn:${entry.code}` : entry.code))
-                .join(", ")
+                .join(", ")}`
             : "none",
-        Bundle: inspect.bundleCapabilities.length > 0 ? inspect.bundleCapabilities.join(", ") : "-",
+        Bundle:
+          inspect.bundleCapabilities.length > 0
+            ? terminalText`${inspect.bundleCapabilities.join(", ")}`
+            : "-",
         Hooks:
           [
             inspect.typedHooks.length > 0 ? `${inspect.typedHooks.length} typed` : "",
@@ -230,43 +236,49 @@ export async function runPluginsInspectCommand(
       const lines: string[] = [];
       const appendSection = (title: string, content: string[]) => {
         if (content.length > 0) {
-          lines.push("", theme.muted(`${title}:`), ...content);
+          lines.push("", theme.muted(`${title}:`), ...content.map((line) => terminalText`${line}`));
         }
       };
-      lines.push(theme.heading(inspect.plugin.name || inspect.plugin.id));
+      lines.push(theme.heading(terminalText`${inspect.plugin.name || inspect.plugin.id}`));
       if (inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id) {
-        lines.push(theme.muted(`id: ${inspect.plugin.id}`));
+        lines.push(theme.muted(terminalText`id: ${inspect.plugin.id}`));
       }
       if (inspect.plugin.description) {
-        lines.push(inspect.plugin.description);
+        lines.push(terminalText`${inspect.plugin.description}`);
       }
       lines.push("");
       lines.push(`${theme.muted("Status:")} ${formatPluginStatus(inspect.plugin, inspectRuntime)}`);
       if (inspect.plugin.failurePhase) {
-        lines.push(`${theme.muted("Failure phase:")} ${inspect.plugin.failurePhase}`);
+        lines.push(
+          `${theme.muted("Failure phase:")} ${terminalText`${inspect.plugin.failurePhase}`}`,
+        );
       }
       if (inspect.plugin.failedAt) {
         lines.push(`${theme.muted("Failed at:")} ${inspect.plugin.failedAt.toISOString()}`);
       }
-      lines.push(`${theme.muted("Format:")} ${inspect.plugin.format ?? "openclaw"}`);
+      lines.push(
+        `${theme.muted("Format:")} ${terminalText`${inspect.plugin.format ?? "openclaw"}`}`,
+      );
       if (inspect.plugin.bundleFormat) {
         lines.push(
-          `${theme.muted("Bundle format:")} ${formatPluginBundleFormat(inspect.plugin.bundleFormat)}`,
+          `${theme.muted("Bundle format:")} ${terminalText`${formatPluginBundleFormat(inspect.plugin.bundleFormat)}`}`,
         );
       }
-      lines.push(`${theme.muted("Source:")} ${shortenHomePath(inspect.plugin.source)}`);
-      lines.push(`${theme.muted("Origin:")} ${inspect.plugin.origin}`);
+      lines.push(`${theme.muted("Source:")} ${displayPath(inspect.plugin.source)}`);
+      lines.push(`${theme.muted("Origin:")} ${terminalText`${inspect.plugin.origin}`}`);
       if (inspect.plugin.trust) {
-        lines.push(`${theme.muted("Trust:")} ${formatPluginTrustDiagnostic(inspect.plugin.trust)}`);
+        lines.push(
+          `${theme.muted("Trust:")} ${terminalText`${formatPluginTrustDiagnostic(inspect.plugin.trust)}`}`,
+        );
       }
       if (inspect.plugin.version) {
-        lines.push(`${theme.muted("Version:")} ${inspect.plugin.version}`);
+        lines.push(`${theme.muted("Version:")} ${terminalText`${inspect.plugin.version}`}`);
       }
-      lines.push(`${theme.muted("Shape:")} ${inspect.shape}`);
-      lines.push(`${theme.muted("Capability mode:")} ${inspect.capabilityMode}`);
+      lines.push(`${theme.muted("Shape:")} ${terminalText`${inspect.shape}`}`);
+      lines.push(`${theme.muted("Capability mode:")} ${terminalText`${inspect.capabilityMode}`}`);
       if (inspect.bundleCapabilities.length > 0) {
         lines.push(
-          `${theme.muted("Bundle capabilities:")} ${inspect.bundleCapabilities.join(", ")}`,
+          `${theme.muted("Bundle capabilities:")} ${terminalText`${inspect.bundleCapabilities.join(", ")}`}`,
         );
       }
       appendSection(
@@ -345,8 +357,8 @@ export async function runPluginsInspectCommand(
         const installLines = [`Source: ${install.source}`];
         for (const [label, value] of [
           ["Spec", install.spec],
-          ["Source path", install.sourcePath ? shortenHomePath(install.sourcePath) : undefined],
-          ["Install path", install.installPath ? shortenHomePath(install.installPath) : undefined],
+          ["Source path", install.sourcePath ? displayPath(install.sourcePath) : undefined],
+          ["Install path", install.installPath ? displayPath(install.installPath) : undefined],
           ["Recorded version", install.version],
           ["ClawHub package", install.clawhubPackage],
           ["ClawHub channel", install.clawhubChannel],
@@ -378,7 +390,7 @@ export async function runPluginsInspectCommand(
       if (inspect.plugin.error) {
         const label =
           inspect.plugin.status === "error" ? theme.error("Error:") : theme.muted("Reason:");
-        lines.push("", `${label} ${inspect.plugin.error}`);
+        lines.push("", `${label} ${terminalText`${inspect.plugin.error}`}`);
       }
       return lines.join("\n");
     }

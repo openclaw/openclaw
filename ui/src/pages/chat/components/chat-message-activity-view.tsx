@@ -15,16 +15,18 @@ import {
 } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { selectActivityHeadline } from "./chat-activity-headline-selection.ts";
 import { ChatActivityHeadline } from "./chat-activity-headline.solid.tsx";
+import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { descendantCards } from "./chat-message-activity-operation.tsx";
 import type { ActivityOperationProps } from "./chat-message-bubble-options.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
-import { BrowserTabPreviews, syncToolDisclosureOverflow } from "./chat-tool-cards.solid.tsx";
+import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
-import { ToolOutcomeSummary, ToolReviewOutcome } from "./chat-tool-outcome-summary.solid.tsx";
+import { ToolReviewOutcome } from "./chat-tool-outcome-summary.solid.tsx";
 
 function prepareActivityGroup(
   groups: readonly MessageGroupData[],
@@ -80,7 +82,6 @@ function prepareActivityGroup(
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
   const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
   const groupSummaryLabel = summarizeToolGroup(visibleActivity, {
-    includeInlineOutcomes: activityExpanded,
     ownSessionLaunches: ownSessionLaunchCalls(cards),
   });
   const toolCardOverrides = new Map<ToolCard, ActivityOperationProps | null>();
@@ -90,9 +91,9 @@ function prepareActivityGroup(
     return outcome ? [outcome] : [];
   });
   const reviewOutcome = resolveToolApprovalReviewOutcome(approvalReviews, recordedReviewOutcomes);
-  // A settled step that completed with only routine nested calls is one operation:
-  // its own row names it and keeps those calls underneath, where a count hides both.
-  // Other outcomes and reviewed steps keep the counted row that carries their status.
+  // A settled step with only routine nested calls is one operation: its own row
+  // names it, carries its outcome, and keeps those calls underneath, where a count
+  // hides all three. Blocked, skipped, and reviewed steps keep the counted row.
   const [step] = cardGroups;
   const stepActivity = step ? preparedByCard.get(step.card) : undefined;
   const soleStep =
@@ -103,7 +104,7 @@ function prepareActivityGroup(
     cardGroups.length === 1 &&
     step.children.length > 0 &&
     visibleCalls.size === 1 &&
-    stepActivity?.status === "completed" &&
+    (stepActivity?.status === "completed" || stepActivity?.status === "failed") &&
     visibleCalls.has(stepActivity.toolCallId ?? stepActivity.itemId);
   if (activityExpanded || soleStep) {
     for (const group of cardGroups) {
@@ -124,8 +125,6 @@ function prepareActivityGroup(
     visibleActivity,
     reviewOutcome,
     approvalReviews,
-    cards,
-    visibleCalls,
     activityDisclosureId,
     activityBodyId,
     activityExpanded,
@@ -151,6 +150,8 @@ function ActivityGroupBody(props: {
   const overrides = () => props.state.toolCardOverrides;
   const soleStep = () => state().soleStep && !props.options.bubbleMode;
   const compact = () => Boolean(props.options.bubbleMode);
+  const liveBubble = () =>
+    compact() && props.groups.some((group) => group.key === props.options.bubbleActivityGroupKey);
   return (
     <div
       class={[
@@ -158,6 +159,7 @@ function ActivityGroupBody(props: {
         {
           "chat-activity-group--step": soleStep(),
           "chat-activity-group--bubble": compact(),
+          "chat-activity-group--working": liveBubble(),
           "is-open": !soleStep() && state().activityExpanded,
         },
       ]}
@@ -169,6 +171,9 @@ function ActivityGroupBody(props: {
           type="button"
           aria-expanded={state().activityExpanded ? "true" : "false"}
           aria-controls={state().activityBodyId}
+          aria-label={
+            liveBubble() && !state().headline?.title ? t("chat.view.workingDetails") : undefined
+          }
           onPointerEnter={syncOverflow}
           onFocus={syncOverflow}
           onClick={() =>
@@ -179,6 +184,7 @@ function ActivityGroupBody(props: {
           }
         >
           <ChatActivityHeadline
+            bubbleMode={liveBubble()}
             contentRef={(element) => (disclosureContent = element)}
             scope={JSON.stringify([
               props.options.sessionKey,
@@ -199,17 +205,6 @@ function ActivityGroupBody(props: {
               reviewer={state().approvalReviews[0]?.label}
             />
           </openclaw-chat-tool-review-outcome>
-          <Show when={!state().activityExpanded}>
-            <openclaw-chat-tool-outcome-summary style={{ display: "contents" }}>
-              <ToolOutcomeSummary
-                cards={state().cards.filter(
-                  (card) => card.callId && state().visibleCalls.has(card.callId),
-                )}
-                includeCount={true}
-                activity={state().visibleActivity}
-              />
-            </openclaw-chat-tool-outcome-summary>
-          </Show>
           <span class="chat-tool-row__chevron" aria-hidden="true">
             <Icon name="chevronRight" />
           </span>

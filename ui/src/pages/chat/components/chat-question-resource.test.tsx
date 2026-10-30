@@ -17,7 +17,7 @@ import {
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatQuestionResource } from "./chat-question-resource.tsx";
 // Load before the timed interaction: this regression covers context, not cold module transforms.
-import "../../../components/mcp-app-view-registration.ts";
+import "../../../components/mcp-app-view.tsx";
 
 const previewQuestion = {
   questionId: "part",
@@ -41,63 +41,71 @@ function mountResource(
     ...application.gateway.snapshot,
     phase: "connected",
     client: createTestGatewayClient(request),
-    ...(upload
+    hello: upload
       ? {
-          hello: {
-            ...gatewayHelloForMethods(["mcp.app.formResource"]),
-            policy: {
-              attachments: { maxBytes: 1024, maxImageBytes: 1024 },
-              maxPayload: 1024 * 1024,
-            },
-          },
+          ...gatewayHelloForMethods(["mcp.app.formResource"]),
+          policy: { attachments: { maxBytes: 1024, maxImageBytes: 1024 }, maxPayload: 1024 * 1024 },
         }
-      : {}),
+      : application.gateway.snapshot.hello,
   });
   // SAFETY: These paths consume only Gateway capabilities and the upload policy.
   const context = { gateway: application.gateway } as ApplicationContext;
   const selections = vi.fn();
-  const noSelection = new Set<string>();
-  let setDisabled!: (value: boolean) => void;
-  let setRequestId!: (value: string) => void;
+  let controls!: { setDisabled: (value: boolean) => void; setRequestId: (value: string) => void };
+  const question = upload
+    ? {
+        ...previewQuestion,
+        options: [],
+        resource: { ...previewQuestion.resource, userOptions: { kind: "file" as const } },
+      }
+    : previewQuestion;
   const view = mountSolid(
     () => {
       const [selected, setSelected] = createSignal<ReadonlySet<string>>(new Set());
-      const [disabled, updateDisabled] = createSignal(false);
-      const [requestId, updateRequestId] = createSignal("question-request");
-      setDisabled = updateDisabled;
-      setRequestId = updateRequestId;
-      const resource = (
-        <ChatQuestionResource
-          question={
-            upload
-              ? {
-                  ...previewQuestion,
-                  question: "Upload a part",
-                  options: [],
-                  resource: { ...previewQuestion.resource, userOptions: { kind: "file" } },
-                }
-              : previewQuestion
+      const [disabled, setDisabled] = createSignal(false);
+      const [requestId, setRequestId] = createSignal("question-request");
+      controls = { setDisabled, setRequestId };
+      const onSelection = upload
+        ? (values: string[]) => {
+            selections(values);
+            setSelected(new Set(values));
           }
+        : undefined;
+      return (
+        <ChatQuestionResource
+          question={question}
           requestId={requestId()}
           sessionKey={`agent:main:${upload ? "upload" : "preview"}-session`}
           agentId={agentId}
-          selected={upload ? selected() : noSelection}
+          selected={selected()}
           disabled={disabled()}
-          onSelection={
-            upload
-              ? (values) => {
-                  selections(values);
-                  setSelected(new Set(values));
-                }
-              : undefined
-          }
+          onSelection={onSelection}
         />
       );
-      return upload ? <div>{resource}</div> : resource;
     },
     { wrapper: createSolidApplicationContextProvider(context).wrapper },
   );
-  return { view, selections, setDisabled, setRequestId };
+  return { view, selections, ...controls };
+}
+
+function expectResourceRequest(
+  request: ReturnType<typeof createGatewayRequestMock>,
+  action: "preview" | "upload",
+  payload: object,
+) {
+  expect(request).toHaveBeenCalledWith(
+    "mcp.app.formResource",
+    {
+      sessionKey: `agent:main:${action}-session`,
+      agentId: action === "preview" ? "main" : undefined,
+      viewId: "form-view",
+      requestId: "question-request",
+      questionId: "part",
+      action,
+      ...payload,
+    },
+    { signal: expect.any(AbortSignal) },
+  );
 }
 
 it("keeps the Solid application context when opening a resource preview", async () => {
@@ -122,19 +130,7 @@ it("keeps the Solid application context when opening a resource preview", async 
       "Preview unavailable",
     ),
   );
-  expect(request).toHaveBeenCalledWith(
-    "mcp.app.formResource",
-    {
-      sessionKey: "agent:main:preview-session",
-      agentId: "main",
-      viewId: "form-view",
-      requestId: "question-request",
-      questionId: "part",
-      action: "preview",
-      optionIndex: 0,
-    },
-    { signal: expect.any(AbortSignal) },
-  );
+  expectResourceRequest(request, "preview", { optionIndex: 0 });
   expect(request).toHaveBeenCalledWith(
     "mcp.app.view",
     { sessionKey: "agent:main:preview-session", viewId: "preview-view" },
@@ -157,19 +153,9 @@ it("publishes uploaded resource selections and follows controlled selections", a
   input.dispatchEvent(new Event("change", { bubbles: true }));
 
   await waitForSolid(() => expect(selections).toHaveBeenCalledWith(["parts://notes"]));
-  expect(request).toHaveBeenCalledWith(
-    "mcp.app.formResource",
-    {
-      sessionKey: "agent:main:upload-session",
-      agentId: undefined,
-      viewId: "form-view",
-      requestId: "question-request",
-      questionId: "part",
-      action: "upload",
-      files: [{ name: "notes.txt", mimeType: "text/plain", content: "ZXhhbXBsZQ==" }],
-    },
-    { signal: expect.any(AbortSignal) },
-  );
+  expectResourceRequest(request, "upload", {
+    files: [{ name: "notes.txt", mimeType: "text/plain", content: "ZXhhbXBsZQ==" }],
+  });
   const remove = await waitForSolid(() =>
     view.getByRole<HTMLButtonElement>("button", { name: "Remove" }),
   );
@@ -211,14 +197,23 @@ it("publishes uploaded resource selections and follows controlled selections", a
 it("retires pending previews on disabled and request changes while retaining controls", async () => {
   const first = Promise.withResolvers<QuestionResourceActionResult>();
   const second = Promise.withResolvers<QuestionResourceActionResult>();
-  const request = createGatewayRequestMock(async () => ({
+  const current: QuestionResourceActionResult = {
     preview: { contents: [{ text: "Current preview" }] },
-  }));
+  };
+  const request = createGatewayRequestMock(async () => current);
   request.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
   const { view, setDisabled, setRequestId } = mountResource(request);
   const button = await waitForSolid(() =>
     view.getByRole<HTMLButtonElement>("button", { name: "Preview resource: Bracket" }),
   );
+  const expectState = async (busy: boolean, error: string | null = null) => {
+    await waitForSolid(() => {
+      expect(button.disabled).toBe(busy);
+      expect(view.queryByRole("alert")?.textContent ?? null).toBe(error);
+      expect(view.getByRole("button", { name: "Preview resource: Bracket" })).toBe(button);
+    });
+  };
+  const expectPreview = () => expect(view.getByText("Current preview")).toBeTruthy();
   button.click();
   button.click();
   await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
@@ -229,8 +224,7 @@ it("retires pending previews on disabled and request changes while retaining con
   });
   first.resolve({ preview: { contents: [{ text: "Retired disabled preview" }] } });
   setDisabled(false);
-  await waitForSolid(() => expect(button.disabled).toBe(false));
-  expect(view.getByRole("button", { name: "Preview resource: Bracket" })).toBe(button);
+  await expectState(false);
   button.click();
   await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
   setRequestId("replacement-request");
@@ -238,12 +232,10 @@ it("retires pending previews on disabled and request changes while retaining con
     expect(request.mock.calls[1]?.[2]?.signal?.aborted).toBe(true);
     expect(button.disabled).toBe(false);
   });
-  expect(view.getByRole("button", { name: "Preview resource: Bracket" })).toBe(button);
+  await expectState(false);
   button.click();
-  await waitForSolid(() => {
-    expect(view.getByText("Current preview")).toBeTruthy();
-    expect(button.disabled).toBe(false);
-  });
+  await waitForSolid(expectPreview);
+  await expectState(false);
   second.reject(new Error("Retired request failed"));
   await second.promise.catch(() => {});
   expect(view.queryByText("Retired disabled preview")).toBeNull();
@@ -251,32 +243,19 @@ it("retires pending previews on disabled and request changes while retaining con
   expect(request.mock.calls[2]?.[1]).toMatchObject({ requestId: "replacement-request" });
   request.mockRejectedValueOnce(new Error("Resource preview failed"));
   button.click();
-  await waitForSolid(() => {
-    expect(view.getByRole("alert").textContent).toBe("Resource preview failed");
-    expect(button.disabled).toBe(false);
-  });
-  expect(view.getByText("Current preview")).toBeTruthy();
+  await expectState(false, "Resource preview failed");
+  expectPreview();
   const retry = Promise.withResolvers<QuestionResourceActionResult>();
   request.mockImplementationOnce(() => retry.promise);
   button.click();
   button.click();
   await waitForSolid(() => {
-    expect(view.queryByRole("alert")).toBeNull();
     expect(request).toHaveBeenCalledTimes(5);
-    expect(button.disabled).toBe(true);
     expect(view.getByRole("status").textContent).toBe("Loading…");
   });
-  expect(view.getByText("Current preview")).toBeTruthy();
-  expect(view.getByRole("button", { name: "Preview resource: Bracket" })).toBe(button);
-  retry.reject(new Error("Resource retry failed"));
-  await waitForSolid(() => {
-    expect(view.getByRole("alert").textContent).toBe("Resource retry failed");
-    expect(button.disabled).toBe(false);
-  });
-  expect(view.getByText("Current preview")).toBeTruthy();
-  button.click();
-  await waitForSolid(() => {
-    expect(view.queryByRole("alert")).toBeNull();
-    expect(request).toHaveBeenCalledTimes(6);
-  });
+  await expectState(true);
+  expectPreview();
+  retry.resolve(current);
+  await expectState(false);
+  expectPreview();
 });

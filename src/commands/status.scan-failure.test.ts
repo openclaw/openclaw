@@ -62,7 +62,7 @@ it.each([
   async (mode, unavailable) => {
     const timeoutMs = mode === "fast JSON" ? 2345 : undefined;
     const original = new Error(
-      "OpenClaw agent database /state/agents/main/agent.sqlite uses schema version 19; stop active agents and run openclaw doctor --fix to migrate session identities before using it.",
+      "OpenClaw agent database /state/agents/main/agent.sqlite uses schema version 19; stop active agents and run openclaw doctor --fix to upgrade it to schema version 32 before using it.",
     );
     mocks.scan.mockRejectedValue(original);
     mocks.overview.mockRejectedValue(original);

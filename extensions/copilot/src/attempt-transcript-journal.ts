@@ -96,6 +96,7 @@ export function createAttemptTranscriptJournal(params: {
   const projectDisplay = (message: AgentMessage) =>
     projectAgentHarnessTranscriptMessageForDisplay({
       hidden: hiddenTurn || (message as { display?: boolean }).display === false,
+      inputProvenance: params.attempt.inputProvenance,
       message,
     });
   const messagesSnapshot = [...params.messages];

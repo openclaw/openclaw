@@ -16,6 +16,7 @@ export async function assertExistingPullRequestWriteAccess(params: {
   pullRequest: PullRequest;
   identity: PreparedGitHubPublicationIdentity;
   assertCurrent: () => void;
+  requirePublicRepositories?: boolean;
 }): Promise<unknown> {
   const { pullRequest: pr, identity, assertCurrent } = params;
   assertCurrent();
@@ -65,6 +66,11 @@ export async function assertExistingPullRequestWriteAccess(params: {
       typeof value.owner.type !== "string"
     ) {
       throw unavailable();
+    }
+    if (params.requirePublicRepositories && value.private !== false) {
+      throw new Error(
+        "The recorded PR must remain public to continue without a linked GitHub account.",
+      );
     }
     const permissions = isRecord(value.permissions) ? value.permissions : undefined;
     return {

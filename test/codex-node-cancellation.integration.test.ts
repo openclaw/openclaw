@@ -7,15 +7,15 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, expect, it, vi } from "vitest";
 import codexPlugin from "../extensions/codex/index.js";
 import { invokeRegisteredNodeHostCommand } from "../src/node-host/plugin-node-host.js";
 import { loadPluginManifest } from "../src/plugins/manifest.js";
-import { createTestPluginRegistry } from "../src/plugins/registry-runtime.test-helpers.js";
+import { createRuntimeTestRegistry } from "../src/plugins/registry-runtime.test-helpers.js";
 import { runWithSpawnBroker } from "../src/process/spawn-broker/context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "../src/process/spawn-broker/host.js";
 import { isPidDefinitelyDead } from "../src/shared/pid-alive.js";
-import { resolveBundledPluginPublicModulePath } from "../src/test-utils/bundled-plugin-public-surface.js";
 import { createDeferred, withTestTimeout } from "./helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
@@ -55,17 +55,10 @@ it.skipIf(skipBrokerTests)(
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
     const pluginConfig = { sessionCatalog: { enabled: false } };
     const config = { plugins: { entries: { codex: { enabled: true, config: pluginConfig } } } };
-    const registry = createTestPluginRegistry(
+    const registry = createRuntimeTestRegistry(
       createPluginRuntimeMock({ config: { current: () => config } }),
     );
-    const codexManifest = loadPluginManifest(
-      path.dirname(
-        resolveBundledPluginPublicModulePath({
-          pluginId: "codex",
-          artifactBasename: "openclaw.plugin.json",
-        }),
-      ),
-    );
+    const codexManifest = loadPluginManifest(bundledPluginRoot("codex"));
     if (!codexManifest.ok) {
       throw new Error(codexManifest.error);
     }
@@ -74,7 +67,6 @@ it.skipIf(skipBrokerTests)(
       source: path.join(root, "index.js"),
       nativeSessionCatalog: codexManifest.manifest.setup?.nativeSessionCatalog,
     });
-    registry.registry.plugins.push(record);
     codexPlugin.register(registry.createApi(record, { config, pluginConfig }));
     setActivePluginRegistry(registry.registry);
 
@@ -113,16 +105,11 @@ it.skipIf(skipBrokerTests)(
         }
         const source = `
           const fs = require("node:fs");
-          let prompt = "";
-          process.stdin.setEncoding("utf8");
-          process.stdin.on("data", chunk => { prompt += chunk; });
-          process.stdin.on("end", () => {
-            if (prompt === "retry") {
-              fs.writeFileSync(process.argv[1], "retry completed");
-            } else {
-              setInterval(() => {}, 1_000);
-            }
-          });
+          if (fs.readFileSync(0, "utf8") === "retry") {
+            fs.writeFileSync(process.argv[1], "retry completed");
+          } else {
+            setInterval(() => {}, 1_000);
+          }
         `;
         const remote = spawnExeca([process.execPath, "-e", source, outputPath], options);
         remotes.push(remote);
@@ -190,18 +177,17 @@ it.skipIf(skipBrokerTests)(
       controller.abort();
       await retainFailure(async () => {
         resumeBroker();
-        const cleanup = await Promise.allSettled(
-          remotes.map(async (remote) => {
-            await wait(remote.child.ready(), "cleanup could not obtain late PID").catch(
-              () => undefined,
-            );
-            remote.child.kill("SIGKILL");
-            await wait(remote.result, "fixture process did not settle").catch(() => undefined);
-            await wait(remote.child.waitForClose(), "fixture child did not close");
-          }),
-        );
-        failures.push(
-          ...cleanup.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+        await Promise.all(
+          remotes.map((remote) =>
+            retainFailure(async () => {
+              await wait(remote.child.ready(), "cleanup could not obtain late PID").catch(
+                () => undefined,
+              );
+              remote.child.kill("SIGKILL");
+              await wait(remote.result, "fixture process did not settle").catch(() => undefined);
+              await wait(remote.child.waitForClose(), "fixture child did not close");
+            }),
+          ),
         );
       });
       await retainFailure(() => broker.close());

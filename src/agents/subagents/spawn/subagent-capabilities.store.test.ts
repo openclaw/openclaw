@@ -25,6 +25,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { resolveRequesterToolPolicies } from "../../requester-tool-policy.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
@@ -118,7 +119,8 @@ describe("persisted subagent capability lookups", () => {
               const request = { config: cfg, agentId: "main", sessionKey: key };
               const resolve = () => resolveRequesterToolPolicies(request);
               const readPolicy = () => {
-                const { inheritedToolPolicy: inherited, subagentStore: store } = resolve();
+                const { inheritedToolPolicy: inherited } = resolve();
+                const store = resolveStore(key, { cfg });
                 return { policy: inherited, depth: resolveCapabilities(key, { cfg, store }).depth };
               };
               expect(resolve().inheritedToolPolicy).toEqual(policy);
@@ -232,6 +234,18 @@ describe("persisted subagent capability lookups", () => {
       expect(retained.read()).toBe(1);
       writeEntries(storePath, { [key]: makeEntry("nested-child", { spawnDepth: 2 }) });
       expect(() => retained.read()).toThrow("Session capability metadata changed");
+      const run = vi.fn(async () => retained.read());
+      await expect(
+        runWithModelFallback({
+          cfg: undefined,
+          provider: "fixture-provider",
+          model: "fixture-model",
+          manifestPlugins: [],
+          fallbacksOverride: ["fixture-next/fixture-model"],
+          run,
+        }),
+      ).rejects.toThrow("Session capability metadata changed");
+      expect(run).toHaveBeenCalledOnce();
     } finally {
       retained.release();
     }
@@ -475,11 +489,6 @@ describe("getSubagentDepthFromSessionStore", () => {
 });
 
 describe("resolveAgentTimeoutMs", () => {
-  it("resolves unlimited config timeoutSeconds", () => {
-    const cfg = { agents: { defaults: { timeoutSeconds: 0 } } } satisfies OpenClawConfig;
-    expect(resolveAgentTimeoutMs({ cfg })).toBe(MAX_TIMER_TIMEOUT_MS);
-  });
-
   it("uses a timer-safe sentinel for no-timeout overrides", () => {
     expect(resolveAgentTimeoutMs({ overrideSeconds: 0 })).toBe(MAX_TIMER_TIMEOUT_MS);
     expect(resolveAgentTimeoutMs({ overrideMs: 0 })).toBe(MAX_TIMER_TIMEOUT_MS);

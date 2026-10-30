@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { expect } from "vitest";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, type RawData } from "ws";
 import type { RpcRequest } from "./protocol.js";
 
 export async function createWebSocketPeer(
@@ -14,12 +14,7 @@ export async function createWebSocketPeer(
   const methods: string[] = [];
   server.on("connection", (socket) => {
     socket.on("message", (data) => {
-      const buffer = Array.isArray(data)
-        ? Buffer.concat(data)
-        : Buffer.isBuffer(data)
-          ? data
-          : Buffer.from(data);
-      const request = JSON.parse(buffer.toString("utf8")) as RpcRequest;
+      const request = JSON.parse(rawDataToText(data)) as RpcRequest;
       const send = (message: unknown) => socket.send(JSON.stringify(message));
       methods.push(request.method);
       handle(request, (result) => send({ id: request.id, result }), send);
@@ -48,4 +43,14 @@ export async function createWebSocketPeer(
       expect(server.address()).toBeNull();
     },
   };
+}
+
+export function rawDataToText(data: RawData): string {
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  if (data instanceof ArrayBuffer) {
+    return Buffer.from(data).toString("utf8");
+  }
+  return data.toString("utf8");
 }

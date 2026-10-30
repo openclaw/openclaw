@@ -75,6 +75,11 @@ Hosted search does not require a local Ollama daemon or `ollama signin`.
 }
 ```
 
+Ollama Web Search uses `tools.web.search.maxResults` for the default result
+count (5 when unset) and `tools.web.search.timeoutSeconds` for its request
+deadline (15 seconds when unset). A search's `count` argument overrides the
+configured result count.
+
 Optional host override, scoped to web search only:
 
 ```json5

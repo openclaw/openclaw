@@ -21,14 +21,9 @@ type DiscordTranscriptsVoiceManager = NonNullable<
 >;
 
 const tempDirs = createTempDirTracker();
+let store: TranscriptsStore;
 
-function createTool(
-  stateDir: string,
-  config: OpenClawConfig,
-  accountId = "account-a",
-  senderId = "allowed",
-) {
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+function createTool(config: OpenClawConfig, accountId = "account-a", senderId = "allowed") {
   return createTranscriptsTool({
     agentId: "main",
     caller: {
@@ -61,12 +56,6 @@ function makeConfig(otherAccount = false): OpenClawConfig {
   };
 }
 
-function storeFor(stateDir: string): TranscriptsStore {
-  return new TranscriptsStore(path.join(stateDir, "transcripts"), {
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
-}
-
 async function expectHidden(tool: ReturnType<typeof createTool>, label: string, actions: string[]) {
   await expect(tool.execute(`status-${label}`, { action: "status" })).resolves.toMatchObject({
     details: { active: [] },
@@ -80,6 +69,9 @@ async function expectHidden(tool: ReturnType<typeof createTool>, label: string, 
 
 describe("transcripts tool with the registered Discord provider", () => {
   beforeEach(() => {
+    const stateDir = tempDirs.make("openclaw-transcripts-discord-provider-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    store = new TranscriptsStore(path.join(stateDir, "transcripts"), { env: process.env });
     const registry = createEmptyPluginRegistry();
     registry.transcriptSourceProviders.push({
       pluginId: "discord",
@@ -128,13 +120,12 @@ describe("transcripts tool with the registered Discord provider", () => {
   });
 
   it("keeps a model-requested account switch on the trusted Discord account", async () => {
-    const stateDir = tempDirs.make("openclaw-transcripts-discord-provider-");
     const { join: accountAJoin, leave: accountALeave } = registerManager("account-a");
     const { join: accountBJoin, leave: accountBLeave } = registerManager("account-b");
     const config = makeConfig(true);
-    const ownerTool = createTool(stateDir, config);
-    const otherAccountTool = createTool(stateDir, config, "account-b");
-    const deniedSameAccountTool = createTool(stateDir, config, "account-a", "blocked");
+    const ownerTool = createTool(config);
+    const otherAccountTool = createTool(config, "account-b");
+    const deniedSameAccountTool = createTool(config, "account-a", "blocked");
 
     const startResult = await ownerTool.execute("start-account-bound", {
       action: "start",
@@ -151,7 +142,7 @@ describe("transcripts tool with the registered Discord provider", () => {
     });
     expect(accountAJoin).toHaveBeenCalledOnce();
     expect(accountBJoin).not.toHaveBeenCalled();
-    await expect(storeFor(stateDir).readSession("account-bound")).resolves.toMatchObject({
+    await expect(store.readSession("account-bound")).resolves.toMatchObject({
       source: { accountId: "account-a" },
       metadata: { agentId: "main" },
     });
@@ -172,9 +163,8 @@ describe("transcripts tool with the registered Discord provider", () => {
   });
 
   it("rejects a Discord sender that the voice command policy denies", async () => {
-    const stateDir = tempDirs.make("openclaw-transcripts-discord-provider-denied-");
     const { join } = registerManager("account-a", "joined");
-    const deniedTool = createTool(stateDir, makeConfig(), "account-a", "blocked");
+    const deniedTool = createTool(makeConfig(), "account-a", "blocked");
 
     await expect(
       deniedTool.execute("denied-sender", {
@@ -186,6 +176,6 @@ describe("transcripts tool with the registered Discord provider", () => {
       }),
     ).rejects.toThrow("not authorized");
     expect(join).not.toHaveBeenCalled();
-    await expect(storeFor(stateDir).readSession("denied-sender")).resolves.toBeUndefined();
+    await expect(store.readSession("denied-sender")).resolves.toBeUndefined();
   });
 });

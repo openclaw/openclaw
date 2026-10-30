@@ -16,7 +16,6 @@ import type { MenuControls } from "../../../components/solid/menu.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import "../../../components/tooltip.ts";
-import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import {
@@ -207,9 +206,6 @@ export function GitHubPublicationAction(props: {
   /** Opt embedded controls into the containing Menu’s traversal. */
   menuControls?: boolean;
   controls?: MenuControls;
-  onOpenPublished?: (
-    result: Extract<NonNullable<GitHubPublicationView["result"]>, { status: "published" }>,
-  ) => void;
 }) {
   const operation = createPublicationAction(() => props.publication);
   const publishedLinkRef = props.controls?.ref();
@@ -262,12 +258,6 @@ export function GitHubPublicationAction(props: {
               href={result().url}
               target="_blank"
               rel="noopener noreferrer"
-              onClick={(event) => {
-                if (props.onOpenPublished && shouldHandleNavigationClick(event)) {
-                  event.preventDefault();
-                  props.onOpenPublished(result());
-                }
-              }}
             >
               {t("chat.pullRequests.openPublishedPr")}
             </a>
@@ -483,28 +473,34 @@ function PublicationEffect(props: {
   );
 }
 
-// One short status line; server prose, account, and effects stay one click away.
-function publicationHeadline(publication: GitHubPublicationView, busy: boolean) {
-  const { result, error, locked } = publication;
-  if (error) {
-    return { text: t("githubPublication.statusUnavailable"), alert: true };
+export function githubPublicationState(publication: GitHubPublicationView) {
+  if (publication.error) {
+    return "unavailable";
   }
-  switch (result?.status) {
+  return (
+    publication.result?.status ??
+    (publication.locked ? (publication.activity !== null ? "active" : "unknown") : undefined)
+  );
+}
+
+// One short status line; server prose, account, and effects stay one click away.
+function publicationHeadline(publication: GitHubPublicationView) {
+  switch (githubPublicationState(publication)) {
+    case "unavailable":
+      return { text: t("githubPublication.statusUnavailable"), alert: true };
     case "failed":
       return { text: t("githubPublication.statusFailed"), alert: true };
     case "needs_confirmation":
       return { text: t("githubPublication.statusConfirm"), alert: false };
+    case "active":
     case "publishing":
       return { text: t("githubPublication.statusPublishing"), alert: false };
     case "requested":
       return { text: t("githubPublication.statusRequested"), alert: false };
+    case "unknown":
+      return { text: t("githubPublication.statusUnknown"), alert: true };
     default:
-      if (!locked) {
-        return null;
-      }
-      return busy
-        ? { text: t("githubPublication.statusPublishing"), alert: false }
-        : { text: t("githubPublication.statusUnknown"), alert: true };
+      return null;
   }
 }
 
@@ -560,7 +556,7 @@ export function GitHubPublicationDetails(props: {
       Boolean(result || confirmation || error || locked || personalUnavailable() || noAccount())
     );
   };
-  const headline = () => publicationHeadline(props.publication, busy());
+  const headline = () => publicationHeadline(props.publication);
   const refresh = () =>
     !busy() &&
     (props.publication.error ||

@@ -1,10 +1,6 @@
 // Control UI tests prove locale chunk recovery through a real browser reconnect.
-import { existsSync, writeFileSync } from "node:fs";
-import path from "node:path";
 import type { BrowserContext, Page, Route } from "playwright";
 import { expect, it } from "vitest";
-import { isSupportedLocale, SUPPORTED_LOCALES } from "../../../src/shared/control-ui-locale.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledGatewayUrl,
   installMockGateway,
@@ -55,96 +51,49 @@ async function reconnect(page: Page, gateway: MockGatewayControls): Promise<void
 }
 
 suite.define(() => {
-  it.each([
-    { name: "sv-SE", browserLocale: "sv-SE", savedLocale: null, expectedLocale: "sv" },
-    { name: "sv-FI", browserLocale: "sv-FI", savedLocale: null, expectedLocale: "sv" },
-    { name: "saved-sv", browserLocale: "en-US", savedLocale: "sv", expectedLocale: "sv" },
-    { name: "saved-fr", browserLocale: "sv-SE", savedLocale: "fr", expectedLocale: "fr" },
-  ])("preserves the browser or saved language for $name after reload", async (scenario) => {
-    const context = await suite.newBrowserContext({
-      ...createControlUiE2eContextOptions(),
-      locale: scenario.browserLocale,
-    });
-    const page = await context.newPage();
-    if (scenario.savedLocale) {
-      await page.addInitScript((savedLocale) => {
-        if (!sessionStorage.getItem("swedish-locale-test.initialized")) {
-          localStorage.setItem("openclaw.i18n.locale", savedLocale);
-          sessionStorage.setItem("swedish-locale-test.initialized", "1");
-        }
-      }, scenario.savedLocale);
-    }
-    await installMockGateway(page);
-
-    await page.goto(`${suite.server.baseUrl}settings/appearance`);
-    const picker = page.locator("#settings-language openclaw-select-picker");
-    await picker.waitFor();
-    const artifacts = createControlUiE2eArtifactDir("swedish-locale");
-    for (const stage of ["before", "after"]) {
-      if (stage === "after") {
-        await page.reload();
-      }
-      await expect
-        .poll(() => page.evaluate(() => document.documentElement.lang))
-        .toBe(scenario.expectedLocale);
-      await picker.locator(".picker-select__trigger").click();
-      const swedishOption = picker.locator('[role="option"][data-value="sv"]');
-      await swedishOption.waitFor();
-      await swedishOption.scrollIntoViewIfNeeded();
-      expect(await swedishOption.textContent()).toContain("Svenska");
-      if (!scenario.savedLocale) {
-        expect(
-          await picker.locator('[role="option"][data-value="system"]').textContent(),
-        ).toContain("Svenska");
-      }
-      await page.screenshot({
-        path: path.join(artifacts, `${scenario.name}-picker-${stage}-reload.png`),
-      });
-    }
-    const browserState = {
-      ...(await page.evaluate(() => ({
-        navigatorLanguage: navigator.language,
-        documentLanguage: document.documentElement.lang,
-        savedLocale: localStorage.getItem("openclaw.i18n.locale"),
-      }))),
-      swedishTranslationMemoryPresent: existsSync(
-        new URL("../i18n/.i18n/sv.tm.jsonl", import.meta.url),
-      ),
-    };
-    expect(browserState).toMatchObject({
-      navigatorLanguage: scenario.browserLocale,
-      savedLocale: scenario.savedLocale,
-    });
-    writeFileSync(
-      path.join(artifacts, `${scenario.name}-browser-state.json`),
-      `${JSON.stringify(browserState, null, 2)}\n`,
-    );
-  });
-
-  it("lazy-loads each registered locale only after the operator selects it", async () => {
+  it("loads a selected locale on demand and updates the mounted Appearance heading", async () => {
     const context = await createContext();
     const page = await context.newPage();
     await installMockGateway(page);
-    const requests = new Map<string, number>();
+    let localeRequests = 0;
     page.on("request", (request) => {
-      const match = new URL(request.url()).pathname.match(/\/src\/i18n\/locales\/([^/]+)\.ts$/);
-      // English registrar modules are not operator-selectable locale adapters.
-      if (match?.[1] && isSupportedLocale(match[1]) && match[1] !== "en") {
-        requests.set(match[1], (requests.get(match[1]) ?? 0) + 1);
+      if (new URL(request.url()).pathname === "/src/i18n/locales/zh-CN.ts") {
+        localeRequests += 1;
       }
     });
 
     await page.goto(`${suite.server.baseUrl}settings/appearance`);
+    const heading = page.locator("openclaw-config-page h1.page-title");
     const picker = page.locator("#settings-language openclaw-select-picker");
-    await picker.waitFor();
-    expect(requests.size).toBe(0);
+    await expect.poll(() => heading.textContent()).toBe("Appearance");
 
-    for (const locale of SUPPORTED_LOCALES.slice(1)) {
-      await selectPickerValue(picker, locale);
-      await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe(locale);
-      expect(requests.get(locale)).toBe(1);
+    expect(localeRequests).toBe(0);
+    await selectPickerValue(picker, "zh-CN");
+    await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("zh-CN");
+    await expect.poll(() => heading.textContent()).toBe("外观");
+    expect(localeRequests).toBe(1);
+
+    await selectPickerValue(picker, "en");
+    await expect.poll(() => heading.textContent()).toBe("Appearance");
+    expect(new URL(page.url()).pathname).toBe("/settings/appearance");
+  });
+
+  it("labels the browser-selected language in the system picker", async () => {
+    const context = await suite.newBrowserContext({
+      ...createControlUiE2eContextOptions(),
+      locale: "sv-FI",
+    });
+    const page = await context.newPage();
+    await installMockGateway(page);
+    await page.goto(`${suite.server.baseUrl}settings/appearance`);
+    const picker = page.locator("#settings-language openclaw-select-picker");
+    await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("sv");
+    await picker.locator(".picker-select__trigger").click();
+    for (const value of ["sv", "system"]) {
+      expect(
+        await picker.locator(`[role="option"][data-value="${value}"]`).textContent(),
+      ).toContain("Svenska");
     }
-    expect(requests.size).toBe(SUPPORTED_LOCALES.length - 1);
   });
 
   it("applies a locale whose first chunk request failed after the Gateway reconnects", async () => {

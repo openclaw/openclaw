@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
+import { resolveControlUiRootSync } from "./control-ui-assets.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -24,9 +24,6 @@ it.each(["package", "symlinked wrapper"] as const)(
       fs.symlinkSync(entrypoint, argv1, "file");
     }
 
-    await expect(resolveControlUiAssetHealth({ argv1 })).resolves.toEqual({
-      kind: "ready",
-      indexPath,
-    });
+    expect(resolveControlUiRootSync({ argv1 })).toBe(path.dirname(indexPath));
   },
 );

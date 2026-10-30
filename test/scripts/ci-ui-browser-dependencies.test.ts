@@ -10,11 +10,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 it.each([
   "ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts",
   "ui/src/e2e/tooltip-first-activation.e2e.test.ts",
+  "ui/src/e2e/logs-scroll.e2e.test.ts",
 ])("installs WebKit only for the shard owning %s", (suite) => {
-  const step = workflow.requiredWorkflowStep(
-    workflow.readCiWorkflow().jobs["checks-ui-e2e"].steps,
-    "Test Control UI end-to-end",
-  );
   const root = tempDirs.make("openclaw-ui-browser-dependencies-");
   const local = (file: string) => path.join(root, file);
   const read = (file: string) => readFileSync(local(file), "utf8");
@@ -47,7 +44,7 @@ export default { test: {
   writeFileSync(local("installs"), "");
   const run = (index: number, patterns?: string[]) => {
     writeFileSync(local("include.json"), JSON.stringify(patterns ?? []));
-    const result = workflow.runWorkflowShellScript(step.run, {
+    const result = workflow.runControlUiE2eWorkflow({
       cwd: root,
       env: {
         ...process.env,

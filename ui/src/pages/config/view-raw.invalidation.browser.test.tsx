@@ -41,7 +41,7 @@ it("retains the native raw editor and undo through controlled edits and schema h
   expect(document.activeElement).toBe(input);
   expect([input.selectionStart, input.selectionEnd]).toEqual([2, 5]);
   expect(setter).not.toHaveBeenCalled();
-  await userEvent.keyboard("{Control>}z{/Control}");
+  await userEvent.keyboard("{ControlOrMeta>}z{/ControlOrMeta}");
   expect(input.value).toBe('{ "audit": "draft" }');
   const onSave = vi.fn();
   renderConfigInto({ ...current, onSave }, root);
