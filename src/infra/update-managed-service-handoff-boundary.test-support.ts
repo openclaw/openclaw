@@ -604,7 +604,12 @@ export function createManagedServiceManagerBoundary({
         await expect(pathExists(commandsPath)).resolves.toBe(false);
         expect(stdout).not.toContain("committed\n");
         await expect(pathExists(updaterPath)).resolves.toBe(false);
-      } else if (options?.launchdFault === "wrong-parent" || options?.overdueCommit) {
+      } else if (
+        ["wrong-parent", "nested-parent", "foreign-job", "duplicate-pid"].includes(
+          options?.launchdFault ?? "",
+        ) ||
+        options?.overdueCommit
+      ) {
         const cancelled = waitForHandoffResponse(runningHelper.stdout, "cancelled");
         runningHelper.stdin?.write("park\n");
         await cancelled;

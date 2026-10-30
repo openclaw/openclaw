@@ -1,3 +1,4 @@
+export { parseLaunchctlJob } from "../daemon/launchctl-job.js";
 import "./sealed-runtime-bootstrap.js";
 import { routeLogsToStderr } from "../logging/console.js";
 
