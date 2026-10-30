@@ -19,6 +19,20 @@ describe("plugin contract registry", () => {
     expect(ids).toEqual([...new Set(ids)]);
   }
 
+  it("isolates nested capability metadata between snapshot reads", () => {
+    const first = pluginRegistrationContractRegistry.find((entry) => entry.pluginId === "google");
+    if (!first) {
+      throw new Error("Google contract fixture missing");
+    }
+    first.providerIds.push("fixture-only");
+    first.providerEnvVars["fixture-only"] = ["FIXTURE_ONLY_API_KEY"];
+
+    const next = pluginRegistrationContractRegistry.find((entry) => entry.pluginId === "google");
+    expect(next?.providerIds).toContain("google");
+    expect(next?.providerIds).not.toContain("fixture-only");
+    expect(next?.providerEnvVars).not.toHaveProperty("fixture-only");
+  });
+
   it.each([
     {
       name: "does not duplicate bundled provider ids",

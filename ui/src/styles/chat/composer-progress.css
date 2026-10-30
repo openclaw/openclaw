@@ -1,5 +1,3 @@
-@import "./composer-context-strip.css";
-
 .session-progress-card--composer,
 .session-progress-card__summary {
   border-radius: calc(20px * var(--openclaw-corner-radius-scale));
@@ -131,8 +129,31 @@
 }
 
 .agent-chat__goal-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: var(--chat-stack-trailing-control-size);
   height: var(--chat-stack-trailing-control-size);
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+}
+
+.agent-chat__goal-action:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.agent-chat__goal-action svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .agent-chat__goal-action-label {

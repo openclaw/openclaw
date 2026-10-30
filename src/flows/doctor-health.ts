@@ -123,7 +123,12 @@ export async function runDoctorHealthFlow(
     await import("../plugins/plugin-generation-source-lookup.js");
   await withPluginGenerationSourceCustody(() =>
     custody ? withCommandProcessScope(run, undefined, custody) : run(),
-  );
+  ).catch(async (error: unknown) => {
+    const { reportDoctorReadOnlyFilesystemError } =
+      await import("../commands/doctor-maintenance-inspection.js");
+    await reportDoctorReadOnlyFilesystemError(error, runtime);
+    throw error;
+  });
   signal?.throwIfAborted();
   requestedExit?.();
 }

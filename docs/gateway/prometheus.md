@@ -887,6 +887,17 @@ applies.
 
 The `transcripts` request family includes stored event appends and retention.
 
+Known session writer commands outside the transcript and history families retain
+their exact owner names, including `session.entries.replace`,
+`session.lifecycle.deletePlan`, `session.lifecycle.delete`,
+`session.archivePruning.pruneRetention`, `session.archivePruning.reclaimPages`, and
+`session.metadata.append`. Unknown `session.*` commands still use `sessions`, so
+queries that compare with older builds should aggregate `sessions` with the
+`session.*` labels. Cron, plugin-state, transcript and history commands keep their
+family labels. The closed vocabulary lives in `src/infra/sqlite-worker-request-class.ts`
+and also applies to worker payload-byte metrics. The `execute` phase includes I/O and
+commit waits, not just SQL or CPU.
+
 Shared-state reads use kind `stateRead` (formerly `state_read`) and the same
 bounded operation-family classifier as SQLite writers. Examples include
 `devicePairing`, `acpSessions`, `workers`, and `cron`; standalone admission reads
