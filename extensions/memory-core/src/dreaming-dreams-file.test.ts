@@ -369,7 +369,11 @@ describe("dream narrative publication", () => {
     },
   );
 
-  it("writes only a generic trace after empty completion", async () => {
+  it("retains fallback history without displacing useful diary continuity", async () => {
+    const olderEntry = "The archive remembered a durable fact.";
+    const newerEntry =
+      "A memory trace surfaced, but details were unavailable in this run. Then I remembered the archive.";
+    await writeBackfill(olderEntry);
     const { run } = narrativeHarness("   \n  ");
     const outcome = await run({
       data: { phase: "deep", snippets: ["A private raw staging fragment."] },
@@ -379,6 +383,18 @@ describe("dream narrative publication", () => {
     const diary = await readDiary();
     expect(diary).toContain("A memory trace surfaced, but details were unavailable in this run.");
     expect(diary).not.toContain("A private raw staging fragment.");
+    await appendNarrativeEntry({ workspaceDir, narrative: newerEntry, nowMs: phaseDefaults.nowMs });
+    const recentDiaryEntries = await readRecentDreamDiaryEntries({ workspaceDir, limit: 2 });
+    expect(recentDiaryEntries).toEqual([newerEntry, olderEntry]);
+
+    const next = narrativeHarness("A fresh reflection on the archive.");
+    await next.run({ data: { phase: "light", snippets: ["An archive."], recentDiaryEntries } });
+    const prompt = next.subagent.complete.mock.calls[0]?.[0].message;
+    expect(prompt).toContain(`  - ${olderEntry}`);
+    expect(prompt).toContain(`  - ${newerEntry}`);
+    expect(prompt).not.toContain(
+      "  - A memory trace surfaced, but details were unavailable in this run.\n",
+    );
   });
 
   it("writes a generic trace without selecting credentials for an ownerless sweep", async () => {
