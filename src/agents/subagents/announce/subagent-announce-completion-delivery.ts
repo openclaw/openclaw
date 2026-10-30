@@ -13,6 +13,7 @@ import { splitMediaFromOutput } from "../../../media/parse.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import type { SessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../../sessions/user-turn-transcript.types.js";
 import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
@@ -57,6 +58,7 @@ export async function runAnnounceAgentCall(params: {
   expectFinal?: boolean;
   onAccepted?: (payload: unknown) => void;
   onExecutionStarted?: () => void;
+  onInputCommitted?: (receipt: UserTurnTranscriptAdmissionReceipt) => void | Promise<void>;
   onBeforeDispatch?: () => void | Promise<void>;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -139,6 +141,13 @@ export async function runAnnounceAgentCall(params: {
         onAccepted: (payload) => {
           clearTimeout(timer);
           params.onAccepted?.(payload);
+        },
+        onInputCommitted: (receipt) => {
+          executionSignal.throwIfAborted();
+          if (!params.isExecutionAllowed()) {
+            throw new SourceOwnerChangedError();
+          }
+          return params.onInputCommitted?.(receipt);
         },
         onStartOwner: (owner) => {
           // Private callers still time out their observation while admission keeps custody.

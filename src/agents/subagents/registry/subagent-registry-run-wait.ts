@@ -252,7 +252,10 @@ export abstract class SubagentWaitManager {
       entry = currentEntry();
       const completeAsRunTimeout = (endedAt?: number, startedAt?: number) =>
         complete({
-          outcome: { status: "timeout" },
+          outcome: {
+            status: "timeout",
+            ...(waitStatus === "timeout" && wait.error ? { error: wait.error } : {}),
+          },
           reason: SUBAGENT_ENDED_REASON_COMPLETE,
           terminalReply: wait.terminalReply,
           ...(typeof endedAt === "number" ? { endedAt } : {}),

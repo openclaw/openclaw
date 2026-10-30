@@ -107,7 +107,12 @@ export type RequesterSettleWakeState = {
   /** Number of delivery attempts already admitted. */
   attemptCount: number;
   /** Raw private input retained with its exact dispatch identity until this wake settles. */
-  privateInput?: { runId: string; message: string };
+  privateInput?: {
+    runId: string;
+    message: string;
+    /** Durable execution identities of failures represented in these exact message bytes. */
+    representedFailureIdentities?: string[];
+  };
   /** Retained retry receipt from an admitted attempt; mailbox admission owns scheduling. */
   nextAttemptAt?: number;
   /** Frozen wave membership after delivery admission or requester-yield re-admission. */

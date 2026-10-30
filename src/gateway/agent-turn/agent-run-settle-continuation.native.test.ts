@@ -1,9 +1,22 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../agents/internal-runtime-context.js";
+import {
+  runSessionManagerWrite,
+  withSessionManagerWriteAssertion,
+} from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { recordSubagentFailureHandoff } from "../../agents/subagents/registry/subagent-failure-handoff.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import {
+  createSubagentStoreRunFixture,
+  persistRegistryFixture,
+  loadSubagentRegistryFromSqlite,
+} from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
 import { buildRequesterSettleWakeIdentity } from "../../agents/subagents/registry/subagent-requester-settle-identity.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
@@ -13,7 +26,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import * as pendingInputs from "../../config/sessions/session-accessor.pending-inputs.js";
 import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
-import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
@@ -23,6 +35,10 @@ import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileDisplayName,
 } from "../../state/user-profile-writes.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { withSessionSendDelivery } from "../session-send-delivery.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
@@ -78,7 +94,21 @@ async function withTurn<T>(params: TurnParams, body: (recorder: Recorder) => Pro
   }
 }
 
-const fixture = useTempSessionsFixture("settle-continuation-native-");
+let state: OpenClawTestState;
+beforeEach(async () => {
+  // The Gateway recorder and native writers must share one explicit fixture root,
+  // including when the test runner inherited a named operator profile.
+  state = await createOpenClawTestState({ prefix: "settle-continuation-native-" });
+});
+afterEach(async () => {
+  await state.cleanup();
+  subagentRuns.clear();
+  clearSubagentRunsReadCacheForTest();
+});
+const fixture = {
+  storePath: () => path.join(state.sessionsDir(), "sessions.json"),
+  sessionsDir: () => state.sessionsDir(),
+};
 async function expectUserInputs(scope: Parameters<typeof loadTranscriptEvents>[0], count: number) {
   const users = (await loadTranscriptEvents(scope)).filter(
     (entry) =>
@@ -447,7 +477,9 @@ it("keeps the committed child target and later owner metadata through input pers
     sessionId: reroutedTarget.sessionId,
     updatedAt: 1,
   });
+  const onInputCommitted = vi.fn();
   const params = makeTurnParams(target, "Child task", "fresh-child-run", {
+    onInputCommitted,
     cfg: { session: { store: reroutedTarget.storePath } },
     sessionEntry,
     freshChildStorePath: target.storePath,
@@ -461,52 +493,267 @@ it("keeps the committed child target and later owner metadata through input pers
       (event) => isIndexedSessionEntry(event) && event.type === "message",
     );
     expect(messages).toMatchObject([{ message: { role: "user", content: "Child task" } }]);
+    expect(onInputCommitted).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sessionKey, sessionId }),
+    );
     expect(loadSessionEntry(target)).toMatchObject({ sessionId, label: "Renamed child" });
     expect(await loadTranscriptEvents(reroutedTarget)).toEqual([]);
   });
 });
 
-it("persists subagent completion handoff prompts as hidden inter-session turns", async () => {
-  const sessionKey = "agent:main:completion-handoff";
-  const sessionId = "completion-handoff-session";
-  const target = { agentId: "main", sessionKey, sessionId, storePath: fixture.storePath() };
-  await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
-  const provenance = {
-    kind: "inter_session" as const,
-    sourceSessionKey: "agent:main:subagent:child",
-    sourceTool: "subagent_announce",
-  };
-  const message = "Continue the OpenClaw runtime event.";
-  const params = makeTurnParams(target, message, "announce:completion-handoff", {
-    inputProvenance: provenance,
-    request: {
-      internalEvents: [
-        {
-          type: "task_completion",
-          source: "subagent",
-          childSessionKey: provenance.sourceSessionKey,
-          childSessionId: "child-session-id",
-          announceType: "completion",
-          taskLabel: "child task",
-          status: "ok",
-          statusLabel: "completed",
-          result: "child result",
-          replyInstruction: "Deliver the child result.",
+it.each([false, true])(
+  "keeps healthy completion results runtime-only (private=%s)",
+  async (privateCompletion) => {
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:healthy-completion",
+      sessionId: "healthy-parent",
+      storePath: fixture.storePath(),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const onInputCommitted = vi.fn();
+    const params = makeTurnParams(
+      target,
+      "Continue the OpenClaw runtime event.",
+      "announce:healthy-completion",
+      {
+        privateCompletion: privateCompletion ? true : undefined,
+        onInputCommitted,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:healthy",
+          sourceTool: "subagent_announce",
         },
-      ],
-    },
-  });
-  // The completion's runtime context is saved after this turn; replay needs the turn itself.
-  await withTurn(params, async (recorder) => {
-    expect(await recorder.persistApproved()).toMatchObject({ appended: true });
-  });
-  const messages = (await loadTranscriptEvents(target)).filter(
-    (event) => isIndexedSessionEntry(event) && event.type === "message",
-  );
-  expect(messages).toMatchObject([
-    { message: { role: "user", display: false, content: message, provenance } },
-  ]);
-});
+        request: {
+          deliver: false,
+          expectedExistingSessionId: target.sessionId,
+          internalEvents: [
+            {
+              type: "task_completion",
+              source: "subagent",
+              childSessionKey: "agent:main:subagent:healthy",
+              announceType: "completion",
+              taskLabel: "healthy child",
+              status: "ok",
+              statusLabel: "completed",
+              result: "HEALTHY_RUNTIME_ONLY",
+              replyInstruction: "Review the result.",
+            },
+          ],
+        },
+      },
+    );
+    await withTurn(params, async (recorder) => {
+      expect(await recorder.persistApproved()).toMatchObject({ appended: true });
+      expect(onInputCommitted).toHaveBeenCalledOnce();
+      expect(JSON.stringify(await loadTranscriptEvents(target))).not.toContain(
+        "HEALTHY_RUNTIME_ONLY",
+      );
+      expect(params.request.internalEvents?.[0]?.result).toBe("HEALTHY_RUNTIME_ONLY");
+    });
+  },
+);
+
+it.each([
+  [false, false],
+  [true, false],
+  [false, true],
+  [true, true],
+])(
+  "commits failure diagnostics with custody, not admission (private=%s, rejected=%s)",
+  async (privateCompletion, rejected) => {
+    const sessionKey = "agent:main:completion-handoff";
+    const sessionId = "completion-handoff-session";
+    const target = { agentId: "main", sessionKey, sessionId, storePath: fixture.storePath() };
+    await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+    const child = createSubagentStoreRunFixture({
+      requesterSessionKey: sessionKey,
+      requesterStorePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+      completionRequesterSessionId: sessionId,
+      completion: {
+        required: true,
+        resultText: "Saved partial progress: found the failing request.",
+      },
+      execution: {
+        status: "terminal",
+        endedAt: 8,
+        outcome: { status: "error", error: "Provider unavailable" },
+      },
+    });
+    const healthy = createSubagentStoreRunFixture({
+      ...child,
+      runId: "healthy-sibling-run",
+      childSessionKey: "agent:main:subagent:healthy-sibling",
+      execution: { status: "terminal", endedAt: 8, outcome: { status: "ok" } },
+      completion: { required: true, resultText: "HEALTHY_RUNTIME_ONLY" },
+    });
+    subagentRuns.set(child.runId, child);
+    subagentRuns.set(healthy.runId, healthy);
+    persistRegistryFixture(
+      new Map([
+        [child.runId, child],
+        [healthy.runId, healthy],
+      ]),
+    );
+    // Direct completion inputs use typed events, unlike message-embedded settle cohorts.
+    const events: NonNullable<TurnParams["request"]["internalEvents"]> = [child, healthy].map(
+      (row) => ({
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: row.childSessionKey,
+        announceType: "completion",
+        taskLabel: "child task",
+        status: row.execution.outcome!.status,
+        statusLabel: row.execution.outcome?.error ?? "completed",
+        result: row.completion!.resultText!,
+        replyInstruction: "Review the result.",
+      }),
+    );
+    const provenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: child.childSessionKey,
+      sourceTool: "subagent_announce",
+    };
+    const message = "Continue the OpenClaw runtime event.";
+    let handoff: Promise<void> | undefined;
+    const onInputCommitted = vi.fn<NonNullable<TurnParams["onInputCommitted"]>>((receipt) => {
+      handoff = recordSubagentFailureHandoff({
+        entries: [child, healthy],
+        requester: receipt,
+        assertCurrent: () => {},
+      });
+      return handoff;
+    });
+    const params = makeTurnParams(target, message, "announce:completion-handoff", {
+      onInputCommitted,
+      privateCompletion: privateCompletion ? true : undefined,
+      inputProvenance: provenance,
+      request: {
+        expectedExistingSessionId: sessionId,
+        deliver: false,
+        internalEvents: events,
+      },
+    });
+    await withTurn(params, async (recorder) => {
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const write = recorder.persistApproved({
+        target: async () => {
+          entered.resolve();
+          await resume.promise;
+          if (rejected) {
+            throw new Error("Failure-bearing input write rejected");
+          }
+          return {
+            ...target,
+            sessionEntry: expectDefined(loadSessionEntry(target), "current requester"),
+          };
+        },
+      });
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          write,
+          "Input write did not reach its target",
+        );
+        expect(onInputCommitted).not.toHaveBeenCalled();
+        expect(await loadTranscriptEvents(target)).toEqual([]);
+        expect(
+          loadSubagentRegistryFromSqlite().get(child.runId)?.delivery?.failureHandoff,
+        ).toBeUndefined();
+      } finally {
+        resume.resolve();
+      }
+      if (rejected) {
+        await expect(write).rejects.toThrow("Failure-bearing input write rejected");
+        expect(onInputCommitted).not.toHaveBeenCalled();
+        expect(await loadTranscriptEvents(target)).toEqual([]);
+        expect(
+          loadSubagentRegistryFromSqlite().get(child.runId)?.delivery?.failureHandoff,
+        ).toBeUndefined();
+        return;
+      }
+      expect(await write).toMatchObject({ appended: true });
+      await handoff;
+      expect(onInputCommitted).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          sessionKey,
+          sessionId,
+          idempotencyKey: "announce:completion-handoff:user",
+        }),
+      );
+      expect(
+        loadSubagentRegistryFromSqlite().get(child.runId)?.delivery?.failureHandoff,
+      ).toMatchObject({ requesterSessionKey: sessionKey, requesterSessionId: sessionId });
+      // The later runtime-context carrier has not been appended. Custody must
+      // already include cause and progress, even if that later write never succeeds.
+      const committedEvents = await loadTranscriptEvents(target);
+      const messages = committedEvents.filter(
+        (event) => isIndexedSessionEntry(event) && event.type === "message",
+      );
+      expect(messages).toMatchObject([
+        {
+          message: {
+            role: "user",
+            display: false,
+            provenance,
+            content: expect.stringContaining("Provider unavailable"),
+          },
+        },
+      ]);
+      expect(JSON.stringify(messages)).toContain("found the failing request.");
+      expect(JSON.stringify(committedEvents)).not.toContain("HEALTHY_RUNTIME_ONLY");
+      expect(
+        events.some(
+          (event) => event.status === "ok" && event.result.includes("HEALTHY_RUNTIME_ONLY"),
+        ),
+      ).toBe(true);
+      expect(
+        loadSubagentRegistryFromSqlite().get(healthy.runId)?.delivery?.failureHandoff,
+      ).toBeUndefined();
+      const manager = await SessionManager.openAsync(target, state.sessionsDir());
+      const contextEntered = createDeferred();
+      const releaseContext = createDeferred();
+      const predecessor = runSessionManagerWrite(manager, async () => {
+        contextEntered.resolve();
+        await releaseContext.promise;
+      });
+      await contextEntered.promise;
+      let contextCurrent = true;
+      const contextWrite = withSessionManagerWriteAssertion(
+        manager,
+        () => {
+          if (!contextCurrent) {
+            throw new Error("Runtime context write rejected");
+          }
+        },
+        () =>
+          manager.appendCustomMessageEntryAsync(
+            OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+            "Later runtime-context copy",
+            false,
+          ),
+      );
+      try {
+        // The real manager queue delays the context, while the committed input
+        // and custody receipt already retain both diagnostic facts.
+        expect(await loadTranscriptEvents(target)).toEqual(committedEvents);
+      } finally {
+        contextCurrent = false;
+        releaseContext.resolve();
+        await expect(contextWrite).rejects.toThrow("Runtime context write rejected");
+        await predecessor;
+      }
+      expect(await loadTranscriptEvents(target)).toEqual(committedEvents);
+      expect(
+        loadSubagentRegistryFromSqlite().get(child.runId)?.delivery?.failureHandoff,
+      ).toMatchObject({ requesterSessionKey: sessionKey, requesterSessionId: sessionId });
+      expect(recorder.getProcessingCompletion?.()).toBeUndefined();
+      await recorder.persistApproved();
+      expect(onInputCommitted).toHaveBeenCalledOnce();
+    });
+  },
+);
 
 it.each(["Original requester", null])(
   "retains accepted sender presentation after a profile rename (%s)",

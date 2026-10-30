@@ -1,0 +1,3 @@
+# Bounded test-only metadata for the unresolved Linux stream-commit budget failure.
+# Preserves the original oracle; validates the accessor-backed observer separately.
+136

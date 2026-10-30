@@ -181,11 +181,13 @@ function SubagentRowContent(props: { subagent: SpawnedSubagent; onOpen?: () => v
   const state = () =>
     props.subagent.session?.running
       ? t("chat.toolCards.subagentRunning")
-      : props.subagent.session?.ended === "failed"
-        ? t("chat.toolCards.failed")
-        : props.subagent.session?.ended === "stopped"
-          ? t("chat.toolCards.subagentStopped")
-          : formatDurationCompact(props.subagent.session?.runtimeMs);
+      : props.subagent.session?.failureHandedOff
+        ? t("chat.toolCards.subagentReturned")
+        : props.subagent.session?.ended === "failed"
+          ? t("chat.toolCards.failed")
+          : props.subagent.session?.ended === "stopped"
+            ? t("chat.toolCards.subagentStopped")
+            : formatDurationCompact(props.subagent.session?.runtimeMs);
   return (
     <>
       <Show
@@ -198,7 +200,11 @@ function SubagentRowContent(props: { subagent: SpawnedSubagent; onOpen?: () => v
         <span
           class={[
             "chat-tool-row__subagent-state",
-            { "chat-tool-row__subagent-state--failed": props.subagent.session?.ended === "failed" },
+            {
+              "chat-tool-row__subagent-state--failed":
+                props.subagent.session?.ended === "failed" &&
+                !props.subagent.session.failureHandedOff,
+            },
           ]}
         >
           {state()}

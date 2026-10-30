@@ -5,7 +5,6 @@ import { cp, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { MessageReactionSummary } from "@openclaw/gateway-protocol";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import type { Locator, Page } from "playwright";
 import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
@@ -16,15 +15,8 @@ import type {
   SessionsDiffResult,
 } from "../../../packages/gateway-protocol/src/schema/sessions.ts";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
-import type { ControlUiBootstrapConfig } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { controlUiPluginAssetRoot } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
-import type {
-  AgentsListResult,
-  ModelCatalogEntry,
-  UpdateAvailable,
-  UpdateScheduleState,
-} from "../api/types.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { createControlUiAttachmentFacts } from "./control-ui-attachment-fixtures.ts";
@@ -37,10 +29,10 @@ import {
 import type {
   ControlUiMockGateway,
   ControlUiMockGatewayInstallOptions,
+  ControlUiMockGatewayScenario,
   ControlUiMockRequestHandler,
   MockGatewayControls,
   MockGatewayRequest,
-  MockGatewayRequestSelector,
   MockGatewayWindow,
 } from "./control-ui-e2e-contract.ts";
 import { createMockGatewayControls, installMockGatewayScript } from "./control-ui-e2e-controls.ts";
@@ -59,18 +51,14 @@ import {
   extendControlUiE2eWaitTimeoutForSourceServer,
 } from "./control-ui-e2e-readiness.ts";
 import { getSharedControlUiE2ePreview } from "./control-ui-e2e-shared-preview.ts";
-import { normalizeControlUiMockAuth, type ControlUiMockAuth } from "./control-ui-mock-auth.ts";
+import { normalizeControlUiMockAuth } from "./control-ui-mock-auth.ts";
 import { createControlUiMockDeferredRequests } from "./control-ui-mock-deferred-requests.ts";
-import {
-  createControlUiMockPresence,
-  type ControlUiMockPresenceScenario,
-} from "./control-ui-mock-presence.ts";
+import { createControlUiMockPresence } from "./control-ui-mock-presence.ts";
 import { createControlUiMockReactions } from "./control-ui-mock-reactions.ts";
 import { createControlUiMockResponses } from "./control-ui-mock-responses.ts";
 import { createControlUiMockSessionSubscriptions } from "./control-ui-mock-session-subscriptions.ts";
 import { parseControlUiMockRequestFrame } from "./control-ui-mock-wire.ts";
 import { createControlUiPaneRuntimeTestAdapterScript } from "./control-ui-pane-runtime.test-support.ts";
-import type { NativeControlUiPluginFixture } from "./control-ui-plugin-fixture.ts";
 import {
   createControlUiSessionFixtures,
   type ControlUiSessionFixture,
@@ -78,6 +66,7 @@ import {
 
 export type {
   ControlUiMockGateway,
+  ControlUiMockGatewayScenario,
   ControlUiMockRequestHandler,
   MockGatewayControls,
   MockGatewayRequest,
@@ -197,118 +186,6 @@ const json5BrowserSource = readFileSync(require.resolve("json5/dist/index.min.js
 
 export { installControlUiMockBootstrapDocument } from "./control-ui-bootstrap-fixture.ts";
 export { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
-
-export interface ControlUiMockGatewayScenario
-  extends ControlUiMockAuth, ControlUiMockPresenceScenario {
-  bootstrapPreferences?: ControlUiBootstrapConfig["preferences"];
-  /** Auto-wait for sidebar rosters unless startup is held or connect fails; true overrides those skips, false disables the wait. */
-  awaitInitialRoster?: boolean;
-  nativePlugins?: readonly NativeControlUiPluginFixture[];
-  pluginAssetsRequireAuth?: boolean;
-  attachmentMaxBytes?: number;
-  agentModel?: string | null;
-  assistantAgentId?: string;
-  assistantName?: string;
-  automaticallyFetchFavicons?: boolean;
-  communityInvite?: boolean;
-  basePath?: string;
-  controlUiTabs?: Array<{
-    group?: string;
-    icon?: string;
-    id: string;
-    label: string;
-    path?: string;
-    placement?: string;
-    pluginId: string;
-    slug?: string;
-  }>;
-  controlUiLinkReaders?: unknown[];
-  controlUiWidgetKinds?: Array<{
-    kind: string;
-    label: string;
-    pluginId: string;
-  }>;
-  allowedSessionVisibilities?: Array<"shared" | "read-only" | "suggest" | "draft">;
-  hasMultipleSessionSharingIdentities?: boolean;
-  featureCapabilities?: string[];
-  connectCapabilities?: string[];
-  defaultAgentId?: string;
-  deferredMethods?: string[];
-  deferredRequests?: MockGatewayRequestSelector[];
-  /** Hold every request until resolveDeferred/rejectDeferred releases the method. */
-  heldMethods?: string[];
-  /** Hold only requests matching these method and parameter selectors. */
-  heldRequests?: MockGatewayRequestSelector[];
-  /** Fail each admission-dependent read this many times before serving its normal response. */
-  startupPendingResponses?: number;
-  /** Non-release gateway checkout branch surfaced in the sidebar footer. */
-  devGitBranch?: string;
-  /** Exact immutable Control UI artifact served by the mocked Gateway. */
-  serverBuildId?: string;
-  /** Exact Gateway lifecycle generation served in hello. */
-  gatewayBootId?: string;
-  gatewaySuspensionPhase?: "accepting" | "preparing" | "draining" | "prepared";
-  /** Optional startup update snapshot for rich local mock fixtures. */
-  updateAvailable?: UpdateAvailable | null;
-  /** Optional automatic-update campaign snapshot for rich local mock fixtures. */
-  updateSchedule?: UpdateScheduleState | null;
-  controlUiBuildSource?: "bundled" | "configured";
-  serverVersion?: string;
-  featureEvents?: string[];
-  featureMethods?: string[];
-  /** Simulate a legacy Gateway that predates the advertised method catalog. */
-  omitFeatureMethods?: boolean;
-  historyMessages?: unknown[];
-  /** Disable only for scenarios exercising the separate chat.startup fallback. */
-  subscriptionInitialHistory?: boolean;
-  sessionReactions?: Record<string, Record<string, MessageReactionSummary[]>>;
-  /** Canonical per-session transcripts, shared by history and startup reads. */
-  sessionTranscripts?: Record<
-    string,
-    {
-      messages: unknown[];
-      thinkingLevel?: string | null;
-      inFlightRun?: ControlUiMockGatewayScenario["inFlightRun"];
-    }
-  >;
-  maxPayload?: number;
-  /** Static payloads, parameter-matched cases, or call-ordered sequences. */
-  methodResponses?: Record<string, unknown>;
-  /** URL prefixes that retain the browser's real WebSocket transport. */
-  webSocketPassthroughPrefixes?: string[];
-  /** Replayed in-flight run snapshot served by chat.history and chat.startup. */
-  inFlightRun?: {
-    runId: string;
-    text?: string;
-    startedAt?: number;
-    events?: unknown[];
-    plan?: unknown;
-  } | null;
-  /** Subscription-scoped Gateway events replayed on a fixed browser-side cycle. */
-  repeatingSessionEvents?: {
-    events: Array<{ event: "agent" | "session.observer" | "session.tool"; payload: unknown }>;
-    intervalMs?: number;
-  };
-  /** Explicit history-only row override, for example a stale run-state projection. */
-  sessionInfo?: Record<string, unknown> | null;
-  /** Canonical fixture rows, independent of case/sequence/deferred wire overrides. */
-  sessions?: ControlUiSessionFixture[];
-  /** Partition sessions.list fixtures by archived state after applying patches. */
-  sessionArchiveFiltering?: boolean;
-  models?: ModelCatalogEntry[];
-  /** Selected fixture and event default; use controlUiSessionUrl to select it in the UI. */
-  sessionKey?: string;
-  sessionScope?: AgentsListResult["scope"];
-  mainSessionKey?: string;
-  /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
-  sessionGroups?: string[];
-  /** Optional New Session defaults keyed by custom group name. */
-  sessionGroupDefaults?: Record<string, { cwd?: string; worktree?: boolean }>;
-  terminalEnabled?: boolean;
-  cliAgentsEnabled?: boolean;
-  workspace?: string;
-  workspaceGit?: boolean;
-}
 
 type NormalizedControlUiMockGatewayScenario = Required<
   Omit<
@@ -905,6 +782,11 @@ function installControlUiMockGateway(
   parseFrame: typeof parseControlUiMockRequestFrame,
 ) {
   const NativeWebSocket = window.WebSocket;
+  const streamBudgetTrace = window as Window & {
+    ocStreamBudgetTrace?: {
+      record: (kind: string, detail: string, keys?: string[]) => void;
+    };
+  };
   type DeferredResponse = {
     id: string;
     method: string;
@@ -2292,6 +2174,7 @@ function installControlUiMockGateway(
         return;
       }
       requests.push({ id, method, params: frame.params });
+      streamBudgetTrace.ocStreamBudgetTrace?.record("rpc-request", method);
       if (deferredRequests.shouldDefer(method, frame.params)) {
         deferredRequests.responses.push({ id, method, params: frame.params, socket: this });
         return;
@@ -2303,6 +2186,11 @@ function installControlUiMockGateway(
         if (!mockError) {
           this.sessionMessageSubscriptions.recordRequest(method, frame.params, payload);
         }
+        streamBudgetTrace.ocStreamBudgetTrace?.record(
+          mockError ? "rpc-error" : "rpc-response",
+          method,
+          isRecord(payload) ? Object.keys(payload).slice(0, 16) : [],
+        );
         this.deliver(
           mockError
             ? { id, ok: false, error: mockError, type: "res" }
@@ -2397,6 +2285,7 @@ function installControlUiMockGateway(
       ),
     rejectDeferred(method, error, options) {
       for (const response of deferredRequests.take(method, options)) {
+        streamBudgetTrace.ocStreamBudgetTrace?.record("rpc-error", response.method);
         response.socket.deliver({
           error: {
             code: error?.code ?? "INVALID_REQUEST",
@@ -2429,6 +2318,11 @@ function installControlUiMockGateway(
             resolvedPayload,
           );
         }
+        streamBudgetTrace.ocStreamBudgetTrace?.record(
+          mockError ? "rpc-error" : "rpc-response",
+          response.method,
+          isRecord(resolvedPayload) ? Object.keys(resolvedPayload).slice(0, 16) : [],
+        );
         response.socket.deliver({
           id: response.id,
           ok: !mockError,

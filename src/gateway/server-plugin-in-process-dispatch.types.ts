@@ -4,6 +4,7 @@ import type { SubagentCompletionToolHandoffRegistration } from "../agents/subage
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { SessionControllerInput } from "../sessions/session-controller.contracts.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../sessions/user-turn-transcript.types.js";
 import type {
   AgentTurnStartOwner,
   RequesterSettleWakeReplay,
@@ -47,6 +48,7 @@ export type DispatchGatewayMethodInProcessOptions = {
   onStartOwner?: (owner: AgentTurnStartOwner) => void;
   onExecution?: (execution: Promise<void>) => void;
   onExecutionStarted?: () => void;
+  onInputCommitted?: (receipt: UserTurnTranscriptAdmissionReceipt) => void | Promise<void>;
   onSignalAbort?: () => Promise<void> | void;
   operatorRoleActor?: GatewayOperatorRoleActor;
   pluginRuntimeOwnerId?: string;

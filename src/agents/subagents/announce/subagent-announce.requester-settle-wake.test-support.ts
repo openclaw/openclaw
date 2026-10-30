@@ -57,12 +57,16 @@ export async function completeBatch(
   await onCommitted?.();
 }
 
-export const deliverSpy = vi.fn(async (_params: Record<string, unknown>): Promise<Result> => ({
+type DeliveryParams = Parameters<
+  typeof import("./subagent-announce-delivery.js").deliverSubagentAnnouncement
+>[0];
+
+export const deliverSpy = vi.fn(async (_params: DeliveryParams): Promise<Result> => ({
   delivered: true,
   path: "direct",
 }));
 
-export function deliveredCallArg(): Record<string, unknown> {
+export function deliveredCallArg(): DeliveryParams {
   const call = deliverSpy.mock.calls[0]?.[0];
   if (!call) {
     throw new Error("expected deliverSubagentAnnouncement call");

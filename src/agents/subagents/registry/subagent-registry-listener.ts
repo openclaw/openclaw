@@ -183,7 +183,7 @@ export function createSubagentRegistryListener(config: {
           return;
         }
         if (completion.outcome.status === "timeout") {
-          pendingLifecycle.scheduleTimeout(pendingTerminal);
+          pendingLifecycle.scheduleTimeout({ ...pendingTerminal, error: terminalOutcome.error });
           return;
         }
         if (phase === "error" && completion.reason === SUBAGENT_ENDED_REASON_ERROR) {

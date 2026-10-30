@@ -62,6 +62,7 @@ function snapshotChildren(value: SidebarRecentSession["subagentSummary"]) {
     queuedChildCount: value.queuedChildCount || undefined,
     unreadChildCount: value.unreadChildCount || undefined,
     failedChildCount: value.failedChildCount || undefined,
+    attentionFailedChildCount: value.failedChildCount ? value.attentionFailedChildCount : undefined,
   };
   return Object.values(state).some((item) => item !== undefined) ? state : undefined;
 }
@@ -87,6 +88,7 @@ export function snapshotSessions(
         isRunVisuallyActive: (row.isRunVisuallyActive ?? row.hasActiveRun) || undefined,
         hasAutomation: row.hasAutomation || undefined,
         status: row.isChild || row.status !== "done" ? row.status : undefined,
+        failureHandedOff: row.failureHandedOff || undefined,
         workSession: row.workSession || undefined,
         acpSession: row.acpSession || undefined,
         workspaceKind: row.workspaceKind,
@@ -181,6 +183,10 @@ export function restoreSnapshotSession(
       attention: restoreAttention(state.subagentSummary.attention, row.key),
       runningChildCount: state.subagentSummary.runningChildCount ?? 0,
       failedChildCount: state.subagentSummary.failedChildCount ?? 0,
+      attentionFailedChildCount:
+        state.subagentSummary.attentionFailedChildCount ??
+        state.subagentSummary.failedChildCount ??
+        0,
     },
     childSessionKeys: row.children.map((child) => child.key),
     childLoadParentKeys: row.childLoadParentKeys ?? [],
@@ -189,5 +195,6 @@ export function restoreSnapshotSession(
     containsActiveDescendant: false,
     runningChildCount: state?.runningChildCount ?? 0,
     failedChildCount: state?.failedChildCount ?? 0,
+    attentionFailedChildCount: state?.attentionFailedChildCount ?? state?.failedChildCount ?? 0,
   };
 }

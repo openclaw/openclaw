@@ -199,6 +199,8 @@ export const SessionRowSchema = Type.Object(
     status: Type.Optional(SessionRunStatusSchema),
     lastRunError: Type.Optional(Type.String()),
     suppressErrorNotice: Type.Optional(Type.Boolean()),
+    /** Exact failed run has reached its current parent through a durable input/result. */
+    failureHandedOff: Type.Optional(Type.Boolean()),
     providerReview: Type.Optional(SessionProviderReviewProjectionSchema),
     /** Exact run that produced the latest terminal lifecycle projection. */
     lastRunId: Type.Optional(NonEmptyString),

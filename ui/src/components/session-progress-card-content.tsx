@@ -193,14 +193,16 @@ export function ProgressRuntime(props: {
         : "sessionProgressCard.runtime.idle",
     );
   });
+  const childFailureNeedsAttention = () =>
+    (props.runtime?.children?.attentionFailed ?? props.runtime?.children?.failed ?? 0) > 0;
   const detail = () =>
     unavailable()
       ? ""
       : formatUiExternalText(
           props.terminalOutcome === "failed"
             ? props.runtime?.lastRunError
-            : props.runtime?.children?.failed
-              ? props.runtime.childError
+            : childFailureNeedsAttention()
+              ? props.runtime?.childError
               : undefined,
         ).slice(0, 240);
   return (
@@ -209,8 +211,7 @@ export function ProgressRuntime(props: {
         class="session-progress-card__runtime"
         role="status"
         data-error={String(
-          !unavailable() &&
-            (props.terminalOutcome === "failed" || Boolean(props.runtime?.children?.failed)),
+          !unavailable() && (props.terminalOutcome === "failed" || childFailureNeedsAttention()),
         )}
       >
         <span>{label()}</span>

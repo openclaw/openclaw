@@ -6,6 +6,7 @@ import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { SubagentAnnounceFlowOutcome } from "../announce/subagent-announce.js";
+import { isFailedTerminalSubagentRun } from "../subagent-failure.js";
 import {
   getDeliveryLastError,
   ensureCompletionState,
@@ -278,9 +279,10 @@ export const finalizeSubagentCleanup = async (
       ? ANNOUNCE_COMPLETION_HARD_EXPIRY_MS
       : ANNOUNCE_EXPIRY_MS;
   const expired = Date.now() >= resolveAnnounceDeliveryDeadline(entry, Date.now(), expiryMs);
-  const activeDescendantRuns = expired
-    ? 0
-    : await params.countPendingDescendantRuns(entry.childSessionKey, assertCurrent);
+  const activeDescendantRuns =
+    expired || isFailedTerminalSubagentRun(entry)
+      ? 0
+      : await params.countPendingDescendantRuns(entry.childSessionKey, assertCurrent);
   assertCurrent();
   const now = Date.now();
   const decision: {

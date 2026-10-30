@@ -299,6 +299,89 @@ describe("exact-run announcement results", () => {
     expect(terminalReply).toEqual({ disposition: "visible", text: `${text.slice(0, 4_095)}…` });
   });
 
+  it.each(["error", "timeout"] as const)(
+    "keeps exact-run %s progress separate from final output",
+    async (status) => {
+      const child = completedChild("");
+      child.execution.endedAt = 8;
+      child.execution.outcome = { status, error: "provider unavailable" };
+      testing.setDepsForTest({
+        readSessionMessagesAsync: async () => [
+          { ...textAssistant("Earlier task output"), __openclaw: { runId: "earlier" } },
+          {
+            role: "assistant",
+            __openclaw: { runId: child.runId },
+            content: [
+              { type: "text", text: "Saved two findings" },
+              { type: "toolCall", id: "read", name: "read", arguments: {} },
+            ],
+          },
+          {
+            role: "toolResult",
+            __openclaw: { runId: child.runId },
+            content: "private raw tool output",
+          },
+          { ...textAssistant("Newer task output"), __openclaw: { runId: "later" } },
+        ],
+      });
+      const individual = await readResult(child);
+      const batch = await readFindings([child]);
+      expect(individual.text).toBe(
+        "Saved partial progress (not a completed result):\nSaved two findings",
+      );
+      expect(batch.text).toContain(individual.text);
+      expect(batch.text).toContain(`status: ${status}: provider unavailable`);
+      expect(batch.text).not.toMatch(/Earlier task|Newer task|private raw tool/);
+      expect(child.completion?.terminalReply).toEqual({ disposition: "empty" });
+    },
+  );
+
+  it("reads ordinary failed-child progress without a recovery transcript target", async () => {
+    const child = completedChild("Captured transport diagnostic");
+    child.execution.transcriptTarget = undefined;
+    child.childSessionIdentity = { sessionId: "ordinary-child" };
+    child.execution.endedAt = 8;
+    child.execution.outcome = { status: "error", error: "synthetic cause" };
+    testing.setDepsForTest({
+      getRuntimeConfig: () => ({}),
+      resolveSessionStorePathCore: () => storePath,
+      readSessionMessagesAsync: async (target) => {
+        expect(target).toMatchObject({ sessionId: "ordinary-child", storePath, sessionKey });
+        return [
+          { ...textAssistant("Ordinary saved findings"), __openclaw: { runId: child.runId } },
+        ];
+      },
+    });
+    expect((await readFindings([child])).text).toContain(
+      "Saved partial progress (not a completed result):\nOrdinary saved findings",
+    );
+  });
+
+  it.each([false, true])(
+    "delivers failure without optional progress; retains source fence (replaced=%s)",
+    async (replaced) => {
+      const child = completedChild("");
+      child.execution.endedAt = 8;
+      child.execution.outcome = { status: "error", error: "provider unavailable" };
+      testing.setDepsForTest({
+        readSessionMessagesAsync: async () => {
+          if (replaced) {
+            published.delete(child.runId);
+          }
+          throw new Error("retained transcript unreadable");
+        },
+      });
+      const prepared = await readResult(child);
+      expect(prepared.text).toBe("Saved partial progress unavailable.");
+      expect(prepared.isCurrent()).toBe(!replaced);
+      if (!replaced) {
+        const findings = await readFindings([child]);
+        expect(findings.text).toContain("status: error: provider unavailable");
+        expect(findings.text).toContain("Saved partial progress unavailable.");
+      }
+    },
+  );
+
   it("marks retained evidence when a normal child's exact result is unavailable", async () => {
     const child = completedChild("bounded producer evidence");
     child.execution.transcriptTarget = undefined;

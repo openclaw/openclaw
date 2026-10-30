@@ -291,7 +291,7 @@ describe("Code Mode swarm guest", () => {
     swarmMocks.waitForCollectorCompletion.mockImplementation(async () => {
       collectorStarted.resolve();
       await collectorRelease.promise;
-      return { runId: "collector-1", status: "done", result: "collected" };
+      return { ...restoredCollector, result: "collected" };
     });
     const harness = createSwarmHarness();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
@@ -377,6 +377,7 @@ describe("Code Mode swarm host bridge", () => {
       }));
       swarmMocks.waitForCollectorCompletion.mockImplementation(
         async ({ runId }: { runId: string }) => ({
+          ...restoredCollector,
           runId,
           status: "done",
           result: runId,

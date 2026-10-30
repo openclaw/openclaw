@@ -327,7 +327,8 @@ export function summarizeTeamSessionSlots(
     queued += Number(visuallyActive && row.status === "queued") + (children?.queuedChildCount ?? 0);
     unread += Number(row.unread) + (children?.unreadChildCount ?? 0);
     failed ||=
-      row.status === "failed" || row.status === "timeout" || (children?.failedChildCount ?? 0) > 0;
+      (!row.failureHandedOff && (row.status === "failed" || row.status === "timeout")) ||
+      (children?.attentionFailedChildCount ?? children?.failedChildCount ?? 0) > 0;
   }
   return { attention, active, queued, unread, failed };
 }

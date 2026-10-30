@@ -1,0 +1,3 @@
+# Typed-event and collector persistence bounds: actual producer, guard, native append and cold attention.
+# Includes native hook/omission controls; replaces the earlier standalone custody positive.
+502

@@ -193,43 +193,60 @@ it("does not transfer completed child control to a different session at the same
   }
 });
 
-it("hydrates a cold durable source before advancing its replacement generation", async () => {
-  vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1");
-  onTestFinished(() => {
-    vi.unstubAllEnvs();
-  });
-  const childSessionKey = "agent:main:subagent:cold-replacement";
-  await register("cold-original", childSessionKey, "cold-replacement-session", {
-    task: "restored replacement source",
-    retainAttachmentsOnKeep: true,
-  });
-  expect(await replaceRun("cold-original", "cold-predecessor")).toBe(true);
-  await updateRun("cold-predecessor", (draft) => {
-    draft.execution = {
-      ...draft.execution,
-      status: "terminal",
-      endedAt: Date.now(),
-      outcome: { status: "ok" },
-    };
-  });
-  // Evict only the resident value; its canonical row remains the replacement source.
-  subagentRuns.delete("cold-predecessor");
-  expect(loadSubagentRegistryFromSqlite().get("cold-predecessor")?.generation).toBe(2);
-  expect(
-    await reactivateCompletedSubagentSession({
-      sessionKey: childSessionKey,
-      runId: "cold-successor",
-    }),
-  ).toBe(true);
-  expect(subagentRuns.get("cold-successor")).toMatchObject({
-    generation: 3,
-    taskRunId: "cold-successor",
-    execution: { status: "running" },
-  });
-  const stored = loadSubagentRegistryFromSqlite();
-  expect(stored.get("cold-predecessor")?.execution.suppressSessionEffects).toBe(true);
-  expect(stored.get("cold-successor")?.generation).toBe(3);
-});
+it.each(["ok", "error"] as const)(
+  "hydrates a cold %s source without transferring prior failure custody",
+  async (status) => {
+    vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1");
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
+    const childSessionKey = "agent:main:subagent:cold-replacement";
+    await register("cold-original", childSessionKey, "cold-replacement-session", {
+      task: "restored replacement source",
+      retainAttachmentsOnKeep: true,
+    });
+    expect(await replaceRun("cold-original", "cold-predecessor")).toBe(true);
+    await updateRun("cold-predecessor", (draft) => {
+      draft.execution = {
+        ...draft.execution,
+        status: "terminal",
+        endedAt: Date.now(),
+        outcome: { status },
+      };
+      if (status === "error") {
+        draft.delivery = {
+          status: "delivered",
+          failureHandoff: {
+            requesterSessionKey: "agent:main:main",
+            requesterSessionId: "original-parent",
+            requesterStorePath: fixture.stateDir,
+          },
+        };
+      }
+    });
+    // Evict only the resident value; its canonical row remains the replacement source.
+    subagentRuns.delete("cold-predecessor");
+    expect(loadSubagentRegistryFromSqlite().get("cold-predecessor")?.generation).toBe(2);
+    expect(
+      await reactivateCompletedSubagentSession({
+        sessionKey: childSessionKey,
+        runId: "cold-successor",
+      }),
+    ).toBe(true);
+    expect(subagentRuns.get("cold-successor")).toMatchObject({
+      generation: 3,
+      taskRunId: "cold-successor",
+      execution: { status: "running" },
+    });
+    const stored = loadSubagentRegistryFromSqlite();
+    expect(stored.get("cold-predecessor")?.execution.suppressSessionEffects).toBe(true);
+    expect(stored.get("cold-successor")?.generation).toBe(3);
+    expect(stored.get("cold-successor")?.delivery?.failureHandoff).toBeUndefined();
+    if (status === "error") {
+      expect(stored.get("cold-predecessor")?.delivery?.failureHandoff).toBeDefined();
+    }
+  },
+);
 
 it.each(["transaction", "commit"] as const)(
   "rejects replacement lifecycle retirement at native %s admission",

@@ -155,7 +155,7 @@ describe("requester pause notices", () => {
       return { delivered: true, path: "direct" };
     });
     await expectWake(true, 1, params);
-    const message = String(deliveredCallArg().triggerMessage);
+    const message = deliveredCallArg().triggerMessage;
     expect(message).toContain('"state":"paused"');
     expect(message).toContain('"runId":"run-b"');
     expect(message).toContain('"label":"landing child"');

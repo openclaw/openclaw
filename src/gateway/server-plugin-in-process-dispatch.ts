@@ -449,6 +449,7 @@ export async function dispatchGatewayMethodInProcess<T>(
             onAccepted: options?.onAccepted,
             onStartOwner: options?.onStartOwner,
             onExecutionStarted: options?.onExecutionStarted,
+            onInputCommitted: options?.onInputCommitted,
             onSignalAbort: options?.onSignalAbort,
             signal: options?.signal,
             timeoutMs: options?.timeoutMs,

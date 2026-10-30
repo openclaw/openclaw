@@ -306,7 +306,9 @@ function renderRecentSessionRow(params: RecentSessionParams) {
             {
               "sidebar-child-session-toggle--running": !team() && session().runningChildCount > 0,
               "sidebar-child-session-toggle--failed":
-                !team() && !(session().runningChildCount > 0) && session().failedChildCount > 0,
+                !team() &&
+                !(session().runningChildCount > 0) &&
+                (session().attentionFailedChildCount ?? session().failedChildCount) > 0,
             },
           ]}
           type="button"

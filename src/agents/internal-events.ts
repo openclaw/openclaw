@@ -326,3 +326,17 @@ export function resolveInternalEventTranscriptBody(
     ? body
     : resolveAcpPromptBody(body, events, inputProvenance);
 }
+
+/** Direct completion custody retains diagnostics; healthy events remain runtime-only. */
+export function resolveFailureHandoffTranscriptBody(
+  body: string,
+  events: AgentInternalEvent[] | undefined,
+): string {
+  return resolveAcpPromptBody(
+    resolveInternalEventPromptBody(body, events),
+    events?.filter(
+      (event) =>
+        event.source === "subagent" && (event.status === "error" || event.status === "timeout"),
+    ),
+  );
+}

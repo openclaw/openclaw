@@ -126,7 +126,7 @@ export type InternalToolExecutionPreparer = (params: {
 
 const toolExecutionPreparerByTool = new WeakMap<object, InternalToolExecutionPreparer>();
 
-type InternalToolResultAcknowledgement = () => void;
+type InternalToolResultAcknowledgement = (committedMessage?: AgentMessage) => void;
 const toolResultAcknowledgementByValue = new WeakMap<object, InternalToolResultAcknowledgement>();
 const toolResultProvenanceByValue = new WeakMap<object, object>();
 const toolResultContentSourceByValue = new WeakMap<object, ToolResultContentSource>();
@@ -317,12 +317,15 @@ export function appendToolLoopWarning<T extends AgentToolResult<unknown>>(
   });
 }
 
-/** Commit one tool result after its owning message has attached. */
-export function acknowledgeInternalToolResult(value: object): void {
+/** Pass the actual committed representation, not the producer's pre-transform value. */
+export function acknowledgeInternalToolResult(
+  value: object,
+  committedMessage?: AgentMessage,
+): void {
   const acknowledge = toolResultAcknowledgementByValue.get(value);
   if (!acknowledge) {
     return;
   }
   toolResultAcknowledgementByValue.delete(value);
-  acknowledge();
+  acknowledge(committedMessage);
 }

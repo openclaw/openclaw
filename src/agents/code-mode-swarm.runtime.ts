@@ -24,12 +24,15 @@ import {
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { isToolExecutionAllowed } from "./tool-policy-shared.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
+import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import {
   waitForCollectorCompletion,
+  readNativeSubagentCollection,
   type CollectorCompletionResult,
 } from "./tools/agents-wait-tool.js";
-import { ToolInputError } from "./tools/common.js";
+import { jsonResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-resolution.js";
 
 function resolveCodeModeRequesterSessionKey(ctx: ToolSearchToolContext): string {
@@ -189,6 +192,8 @@ async function runAgentSpawnBridge(params: {
 }
 
 async function runAgentWaitBridge(params: {
+  parentToolCallId: string;
+  onUpdate?: AgentToolUpdateCallback;
   request: PendingBridgeRequest;
   ctx: ToolSearchToolContext;
   signal?: AbortSignal;
@@ -202,13 +207,70 @@ async function runAgentWaitBridge(params: {
     throw new ToolInputError("agents.run wait requires session identity.");
   }
   const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);
-  return await waitForCollectorCompletion({
-    runId: runId.trim(),
-    currentSessionKeys: new Set([rawSessionKey, requesterSessionKey]),
-    currentAgentId: params.ctx.agentId,
-    config: params.ctx.runtimeConfig ?? params.ctx.config,
-    signal: params.signal,
-  });
+  const catalog = params.ctx.catalogRef?.current;
+  const spawn = catalog?.entries.find(
+    (entry) => entry.name === "sessions_spawn" && isCollectorSpawnTool(entry.tool),
+  );
+  if (!catalog || !spawn || !isCollectorSpawnTool(spawn.tool)) {
+    throw new ToolInputError("Joined collector wait catalog is no longer active.");
+  }
+  const spawnTool = spawn.tool;
+  const assertSource = captureAgentToolSourceExecutionGuard(params.signal);
+  const assertToolAllowed = getGatewayToolCallerIdentity()?.assertToolAllowed;
+  const assertCurrent = () => {
+    assertSource();
+    params.ctx.abortSignal?.throwIfAborted();
+    assertToolAllowed?.("sessions_spawn");
+    if (
+      params.ctx.catalogRef?.current !== catalog ||
+      !catalog.entries.includes(spawn) ||
+      !resolveSwarmConfig(params.ctx.runtimeConfig ?? params.ctx.config, params.ctx.agentId)
+        .enabled ||
+      (params.ctx.toolExecutionAllow &&
+        !isToolExecutionAllowed(params.ctx.toolExecutionAllow, "sessions_spawn"))
+    ) {
+      throw new ToolInputError("Joined collector wait catalog is no longer active.");
+    }
+    runAgentToolSourceExecutionGuard(spawnTool);
+  };
+  // The intrinsic is authorized by sessions_spawn, not raw agents_wait. Its result
+  // still uses the subscribed nested lifecycle so custody follows durable append.
+  const wait: AnyAgentTool = {
+    name: "agents.run",
+    label: "Join Agent",
+    description: "Collect the joined agent result.",
+    parameters: { type: "object", properties: {} },
+    execute: async (_id, _input, signal) =>
+      jsonResult(
+        await waitForCollectorCompletion({
+          runId: runId.trim(),
+          currentSessionKeys: new Set([rawSessionKey, requesterSessionKey]),
+          consumerSessionKey: requesterSessionKey,
+          currentAgentId: params.ctx.agentId,
+          config: params.ctx.runtimeConfig ?? params.ctx.config,
+          signal,
+          assertCurrent,
+        }),
+      ),
+  };
+  assertCurrent();
+  const toolCallId = params.parentToolCallId + ":" + params.request.id;
+  const result = params.ctx.executeTool
+    ? await params.ctx.executeTool({
+        tool: wait,
+        toolName: wait.name,
+        toolCallId,
+        parentToolCallId: params.parentToolCallId,
+        source: "openclaw",
+        replaySafe: true,
+        input: { runId: runId.trim() },
+        signal: params.signal,
+        onUpdate: params.onUpdate,
+        acceptResultBeforeProjection: async (value) =>
+          snapshotToolSearchTargetTranscriptResult(value),
+      })
+    : await wait.execute(toolCallId, { runId: runId.trim() }, params.signal);
+  return readNativeSubagentCollection({ completed: [result.details], pending: [] }).completed[0]!;
 }
 
 function runSwarmNoteBridge(params: {

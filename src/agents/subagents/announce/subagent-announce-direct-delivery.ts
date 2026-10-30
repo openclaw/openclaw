@@ -55,23 +55,13 @@ import {
 import { createDirectAnnounceResponseClassifier } from "./subagent-announce-direct-response.js";
 import {
   sourceOwnerChangedResult,
+  completionHandoffPendingResult,
   type SubagentAnnounceDeliveryResult,
   type SubagentAnnounceDirectParams,
 } from "./subagent-announce-dispatch.js";
 import { resolveExactSubagentCompletionEvent } from "./subagent-announce-handoff.js";
 import { resolveCompletionDeliveryOrigins } from "./subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
-
-/** Another owner (a yielded requester or an idle cron turn) settles this completion. */
-function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
-  return {
-    delivered: false,
-    path: "none",
-    reason: "completion_handoff_pending",
-    terminal: true,
-    disposition: "intentional_non_delivery",
-  };
-}
 
 export async function sendSubagentAnnounceDirectly(
   params: SubagentAnnounceDirectParams,
@@ -491,6 +481,7 @@ async function sendSubagentAnnounceDirectlyBound(
         signal: params.signal,
         onAccepted: params.onAccepted,
         onExecutionStarted: params.onExecutionStarted,
+        onInputCommitted: params.onInputCommitted,
         onBeforeDispatch: params.onBeforeDispatch
           ? async () => {
               await params.onBeforeDispatch!();

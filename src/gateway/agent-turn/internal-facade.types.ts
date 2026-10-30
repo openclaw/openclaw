@@ -3,6 +3,7 @@ import type { ConnectParams } from "../../../packages/gateway-protocol/src/schem
 import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionControllerInput } from "../../sessions/session-controller.contracts.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { GatewayMethodDispatchResponse } from "../server-in-process-dispatch.types.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayClient } from "../server-methods/client-types.js";
@@ -54,6 +55,8 @@ export type InternalAgentTurnDispatchOptions = {
   onAccepted?: (payload: unknown) => void;
   onStartOwner?: (owner: AgentTurnStartOwner) => void;
   onExecutionStarted?: () => void;
+  /** Recorder observation: committed input, not completed parent execution. */
+  onInputCommitted?: (receipt: UserTurnTranscriptAdmissionReceipt) => void | Promise<void>;
   onSignalAbort?: () => Promise<void> | void;
   signal?: AbortSignal;
   timeoutMs?: number;

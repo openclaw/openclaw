@@ -1,5 +1,6 @@
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import { isFailedTerminalSubagentRun } from "../agents/subagents/subagent-failure.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
@@ -445,6 +446,32 @@ export function prepareProjectedSessionPresentation(
             target: value,
           }) && !sharing.authorizeTarget(value, recipientView?.sharingRole)
         : undefined;
+    const failedRun = subagentRuns.getDisplaySubagentRun(record.key);
+    const handoff = failedRun?.delivery?.failureHandoff;
+    // Receipt ownership is exact-run and incarnation-bound, never inferred from ancestry.
+    const failureHandedOff = Boolean(
+      failedRun &&
+      handoff &&
+      isFailedTerminalSubagentRun(failedRun) &&
+      (record.entry.lastRunId === failedRun.runId ||
+        record.entry.lifecycleRunId === failedRun.runId) &&
+      projection
+        .selectEntries({ key: handoff.requesterSessionKey })
+        .some(
+          (parent) =>
+            parent.entry.sessionId === handoff.requesterSessionId &&
+            parent.entry.lifecycleRevision === handoff.requesterLifecycleRevision &&
+            projection
+              .physicalPaths(handoff.requesterStorePath, parent.agentId)
+              .includes(parent.storeTarget.storePath) &&
+            canReadLinkedEntry(
+              parent.key,
+              parent.entry,
+              parent.agentId,
+              parent.storeTarget.storePath,
+            ),
+        ),
+    );
     const signature = views && optionKey(options);
     recipientFacts[0] = recipientView?.visibility;
     recipientFacts[1] = recipientView?.hiddenFromInvolvingMe;
@@ -457,7 +484,8 @@ export function prepareProjectedSessionPresentation(
     recipientFacts[6] = visibility
       ? visibility.swarmKey
       : excludedSwarmKeys && JSON.stringify([...excludedSwarmKeys]);
-    recipientFacts.length = 7;
+    recipientFacts[7] = failureHandedOff;
+    recipientFacts.length = 8;
     const variants = signature === undefined ? undefined : views?.get(signature);
     if (variants) {
       for (const cached of variants) {
@@ -475,6 +503,9 @@ export function prepareProjectedSessionPresentation(
       childActivity,
       preparedFacts,
     });
+    if (failureHandedOff) {
+      row.failureHandedOff = true;
+    }
     row.childOwnerSessionKeys = [...childOwnerSessionKeys];
     row.fastMode = presentFastMode(row.fastMode);
     row.effectiveFastMode = presentFastMode(row.effectiveFastMode);

@@ -361,7 +361,7 @@ describe("agents_wait", () => {
         {
           runId: failed.runId,
           status: "failed",
-          result: "",
+          result: "Saved partial progress unavailable.",
           structured: { partial: true },
           error: "provider failed after tool output",
           sessionKey: failed.childSessionKey,

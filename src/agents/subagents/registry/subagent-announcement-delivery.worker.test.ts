@@ -2,6 +2,7 @@
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation as runWorker, useSubagentControlFixture } from "./subagent-control.test-support.js";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, beforeEach, expect, it, vi } from "vitest";
 import { createDeferredCore as createDeferred } from "../../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
@@ -18,6 +19,7 @@ import {
   installEndedHook,
   registerSuccessor,
   storedAnnouncement,
+  updateRun,
   withUnreadableReceipt,
 } from "./subagent-announcement.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -28,6 +30,7 @@ import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixtur
 import * as registryState from "./subagent-registry-state.js";
 import { prepareSubagentSessionCleanupRevocation, resumeSubagentRun } from "./subagent-registry.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import { testing } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
@@ -227,6 +230,98 @@ it("defers registered parent delivery until its descendant settles", async () =>
   });
 });
 
+it.each(["error", "timeout"] as const)(
+  "returns a registered %s failure without reviving it or deleting its running subtree",
+  async (status) => {
+    await withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
+      const waitReceipt = createDeferred<Record<string, unknown>>();
+      fixture.gateway.mockImplementation(async (request) => {
+        if (request.method === "agent.wait") {
+          return asOptionalRecord(request.params)?.runId === `failed-parent-${status}`
+            ? await waitReceipt.promise
+            : await new Promise<never>(() => {});
+        }
+        if (request.method === "chat.history") {
+          return {
+            messages: [
+              { role: "user", content: "Synthetic child task" },
+              {
+                role: "assistant",
+                content: [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }],
+              },
+              { role: "toolResult", toolCallId: "read-1", content: "must not be a final answer" },
+            ],
+          };
+        }
+        throw new Error(`Unexpected failure RPC ${request.method}`);
+      });
+      const parent = await registerCompletion(`failed-parent-${status}`, { cleanup: "delete" });
+      const child = await registerCompletion(`pending-child-${status}`, {
+        requesterSessionKey: parent.childSessionKey,
+        expectsCompletionMessage: false,
+      });
+      fixture.wake.mockResolvedValue(false);
+      const announced = createDeferred();
+      fixture.announce.mockImplementation(async (params) => {
+        try {
+          return await nativeAnnounce.runSubagentAnnounceFlow(params);
+        } finally {
+          announced.resolve();
+        }
+      });
+      waitReceipt.resolve({
+        status,
+        endedAt: Date.now(),
+        error: "synthetic provider failure",
+        terminalReply: { disposition: "empty" },
+      });
+      await announced.promise;
+      await fixture.settle();
+      expect(turns.start).toHaveBeenCalledOnce();
+      const request = turns.start.mock.calls[0]![0].preflight.request;
+      expect(request.sessionKey).toBe("agent:main:main");
+      expect(JSON.stringify(request.internalEvents)).toContain("synthetic provider failure");
+      expect(JSON.stringify(request.internalEvents)).toContain(child.runId);
+      expect(JSON.stringify(request.internalEvents)).toContain("announcing");
+      expect(JSON.stringify(request.internalEvents)).not.toContain("must not be a final answer");
+      expect(storedAnnouncement(parent.runId)).toMatchObject({
+        execution: { status: "terminal", outcome: { status } },
+        delivery: { status: "delivered", disposition: "delivered" },
+        cleanupCompletedAt: expect.any(Number),
+      });
+      expect(storedAnnouncement(parent.runId)?.wakeOnDescendantSettle).toBeUndefined();
+      expect(storedAnnouncement(child.runId)?.execution.status).toBe("running");
+      expect(storedAnnouncement(parent.runId)?.requesterSettleWake?.retireAfterSettle).not.toBe(
+        true,
+      );
+      expect(storedAnnouncement(parent.runId)?.archiveAtMs).toBeTypeOf("number");
+      await updateRun(parent.runId, (draft) => {
+        draft.archiveAtMs = Date.now() - 1;
+        // This fixture scripts wake dispatch; isolate the sweep after its delivered obligation.
+        draft.requesterSettleWake = undefined;
+      });
+      await testing.sweepOnceForTests();
+      expect(storedAnnouncement(parent.runId)).toBeDefined();
+      expect(fixture.gateway.mock.calls.some(([call]) => call.method === "sessions.delete")).toBe(
+        false,
+      );
+      completeRegistered(child);
+      await fixture.settle();
+      fixture.gateway.mockImplementation(async (call) => {
+        if (call.method === "sessions.delete") {
+          return {};
+        }
+        throw new Error("Unexpected cleanup RPC " + call.method);
+      });
+      await testing.sweepOnceForTests();
+      expect(storedAnnouncement(parent.runId)).toBeUndefined();
+      expect(
+        fixture.gateway.mock.calls.filter(([call]) => call.method === "sessions.delete"),
+      ).toHaveLength(1);
+    });
+  },
+);
+
 it("keeps a delivered announcement fenced when its committed native receipt is unreadable", async () => {
   const run = await registerCompletion("uncertain-announcement-receipt", {
     cleanup: "delete",
@@ -287,9 +382,9 @@ it("keeps a delivered announcement fenced when its committed native receipt is u
     expect(turns.start).toHaveBeenCalledOnce();
     expect(fixture.announce).toHaveBeenCalledOnce();
     expect(fixture.wake).not.toHaveBeenCalled();
-    expect(
-      fixture.gateway.mock.calls.some(([request]) => request.method === "sessions.delete"),
-    ).toBe(false);
+    expect(fixture.gateway.mock.calls.some(([call]) => call.method === "sessions.delete")).toBe(
+      false,
+    );
   } finally {
     worker.mockRestore();
     await fixture.settle();

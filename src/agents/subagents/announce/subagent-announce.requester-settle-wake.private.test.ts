@@ -87,7 +87,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     if (yielded && single) {
       expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-b:yield-1"));
     }
-    const trigger = String(call.triggerMessage);
+    const trigger = call.triggerMessage;
     expect(trigger).toContain("private marker");
     if (yielded && marked) {
       expect(trigger).not.toContain("Your final reply stays internal");

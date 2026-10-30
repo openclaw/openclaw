@@ -21,6 +21,7 @@ import {
   clearSubagentPendingDelivery,
   loadPendingFinalDeliveryPayload,
 } from "./subagent-delivery-state.js";
+import { recordSubagentFailureHandoff } from "./subagent-failure-handoff.js";
 import {
   resolveAnnounceDeliveryDeadline,
   shouldSuspendPendingFinalDelivery,
@@ -436,6 +437,13 @@ export const startSubagentAnnounceCleanupFlow = (
       );
     },
     isCompletionOwnedByRequesterYield: requesterOwnsCompletion,
+    onInputCommitted: (receipt) =>
+      recordSubagentFailureHandoff({
+        entries: [entry],
+        requester: receipt,
+        assertCurrent,
+        context: stateContext,
+      }),
     onBeforeDeleteChildSession:
       cleanup === "delete"
         ? async () => {

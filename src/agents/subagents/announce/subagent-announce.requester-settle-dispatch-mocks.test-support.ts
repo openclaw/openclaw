@@ -31,6 +31,7 @@ const loadRequester = vi.hoisted(() =>
   >(),
 );
 const registryRead = vi.hoisted(() => ({
+  buildSubagentSessionListReadIndex: () => ({ listDescendantRunsForRequester: () => [] }),
   countPendingDescendantRuns: vi.fn<typeof countPendingDescendantRuns>(
     async (_key, assertCurrent) => {
       assertCurrent();
@@ -68,6 +69,7 @@ vi.mock("../../../gateway/agent-turn/agent-turn-service.js", () => ({
   createAgentTurnService: () => ({ startTurn, waitForTurn: vi.fn() }),
 }));
 
+// mock-isolation: Routing fixtures have no descendants and must not open a session database.
 vi.mock("../registry/subagent-registry-read.js", () => registryRead);
 // mock-isolation: Dispatch fixtures supply requester depth without opening a session database.
 vi.mock("../spawn/subagent-depth.js", () => ({

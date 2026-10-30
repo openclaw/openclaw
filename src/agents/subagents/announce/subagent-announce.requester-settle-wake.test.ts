@@ -70,7 +70,7 @@ function transcriptsFor(children: Child[], events: (child: Child) => unknown[]) 
   });
 }
 function expectMessage(included: string[], excluded: string[] = []) {
-  const message = String(deliveredCallArg().triggerMessage);
+  const message = deliveredCallArg().triggerMessage;
   for (const text of included) {
     expect(message).toContain(text);
   }
@@ -203,7 +203,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       await vi.advanceTimersByTimeAsync(300_000);
       await expect(wake({ settledEntry: restored, onDescendantsPending })).resolves.toBe(true);
       expect(deliverSpy).toHaveBeenCalledOnce();
-      expect(String(deliveredCallArg().triggerMessage)).toContain(
+      expect(deliveredCallArg().triggerMessage).toContain(
         "a descendant result below it was still undelivered when waiting stopped",
       );
       expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a"], 1, {

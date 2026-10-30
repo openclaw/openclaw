@@ -48,7 +48,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
     });
     expect(call.requireVisibleReply).toBeUndefined();
     expect(quietChild.requesterTurnRunId).toBe("quiet-cancellation-owner");
-    const message = String(call.triggerMessage);
+    const message = call.triggerMessage;
     expect(message).toContain("settled");
     expect(message).toContain("social findings");
     expect(message).toContain("network findings");
@@ -84,7 +84,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
     expect(await wakeRequester(wakeParams({ settledEntry: children[5] }))).toBe(true);
 
     expect(deliverSpy).toHaveBeenCalledOnce();
-    const message = String(deliveredCallArg().triggerMessage);
+    const message = deliveredCallArg().triggerMessage;
     const results = Array.from(
       message.matchAll(
         /Child task[^\n]*\n<prompt-data>\n([^\n]+)\n<\/prompt-data>\nstatus: ([^\n]+)\nChild result[^\n]*\n<prompt-data>\n([^\n]+)\n<\/prompt-data>/g,

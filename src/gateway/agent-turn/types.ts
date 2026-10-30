@@ -3,6 +3,7 @@ import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-ou
 import type { AgentRunTerminalReceipt } from "../../agents/agent-run-terminal-receipt.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
 import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -21,6 +22,8 @@ export type AgentTurnIo = {
   emitStartOwner?: (runId: string, entry: RpcSourceRef) => void;
   /** Internal lifecycle observer; public transports do not expose this callback. */
   emitExecutionStarted?: () => void;
+  /** Recorder observation: committed input, not completed parent execution. */
+  emitInputCommitted?: (receipt: UserTurnTranscriptAdmissionReceipt) => void | Promise<void>;
   emitFinal: (final: AgentTurnFrame, meta?: Parameters<RespondFn>[3]) => void;
 };
 

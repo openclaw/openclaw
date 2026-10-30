@@ -22,6 +22,7 @@ import {
 } from "../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "../agents/sessions/agent-session-loop-resource-loader.test-support.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import * as announcementDelivery from "../agents/subagents/announce/subagent-announce-delivery.js";
 import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { resumeSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
@@ -77,7 +78,7 @@ function trackRequests(context: GatewayRequestContext) {
   };
 }
 
-async function createCompletion(context: GatewayRequestContext) {
+async function createCompletion(context: GatewayRequestContext, failed = false) {
   const id = randomUUID();
   const requesterSessionKey = `agent:main:native-completion:${id}`;
   const sessionId = `requester-${id}`;
@@ -154,8 +155,8 @@ async function createCompletion(context: GatewayRequestContext) {
           childSessionKey,
           childSessionId: `child-${id}`,
           announceId,
-          status: "succeeded",
-          result: "Retained child result",
+          status: failed ? "failed" : "succeeded",
+          result: failed ? "Saved partial progress: child failure" : "Retained child result",
           isSourceSessionAdmissionAllowed: () => retainedCustody.isCurrent(),
         }),
       [Symbol.dispose]: () => retainedCustody.release(),
@@ -333,11 +334,19 @@ describe("native completion final-effect authority", () => {
     },
   );
 
-  it.for(["live", "operator-revoked", "requester-replaced"] as const)(
+  it.for(["live", "failed", "operator-revoked", "requester-replaced"] as const)(
     "revalidates %s authority after the real recorder during automatic compaction",
-    async (change, { signal }) => {
+    async (scenario, { signal }) => {
+      const change = scenario === "failed" ? "live" : scenario;
       const context = getContext();
-      using completion = await createCompletion(context);
+      const committed = vi.fn();
+      const deliver = announcementDelivery.deliverSubagentAnnouncement;
+      // Supply the registered completion's observer shape without replacing the
+      // active recorder, admission, steering, or durable transcript writer.
+      vi.spyOn(announcementDelivery, "deliverSubagentAnnouncement").mockImplementation((params) =>
+        deliver({ ...params, onInputCommitted: committed }),
+      );
+      using completion = await createCompletion(context, scenario === "failed");
       const { entered, resume } = createGate();
       const { entered: compacting, resume: resumeCompaction } = createGate();
       const queued = createDeferred();
@@ -430,6 +439,13 @@ describe("native completion final-effect authority", () => {
               resumeCompaction.resolve();
               await prompt;
               expect(await delivery).toMatchObject({ delivered: true, path: "steered" });
+              const persisted = JSON.stringify(completion.transcript());
+              expect(committed).toHaveBeenCalledOnce();
+              if (scenario === "failed") {
+                expect(persisted).toContain("Saved partial progress: child failure");
+              } else {
+                expect(persisted).not.toContain("Retained child result");
+              }
               expect(sessionManager.getEntries()).toContainEqual(
                 expect.objectContaining({
                   type: "message",
@@ -446,6 +462,7 @@ describe("native completion final-effect authority", () => {
               await prompt;
               expect(inject).not.toHaveBeenCalled();
               expect(session.getSteeringMessages()).toEqual([]);
+              expect(committed).not.toHaveBeenCalled();
               expect(completion.transcript()).toEqual(before);
               expect(await completion.pendingTotal()).toBe(0);
             }

@@ -1,6 +1,9 @@
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type { SessionControllerInput } from "../../../sessions/session-controller.contracts.js";
-import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
+import type {
+  UserTurnTranscriptAdmissionReceipt,
+  UserTurnTranscriptRecorder,
+} from "../../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
@@ -88,6 +91,7 @@ export type SubagentAnnounceDirectParams = {
   signal?: AbortSignal;
   onAccepted?: (payload: unknown) => void;
   onExecutionStarted?: () => void;
+  onInputCommitted?: (receipt: UserTurnTranscriptAdmissionReceipt) => void | Promise<void>;
   onBeforeDispatch?: () => void | Promise<void>;
   resolveGatewayContext?: GatewayContextResolver;
   controllerInput?: SessionControllerInput;
@@ -99,6 +103,17 @@ export function sourceOwnerChangedResult(): SubagentAnnounceDeliveryResult {
     path: "none",
     reason: "source_owner_changed",
     error: "subagent source lifecycle changed before completion delivery",
+    terminal: true,
+    disposition: "intentional_non_delivery",
+  };
+}
+
+/** Another owner (a yielded requester or an idle cron turn) settles this completion. */
+export function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
+  return {
+    delivered: false,
+    path: "none",
+    reason: "completion_handoff_pending",
     terminal: true,
     disposition: "intentional_non_delivery",
   };

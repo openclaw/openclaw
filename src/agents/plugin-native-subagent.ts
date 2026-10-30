@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { copyInternalToolResultState } from "../../packages/agent-core/src/internal-hooks.js";
 import { getRuntimeConfig } from "../config/io.runtime.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
@@ -545,7 +546,7 @@ export function createRequestNativeSubagentRuntime(
           selection: await readSelection(completion.runId, completion.sessionKey, {}, records),
         })),
       );
-      return { ...collection, completed };
+      return copyInternalToolResultState(result, { ...collection, completed });
     },
   };
 }

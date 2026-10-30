@@ -74,9 +74,11 @@ export function isSubagentsPanelSession(row: GatewaySessionRow): boolean {
   return row.classification === "subagent" || isSubagentSessionKey(row.key);
 }
 
-/** A subagent that handed off to its own subagents is still at work. */
+/** Own active work, or a pending subtree unless this run's own failure was already handed off. */
 export function isUnfinishedSubagent(row: GatewaySessionRow): boolean {
-  return isSessionRunStateActive(row) || row.hasActiveSubagentRun === true;
+  return (
+    isSessionRunStateActive(row) || (!row.failureHandedOff && row.hasActiveSubagentRun === true)
+  );
 }
 
 function finishedRuntimeMs(row: GatewaySessionRow): number | null {
@@ -126,6 +128,7 @@ export function resolveSpawnedSubagent(
       // Whether the Subagents panel lists it.
       listed: isSubagentsPanelSession(row),
       running,
+      failureHandedOff: row.failureHandedOff,
       // Runtime is shown only once the session finishes.
       runtimeMs: running ? null : finishedRuntimeMs(row),
       ...(ended ? { ended } : {}),
@@ -155,6 +158,7 @@ export function spawnedSubagentsRenderKey(rows: readonly GatewaySessionRow[] | u
           running,
           running ? null : finishedRuntimeMs(row),
           running ? null : endedWithoutFinishing(row),
+          row.failureHandedOff,
         ]);
       })
       .toSorted()

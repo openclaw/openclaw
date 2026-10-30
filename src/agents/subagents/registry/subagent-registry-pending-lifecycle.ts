@@ -97,7 +97,7 @@ export function createPendingLifecycleScheduler(params: {
           endedAt: pending.endedAt,
           outcome:
             kind === "timeout"
-              ? { status: "timeout" }
+              ? { status: "timeout", ...(pending.error ? { error: pending.error } : {}) }
               : {
                   status: "error",
                   error: pending.cancellation ? "subagent run terminated" : pending.error,

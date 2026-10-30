@@ -1,0 +1,3 @@
+# Cold SQL receipt roundtrip through native input, Gateway rows and descendant recovery.
+# Extends three existing cases; preserves legacy, reset, foreign and privacy assertions.
+91

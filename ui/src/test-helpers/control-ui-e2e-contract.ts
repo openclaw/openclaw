@@ -1,4 +1,15 @@
+import type { MessageReactionSummary } from "@openclaw/gateway-protocol";
+import type { ControlUiBootstrapConfig } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import type {
+  AgentsListResult,
+  ModelCatalogEntry,
+  UpdateAvailable,
+  UpdateScheduleState,
+} from "../api/types.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
+import type { ControlUiMockAuth } from "./control-ui-mock-auth.ts";
+import type { ControlUiMockPresenceScenario } from "./control-ui-mock-presence.ts";
+import type { NativeControlUiPluginFixture } from "./control-ui-plugin-fixture.ts";
 import type {
   createControlUiSessionFixtures,
   ControlUiSessionFixture,
@@ -25,6 +36,118 @@ export type MockGatewayRequest = {
   method: string;
   params?: unknown;
 };
+
+export interface ControlUiMockGatewayScenario
+  extends ControlUiMockAuth, ControlUiMockPresenceScenario {
+  bootstrapPreferences?: ControlUiBootstrapConfig["preferences"];
+  /** Auto-wait for sidebar rosters unless startup is held or connect fails; true overrides those skips, false disables the wait. */
+  awaitInitialRoster?: boolean;
+  nativePlugins?: readonly NativeControlUiPluginFixture[];
+  pluginAssetsRequireAuth?: boolean;
+  attachmentMaxBytes?: number;
+  agentModel?: string | null;
+  assistantAgentId?: string;
+  assistantName?: string;
+  automaticallyFetchFavicons?: boolean;
+  communityInvite?: boolean;
+  basePath?: string;
+  controlUiTabs?: Array<{
+    group?: string;
+    icon?: string;
+    id: string;
+    label: string;
+    path?: string;
+    placement?: string;
+    pluginId: string;
+    slug?: string;
+  }>;
+  controlUiLinkReaders?: unknown[];
+  controlUiWidgetKinds?: Array<{
+    kind: string;
+    label: string;
+    pluginId: string;
+  }>;
+  allowedSessionVisibilities?: Array<"shared" | "read-only" | "suggest" | "draft">;
+  hasMultipleSessionSharingIdentities?: boolean;
+  featureCapabilities?: string[];
+  connectCapabilities?: string[];
+  defaultAgentId?: string;
+  deferredMethods?: string[];
+  deferredRequests?: MockGatewayRequestSelector[];
+  /** Hold every request until resolveDeferred/rejectDeferred releases the method. */
+  heldMethods?: string[];
+  /** Hold only requests matching these method and parameter selectors. */
+  heldRequests?: MockGatewayRequestSelector[];
+  /** Fail each admission-dependent read this many times before serving its normal response. */
+  startupPendingResponses?: number;
+  /** Non-release gateway checkout branch surfaced in the sidebar footer. */
+  devGitBranch?: string;
+  /** Exact immutable Control UI artifact served by the mocked Gateway. */
+  serverBuildId?: string;
+  /** Exact Gateway lifecycle generation served in hello. */
+  gatewayBootId?: string;
+  gatewaySuspensionPhase?: "accepting" | "preparing" | "draining" | "prepared";
+  /** Optional startup update snapshot for rich local mock fixtures. */
+  updateAvailable?: UpdateAvailable | null;
+  /** Optional automatic-update campaign snapshot for rich local mock fixtures. */
+  updateSchedule?: UpdateScheduleState | null;
+  controlUiBuildSource?: "bundled" | "configured";
+  serverVersion?: string;
+  featureEvents?: string[];
+  featureMethods?: string[];
+  /** Simulate a legacy Gateway that predates the advertised method catalog. */
+  omitFeatureMethods?: boolean;
+  historyMessages?: unknown[];
+  /** Disable only for scenarios exercising the separate chat.startup fallback. */
+  subscriptionInitialHistory?: boolean;
+  sessionReactions?: Record<string, Record<string, MessageReactionSummary[]>>;
+  /** Canonical per-session transcripts, shared by history and startup reads. */
+  sessionTranscripts?: Record<
+    string,
+    {
+      messages: unknown[];
+      thinkingLevel?: string | null;
+      inFlightRun?: ControlUiMockGatewayScenario["inFlightRun"];
+    }
+  >;
+  maxPayload?: number;
+  /** Static payloads, parameter-matched cases, or call-ordered sequences. */
+  methodResponses?: Record<string, unknown>;
+  /** URL prefixes that retain the browser's real WebSocket transport. */
+  webSocketPassthroughPrefixes?: string[];
+  /** Replayed in-flight run snapshot served by chat.history and chat.startup. */
+  inFlightRun?: {
+    runId: string;
+    text?: string;
+    startedAt?: number;
+    events?: unknown[];
+    plan?: unknown;
+  } | null;
+  /** Subscription-scoped Gateway events replayed on a fixed browser-side cycle. */
+  repeatingSessionEvents?: {
+    events: Array<{ event: "agent" | "session.observer" | "session.tool"; payload: unknown }>;
+    intervalMs?: number;
+  };
+  /** Explicit history-only row override, for example a stale run-state projection. */
+  sessionInfo?: Record<string, unknown> | null;
+  /** Canonical fixture rows, independent of case/sequence/deferred wire overrides. */
+  sessions?: ControlUiSessionFixture[];
+  /** Partition sessions.list fixtures by archived state after applying patches. */
+  sessionArchiveFiltering?: boolean;
+  models?: ModelCatalogEntry[];
+  /** Selected fixture and event default; use controlUiSessionUrl to select it in the UI. */
+  sessionKey?: string;
+  sessionScope?: AgentsListResult["scope"];
+  mainSessionKey?: string;
+  /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
+  sessionGroups?: string[];
+  /** Optional New Session defaults keyed by custom group name. */
+  sessionGroupDefaults?: Record<string, { cwd?: string; worktree?: boolean }>;
+  terminalEnabled?: boolean;
+  cliAgentsEnabled?: boolean;
+  workspace?: string;
+  workspaceGit?: boolean;
+}
 
 export type ControlUiMockGatewayInstallOptions = {
   requestHandlers?: Record<string, (params: unknown) => unknown>;

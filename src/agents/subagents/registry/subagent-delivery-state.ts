@@ -86,6 +86,9 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
       ? {
           delivery: {
             status: entry.delivery.status,
+            ...(entry.delivery.failureHandoff
+              ? { failureHandoff: entry.delivery.failureHandoff }
+              : {}),
             ...(entry.delivery.disposition ? { disposition: entry.delivery.disposition } : {}),
             ...(entry.delivery.suspendedAt !== undefined
               ? { suspendedAt: entry.delivery.suspendedAt }
@@ -274,6 +277,8 @@ export const clearSubagentPendingDelivery = (entry: SubagentRunRecord) => {
   delivery.suspendedReason = undefined;
   if (delivery.status !== "delivered" && delivery.status !== "failed") {
     clearDeliveryState(entry);
+    // Clearing this execution's outbox preserves its receipt; replacing the run does not.
+    ensureDeliveryState(entry).failureHandoff = delivery.failureHandoff;
   }
 };
 

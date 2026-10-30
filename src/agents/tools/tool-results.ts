@@ -1,10 +1,11 @@
+import { copyInternalToolResultState } from "../../../packages/agent-core/src/internal-hooks.js";
 import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
 
 export function textResult<TDetails>(text: string, details: TDetails): AgentToolResult<TDetails> {
-  return {
-    content: [{ type: "text", text }],
-    details,
-  };
+  const result = { content: [{ type: "text" as const, text }], details };
+  return details && typeof details === "object"
+    ? copyInternalToolResultState(details, result)
+    : result;
 }
 
 export function jsonResult<TDetails>(payload: TDetails): AgentToolResult<TDetails> {

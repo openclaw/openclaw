@@ -341,7 +341,7 @@ export function installSessionToolResultGuard(
       transcriptSeqByEntryId.set(entryId, committedMessageSeq);
     }
     // Destructive tool-side state commits only after this exact result is durable.
-    acknowledgeInternalToolResult(acknowledgementSource);
+    acknowledgeInternalToolResult(acknowledgementSource, persistedMessage);
     if (assistantSource && appended) {
       assistantSource.committedMessageId = entryId;
       assistantSource.committedMessageSeq =

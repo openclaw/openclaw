@@ -56,6 +56,7 @@ const enChatToolLabels = {
       running: "Running",
       subagentRunning: "running",
       subagentStopped: "stopped",
+      subagentReturned: "returned to parent",
       openSubagent: "Open subagent session",
       completed: "Completed",
       blocked: "Blocked",

@@ -272,6 +272,7 @@ export function createInternalAgentTurnFacade(
             finalResult?.resolve(final);
           }
         },
+        emitInputCommitted: dispatchOptions.onInputCommitted,
         ...(dispatchOptions.onExecutionStarted
           ? { emitExecutionStarted: dispatchOptions.onExecutionStarted }
           : {}),

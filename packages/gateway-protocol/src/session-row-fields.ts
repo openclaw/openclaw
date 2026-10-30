@@ -36,6 +36,7 @@ export const SESSION_DASHBOARD_ROW_FIELDS: ReadonlySet<string> = new Set([
   "updatedAt",
   "snapshotAt",
   "status",
+  "failureHandedOff",
   "createdActor",
   "owner",
   "hasBoard",

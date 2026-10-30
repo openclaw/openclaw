@@ -11,6 +11,8 @@ export type SessionProgressCardRuntime = {
     queued: number;
     waiting: number;
     failed: number;
+    /** Failed children not yet handed off require attention; failed remains the diagnostic total. */
+    attentionFailed?: number;
     stopped?: number;
   };
 };

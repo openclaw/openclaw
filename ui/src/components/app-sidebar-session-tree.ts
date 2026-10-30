@@ -25,6 +25,7 @@ function summarizeChildren(
   let unreadChildCount = 0;
   let runningChildCount = 0;
   let failedChildCount = 0;
+  let attentionFailedChildCount = 0;
   let queuedChildCount = 0;
   let workspaceConflictCount = 0;
   const unreadHiddenRuns: SidebarRecentSession[] = [];
@@ -50,6 +51,9 @@ function summarizeChildren(
     failedChildCount +=
       Number(child.status === "failed" || child.status === "timeout") +
       (descendants?.failedChildCount ?? 0);
+    attentionFailedChildCount +=
+      Number(!child.failureHandedOff && (child.status === "failed" || child.status === "timeout")) +
+      (descendants?.attentionFailedChildCount ?? descendants?.failedChildCount ?? 0);
     queuedChildCount +=
       Number(visuallyActive && child.status === "queued") + (descendants?.queuedChildCount ?? 0);
     workspaceConflictCount += onlySubagents
@@ -67,6 +71,7 @@ function summarizeChildren(
     unreadChildCount,
     runningChildCount,
     failedChildCount,
+    attentionFailedChildCount,
     queuedChildCount,
     workspaceConflictCount,
     // Hidden runs have no row to open, so their parent acknowledges them.

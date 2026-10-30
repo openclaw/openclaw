@@ -1,0 +1,3 @@
+# Native durable handoff/collector ownership and rejection, failed-root descendants,
+# real Gateway question recovery, and neutral UI diagnostic regressions.
+1987

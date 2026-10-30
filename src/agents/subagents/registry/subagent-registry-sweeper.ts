@@ -12,6 +12,7 @@ import {
   blockSubagentCompletionDelivery,
   reconcileRetiredSubagentCancellation,
 } from "../completion/subagent-completion-admission.store.js";
+import { isFailedTerminalSubagentRun } from "../subagent-failure.js";
 import { settleSubagentCompletionReservation } from "./subagent-controller-inputs.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import {
@@ -28,6 +29,7 @@ import {
   subagentRuns,
 } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import {
   discardSuspendedPendingFinalDelivery,
   isSuspendedPendingFinalDelivery,
@@ -357,6 +359,16 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
 
+        // Return custody may settle before descendants. Keep their parent session until
+        // bounded liveness expires or they settle; normal cleanup then applies.
+        if (
+          isFailedTerminalSubagentRun(entry) &&
+          buildSubagentRunReadIndexFromRuns({ runs, now }).countActiveDescendantRuns(
+            entry.childSessionKey,
+          ) > 0
+        ) {
+          continue;
+        }
         if (entry.collect && entry.collectorCompletion) {
           if (entry.collectorLaunchCleanupPending) {
             let suppressSessionCleanup = shouldSuppressSubagentSessionCleanup(entry);

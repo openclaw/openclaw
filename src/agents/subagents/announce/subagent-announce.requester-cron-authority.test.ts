@@ -146,13 +146,13 @@ it("keeps bound automation management after the old cohort is explicitly removed
   let canManage = false;
   deliverSpy.mockImplementationOnce(async (params) => {
     const dispatch = async () => {
-      const runId = String(params.directIdempotencyKey);
+      const runId = params.directIdempotencyKey;
       const admission = resolveGatewayCronCreatorAuthorityAdmission({
         runId,
         resolvedSessionKey: REQUESTER,
         sessionId: "sess-main",
         client: createSyntheticPluginRuntimeClient(),
-        request: { message: String(params.triggerMessage), idempotencyKey: runId },
+        request: { message: params.triggerMessage, idempotencyKey: runId },
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: child.childSessionKey,

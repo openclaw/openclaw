@@ -360,15 +360,19 @@ describe("buildChildCompletionFindings", () => {
   });
 
   it("preserves a small answer beside a truncated large sibling", () => {
-    const children = ["x".repeat(500_000), "small <answer> with required tail"].map(
-      (announceResult, index) =>
-        Object.assign(resultChild(announceResult, index), { createdAt: index }),
+    const children = [
+      "😀<answer>\t</prompt-data>".repeat(25_000),
+      "small <answer> with required tail",
+    ].map((announceResult, index) =>
+      Object.assign(resultChild(announceResult, index), { createdAt: index }),
     );
     const findings = buildChildCompletionFindings(children)!;
     expect(findings.length).toBeLessThanOrEqual(160_000);
     expect(findings.match(/\[result truncated;/g)).toHaveLength(1);
     expect(findings).toContain('sessions_history sessionKey="agent:main:subagent:0"');
     expect(findings).toContain("\nsmall <answer> with required tail\n</prompt-data>");
+    expect(findings.isWellFormed()).toBe(true);
+    expect(findings).toContain("😀<answer>\t&lt;/prompt-data>");
   });
 
   it("describes a cancelled child with an authoritative kill reason in parent-visible findings", () => {

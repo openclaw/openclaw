@@ -304,6 +304,7 @@ export function buildSidebarSessionNavigationState(input: {
           forkSource: row.forkSource,
           status: row.status,
           lastRunError: row.lastRunError,
+          failureHandedOff: row.failureHandedOff,
           createdAt: row.createdAt,
           startedAt: row.startedAt,
           updatedAt: row.updatedAt,
@@ -320,6 +321,7 @@ export function buildSidebarSessionNavigationState(input: {
           containsActiveDescendant: false,
           runningChildCount: 0,
           failedChildCount: 0,
+          attentionFailedChildCount: 0,
         };
       },
     );

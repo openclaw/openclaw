@@ -13,20 +13,32 @@ import { findSessionTranscriptArchiveEventReadOnly } from "../../../config/sessi
 import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
+import { readSessionTranscriptRunId } from "../../../sessions/transcript-events.js";
 import { isSilentAssistantTranscriptMessage } from "../../../shared/chat-message-content.js";
 import { isContractToolCallBlock, readToolCallName } from "../../../shared/tool-block-contract.js";
 import { sleep } from "../../../utils/sleep.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { resolveSubagentChildAgentId } from "../registry/subagent-child-owner-match.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { buildSubagentSessionListReadIndex } from "../registry/subagent-registry-read.js";
 import type { SubagentRunReadRecord } from "../registry/subagent-registry-read.types.js";
 import { prepareSubagentRunsSnapshotForRunIds } from "../registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { isRequesterCompletionCohortCurrent } from "../registry/subagent-requester-settle-identity.js";
-import { recordLatestSubagentRun } from "../registry/subagent-run-generation.js";
+import {
+  copySubagentRunRuntimeOwner,
+  recordLatestSubagentRun,
+} from "../registry/subagent-run-generation.js";
+import {
+  hasSubagentRunEnded,
+  isRetainedUnendedSubagentRun,
+} from "../registry/subagent-run-liveness.js";
+import { withSubagentSessionSource } from "../spawn/subagent-session-source.js";
+import { isFailedTerminalSubagentRun } from "../subagent-failure.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
   buildChildCompletionFindings,
+  prepareChildCompletionFindings,
   readSubagentRunAnnounceResultUsing,
   readSubagentRunFinalAnswerUsing,
   SubagentAnnouncePreparationConflictError,
@@ -352,18 +364,150 @@ async function prepareAnnounceRunReader(runIds: string[]): Promise<AnnounceRunRe
   };
 }
 
-export async function readSubagentRunAnnounceResult(
+async function readSubagentRunResultWithProgress(
   child: SubagentRunRecord,
-  readSubagentRun?: AnnounceRunReader,
+  readCurrent: AnnounceRunReader,
 ): Promise<PreparedAnnounceResult> {
-  return await readSubagentRunAnnounceResultUsing(child, {
-    readSubagentRun: readSubagentRun ?? (await prepareAnnounceRunReader([child.runId])),
+  const prepared = await readSubagentRunAnnounceResultUsing(child, {
+    readSubagentRun: readCurrent,
     findTranscriptEvent,
     findSessionTranscriptArchiveEventReadOnly,
     getRuntimeConfig,
     readSubagentSessionEntry,
     resolveSessionStorePathCore,
   });
+  const current = readCurrent(child.runId);
+  if (!current || !isFailedTerminalSubagentRun(current)) {
+    return prepared;
+  }
+  const target = current.execution.transcriptTarget;
+  const agentId = target?.agentId ?? resolveSubagentChildAgentId(current);
+  let progress: string | undefined;
+  let progressUnavailable = false;
+  if (current.completion?.terminalReply?.disposition !== "silent" && agentId) {
+    const messages = await (async () => {
+      const storePath =
+        target?.storePath ??
+        resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId });
+      const sessionKey = target?.sessionKey ?? current.childSessionKey;
+      return withSubagentSessionSource({ agentId, storePath, sessionKey }, async (source) => {
+        const sourcePath = source?.path ?? storePath;
+        const sessionId =
+          target?.sessionId ??
+          current.childSessionIdentity?.sessionId ??
+          (await readSubagentSessionEntry(sourcePath, sessionKey, agentId))?.sessionId;
+        return sessionId
+          ? readSessionMessagesAsync(
+              { agentId, sessionId, sessionKey, storePath: sourcePath },
+              { mode: "recent", maxMessages: 100, maxBytes: 1024 * 1024 },
+            )
+          : [];
+      });
+    })().catch(() => {
+      // Optional retained progress cannot prevent delivery of the mandatory failure cause.
+      progressUnavailable = true;
+      return [];
+    });
+    let text: string | undefined;
+    let toolCalls = 0;
+    for (const message of messages) {
+      if (readSessionTranscriptRunId(message) !== child.runId) {
+        continue;
+      }
+      const record = asOptionalObjectRecord(message);
+      if (record?.role !== "assistant") {
+        continue;
+      }
+      if (!isSilentAssistantTranscriptMessage(message)) {
+        text = extractStoredAssistantText(message)?.trim() || text;
+      }
+      if (Array.isArray(record.content)) {
+        toolCalls += record.content.filter(isContractToolCallBlock).length;
+      }
+    }
+    progress =
+      text || (toolCalls ? `${toolCalls} tool call(s) made without visible output.` : undefined);
+  }
+  return {
+    text:
+      [
+        prepared.text,
+        progress ? "Saved partial progress (not a completed result):\n" + progress : undefined,
+        progressUnavailable ? "Saved partial progress unavailable." : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n\n") || undefined,
+    isCurrent: prepared.isCurrent,
+  };
+}
+
+export async function readSubagentRunAnnounceResult(
+  child: SubagentRunRecord,
+  readSubagentRun?: AnnounceRunReader,
+): Promise<PreparedAnnounceResult> {
+  const readCurrent = readSubagentRun ?? (await prepareAnnounceRunReader([child.runId]));
+  const prepared = await readSubagentRunResultWithProgress(child, readCurrent);
+  if (!isFailedTerminalSubagentRun(child)) {
+    return prepared;
+  }
+  const descendants = buildSubagentSessionListReadIndex(Date.now(), [
+    child.childSessionKey,
+  ]).listDescendantRunsForRequester(child.childSessionKey);
+  // A collector's completion is readiness, not durable consumption. Keep its
+  // public ID recoverable even after completion cleanup, without waking it.
+  const unconsumedFailures = descendants.filter(
+    (run) => run.collect && isFailedTerminalSubagentRun(run) && !run.delivery?.failureHandoff,
+  );
+  const pending = descendants
+    .filter((run) =>
+      hasSubagentRunEnded(run)
+        ? run.cleanupCompletedAt === undefined && !run.collectorCompletion
+        : isRetainedUnendedSubagentRun(run),
+    )
+    .map((run) => ({
+      runId: run.swarmRunId ?? run.runId,
+      mode: run.collect ? "collector" : "announcing",
+    }));
+  const readFailures = unconsumedFailures.length
+    ? await prepareAnnounceRunReader(unconsumedFailures.map((run) => run.runId))
+    : undefined;
+  const failures = await Promise.all(
+    unconsumedFailures.map(async (run) => {
+      const current = readFailures?.(run.runId);
+      if (!current) {
+        throw new SubagentAnnouncePreparationConflictError(
+          "A failed collector changed during parent handoff.",
+        );
+      }
+      // Read each selected descendant once, not its subtree recursively. The
+      // existing transcript window and findings formatter bound retained output.
+      const result = await readSubagentRunResultWithProgress(current, readFailures!);
+      return { child: current, text: result.text, isCurrent: result.isCurrent };
+    }),
+  );
+  const text = [
+    prepared.text,
+    pending.length
+      ? "Pending delegated runs (not completed): " + JSON.stringify(pending)
+      : undefined,
+    failures.length
+      ? [
+          "Failed collectors awaiting consumption (run IDs): " +
+            JSON.stringify(failures.map(({ child: run }) => run.swarmRunId ?? run.runId)),
+          buildChildCompletionFindings(
+            failures.map(({ child: run, text: result }) =>
+              Object.assign({}, run, { announceResult: result }),
+            ),
+          ),
+        ].join("\n")
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  return {
+    text: text || undefined,
+    isCurrent: () => prepared.isCurrent() && failures.every((result) => result.isCurrent()),
+  };
 }
 
 /** The complete final answer recorded by this run, or undefined when retention removed it. */
@@ -383,7 +527,11 @@ export async function readSubagentRunFinalAnswer(
 export async function readChildCompletionFindings(
   children: SubagentRunRecord[],
   readSubagentRun?: AnnounceRunReader,
-): Promise<PreparedAnnounceResult> {
+): Promise<
+  PreparedAnnounceResult & {
+    representedChildren: SubagentRunRecord[];
+  }
+> {
   const readCurrent =
     readSubagentRun ?? (await prepareAnnounceRunReader(children.map((child) => child.runId)));
   const results = await Promise.all(
@@ -405,8 +553,10 @@ export async function readChildCompletionFindings(
     );
   }
   return {
-    text: buildChildCompletionFindings(
-      results.map(({ child, text }) => Object.assign({}, child, { announceResult: text })),
+    ...prepareChildCompletionFindings(
+      results.map(({ child, text }) =>
+        copySubagentRunRuntimeOwner(child, { ...child, announceResult: text }),
+      ),
     ),
     isCurrent,
   };

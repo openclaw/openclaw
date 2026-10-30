@@ -519,7 +519,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
           res.end(payload, () => {
             // Ending queues bytes; only a completed write owns result delivery.
             if (res.writableFinished) {
-              responses.forEach(acknowledgeInternalToolResult);
+              responses.forEach((response) => acknowledgeInternalToolResult(response));
             }
           });
         }

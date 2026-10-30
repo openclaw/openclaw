@@ -8,10 +8,12 @@ import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import {
   buildSubagentPrivateCompletionInstruction,
   SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
+  SUBAGENT_FAILURE_RECOVERY_INSTRUCTION,
 } from "../completion/subagent-completion-instructions.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { isSubagentObligationRetired } from "../registry/subagent-requester-settle-identity.js";
 import { getSubagentTerminalReplySummary } from "../registry/subagent-run-payload-facts.js";
+import { isFailedTerminalSubagentRun } from "../subagent-failure.js";
 import { needsRequesterSettleFindings } from "./subagent-announce.requester-settle-state.js";
 
 const REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS = 1_024;
@@ -83,6 +85,9 @@ export function buildRequesterSettleWakeMessage(params: {
     "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive for it. Other batches may still be running.",
     // Private completion guidance already includes the shared outcome policy.
     ...(params.parentOnly ? [] : [`[Subagent Context] ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}`]),
+    ...(params.children.some(isFailedTerminalSubagentRun)
+      ? [SUBAGENT_FAILURE_RECOVERY_INSTRUCTION]
+      : []),
     params.parentOnly
       ? `[Subagent Context] ${buildSubagentPrivateCompletionInstruction(params.requesterOrigin)}`
       : params.yieldedFinalDeliverable
@@ -121,7 +126,7 @@ export function describeChildrenEndedWithoutResult(labels: readonly string[]): s
 // A cohort whose every member was stopped, killed, or deleted resolves with no result to review.
 function describeSettledBatch(children: readonly SubagentRunRecord[]): string {
   if (children.length === 0 || !children.every(isSubagentObligationRetired)) {
-    return "[Subagent Context] Every subagent in this batch has now settled, including its descendants.";
+    return "[Subagent Context] Every direct subagent in this batch has now settled. Healthy subtrees have settled; failed children may still have pending delegated runs listed in their findings.";
   }
   const labels = children.map(
     (child) => child.label?.trim() || child.taskName?.trim() || child.task.trim() || child.runId,

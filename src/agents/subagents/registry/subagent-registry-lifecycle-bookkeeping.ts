@@ -4,6 +4,7 @@ import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
+import { isFailedTerminalSubagentRun } from "../subagent-failure.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { markRequesterSettleWakePending } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
@@ -17,6 +18,7 @@ import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-p
 import { scheduleRequesterSettleWake } from "./subagent-registry-lifecycle-wake.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
+import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export async function completeCleanupBookkeeping(
@@ -152,8 +154,19 @@ export async function completeCleanupBookkeeping(
     mutate: (draft, current) => {
       const suppressSessionEffects = !context.sessionEffectsHostCurrent(current);
       cleanupParams.finalizeDelivery?.(draft);
+      const retainFailedParent =
+        isDeleteCleanup &&
+        isFailedTerminalSubagentRun(draft) &&
+        buildSubagentRunReadIndexFromRuns({ runs: params.runs }).countActiveDescendantRuns(
+          draft.childSessionKey,
+        ) > 0;
+      if (retainFailedParent) {
+        // The normal sweep owns deferred deletion; do not lose the row at batch settlement.
+        draft.archiveAtMs ??= cleanupParams.completedAt;
+      }
       // Cron reads settled rows until archive; expired discards have no remaining reader.
       retireAfterSettle =
+        !retainFailedParent &&
         !draft.collect &&
         ((isDeleteCleanup &&
           (!isCronRunSessionKey(draft.requesterSessionKey) ||

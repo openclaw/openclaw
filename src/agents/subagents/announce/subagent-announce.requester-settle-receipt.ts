@@ -4,8 +4,11 @@ import type {
 } from "../../../config/sessions/session-entry-current.types.js";
 import { captureSystemEventStoreCurrentCheck } from "../../../infra/system-event-ownership.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../../sessions/user-turn-transcript.types.js";
 import { evaluateGatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-context.js";
 import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
+import { recordSubagentFailureHandoff } from "../registry/subagent-failure-handoff.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 /** Watch effects retain their original stores; the durable wake keeps its ordinary handoff rules. */
 export function createRequesterSettleReceiptAdmission(params: {
@@ -99,5 +102,17 @@ export function createRequesterSettleReceiptAdmission(params: {
     },
     isStoreCurrent: () =>
       evaluateGatewayToolCallerReceiptAdmission(admission, () => params.isStoreCurrent()),
+    observeFailureHandoff(entries: readonly SubagentRunRecord[], isCurrent: () => boolean) {
+      return (requester: UserTurnTranscriptAdmissionReceipt) =>
+        recordSubagentFailureHandoff({
+          entries,
+          requester,
+          assertCurrent: () => {
+            if (!isCurrent()) {
+              throw new Error("Requester failure cohort changed");
+            }
+          },
+        });
+    },
   });
 }

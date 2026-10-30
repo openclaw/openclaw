@@ -184,6 +184,7 @@ export type SidebarRecentSession = Readonly<{
     | "queuedChildCount"
     | "runningChildCount"
     | "failedChildCount"
+    | "attentionFailedChildCount"
     | "workspaceConflictCount"
   >;
   agentStatusNote?: string;
@@ -195,6 +196,7 @@ export type SidebarRecentSession = Readonly<{
   forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
   status?: SessionRunStatus;
   lastRunError?: string;
+  failureHandedOff?: boolean;
   createdAt?: number;
   startedAt?: number;
   updatedAt?: number | null;
@@ -210,6 +212,8 @@ export type SidebarRecentSession = Readonly<{
   containsActiveDescendant: boolean;
   runningChildCount: number;
   failedChildCount: number;
+  /** Failures not yet handed off; diagnostic failedChildCount remains complete. */
+  attentionFailedChildCount?: number;
 }>;
 
 export type SidebarSessionHovercardRow = Pick<

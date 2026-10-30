@@ -27,6 +27,7 @@ import {
   buildAgentInternalEventContext,
   collectAgentInternalEventMedia,
   formatGeneratedMediaDeliveredForPrompt,
+  resolveFailureHandoffTranscriptBody,
   type AgentInternalEvent,
 } from "../../internal-events.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
@@ -262,10 +263,13 @@ async function deliverSubagentAnnouncementBound(
       sourceTool: sourceTool ?? "subagent_announce",
     };
     // The recorder guards the exact requester session the completion steers into.
-    createCompletionUserTurnTranscriptRecorder = (sessionId) =>
-      createUserTurnTranscriptRecorder({
+    createCompletionUserTurnTranscriptRecorder = (sessionId) => {
+      const recorder = createUserTurnTranscriptRecorder({
         input: {
-          text: transcriptMessage,
+          // Active steering has the same custody contract as a fresh Gateway turn.
+          text: params.onInputCommitted
+            ? resolveFailureHandoffTranscriptBody(transcriptMessage, internalEvents)
+            : transcriptMessage,
           idempotencyKey: `${directIdempotencyKey}:active-wake`,
           provenance,
         },
@@ -288,7 +292,17 @@ async function deliverSubagentAnnouncementBound(
           };
         },
         errorContext: "active requester completion transcript",
+        onMessagePersisted: () => {
+          const receipt = recorder.getAdmissionReceipt?.();
+          if (!receipt || sourceOwnerChanged()) {
+            return;
+          }
+          const observe = () => params.onInputCommitted?.(receipt);
+          return params.resolveGatewayContext?.()?.trackExecution(observe) ?? observe();
+        },
       });
+      return recorder;
+    };
   }
   if (sourceOwnerChanged()) {
     return sourceOwnerChangedResult();

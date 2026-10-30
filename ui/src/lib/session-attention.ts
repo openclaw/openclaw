@@ -36,6 +36,7 @@ export function sessionRowAttention(
   const failureAt = row.endedAt ?? row.updatedAt ?? 0;
   if (
     row.suppressErrorNotice ||
+    row.failureHandedOff ||
     (row.status !== "failed" && row.status !== "timeout") ||
     (row.lastReadAt != null && failureAt <= row.lastReadAt)
   ) {

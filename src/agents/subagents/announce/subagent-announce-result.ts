@@ -177,9 +177,12 @@ export type ChildCompletionRow = Pick<
   >;
 };
 
-export function buildChildCompletionFindings(
-  children: Array<ChildCompletionRow>,
-): string | undefined {
+export function prepareChildCompletionFindings<T extends ChildCompletionRow>(
+  children: T[],
+): {
+  text: string | undefined;
+  representedChildren: T[];
+} {
   const sorted = children.toSorted((a, b) => {
     if (a.createdAt !== b.createdAt) {
       return a.createdAt - b.createdAt;
@@ -230,6 +233,7 @@ export function buildChildCompletionFindings(
     };
     const resultBlock = wrapPromptDataBlock(result) || "Child result: (no output)";
     sections.push({
+      child,
       result,
       childSessionKey: child.childSessionKey,
       resultBlock,
@@ -255,7 +259,7 @@ export function buildChildCompletionFindings(
   }
 
   if (sections.length === 0) {
-    return undefined;
+    return { text: undefined, representedChildren: [] };
   }
 
   const heading = "Child completion results:\n\n";
@@ -299,9 +303,18 @@ export function buildChildCompletionFindings(
     }
     remaining -= section.resultBlock.length - section.minimumChars;
   }
-  return [
-    heading,
-    ...visible.map(({ header, resultBlock }) => `${header}\n${resultBlock}`),
-    ...(summary ? [summary] : []),
-  ].join("\n\n");
+  return {
+    text: [
+      heading,
+      ...visible.map(({ header, resultBlock }) => `${header}\n${resultBlock}`),
+      ...(summary ? [summary] : []),
+    ].join("\n\n"),
+    representedChildren: visible.map(({ child }) => child),
+  };
+}
+
+export function buildChildCompletionFindings(
+  children: Array<ChildCompletionRow>,
+): string | undefined {
+  return prepareChildCompletionFindings(children).text;
 }

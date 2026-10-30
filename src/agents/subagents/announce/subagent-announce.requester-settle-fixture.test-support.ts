@@ -54,8 +54,11 @@ const { registryRuntimeMock, findTranscriptEventMock, readDescendantFacts } = vi
 
 export { registryRuntimeMock, findTranscriptEventMock, readDescendantFacts };
 
-// mock-isolation: settlement reads only the requester wave and its live session owners.
-vi.mock("../registry/subagent-registry-read.js", () => registryRuntimeMock);
+// mock-isolation: Select the fixture wave; other registry readers retain their real contracts.
+vi.mock("../registry/subagent-registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../registry/subagent-registry-read.js")>()),
+  ...registryRuntimeMock,
+}));
 vi.mock("./subagent-announce.requester-settle-descendants.js", () => ({
   createRequesterDescendantReader:
     (params: Parameters<typeof createRequesterDescendantReader>[0]) => () =>
@@ -81,7 +84,7 @@ vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
 
 // mock-isolation: Requester settlement uses the fixture session map and delivery receipt, without transport or session-store access.
 vi.mock("./subagent-announce-delivery.js", () => ({
-  deliverSubagentAnnouncement: (params: Record<string, unknown>) => deliverSpy(params),
+  deliverSubagentAnnouncement: (params: Parameters<typeof deliverSpy>[0]) => deliverSpy(params),
   loadRequesterSessionEntry: (sessionKey: string) => ({
     cfg: getRuntimeConfig(),
     entry: sessionStore[sessionKey],

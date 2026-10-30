@@ -6,6 +6,7 @@ import {
   prepareSubagentSessionListReadCache,
 } from "../registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { isFailedTerminalSubagentRun } from "../subagent-failure.js";
 
 export function createRequesterDescendantReader(params: {
   requesterSessionKey: string;
@@ -49,30 +50,47 @@ export function createRequesterDescendantReader(params: {
         runs.set(runId, live);
       }
     }
-    const index = buildScopedSubagentRunReadIndexFromRuns(
+    let index = buildScopedSubagentRunReadIndexFromRuns(
       runs,
       params.requesterSessionKey,
       params.requesterAgentId,
       params.requesterStorePath,
       params.rootRunIds,
     );
+    // Keep every direct member. Only work below a terminal failure stops blocking return.
+    const pruned = new Set<string>();
+    const retained = new Map(runs);
+    for (const run of index.listDescendantRunsForRequester(params.requesterSessionKey)) {
+      if (pruned.has(run.requesterSessionKey)) {
+        retained.delete(run.runId);
+        pruned.add(run.childSessionKey);
+      } else if (isFailedTerminalSubagentRun(run)) {
+        pruned.add(run.childSessionKey);
+      }
+    }
+    if (retained.size !== runs.size) {
+      index = buildScopedSubagentRunReadIndexFromRuns(
+        retained,
+        params.requesterSessionKey,
+        params.requesterAgentId,
+        params.requesterStorePath,
+        params.rootRunIds,
+      );
+    }
     const unsettled = index.hasDescendantRunAwaitingSettle(
       params.requesterSessionKey,
       params.settledEntry.runId,
       params.settledBefore,
     );
     const active = index.countActiveDescendantRuns(params.requesterSessionKey);
+    const latestEndedAt = index
+      .listDescendantRunsForRequester(params.requesterSessionKey)
+      .reduce((latest, run) => Math.max(latest, run.execution.endedAt ?? 0), 0);
     // Terminal delivery gets one bounded grace period, derived from durable end
     // times so neither sweeps nor a Gateway restart recharge the wait.
     const deliveryWaitUntil =
       unsettled && active === 0
-        ? index
-            .listDescendantRunsForRequester(params.requesterSessionKey)
-            .reduce(
-              (latest, run) => Math.max(latest, run.execution.endedAt ?? 0),
-              params.settledEntry.execution.endedAt ?? 0,
-            ) +
-          5 * 60_000
+        ? Math.max(latestEndedAt, params.settledEntry.execution.endedAt ?? 0) + 5 * 60_000
         : undefined;
     return { unsettled, active, ...(deliveryWaitUntil !== undefined ? { deliveryWaitUntil } : {}) };
   };

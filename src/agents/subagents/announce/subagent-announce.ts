@@ -10,6 +10,7 @@ import {
 import { waitForSessionRunEnd } from "../../../sessions/session-controller.native-runtime.js";
 import { isSessionRunActive } from "../../../sessions/session-controller.queries.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../../sessions/user-turn-transcript.types.js";
 import { createLazyPromise } from "../../../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import {
@@ -27,6 +28,7 @@ import {
 import {
   buildSubagentPrivateCompletionInstruction,
   SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
+  SUBAGENT_FAILURE_RECOVERY_INSTRUCTION,
 } from "../completion/subagent-completion-instructions.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
@@ -43,6 +45,7 @@ import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { getSubagentTerminalReplySummary } from "../registry/subagent-run-payload-facts.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
+import { isFailedTerminalSubagentRun } from "../subagent-failure.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
   hasAnnounceSendEvidence,
@@ -139,6 +142,7 @@ type SubagentAnnounceFlowParams = Omit<PendingFinalDeliveryPayload, "requesterDi
   signal?: AbortSignal;
   onAccepted?: () => void;
   onExecutionStarted?: () => void;
+  onInputCommitted?: (receipt: UserTurnTranscriptAdmissionReceipt) => void | Promise<void>;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   onBeforeDeleteChildSession?: () => boolean | Promise<boolean>;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
@@ -227,6 +231,14 @@ async function runSubagentAnnounceFlowBound(
       }
     }
     const failedTerminalOutcome = outcome.status === "error";
+    const failedTask = isFailedTerminalSubagentRun({
+      execution: {
+        status: "terminal",
+        endedAt: params.endedAt,
+        outcome,
+      },
+      endedReason: params.endedReason,
+    });
     const killed = params.endedReason === SUBAGENT_ENDED_REASON_KILLED;
     const allowFailedOutputCapture =
       !killed && (!failedTerminalOutcome || (!params.roundOneReply && !params.fallbackReply));
@@ -273,10 +285,13 @@ async function runSubagentAnnounceFlowBound(
             );
       if (pendingChildDescendantRuns > 0) {
         shouldDeleteChildSession = false;
-        return "retryable";
+        if (!failedTask) {
+          return "retryable";
+        }
       }
 
       if (
+        !failedTask &&
         childSessionCurrent &&
         childSessionEffectsAllowed() &&
         params.wakeOnDescendantSettle === true
@@ -357,6 +372,7 @@ async function runSubagentAnnounceFlowBound(
       reply = undefined;
     }
     if (
+      !ownResult &&
       params.terminalReply?.disposition === "empty" &&
       outcome.status === "timeout" &&
       (await prepareChildSessionEffects()) &&
@@ -537,18 +553,23 @@ async function runSubagentAnnounceFlowBound(
           params.terminalReply?.disposition === "visible"
             ? params.terminalReply.modelRouteChange
             : undefined;
-        const replyInstruction = buildAnnounceReplyInstruction({
-          requesterIsSubagent,
-          requesterOrigin: directOrigin,
-          completionTarget: params.completionTarget,
-          modelRouteChange,
-          // Nested and local operator parents may report the route fact. External
-          // channel parents receive it only as private orchestration context.
-          preserveModelRouteNotice:
-            requesterIsSubagent ||
-            !completionChannel ||
-            !isDeliverableMessageChannel(completionChannel),
-        });
+        const replyInstruction = [
+          buildAnnounceReplyInstruction({
+            requesterIsSubagent,
+            requesterOrigin: directOrigin,
+            completionTarget: params.completionTarget,
+            modelRouteChange,
+            // Nested and local operator parents may report the route fact. External
+            // channel parents receive it only as private orchestration context.
+            preserveModelRouteNotice:
+              requesterIsSubagent ||
+              !completionChannel ||
+              !isDeliverableMessageChannel(completionChannel),
+          }),
+          failedTask ? SUBAGENT_FAILURE_RECOVERY_INSTRUCTION : undefined,
+        ]
+          .filter(Boolean)
+          .join(" ");
         const internalEvents: AgentInternalEvent[] = [
           {
             type: "task_completion",
@@ -595,6 +616,7 @@ async function runSubagentAnnounceFlowBound(
           signal: params.signal,
           onAccepted: params.onAccepted,
           onExecutionStarted: params.onExecutionStarted,
+          onInputCommitted: params.onInputCommitted,
           resolveGatewayContext: params.resolveGatewayContext,
           controllerInput: params.controllerInput,
         });

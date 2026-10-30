@@ -44,6 +44,17 @@ export type SubagentCompletionDeliveryState = {
   createdAt?: number;
   enqueuedAt?: number;
   deliveredAt?: number;
+  /**
+   * Recorded only after this exact failure is committed to the authorized consumer's durable input/result.
+   * requesterSessionKey identifies that actual consumer (possibly an ancestor), not necessarily
+   * the original spawning requester.
+   */
+  failureHandoff?: {
+    requesterSessionKey: string;
+    requesterSessionId: string;
+    requesterLifecycleRevision?: string;
+    requesterStorePath: string;
+  };
   announcedAt?: number;
   /** Exact requester turn and completed child batch that already produced its visible final. */
   requesterVisibleFinal?: { requesterTurnRunId: string; batchRunIds: string[] };

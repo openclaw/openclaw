@@ -294,6 +294,7 @@ function readSessionFixture(sessionKey: string): SessionEntry | undefined {
 function createRegistryDiscoveryFixture() {
   return {
     ...registry,
+    buildSubagentSessionListReadIndex: () => ({ listDescendantRunsForRequester: () => [] }),
     buildLatestSubagentSessionListReadIndex: () => ({ getLatestSubagentRun: () => null }),
     listSubagentRunsForRequester(sessionKey: string, scope?: { requesterRunId?: string }) {
       return registry
@@ -304,6 +305,7 @@ function createRegistryDiscoveryFixture() {
 }
 
 vi.mock("../registry/subagent-registry.js", () => createRegistryDiscoveryFixture());
+// mock-isolation: Formatting fixtures supply an empty descendant inventory without database discovery.
 vi.mock("../registry/subagent-registry-read.js", () => createRegistryDiscoveryFixture());
 
 const gatewayDeps = {
@@ -364,7 +366,11 @@ describe("subagent announce formatting", () => {
   }
 
   async function deliverCompletion(params: AnnounceParams) {
-    expect(await announceCompletion(params)).toBe("delivered");
+    const delivery = vi.fn();
+    expect(
+      await announceCompletion({ ...params, onDeliveryResult: delivery }),
+      JSON.stringify(delivery.mock.calls),
+    ).toBe("delivered");
     return expectParentAnnounce();
   }
 
@@ -416,6 +422,7 @@ describe("subagent announce formatting", () => {
         return event === undefined ? undefined : { event };
       },
       ...gatewayDeps,
+      readSessionMessagesAsync: async () => [],
       readSubagentSessionEntry: (_storePath, sessionKey) => readSessionFixture(sessionKey),
       resolveSessionStorePathCore: () => "/tmp/sessions.json",
     });

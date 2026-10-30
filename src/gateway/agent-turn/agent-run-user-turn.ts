@@ -12,6 +12,7 @@ import {
 } from "../../agents/bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults } from "../../agents/bash-tools.exec-types.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { resolveFailureHandoffTranscriptBody } from "../../agents/internal-events.js";
 import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
 import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import {
@@ -41,6 +42,7 @@ import {
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import {
   INLINE_IMAGE_DURABLE_OMISSION_MARKER,
@@ -148,6 +150,7 @@ export function recordAgentRunUserTurnParticipant(
 export async function prepareAgentRunUserTurn(params: {
   assertCurrent: () => void;
   onUserTurnMediaPersisted: () => void;
+  onInputCommitted?: (receipt: UserTurnTranscriptAdmissionReceipt) => void | Promise<void>;
   assertCompletionCurrent?: () => void;
   privateCompletion?: true;
   replyExpectation?: ReplyExpectation;
@@ -230,7 +233,15 @@ export async function prepareAgentRunUserTurn(params: {
 
     let message = params.message;
     const runtimeContextFragments = params.client?.internal?.runtimeContextFragments;
-    let effectiveTranscriptInputText = params.effectiveTranscriptInputText;
+    // Direct completion events retain failure diagnostics, not healthy runtime context.
+    // Settle inputs already carry the complete bounded cohort for hidden model replay.
+    let effectiveTranscriptInputText =
+      params.onInputCommitted && params.inputProvenance?.sourceTool === "subagent_announce"
+        ? resolveFailureHandoffTranscriptBody(
+            params.effectiveTranscriptInputText,
+            params.request.internalEvents,
+          )
+        : params.effectiveTranscriptInputText;
     let execApprovalContinuationPromptRange: ExecApprovalContinuationPromptRange | undefined;
     if (execApprovalFollowupRuntimeHandoff?.resultText !== undefined) {
       const continuation = buildExecApprovalContinuationPrompt(
@@ -389,6 +400,16 @@ export async function prepareAgentRunUserTurn(params: {
             }
           : resolveTarget,
         errorContext: "gateway agent user turn transcript",
+        onMessagePersisted: () => {
+          const receipt = recorder?.getAdmissionReceipt?.();
+          if (receipt) {
+            params.assertCurrent();
+            return params.onInputCommitted
+              ? params.context.trackExecution(() => params.onInputCommitted!(receipt))
+              : undefined;
+          }
+          return undefined;
+        },
         beforeMessageWrite: (writeContext) => {
           const preparedMessage = runAgentHarnessBeforeMessageWriteHook(writeContext);
           params.assertCurrent();
