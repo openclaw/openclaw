@@ -678,13 +678,15 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 }
 
 .sidebar-session-owner-filter {
-  flex: 0 1 auto;
+  flex: none;
   width: auto !important;
   min-width: 0 !important;
 }
 
 .sidebar-session-owner-filter .picker-select__trigger {
-  gap: 4px;
+  justify-content: flex-start;
+  gap: 5px;
+  width: auto;
   min-height: 30px;
   padding: 4px 6px;
   border: 0;
@@ -692,8 +694,31 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   font-weight: 600;
 }
 
+.sidebar-session-owner-filter .picker-select__copy {
+  flex: none;
+}
+
+.sidebar-session-owner-filter .picker-select__label {
+  color: var(--text-strong);
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 550;
+  letter-spacing: -0.005em;
+}
+
 .sidebar-session-owner-filter .picker-select__chevron {
-  margin-inline-start: 0;
+  margin-inline-start: -2px;
+  color: var(--muted);
+}
+
+.sidebar-session-owner-filter .picker-select__chevron svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 1.75px;
+}
+
+.sidebar-session-owner-filter .picker-select__leading .viewer-avatar {
+  width: 18px;
+  height: 18px;
 }
 
 .sidebar-session-owner-filter.picker-select--sheet .picker-select__trigger .picker-select__chevron {
@@ -712,7 +737,7 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 .sidebar--rail .sidebar-session-toolbar__button.sidebar-session-sort {
   width: auto;
   max-width: 50%;
-  gap: 2px;
+  gap: 4px;
   opacity: 1;
 }
 
