@@ -148,7 +148,6 @@ function loseFirstAuditBatchReply() {
     expect(stopped).toBeDefined();
   };
 }
-
 describe("audit writer shared worker", () => {
   it.each([[2], [10], [32], [10, "ABORT"], [10, "ROLLBACK"], [32, "message"]] as const)(
     "commits %i items with statement isolation (%s)",
