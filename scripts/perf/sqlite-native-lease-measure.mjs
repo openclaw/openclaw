@@ -207,7 +207,7 @@ try {
       sampledWorkerBytes += bytes(JSON.parse(await profiles.pop().stop()));
     }
     for (const key of Object.keys(fs).filter(
-      (key) => key.endsWith("Sync") && typeof fs[key] === "function",
+      (name) => name.endsWith("Sync") && typeof fs[name] === "function",
     )) {
       wrap(fs, key);
     }
