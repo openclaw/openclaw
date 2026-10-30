@@ -601,6 +601,26 @@ Example truncate response (`--max-lines 200`):
 }
 ```
 
+## Search transcript history
+
+Search past transcript text across stored sessions, the same index the agent's search tool and the Control UI palette use.
+
+```bash
+openclaw sessions search "cron schedule"
+openclaw sessions search backup --agent work --active-minutes 1440
+openclaw sessions search "webhook" --key agent:main:main --json
+```
+
+| Flag                   | Description                                                                 |
+| ---------------------- | --------------------------------------------------------------------------- |
+| `--limit <count>`      | Max matches, default 10, max 25.                                            |
+| `--key <sessionKey>`   | Search one explicit session key instead of the visible roster (repeatable). |
+| `--agent <id>`         | Agent id that owns the sessions (required for global keys).                 |
+| `--active-minutes <n>` | Only search sessions active within the last N minutes.                      |
+| `--json`               | Raw `sessions.search` response.                                             |
+
+The Gateway resolves the visible roster from `--agent`, `--key`, and `--active-minutes`, so the parent `sessions` list selectors (`--store`, `--all-agents`, `--active`, `--limit`, `--verbose`) do not apply. A first-use index reconcile is reported as in-progress rather than as an empty result, and truncated result sets say so explicitly.
+
 ## Related
 
 - [Session config](/gateway/config-agents/sessions#session)

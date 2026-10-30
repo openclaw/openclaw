@@ -512,4 +512,85 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         );
       });
     });
+
+  addSessionsGatewayOptions(sessionsCmd.command("search <query>"))
+    .description("Search past transcript text across stored sessions")
+    .option("--limit <count>", "Max matches (default 10, max 25)")
+    .option(
+      "--key <sessionKey>",
+      "Search one explicit session key (repeatable)",
+      (value, previous) => {
+        const next = Array.isArray(previous) ? previous : previous ? [previous] : [];
+        next.push(value);
+        return next;
+      },
+    )
+    .option("--active-minutes <minutes>", "Only search sessions active within N minutes")
+    .addHelpText(
+      "after",
+      () =>
+        `
+${theme.heading("Examples:")}
+${formatHelpExamples([
+  [
+    'openclaw sessions search "cron schedule"',
+    "Find what changed around a topic across all visible sessions.",
+  ],
+  [
+    "openclaw sessions search backup --agent work --active-minutes 1440",
+    "Search one agent's recent sessions for backup work.",
+  ],
+  [
+    'openclaw sessions search "webhook" --key agent:main:main --json',
+    "Search one session and emit the raw hits.",
+  ],
+])}
+
+${theme.muted(
+  "Backed by the sessions.search gateway RPC; the index may still reconcile on first use.",
+)}`,
+    )
+    .action(async (query: string, opts, command) => {
+      // The Gateway resolves search scope from <query> and --agent; list selectors cannot apply.
+      const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined; // SAFETY: the sessions parent registers the list options rejected below.
+      rejectUnsupportedSessionsParentOptions(
+        "search",
+        parentOpts,
+        ["store", "allAgents", "active", "limit", "verbose"],
+        "the gateway resolves the visible roster from --agent, --key, and --active-minutes",
+      );
+      const limit = parseStrictPositiveInteger(opts.limit);
+      if (opts.limit !== undefined && limit === undefined) {
+        throwExpectedCliError("--limit must be a positive integer.");
+      }
+      if (limit !== undefined && limit > 25) {
+        throwExpectedCliError("--limit must be between 1 and 25.");
+      }
+      const activeMinutes = parseStrictPositiveInteger(opts.activeMinutes);
+      if (opts.activeMinutes !== undefined && activeMinutes === undefined) {
+        throwExpectedCliError("--active-minutes must be a positive integer.");
+      }
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
+      if (opts.timeout !== undefined && timeoutMs === undefined) {
+        throwExpectedCliError("--timeout must be a positive integer (milliseconds).");
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsSearchCommand } = await import("../../commands/sessions-search.js");
+        await sessionsSearchCommand(
+          {
+            query,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent, // SAFETY: Commander parses --agent as a string.
+            keys: opts.key as string[] | undefined, // SAFETY: Commander collects repeated --key values as strings.
+            limit,
+            activeMinutes,
+            timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
+            url: opts.url as string | undefined, // SAFETY: Commander parses transport options as strings.
+            token: opts.token as string | undefined, // SAFETY: Commander parses transport options as strings.
+            password: opts.password as string | undefined, // SAFETY: Commander parses transport options as strings.
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
 }
