@@ -492,9 +492,6 @@ describe("conversation position rail", () => {
         new Map(ids.map((id) => [id, id])),
       );
       renderRows(rows);
-      // Commit the observed viewport and its header margin before reader queries.
-      await settleFrames();
-      flush();
       // No scroll event or render between these queries: mounted rows are stale.
       container.scrollTop = 100;
       expect(session.activeMessageId(ids)).toBe("row-2");
