@@ -10,16 +10,14 @@ openclaw-chat-details[mobile] {
 }
 
 .chat-details-toggle[hidden],
-.chat-gutter-header[hidden],
 .chat-details[hidden] {
   display: none;
 }
 
-/* Notices and suggestions share the gutter; Details lives in the pane header. */
+/* Notices own the gutter; Details lives in the pane header. */
 .chat-gutter-stack--details {
   width: calc(100% - 28px);
   max-height: calc(100cqh - var(--chat-mobile-pane-header-height, 0px) - 20px);
-  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .chat-gutter-stack--details .chat-gutter-header {
@@ -35,15 +33,6 @@ openclaw-chat-details[mobile] {
   justify-self: center;
   max-width: min(34rem, 100%);
   transform: none;
-}
-
-.chat-gutter-stack--details .task-suggestions {
-  width: min(450px, 100%);
-  min-height: 0;
-}
-
-.chat-gutter-stack--details .task-suggestion {
-  max-height: 100%;
 }
 
 .chat-pane__header-trailing > openclaw-chat-details {

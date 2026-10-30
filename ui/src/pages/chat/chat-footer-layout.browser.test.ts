@@ -426,7 +426,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
           "chat-main > chat-main__conversation-column",
           `<div class="chat-topbar-notices"></div>${conversation(`
             <div class="chat-thread" role="log">${nest("chat-thread-inner", "Transcript")}</div>
-            ${nest("chat-gutter-stack > task-suggestions", "Task suggestion")}
+            ${nest("chat-gutter-stack > chat-gutter-header", "Gutter notice")}
             ${composerFooter("Composer", footerContext)}`)}`,
         );
         await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head>

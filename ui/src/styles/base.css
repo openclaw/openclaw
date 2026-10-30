@@ -173,7 +173,6 @@
   --accent-2-subtle: rgba(20, 184, 166, 0.1);
 
   /* Theme-invariant presentation colors. */
-  --task-suggestion-action-fg: #fafafa;
   --button-icon-bg: #ffffff;
   --brand-logo-chip-bg: #ffffff;
   --qr-bg: #ffffff;

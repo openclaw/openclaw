@@ -163,6 +163,7 @@ const catalog = {
     taskSuggestions: {
       eyebrow: "Suggested task · in {repo}",
       startSession: "Start in a new session",
+      start: "Start",
       startOptions: "Choose where to start the task",
       startWorktree: "Start in a new worktree",
       chooseRepository: "Choose repository",

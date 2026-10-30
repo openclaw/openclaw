@@ -1,0 +1,597 @@
+/* Suggested tasks sit in the composer's context stack. Closed, a suggestion is
+   one row on the queue and progress card's surface and geometry. Open, it reads
+   like the question panel: header, content, then the action footer, so the
+   start action always sits nearest the composer. Start shares Send's accent fill
+   and ink, so a custom accent paints both identically. */
+.task-suggestions {
+  display: grid;
+  min-width: 0;
+  container-type: inline-size;
+}
+
+.task-suggestion {
+  grid-area: 1 / 1;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  /* Open cards stay inside short panes; only the content scrolls. */
+  max-height: min(30rem, 62dvh);
+  overflow: hidden;
+  border: 1px solid var(--chat-composer-hairline, var(--border));
+  border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
+  background: var(--composer-attached-surface, var(--chat-composer-surface, var(--panel-strong)));
+  backdrop-filter: blur(8px);
+}
+
+:root[data-theme-mode="light"] .task-suggestion {
+  border-color: var(--chat-composer-light-outline, var(--border));
+}
+
+.task-suggestion[hidden],
+.task-suggestion__details[hidden] {
+  display: none;
+}
+
+.task-suggestion[data-swap-direction="next"] {
+  animation: task-suggestion-swap-next 200ms var(--ease-out);
+}
+
+.task-suggestion[data-swap-direction="previous"] {
+  animation: task-suggestion-swap-previous 200ms var(--ease-out);
+}
+
+@keyframes task-suggestion-swap-next {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+}
+
+@keyframes task-suggestion-swap-previous {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+}
+
+/* Header */
+
+.task-suggestion__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  /* The card supplies the two border pixels. */
+  min-height: calc(var(--chat-stack-header-height, 40px) - 2px);
+  padding: 5px var(--chat-stack-trailing-inset, 8px) 5px var(--chat-stack-leading-inset, 13px);
+}
+
+.task-suggestion[data-expanded="true"] .task-suggestion__head {
+  align-items: flex-start;
+  padding-top: 9px;
+}
+
+.task-suggestion__toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.task-suggestion__toggle:disabled {
+  cursor: default;
+}
+
+.task-suggestion__toggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.task-suggestion[data-expanded="true"] .task-suggestion__toggle {
+  align-items: flex-start;
+}
+
+.task-suggestion__icon {
+  display: inline-grid;
+  flex: none;
+  width: var(--chat-stack-icon-size, 14px);
+  height: 18px;
+  place-items: center;
+  color: var(--muted);
+}
+
+.task-suggestion[data-failed] .task-suggestion__icon {
+  color: var(--danger);
+}
+
+.task-suggestion__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.task-suggestion__heading {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.task-suggestion[data-expanded="true"] .task-suggestion__heading {
+  flex-direction: column;
+  gap: 1px;
+}
+
+.task-suggestion__title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Open, the whole title is the heading of the card. */
+.task-suggestion[data-expanded="true"] .task-suggestion__title {
+  overflow: visible;
+  color: var(--text-strong);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* The repository yields its space to the title first. */
+.task-suggestion__repo {
+  flex: 0 3 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-suggestion__chevron {
+  display: inline-grid;
+  flex: none;
+  width: 16px;
+  height: 18px;
+  place-items: center;
+  color: var(--muted);
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+/* Same direction language as the question panel above the composer. */
+.task-suggestion[data-expanded="true"] .task-suggestion__chevron {
+  transform: rotate(180deg);
+}
+
+.task-suggestion__chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .task-suggestion__toggle:hover:not(:disabled) .task-suggestion__title {
+    color: var(--text-strong);
+  }
+
+  .task-suggestion__toggle:hover:not(:disabled) .task-suggestion__chevron {
+    color: var(--text);
+  }
+}
+
+.task-suggestion__head-actions,
+.task-suggestion__pager,
+.task-suggestion__split {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+.task-suggestion__head-actions {
+  gap: 4px;
+  margin-inline-start: auto;
+}
+
+.task-suggestion__pager {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-suggestion__position {
+  padding-inline: 1px;
+  white-space: nowrap;
+}
+
+.task-suggestion__icon-button {
+  display: grid;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--icon-interactive, var(--muted));
+  cursor: var(--cursor-action);
+  user-select: none;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.task-suggestion__icon-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.task-suggestion__icon-button:hover:not(:disabled) {
+  background: var(--chat-composer-hover, color-mix(in srgb, var(--text) 7%, transparent));
+  color: var(--text-strong);
+}
+
+.task-suggestion__icon-button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.task-suggestion__icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* Start. Closed, it is a quiet accent-tinted text action beside the title.
+   Open, it is the same small primary button the question panel submits with,
+   so it carries Send's fill and ink; both read as one action with a divided
+   options trigger. */
+
+.task-suggestion .task-suggestion__start {
+  gap: 4px;
+  min-height: 28px;
+  padding-block: 0;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  box-shadow: none;
+  user-select: none;
+}
+
+.task-suggestion .task-suggestion__start--primary {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.task-suggestion .task-suggestion__start--options {
+  padding-inline: 5px;
+  border-inline-start-width: 0;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
+.task-suggestion .task-suggestion__start svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Matches Send's hover step, which stays visible in themes that leave
+   --primary-hover at the base value. */
+.task-suggestion .task-suggestion__start.primary:hover:not(:disabled) {
+  background: var(--chat-send-hover-bg, color-mix(in srgb, var(--primary) 86%, var(--text-strong)));
+  box-shadow: none;
+}
+
+.task-suggestion .task-suggestion__start.primary:disabled {
+  border-color: transparent;
+  background: var(--chat-composer-hover, color-mix(in srgb, var(--muted) 16%, transparent));
+  color: var(--chat-composer-tertiary, var(--muted));
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+.task-suggestion .task-suggestion__start.primary.task-suggestion__start--options {
+  border-inline-start: 1px solid color-mix(in srgb, var(--primary-foreground) 22%, transparent);
+}
+
+.task-suggestion .task-suggestion__start.primary.task-suggestion__start--options:disabled {
+  border-inline-start-color: color-mix(in srgb, var(--muted) 18%, transparent);
+}
+
+/* The closed row: text in the accent, no fill, a wash on hover. */
+.task-suggestion__split[data-placement="head"] .task-suggestion__start {
+  border-color: transparent;
+  background: transparent;
+  color: var(--accent);
+}
+
+.task-suggestion__split[data-placement="head"] .task-suggestion__start--primary {
+  padding-inline: 9px 6px;
+}
+
+.task-suggestion__split[data-placement="head"] .task-suggestion__start:hover:not(:disabled) {
+  background: var(--chat-composer-hover, color-mix(in srgb, var(--text) 7%, transparent));
+  color: var(--accent-hover, var(--accent));
+}
+
+.task-suggestion__split[data-placement="head"] .task-suggestion__start:disabled {
+  background: transparent;
+  color: var(--chat-composer-tertiary, var(--muted));
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+.task-suggestion .task-suggestion__start:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Content */
+
+/* A column, not a grid: grid rows sized before the scrollbar appears let a
+   rewrapped long summary overlap the prompt beneath it. */
+.task-suggestion__details {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  /* Copy lines up with the title, past the icon column. */
+  padding: 2px 14px 4px
+    calc(var(--chat-stack-leading-inset, 13px) + var(--chat-stack-icon-size, 14px) + 8px);
+}
+
+.task-suggestion__details > * {
+  flex: none;
+}
+
+.task-suggestion__summary {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.task-suggestion__prompt {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--chat-composer-hairline, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.task-suggestion__prompt-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 4px 2px 10px;
+  border-bottom: 1px solid var(--chat-composer-hairline, var(--border));
+  color: var(--muted);
+}
+
+.task-suggestion__prompt-head > svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+}
+
+.task-suggestion__path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  color: var(--muted);
+  font: 11px/1.4 var(--mono);
+  scrollbar-width: none;
+  white-space: nowrap;
+}
+
+.task-suggestion__path[data-overflow-right] {
+  mask-image: linear-gradient(to right, black 0, black calc(100% - 24px), transparent 100%);
+}
+
+.task-suggestion__path::-webkit-scrollbar {
+  display: none;
+}
+
+.task-suggestion__prompt-text {
+  max-height: 10rem;
+  padding: 9px 12px 10px;
+  overflow-y: auto;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  scrollbar-width: thin;
+  white-space: pre-wrap;
+}
+
+/* Repository recovery */
+
+.task-suggestion__repository {
+  display: grid;
+  gap: 8px;
+}
+
+.task-suggestion__repository p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.task-suggestion__repository label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.task-suggestion__repository-path {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--chat-composer-hairline, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+  color: var(--text);
+  font: 12px var(--mono);
+}
+
+.task-suggestion__repository-path:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.task-suggestion__repository-list {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--chat-composer-hairline, var(--border));
+  border-radius: 10px;
+}
+
+.task-suggestion__repository-choice {
+  display: grid;
+  grid-template-columns: 14px minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-top: 1px solid var(--chat-composer-hairline, var(--border));
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.task-suggestion__repository-choice:first-child {
+  border-top: 0;
+}
+
+.task-suggestion__repository-choice svg {
+  width: 13px;
+  height: 13px;
+  color: var(--muted);
+}
+
+.task-suggestion__repository-choice small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font: 11px var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-suggestion__repository-choice:hover:not(:disabled),
+.task-suggestion__repository-choice[data-selected] {
+  background: var(--chat-composer-hover, color-mix(in srgb, var(--text) 6%, transparent));
+}
+
+.task-suggestion__repository-choice:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+/* Footer */
+
+.task-suggestion__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px var(--chat-stack-trailing-inset, 8px) 8px
+    calc(var(--chat-stack-leading-inset, 13px) + var(--chat-stack-icon-size, 14px) + 8px);
+}
+
+.task-suggestion__error {
+  flex: 1 1 12rem;
+  min-width: 0;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.task-suggestion .task-suggestion__secondary {
+  min-height: 28px;
+  padding-block: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.task-suggestion .task-suggestion__secondary:hover:not(:disabled) {
+  background: var(--chat-composer-hover, var(--panel-hover));
+  color: var(--text);
+}
+
+/* Narrow stacks (phones, split panes): closed, the row keeps only what fits
+   comfortably beside a readable title: the position and Dismiss. Opening it
+   reveals paging and the start action in reach of the thumb, above the composer. */
+@container (max-width: 480px) {
+  .task-suggestion[data-expanded="false"] .task-suggestion__repo,
+  .task-suggestion[data-expanded="false"] .task-suggestion__page,
+  .task-suggestion__split[data-placement="head"] {
+    display: none;
+  }
+
+  .task-suggestion__details,
+  .task-suggestion__foot {
+    padding-inline-start: var(--chat-stack-leading-inset, 13px);
+  }
+
+  .task-suggestion__split[data-placement="foot"],
+  .task-suggestion__error {
+    flex: 1 1 100%;
+  }
+
+  .task-suggestion__split[data-placement="foot"] .task-suggestion__start--primary {
+    flex: 1 1 auto;
+    min-height: 32px;
+  }
+
+  .task-suggestion__split[data-placement="foot"] .task-suggestion__start--options {
+    min-height: 32px;
+    padding-inline: 10px;
+  }
+
+  .task-suggestion .task-suggestion__retry,
+  .task-suggestion .task-suggestion__secondary {
+    flex: 1 1 0;
+    min-height: 32px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-suggestion[data-swap-direction],
+  .task-suggestion__chevron {
+    animation: none;
+    transition-duration: 0ms;
+  }
+}

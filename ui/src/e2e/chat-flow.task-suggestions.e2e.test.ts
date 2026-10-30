@@ -4,7 +4,7 @@ import type { TaskSuggestion } from "../../../packages/gateway-protocol/src/sche
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { createControlUiMockBootstrapConfig } from "../test-helpers/control-ui-e2e.ts";
-import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
+import { resolveRenderedColors } from "../test-helpers/rendered-colors.ts";
 import {
   newChatPage,
   createChatFlowE2eSuite,
@@ -56,21 +56,30 @@ async function openTasks(
   return { page, gateway };
 }
 
-async function expectReadableButton(button: Locator) {
+async function renderedFill(button: Locator) {
+  await button.evaluate(finishElementAnimations);
   const raw = await button.evaluate((element) => ({
     foreground: getComputedStyle(element).color,
     background: getComputedStyle(element).backgroundColor,
   }));
-  const colors = await button.page().evaluate(resolveRenderedColors, raw);
-  const luminance = (color: RenderedColor) =>
-    [color.red, color.green, color.blue]
-      .map((value) => value / 255)
-      .map((value) => (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4))
-      .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index]!, 0);
-  const { red, green, blue } = colors.foreground!;
-  expect.soft(Math.min(red, green, blue)).toBeGreaterThanOrEqual(240);
-  const ratio = (luminance(colors.foreground!) + 0.05) / (luminance(colors.background!) + 0.05);
-  expect.soft(ratio).toBeGreaterThanOrEqual(4.5);
+  return button.page().evaluate(resolveRenderedColors, raw);
+}
+
+// The start action shares Send's accent fill and ink, at rest and on hover.
+async function expectSendFill(button: Locator, send: Locator) {
+  const page = button.page();
+  for (const hovered of [false, true]) {
+    await page.mouse.move(0, 0);
+    if (hovered) {
+      await send.hover();
+    }
+    const expected = await renderedFill(send);
+    await page.mouse.move(0, 0);
+    if (hovered) {
+      await button.hover();
+    }
+    expect.soft(await renderedFill(button)).toEqual(expected);
+  }
 }
 
 suite.define(() => {
@@ -121,27 +130,33 @@ suite.define(() => {
       expect(await gateway.getRequests("taskSuggestions.accept")).toHaveLength(0);
       const triggerBox = await options.boundingBox();
       expect(triggerBox).not.toBeNull();
+      // The row sits above the composer, so its menu opens upward into the transcript.
       const menuBox = await card.getByRole("menu").boundingBox();
-      expect.soft(menuBox?.y).toBeGreaterThanOrEqual(triggerBox!.y + triggerBox!.height);
-      for (const button of [startButton, options]) {
-        await page.mouse.move(0, 0);
-        await button.evaluate(finishElementAnimations);
-        await expectReadableButton(button);
-        await button.hover();
-        await button.evaluate(finishElementAnimations);
-        await expectReadableButton(button);
-      }
+      expect.soft((menuBox?.y ?? 0) + (menuBox?.height ?? 0)).toBeLessThanOrEqual(triggerBox!.y);
 
       await page.keyboard.press("Escape");
       await expect
         .poll(() => options.evaluate((element) => element === document.activeElement))
         .toBe(true);
-      expect(await findButton(card, "Copy prompt").isEnabled()).toBe(true);
       expect(await gateway.getRequests("environments.list")).toHaveLength(0);
 
-      await exactText(page, "Show instructions").click();
+      // Above the composer, not floating over the transcript.
+      const footer = page.locator(".chat-footer__context");
+      expect(
+        await footer.locator(`.task-suggestion[data-task-id="${suggestion.id}"]`).count(),
+      ).toBe(1);
+      const toggle = card.locator(".task-suggestion__toggle");
+      expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(await exactText(page, suggestion.prompt).isVisible()).toBe(false);
+      await toggle.click();
+      await exactText(page, suggestion.tldr).waitFor(visible);
       await exactText(page, suggestion.cwd).waitFor(visible);
       await exactText(page, suggestion.prompt).waitFor(visible);
+      expect(await findButton(card, "Copy prompt").isEnabled()).toBe(true);
+      // Open, the start action sits in the footer, nearest the composer.
+      expect(await card.locator('.task-suggestion__split[data-placement="foot"]').isVisible()).toBe(
+        true,
+      );
       const sourceUrl = page.url();
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       const draft = "Continue the current conversation.";
@@ -151,6 +166,12 @@ suite.define(() => {
         await composer.inputValue(),
       ];
       await composer.fill(draft);
+      const send = page.locator(".agent-chat__input").getByRole("button", { name: "Send message" });
+      await expect.poll(() => send.isEnabled()).toBe(true);
+      for (const button of [startButton, options]) {
+        await expectSendFill(button, send);
+      }
+      await page.mouse.move(0, 0);
       await gateway.deferNext("taskSuggestions.accept");
       if (mode === "local") {
         await startButton.click();
@@ -189,6 +210,8 @@ suite.define(() => {
     await card.waitFor(visible);
     expect(await findButton(card, startLabel).isDisabled()).toBe(true);
     expect(await findButton(card, optionsLabel).isDisabled()).toBe(true);
+    // Copy lives beside the prompt it copies.
+    await card.locator(".task-suggestion__toggle").click();
     expect(await findButton(card, "Copy prompt").isEnabled()).toBe(true);
   });
 
@@ -220,9 +243,10 @@ suite.define(() => {
       const tray = page.locator(".task-suggestions");
       await tray.waitFor(visible);
       expect(await tray.locator(".task-suggestion:visible").count()).toBe(1);
-      expect(await exactText(tray, "1 / 12").count()).toBe(1);
+      await tray.locator(".task-suggestion:visible .task-suggestion__toggle").click();
+      expect(await exactText(tray, "1/12").count()).toBe(1);
       await tray.getByRole("button", { name: "Next suggested task" }).click();
-      expect(await exactText(tray, "2 / 12").count()).toBe(1);
+      expect(await exactText(tray, "2/12").count()).toBe(1);
       const summary = tray.locator(".task-suggestion:visible .task-suggestion__summary");
 
       expect(
@@ -253,7 +277,9 @@ suite.define(() => {
             observer.observe(element);
           }),
       );
-      const summaryScroll = await summary.evaluate((element) => {
+      // Verbose output stays reachable inside the bounded details region.
+      const detailsRegion = tray.locator(".task-suggestion:visible .task-suggestion__details");
+      const summaryScroll = await detailsRegion.evaluate((element) => {
         element.scrollTop = element.scrollHeight;
         return (
           element.scrollTop > 0 &&
@@ -263,7 +289,6 @@ suite.define(() => {
       expect(summaryScroll).toBe(true);
 
       const card = tray.locator(".task-suggestion:visible");
-      await exactText(card, "Show instructions").click();
       const start = card.getByRole("button", { name: startLabel, exact: true });
       const hasClearance = () =>
         card.evaluate((element) => {
@@ -284,17 +309,10 @@ suite.define(() => {
         });
       await expect.poll(hasClearance).toBe(true);
 
+      // Playwright's trial click proves each control is visible, stable and receives the pointer.
       for (const control of [findButton(card, "Copy prompt"), start]) {
-        expect(
-          await control.evaluate((element) => {
-            const bounds = element.getBoundingClientRect();
-            return element.contains(
-              document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
-            );
-          }),
-        ).toBe(true);
+        await control.click({ trial: true });
       }
-      await start.click({ trial: true });
 
       const composer = page.locator(".agent-chat__composer-shell");
       await composer.waitFor(visible);

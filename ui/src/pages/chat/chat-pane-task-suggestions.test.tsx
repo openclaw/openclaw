@@ -460,7 +460,6 @@ it.each([
     expect(failure).toContain(result ? "Couldn't confirm" : "Synthetic session creation failed");
     expect(state.chatError).toBe(failure);
     draw();
-    expect(query<HTMLDetailsElement>("details")?.open).toBe(true);
     expect(container.textContent).toContain(suggestion.prompt);
     expect(query('[role="alert"]')?.textContent).toContain(
       result ? "Couldn't confirm" : "Synthetic session creation failed",

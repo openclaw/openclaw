@@ -208,6 +208,11 @@ function ChatFooterContent(
           />
         </ChatLazyBoundary>
       </Show>
+      <Show when={input.props.taskSuggestions?.length}>
+        <ChatLazyBoundary>
+          <ChatTaskSuggestionTray view={input.props} />
+        </ChatLazyBoundary>
+      </Show>
       <Show when={input.application}>
         <openclaw-plugin-contributions
           prop:kind="composer"
@@ -656,27 +661,11 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                         </button>
                       </div>
                     </Show>
-                    <Show
-                      when={
-                        input.props.detailsEnabled || (input.props.taskSuggestions?.length ?? 0) > 0
-                      }
-                    >
-                      <div
-                        class={[
-                          "chat-gutter-stack",
-                          { "chat-gutter-stack--details": input.props.detailsEnabled },
-                        ]}
-                      >
-                        <div class="chat-gutter-header" hidden={!input.props.detailsEnabled}>
-                          <Show when={input.props.detailsEnabled}>
-                            <ChatTopbarNotices {...input.props} />
-                          </Show>
+                    <Show when={input.props.detailsEnabled}>
+                      <div class="chat-gutter-stack chat-gutter-stack--details">
+                        <div class="chat-gutter-header">
+                          <ChatTopbarNotices {...input.props} />
                         </div>
-                        <Show when={input.props.taskSuggestions?.length}>
-                          <ChatLazyBoundary>
-                            <ChatTaskSuggestionTray view={input.props} />
-                          </ChatLazyBoundary>
-                        </Show>
                       </div>
                     </Show>
                     <div
