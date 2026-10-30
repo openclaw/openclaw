@@ -184,12 +184,13 @@ export function createGatewayChatUserTurnController(params: {
     });
   const prepareWorkerGoalSource = async () =>
     prepareSessionSourceAuthority(captureWorkerGoalSource());
-  const workerGoalSource: SessionSourceAssertion | undefined = admission.workerGoalAdmission
-    ? Object.assign(() => captureWorkerGoalSource()(), {
-        prepareSessionSource: prepareWorkerGoalSource,
-        prepareSessionSourceScope: prepareWorkerGoalSource,
-      })
-    : undefined;
+  const workerGoalSource: SessionSourceAssertion | undefined =
+    admission.codexGoalAdmission === "worker"
+      ? Object.assign(() => captureWorkerGoalSource()(), {
+          prepareSessionSource: prepareWorkerGoalSource,
+          prepareSessionSourceScope: prepareWorkerGoalSource,
+        })
+      : undefined;
   const recorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
     onMessagePersisted: params.onMessagePersisted,
     ...(recoveredInput ? { message: recoveredInput.target.message } : {}),
@@ -217,12 +218,13 @@ export function createGatewayChatUserTurnController(params: {
             operation: request.goalOperation,
             runId: session.clientRunId,
             ...params.goalCommitGuard,
-            assertCurrent: admission.workerGoalAdmission
-              ? composeSessionSourceAssertion([
-                  params.goalCommitGuard?.assertCurrent,
-                  workerGoalSource,
-                ])
-              : params.goalCommitGuard?.assertCurrent,
+            assertCurrent:
+              admission.codexGoalAdmission === "worker"
+                ? composeSessionSourceAssertion([
+                    params.goalCommitGuard?.assertCurrent,
+                    workerGoalSource,
+                  ])
+                : params.goalCommitGuard?.assertCurrent,
           },
         }
       : {}),
@@ -382,7 +384,7 @@ export function createGatewayChatUserTurnController(params: {
     }
     // A setup/error fallback must not activate a Goal before placement admission.
     // The selected native harness promotes staged input through persistApproved.
-    if (admission.workerGoalAdmission && !recorder.hasPersisted()) {
+    if (admission.codexGoalAdmission && !recorder.hasPersisted()) {
       return undefined;
     }
     const persisted = await measureDiagnosticsTimelineSpan(
@@ -409,7 +411,7 @@ export function createGatewayChatUserTurnController(params: {
     getSessionInitializationOptions: () => ({
       requestedSessionId: session.requestedSessionId,
       resumeRequestedSession: request.reconnectResumeRequested,
-      ...(admission.localInputAdmission || admission.workerGoalAdmission
+      ...(admission.localInputAdmission || admission.codexGoalAdmission
         ? {
             expectedExistingSessionId: admission.admittedSessionId,
             pinExpectedExistingSession: true,

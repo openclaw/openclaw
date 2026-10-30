@@ -14,11 +14,13 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getPluginRegistryGatewayOwner } from "../../plugins/registry-lifecycle.js";
 import {
   getPluginRegistryForContext,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import {
@@ -32,6 +34,7 @@ import {
   loadAgentRunnerMemoryRuntime,
   loadSessionStoreRuntime,
 } from "../command/runtime-loaders.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
 import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.js";
 import { createSessionMaintenanceOwner } from "./coordinator.js";
 
@@ -162,6 +165,7 @@ export function scheduleSessionMaintenance(
     log.warn("Optional session maintenance skipped: no active plugin registry.");
     return;
   }
+  const gatewayOwner = getPluginRegistryGatewayOwner(pluginRegistry);
   const resolveGatewayContext = fenceScheduledGatewayContextResolver(
     getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,
   );
@@ -201,16 +205,11 @@ export function scheduleSessionMaintenance(
     }
     readSource?.assertSourceCurrent();
   };
-  // Scheduled from the foreground turn's async context, this work runs after that turn
-  // retires; it leaves the turn's controller context so withSessionTurn admits a fresh turn.
-  const run = runWithSessionControllerCleanup(() =>
-    withPluginRuntimeGatewayRequestScope(
-      {
-        pluginRegistry,
-        resolveGatewayContext,
-        isWebchatConnect: () => false,
-      },
-      async () => {
+  // Maintenance leaves the completed turn's controller and plugin custody.
+  // Its original Gateway selects the generation when this work becomes eligible.
+  const run = runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+    runOutsidePluginRuntimeGenerationScope(() =>
+      runWithSessionControllerCleanup(async () => {
         if (
           afterOwnerSettles &&
           !(await racePromiseWithAbortSignal(afterOwnerSettles, owner.signal))
@@ -220,164 +219,185 @@ export function scheduleSessionMaintenance(
           );
           return;
         }
-        await owner.run({
-          admit: (runAdmitted) =>
-            runWithGatewayIndependentRootWorkAdmission(
-              async () =>
-                await withSessionTurn(
-                  {
-                    sessionKey,
-                    storePath: prepared.storePath,
-                    sessionId: request.sessionId,
-                    agentId: followupRun.run.agentId,
-                    abortSignal: owner.signal,
-                    // Post-turn upkeep must not look like the finished turn restarting.
-                    projectSessionActive: false,
-                  },
-                  async (operation, operationSignal) => {
-                    if (!operation) {
-                      throw new Error("Maintenance requires a session controller owner");
-                    }
-                    bindSessionControllerTarget(operation, target);
-                    const assertTurnCurrent = () => {
-                      operationSignal.throwIfAborted();
-                      assertCurrent();
-                    };
-                    return await runAdmitted(async () => {
-                      assertTurnCurrent();
-                      const { captureSessionEntryCurrentRead, withSessionEntryReadOnlyInWorker } =
-                        await loadSessionStoreRuntime();
-                      let entry: SessionEntry | undefined;
-                      const admission = await beginSessionEffect({
+        const currentRegistry = gatewayOwner ? gatewayOwner.current() : pluginRegistry;
+        if (!currentRegistry) {
+          throw createAbortError("Optional maintenance plugin runtime retired");
+        }
+        await withPluginRuntimeGatewayRequestScope(
+          {
+            pluginRegistry: currentRegistry,
+            resolveGatewayContext,
+            isWebchatConnect: () => false,
+          },
+          () =>
+            owner.run({
+              admit: (runAdmitted) =>
+                runWithGatewayIndependentRootWorkAdmission(
+                  async () =>
+                    await withSessionTurn(
+                      {
+                        sessionKey,
+                        storePath: prepared.storePath,
+                        sessionId: request.sessionId,
                         agentId: followupRun.run.agentId,
-                        scope: prepared.storePath,
-                        identities: [sessionKey, request.sessionId],
-                        signal: operationSignal,
-                        operation,
-                        onInterrupt: () =>
-                          interrupted.abort(
-                            createAbortError("Session maintenance writer admission interrupted"),
-                          ),
-                        assertAllowed: async () => {
+                        abortSignal: owner.signal,
+                        // Post-turn upkeep must not look like the finished turn restarting.
+                        projectSessionActive: false,
+                      },
+                      async (operation, operationSignal) => {
+                        if (!operation) {
+                          throw new Error("Maintenance requires a session controller owner");
+                        }
+                        bindSessionControllerTarget(operation, target);
+                        const assertTurnCurrent = () => {
+                          operationSignal.throwIfAborted();
+                          assertCurrent();
+                        };
+                        return await runAdmitted(async () => {
                           assertTurnCurrent();
-                          entry = await withSessionEntryReadOnlyInWorker(
-                            sessionReadScope,
-                            assertTurnCurrent,
-                            async (read, source) => {
-                              if (!read.ok) {
-                                throw read.error;
-                              }
-                              const captured = captureSessionEntryCurrentRead(
+                          const {
+                            captureSessionEntryCurrentRead,
+                            withSessionEntryReadOnlyInWorker,
+                          } = await loadSessionStoreRuntime();
+                          let entry: SessionEntry | undefined;
+                          const admission = await beginSessionEffect({
+                            agentId: followupRun.run.agentId,
+                            scope: prepared.storePath,
+                            identities: [sessionKey, request.sessionId],
+                            signal: operationSignal,
+                            operation,
+                            onInterrupt: () =>
+                              interrupted.abort(
+                                createAbortError(
+                                  "Session maintenance writer admission interrupted",
+                                ),
+                              ),
+                            assertAllowed: async () => {
+                              assertTurnCurrent();
+                              entry = await withSessionEntryReadOnlyInWorker(
                                 sessionReadScope,
-                                source,
-                              );
-                              if (
-                                (readSource &&
-                                  (captured.kind !== readSource.kind ||
+                                assertTurnCurrent,
+                                async (read, source) => {
+                                  if (!read.ok) {
+                                    throw read.error;
+                                  }
+                                  const captured = captureSessionEntryCurrentRead(
+                                    sessionReadScope,
+                                    source,
+                                  );
+                                  if (
+                                    (readSource &&
+                                      (captured.kind !== readSource.kind ||
+                                        (captured.kind === "file" &&
+                                          readSource.kind === "file" &&
+                                          (captured.source.agentId !== readSource.source.agentId ||
+                                            captured.source.path !== readSource.source.path ||
+                                            captured.source.databaseIdentity !==
+                                              readSource.source.databaseIdentity ||
+                                            captured.source.databaseBirthtime !==
+                                              readSource.source.databaseBirthtime)))) ||
                                     (captured.kind === "file" &&
-                                      readSource.kind === "file" &&
-                                      (captured.source.agentId !== readSource.source.agentId ||
-                                        captured.source.path !== readSource.source.path ||
-                                        captured.source.databaseIdentity !==
-                                          readSource.source.databaseIdentity ||
-                                        captured.source.databaseBirthtime !==
-                                          readSource.source.databaseBirthtime)))) ||
-                                (captured.kind === "file" &&
-                                  !sourceIdentities.some(
-                                    (identity) =>
-                                      identity.canonicalPath === captured.source.path &&
-                                      identity.key === `file:${captured.source.databaseIdentity}` &&
-                                      identity.birthtime === captured.source.databaseBirthtime,
-                                  ))
+                                      !sourceIdentities.some(
+                                        (identity) =>
+                                          identity.canonicalPath === captured.source.path &&
+                                          identity.key ===
+                                            `file:${captured.source.databaseIdentity}` &&
+                                          identity.birthtime === captured.source.databaseBirthtime,
+                                      ))
+                                  ) {
+                                    throw createAbortError(
+                                      "Session maintenance database changed before admission",
+                                    );
+                                  }
+                                  readSource ??= captured;
+                                  return read.value;
+                                },
+                              );
+                              assertTurnCurrent();
+                              if (
+                                !entry ||
+                                entry.sessionId !== request.sessionId ||
+                                entry.lifecycleRevision !== request.lifecycleRevision
                               ) {
                                 throw createAbortError(
-                                  "Session maintenance database changed before admission",
+                                  "Session changed before optional maintenance admission",
                                 );
                               }
-                              readSource ??= captured;
-                              return read.value;
+                              if (entry.pendingFinalDelivery) {
+                                throw createAbortError(
+                                  "Optional maintenance skipped while final delivery is pending",
+                                );
+                              }
                             },
-                          );
-                          assertTurnCurrent();
-                          if (
-                            !entry ||
-                            entry.sessionId !== request.sessionId ||
-                            entry.lifecycleRevision !== request.lifecycleRevision
-                          ) {
-                            throw createAbortError(
-                              "Session changed before optional maintenance admission",
-                            );
-                          }
-                          if (entry.pendingFinalDelivery) {
-                            throw createAbortError(
-                              "Optional maintenance skipped while final delivery is pending",
-                            );
-                          }
-                        },
-                      });
-                      try {
-                        await admission.run(async () => {
-                          assertTurnCurrent();
-                          if (!entry) {
-                            throw createAbortError("Session maintenance has no admitted session");
-                          }
-                          const sessionStore = { [sessionKey]: entry };
-                          const memory = await loadAgentRunnerMemoryRuntime();
-                          followupRun.run.timeoutMs = budget.remainingMs();
-                          assertTurnCurrent();
-                          const flushed = await memory.runMemoryFlushIfNeeded({
-                            cfg: prepared.cfg,
-                            followupRun,
-                            promptForEstimate: "",
-                            defaultModel: followupRun.run.model,
-                            resolvedVerboseLevel: followupRun.run.verboseLevel ?? "off",
-                            sessionEntry: entry,
-                            sessionStore,
-                            sessionKey,
-                            runtimePolicySessionKey: prepared.runtimePolicySessionKey ?? sessionKey,
-                            storePath: prepared.storePath,
-                            replyOperation: operation,
-                            abortSignal: operationSignal,
                           });
-                          // Flush reports aborted attempts as failed outcomes; cancellation still forbids compaction.
-                          assertTurnCurrent();
-                          entry = flushed.sessionEntry ?? entry;
-                          followupRun.run.sessionId = entry.sessionId;
-                          followupRun.run.timeoutMs = budget.remainingMs();
-                          assertTurnCurrent();
-                          await memory.runSessionCompactionIfNeeded({
-                            cfg: prepared.cfg,
-                            followupRun,
-                            promptForEstimate: "",
-                            // The completed user is canonical history; do not reserve its input twice.
-                            compactionRequestBudget: request.compactionRequestBudget
-                              ? { ...request.compactionRequestBudget, pendingTokens: 0 }
-                              : undefined,
-                            sessionEntry: entry,
-                            sessionStore,
-                            sessionKey,
-                            runtimePolicySessionKey: prepared.runtimePolicySessionKey ?? sessionKey,
-                            storePath: prepared.storePath,
-                            defaultModel: followupRun.run.model,
-                            agentHarnessId: request.agentHarnessId,
-                            abortSignal: operationSignal,
-                            authorize: () => {
+                          try {
+                            await admission.run(async () => {
                               assertTurnCurrent();
-                              return true;
-                            },
-                          });
+                              if (!entry) {
+                                throw createAbortError(
+                                  "Session maintenance has no admitted session",
+                                );
+                              }
+                              const sessionStore = { [sessionKey]: entry };
+                              const memory = await loadAgentRunnerMemoryRuntime();
+                              followupRun.run.timeoutMs = budget.remainingMs();
+                              assertTurnCurrent();
+                              const flushed = await memory.runMemoryFlushIfNeeded({
+                                cfg: prepared.cfg,
+                                followupRun,
+                                promptForEstimate: "",
+                                defaultModel: followupRun.run.model,
+                                resolvedVerboseLevel: followupRun.run.verboseLevel ?? "off",
+                                sessionEntry: entry,
+                                sessionStore,
+                                sessionKey,
+                                runtimePolicySessionKey:
+                                  prepared.runtimePolicySessionKey ?? sessionKey,
+                                storePath: prepared.storePath,
+                                replyOperation: operation,
+                                abortSignal: operationSignal,
+                              });
+                              // Flush reports aborted attempts as failed outcomes; cancellation still forbids compaction.
+                              assertTurnCurrent();
+                              entry = flushed.sessionEntry ?? entry;
+                              followupRun.run.sessionId = entry.sessionId;
+                              followupRun.run.timeoutMs = budget.remainingMs();
+                              assertTurnCurrent();
+                              await memory.runSessionCompactionIfNeeded({
+                                cfg: prepared.cfg,
+                                followupRun,
+                                promptForEstimate: "",
+                                // The completed user is canonical history; do not reserve its input twice.
+                                compactionRequestBudget: request.compactionRequestBudget
+                                  ? { ...request.compactionRequestBudget, pendingTokens: 0 }
+                                  : undefined,
+                                sessionEntry: entry,
+                                sessionStore,
+                                sessionKey,
+                                runtimePolicySessionKey:
+                                  prepared.runtimePolicySessionKey ?? sessionKey,
+                                storePath: prepared.storePath,
+                                defaultModel: followupRun.run.model,
+                                agentHarnessId: request.agentHarnessId,
+                                abortSignal: operationSignal,
+                                authorize: () => {
+                                  assertTurnCurrent();
+                                  return true;
+                                },
+                              });
+                            });
+                          } finally {
+                            admission.release();
+                          }
                         });
-                      } finally {
-                        admission.release();
-                      }
-                    });
-                  },
+                      },
+                    ),
+                  "session-maintenance",
+                  owner.signal,
                 ),
-              "session-maintenance",
-              owner.signal,
-            ),
-        });
-      },
+            }),
+        );
+      }),
     ),
   );
   void owner

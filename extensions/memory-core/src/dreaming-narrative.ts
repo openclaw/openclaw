@@ -6,7 +6,11 @@ import {
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { appendNarrativeEntry, clampDreamDiaryContextEntry } from "./dreaming-dreams-file.js";
+import {
+  appendNarrativeEntry,
+  clampDreamDiaryContextEntry,
+  FALLBACK_NARRATIVE,
+} from "./dreaming-dreams-file.js";
 
 export type DreamingCompletion = Pick<PluginRuntime["subagent"], "complete">;
 
@@ -74,9 +78,6 @@ function formatFallbackWriteFailure(err: unknown): string {
   );
 }
 
-const REQUEST_SCOPED_FALLBACK_NARRATIVE =
-  "A memory trace surfaced, but details were unavailable in this run.";
-
 export async function appendFallbackNarrativeEntry(params: {
   workspaceDir: string;
   data: NarrativePhaseData;
@@ -90,7 +91,7 @@ export async function appendFallbackNarrativeEntry(params: {
       workspaceDir: params.workspaceDir,
       // Raw snippets and promotions are pre-processing memory staging fragments.
       // Keep fallback diary text generic so DREAMS.md never leaks staging content.
-      narrative: REQUEST_SCOPED_FALLBACK_NARRATIVE,
+      narrative: FALLBACK_NARRATIVE,
       nowMs: params.nowMs,
       timezone: params.timezone,
     });

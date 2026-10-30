@@ -337,6 +337,7 @@ const { values } = parseArgs({
     "network-latency-ms": { type: "string" },
     "download-kbps": { type: "string" },
     "cpu-throttle": { type: "string" },
+    "low-memory": { type: "boolean", default: false },
     port: { type: "string" },
     "sandbox-port": { type: "string" },
     "compare-bundle-dir": { type: "string", multiple: true, default: [] },
@@ -865,7 +866,12 @@ const isolatedSandboxOrigin =
   values["dashboard-widget"] || values["dashboard-mcp-app"] || values["dashboard-paint-marker"]
     ? `http://127.0.0.1:${address.port}`
     : undefined;
-const chromiumArgs = isolatedSandboxOrigin ? [`--isolate-origins=${isolatedSandboxOrigin}`] : [];
+const chromiumArgs = [
+  ...(isolatedSandboxOrigin ? [`--isolate-origins=${isolatedSandboxOrigin}`] : []),
+  ...(values["low-memory"]
+    ? ["--enable-low-end-device-mode", "--js-flags=--max-old-space-size=128"]
+    : []),
+];
 let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
@@ -3470,6 +3476,9 @@ try {
         networkLatencyMs,
         downloadKbps,
         cpuThrottle,
+        memoryProfile: values["low-memory"]
+          ? "Chromium low-end-device mode; 128 MiB V8 old-space limit, not an OS/RSS limit."
+          : "default",
         comparisonBundleDirs,
         fixture: fixture.counts,
         sidebarView,

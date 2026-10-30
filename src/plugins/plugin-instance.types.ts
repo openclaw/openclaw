@@ -1,6 +1,12 @@
 import type { Static } from "typebox";
 import type { PluginRuntimeRetentionSchema } from "../../packages/gateway-protocol/src/schema/plugin-retention.js";
 
+export type PluginInstanceDisposalCleanup = {
+  failures: unknown[];
+  hostFailure?: { error: unknown };
+  moduleCleanups: Array<() => void | Promise<void>>;
+};
+
 /** Payload-free facts shared with administrator inspection. */
 export type PluginRetentionSnapshot = Static<typeof PluginRuntimeRetentionSchema>;
 export type PluginRetainedReference = Omit<PluginRetentionSnapshot["references"][number], "ageMs">;

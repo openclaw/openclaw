@@ -4,6 +4,7 @@ import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   commandResult,
   createProviderTestHarness,
+  nodeEnrollmentFixture,
 } from "./crabbox-worker-provider.test-support.js";
 
 vi.mock("./crabbox-managed-binary.js", async (importOriginal) => ({
@@ -91,4 +92,48 @@ it("re-arms a pending heartbeat when inspection shortens the idle window", async
   await vi.advanceTimersByTimeAsync(3000);
   expect(heartbeat).toHaveBeenCalledTimes(2);
   await provider.destroy(lifecycleLease());
+});
+
+it("refreshes Sandbox activity without requesting an idle policy replacement", async () => {
+  const { provider, heartbeat, warnings } = heartbeatFixture(async (argv) =>
+    argv.includes("--idle-timeout")
+      ? commandResult({
+          code: 2,
+          stderr:
+            "provider=azure-sandbox does not support replacing the lease idle timeout while heartbeating",
+        })
+      : commandResult({
+          stdout: JSON.stringify({ id: LEASE_ID, provider: "azure-sandbox", state: "Running" }),
+        }),
+  );
+  const profile = { ...PROFILE, provider: "azure-sandbox", class: "small" };
+  try {
+    await provider.provision(profile, `provision:v2:${"0".repeat(64)}`, {
+      assertCurrent: () => {},
+      beginNodeEnrollment: async () => nodeEnrollmentFixture("fixture-setup-code", "Sandbox test"),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(heartbeat).toHaveBeenCalledTimes(2);
+    expect(warnings).toEqual([]);
+    heartbeat.mockImplementationOnce(async () => commandResult({ code: 1, stderr: "unavailable" }));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(warnings).toEqual([
+      "Crabbox heartbeat failed with exit code 1: unavailable; Sandbox idle activity is not being refreshed; OpenClaw will retry automatically; save your work if failures persist",
+    ]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(heartbeat).toHaveBeenCalledTimes(4);
+    expect(warnings).toHaveLength(1);
+    heartbeat.mockImplementationOnce(async () =>
+      commandResult({ code: 2, stderr: "provider=azure-sandbox does not support lease heartbeat" }),
+    );
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(heartbeat).toHaveBeenCalledTimes(5);
+    expect(warnings.at(-1)).toBe(
+      `Crabbox provider azure-sandbox does not support heartbeat for worker lease ${LEASE_ID}; Sandbox idle activity is not being refreshed; save your work if failures persist`,
+    );
+  } finally {
+    await provider.destroy({ leaseId: LEASE_ID, profile });
+    vi.useRealTimers();
+  }
 });
