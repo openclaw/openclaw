@@ -23,6 +23,12 @@ export const CanvasDocumentViewResultSchema = closedObject({
   sandboxUrl: Type.String(),
   sandboxPort: Type.Integer({ minimum: 1, maximum: 65535 }),
   sandboxOrigin: Type.Optional(Type.String()),
+  embedSandbox: Type.Optional(
+    Type.Union([Type.Literal("strict"), Type.Literal("scripts"), Type.Literal("trusted")], {
+      description:
+        "Effective Control UI embed ceiling, not a capability grant. Clients apply their stricter local/content policy; missing or unknown modes require strict isolation.",
+    }),
+  ),
 });
 
 export type CanvasDocumentPreviewParams = Static<typeof CanvasDocumentPreviewParamsSchema>;
