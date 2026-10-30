@@ -20,6 +20,7 @@ import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
 import { runGatewayCronSessionEvent } from "../../gateway/server-cron-event-dispatch.js";
 import { createGatewayCronTargetResolver } from "../../gateway/server-cron-targets.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -62,6 +63,7 @@ it.for([
   { result: "progress", notification: "native-only" },
   { result: "progress", notification: "conversation", alias: "main-key" },
   { result: "progress", notification: "conversation", alias: "agent" },
+  { result: "progress", notification: "conversation", alias: "global-main" },
   { result: "progress", notification: "other-conversation" },
   { result: "progress", messageTool: true },
   { result: "progress", messageTool: "mirror" },
@@ -78,12 +80,15 @@ it.for([
     const unavailable = notification === "unavailable";
     const deliveryFails = unavailable || nativeOnly || otherConversation;
     const alias = "alias" in scenario ? scenario.alias : undefined;
+    const globalScope = alias === "global-main";
     const result = progress ? { outcome: "progress", summary } : { outcome: "no_change" };
     await withOpenClawTestState(
       { label: "automation-shared-result", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
         const cfg = completionConfig(state.workspaceDir);
-        if (alias === "main-key") {
+        if (globalScope) {
+          cfg.session = { scope: "global" };
+        } else if (alias === "main-key") {
           cfg.session = { mainKey: "primary" };
         } else if (alias === "agent") {
           cfg.agents = {
@@ -129,8 +134,9 @@ it.for([
         });
         const scope = {
           agentId: alias === "agent" ? "ops" : "main",
-          sessionKey:
-            alias === "agent"
+          sessionKey: globalScope
+            ? "global"
+            : alias === "agent"
               ? "agent:ops:main"
               : alias === "main-key"
                 ? "agent:main:primary"
@@ -170,7 +176,7 @@ it.for([
             sessionTarget:
               alias === "agent"
                 ? "session:agent:main:main"
-                : alias === "main-key"
+                : alias === "main-key" || alias === "global-main"
                   ? "session:main"
                   : `session:${scope.sessionKey}`,
             delivery: notificationDisabled
@@ -270,7 +276,9 @@ it.for([
           );
           expect(settled.sessionId).toBe(sessionId);
           expect(settled.pendingFinalDelivery).toBeUndefined();
-          expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
+          expect(
+            peekSystemEventEntries(resolveSystemEventQueueKey(scope.sessionKey, scope.agentId)),
+          ).toEqual([]);
           const messages = (await loadTranscriptEvents({ ...scope, sessionId })).map(
             readTranscriptEventMessage,
           );

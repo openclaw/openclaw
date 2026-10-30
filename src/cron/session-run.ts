@@ -101,12 +101,15 @@ export async function runCronSessionTurn(
       !delivery.resolvedDelivery.sourceConversationUnavailable &&
       !requiresExternalCronDelivery(delivery.deliveryPlan, delivery.resolvedDelivery) &&
       deliverySessionKey &&
-      resolveCronAgentSessionKey({
-        sessionKey: deliverySessionKey,
-        agentId: params.agentId,
-        mainKey: params.cfg.session?.mainKey,
-        cfg: params.cfg,
-      }) === queueKey,
+      resolveSystemEventQueueKey(
+        resolveCronAgentSessionKey({
+          sessionKey: deliverySessionKey,
+          agentId: params.agentId,
+          mainKey: params.cfg.session?.mainKey,
+          cfg: params.cfg,
+        }),
+        params.agentId,
+      ) === queueKey,
     );
     const deliverySuppressionReason =
       delivery && !delivery.resolvedDelivery.ok
