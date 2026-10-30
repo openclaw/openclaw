@@ -59,4 +59,36 @@ extension CanvasWindowController {
     func webView(_: WKWebView, didFinish _: WKNavigation?) {
         self.applyDebugStatusIfNeeded()
     }
+
+    func webView(
+        _ webView: WKWebView,
+        didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: Error)
+    {
+        self.webView(webView, didFail: navigation, withError: error)
+    }
+
+    func webView(_: WKWebView, didFail _: WKNavigation!, withError error: Error) {
+        let nsError = error as NSError
+        // A newer load superseding this one is not a failure.
+        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled { return }
+        canvasWindowLogger.error(
+            "canvas load failed domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public)")
+        self.showLoadFailure("Canvas couldn't show this page (\(nsError.domain) \(nsError.code)).")
+    }
+
+    func webViewWebContentProcessDidTerminate(_: WKWebView) {
+        canvasWindowLogger.error("canvas web content process terminated")
+        // A failure page instead of reload: a crash that recurs on load would loop.
+        self.showLoadFailure("Canvas stopped unexpectedly. Present it again to retry.")
+    }
+
+    private func showLoadFailure(_ message: String) {
+        let page = CanvasSchemeHandler.html(message, title: "Canvas error")
+        self.webView.load(
+            page.data,
+            mimeType: page.mime,
+            characterEncodingName: "utf-8",
+            baseURL: URL(string: "about:blank")!)
+    }
 }
