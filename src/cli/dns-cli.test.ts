@@ -101,8 +101,12 @@ describe("dns-cli probe bounds", () => {
       // filesystem so its staged-rename contract holds in tests; sudo itself
       // is unavailable on CI hosts, so only the file effects are simulated.
       if (cmd === "sudo" && args[0] === "tee" && typeof opts?.input === "string") {
+        const staged = args[1];
+        if (typeof staged !== "string") {
+          return spawnOk();
+        }
         try {
-          fs.writeFileSync(args[1], opts.input);
+          fs.writeFileSync(staged, opts.input);
           return spawnOk();
         } catch (error) {
           return { ...spawnOk(), status: 1, error: error as Error };

@@ -66,10 +66,12 @@ function resolveConfigDir(dirPath: string): string {
 }
 
 function isPermissionFailure(error: unknown): boolean {
+  // SAFETY: Node fs errors carry the errno string on a code property.
   const code = (error as { code?: string }).code;
   if (code === "EACCES" || code === "EPERM") {
     return true;
   }
+  // SAFETY: AggregateError-style writers chain the original fs error on cause.
   const cause = (error as { cause?: unknown }).cause;
   return cause instanceof Error && cause !== error && isPermissionFailure(cause);
 }
