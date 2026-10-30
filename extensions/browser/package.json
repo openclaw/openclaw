@@ -10,7 +10,7 @@
     "chrome-devtools-mcp": "1.11.0",
     "express": "5.3.0",
     "playwright-core": "1.64.1",
-    "typebox": "1.4.2",
+    "typebox": "1.4.3",
     "yargs-parser": "22.0.0",
     "zod": "4.6.7"
   },

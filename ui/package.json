@@ -35,7 +35,7 @@
     "@panzoom/panzoom": "4.6.2",
     "@solidjs/signals": "2.0.0-rc.18",
     "@solidjs/web": "2.0.0-rc.18",
-    "@tanstack/virtual-core": "3.19.2",
+    "@tanstack/virtual-core": "3.19.7",
     "@zag-js/menu": "2.0.0-next.3",
     "@zag-js/rect-utils": "2.0.0-next.3",
     "@zag-js/vanilla": "2.0.0-next.3",
@@ -47,7 +47,7 @@
     "markdown-it": "15.0.3",
     "markdown-it-cjk-friendly": "3.0.0",
     "markdown-it-emoji": "3.1.0",
-    "mediabunny": "1.61.6",
+    "mediabunny": "1.62.1",
     "parse5": "8.0.1",
     "remend": "1.4.0",
     "solid-js": "2.0.0-rc.18",
@@ -67,7 +67,7 @@
     "pako": "3.0.2",
     "playwright": "1.64.1",
     "postcss": "8.5.31",
-    "vite": "8.3.4",
+    "vite": "8.3.5",
     "vitest": "5.0.5"
   }
 }
