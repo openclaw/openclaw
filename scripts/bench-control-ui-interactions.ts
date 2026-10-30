@@ -71,6 +71,7 @@ const { values } = parseArgs({
     viewport: { type: "string", default: "both" },
     pairs: { type: "string", default: "1" },
     "cpu-throttle": { type: "string", default: "1" },
+    "low-memory": { type: "boolean", default: false },
     trace: { type: "boolean", default: false },
     "selector-stats": { type: "boolean", default: false },
     theme: { type: "string", default: "light" },
@@ -444,8 +445,12 @@ if (values["process-wakeups"]) {
   }
 }
 const browserExecutable = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+const memoryArgs = values["low-memory"]
+  ? ["--enable-low-end-device-mode", "--js-flags=--max-old-space-size=128"]
+  : [];
 const browser = await chromium.launch({
   executablePath: browserExecutable,
+  args: memoryArgs,
 });
 
 async function launchNativeVisibilityContext() {
@@ -461,6 +466,7 @@ async function launchNativeVisibilityContext() {
       "--use-mock-keychain",
       // Full Chrome headless still hides a natively minimized window; the headless shell does not.
       "--headless=new",
+      ...memoryArgs,
       "about:blank",
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
@@ -629,6 +635,9 @@ try {
           ? "Observe-only Solid build; diagnostic counts, not production timing evidence."
           : false,
         cpuThrottle,
+        memoryProfile: values["low-memory"]
+          ? "Chromium low-end-device mode; 128 MiB V8 old-space limit, not an OS/RSS limit."
+          : "default",
         retainedHeap: values["retained-heap"]
           ? "Separate GC-controlled proof: full heap/DOM snapshots after preparation and after action metrics/tracing, including fixture request history; not a timing comparison."
           : false,
@@ -760,6 +769,7 @@ try {
                   colorScheme: theme,
                   isMobile: viewport.name === "mobile",
                   hasTouch: viewport.name === "mobile",
+                  args: memoryArgs,
                 })
               : undefined;
           const ownedBrowserPid = nativeVisibility?.processId ?? observationBrowser?.processId;
