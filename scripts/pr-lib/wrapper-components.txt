@@ -2789,3 +2789,11 @@ src/shared/widget-media.ts
 src/gateway/worker-environments/local-workspace-cas.ts
 src/gateway/worker-environments/local-workspace-cas.kernel.ts
 src/gateway/worker-environments/local-workspace-gc.ts
+src/infra/archive.ts
+src/infra/install-flow.ts
+src/infra/install-mode-options.ts
+src/infra/install-progress.ts
+src/infra/install-source-utils.ts
+src/infra/npm-command.ts
+src/infra/npm-install-env.ts
+src/infra/update-network-budget.ts
