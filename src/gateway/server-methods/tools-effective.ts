@@ -31,6 +31,7 @@ import type {
   EffectiveToolInventoryNotice,
   EffectiveToolInventoryResult,
 } from "../../agents/tools-effective-inventory.types.js";
+import { resolveSessionToolPreviewSandboxPolicy } from "../../agents/tools-effective-sandbox-policy.js";
 import { resolveReplyToMode } from "../../auto-reply/reply/reply-threading.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/config.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
@@ -55,7 +56,7 @@ import { resolveSessionModelRef, type GatewaySessionEntryRead } from "../session
 import { respondError } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 type TrustedToolsEffectiveContext = NonNullable<
@@ -506,6 +507,7 @@ async function resolveTrustedToolsEffectiveContext(
     sessionKey: string;
     requestedAgentId?: string;
     respond: RespondFn;
+    context: GatewayRequestContext;
   },
   loaded: Pick<GatewaySessionEntryRead, "entry" | "canonicalKey" | "cfg">,
 ) {
@@ -581,6 +583,13 @@ async function resolveTrustedToolsEffectiveContext(
       config: context.cfg,
       sessionKey: context.sessionKey,
       preparedSessionEntry: { sessionKey: canonicalKey, entry: loaded.entry },
+      sandboxToolPolicy: await resolveSessionToolPreviewSandboxPolicy({
+        cfg: context.cfg,
+        agentId: context.agentId,
+        sessionKey: canonicalKey,
+        sessionEntry: loaded.entry,
+        context: params.context,
+      }),
       agentId: context.agentId,
       modelProvider: context.modelProvider,
       modelId: context.modelId,
@@ -623,6 +632,7 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
             sessionKey: params.sessionKey,
             requestedAgentId: sessionOwner.agentId,
             respond,
+            context,
           },
           loaded,
         );
