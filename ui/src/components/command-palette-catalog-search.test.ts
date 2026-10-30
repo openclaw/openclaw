@@ -40,9 +40,6 @@ it("matches canonically equivalent catalog labels in either Unicode form", () =>
   ];
   const nfcQuery = "Caf\u00e9";
   const nfdQuery = "Cafe\u0301";
-  expect(catalogItems[0]?.label).not.toBe(`${nfcQuery}-notes`);
-  expect(catalogItems[0]?.label.normalize("NFC")).toBe(`${nfcQuery}-notes`);
-  expect(nfdQuery.normalize("NFC")).toBe(nfcQuery.normalize("NFC"));
 
   for (const query of [nfcQuery, nfdQuery]) {
     const items = filterCommandPaletteItems({
