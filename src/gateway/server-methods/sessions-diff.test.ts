@@ -515,6 +515,19 @@ describe("loadSessionDiff", () => {
       repoGit("checkout", "-qb", "task");
       const worktree = { id, repoRoot, branch: "task" };
       await seedManagedReview(worktree, { sessionKey, sessionId: "s1" }, stateRoot, acceptedBase);
+      // Native revision reads are disabled on Windows.
+      if (process.platform !== "win32") {
+        const indexPath = path.join(repoRoot, ".git", "index");
+        const originalIndex = fs.readFileSync(indexPath);
+        fs.utimesSync(path.join(repoRoot, "base.txt"), new Date(0), new Date(0));
+        expect((await readDiff({ scope: "uncommitted" })).files).toEqual([]);
+        expect(fs.readFileSync(indexPath)).toEqual(originalIndex);
+        mockSession(repoRoot, { worktree });
+        expect(await requestDiff({ sessionKey, scope: "uncommitted" })).toMatchObject([
+          { ok: true, payload: { files: [], additions: 0, deletions: 0 } },
+        ]);
+        expect(fs.readFileSync(indexPath)).not.toEqual(originalIndex);
+      }
       mockSession(repoRoot, { worktree });
       write("task.txt", "authored change\n");
       const beforePublication = await readDiff();

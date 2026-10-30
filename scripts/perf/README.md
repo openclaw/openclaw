@@ -3568,6 +3568,36 @@ then the steady distribution, in concurrent pairs with swapped CPU halves.
 
 ### Large-worktree revision validation
 
+For a content-sized fixture, add `--tracked 62000 --tracked-bytes 17742` at seed
+time (about 1.1 GB of synthetic random tracked bytes). Use the same seeded tree
+for both arms. `--restat-inventory` changes only inventory timestamps before the
+first read. Compare the default read-only index with `--refresh-index`, which
+models a managed checkout's permission to retain verified Git stat data. Use
+`--boundary revision` for revision CPU/allocation and `--boundary read` for the
+complete read owner. Report the first read (`warmup`) separately from subsequent
+polls: retaining stat data changes the work later polls perform. The collector
+alone (`--boundary owner --prepared-status`) excludes this status preparation.
+Accept identical response hashes, lower complete-read Git wall time/CPU, and
+stable owner allocation, with at least five alternating samples per arm and
+identical-code A/A controls. Report filesystem type and cold/warm samples separately.
+
+For native Git CPU and filesystem-specific timing, use the companion probe on a
+new synthetic directory on the target filesystem:
+
+```sh
+python3 scripts/perf/checkout-diff-index-measure.py \
+  --root /mounted-btrfs/synthetic-diff \
+  --output /path/to/index-results.json --trace /path/to/index.trace
+```
+
+It seeds 62,000 files / 1.1 GB, disables seed auto-GC, and alternates two identical
+read-only controls with managed status refresh. Each arm restores the same stale
+index after timestamp-only churn. The report separates the initial round from
+five warm rounds, checks response hashes, and records child-process CPU for
+status, tracked diff statistics, and the following poll. This measures native Git,
+not Gateway latency or JavaScript allocation; use the TypeScript workload above
+for those owner observations. The caller removes its synthetic directory afterward.
+
 Seed separate fixtures with `--boundary rpc --tracked 267000 --untracked 4` to
 exercise production-sized indexes and directory trees. Nonzero `--tracked`
 creates a real linked worktree with that many additional unchanged tracked empty
