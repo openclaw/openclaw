@@ -38,6 +38,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   mutationRevision = 0;
   readonly advisoryLockKey: bigint;
   private bridge?: PostgresBridge;
+  private idleCheckout = false;
   private readonly bridgeParameters: Parameters<typeof createPostgresBridge>[0];
   private failure: Error | undefined;
   private outcomeUnknown = true;
@@ -73,6 +74,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       takePreparedPostgresBridge(this.bridgeParameters) ??
       createPostgresBridge(this.bridgeParameters);
     this.bridge = bridge;
+    this.idleCheckout = idle !== undefined;
     bridge.port.unref();
     if (idle) {
       return bridge;
@@ -170,7 +172,14 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     const deadline = performance.now() + 120_000;
     // A failed or unsettled request cannot reuse an earlier idle observation.
     bridge.inTransaction = undefined;
-    bridge.port.postMessage({ ...request, id }, []);
+    const reconnectIfIdle =
+      this.idleCheckout &&
+      (request.operation === "query" || request.operation === "recovery-generation");
+    this.idleCheckout = false;
+    bridge.port.postMessage(
+      { ...request, ...(reconnectIfIdle ? { reconnectIfIdle } : {}), id },
+      [],
+    );
     recordWorkerMessage("sqlite_request", "to_worker");
     // Reply notifications belong to this connection; peer death is checked between slices.
     for (

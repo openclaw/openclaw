@@ -33,8 +33,20 @@ export type BridgeCommand =
   | { operation: "connect"; schema: string }
   | { operation: "close" }
   | { operation: "release" }
-  | { operation: "recovery-generation"; schema: string; storeId: string; lock: boolean }
-  | { operation: "query"; schema: string; sql: string; parameters: readonly SQLInputValue[] };
+  | {
+      operation: "recovery-generation";
+      schema: string;
+      storeId: string;
+      lock: boolean;
+      reconnectIfIdle?: boolean;
+    }
+  | {
+      operation: "query";
+      schema: string;
+      sql: string;
+      parameters: readonly SQLInputValue[];
+      reconnectIfIdle?: boolean;
+    };
 export type BridgeRequest = BridgeCommand & { id: number };
 export type BridgeReply = { id: number } & (
   | { result: PostgresResult }

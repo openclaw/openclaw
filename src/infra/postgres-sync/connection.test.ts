@@ -171,8 +171,19 @@ it("reuses a returned transport for another schema without checkout or release m
     expect(withEngineStoreAdmission(() => reader.prepare("SELECT 7 AS value").get())).toEqual({
       value: 7,
     });
+    expect(withEngineStoreAdmission(() => reader.prepare("SELECT 7 AS value").get())).toEqual({
+      value: 7,
+    });
     expect(fixture.sent.mock.calls.map(([request]) => request)).toEqual([
-      { operation: "query", schema: "schema_b", sql: "SELECT 7 AS value", parameters: [], id: 3 },
+      {
+        operation: "query",
+        schema: "schema_b",
+        sql: "SELECT 7 AS value",
+        parameters: [],
+        reconnectIfIdle: true,
+        id: 3,
+      },
+      { operation: "query", schema: "schema_b", sql: "SELECT 7 AS value", parameters: [], id: 4 },
     ]);
   } finally {
     next?.close();

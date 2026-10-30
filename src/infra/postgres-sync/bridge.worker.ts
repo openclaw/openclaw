@@ -187,10 +187,10 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
     schema = namespace;
   }
 
-  async function useSchema(namespace: string) {
+  async function useSchema(namespace: string, reconnectIfIdle: boolean) {
     if (connectionError) {
-      // Reconnect before a new effect only when the previous operation finished idle.
-      if (client.getTransactionStatus() !== "I") {
+      // Only a returned transport can reconnect before its new borrower starts work.
+      if (!reconnectIfIdle || client.getTransactionStatus() !== "I") {
         throw connectionError;
       }
       await connect(namespace);
@@ -240,7 +240,7 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
           }
           reply = { id: request.id, reusable };
         } else if (request.operation === "recovery-generation") {
-          await useSchema(request.schema);
+          await useSchema(request.schema, request.reconnectIfIdle === true);
           if (request.lock) {
             await lockPostgresGeneration(client, schema);
           }
@@ -255,7 +255,7 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
             inTransaction: client.getTransactionStatus() !== "I",
           };
         } else {
-          await useSchema(request.schema);
+          await useSchema(request.schema, request.reconnectIfIdle === true);
           const results = await statements.query(request.sql, request.parameters);
           const result: QueryResult = Array.isArray(results) ? results.at(-1)! : results;
           // A trailing SELECT must not hide an earlier write in the same SQL batch.
