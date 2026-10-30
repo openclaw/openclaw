@@ -86,8 +86,11 @@ struct CanvasWindowSmokeTests {
             .appendingPathComponent("openclaw-canvas-test-\(UUID().uuidString)")
         try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager().removeItem(at: root) }
+        let sessionKey = "canvas-load-test-\(UUID().uuidString)"
+        defer { AppDefaults.standard.removeObject(
+            forKey: CanvasWindowController.storedFrameDefaultsKey(sessionKey: sessionKey)) }
         let controller = try CanvasWindowController(
-            sessionKey: "main",
+            sessionKey: sessionKey,
             root: root,
             anchorProvider: { NSRect(x: 200, y: 400, width: 40, height: 40) },
             websiteDataStore: .nonPersistent())
