@@ -121,14 +121,11 @@ async function expectWarmResume(
 ) {
   const handle = context.liveSession?.current();
   expect(handle?.isIdle()).toBe(true);
-  expect(
-    await runDetail(context, { prompt: "next input", useResume: true, ...overrides }),
-  ).toMatchObject({
-    pid: detail.pid,
-    turn: 2,
-    user: "next input",
-  });
+  const next = await runDetail(context, { prompt: "next input", useResume: true, ...overrides });
+  expect(next).toMatchObject({ pid: detail.pid, turn: 2, user: overrides.prompt ?? "next input" });
   expect(context.liveSession?.current()).toBe(handle);
+  expect(handle?.isIdle()).toBe(true);
+  return next;
 }
 
 async function startInjection(scenario: string, overrides: Partial<CliBackendExecuteContext> = {}) {
@@ -242,6 +239,20 @@ describe("Claude native stdio boundary", () => {
       gate.resolve();
     }
   });
+  it.each(["failed", "pending"])("retires %s OpenClaw MCP startup", async (status) => {
+    const context = await createContext();
+    context.env.CLAUDE_FIXTURE_MCP_SERVERS = JSON.stringify([{ name: "openclaw", status }]);
+    await expect(collect(context)).rejects.toThrow(
+      `Claude Code started without the OpenClaw MCP server (status ${status}). The CLI process was retired; retry the request to start a fresh process.`,
+    );
+    const pid = Number(await readFixture(context, "fixture.pid"));
+    expectRetired(context, pid);
+    context.env.CLAUDE_FIXTURE_MCP_SERVERS = '[{"name":"openclaw","status":"connected"}]';
+    const next = await runDetail(context, { useResume: true });
+    expect(next.turn).toBe(1);
+    expect(next.pid).not.toBe(pid);
+    await expectWarmResume(context, next);
+  });
 
   it("rejects startup when the owner refuses capture", async () => {
     const liveSession = createLiveSession();
@@ -264,11 +275,9 @@ describe("Claude native stdio boundary", () => {
     "background-agent-foreground-bash",
     "background-agent-foreground-bash-run-ids",
   ])("preserves parent result ownership and warm reuse for %s", async (scenario) => {
-    const liveSession = createLiveSession();
     const release = createDeferred<CliBackendToolPermissionResult>();
     const decision = { behavior: "deny" as const, message: "Fixture released." };
     const context = await createContext(scenario, {
-      liveSession,
       requestToolPermission: () => release.promise,
     });
     const results: Record<string, unknown>[] = [];
@@ -280,7 +289,7 @@ describe("Claude native stdio boundary", () => {
         results.push(record);
         if (results.length === 1) {
           expect(record).toHaveProperty("openclaw_interim_result", true);
-          expect(liveSession.current()?.isIdle()).toBe(false);
+          expect(context.liveSession.current()?.isIdle()).toBe(false);
           release.resolve(decision);
         }
       }
@@ -439,14 +448,10 @@ describe("Claude native stdio boundary", () => {
     expectFinalResults(records, explicit ? 1 : 2);
     expect(context.liveSession?.current()?.isIdle()).toBe(true);
     if (explicit) {
-      const first = resultDetail(records);
-      const handle = context.liveSession?.current();
-      expect(await runDetail(context, { useResume: true })).toMatchObject({
-        firstSeenBackground: true,
-        turn: 2,
-        pid: first.pid,
-      });
-      expect(context.liveSession?.current()).toBe(handle);
+      expect(await expectWarmResume(context, resultDetail(records))).toHaveProperty(
+        "firstSeenBackground",
+        true,
+      );
     }
   });
 
@@ -570,13 +575,17 @@ describe("Claude native stdio boundary", () => {
     },
   );
 
-  it("isolates arguments, host permissions, and private context across warm turns", async () => {
+  it.each(["connected", undefined])("isolates warm turns with OpenClaw MCP %s", async (status) => {
     const context = await createContext("normal", {
       sessionId: SESSION_ID,
       useResume: true,
       promptContext: { prependContext: "private prefix", appendContext: "private suffix" },
       toolAvailability: { native: ["Read"], discovery: ["ToolSearch"], openClaw: ["message"] },
     });
+    context.env.CLAUDE_FIXTURE_MCP_SERVERS = JSON.stringify([
+      { name: "optional-server", status: "failed" },
+      ...(status ? [{ name: "openclaw", status }] : []),
+    ]);
     const nativeArgs = ["--fork-session", "--plugin-dir", "/tmp/synthetic-skills"];
     context.args = [
       ...context.args,
@@ -621,23 +630,13 @@ describe("Claude native stdio boundary", () => {
       privateContext: "private prefix\n\nprivate suffix",
       permission: { behavior: "deny" },
     });
-    const handle = context.liveSession.current();
     expect(
-      await runDetail(context, {
+      await expectWarmResume(context, detail, {
         prompt: "Which color?",
         promptContext: { prependContext: "second private context" },
         promptOrigin: "host",
-        useResume: true,
       }),
-    ).toMatchObject({
-      turn: 2,
-      user: "Which color?",
-      synthetic: true,
-      privateContext: "second private context",
-      pid: detail.pid,
-    });
-    expect(context.liveSession.current()).toBe(handle);
-    expect(handle?.isIdle()).toBe(true);
+    ).toMatchObject({ synthetic: true, privateContext: "second private context" });
   });
 
   it.each([
