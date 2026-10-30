@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-// Process replacement, real model streams/tools and durable input custody need the real Gateway.
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setTimeout as delay } from "node:timers/promises";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
@@ -32,8 +32,9 @@ const RESUME =
   "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
 const CASES = ["stream", "tool", "parent", "background", "idle", "compact"] as const;
 type Case = (typeof CASES)[number];
-const agent = (name: Case) => (name === "tool" ? "other" : "main");
-const key = (cycle: number, name: Case) => `agent:${agent(name)}:restart-resume-${cycle}-${name}`;
+const agent = (name: Case) => (name === "stream" || name === "tool" ? "other" : "main");
+const key = (cycle: number, name: Case) =>
+  `agent:${agent(name)}:main:thread:restart-resume-${cycle}-${name}`;
 const marker = (cycle: number, name: Case) => `RESTART_CASE_${cycle}_${name}`;
 const childMarker = (cycle: number) => `RESTART_CHILD_${cycle}`;
 const queued = (cycle: number, ordinal: number) => `QUEUED_BEFORE_RESTART_${cycle}_${ordinal}`;
@@ -42,6 +43,17 @@ const fresh = (cycle: number) => `FRESH_AFTER_RESTART_${cycle}`;
 const CRASH_QUEUED = "QUEUED_BEFORE_SIGKILL_MUST_REMAIN_INERT";
 const AFTER_CRASH = "FRESH_AFTER_CRASH_WORKS";
 const WARMUP = "COMPACTION_HISTORY_TO_SUMMARIZE";
+
+function expectCleanHistory(messages: unknown[]) {
+  expect(
+    messages
+      .filter(isRecord)
+      .some((message) => message.stopReason === "error" || message.openclawRunError !== undefined),
+  ).toBe(false);
+  expect(JSON.stringify(messages)).not.toMatch(
+    /interrupted before the agent started|subagent failed|restart recovery blocked|use \/new or \/reset/i,
+  );
+}
 
 function currentInput(body: Record<string, unknown>): string {
   const input = Array.isArray(body.input) ? body.input : [body.input];
@@ -79,7 +91,6 @@ async function providerFixture(signal: AbortSignal) {
   }> = [];
   const summaries: Array<{ cycle: number; ordinal: number }> = [];
   const issued = new Set<string>();
-  const resumed = new Set<string>();
   const heldResumes = new Map<number, { response: ServerResponse; ordinal: number }>();
   let ordinal = 0;
   let restarting = false;
@@ -140,27 +151,14 @@ async function providerFixture(signal: AbortSignal) {
           const match = /RESTART_CASE_(\d+)_(stream|tool|parent|background|idle|compact)/.exec(
             input,
           );
-          if (child && input.includes("You are running as a subagent")) {
-            const cycle = Number(child[1]);
-            calls.push({
-              cycle,
-              name: "child",
-              current,
-              resumeInput: hasNewResumeInput(body),
-              ordinal: requestOrdinal,
-            });
-            gate(`child:${cycle}`).resolve();
-            // The parent must resume once; its child must settle quietly instead of being adopted.
-            return;
-          }
-          if (!match) {
+          const name =
+            child && input.includes("You are running as a subagent")
+              ? "child"
+              : CASES.find((candidate) => candidate === match?.[2]);
+          if (!name) {
             throw new Error(`Unexpected synthetic model input: ${current}`);
           }
-          const cycle = Number(match[1]);
-          const name = CASES.find((candidate) => candidate === match[2]);
-          if (!name) {
-            throw new Error("Unknown restart case");
-          }
+          const cycle = Number(name === "child" ? child?.[1] : match?.[1]);
           calls.push({
             cycle,
             name,
@@ -168,6 +166,18 @@ async function providerFixture(signal: AbortSignal) {
             resumeInput: hasNewResumeInput(body),
             ordinal: requestOrdinal,
           });
+          if (name === "child") {
+            gate(`child:${cycle}`).resolve();
+            // The parent resumes; its child settles quietly instead of being adopted.
+            return;
+          }
+          const toolOutput = asRecord(
+            Array.isArray(body.input)
+              ? body.input.findLast(
+                  (item) => isRecord(item) && item.type === "function_call_output",
+                )
+              : undefined,
+          );
           const tool = (id: string, args: object) => {
             const wireName = tools.includes(id) ? id : "dispatch_action";
             expect(tools).toContain(wireName);
@@ -180,16 +190,7 @@ async function providerFixture(signal: AbortSignal) {
             );
           };
           if (restarting) {
-            // Accept the predecessor's first post-restart request too, so the same
-            // fixture can prove that its input lacks the required resume message.
-            const resume =
-              hasNewResumeInput(body) ||
-              (!resumed.has(`${cycle}:${name}`) &&
-                !current.includes("QUEUED_BEFORE_RESTART") &&
-                !current.includes(fresh(cycle)) &&
-                !current.includes(AFTER_CRASH));
-            if (resume) {
-              resumed.add(`${cycle}:${name}`);
+            if (hasNewResumeInput(body)) {
               gate(`resume:${cycle}:${name}`).resolve();
               if (name === "stream") {
                 heldResumes.set(cycle, { response, ordinal: requestOrdinal });
@@ -202,12 +203,7 @@ async function providerFixture(signal: AbortSignal) {
               }
               text(`RESUMED_${cycle}_${name}`);
             } else if (issued.delete(`gateway:${cycle}:${name}`)) {
-              const output = Array.isArray(body.input)
-                ? body.input.findLast(
-                    (item) => isRecord(item) && item.type === "function_call_output",
-                  )
-                : undefined;
-              const result = asRecord(JSON.parse(String(asRecord(output).output)));
+              const result = asRecord(JSON.parse(String(toolOutput.output)));
               expect(result.error).toBeUndefined();
               expect(result.status).not.toBe("error");
               expect(current).toContain(key(cycle, name));
@@ -245,13 +241,8 @@ async function providerFixture(signal: AbortSignal) {
               tool("process", { action: "list" });
               return;
             }
-            const output = Array.isArray(body.input)
-              ? body.input.findLast(
-                  (item) => isRecord(item) && item.type === "function_call_output",
-                )
-              : undefined;
             // A launch callback alone does not prove the process still runs at shutdown.
-            expect(String(asRecord(output).output)).toMatch(/\brunning\s+\S+.* :: /);
+            expect(String(toolOutput.output)).toMatch(/\brunning\s+\S+.* :: /);
           }
           if (name === "parent" && !issued.has(id)) {
             issued.add(id);
@@ -349,7 +340,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
       },
     });
     // Two logical agents share one physical store; resume must retain the session's agent.
-    const sharedStore = path.join(instance.stateDir, "shared.sqlite");
+    const sharedStore = suspended ? undefined : path.join(instance.stateDir, "shared.sqlite");
     const config = asRecord(JSON.parse(await readFile(instance.configPath, "utf8")));
     await instance.state.writeConfig({ ...config, ...restartResumeConfig(model, sharedStore) });
     let client: GatewayClient | undefined;
@@ -394,7 +385,6 @@ it.skipIf(process.platform === "win32").for([true, false])(
         await instance.startGateway();
         client = await connectClient();
         const { profile } = await client.request<{ profile: { id: string } }>("users.self", {});
-        expect(profile.id).toBeTruthy();
         for (const [cycle, mode] of (suspended
           ? ["suspend-reopened"]
           : ["SIGTERM", "managed"]
@@ -532,13 +522,19 @@ it.skipIf(process.platform === "win32").for([true, false])(
           }
           await closeOpenClawStateDatabaseAsync();
           const blockedStore =
-            mode === "suspend-reopened"
-              ? new DatabaseSync(resolveOpenClawStateSqlitePath(instance.env))
-              : undefined;
+            mode === "managed"
+              ? undefined
+              : new DatabaseSync(
+                  mode === "suspend-reopened"
+                    ? resolveOpenClawStateSqlitePath(instance.env)
+                    : sharedStore!,
+                );
           try {
             blockedStore?.exec("BEGIN IMMEDIATE");
             expect(child.kill("SIGTERM")).toBe(true);
-            if (blockedStore) {
+            if (mode === "SIGTERM") {
+              await delay(1_400);
+            } else if (blockedStore) {
               await vi.waitFor(
                 () =>
                   expect(instance.logs()).toContain("restart signal settlement exceeded 1000ms"),
@@ -561,7 +557,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
             .soft(shutdownMs, `busy shutdown must finish within ten seconds\n${instance.logs()}`)
             .toBeLessThan(10_000);
           expect(
-            readRestartSession(instance.state.agentDir(), key(cycle, "stream"), sharedStore)
+            readRestartSession(instance.state.agentDir("other"), key(cycle, "stream"), sharedStore)
               ?.resumeAfterRestart,
           ).toBeDefined();
           await client.stopAndWait();
@@ -645,17 +641,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
               `${name}: ${JSON.stringify(calls.map((call) => call.current.slice(-4_000)))}`,
             ).toHaveLength(name === "idle" ? 0 : 1);
             const result = await history(key(cycle, name));
-            expect(
-              result.messages
-                .filter(isRecord)
-                .some(
-                  (message) =>
-                    message.stopReason === "error" || message.openclawRunError !== undefined,
-                ),
-            ).toBe(false);
-            expect(JSON.stringify(result.messages)).not.toMatch(
-              /interrupted before the agent started|subagent failed|restart recovery blocked/i,
-            );
+            expectCleanHistory(result.messages);
             expect(
               result.pendingInputs?.items.some((item) => item.state === "interrupted"),
             ).not.toBe(true);
@@ -680,7 +666,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
         }
         provider.prepare();
         const crashKey = key(2, "stream");
-        await client.request("sessions.create", { key: crashKey, agentId: "main" });
+        await client.request("sessions.create", { key: crashKey, agentId: "other" });
         await send(crashKey, marker(2, "stream"));
         await provider.wait("ready:2:stream");
         await send(crashKey, CRASH_QUEUED, "followup");
@@ -709,16 +695,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
           provider.calls.filter((call) => call.cycle === 2 && call.current.includes(RESUME)),
         ).toEqual([]);
         const crashHistory = await history(crashKey);
-        expect(
-          crashHistory.messages
-            .filter(isRecord)
-            .some(
-              (message) => message.stopReason === "error" || message.openclawRunError !== undefined,
-            ),
-        ).toBe(false);
-        expect(JSON.stringify(crashHistory.messages)).not.toMatch(
-          /interrupted before the agent started|restart recovery blocked|use \/new or \/reset/i,
-        );
+        expectCleanHistory(crashHistory.messages);
         provider.prepare();
         await send(crashKey, `${marker(2, "stream")} GRACEFUL_AFTER_CRASH`);
         await provider.wait("ready:graceful-after-crash");
