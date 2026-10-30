@@ -137,4 +137,38 @@ describe("msteams directory live", () => {
 
     expect(listTeamsByNameMock).toHaveBeenCalledWith("graph-token", "plat");
   });
+
+  it("matches channels by canonically equivalent names across NFC and NFD forms", async () => {
+    const mixedChannels = [
+      { id: "chan-nfc", displayName: "Café" },
+      { id: "chan-nfd", displayName: "Café" },
+    ];
+    listTeamsByNameMock.mockResolvedValue({ items: [teams[0]], truncated: false });
+    listChannelsForTeamMock.mockResolvedValue({ items: mixedChannels, truncated: false });
+
+    await expect(
+      listMSTeamsDirectoryGroupsLive({
+        cfg: {},
+        query: "platform/café",
+      }),
+    ).resolves.toEqual([
+      entry("group", "conversation:chan-nfc", "Platform/Café", "#Café", mixedChannels[0]),
+      entry("group", "conversation:chan-nfd", "Platform/Café", "#Café", mixedChannels[1]),
+    ]);
+  });
+
+  it("matches an NFD channel query against NFC channel names", async () => {
+    const nfcChannels = [{ id: "chan-nfc", displayName: "Café" }];
+    listTeamsByNameMock.mockResolvedValue({ items: [teams[0]], truncated: false });
+    listChannelsForTeamMock.mockResolvedValue({ items: nfcChannels, truncated: false });
+
+    await expect(
+      listMSTeamsDirectoryGroupsLive({
+        cfg: {},
+        query: "platform/café",
+      }),
+    ).resolves.toEqual([
+      entry("group", "conversation:chan-nfc", "Platform/Café", "#Café", nfcChannels[0]),
+    ]);
+  });
 });
