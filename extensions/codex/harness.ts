@@ -14,11 +14,8 @@ import {
   CODEX_NATIVE_TOOL_REQUIREMENTS,
   CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
 } from "./native-tool-policy.js";
-import {
-  readCodexPluginConfig as readWorkerPluginConfig,
-  resolveCodexAppServerCommand,
-} from "./src/app-server/config-parsing.js";
-import { hasManagedCodexAppServerBinary } from "./src/app-server/managed-binary-paths.js";
+import { readCodexPluginConfig as readWorkerPluginConfig } from "./src/app-server/config-parsing.js";
+import { hasManagedCodexAppServerBinary } from "./src/app-server/managed-binary.js";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
@@ -403,7 +400,8 @@ export function createCodexAppServerAgentHarness(
         (appServer?.transport ?? "stdio") === "stdio" &&
         // Worker placement owns its binary; selection has no admitted placement yet.
         appServer?.workerHostedCloud !== true &&
-        resolveCodexAppServerCommand(appServer?.command).commandSource === "managed" &&
+        !appServer?.command?.trim() &&
+        !process.env.OPENCLAW_CODEX_APP_SERVER_BIN?.trim() &&
         !hasManagedCodexAppServerBinary()
       ) {
         // Missing binaries cannot preserve an explicit native session's ownership.
