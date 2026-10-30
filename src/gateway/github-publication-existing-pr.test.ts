@@ -22,7 +22,7 @@ import {
 
 const mocks = githubPublicationTestMocks();
 
-async function fixture(fork = false, linked = true) {
+async function fixture(fork = false, linked = true, maintainer = false) {
   const f = await createRequesterPublicationFixture(checkpoint, "local");
   const local = f.local!;
   if (linked) {
@@ -179,7 +179,8 @@ async function fixture(fork = false, linked = true) {
     mutations,
     entry,
     publicationSession,
-    publish: (key: string) => f.coordinator.requestForSessionV2(f.request(key, f.guest)),
+    publish: (key: string) =>
+      f.coordinator.requestForSessionV2(f.request(key, maintainer ? f.maintainer : f.guest)),
     expectWrites(count: number) {
       expect(pushes).toHaveLength(count);
       expect(mutations).toEqual([]);
@@ -241,10 +242,14 @@ describe("shared publication to a prepared original PR", () => {
     realWorktree: true,
   });
 
-  it.each([false, true])(
-    "appends to the original PR and retains local branch custody across repeat publication (fork=%s)",
-    async (fork) => {
-      const f = await fixture(fork);
+  it.each([
+    { fork: false, maintainer: false },
+    { fork: true, maintainer: false },
+    { fork: true, maintainer: true },
+  ])(
+    "appends to the original PR and retains local branch custody across repeat publication (fork=$fork, maintainer=$maintainer)",
+    async ({ fork, maintainer }) => {
+      const f = await fixture(fork, true, maintainer);
       const result = await f.publish("first-update");
       expect(result).toMatchObject({
         status: "published",

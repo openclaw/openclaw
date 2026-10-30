@@ -108,7 +108,11 @@ requesting person. The URL must name a PR on the configured GitHub host. Copied
 Files, Commits and Checks links, query strings and comment or review anchors
 resolve to the same canonical PR. The Gateway checks numeric account identity, current session access and the selected
 shared publisher. A private repository also requires current repository access
-for the linked account; shared credentials alone do not grant that access.
+for the linked account; shared credentials alone do not grant a guest that access.
+A currently authorized maintainer with full operator write permission can inspect
+another person's PR through the shared publisher without linking a personal GitHub
+account. The current selected caller capability and session access are checked
+throughout the action; a previous maintainer turn grants no authority to later turns.
 
 Inspection returns the canonical PR URL, author, state, base and head repository
 IDs, branches and observed commits. Closed and merged PRs retain their state;
@@ -126,7 +130,7 @@ to the requesting person. For the current conversation's existing publication,
 read metadata with `edit` without a title or body. For new work, use `publish`;
 it checks the selected publisher at the publication boundary. A bot-authored PR
 from another conversation is not eligible for own-PR import just because the
-publisher created it; continue in its original publication conversation.
+publisher created it; guests continue in its original publication conversation.
 
 For an open PR originally published from this conversation, `refresh_base`
 selects its current GitHub destination before integrating the base into the
@@ -144,12 +148,12 @@ the saved work, and returns any conflicts. The next publication appends to the
 same PR. This also works when the managed publisher authored the PR, as long as
 the PR author is the publisher account recorded for this conversation's
 publication. Assigning a new session owner does not change who can prepare it:
-only the person who started the conversation can.
+the creator or a currently authorized full-write maintainer can prepare it.
 
 For this recorded publication in public base and head repositories, a personal
 GitHub link is not required; the currently selected publisher must still match
 the recorded publisher. Private repositories and imports of other PRs retain
-their linked-account and repository-access requirements.
+their linked-account and repository-access requirements for guests.
 
 To import your own existing PR into a local conversation, use `github_publish` with
 `action: "prepare_pr"` and `pullRequestUrl`. This action is offered only in
@@ -157,8 +161,13 @@ sessions with a writable managed sandbox or an ordinary local Docker or Podman
 sandbox; sessions that run directly on the host do not see it. A separate
 inspection call is
 optional: preparation verifies the current linked author, repository access,
-original head and publisher write eligibility again. The request can be made in
-one message or established earlier in the conversation before the URL arrives.
+original head and publisher write eligibility again. A current full-write
+maintainer can also prepare or continue the target PR in another person's
+conversation without being its creator or the PR author. This uses the same
+shared publisher and writable sandbox, preserves the guest's permissions and
+identity, and keeps current authority through any preparation handoff. The request
+can be made in one message or established earlier in the conversation before the
+URL arrives.
 An explicitly empty managed workspace can receive the PR without selecting a
 project first. Existing managed projects must match the PR's head or base
 repository.
@@ -226,8 +235,9 @@ and is not a publication receipt.
 After preparation, ordinary shared publication appends changes to the original
 PR's head repository and branch. It preserves the PR number, author, existing
 commits, discussion and draft state, including an update that reverts the original
-contribution completely. The Gateway rechecks the linked author,
-repository access, publisher permission and remote head before pushing. A fork
+contribution completely. The Gateway rechecks current requester eligibility,
+including linked authorship for guests, repository access, publisher permission
+and remote head before pushing. A fork
 can use GitHub's maintainer-edit permission without granting the publisher direct
 write access to the fork. Publisher credentials remain outside the sandbox.
 
