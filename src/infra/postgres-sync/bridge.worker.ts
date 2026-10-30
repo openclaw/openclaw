@@ -135,7 +135,8 @@ function createStatementCache(client: pg.Client) {
 }
 
 function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
-  const { port, signal, url, schema, connectTimeoutMs, lockTimeoutMs, statementTimeoutMs } = data;
+  const { port, signal, url, connectTimeoutMs, lockTimeoutMs, statementTimeoutMs } = data;
+  let schema = data.schema;
   const control = new Int32Array(signal);
   let client: pg.Client;
   let statements: ReturnType<typeof createStatementCache>;
@@ -154,53 +155,69 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
     Atomics.notify(control, 0);
   }
 
+  async function connect(namespace: string) {
+    const searchPath = `"${namespace.replaceAll('"', '""')}"`;
+    if (client) {
+      await client.end().catch(() => {});
+    }
+    connectionError = undefined;
+    // URL parsing can throw too; every connect failure must wake the waiting host.
+    client = new pg.Client({
+      connectionString: url,
+      connectionTimeoutMillis: connectTimeoutMs,
+      types: {
+        // Store decoders own JSON parsing, including malformed legacy payload handling.
+        getTypeParser: (oid, format) =>
+          (oid === pg.types.builtins.JSON || oid === pg.types.builtins.JSONB) && format !== "binary"
+            ? (value: string) => value
+            : pg.types.getTypeParser(oid, format),
+      },
+    });
+    statements = createStatementCache(client);
+    client.on("error", (error) => {
+      materializeErrorStack(error);
+      connectionError = error;
+    });
+    await client.connect();
+    await client.query(
+      "SELECT set_config('lock_timeout', $1, false), " +
+        "set_config('statement_timeout', $2, false), set_config('search_path', $3, false)",
+      [`${lockTimeoutMs}ms`, `${statementTimeoutMs}ms`, searchPath],
+    );
+    schema = namespace;
+  }
+
+  async function useSchema(namespace: string, reconnectIfIdle: boolean) {
+    if (connectionError) {
+      // Only a returned transport can reconnect before its new borrower starts work.
+      if (!reconnectIfIdle || client.getTransactionStatus() !== "I") {
+        throw connectionError;
+      }
+      await connect(namespace);
+      return;
+    }
+    if (schema === namespace) {
+      return;
+    }
+    if (client.getTransactionStatus() !== "I") {
+      throw new Error("Cannot switch PostgreSQL schemas inside a transaction");
+    }
+    try {
+      await client.query("SELECT set_config('search_path', $1, false)", [
+        `"${namespace.replaceAll('"', '""')}"`,
+      ]);
+      schema = namespace;
+    } catch {
+      // No user statement ran; discard the failed setup before opening a fresh transport.
+      await connect(namespace);
+    }
+  }
+
   async function handleRequest(request: BridgeRequest) {
     let reply: BridgeReply;
     try {
       if (request.operation === "connect") {
-        if (client && !connectionError) {
-          try {
-            // Validate only while idle: user statements are never replayed after a lost connection.
-            await client.query("SELECT 1");
-            reply = {
-              id: request.id,
-              result: { inTransaction: false, rows: [], rowCount: 0, fields: [] },
-            };
-            send(reply);
-            return;
-          } catch (error) {
-            connectionError = error instanceof Error ? error : new Error(String(error));
-            materializeErrorStack(connectionError);
-          }
-        }
-        if (client) {
-          await client.end().catch(() => {});
-        }
-        connectionError = undefined;
-        // URL parsing can throw too; every connect failure must wake the waiting host.
-        client = new pg.Client({
-          connectionString: url,
-          connectionTimeoutMillis: connectTimeoutMs,
-          types: {
-            // Store decoders own JSON parsing, including malformed legacy payload handling.
-            getTypeParser: (oid, format) =>
-              (oid === pg.types.builtins.JSON || oid === pg.types.builtins.JSONB) &&
-              format !== "binary"
-                ? (value: string) => value
-                : pg.types.getTypeParser(oid, format),
-          },
-        });
-        statements = createStatementCache(client);
-        client.on("error", (error) => {
-          materializeErrorStack(error);
-          connectionError = error;
-        });
-        await client.connect();
-        await client.query(
-          "SELECT set_config('lock_timeout', $1, false), " +
-            "set_config('statement_timeout', $2, false), set_config('search_path', $3, false)",
-          [`${lockTimeoutMs}ms`, `${statementTimeoutMs}ms`, `"${schema.replaceAll('"', '""')}"`],
-        );
+        await connect(request.schema);
         reply = {
           id: request.id,
           result: { inTransaction: false, rows: [], rowCount: 0, fields: [] },
@@ -212,10 +229,10 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
           result: { inTransaction: false, rows: [], rowCount: 0, fields: [] },
         };
       } else {
-        if (connectionError) {
-          throw connectionError;
-        }
         if (request.operation === "release") {
+          if (connectionError) {
+            throw connectionError;
+          }
           // Server status also catches transactions opened later in a multi-statement query.
           const reusable = client.getTransactionStatus() === "I";
           if (!reusable) {
@@ -223,6 +240,7 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
           }
           reply = { id: request.id, reusable };
         } else if (request.operation === "recovery-generation") {
+          await useSchema(request.schema, request.reconnectIfIdle === true);
           if (request.lock) {
             await lockPostgresGeneration(client, schema);
           }
@@ -231,8 +249,13 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
             anchor,
             await inspectPostgresGeneration(client, anchor),
           );
-          reply = { id: request.id, generation };
+          reply = {
+            id: request.id,
+            generation,
+            inTransaction: client.getTransactionStatus() !== "I",
+          };
         } else {
+          await useSchema(request.schema, request.reconnectIfIdle === true);
           const results = await statements.query(request.sql, request.parameters);
           const result: QueryResult = Array.isArray(results) ? results.at(-1)! : results;
           // A trailing SELECT must not hide an earlier write in the same SQL batch.

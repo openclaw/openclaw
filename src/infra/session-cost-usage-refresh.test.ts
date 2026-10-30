@@ -18,6 +18,7 @@ import { requestCostUsageCacheRefresh as requestRefresh } from "./session-cost-u
 import {
   loadCostUsageSummaryFromCache as loadSummary,
   loadSessionCostSummariesFromCache as loadSessions,
+  loadSessionUsageOverviewFromCache as loadOverview,
 } from "./session-cost-usage.js";
 
 const config = {};
@@ -445,6 +446,35 @@ test.for(["completes", "slow", "cancelled", "rollback"] as const)(
   },
 );
 
+test("returns the committed overview while its refresh is still pending", async ({
+  usage: { agentId, files, refresh, hold, request, newScope },
+}) => {
+  const refreshOwner = newScope();
+  const release = hold("refreshed");
+  refresh.mockReturnValue(release.promise);
+  request({ sessionFiles: [files[0]] }, refreshOwner);
+  await tick(0, 1);
+  const settled = vi.fn();
+  const reading = newScope().track(() =>
+    loadOverview({
+      config,
+      agentId,
+      families: [[{ sessionFile: files[0] }]],
+      startMs: Date.UTC(2026, 8, 18),
+      endMs: Date.UTC(2026, 8, 19) - 1,
+    }),
+  );
+  void reading.then(settled, settled);
+  // A report must return its explicit partial state without waiting for a transcript scan.
+  await vi.waitFor(() => expect(settled).toHaveBeenCalled(), { timeout: 1_000 });
+  expect(await reading).toMatchObject({
+    computing: [true],
+    summarizing: 1,
+    cacheStatus: { status: "refreshing", pendingFiles: 1 },
+  });
+  expect(refreshOwner.signal.aborted).toBe(false);
+});
+
 test("keeps an exact logical-selector read pending across a deferred rebuild", async ({
   usage: { agentId, storePath, refresh, hold, read, request },
 }) => {
@@ -464,7 +494,7 @@ test("keeps an exact logical-selector read pending across a deferred rebuild", a
   await vi.advanceTimersByTimeAsync(0);
   const reading = read(logical);
   const settled = vi.fn();
-  void reading.then(settled);
+  void reading.then(settled, settled);
   releaseFirst.resolve("refreshed");
   await vi.advanceTimersByTimeAsync(1);
   expect(refresh.mock.calls[1]?.[0]).toMatchObject({

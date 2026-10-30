@@ -5907,3 +5907,51 @@ CLI process's physical disk-read bytes. Those disk bytes exclude child processes
 and cached reads; they are distinct from logical archive bytes. Record host load,
 archive size, and complete CLI wall/CPU with `/usr/bin/time -l` as well. Keep
 compression-level experiments separate from the default-settings comparison.
+
+### Session usage request work
+
+`sessions-usage-measure.ts` sends `sessions.usage` through an isolated Gateway and
+signed synthetic WebSocket client. Generate state with `team-shape-fixture.ts`,
+then append a known usage event to each session before baseline/candidate runs:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts \
+  --state-dir /path/to/new-fixture --sessions 5000 --runs 0 \
+  --approvals 0 --cron 0 --projects 0 --transcript-mib 10240 --port 41783
+node --import ./scripts/tsx.mjs scripts/perf/sessions-usage-measure.ts \
+  --root /path/to/new-fixture --output /path/to/seed.json --seed-usage
+node --cpu-prof --cpu-prof-dir=/path/to/profiles --import ./scripts/tsx.mjs \
+  scripts/perf/sessions-usage-measure.ts --root /path/to/synthetic-copy \
+  --output /path/to/overview.json --port 41783 --rounds 5 --sample-allocations \
+  --cpu-profile-dir /path/to/profiles
+```
+
+`--projection detail` exercises the default detailed RPC; the default is the
+Control UI overview. Each round varies an empty part of the date range to force a
+fresh report rather than measure outer result-cache hits. `--same-query` measures
+that hot cache separately. These dates cover the default fixture and its seeded
+usage. A complete report must contain 125 tokens and $0.001 per session.
+
+`--owner-dir /path/to/baseline` overlays saved repository-relative source files
+in the Gateway and its workers, preserving module URLs and relative imports.
+The driver records selection and worker-owner latency, main-thread and process
+CPU, RSS, response bytes, partial status, and totals. Allocation mode samples
+collected and retained allocations on the Gateway and each usage worker;
+per-worker measurements are in `<output>.workers.jsonl`. After the measured rounds,
+the driver polls separately until the report is fresh with the known totals,
+recording elapsed time and process CPU from the first RPC through convergence.
+`--converge-ms` bounds this phase (default ten minutes); timeout fails the run.
+Heap deltas are retained
+separately and are not allocation measurements. Profiles and generated preload
+files stay beside the requested output.
+
+Use `--reset-usage` between cold projection runs, with the Gateway stopped. This
+offline operation uses the usage owner to remove its rebuildable rollups and
+partitions, preserving transcripts and database identity. Leave the projection
+intact for warm runs and alternate baseline/candidate runs. Run at least five
+samples of each without concurrent fixture generation or test work. Acceptance:
+identical complete token/cost totals, fewer unnecessary transcript scans, lower
+owner latency, CPU, and allocations, with no user-facing metric regressing by
+20% or more. Record cold catch-up and warm-report results separately, including
+partial counts so a faster incomplete response cannot masquerade as a complete
+report speedup.

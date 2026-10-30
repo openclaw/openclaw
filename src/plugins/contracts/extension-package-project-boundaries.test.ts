@@ -55,12 +55,11 @@ const MEMORY_CORE_BRIDGES = [
   ..."agent auth config io kysely memory network paths session sqlite workspace"
     .split(" ")
     .map((name) => `openclaw-runtime-${name}`),
-  // Standalone transcript readers use narrow core read owners.
-  "session-entry-render",
-  "session-memory-authority",
-  "session-reset-recall-read.worker",
-  "session-transcript-corpus.worker",
-  "session-transcript-stats-read",
+  // Per-call deadlines and standalone transcript readers use narrow core owners.
+  ...(
+    "search-deadline-control session-entry-render session-memory-authority " +
+    "session-reset-recall-read.worker session-transcript-corpus.worker session-transcript-stats-read"
+  ).split(" "),
 ].map((name) => `packages/memory-host-sdk/src/host/${name}.ts`);
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe JSON file shape.
