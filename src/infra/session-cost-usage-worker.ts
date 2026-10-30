@@ -371,6 +371,7 @@ export async function executeUsageCostWorker(
     let batchBytes = 0;
     const sendBatch = async () => {
       const transfers = batch.map((row) => row.value.buffer);
+      // Settle each bounded snapshot before producing more, releasing writer custody between batches.
       await host("prune-rows", batch, transfers);
       batch = [];
       batchBytes = 0;
@@ -382,7 +383,7 @@ export async function executeUsageCostWorker(
       const value = new TextEncoder().encode(row.valueJson);
       const rowBytes = value.byteLength + 2 * row.key.length;
       // Preserve single-row delivery for oversized metadata without growing other batches.
-      if (batch.length > 0 && (batch.length >= 64 || batchBytes + rowBytes > 1024 * 1024)) {
+      if (batch.length > 0 && (batch.length >= 1024 || batchBytes + rowBytes > 1024 * 1024)) {
         await sendBatch();
       }
       batch.push({ key: row.key, value, updatedAt: row.updatedAt });
@@ -391,7 +392,6 @@ export async function executeUsageCostWorker(
     }
     if (batch.length > 0) {
       await sendBatch();
-      await host("prune", {});
     }
   }
   // Partitions written before quarter rows existed, or by a build without them,

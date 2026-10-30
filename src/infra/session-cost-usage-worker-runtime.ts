@@ -27,7 +27,6 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
-import type { SessionCostUsageRollupSnapshot } from "./session-cost-usage-cache.kernel.js";
 import { prepareSessionCostUsageRefreshLock } from "./session-cost-usage-cache.sqlite.js";
 import { runSessionActorUsage } from "./session-cost-usage-memory.js";
 import {
@@ -266,7 +265,6 @@ async function runPreparedUsageCostWorker(
       scope.assertCurrent();
       signal?.throwIfAborted();
     };
-    const pruneRows: SessionCostUsageRollupSnapshot[] = [];
     const lock =
       capturedOperation.kind === "refresh"
         ? prepareSessionCostUsageRefreshLock(location.agentId, location.databasePath, {
@@ -349,17 +347,14 @@ async function runPreparedUsageCostWorker(
                   output = request.input.map(resolveCost);
                   break;
                 case "prune-rows":
-                  for (const row of request.input) {
-                    pruneRows.push({
+                  await requireLock("prune cache rows").pruneRows(
+                    request.input.map((row) => ({
                       key: row.key,
                       valueJson: row.value,
                       updatedAt: row.updatedAt,
-                    });
-                  }
-                  break;
-                case "prune":
-                  await requireLock("prune cache rows").pruneRows(pruneRows, context.signal);
-                  pruneRows.length = 0;
+                    })),
+                    context.signal,
+                  );
                   break;
                 case "write":
                   output = await requireLock("write cache rows").writeRollup(

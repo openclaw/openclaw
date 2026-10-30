@@ -183,7 +183,6 @@ export type UsageCostWorkerHostEffects = {
     output: Array<ModelCostConfig | undefined>;
   };
   "prune-rows": { input: UsageCostPruneRow[]; output: void };
-  prune: { input: Record<string, never>; output: void };
   write: { input: UsageCostPreparedRollup[]; output: boolean };
   "write-quarters": { input: UsageCostQuarterBackfillRow[]; output: boolean };
 };
