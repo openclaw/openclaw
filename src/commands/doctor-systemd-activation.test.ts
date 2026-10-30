@@ -16,9 +16,9 @@ import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import * as schemaMigrations from "./doctor-schema-migrations.js";
 
-// Native service inspection is the external boundary. The bootstrap, maintenance,
-// backup and schema owners below are real; native systemd still needs remote proof.
-vi.mock("../cli/run-main-service-installation.js", () => ({
+// Keep native discovery isolated; bootstrap, backup and schema owners remain real.
+vi.mock("../cli/run-main-service-installation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof serviceInstallation>()),
   readOwnGatewayServiceCommand: vi.fn(),
 }));
 
