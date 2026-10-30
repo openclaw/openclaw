@@ -60,7 +60,7 @@ suite.define(() => {
         'openclaw-app-sidebar .sidebar-recent-session[data-session-key="' + parentKey + '"]',
       );
       await row.waitFor({ state: "visible" });
-      await gateway.waitForRequest("sessions.list", { spawnedBy: parentKey });
+      await gateway.waitForRequest("sessions.list", { match: { spawnedBy: parentKey } });
       await page
         .locator('[data-session-key="' + ownFailureKey + '"] [data-session-attention="error"]')
         .waitFor();

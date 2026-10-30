@@ -38,6 +38,7 @@ it.each(["none", "error"] as const)(
       {
         key: "agent:main:parent",
         label: "Parent",
+        pinned: false,
         isChild: false,
         children: [],
         state: { attention: "error", ownAttention, subagentSummary: { attention: "error" } },
