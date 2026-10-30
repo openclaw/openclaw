@@ -37,7 +37,7 @@ const suite = createControlUiE2eSuite({
       entrypoint: ["dist/index.js"],
       env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
       config: {
-        gateway: { controlUi: { enabled: true }, reload: { mode: "hot" } },
+        gateway: { controlUi: { enabled: true }, reload: { mode: "hybrid" } },
         plugins: { allow: [] },
         cron: { enabled: false },
         logging: { level: "info", consoleLevel: "error" },
@@ -46,7 +46,7 @@ const suite = createControlUiE2eSuite({
     instance = owner;
     try {
       const validation = await owner.cli(["config", "validate", "--json"]);
-      expect(validation.code, validation.stderr).toBe(0);
+      expect(validation.code, validation.stdout || validation.stderr).toBe(0);
       await owner.startGateway();
       return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
     } catch (error) {
