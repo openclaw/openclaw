@@ -1514,6 +1514,21 @@ fs.readFileSync = (file, ...args) => {
     expect(result.status, result.stderr).toBe(expectedExit);
   });
 
+  it("accepts one automatic recovery cleanup after an already-current update", () => {
+    const payload = {
+      status: "skipped",
+      reason: "already-current",
+      before: { version: "2026.9.3", buildId: "candidate-build" },
+      after: { version: "2026.9.3", buildId: "candidate-build" },
+      steps: [
+        { name: "package-install", exitCode: 0, command: `npm install ${UPDATE_URL}` },
+        { name: "recovery-artifact-cleanup", exitCode: 0 },
+      ],
+    };
+
+    expect(runUpdateJson(payload, { UPDATE_EXPECT_OUTCOME: "already-current" }).status).toBe(0);
+  });
+
   it("accepts legacy same-version apply only with the frozen-target compatibility flag", () => {
     const payload = {
       status: "ok",
