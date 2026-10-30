@@ -355,9 +355,7 @@ export const SKILL_WORKSHOP_TOOL_NAME = CORE_SKILL_WORKSHOP_TOOL_NAME;
  * @deprecated Pass the run's callable tool names to listToolPromptGuidance; it includes
  * this section while `skill_workshop` is callable.
  */
-export function buildSkillWorkshopPromptSection(): string[] {
-  return buildCoreSkillWorkshopPromptSection();
-}
+export const buildSkillWorkshopPromptSection = buildCoreSkillWorkshopPromptSection;
 export {
   buildDelegationGuidanceSection,
   resolveMainSessionDelegationMode,
