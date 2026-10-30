@@ -23,6 +23,8 @@ const METADATA_KEYS = [
 export type NodePackageManifest = DistributionPackageManifest & {
   scripts?: Record<string, string>;
   devDependencies?: Record<string, string>;
+  os?: string[];
+  cpu?: string[];
   openclaw?: { extensions?: string[]; runtimeExtensions?: string[] };
 };
 

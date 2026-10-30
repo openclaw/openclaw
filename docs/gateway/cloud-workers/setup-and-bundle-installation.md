@@ -9,7 +9,7 @@ OpenClaw installs its runtime automatically from the running Gateway. Profiles n
 
 ## Automatic Linux Node toolchains
 
-Linux x64 and arm64 workers need no Node installation in `settings.setup`. OpenClaw preserves a supported Node on `PATH`; otherwise it installs its pinned official release after SHA-256 verification. Explicit npm profiles also require npm, npx, and Corepack before reusing the existing toolchain. Installing a toolchain needs compatible glibc, `curl`, `tar`, and `sha256sum`, plus HTTPS access to nodejs.org; a supported bundle-mode Node installation needs no download.
+Linux x64 and arm64 workers need no Node installation in `settings.setup`. OpenClaw preserves a supported Node on `PATH`; otherwise it installs its pinned official release after SHA-256 verification. Explicit npm profiles and repository seed/setup preparation require npm, npx, and Corepack before reusing the existing toolchain. Only bundle runtime enrollment uses the Node-only prerequisite. Installing a toolchain needs compatible glibc, `curl`, `tar`, and `sha256sum`, plus HTTPS access to nodejs.org; a supported bundle-mode Node installation needs no download.
 
 Prepared repositories select their Node requirement from `.nvmrc`, `.node-version`, `.tool-versions` (`nodejs` or `node`), `mise.toml` (`[tools] node`), then `package.json` `engines.node`. Versions, majors, SemVer ranges, `node`/`latest`, and LTS aliases resolve to a matching official Linux release; `system` retains the bootstrap Node. Invalid declarations or missing releases fail with a repair hint.
 

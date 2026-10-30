@@ -67,5 +67,6 @@ fi
 `;
 }
 
-export const DEFAULT_NODE_TOOLCHAIN_SETUP_SH = createNodeToolchainSetup(false);
-export const NPM_NODE_TOOLCHAIN_SETUP_SH = createNodeToolchainSetup(true);
+// Repository preparation resolves Node versions through npm and creates Corepack shims.
+export const DEFAULT_NODE_TOOLCHAIN_SETUP_SH = createNodeToolchainSetup(true);
+export const BUNDLE_NODE_TOOLCHAIN_SETUP_SH = createNodeToolchainSetup(false);
