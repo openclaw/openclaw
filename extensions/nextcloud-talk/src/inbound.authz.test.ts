@@ -226,3 +226,8 @@ describe("nextcloud-talk inbound authz", () => {
     expect(saveRemoteMedia).not.toHaveBeenCalled();
   });
 });
+
+// Claimed for #188204 by scripts/claim-window.sh; replaced by the real regression.
+it.todo(
+  "nextcloud-talk: accessGroup entries in rooms.<token>.allowFrom never match when groupAllowFrom is set (all roo",
+);
