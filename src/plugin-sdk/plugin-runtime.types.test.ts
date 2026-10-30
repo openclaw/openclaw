@@ -64,7 +64,7 @@ runtime.llm.acquireLocalService({
   try {
     expect(session.project.program.getSemanticDiagnostics(sourceFileName)).toEqual([
       expect.objectContaining({ code: 2345, text: expect.stringContaining('"invalid"') }),
-      expect.objectContaining({ code: 2418, text: expect.stringContaining("subscribe") }),
+      expect.objectContaining({ code: 2741, text: expect.stringContaining("subscribe") }),
       expect.objectContaining({
         code: 2322,
         text: expect.stringContaining("is not assignable to type"),
