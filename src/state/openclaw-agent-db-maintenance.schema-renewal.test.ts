@@ -88,7 +88,9 @@ it.each([true, false])(
     await withOpenClawTestState({ label: "maintenance-schema-renewal" }, async (state) => {
       const seeded = openOpenClawStateDatabase({ env: state.env });
       // Missing first-use provenance is a supported persisted schema, not a live DDL injection.
-      if (!present) seeded.db.exec("ALTER TABLE agent_database_leases DROP COLUMN provenance");
+      if (!present) {
+        seeded.db.exec("ALTER TABLE agent_database_leases DROP COLUMN provenance");
+      }
       const pathname = seeded.path;
       await closeOpenClawStateDatabaseByPathAsync(pathname);
       await assertDoctorAgentLeaseAdmission(state.env);
@@ -218,7 +220,9 @@ it.each([true, false])(
             outcome.status,
             outcome.status === "rejected" ? String(outcome.error) : "",
           );
-          if (outcome.status === "rejected") throw outcome.error;
+          if (outcome.status === "rejected") {
+            throw outcome.error;
+          }
         } finally {
           observations.port1.close();
           observations.port2.close();
