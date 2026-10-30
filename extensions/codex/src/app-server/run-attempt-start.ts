@@ -6,7 +6,7 @@ import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
-import { flattenCodexDynamicToolFunctions } from "./protocol.js";
+import { flattenCodexDynamicToolFunctions, type JsonObject } from "./protocol.js";
 import { createCodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 import {
   emitCodexAppServerEvent,
@@ -48,6 +48,20 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       turnState.promptBuild.developerInstructions,
     attemptTools.configuredMcp?.diagnosticNotice,
   );
+  const buildDeveloperInstructionsForNativeConfig = (nativeConfig: JsonObject) => {
+    const generated = context.baseDeveloperInstructions;
+    const offset = developerInstructions.indexOf(generated);
+    if (offset < 0) {
+      // A prompt hook replaced the generated policy; preserve that hook's output.
+      return developerInstructions;
+    }
+    const resolved = context.buildNativeDeveloperInstructions(nativeConfig);
+    return (
+      developerInstructions.slice(0, offset) +
+      resolved +
+      developerInstructions.slice(offset + generated.length)
+    );
+  };
   const {
     params,
     attemptClientFactory,
@@ -114,6 +128,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
+      buildDeveloperInstructionsForNativeConfig,
       refreshableInstructions:
         joinPresentSections(
           context.refreshableInstructions,

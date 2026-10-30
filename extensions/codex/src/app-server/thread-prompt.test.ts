@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolFunctionSpec,
@@ -6,6 +7,7 @@ import {
   type JsonObject,
 } from "./protocol.js";
 import { buildDeveloperInstructions, type CodexThreadPromptContext } from "./thread-prompt.js";
+import { buildCodexThreadConfiguration } from "./thread-requests.js";
 
 function tool(
   name: string,
@@ -96,6 +98,76 @@ describe("buildDeveloperInstructions deferred tool discovery", () => {
       }
     },
   );
+});
+
+describe("buildDeveloperInstructions native collaboration configuration", () => {
+  it.each([
+    ["flat disabled", { "agents.enabled": false, "features.multi_agent_v2": false }, false],
+    [
+      "nested disabled",
+      { agents: { enabled: false }, features: { multi_agent_v2: { enabled: false } } },
+      false,
+    ],
+    ["explicit V2 override", { "agents.enabled": false, "features.multi_agent_v2": true }, true],
+    [
+      "nested V2 override",
+      { agents: { enabled: false }, features: { multi_agent_v2: { enabled: true } } },
+      true,
+    ],
+    [
+      "model-selected collaboration",
+      { "features.multi_agent": false, "features.multi_agent_v2": false },
+      true,
+    ],
+  ] as const)("matches Codex collaboration precedence (%s)", (_label, config, nativeExpected) => {
+    const instructions = render({}, { nativeCollaborationConfig: config as JsonObject });
+    expect(instructions.includes("Use Codex native `spawn_agent`")).toBe(nativeExpected);
+    expect(instructions).toContain("sessions_spawn");
+    if (!nativeExpected) {
+      expect(instructions).not.toContain("native `wait_agent`");
+    }
+  });
+
+  it("aligns constructed thread guidance with the effective disabled request", () => {
+    const params = {
+      agentId: "main",
+      config: {},
+      modelId: "gpt-6.1-sol",
+      sessionKey: "agent:main:main",
+      toolsAllow: ["sessions_spawn"],
+      delegationCapability: "full" as const,
+    };
+    const appServer = resolveCodexAppServerRuntimeOptions({ env: {} });
+    const options = {
+      appServer,
+      dynamicTools: delegationTools,
+      hostSystemAgentActive: false,
+      nativeCodeModeEnabled: true,
+    };
+    const disabled = buildCodexThreadConfiguration(params, {
+      ...options,
+      config: { "agents.enabled": false, "features.multi_agent_v2": false },
+    });
+    expect(disabled.config["agents.enabled"]).toBe(false);
+    expect(disabled.developerInstructions).not.toContain("spawn_agent");
+    expect(disabled.developerInstructions).toContain("sessions_spawn");
+
+    const inherited = buildCodexThreadConfiguration(params, {
+      ...options,
+      nativeQuestionConfig: {
+        config: { agents: { enabled: false }, features: { multi_agent_v2: false } },
+        origins: {},
+        layers: [],
+      },
+    });
+    expect(inherited.developerInstructions).not.toContain("spawn_agent");
+
+    const v2 = buildCodexThreadConfiguration(params, {
+      ...options,
+      config: { "agents.enabled": false, "features.multi_agent_v2": { enabled: true } },
+    });
+    expect(v2.developerInstructions).toContain("Use Codex native `spawn_agent`");
+  });
 });
 
 describe("buildDeveloperInstructions delegation guidance", () => {

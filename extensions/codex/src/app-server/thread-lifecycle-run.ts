@@ -13,6 +13,7 @@ import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   isCodexPluginThreadBindingStale,
+  mergeCodexThreadConfigs,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 import {
@@ -110,6 +111,11 @@ export async function startOrResumeThread(
     }
     const preflight = await prepareCodexThreadLifecyclePreflight(params);
     const callerConfig = params.config;
+    const nativeDeveloperInstructions =
+      input.buildDeveloperInstructionsForNativeConfig?.(
+        mergeCodexThreadConfigs(preflight.effectiveConfig.config, callerConfig) ??
+          preflight.effectiveConfig.config,
+      ) ?? input.developerInstructions;
     const {
       contextEngineBinding,
       dynamicToolsContainDeferred,
@@ -156,10 +162,10 @@ export async function startOrResumeThread(
         : input.refreshableInstructions;
       // Only an actual relay can preserve current context through native compaction.
       params.developerInstructions =
-        params.inferenceRoute || input.developerInstructions === undefined
-          ? input.developerInstructions
+        params.inferenceRoute || nativeDeveloperInstructions === undefined
+          ? nativeDeveloperInstructions
           : joinPresentSections(
-              input.developerInstructions,
+              nativeDeveloperInstructions,
               splitCodexExtraSystemPrompt(params.params).turn,
             );
       return context;

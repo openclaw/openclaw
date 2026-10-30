@@ -68,6 +68,46 @@ describe("Codex native configuration lifecycle", () => {
     throw new Error(`unexpected method: ${method}`);
   }
 
+  it.each([
+    ["native-home disabled", { "agents.enabled": false, "features.multi_agent_v2": false }, false],
+    ["native-home V2 enabled", { "agents.enabled": false, "features.multi_agent_v2": true }, true],
+  ] as const)(
+    "prebuilt instructions follow effective native-home collaboration (%s)",
+    async (_label, effectiveConfig, v2Enabled) => {
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: async (method) => {
+          if (method === "config/read") {
+            return { config: effectiveConfig, origins: {}, layers: [] };
+          }
+          if (method === "thread/start") {
+            return threadStartResult("native-collab-guidance", { cwd: workspaceDir });
+          }
+          return readNativeConfig(method);
+        },
+      });
+      const buildInstructions = vi.fn((config: JsonObject) =>
+        config["features.multi_agent_v2"] === true
+          ? "Native `spawn_agent` available"
+          : "Managed `sessions_spawn` only",
+      );
+      const result = await startOrResumeThread({
+        ...lifecycleParams(fixture.client),
+        developerInstructions: "unverified preflight seed",
+        buildDeveloperInstructionsForNativeConfig: buildInstructions,
+      });
+      expect(result.lifecycle.action).toBe("started");
+      expect(buildInstructions).toHaveBeenCalledOnce();
+      expect(buildInstructions).toHaveBeenCalledWith(expect.objectContaining(effectiveConfig));
+      const start = fixture.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+      expect(start).toMatchObject({
+        developerInstructions: v2Enabled
+          ? "Native `spawn_agent` available"
+          : "Managed `sessions_spawn` only",
+      });
+    },
+  );
+
   it.each([undefined, false, true])(
     "refreshes callable question policy and authored native configuration (%s)",
     async (authored) => {
