@@ -131,7 +131,7 @@ export async function readSessionPullRequestMetadata(
   }
 }
 
-export function pullRequestMetadataSignature(
+function pullRequestMetadataSignature(
   pull: Pick<ControlUiSessionPullRequest, "state" | "title" | "headSha">,
 ) {
   return JSON.stringify([pull.state, pull.title, pull.headSha]);
