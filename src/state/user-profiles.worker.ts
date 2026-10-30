@@ -28,6 +28,7 @@ import {
 } from "./user-profile-github-identity.js";
 import {
   createUserProfileWriteOperation,
+  createPersonalUserProfile,
   linkEmail,
   mergeProfiles,
   setAvatar,
@@ -90,6 +91,11 @@ function accountWrite<Input extends { profileId: string }, Output>(
 }
 
 const userProfileWriteOperations = {
+  "userProfiles.create": createUserProfileWriteOperation(
+    "userProfiles.create",
+    (input: { displayName: string; role: string | null }, owned) =>
+      createPersonalUserProfile(input.displayName, input.role, owned),
+  ),
   "userProfiles.setRole": createUserProfileWriteOperation(
     "userProfiles.setRole",
     (input: { profileId: string; role: string | null }, owned) =>

@@ -542,6 +542,9 @@ identity-scope grant instead. Connection scope grants and ceilings are unchanged
 Named roles apply to authenticated durable profiles and their attested channel
 identities. They organize collaboration within one trusted Gateway domain and do
 not replace separate Gateways when hostile-tenant isolation is required.
+An explicit personal role assignment can also delegate its session-only scopes
+to a verified linked sender without making that sender a channel owner. See
+[personal onboarding](/concepts/user-model#onboard-without-an-external-sign-in-provider).
 Diagnostic audit methods, including `audit.run.inspect`, remain shared-domain
 `operator.read` surfaces and are not filtered by session role. Likewise,
 `operator.write` still authorizes Gateway-wide operations such as tool

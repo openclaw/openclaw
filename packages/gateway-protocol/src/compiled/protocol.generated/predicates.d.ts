@@ -487,6 +487,16 @@ export function isUsersListParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").UsersListParamsSchema
 >;
+export function isUsersCreateParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").UsersCreateParamsSchema
+>;
+export function isUsersCreateResult(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").UsersCreateResultSchema
+>;
 export function isUsersMentionableParams(
   value: unknown,
 ): value is import("typebox").Static<

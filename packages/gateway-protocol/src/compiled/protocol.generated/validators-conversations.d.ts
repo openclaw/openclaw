@@ -5,6 +5,8 @@ export {
   isConversationTurnCancelParams,
   isConversationTurnParams,
   isUsersListParams,
+  isUsersCreateParams,
+  isUsersCreateResult,
   isUsersMentionableParams,
   isUsersMentionableResult,
   isMentionsListParams,

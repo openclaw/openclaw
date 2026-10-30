@@ -274,6 +274,37 @@ export function createUserProfileWriteOperation<Input, Output>(
   };
 }
 
+/** An administrator establishes a person without asserting an email or provider login. */
+export function createPersonalUserProfile(
+  displayName: string,
+  role: string | null,
+  options: UserProfileMutationOptions,
+): UserProfileListItem {
+  ensureUserProfileRoleSchema(options);
+  return runUserProfileWriteTransaction(
+    ({ db }) => {
+      const row = insertUserProfile(
+        db,
+        normalizeInitialDisplayName(displayName),
+        Date.now(),
+        options.mutation,
+      );
+      if (role !== null) {
+        executeSqliteQuerySync(
+          db,
+          userProfilesDb(db).updateTable("user_profiles").set({ role }).where("id", "=", row.id),
+        );
+      }
+      options.mutation?.authority(row.id);
+      options.mutation?.publish(row.id);
+      publishUserProfilesChange(db, row.id);
+      return selectUserProfileListItemById(db, row.id);
+    },
+    options,
+    { operationLabel: "user-profiles.create-personal" },
+  );
+}
+
 /** Assigns or clears the role on an existing profile's current merge head. */
 export function setUserProfileRole(
   profileId: string,

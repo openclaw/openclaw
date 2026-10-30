@@ -132,7 +132,7 @@ not change that identity or grant permissions. Personal model-account management
 keeps its existing write requirements; this change does not expand access to
 credentials, shared provider accounts, or billing.
 
-A single-user Gateway gives unidentified operator connections one durable local owner profile, shared across devices and tabs, including device-token reconnects. The Gateway host account's full name fills an unset display name. A saved name is never overwritten. If no full name is available, the sidebar and Profile header show **Owner** until you set a name. Login names are not used. The owner profile has no email and does not change permissions or identity scopes. It cannot be merged with a personal profile or assigned an operator role. Sign in with a personal identity for those operations. If a build older than v2026.9.2 merged the owner profile into a person, connections stay unidentified and log a repair hint. Run `openclaw doctor --fix`, then reconnect to restore the owner identity. The person keeps their emails, role, and GitHub identities.
+A single-user Gateway gives unidentified operator connections one durable local owner profile, shared across devices and tabs, including device-token reconnects. The Gateway host account's full name fills an unset display name. A saved name is never overwritten. If no full name is available, the sidebar and Profile header show **Owner** until you set a name. Login names are not used. The owner profile has no email and does not change permissions or identity scopes. It cannot be merged with a personal profile or assigned an operator role. Use a signed-in person or an [administrator-established personal profile](#onboard-without-an-external-sign-in-provider) for those operations. If a build older than v2026.9.2 merged the owner profile into a person, connections stay unidentified and log a repair hint. Run `openclaw doctor --fix`, then reconnect to restore the owner identity. The person keeps their emails, role, and GitHub identities.
 
 When `gateway.roles` is configured, unidentified operators receive the owner profile only with token or password authentication. Other connections need a profile-backed sign-in for personal identity. Authenticated ephemeral operator connections, including CLI clients, retain the same durable owner even when omitted from presence. Node and synthetic connections do not receive an owner profile.
 
@@ -268,13 +268,14 @@ need to reconnect.
 
 An administrator can attest that a stable channel sender belongs to an existing Gateway profile. The link includes the channel, the configured channel account, and the sender's native ID. Display names, usernames, and `session.identityLinks` do not establish this association.
 
-All three Gateway methods require `operator.admin`:
+Profile creation and all channel-link methods require `operator.admin`:
 
-| Method                        | Parameters              | Result                                    |
-| ----------------------------- | ----------------------- | ----------------------------------------- |
-| `users.linkChannelIdentity`   | `profileId`, `identity` | The primary profile ID and saved identity |
-| `users.listChannelIdentities` | `profileId`             | `links` for that profile                  |
-| `users.unlinkChannelIdentity` | `profileId`, `identity` | `removed`                                 |
+| Method                        | Parameters              | Result                                          |
+| ----------------------------- | ----------------------- | ----------------------------------------------- |
+| `users.create`                | `displayName`, `role`   | A new personal `profile`, without login aliases |
+| `users.linkChannelIdentity`   | `profileId`, `identity` | The primary profile ID and saved identity       |
+| `users.listChannelIdentities` | `profileId`             | `links` for that profile                        |
+| `users.unlinkChannelIdentity` | `profileId`, `identity` | `removed`                                       |
 
 For example, the `identity` object for a Discord user is:
 
@@ -289,6 +290,72 @@ For example, the `identity` object for a Discord user is:
 Use the exact configured account ID and immutable sender ID. An identical sender ID on another account is a different binding. Repeating the same link is safe. A link already owned by another profile must first be explicitly unlinked from that profile. Unlinking also checks the expected profile, so a stale request cannot remove someone else's binding. The shared **Owner** profile is not a person and cannot receive these links.
 
 Links follow explicit profile merges and the surviving profile's current role. Linking does not rename or merge people, rewrite transcript attribution, assign session ownership, or change session visibility. Permission resolution separately checks the trusted incoming sender and the linked person's current authority.
+
+### Onboard without an external sign-in provider
+
+A token- or password-authenticated administrator can establish a personal profile
+without Tailscale, Cloudflare Access, or a proxy. This is explicit administrator
+attestation, not a claim made by a channel message. The shared **Owner** remains
+separate; creating a person does not change the browser's shared-secret identity
+or create an email, provider login, or sign-in credential.
+
+For limited session authority, define a named role and assign it only to the
+intended person. For a new single-user setup, this example leaves unassigned
+people without operator scopes:
+
+```json5
+{
+  gateway: {
+    roles: {
+      default: "unassigned",
+      definitions: {
+        unassigned: { scopes: [], agents: [], sessions: { others: "none" } },
+        sessionWriter: {
+          scopes: ["operator.sessions.write", "operator.talk"],
+          agents: ["main"],
+          sessions: { others: "none" },
+        },
+      },
+    },
+  },
+}
+```
+
+Merge the role into an existing multi-user configuration instead of replacing
+its roles or changing its default. Through the authenticated administrator's
+Gateway connection:
+
+1. Call `users.create` with `{ "displayName": "Ada", "role": "sessionWriter" }`.
+   Save the returned `profile.id`. Use `role: null` to establish a person without
+   explicitly assigning a role; creation itself grants no channel authority.
+2. Independently verify the sender's immutable native ID and exact configured
+   channel account. Call `users.linkChannelIdentity` with that profile ID and the
+   complete `identity` tuple shown above. Do not use a display name or trust an ID
+   supplied in an untrusted message as evidence of identity.
+3. Have that sender submit a fresh, normally admitted channel turn requesting a
+   new session. Trusted transport metadata resolves the personal profile, and
+   `sessions_create` records that profile as the human creator under its current
+   session-write authority, not as shared Owner.
+
+An explicitly assigned nonadministrative role can delegate only its listed
+`operator.sessions.read`, `operator.sessions.write`, and `operator.talk` scopes
+through a linked sender. Default roles, login-name role assignments, allowlists,
+and message text do not supply this delegation. It does not grant
+`operator.write`, administrator tools, or channel-owner status. Existing agent,
+model, sandbox, session-access, and additional person-access policies still apply.
+Connection scope grants and ceilings are unchanged.
+
+For recovery, use `users.list` and `users.listChannelIdentities` to inspect saved
+profile IDs and exact bindings before repeating an uncertain request. A repeated
+`users.create` creates another person; names are not unique identity keys. Reuse
+the established profile rather than guessing from a matching display name. A
+conflicting binding must be explicitly unlinked from its current profile before
+reassignment. Remove a mistaken link with `users.unlinkChannelIdentity`, and
+clear or change the person's assignment with `users.setRole`. Removal or
+demotion revokes retained authority before further privileged effects; queued
+recovery checks the original binding and current policy rather than falling back
+to Owner. Start a fresh turn after a correction. Existing session creators,
+owners, and transcript attribution are not rewritten.
 
 An authenticated personal requester can use a linked channel identity to steer
 their exact active session across the Control UI and channels, even when the

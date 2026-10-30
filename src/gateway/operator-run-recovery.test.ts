@@ -11,6 +11,7 @@ import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capab
 import { readPersistedFileStat } from "../agents/sessions/tools/file-write-verification.js";
 import { createWriteTool } from "../agents/sessions/tools/write.js";
 import { getCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
+import { getRequesterProfile } from "../auto-reply/requester-profile.js";
 import { withAdminIngress } from "../channels/message-access/operator-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -433,6 +434,43 @@ describe("scheduled authenticated operator source", () => {
         { scopes: ["operator.write"] },
       ),
   );
+  it("recovers only the original limited personal channel authority", async () => {
+    await withAdminIngress(async ({ admins, context, gateway, cfg, activatePolicy }) => {
+      cfg.gateway!.roles!.definitions.sessionWriter = {
+        scopes: ["operator.sessions.write"],
+        agents: ["main"],
+        sessions: { others: "none" },
+      };
+      await activatePolicy({});
+      const person = admins[0]!;
+      setUserProfileRole(person.profile.id, "sessionWriter");
+      const turn = await context(person.identity.senderId);
+      const original = expectDefined(
+        getRequesterProfile(turn)?.operatorAuthority,
+        "verified personal channel authority",
+      );
+      const source = captureQueuedOperatorRecoverySource(original);
+      const serializedSource = JSON.stringify(source);
+      const restore = () =>
+        restoreGatewayQueuedOperatorRecovery({
+          source: JSON.parse(serializedSource),
+          context: gateway,
+          assertCurrent: () => {},
+        });
+      const restored = await restore();
+      try {
+        expect(restored.authority.profileId).toBe(person.profile.id);
+        expect(restored.authority.scopes).toEqual(["operator.sessions.write"]);
+        expect(restored.controlUiAdmin).toBe(false);
+        await changeCanonicalUserChannelIdentity("unlink", person.profile.id, person.identity);
+        expect(restored.authority.assertCurrent).toThrow();
+        await expect(restore()).rejects.toThrow("Queued channel operator authority changed");
+      } finally {
+        restored.release();
+      }
+    });
+  });
+
   it("preserves live channel work at recovery bounds and rejects revoked ingress", async () => {
     await withAdminIngress(
       async ({ admins, context, gateway, retire, cfg, activatePolicy }) => {

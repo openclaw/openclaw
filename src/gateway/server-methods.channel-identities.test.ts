@@ -17,6 +17,53 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 const identity = { channelId: "discord", accountId: "team-bot", senderId: "100000000000000001" };
+
+it("lets the shared administrator establish a person without inventing a login identity", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const owner = ensureGatewayOwnerProfile(null);
+    const request = createRequests(owner.id);
+    expect(
+      await request("create", { displayName: "Ada", role: null }, ["operator.write"]),
+    ).toMatchObject([false, undefined, { code: "FORBIDDEN" }]);
+    const result = await request("create", { displayName: "Ada", role: null });
+    expect(result).toMatchObject([
+      true,
+      { profile: { displayName: "Ada", emails: [], githubIdentity: null } },
+    ]);
+    const profile = result?.[1].profile;
+    expect(profile.id).not.toBe(owner.id);
+    expect(await request("linkChannelIdentity", { profileId: profile.id, identity })).toEqual([
+      true,
+      { profileId: profile.id, identity },
+    ]);
+    expect(resolveUserChannelIdentity(identity)?.profileId).toBe(profile.id);
+    expect(resolveUserChannelIdentity({ ...identity, accountId: "other-bot" })).toBeUndefined();
+    expect(await request("linkChannelIdentity", { profileId: owner.id, identity })).toMatchObject([
+      false,
+      undefined,
+      { code: "INVALID_REQUEST" },
+    ]);
+    const other = (await request("create", { displayName: "Ada", role: null }))?.[1].profile;
+    expect(other.id).not.toBe(profile.id);
+    expect(await request("linkChannelIdentity", { profileId: other.id, identity })).toMatchObject([
+      false,
+      undefined,
+      { code: "INVALID_REQUEST" },
+    ]);
+    for (const params of [
+      { displayName: " ", role: null },
+      { displayName: "Unconfigured role", role: "missing" },
+      { displayName: "Forged login", role: null, email: "ada@example.test" },
+    ]) {
+      expect(await request("create", params)).toMatchObject([
+        false,
+        undefined,
+        { code: "INVALID_REQUEST" },
+      ]);
+    }
+    expect(resolveUserChannelIdentity(identity)?.profileId).toBe(profile.id);
+  });
+});
 function createRequests(profileId: string, expectedProfileId?: string, cfg: OpenClawConfig = {}) {
   return async (action: string, params: unknown, scopes = ["operator.admin"]) => {
     const method = `users.${action}`;
@@ -70,6 +117,7 @@ it.each(["person", "shared owner"] as const)(
       const request = createRequests(admin.id, admin.id, cfg);
       const email = { email: "secondary@example.test", targetProfileId: person.id };
       const operations = [
+        ["create", { displayName: "New person", role: "member" }, validProfile],
         ["linkChannelIdentity", link, link],
         ["listChannelIdentities", { profileId: person.id }, { links: [link] }],
         ["unlinkChannelIdentity", link, { removed: true }],

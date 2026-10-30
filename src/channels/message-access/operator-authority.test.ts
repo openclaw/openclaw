@@ -56,6 +56,7 @@ import {
   setUserProfileRole,
   syncGitHubIdentity,
 } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import {
@@ -600,6 +601,73 @@ const spawnedSessionKey = "agent:main:dashboard:agent-created";
 const revokedMessage = "Channel operator authority changed; send a new request.";
 const agent = { type: "agent", id: "main" } as const;
 const human = (id: string) => ({ type: "human", id }) as const;
+
+it.each(["discord", "slack"] as const)(
+  "creates a session under verified %s personal authority without owner fallback",
+  (channel) =>
+    withAdminIngress(
+      async (fixture) => {
+        const { cfg, admins, context, activatePolicy } = fixture;
+        cfg.gateway!.roles!.definitions.sessionWriter = {
+          scopes: ["operator.sessions.write", "operator.talk"],
+          agents: ["main"],
+          sessions: { others: "view" },
+        };
+        cfg.gateway!.roles!.default = "sessionWriter";
+        await activatePolicy({});
+        const unassigned = ensureProfileForEmail("unassigned@example.test");
+        // Matching the default must not delegate scopes to an unassigned person.
+        linkUserChannelIdentity(unassigned.id, { ...admins[0]!.identity, senderId: "unassigned" });
+        expect(authorityFor(await context("unassigned"))).toBeUndefined();
+        expect(authorityFor(await context(admins[1]!.identity.senderId))?.profileId).toBe(
+          admins[1]!.profile.id,
+        );
+        const person = admins[0]!;
+        setUserProfileRole(person.profile.id, "sessionWriter");
+        const turn = await context(person.identity.senderId);
+        expect(authorize(cfg, turn).senderIsOwner).toBe(false);
+        expect(captureCommandOwnerAssertion(turn)).toBeUndefined();
+        const authority = authorityFor(turn);
+        expect(authority?.profileId).toBe(person.profile.id);
+        expect(authority?.scopes).toEqual(["operator.sessions.write", "operator.talk"]);
+        for (const forged of [
+          structuredClone(turn),
+          { ...turn, AccountId: "other-account" },
+          { ...turn, SenderId: admins[1]!.identity.senderId },
+          await context(person.identity.senderId, false),
+          await context(person.identity.senderId, true, "other-account"),
+        ]) {
+          expect(authorityFor(forged)).toBeUndefined();
+        }
+        using assignment = await prepareAssignment(fixture, turn, true);
+        const created = await assignment.execute("sessions_create", "personal-create", {
+          label: "Personal task",
+        });
+        const key = (created.details as { sessionKey: string }).sessionKey;
+        expect(loadSessionEntry(assignment.scope(key))).toMatchObject({
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: person.profile.id },
+        });
+        await expect(
+          assignment.run(() =>
+            callInProcessGatewayTool("users.create", {
+              displayName: "Not authorized",
+              role: null,
+            }),
+          ),
+        ).rejects.toThrow();
+        if (channel === "discord") {
+          unlinkUserChannelIdentity(person.profile.id, person.identity);
+        } else {
+          setUserProfileRole(person.profile.id, "member");
+        }
+        expect(() => authority?.assertCurrent()).toThrow();
+        await expect(assignment.execute("sessions_create", "revoked-create", {})).rejects.toThrow();
+      },
+      "role",
+      channel,
+    ),
+);
 const withSlack = (run: (fixture: Fixture) => Promise<void>) =>
   withAdminIngress(run, "role", "slack");
 function autoClose<T extends { close: () => void }>(resource: T) {

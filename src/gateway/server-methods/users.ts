@@ -9,6 +9,7 @@ import {
   validateUsersPrefsGetParams,
   validateUsersPrefsSetParams,
   validateUsersSelfParams,
+  validateUsersCreateParams,
   validateUsersSetAvatarParams,
   validateUsersSetDisplayNameParams,
   validateUsersSetRoleParams,
@@ -54,6 +55,7 @@ import {
 } from "../../state/user-profile-list.js";
 import {
   linkCanonicalUserProfileEmail,
+  createCanonicalUserProfile,
   mergeCanonicalUserProfiles,
   setCanonicalUserProfileAvatar,
   setCanonicalUserProfileDisplayName,
@@ -249,6 +251,34 @@ async function runPersonalGitHub(
 }
 
 export const usersHandlers: GatewayRequestHandlers = {
+  "users.create": defineValidatedGatewayMethod(
+    "users.create",
+    validateUsersCreateParams,
+    async (options) => {
+      const assertAdministrator = await prepareUserProfileAdministration(options);
+      const { displayName, role } = options.params;
+      const isConfiguredRole = () => {
+        const definitions = options.context.getRuntimeConfig().gateway?.roles?.definitions;
+        return role === null || (definitions !== undefined && Object.hasOwn(definitions, role));
+      };
+      const unknownRoleMessage = `unknown operator role "${role}"; define it under gateway.roles.definitions before assigning it`;
+      if (!isConfiguredRole()) {
+        respondError(options.respond, ErrorCodes.INVALID_REQUEST, unknownRoleMessage);
+        return;
+      }
+      const assertCurrent = () => {
+        assertAdministrator();
+        if (!isConfiguredRole()) {
+          throw new Error(unknownRoleMessage);
+        }
+      };
+      assertCurrent();
+      const profile = await createCanonicalUserProfile(displayName, role, { assertCurrent });
+      assertCurrent();
+      options.respond(true, { profile });
+    },
+    profileError,
+  ),
   "users.listAuthLinks": connectHandler(
     "users.listAuthLinks",
     validateUsersListAuthLinksParams,

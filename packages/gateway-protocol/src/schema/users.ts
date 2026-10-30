@@ -122,6 +122,15 @@ export type UsersPersonalFileSetResult = Static<typeof UsersPersonalFileSetResul
 export const UsersSelfParamsSchema = closedObject({});
 export const UsersSelfResultSchema = closedObject({ profile: UserProfileSchema });
 
+// Administrator attestation creates a person, never a login or shared Owner alias.
+export const UsersCreateParamsSchema = closedObject({
+  displayName: Type.String({ minLength: 1, maxLength: 256, pattern: "\\S" }),
+  role: Type.Union([UserProfileRoleSchema, Type.Null()]),
+});
+export const UsersCreateResultSchema = closedObject({ profile: UserProfileSchema });
+export type UsersCreateParams = Static<typeof UsersCreateParamsSchema>;
+export type UsersCreateResult = Static<typeof UsersCreateResultSchema>;
+
 export const UsersLinkEmailParamsSchema = closedObject({
   email: Type.String({ minLength: 1, maxLength: 320 }),
   targetProfileId: UserProfileIdSchema,

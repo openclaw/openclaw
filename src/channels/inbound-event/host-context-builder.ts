@@ -154,8 +154,35 @@ export function createHostChannelInboundEventContextBuilder<
                 );
               }
             }
+            const operator = batch.at(-1)?.operatorAuthority;
+            const operatorAuthority =
+              operator &&
+              batch.every(
+                (input) =>
+                  input?.operatorAuthority?.profileId === requester.id &&
+                  input.operatorAuthority.isCurrent(gateway.getRuntimeConfig()),
+              )
+                ? captureChannelOperatorRunAuthority({
+                    ...operator.operatorProfile,
+                    recoveryReference: operator.recoveryReference,
+                    getRuntimeConfig: () => gateway.getRuntimeConfig(),
+                    assertCurrent: () => {
+                      if (
+                        !owner.isLive() ||
+                        owner.resolveGatewayContext?.() !== gateway ||
+                        !batch.every((input) =>
+                          input?.operatorAuthority?.isCurrent(gateway.getRuntimeConfig()),
+                        )
+                      ) {
+                        throw new Error("Channel operator authority changed; send a new request.");
+                      }
+                    },
+                    signal: operator.signal,
+                  })
+                : undefined;
             bindRequesterProfile(built, {
               ...requester,
+              operatorAuthority,
               isCurrent: () =>
                 owner.isLive() &&
                 owner.resolveGatewayContext?.() === gateway &&

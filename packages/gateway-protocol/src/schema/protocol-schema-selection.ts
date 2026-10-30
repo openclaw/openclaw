@@ -119,6 +119,8 @@ const EXCLUDED_SCHEMA_EXPORTS = [
   "UserChannelIdentitySchema",
   "UserChannelIdentityLinkSchema",
   "UsersLinkChannelIdentityParamsSchema",
+  "UsersCreateParamsSchema",
+  "UsersCreateResultSchema",
   "UsersLinkChannelIdentityResultSchema",
   "UsersUnlinkChannelIdentityParamsSchema",
   "UsersUnlinkChannelIdentityResultSchema",

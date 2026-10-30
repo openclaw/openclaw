@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { parseUserChannelAuthorizationReference } from "../state/user-channel-authorization-reference.js";
 import {
@@ -46,7 +47,7 @@ export function resolveUpdateChannelOperatorAdminIdentityAuthority(
   stateOptions: OpenClawStateDatabaseOptions = {},
 ) {
   const prepared = resolveChannelOperatorIdentityFacts(cfg, identity, stateOptions);
-  return prepared && captureLinkedOperatorAdminIdentity(cfg, prepared.linked, prepared.isCurrent);
+  return prepared && captureLinkedOperatorIdentity(cfg, prepared.linked, prepared.isCurrent);
 }
 
 function resolveChannelOperatorIdentityFacts(
@@ -106,12 +107,42 @@ function resolveLinkedOperatorAdmin(
   return authorized ? linked.profileId : undefined;
 }
 
-function captureLinkedOperatorAdminIdentity(
+function captureLinkedOperatorIdentity(
   cfg: OpenClawConfig,
   linked: UserChannelIdentityAuthorityFacts,
   isIdentityCurrent: (cfg?: OpenClawConfig) => boolean,
+  sessionAuthority = false,
 ) {
-  if (!resolveLinkedOperatorAdmin(cfg, linked)) {
+  const resolveScopes = (currentCfg: OpenClawConfig) => {
+    const policy = resolveOperatorRolePolicyForAssignment(
+      linked.profileId,
+      linked.role,
+      currentCfg,
+      linked.githubLogin ?? null,
+    );
+    if (resolveLinkedOperatorAdmin(currentCfg, linked)) {
+      return policy?.scopes ?? ["operator.admin"];
+    }
+    // Only an explicit personal assignment delegates session authority. Default roles
+    // and channel admission never become Gateway-wide write or owner grants.
+    return sessionAuthority &&
+      linked.role &&
+      resolveOperatorRoleSelection(
+        linked.profileId,
+        linked.role,
+        currentCfg,
+        linked.githubLogin ?? null,
+      ).roleSource === "assigned"
+      ? (policy?.scopes.filter(
+          (scope) =>
+            scope === "operator.sessions.read" ||
+            scope === "operator.sessions.write" ||
+            scope === "operator.talk",
+        ) ?? [])
+      : [];
+  };
+  const scopes = [...resolveScopes(cfg)];
+  if (!scopes.length) {
     return undefined;
   }
   const requiredPlugin = resolveOperatorRolePolicyForAssignment(
@@ -124,7 +155,11 @@ function captureLinkedOperatorAdminIdentity(
   const isCurrent = (currentCfg: OpenClawConfig) => {
     current &&=
       isIdentityCurrent(currentCfg) &&
-      resolveLinkedOperatorAdmin(currentCfg, linked) === linked.profileId &&
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: scopes,
+        allowedScopes: resolveScopes(currentCfg),
+      }) &&
       resolveOperatorRolePolicyForAssignment(
         linked.profileId,
         linked.role,
@@ -133,7 +168,7 @@ function captureLinkedOperatorAdminIdentity(
       )?.accessPolicyPlugin === requiredPlugin;
     return current;
   };
-  return isCurrent(cfg) ? { profileId: linked.profileId, isCurrent } : undefined;
+  return isCurrent(cfg) ? { profileId: linked.profileId, scopes, isCurrent } : undefined;
 }
 
 function captureLinkedOperatorAdmin(
@@ -141,8 +176,9 @@ function captureLinkedOperatorAdmin(
   linked: UserChannelIdentityAuthorityFacts,
   isIdentityCurrent: (cfg?: OpenClawConfig) => boolean,
   original?: UserChannelAuthorization,
+  sessionAuthority = false,
 ) {
-  const identity = captureLinkedOperatorAdminIdentity(cfg, linked, isIdentityCurrent);
+  const identity = captureLinkedOperatorIdentity(cfg, linked, isIdentityCurrent, sessionAuthority);
   if (!identity) {
     return undefined;
   }
@@ -180,6 +216,7 @@ function captureLinkedOperatorAdmin(
       ? {
           authority: {
             profileId: linked.profileId,
+            scopes: identity.scopes,
             isCurrent,
             ...(access ? { signal: access.signal } : {}),
           },
@@ -199,7 +236,7 @@ export type ResolvedChannelOperatorIdentity = {
   prepared: Awaited<ReturnType<typeof prepareUserChannelIdentityAuthority>>;
 };
 
-export async function prepareChannelOperatorAdmin(
+export async function prepareChannelOperator(
   cfg: OpenClawConfig,
   input: UserChannelIdentity | UserChannelAuthorizationReference | ResolvedChannelOperatorIdentity,
   stateOptions: OpenClawStateDatabaseOptions = {},
@@ -230,6 +267,7 @@ export async function prepareChannelOperatorAdmin(
     prepared.linked,
     prepared.isCurrent,
     prepared.linked.authorization,
+    true,
   );
   if (!captured) {
     return undefined;
@@ -262,13 +300,18 @@ export async function prepareChannelOperatorAdmin(
       profileId: prepared.linked.profileId,
       assignedRole: prepared.linked.role,
       githubLogin: prepared.linked.githubLogin ?? null,
-      scopes: resolveOperatorRolePolicyForAssignment(
-        prepared.linked.profileId,
-        prepared.linked.role,
-        cfg,
-        prepared.linked.githubLogin ?? null,
-      )?.scopes ?? ["operator.admin"],
+      scopes: captured.authority.scopes,
       gatewayAccessGrant: captured.grant,
     },
   };
+}
+
+/** Owner-only callers cannot consume a session-only personal grant. */
+export async function prepareChannelOperatorAdmin(
+  cfg: OpenClawConfig,
+  input: UserChannelIdentity | UserChannelAuthorizationReference | ResolvedChannelOperatorIdentity,
+  stateOptions: OpenClawStateDatabaseOptions = {},
+) {
+  const prepared = await prepareChannelOperator(cfg, input, stateOptions);
+  return prepared?.operatorProfile.scopes.includes("operator.admin") ? prepared : undefined;
 }

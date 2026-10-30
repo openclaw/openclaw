@@ -22,6 +22,14 @@ export const validateUsersListParams = createProtocolValidator(
   S.UsersListParamsSchema,
   Checks.isUsersListParams,
 );
+export const validateUsersCreateParams = createProtocolValidator(
+  S.UsersCreateParamsSchema,
+  Checks.isUsersCreateParams,
+);
+export const validateUsersCreateResult = createProtocolValidator(
+  S.UsersCreateResultSchema,
+  Checks.isUsersCreateResult,
+);
 export const validateUsersMentionableParams = createProtocolValidator(
   S.UsersMentionableParamsSchema,
   Checks.isUsersMentionableParams,

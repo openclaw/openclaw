@@ -215,6 +215,14 @@ async function write<Key extends keyof UserProfileWriteOperations>(
   }
 }
 
+export async function createCanonicalUserProfile(
+  displayName: string,
+  role: string | null,
+  options: ProfileWriteOptions = {},
+) {
+  return unwrap(await write("userProfiles.create", { displayName, role }, options));
+}
+
 export async function setCanonicalUserProfileRole(
   profileId: string,
   role: string | null,

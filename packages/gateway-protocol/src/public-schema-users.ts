@@ -33,6 +33,8 @@ export {
   UserChannelIdentitySchema,
   UserChannelIdentityLinkSchema,
   UsersLinkChannelIdentityParamsSchema,
+  UsersCreateParamsSchema,
+  UsersCreateResultSchema,
   UsersLinkChannelIdentityResultSchema,
   UsersUnlinkChannelIdentityParamsSchema,
   UsersUnlinkChannelIdentityResultSchema,
