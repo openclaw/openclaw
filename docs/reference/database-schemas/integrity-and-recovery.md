@@ -91,6 +91,11 @@ physical file metadata. A recovery-quick receipt remains distinct from a full
 verification. The seal is reconstructible verification metadata, not database state
 or a backup.
 
+During shutdown, idle session-reader pools retire without their normal warm-cache
+delay. Accepted reads and writes settle through their existing owners before the
+last writer closes. A reader that fails to retire retains its cleanup custody;
+it cannot cause an incomplete checkpoint to be recorded as a clean close.
+
 Completed memory index schema receipts also survive a clean close. They remain
 scoped to the cache, FTS, and tokenizer settings that were validated, so an
 unchanged restart skips memory schema setup and the resulting agent schema
