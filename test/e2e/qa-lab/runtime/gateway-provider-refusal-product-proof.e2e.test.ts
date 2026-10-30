@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { visitQaSqliteTranscriptEvents } from "../../../../src/plugin-sdk/qa-runtime.js";
+import { resolveOpenClawAgentSqlitePath } from "../../../../src/state/openclaw-agent-db.paths.js";
 import { closeHttpServer } from "../../../helpers/gateway-integration-fixtures.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { listenLoopback, sendChat } from "./gateway-recovery.test-support.js";
@@ -10,7 +13,8 @@ import { listenLoopback, sendChat } from "./gateway-recovery.test-support.js";
 const REFUSAL_EXPLANATION = "Service unavailable. Try again.";
 const REFUSAL_TEXT =
   "The provider refused this request (category: reasoning_extraction). Revise the request and try again.";
-const REFUSAL_NOTICE = `Your request couldn't be completed: ${REFUSAL_TEXT}`;
+// Normal-history copy is separate from the recorder's private terminal diagnostic.
+const REFUSAL_NOTICE = "Your request couldn't be completed.";
 
 type GatewayHistory = {
   messages?: Array<{ role?: unknown; content?: unknown; customType?: unknown }>;
@@ -130,7 +134,34 @@ it("keeps a structured Anthropic refusal terminal across retry and fallback", as
         display: true,
         openclawRunError: { runId: started.runId, summary: REFUSAL_NOTICE },
       });
+      expect(refusals[0]).not.toHaveProperty("details.error");
+      expect(JSON.stringify(history.messages)).not.toContain(REFUSAL_TEXT);
       expect(JSON.stringify({ terminal, history })).not.toContain(REFUSAL_EXPLANATION);
+
+      const receipts: Record<string, unknown>[] = [];
+      await gateway.stop({
+        beforeTempCleanup: () =>
+          visitQaSqliteTranscriptEvents(
+            resolveOpenClawAgentSqlitePath({ agentId: "qa", env: gateway.runtimeEnv }),
+            (eventJson) => {
+              const entry: unknown = JSON.parse(eventJson);
+              if (isRecord(entry) && entry.customType === "run-failed-before-reply") {
+                receipts.push(entry);
+              }
+            },
+          ),
+      });
+      expect(receipts).toEqual([
+        expect.objectContaining({
+          type: "custom_message",
+          customType: "run-failed-before-reply",
+          content: REFUSAL_NOTICE,
+          display: true,
+          excludeFromContext: true,
+          details: { runId: started.runId, error: REFUSAL_TEXT },
+        }),
+      ]);
+      expect(JSON.stringify(receipts)).not.toContain(REFUSAL_EXPLANATION);
     },
     () => stopQaGatewayFixture(gatewayOwner),
     () => provider.stop(),
