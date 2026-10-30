@@ -11,6 +11,8 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveVisibleActiveSessionRunState } from "../../gateway/server-methods/session-active-runs.js";
 import { registerAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
 import {
+  claimAgentRunContext,
+  getAgentRunContext,
   clearAgentRunContext,
   getAgentRunLifecycleGeneration,
 } from "../../infra/agent-run-registry.js";
@@ -128,12 +130,13 @@ it.each(["subagent_settle", "subagent_announce", "sessions_send"])(
 );
 
 it.each([
-  { internal: false, coordination: false },
-  { internal: true, coordination: false },
-  { internal: false, coordination: true },
+  { internal: false, coordination: false, privateCompletion: false },
+  { internal: true, coordination: false, privateCompletion: false },
+  { internal: false, coordination: true, privateCompletion: false },
+  { internal: false, coordination: false, privateCompletion: true },
 ])(
   "projects command startup and capacity waits (internal=$internal, coordination=$coordination)",
-  async ({ internal, coordination }) => {
+  async ({ internal, coordination, privateCompletion }) => {
     const runId = "command-activity";
     const sessionKey = "agent:main:command-activity";
     const sessionId = "command-activity-session";
@@ -149,10 +152,22 @@ it.each([
 
     let releaseWait: (() => void) | undefined;
     try {
+      if (privateCompletion) {
+        claimAgentRunContext(runId, {
+          sessionKey,
+          agentId: "main",
+          isControlUiVisible: false,
+          sessionEventDelivery: false,
+          projectSessionMessages: false,
+          projectSessionActive: false,
+          lifecycleGeneration,
+        });
+      }
       await prepareEmbeddedSessionState({
         cfg: {},
         opts: {
           message: "hello",
+          ...(privateCompletion ? { privateCompletion: true as const } : {}),
           ...(coordination
             ? {
                 inputProvenance: {
@@ -176,7 +191,8 @@ it.each([
         suppressVisibleSessionEffects: internal,
         sessionStateActor: { actorType: "human" },
       });
-      const hidden = internal || coordination;
+      const hidden = internal || coordination || privateCompletion;
+      expect(getAgentRunContext(runId)?.isControlUiVisible).toBe(!hidden);
       const active = hidden ? { active: false, runIds: [] } : { active: true };
       expect(state()).toEqual(active);
       releaseWait = registerAgentRunCapacityWait(runId, lifecycleGeneration);
