@@ -259,12 +259,15 @@ export async function connectIrcClient(options: IrcClientOptions) {
       });
   };
 
-  let lastReceivedAt = Date.now();
+  // Silence is a duration: the monotonic clock keeps liveness decisions intact when the
+  // system clock steps (a forward step must not kill a healthy connection, a backward
+  // step must not hide a dead one).
+  let lastReceivedAt = performance.now();
   const livenessTimer = setInterval(() => {
     if (!ready || closed) {
       return;
     }
-    const silentMs = Date.now() - lastReceivedAt;
+    const silentMs = performance.now() - lastReceivedAt;
     if (silentMs >= IRC_LIVENESS_TIMEOUT_MS) {
       fail(new Error(`IRC server sent nothing for ${Math.round(silentMs / 1000)}s; reconnecting`));
       // Let the close listener notify the monitor, which owns reconnect and backoff.
@@ -321,7 +324,7 @@ export async function connectIrcClient(options: IrcClientOptions) {
     if (receiveOverflowed) {
       return;
     }
-    lastReceivedAt = Date.now();
+    lastReceivedAt = performance.now();
     buffer += chunk;
     let idx = buffer.indexOf("\n");
     while (idx !== -1) {

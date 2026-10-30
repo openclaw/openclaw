@@ -390,7 +390,7 @@ describe("irc client inbound line bound", () => {
 
 describe("irc client liveness", () => {
   beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date", "performance"] });
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -460,6 +460,30 @@ describe("irc client liveness", () => {
     expect(peer.onDisconnect).not.toHaveBeenCalled();
     expect(peer.onError).not.toHaveBeenCalled();
     expect(peer.client.isReady()).toBe(true);
+  });
+
+  it("keeps a healthy connection when the wall clock steps forward", async ({ signal }) => {
+    const peer = await connectToQuietServer(true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    // The wall clock jumps ten minutes; no monotonic time passes.
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(peer.onError).not.toHaveBeenCalled();
+    expect(peer.onDisconnect).not.toHaveBeenCalled();
+    // Monotonic time still drives the keepalive on schedule.
+    await vi.advanceTimersByTimeAsync(90_000);
+    await withinTest(peer.pingReceived, signal);
+  });
+
+  it("still pings on schedule when the wall clock steps backward", async ({ signal }) => {
+    const peer = await connectToQuietServer(true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    // The wall clock jumps back an hour; silence must keep accruing.
+    vi.setSystemTime(Date.now() - 60 * 60_000);
+    await vi.advanceTimersByTimeAsync(100_000);
+    await withinTest(peer.pingReceived, signal);
+    expect(peer.onError).not.toHaveBeenCalled();
+    expect(peer.onDisconnect).not.toHaveBeenCalled();
   });
 
   it.for(["quit", "close", "abort"] as const)(
