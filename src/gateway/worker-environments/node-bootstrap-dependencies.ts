@@ -1,23 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { valid } from "semver";
 import { installedPackagePath } from "../../../scripts/lib/package-installed-dependencies.mts";
 import { sha256File } from "../../infra/directory-durability.js";
 import { hasErrnoCode } from "../../infra/errno.js";
+import { readPackageManifest, type NodePackageManifest } from "./node-bootstrap-package.js";
 
-export type DependencyManifest = {
-  bundleDependencies?: string[] | boolean;
-  bundledDependencies?: string[] | boolean;
-  name: string;
-  version: string;
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-  peerDependencies?: Record<string, string>;
-  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
-  os?: string[];
-  cpu?: string[];
-};
+export type DependencyManifest = NodePackageManifest;
 
 export type NodeBootstrapDependency = {
   requestedName: string;
@@ -74,16 +65,12 @@ export async function collectNodeBootstrapDependencies(
         );
       }
       installed = await fs.realpath(installed);
-      const value = JSON.parse(
-        await fs.readFile(path.join(installed, "package.json"), "utf8"),
-      ) as DependencyManifest;
+      const value = await readPackageManifest(installed);
       // The frozen-lock install owns transitive overrides and peer resolution. Preserve
       // those resolved identities rather than implementing a second package resolver here.
       const expectedName = spec.startsWith("npm:") ? spec.slice(4, spec.lastIndexOf("@")) : name;
       if (
         (!prefix && value.name !== expectedName) ||
-        !value.name ||
-        valid(value.version) !== value.version ||
         (!prefix && valid(spec) === spec && value.version !== spec)
       ) {
         throw new Error(`Node runtime dependency identity mismatch: ${name}@${spec}`);
@@ -159,7 +146,9 @@ export async function collectNodeBootstrapDependencyTargets(
     if (!entry.isDirectory() || !/^(linux|darwin|win32)-(x64|arm64)$/u.test(entry.name)) {
       throw new Error("Invalid node runtime dependency target input");
     }
-    const [platform, arch] = entry.name.split("-") as [string, string];
+    const separator = entry.name.indexOf("-");
+    const platform = entry.name.slice(0, separator);
+    const arch = entry.name.slice(separator + 1);
     if (platform === process.platform && arch === process.arch) {
       continue;
     }
@@ -167,16 +156,12 @@ export async function collectNodeBootstrapDependencyTargets(
     if (root !== path.join(targetInputs, entry.name)) {
       throw new Error("Node runtime target input path is unsafe");
     }
-    const inputPackage = JSON.parse(
-      await fs.readFile(path.join(root, "package.json"), "utf8"),
-    ) as DependencyManifest;
-    const input = JSON.parse(await fs.readFile(path.join(root, "runtime-input.json"), "utf8")) as {
-      platform?: string;
-      arch?: string;
-      packageJsonSha256?: string;
-      lockfileSha256?: string;
-    };
+    const inputPackage = await readPackageManifest(root);
+    const input: unknown = JSON.parse(
+      await fs.readFile(path.join(root, "runtime-input.json"), "utf8"),
+    );
     if (
+      !isRecord(input) ||
       input.platform !== platform ||
       input.arch !== arch ||
       input.packageJsonSha256 !==
