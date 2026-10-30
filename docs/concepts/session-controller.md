@@ -317,7 +317,10 @@ Global-capacity waits, deferred maintenance, pending human questions, tool and
 retry deadlines, and backend-owned work are not interchangeable with missing
 progress. Watchdogs consume owner-held progress and deadlines, preserve healthy
 waits, and target the exact operation observed. Incoming user messages alone must
-not perpetually renew a stuck run's progress clock.
+not perpetually renew a stuck run's progress clock. A tool without an execution
+owner deadline is stopped after three minutes without meaningful tool progress.
+Explicit tool deadlines are honored directly; they do not receive an additional
+quiet-tool allowance or wait for the model request's longer progress horizon.
 
 Embedded-attempt watchdog bookkeeping checks the captured run lifecycle and
 controller ownership without re-entering person-access plugins on each progress

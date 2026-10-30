@@ -451,33 +451,23 @@ describe("operation-owned watchdog through controller admission", () => {
     expect(getSessionControllerOperation(key)).toBe(successor);
   });
 
-  it("honors owned tool and execution deadlines on the exact attempt", async () => {
-    const { operation, cancel } = running();
-    const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
-    let enforcedDeadline = 120_000;
-    attempt.beginTool({
-      toolName: "exec",
-      toolCallId: "command",
-      get deadlineAtMs() {
-        return enforcedDeadline;
-      },
-    });
-    enforcedDeadline = 300_000;
-    expect(operation.watchdog.snapshot().tools).toEqual([
-      {
-        toolName: "exec",
-        toolCallId: "command",
-        startedAtMs: 0,
-        explicitDeadlineAtMs: 300_000,
-        deadlineAtMs: 1_200_000,
-      },
-    ]);
-    await tickAt(operation.watchdog, SESSION_WATCHDOG_QUIET_TOOL_MS + enforcedDeadline - 1);
-    expect(cancel).not.toHaveBeenCalled();
-    attempt.setExecutionDeadline(Date.now());
-    await operation.watchdog.tick();
-    expect(cancel).toHaveBeenCalledOnce();
-  });
+  it.each([undefined, 300_000])(
+    "stops a quiet tool at its own deadline (%s) without waiting for the model horizon",
+    async (explicitDeadline) => {
+      const { operation, cancel } = running();
+      const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+      attempt.beginTool({
+        toolName: "openclaw",
+        toolCallId: "bridge",
+        deadlineAtMs: explicitDeadline,
+      });
+      const deadline = explicitDeadline ?? 180_000;
+      await tickAt(operation.watchdog, deadline - 1);
+      expect(cancel).not.toHaveBeenCalled();
+      await tickAt(operation.watchdog, deadline);
+      expectStalled(operation, cancel);
+    },
+  );
 
   it("counts async tool completion only while its exact attempt is current", async () => {
     const { operation, cancel } = running();
