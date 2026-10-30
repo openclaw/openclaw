@@ -315,8 +315,7 @@ into the final answer.
 
 On Discord, when a utility model resolves for the agent — an explicit
 [`utilityModel`](/gateway/config-agents/models#agents-defaults-model), or the primary
-provider's declared small-model default (OpenAI → `gpt-5.6-luna`,
-Anthropic → `claude-haiku-4-5`) — it supplies a short plain-language filler
+provider's declared small-model default — it supplies a short plain-language filler
 when the model emits no preamble or has been quiet for about 20 seconds
 (Telegram's headline is preamble-only today):
 
