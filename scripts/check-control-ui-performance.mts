@@ -76,7 +76,7 @@ const controlUiPerformanceBudgets = {
   totalCssGzipBytes: 309_265,
   // Board card containment and bounded selectors add 459 B raw / 40 B gzip
   // for lower tab-switch task CPU. Measured raw total plus 64 B variance.
-  totalCssRawBytes: 1_598_293,
+  totalCssRawBytes: 1_598_347,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
