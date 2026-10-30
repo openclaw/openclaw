@@ -42,7 +42,9 @@ export function createCrabboxHeartbeatManager(dependencies: { warn: (message: st
     !disposed && entries.get(entry.id) === entry && !entry.controller.signal.aborted;
   const warn = (entry: HeartbeatEntry, message: string) =>
     dependencies.warn(
-      `${message}; cloud worker machines may be reaped after ${entry.idleTimeout} of coordinator-idle time`,
+      entry.provider === "azure-sandbox"
+        ? `${message}; Sandbox idle activity is not being refreshed`
+        : `${message}; cloud worker machines may be reaped after ${entry.idleTimeout} of coordinator-idle time`,
     );
   const observe = (entry: HeartbeatEntry, lifetime?: CrabboxLeaseLifetime) => {
     entry.lifetime = { ...entry.lifetime, ...lifetime };
@@ -88,8 +90,8 @@ export function createCrabboxHeartbeatManager(dependencies: { warn: (message: st
           entry.provider,
           "--id",
           entry.id,
-          "--idle-timeout",
-          entry.idleTimeout,
+          // Sandbox heartbeat refreshes activity without replacing provider-owned idle policy.
+          ...(entry.provider === "azure-sandbox" ? [] : ["--idle-timeout", entry.idleTimeout]),
           "--json",
         ],
         binary: entry.binary,
