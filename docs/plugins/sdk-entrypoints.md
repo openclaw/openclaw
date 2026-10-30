@@ -418,6 +418,13 @@ deadline, and live admission assertion. It never discovers credentials or
 constructs conversation history. Consumers own endpoint eligibility and any
 account-specific route grant before calling it.
 
+`executeOpenAIDecision(batch, execution)` accepts those same prepared facts as
+explicit fields: provider, model ID, base URL, headers, auth, request overrides,
+signal, deadline, admission assertion, and optional reasoning. Use it when a
+provider has already projected its execution inputs. Pass the full prepared
+request overrides, including auth metadata used to reject credential reflection.
+The context-based helper remains supported and delegates to this executor.
+
 `supportsOpenAIDecisionBatch(batch, reasoning)` gates protocol kinds, image and
 question bounds, and automatic reasoning before transport/discovery. Malformed
 caller contracts throw; structurally valid requests outside protocol support or
