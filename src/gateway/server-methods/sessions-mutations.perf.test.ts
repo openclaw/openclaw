@@ -28,6 +28,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
@@ -54,19 +55,29 @@ const seedSession = (key: string, sessionId: string, entry: Partial<SessionEntry
   upsertSessionEntryCore(sessionScope(key), { sessionId, ...entry });
 
 test.for([
-  { patch: { unread: false }, count: 1, stale: false },
-  { patch: { unread: true }, count: 1, stale: false },
-  { patch: { fastMode: true }, count: 1, stale: false },
-  { patch: { fastMode: null }, count: 1, stale: false },
-  { patch: { unread: false }, count: 2, stale: false },
-  { patch: { unread: false }, count: 2, stale: true },
+  { patch: { unread: false }, count: 1, stale: false, noop: false },
+  { patch: { unread: true }, count: 1, stale: false, noop: false },
+  { patch: { fastMode: true }, count: 1, stale: false, noop: false },
+  { patch: { fastMode: null }, count: 1, stale: false, noop: false },
+  { patch: { unread: false }, count: 2, stale: false, noop: false },
+  { patch: { unread: false }, count: 2, stale: true, noop: false },
+  { patch: { unread: false, expectedMarkedUnreadAt: 0 }, count: 1, stale: false, noop: true },
 ])(
   "prepares archived metadata %j from committed state while a writer is pending",
-  async ({ patch, count, stale }, { signal }) => {
+  async ({ patch, count, stale, noop }, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       await captureRuntimeConfigAsyncReader()();
       const keys = Array.from({ length: count }, (_, index) => `agent:main:contended-${index}`);
-      const skillsSnapshot = { prompt: "synthetic cold snapshot ".repeat(1_000), skills: [] };
+      const skillsSnapshot = {
+        prompt: "synthetic cold snapshot ".repeat(patch.fastMode === null ? 400_000 : 1_000),
+        skills: [],
+      };
+      const baseline = (sessionId: string, fingerprint: string) => ({
+        version: 1 as const,
+        sessionId,
+        root: "/synthetic",
+        files: [{ path: "file.txt", fingerprint }],
+      });
       for (const key of keys) {
         await seedSession(key, key, {
           lifecycleRevision: "before",
@@ -76,6 +87,7 @@ test.for([
           fastMode: patch.fastMode !== true,
           agentStatus: { note: "Synthetic status", expiresAt: Date.now() + 60_000 },
           skillsSnapshot,
+          sessionDiffBaseline: baseline(key, "before"),
         });
       }
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
@@ -107,19 +119,29 @@ test.for([
       const writer = runOpenClawAgentWriteAdmission(database, async () => {
         entered.resolve();
         await release.promise;
-        for (const [index, key] of keys.entries()) {
-          writeSessionEntry(database, key, {
-            ...loadSessionEntry(sessionScope(key))!,
-            inputTokens: 123,
-            updatedAt: 100,
-            agentStatus: undefined,
-            lastReadAt: 77,
-            lifecycleRevision: stale && index === 1 ? "after" : "before",
-          });
-        }
+        runOpenClawAgentWriteTransaction(
+          (current) => {
+            for (const [index, key] of keys.entries()) {
+              writeSessionEntry(current, key, {
+                ...loadSessionEntry(sessionScope(key))!,
+                inputTokens: 123,
+                updatedAt: 100,
+                agentStatus: undefined,
+                lastReadAt: 77,
+                sessionDiffBaseline: baseline(key, "after"),
+                lifecycleRevision: stale && index === 1 ? "after" : "before",
+              });
+            }
+          },
+          { agentId: "main", env: state.env, path: database.path },
+        );
       });
       await entered.promise;
-      const respond = vi.fn();
+      const respond = vi.fn(() => {
+        if (noop) {
+          projected.resolve();
+        }
+      });
       const request = sessionMutationHandlers[
         count === 1 ? "sessions.patch" : "sessions.patchMany"
       ]!({
@@ -151,8 +173,9 @@ test.for([
         release.resolve();
         await Promise.allSettled([writer, request]);
       }
+      await Promise.all([writer, request]);
       expect(first).toBe("snapshot");
-      expect(projection).toHaveBeenCalledTimes(count);
+      expect(projection).toHaveBeenCalledTimes(noop ? 0 : count);
       expect(
         reservation.mock.calls.filter((args) => args[2] === "session.entry-replacements"),
       ).toHaveLength(0);
@@ -169,14 +192,14 @@ test.for([
           archivedAt: 1,
           inputTokens: 123,
           skillsSnapshot,
-          ...(patch.unread === false && !stale
+          ...(patch.unread === false && !stale && !noop
             ? { updatedAt: 100, lastReadAt: expect.any(Number) }
             : { lastReadAt: 77 }),
         });
         expect(committed?.agentStatus).toBeUndefined();
         expect(committed?.fastMode).toBe(patch.fastMode === null ? undefined : true);
         expect(committed?.lifecycleRevision).toBe(stale && index === 1 ? "after" : "before");
-        if (stale) {
+        if (stale || noop) {
           expect(committed?.markedUnreadAt).toBe(1);
         } else if (patch.unread === false) {
           expect(committed?.lastReadAt).toBeGreaterThan(77);
@@ -186,7 +209,12 @@ test.for([
         }
       }
       if (count === 1) {
-        expect(respond.mock.calls[0]?.[1].entry.inputTokens).toBe(123);
+        expect(respond.mock.calls[0]?.[1].entry).toMatchObject({
+          ...(noop ? {} : { inputTokens: 123 }),
+          sessionDiffBaseline: baseline(keys[0]!, noop ? "before" : "after"),
+        });
+        expect(respond.mock.calls[0]?.[1].entry).not.toHaveProperty("skillsSnapshot");
+        expect(respond.mock.calls[0]?.[1].entry).not.toHaveProperty("systemPromptReport");
       }
     });
   },

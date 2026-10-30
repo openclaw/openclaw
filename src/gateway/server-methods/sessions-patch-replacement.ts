@@ -128,7 +128,17 @@ function sessionPatchFields(targets: readonly PreparedPatchTarget[]) {
   if (patch.fastMode !== undefined) {
     fields.push("fastMode");
   }
-  return { fields, guardFields };
+  return {
+    fields,
+    guardFields,
+    // A stale conditional acknowledgment returns its read snapshot without committing.
+    snapshotFields: targets.some(
+      (target) =>
+        target.fullPatch.unread === false && target.fullPatch.expectedMarkedUnreadAt !== undefined,
+    )
+      ? (["sessionDiffBaseline"] as const)
+      : undefined,
+  };
 }
 
 /** Field-only preparation reads committed metadata; replacement preparation retains its writer. */
@@ -158,7 +168,7 @@ export function createSessionPatchGroupWriter(params: {
     let projected: GroupMutationOperation | undefined;
     const admitted = await applySessionEntryCanonicalReplacements<GroupAdmissionResult>({
       ...store,
-      onCommittedEntries: (entries) => {
+      onCommittedEntries: (entries, patchDiffBaselines) => {
         if (!store.fieldPatch) {
           return;
         }
@@ -166,6 +176,10 @@ export function createSessionPatchGroupWriter(params: {
           const entry = entries.get(replacement.sessionKey);
           if (entry) {
             adoptPersistedSessionSnapshot(replacement.entry, entry);
+            const baseline = patchDiffBaselines?.get(replacement.sessionKey);
+            if (baseline) {
+              replacement.entry.sessionDiffBaseline = baseline;
+            }
           }
         }
       },

@@ -65,7 +65,7 @@ export function readSessionEntryReplacementState(
     ? uniqueStrings([...selectedSessionKeys, ...labelOwnerKeys])
     : [...iterateSessionEntryKeys(database)];
   const expectedRows = new Map<string, ResolvedSessionEntryRow>();
-  const projection = params.fieldPatch ? "list" : "full";
+  const projection = params.fieldPatch?.snapshotFields ?? (params.fieldPatch ? "list" : "full");
   const readPrepared =
     selected.length > 1
       ? prepareExactSessionEntryRowReads(database, selected, projection)

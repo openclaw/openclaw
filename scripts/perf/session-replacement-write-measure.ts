@@ -103,7 +103,21 @@ try {
       updatedAt: 1000,
       label: `Synthetic completed task ${index}`,
       delivery: { kind: "none" },
-      ...(values.mode === "metadata" ? { archivedAt: 900, archiveReason: "manual" as const } : {}),
+      ...(values.mode === "metadata"
+        ? {
+            archivedAt: 900,
+            archiveReason: "manual" as const,
+            sessionDiffBaseline: {
+              version: 1 as const,
+              sessionId: `synthetic-write-${index}`,
+              root: "/synthetic",
+              files: Array.from({ length: 100 }, (_, file) => ({
+                path: `file-${file}.ts`,
+                fingerprint: "a".repeat(64),
+              })),
+            },
+          }
+        : {}),
       skillsSnapshot: {
         prompt: "Synthetic saved skill context. ".repeat(snapshotRepeats),
         skills: [],
@@ -308,6 +322,7 @@ async function measureMetadata(
   const fieldPatch = {
     fields: ["markedUnreadAt", "lastReadAt", "agentStatus"] as const,
     guardFields: ["markedUnreadAt", "archivedAt", "pluginOwnerId"] as const,
+    snapshotFields: ["sessionDiffBaseline"] as const,
   };
   const latencies: number[] = [];
   const snapshotMs: number[] = [];

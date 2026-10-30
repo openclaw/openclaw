@@ -527,7 +527,10 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                         (database) => {
                           if (params.onLifecycleCommitted || params.onCommittedEntries) {
                             deferOpenClawAgentPostCommitPublication(database, () => {
-                              params.onCommittedEntries?.(result.current);
+                              params.onCommittedEntries?.(
+                                result.current,
+                                result.patchDiffBaselines,
+                              );
                               params.onLifecycleCommitted?.(result.pendingArchiveRecovery);
                             });
                           }

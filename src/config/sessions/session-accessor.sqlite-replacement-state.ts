@@ -153,6 +153,7 @@ export function prepareSessionEntryReplacementPublication(
   );
   const publication: SessionEntryReplacementPublication = {
     kind: "session-entry-replacements",
+    ...(result.patchDiffBaselines ? { patchDiffBaselines: result.patchDiffBaselines } : {}),
     conversationPublication: readStagedConversationPublications(database),
     transcriptPublication: readStagedSessionTranscriptAuthority(database),
     pendingArchiveRecovery: result.pendingArchiveRecovery,
@@ -422,6 +423,15 @@ export function commitSessionEntryReplacementsInDatabase(
     }
   }
   return {
+    ...(input.fieldPatch
+      ? {
+          patchDiffBaselines: new Map(
+            [...current].flatMap(([key, entry]) =>
+              entry.sessionDiffBaseline ? [[key, entry.sessionDiffBaseline] as const] : [],
+            ),
+          ),
+        }
+      : {}),
     // Fresh creation must not retry another session's failed export.
     pendingArchiveRecovery:
       input.checkPendingArchiveRecovery === true &&
