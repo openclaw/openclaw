@@ -54,6 +54,7 @@ const repositoryScriptEntries = [
   "scripts/perf/placement-retirement-replies.mjs!",
   "scripts/perf/plugin-state-authority-receipts.ts!",
   "scripts/perf/plugin-state-claims-measure.ts!",
+  "scripts/perf/prometheus-cardinality-measure.ts!",
   "scripts/perf/reef-state-request-bytes.ts!",
   "scripts/perf/schema-crossing-measure.ts!",
   "scripts/perf/session-append-reload-measure.ts!",
