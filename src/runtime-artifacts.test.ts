@@ -99,6 +99,9 @@ describe("offline installed runtime artifacts", () => {
 
   it("exports both canonical archives with exact build, plugin, size and digest receipts", async () => {
     const installed = await runtimeFixture();
+    await fs.rm(path.join(installed.packageRoot, "node_modules/native-runtime"), {
+      recursive: true,
+    });
     const artifacts = await prepareWorkerRuntimeArtifacts({
       ...installed.options,
       outputDirectory: installed.outputDirectory,
@@ -135,6 +138,7 @@ describe("offline installed runtime artifacts", () => {
 
   it("exports retained packaged worker bytes when the installation has no worker source tree", async () => {
     const installed = await runtimeFixture();
+    await fs.rm(path.join(installed.packageRoot, "extensions"), { recursive: true });
     const source = await prepareWorkerRuntimeArtifacts({
       ...installed.options,
       outputDirectory: installed.outputDirectory,
