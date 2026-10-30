@@ -205,7 +205,9 @@ describe("nextcloud-talk inbound authz", () => {
     });
     return {
       core,
-      config: config as { accessGroups: { staff: { members: Record<string, string[]> } } },
+      config: config as unknown as {
+        accessGroups: Record<string, { members: Record<string, string[]> }>;
+      },
     };
   }
 
