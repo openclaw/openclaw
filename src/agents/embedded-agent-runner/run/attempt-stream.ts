@@ -375,7 +375,7 @@ export function installEmbeddedAttemptStreamGuards(
   const timeoutOptions = {
     cfg: attempt.config,
     runTimeoutMs: resolvedRunTimeoutMs,
-    modelRequestTimeoutMs: (attempt.model as { requestTimeoutMs?: number }).requestTimeoutMs,
+    modelRequestTimeoutMs: attempt.model.requestTimeoutMs,
     model: { baseUrl: attempt.model.baseUrl, id: attempt.modelId, provider: attempt.provider },
   };
   const idleTimeoutMs = resolveLlmIdleTimeoutMs({ ...timeoutOptions, trigger: attempt.trigger });

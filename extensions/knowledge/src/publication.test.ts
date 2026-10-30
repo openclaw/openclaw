@@ -271,7 +271,8 @@ it("cross-process publishers fence competing edits and never lose the winner", a
 
 it("returns a resume receipt without loading the retained publication plan twice", async () => {
   const f = await fixture();
-  const input = { ...draft(), body: "Synthetic publication body.\n".repeat(1024) };
+  // Just under the 24,000-character page budget.
+  const input = { ...draft(), body: "Synthetic publication body.\n".repeat(850) };
   const storage = new KnowledgeStorage(f.config, f.store);
   const original = await storage.save(input, f.access(), "agent");
   let returnedBytes = 0;

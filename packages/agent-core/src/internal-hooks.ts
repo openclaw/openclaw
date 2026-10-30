@@ -51,6 +51,13 @@ export function commitInternalToolTurnInput(
   }
 }
 
+/** A source-start veto, translated into an unstarted outcome rather than a fatal error. */
+export class InternalToolLoopBlocked extends Error {
+  constructor(readonly intervention: ToolLoopIntervention) {
+    super(intervention.reason);
+  }
+}
+
 export type InternalToolBatchLifecycle = {
   /**
    * Commit admitted calls in assistant order as they launch: prepared calls just
@@ -62,7 +69,10 @@ export type InternalToolBatchLifecycle = {
   releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
   /** Observe settled outcomes in assistant order, before warning text changes their identity. */
   observeOutcome?: (
-    outcome: Pick<AfterToolOutcomeContext, "toolCall" | "args" | "result" | "isError">,
+    outcome: Pick<
+      AfterToolOutcomeContext,
+      "toolCall" | "args" | "result" | "isError" | "errorKind"
+    >,
     state: ToolLoopRecoveryState,
   ) => ToolLoopIntervention | undefined;
 };

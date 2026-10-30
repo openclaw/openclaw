@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Context } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, type TestContext, vi } from "vitest";
 import {
   makeAssistantMessage,
   model as agentLoopModel,
@@ -13,8 +13,10 @@ import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { getSession, waitForExecSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { nodeCommand } from "./bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { createCodeModePermissionChangeReason } from "./code-mode-permission-change.js";
 import { controlledTool } from "./code-mode.controlled-tool.test-support.js";
@@ -60,8 +62,37 @@ function tool(name: string, execute: AnyAgentTool["execute"]) {
   return pluginToolWithExecute(name, name, execute);
 }
 
+async function nativeExecFixture(
+  label: string,
+  onTestFinished: TestContext["onTestFinished"],
+  defaults: Parameters<typeof createExecTool>[0] = {},
+) {
+  const state = await createOpenClawTestState({ label });
+  const scopeKey = `agent-loop:${label}`;
+  const closeScope = getProcessSupervisor().acquireScopeCleanup(scopeKey, {
+    processTree: "required-all",
+  });
+  onTestFinished(async () => {
+    await closeScope();
+    resetProcessRegistryForTests();
+    await state.cleanup();
+  });
+  const shell = createExecTool({
+    host: "gateway",
+    security: "full",
+    ask: "off",
+    scopeKey,
+    cwd: state.workspaceDir,
+    notifyOnExit: false,
+    ...defaults,
+  });
+  return { state, scopeKey, shell };
+}
+
 async function runCodeModeAgent(params: {
-  programs: Array<RecoveryProgram | ((context: Context) => RecoveryProgram)>;
+  programs: Array<
+    RecoveryProgram | ((context: Context) => RecoveryProgram | Promise<RecoveryProgram>)
+  >;
   hiddenTools: AnyAgentTool[];
   execInput?: Record<string, unknown>;
   abortSignal?: AbortSignal;
@@ -84,10 +115,10 @@ async function runCodeModeAgent(params: {
     afterToolCall: async ({ result, isError }) => ({
       isError: isError || isToolResultError(result),
     }),
-    streamFn: (_activeModel, context) => {
+    streamFn: async (_activeModel, context) => {
       const index = requestIndex++;
       const program = params.programs[index];
-      const code = typeof program === "function" ? program(context) : program;
+      const code = typeof program === "function" ? await program(context) : program;
       const waiting = code !== undefined && typeof code !== "string";
       const message = makeAssistantMessage(
         code === undefined
@@ -187,7 +218,6 @@ describe("Code Mode agent-loop error recovery", () => {
       expect(await parked.promise).toMatchObject({
         status: "waiting",
         reason: "pending_tools",
-        replaySafe: false,
       });
       expect(read.tool.execute).toHaveBeenCalledOnce();
       expect(effects).toEqual([]);
@@ -217,60 +247,157 @@ describe("Code Mode agent-loop error recovery", () => {
     }
   });
 
-  it("recovers a wrong shell wait without relaunching", async ({ onTestFinished }) => {
-    const state = await createOpenClawTestState({ label: "wrong-wait-recovery" });
-    const scopeKey = "agent-loop-wrong-wait";
-    const closeScope = getProcessSupervisor().acquireScopeCleanup(scopeKey, {
-      processTree: "required-all",
-    });
-    onTestFinished(async () => {
-      await closeScope();
-      resetProcessRegistryForTests();
-      await state.cleanup();
-    });
-    const command = `${JSON.stringify(globalThis.process.execPath)} -e "process.stdout.write('same-process-recovered')"`;
-    const shell = createExecTool({
-      host: "gateway",
-      security: "full",
-      ask: "off",
-      scopeKey,
-      cwd: state.workspaceDir,
-      notifyOnExit: false,
-    });
-    const process = createProcessTool({ scopeKey });
-    vi.spyOn(shell, "execute");
-    vi.spyOn(process, "execute");
-    let sessionId: string | undefined;
+  it("preserves native exec refusal diagnostics", async ({ onTestFinished }) => {
+    const { state, shell } = await nativeExecFixture("exec-cwd-recovery", onTestFinished);
+    await writeFile(join(state.workspaceDir, "input.txt"), "review-ready");
+    const execute = vi.spyOn(shell, "execute");
+    const command = `${JSON.stringify(globalThis.process.execPath)} -e "require('node:fs').appendFileSync('executions.txt', 'run\\n'); process.stdout.write(require('node:fs').readFileSync('input.txt', 'utf8'))"`;
+    const nonzeroCommand = `${JSON.stringify(globalThis.process.execPath)} -e "process.stdout.write('ordinary-exit'); process.exit(7)"`;
+    const missingCwd = join(state.workspaceDir, "missing");
     const { agent } = await runCodeModeAgent({
-      hiddenTools: [shell, process],
+      hiddenTools: [shell],
       programs: [
-        `return await exec({ command: ${JSON.stringify(command)}, background: true });`,
-        (context) => {
-          const outer = readToolResultDetails(context.messages.at(-1));
-          expect(outer).toMatchObject({ status: "completed", value: { status: "running" } });
-          const nested = resultDetails({ details: outer?.value });
-          if (typeof nested.sessionId !== "string") {
-            throw new Error("Expected the real shell session ID");
-          }
-          sessionId = nested.sessionId;
-          return { wait: true, runId: sessionId };
-        },
-        (context) => {
-          const failure = context.messages.at(-1);
-          expect(failure).toMatchObject({ role: "toolResult", toolName: "wait", isError: true });
-          expect(JSON.stringify(failure)).toContain("poll that same session with process");
-          return `return await process({ action: "poll", sessionId: ${JSON.stringify(sessionId)}, timeout: 1000 });`;
-        },
+        `return await exec({ command: ${JSON.stringify(command)}, workdir: ${JSON.stringify(missingCwd)} });`,
+        `return await exec({ command: ${JSON.stringify(command)} });`,
+        `return await exec({ command: ${JSON.stringify(nonzeroCommand)} });`,
       ],
     });
-    expect(agent.state.errorMessage).toBeUndefined();
-    expectToolCalls(1, shell, process);
-    const lastResult = agent.state.messages.findLast((message) => message.role === "toolResult");
-    expect(readToolResultDetails(lastResult)).toMatchObject({
+    const nativeFailure = await execute.mock.results[0]!.value;
+    expect(nativeFailure.content).toEqual([
+      { type: "text", text: expect.stringContaining("command was not executed") },
+    ]);
+    const results = agent.state.messages
+      .filter((message) => message.role === "toolResult")
+      .map(readToolResultDetails);
+    expect(results[0]).toMatchObject({
       status: "completed",
-      value: { status: "completed", sessionId, exitCode: 0, aggregated: "same-process-recovered" },
+      output: [],
+      value: {
+        status: "failed",
+        failureKind: "runtime-error",
+        exitCode: null,
+        aggregated: "",
+        message: expect.stringContaining("command was not executed"),
+      },
+    });
+    expect(resultDetails({ details: results[0]?.value }).message).toContain(
+      "omit an explicit workdir to use the default cwd",
+    );
+    expect(results[1]).toMatchObject({
+      status: "completed",
+      value: { status: "completed", exitCode: 0, aggregated: "review-ready" },
+    });
+    expect(results[2]).toMatchObject({
+      status: "completed",
+      value: {
+        status: "completed",
+        exitCode: 7,
+        aggregated: "ordinary-exit\n\n(Command exited with code 7)",
+      },
+    });
+    for (const result of results.slice(1)) {
+      expect(resultDetails({ details: result?.value })).not.toHaveProperty("message");
+    }
+    expectRecovered(agent);
+    expectToolCalls(3, shell);
+    expect(await readFile(join(state.workspaceDir, "executions.txt"), "utf8")).toBe("run\n");
+  });
+
+  it("keeps native failure output within its budget", async ({ onTestFinished }) => {
+    const { shell } = await nativeExecFixture("exec-failure-budget", onTestFinished);
+    const bounded = createCatalogCodeModeHarness([shell], {
+      codeMode: { maxSnapshotBytes: 65_536 },
+    });
+    const command = `${JSON.stringify(globalThis.process.execPath)} -e "process.stdout.write('x'.repeat(40000)); process.exit(127)"`;
+    const inspected = await bounded.complete(
+      `const failure = await exec({ command: ${JSON.stringify(command)} }); return { exitCode: failure.exitCode, length: failure.aggregated.length, message: failure.message };`,
+    );
+    expect(inspected, JSON.stringify(inspected)).toMatchObject({
+      status: "completed",
+      value: { exitCode: 127, length: 40_000, message: "Command not found" },
     });
   });
+
+  it.for([false, true])(
+    "recovers a wrong shell wait without relaunching (warning=%s)",
+    async (withWarning, { onTestFinished, signal }) => {
+      const { state, scopeKey, shell } = await nativeExecFixture(
+        "wrong-wait-recovery",
+        onTestFinished,
+        withWarning ? { preparedStoreEnvironment: { env: { NODE_OPTIONS: "--no-warnings" } } } : {},
+      );
+      // Noninteractive exec closes stdin; a parent-owned file releases this same child.
+      const releasePath = join(state.workspaceDir, "release-held-process");
+      const command = nodeCommand(
+        `const fs = require("node:fs"); const release = ${JSON.stringify(releasePath)};
+         const finish = () => { if (fs.existsSync(release)) { watcher.close(); process.stdout.write("same-process-recovered"); } };
+         const watcher = fs.watch(${JSON.stringify(state.workspaceDir)}, finish); finish();`,
+      );
+      const process = createProcessTool({ scopeKey });
+      const nativeExec = vi.spyOn(shell, "execute");
+      vi.spyOn(process, "execute");
+      let sessionId: string | undefined;
+      const { agent } = await runCodeModeAgent({
+        hiddenTools: [shell, process],
+        programs: [
+          `return await exec({ command: ${JSON.stringify(command)}, background: true });`,
+          async (context) => {
+            const outer = readToolResultDetails(context.messages.at(-1));
+            expect(outer).toMatchObject({ status: "completed", value: { status: "running" } });
+            const nested = resultDetails({ details: outer?.value });
+            if (withWarning) {
+              const native = await nativeExec.mock.results[0]!.value;
+              expect(native.content).toEqual([
+                {
+                  type: "text",
+                  text: expect.stringContaining(
+                    "Warning: secret store environment entries were not applied for host=gateway: NODE_OPTIONS.",
+                  ),
+                },
+              ]);
+              expect(nested.warningText).toBe(
+                "Warning: secret store environment entries were not applied for host=gateway: NODE_OPTIONS.",
+              );
+            } else {
+              expect(nested).not.toHaveProperty("warningText");
+            }
+            expect(nested).not.toHaveProperty("message");
+            expect(nested).not.toHaveProperty("error");
+            expect(nested.followUp).toContain("process");
+            if (typeof nested.sessionId !== "string") {
+              throw new Error("Expected the real shell session ID");
+            }
+            sessionId = nested.sessionId;
+            return { wait: true, runId: sessionId };
+          },
+          async (context) => {
+            const failure = context.messages.at(-1);
+            expect(failure).toMatchObject({ role: "toolResult", toolName: "wait", isError: true });
+            expect(JSON.stringify(failure)).toContain("poll that same session with process");
+            const session = sessionId ? getSession(sessionId) : undefined;
+            if (!session) {
+              throw new Error("Expected the original held shell session");
+            }
+            await writeFile(releasePath, "finish");
+            await withinTest(waitForExecSession(session), signal);
+            return `return await process({ action: "poll", sessionId: ${JSON.stringify(sessionId)}, timeout: 0 });`;
+          },
+        ],
+      });
+      expect(agent.state.errorMessage).toBeUndefined();
+      expectToolCalls(1, shell, process);
+      const lastResult = agent.state.messages.findLast((message) => message.role === "toolResult");
+      expect(readToolResultDetails(lastResult)).toMatchObject({
+        status: "completed",
+        value: {
+          status: "completed",
+          sessionId,
+          exitCode: 0,
+          aggregated: "same-process-recovered",
+        },
+      });
+    },
+  );
 
   it("drains the old cell before refreshing its complete catalog in the same session", async () => {
     const refresh = createAgentPluginRuntimeRefresh();

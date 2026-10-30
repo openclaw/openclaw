@@ -104,10 +104,14 @@ export class PluginInvocationScope {
     }
   }
 
+  get pendingReplacementInstances(): readonly PluginInstanceHandle[] {
+    return this.closed
+      ? []
+      : [...this.consumers.keys()].filter((instance) => instance.replacementPending);
+  }
+
   get holdsPendingReplacement(): boolean {
-    return (
-      !this.closed && [...this.consumers.keys()].some((instance) => instance.replacementPending)
-    );
+    return this.pendingReplacementInstances.length > 0;
   }
 
   lookup(instance: PluginInstanceHandle): PluginInvocationBinding | undefined {

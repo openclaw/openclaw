@@ -361,16 +361,10 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   function settle(id, ok, payload) {
     const entry = pending.get(String(id));
     if (!entry) return false;
+    // Host replies are encoded JSON. Decoding failure must terminate the cell;
+    // resolving raw transport text would silently change the tool result's type.
+    const parsed = parseJson(payload);
     pending.delete(String(id));
-    // Workers pass host-encoded strings; avoid guest-mutable String coercion.
-    let parsed = null;
-    if (typeof payload === "string") {
-      try {
-        parsed = parseJson(payload);
-      } catch {
-        parsed = payload;
-      }
-    }
     if (ok) {
       entry.resolve(parsed);
     } else {

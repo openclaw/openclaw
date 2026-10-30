@@ -354,6 +354,7 @@ describe("controller-owned execution guard", () => {
         sessionKey: "agent:example:subagent:child",
         runId: "child-run",
         requesterSessionKey: "agent:example:main",
+        modelFallbackCandidate: false,
       });
     },
   );

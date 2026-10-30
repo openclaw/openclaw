@@ -20,6 +20,11 @@ native thread configuration before the turn; changing back to Fast or standard
 restores the configured native limit on the next turn. Other tiers retain their
 native compaction settings.
 
+Native token-based compaction does not enforce the inference relay's request-byte
+limit. Inline images can exceed that limit before token pressure triggers, and
+the compaction request itself can be too large. See
+[image-heavy conversation troubleshooting](/plugins/codex-harness/troubleshooting#image-heavy-conversations-exceed-the-request-size-limit).
+
 An incognito thread has no persisted resume source, so its creation-time
 compaction settings cannot change in place. If a speed change requires a different
 limit, OpenClaw preserves the conversation and asks you to restore the previous

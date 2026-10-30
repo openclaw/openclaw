@@ -1438,7 +1438,7 @@ describe("ci workflow guards", () => {
         contracts: false,
         channelContracts: false,
         performance: false,
-        coreStripes: [1, 4],
+        coreStripes: [1],
         lintCoreStripes: [1, 2],
         lintExtensionStripes: [],
         lintCentralScripts: true,
@@ -1478,7 +1478,7 @@ describe("ci workflow guards", () => {
         contracts: false,
         channelContracts: false,
         performance: true,
-        coreStripes: [1, 4],
+        coreStripes: [1],
         lintCoreStripes: [1],
         lintExtensionStripes: [],
         lintCentralScripts: false,
@@ -1507,7 +1507,7 @@ describe("ci workflow guards", () => {
         contracts: false,
         channelContracts: false,
         performance: false,
-        coreStripes: [1, 4],
+        coreStripes: [1],
         lintCoreStripes: [1, 2],
         lintExtensionStripes: [],
         lintCentralScripts: true,
@@ -2164,12 +2164,7 @@ describe("ci workflow guards", () => {
         const hostedJob = workflow.jobs["check-test-types-hosted-core-shard"];
         expect(evaluateWorkflowExpression(hostedJob.if, context)).toBe(hosted);
         expect(evaluateWorkflowExpression(hostedJob.strategy.matrix, context).include).toEqual(
-          hosted
-            ? [
-                { stripe: 1, type_graph_names_json: JSON.stringify([coreNames[0]]) },
-                { stripe: 4, type_graph_names_json: JSON.stringify([coreNames[1]]) },
-              ]
-            : [],
+          hosted ? [{ stripe: 1, type_graph_names_json: JSON.stringify(coreNames) }] : [],
         );
         const prodRun = runCheckShardFixture({
           frozenTarget: false,
@@ -2205,19 +2200,11 @@ describe("ci workflow guards", () => {
         });
         expect(result.status, result.output).toBe(0);
         expect(result.typeCalls.filter(({ row }) => row !== "boundary")).toEqual([
-          ...(hosted
-            ? coreNames.map((name, index) => ({
-                row: `core-${index === 0 ? 1 : 4}`,
-                localCheck: null,
-                command: `node --ci-graphs-json ${JSON.stringify([name])} --concurrency 2`,
-              }))
-            : [
-                {
-                  row: "central",
-                  localCheck: centralCorePaths ? null : "0",
-                  command: `node --ci-graphs-json ${JSON.stringify(coreNames)} --concurrency ${centralCorePaths ? 2 : 1}`,
-                },
-              ]),
+          {
+            row: hosted ? "core-1" : "central",
+            localCheck: hosted || centralCorePaths ? null : "0",
+            command: `node --ci-graphs-json ${JSON.stringify(coreNames)} --concurrency ${hosted || centralCorePaths ? 2 : 1}`,
+          },
           {
             row: "central",
             localCheck: "0",
@@ -3971,7 +3958,7 @@ describe("ci workflow guards", () => {
     { file: "scripts/test-built-source-verifiers.mts", selected: true },
     { file: "scripts/run-vitest.mjs", selected: false },
   ])("selects shared source verifier ownership for $file", ({ file, selected }) => {
-    const boundary = "test/extension-import-boundaries.test.ts";
+    const boundary = "test/extension-test-boundary.test.ts";
     const planner = pathToFileURL(path.resolve("scripts/lib/ci-changed-node-test-plan.mts")).href;
     const manifest = runCiManifestFixture({
       bundledPlanner: true,
@@ -8866,7 +8853,7 @@ describe("ci workflow guards", () => {
       })),
     ),
   )(
-    "qualifies $scope $packageVersion without native app jobs through a validated $context",
+    "qualifies $scope $packageVersion with deferred native app jobs through a validated $context",
     ({ scope, packageVersion, branch, context }) => {
       const options = {
         bundledPlanner: true,
@@ -8889,12 +8876,19 @@ describe("ci workflow guards", () => {
       expect(qualification.status, qualification.output).toBe(0);
       expect(qualification.output).toContain(`CI release scope: ${scope}`);
       expect(qualification.summary).toContain(`Scope: \`${scope}\``);
-      expect(qualification.summary).toContain("Native app qualification: deferred");
+      // Stable tags also ship the macOS app, so only beta defers its Swift proof.
+      const macosSwiftDeferred = scope === "npm-beta";
+      expect(qualification.summary).toContain(
+        macosSwiftDeferred
+          ? "Native app qualification: deferred;"
+          : "Native app qualification: deferred except macOS Swift;",
+      );
+      expect(full.outputs.run_macos_swift).toBe("true");
       expect(qualification.outputs).toEqual({
         ...full.outputs,
         release_scope: scope,
-        run_macos_swift: "false",
-        run_openclawkit_tests: "false",
+        run_macos_swift: String(!macosSwiftDeferred),
+        run_openclawkit_tests: macosSwiftDeferred ? "false" : full.outputs.run_openclawkit_tests,
         run_ios_build: "false",
         run_ios_voice_cleanup_tests: "false",
         run_ios_lifecycle_tests: "false",

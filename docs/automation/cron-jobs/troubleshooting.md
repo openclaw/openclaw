@@ -27,6 +27,11 @@ openclaw doctor
 ```
 
 <AccordionGroup>
+  <Accordion title="Reminder creation rejected">
+    - Empty delivery targets are rejected before normalization. Supply a valid target, or omit the unused optional object (for example, `delivery.failureDestination`) instead of filling its fields with empty strings.
+    - A one-time `schedule.kind: "at"` cannot have a `trigger`. Remove `trigger` for an ordinary reminder. If the condition is intentional, use a recurring `every` or `cron` schedule instead. Rejected requests do not create a job; correct the named field before retrying.
+
+  </Accordion>
   <Accordion title="Automations not firing">
     - `Default cron partition selection is unresolved` means older state was moved before its default partition was recorded. The Gateway continues running, but cron waits for an explicit choice. Run `openclaw doctor --fix` interactively, review the partition inventory, choose **Select the default cron partition**, then restart the Gateway. `--yes` and noninteractive runs leave the choice unresolved. Upgraded state retains its recorded partition when moved or restored to another directory.
     - Check the `cron.enabled` config setting and `OPENCLAW_SKIP_CRON` in the Gateway's launch environment. Either can disable automatic runs; clear both disable settings and restart the Gateway to enable scheduling.

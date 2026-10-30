@@ -13,6 +13,7 @@ import {
 import { parseUpdateAdmissionVerdict } from "../../infra/update-run-schema.js";
 import { defaultRuntime } from "../../runtime.js";
 import * as stateReadOnly from "../../state/openclaw-state-db-readonly.js";
+import { withLegacyTemplateStateSchema } from "../../state/openclaw-state-db-schema-v36-template-names.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withStateMigrationBackupForTest } from "../../state/openclaw-state-schema.test-support.js";
 import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
@@ -102,7 +103,9 @@ function fixture(scenario: Scenario, withDatabase = true) {
     using database = new DatabaseSync(path.join(state, "state", "openclaw.sqlite"));
     database.exec("BEGIN");
     database.exec(
-      fs.readFileSync(new URL("../../state/openclaw-state-schema.sql", import.meta.url), "utf8"),
+      withLegacyTemplateStateSchema(
+        fs.readFileSync(new URL("../../state/openclaw-state-schema.sql", import.meta.url), "utf8"),
+      ),
     );
     database.exec("PRAGMA user_version=20");
     database.exec("INSERT INTO schema_meta VALUES ('primary','global',20,NULL,'2026.9.8',1,1)");

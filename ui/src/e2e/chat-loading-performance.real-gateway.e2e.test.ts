@@ -44,6 +44,8 @@ type RpcMetric = {
   limit?: number;
   maxBytes?: number;
   offset?: number;
+  cursor?: string;
+  olderCursor?: string;
   messages?: number;
   historyBytes?: number;
   initialHistory?: boolean;
@@ -248,7 +250,12 @@ suite.define(() => {
     url.hash = new URL(String(handoff.browserUrl)).hash;
     const rpc: RpcMetric[] = [];
     const olderHistoryRequests = (metrics: readonly RpcMetric[]) =>
-      selectRpc(metrics, "chat.history", selectedKey).filter((metric) => (metric.offset ?? 0) > 0);
+      selectRpc(metrics, "chat.history", selectedKey).filter(
+        (metric) =>
+          metric.cursor !== undefined &&
+          metric.historyKind !== "delta" &&
+          metric.historyKind !== "reset",
+      );
     let measuring = false;
     let startedAt = 0;
     await suite.withPage(
@@ -345,6 +352,7 @@ suite.define(() => {
                 ? { maxBytes: historyParams.maxBytes }
                 : {}),
               ...(typeof historyParams.offset === "number" ? { offset: historyParams.offset } : {}),
+              ...(typeof historyParams.cursor === "string" ? { cursor: historyParams.cursor } : {}),
             };
             rpc.push(metric);
             pending.set(frame.id, metric);
@@ -372,6 +380,9 @@ suite.define(() => {
                 : undefined
               : body;
             metric.historyOk = frame.ok === true && history !== undefined;
+            if (typeof history?.olderCursor === "string") {
+              metric.olderCursor = history.olderCursor;
+            }
             if (history?.kind === "delta" || history?.kind === "reset") {
               metric.historyKind = history.kind;
             } else if (Array.isArray(history?.messages)) {
@@ -532,18 +543,23 @@ suite.define(() => {
         expect(olderPages).toHaveLength(olderPageCommits);
         expect(olderPages.length).toBeGreaterThan(1);
         expect(olderPages.map((metric) => metric.messages)).toEqual(olderPageMessageCounts);
-        let nextOffset = initialLoadedMessages;
+        let coveredMessages = initialLoadedMessages;
+        let olderCursor = selectStartupHistory(startupMetrics, selectedKey)[0]?.olderCursor;
         for (const metric of olderPages) {
           expect(metric.receivedMs).toBeDefined();
-          expect(metric.offset).toBe(nextOffset);
+          expect(olderCursor).toEqual(expect.any(String));
+          expect(metric.cursor).toBe(olderCursor);
+          expect(metric.offset).toBeUndefined();
           expect(metric.maxBytes).toBe(3 * 1024 * 1024);
           expect(metric.historyBytes).toBeLessThanOrEqual(metric.maxBytes!);
           const messages = metric.messages ?? 0;
           expect(messages).toBeGreaterThan(0);
           // This fixture has one visible message per source row.
-          nextOffset += messages;
+          coveredMessages += messages;
+          olderCursor = metric.olderCursor;
         }
-        expect(nextOffset).toBe(transcriptLength);
+        expect(coveredMessages).toBe(transcriptLength);
+        expect(olderCursor).toBeUndefined();
         const selectedStartup = selectStartupHistory(startupMetrics, selectedKey)[0];
         expect(selectedStartup).toBeDefined();
         expect(olderHistoryRequests(startupMetrics)).toHaveLength(0);

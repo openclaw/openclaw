@@ -38,6 +38,7 @@ function createFixture(method: (typeof methods)[number]) {
   recordAgentDatabaseAdmissions([refusal], { source: "startup" });
   const startup = {
     hasPendingAgents: true,
+    isAgentInputRecoveryPending: () => false,
     waitForAgentPreparation: () => {
       reachedAdmission.resolve();
       return startup.hasPendingAgents ? preparation.promise : undefined;

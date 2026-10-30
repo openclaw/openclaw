@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -91,13 +92,22 @@ describe("bounded cleanup retaining opaque custom data", () => {
   ])("preserves $label data and repaired parent without staged rows escaping", async ({ data }) => {
     const f = await fixture(data);
     const before = loadTranscriptEventsSync(f.scope);
-    expect(f.remove()).toBe(1);
+    const reopened = SessionManager.openBounded(f.scope, {
+      cwd: f.dir,
+      maxEvents: 20,
+      maxBytes: 8 * 1024 * 1024,
+    });
+    expect(
+      reopened.removeTrailingEntries((entry) => entry.id === f.assistantId, {
+        preserveTrailing: (entry) => entry.type === "custom",
+      }),
+    ).toBe(1);
     const rows = loadTranscriptEventsSync(f.scope);
     expect(rows.filter((row) => isRecord(row) && row.id === f.assistantId)).toHaveLength(0);
     const metadata = f.metadata();
     expect(metadata?.parentId).toBe(f.userId);
     expect(isDeepStrictEqual(metadata?.data, data)).toBe(true);
-    expect(isDeepStrictEqual(f.manager.getEntry(f.metadataId), metadata)).toBe(true);
+    expect(isDeepStrictEqual(reopened.getEntry(f.metadataId), metadata)).toBe(true);
     expect(rows.length).toBeLessThanOrEqual(before.length);
     const integrity = f.database.db.prepare("PRAGMA foreign_key_check").all();
     expect(integrity).toEqual([]);
@@ -176,22 +186,6 @@ describe("bounded cleanup retaining opaque custom data", () => {
     expect(f.manager.getEntry(f.assistantId)).toBeUndefined();
     expect(f.database.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
-  it("recovers retained metadata after reopening an existing bounded session", async () => {
-    const data = { value: "x".repeat(3 * 1024 * 1024) };
-    const f = await fixture(data);
-    const reopened = SessionManager.openBounded(f.scope, {
-      cwd: f.dir,
-      maxEvents: 20,
-      maxBytes: 8 * 1024 * 1024,
-    });
-    expect(
-      reopened.removeTrailingEntries((entry) => entry.id === f.assistantId, {
-        preserveTrailing: (entry) => entry.type === "custom",
-      }),
-    ).toBe(1);
-    expect(isDeepStrictEqual(f.metadata()?.data, data)).toBe(true);
-  });
-
   it("keeps unchanged-prefix IDs out of a tiny suffix query", async () => {
     const f = await fixture({ retained: true }, 40);
     const db = requireNativeSqliteDatabase(f.database.db);
@@ -210,13 +204,19 @@ describe("bounded cleanup retaining opaque custom data", () => {
     }
   });
 
-  it("preserves deep custom JSON that SQLite cannot project", async () => {
+  it.each([300, 1_100])("preserves custom JSON nested %i levels across appends", async (depth) => {
     let data: unknown = "leaf";
-    for (let index = 0; index < 1_100; index += 1) {
+    for (let index = 0; index < depth; index += 1) {
       data = { nested: data };
     }
     const f = await fixture(data);
     expect(f.remove()).toBe(1);
     expect(JSON.stringify(f.metadata()?.data)).toBe(JSON.stringify(data));
+    const manager = await SessionManager.openAsync(f.scope, f.dir);
+    const id = await manager.appendCustomEntryAsync("plugin-state", data);
+    const reopened = await SessionManager.openAsync(f.scope, f.dir);
+    const entry = reopened.getEntry(id);
+    assert(entry?.type === "custom");
+    expect(JSON.stringify(entry.data)).toBe(JSON.stringify(data));
   });
 });

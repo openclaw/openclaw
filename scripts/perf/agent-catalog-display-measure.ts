@@ -9,13 +9,12 @@
  */
 import assert from "node:assert/strict";
 import { Session, type HeapProfiler } from "node:inspector/promises";
-import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
@@ -32,23 +31,10 @@ const iterations = parseStrictIntegerOption({
   label: "iterations",
 });
 const ownerUrl = new URL("../../src/gateway/server-model-catalog-view.ts", import.meta.url).href;
-let replaced = false;
-if (values.owner) {
-  const replacement = pathToFileURL(path.resolve(values.owner)).href;
-  registerHooks({
-    load(url, context, nextLoad) {
-      if (url !== ownerUrl) {
-        return nextLoad(url, context);
-      }
-      replaced = true;
-      const result = nextLoad(replacement, context);
-      return { format: result.format, source: result.source, shortCircuit: true };
-    },
-  });
-}
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl, values.owner);
 const { createPreparedGatewayModelCatalog, readPreparedGatewayModelCatalogMetadata } =
   await import("../../src/gateway/server-model-catalog-view.js");
-assert(!values.owner || replaced, "Requested baseline owner was not loaded");
+assert(!values.owner || wasOwnerReplaced(), "Requested baseline owner was not loaded");
 const plugins = Array.from({ length: 40 }, (_, index) => ({
   id: `synthetic-${index}`,
   providers: [`provider-${index}`],
@@ -84,12 +70,7 @@ globalThis.gc?.();
 const inspector = new Session();
 try {
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 1024,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 1024);
   }
   const hostLoadBefore = loadavg();
   const memoryBefore = process.memoryUsage();

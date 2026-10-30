@@ -1,3 +1,4 @@
+import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import {
   collectNestedErrorCandidates,
   extractErrorCode,
@@ -173,6 +174,7 @@ export function startOpenClawStateLeaseHeartbeat(
     | "expectedIdentity"
     | "deferActivation"
     | "databaseAdmissionPort"
+    | "lossPort"
     | "databaseEngineSelection"
   > & {
     /** The caller retains its shared-state actor through startup and failure teardown. */
@@ -236,18 +238,32 @@ export function startOpenClawStateLeaseHeartbeat(
   const lifecycle = createLeaseHeartbeatCleanup({ cancel: close });
   let lossReported = false;
   let workerLoss: LeaseHeartbeatLoss | undefined;
-  const lossDetail = () =>
-    workerLoss ? ` (lossPath=${workerLoss.path}, lossOutcome=${workerLoss.outcome})` : "";
+  const { port1: lossPort, port2: workerLossPort } = new MessageChannel();
+  lossPort
+    .on("message", (loss: LeaseHeartbeatLoss) => {
+      workerLoss ??= loss;
+    })
+    .unref();
+  const readWorkerLoss = () => {
+    // This private port can be drained without yielding to queued parent callbacks.
+    workerLoss ??= receiveMessageOnPort(lossPort)?.message;
+    return workerLoss;
+  };
+  const lossDetail = () => {
+    const loss = readWorkerLoss();
+    return loss ? ` (lossPath=${loss.path}, lossOutcome=${loss.outcome})` : "";
+  };
   const fail = (cause: Error) => {
     if (lossReported || Atomics.load(shared, state.status) === state.closed) {
       return;
     }
     lossReported = true;
+    const loss = readWorkerLoss()?.leaseLoss;
     const error =
-      workerLoss?.leaseLoss && !(cause instanceof OpenClawStateLeaseError)
+      loss && !(cause instanceof OpenClawStateLeaseError && cause.loss)
         ? new OpenClawStateLeaseError(cause.message, {
             code: "OPENCLAW_STATE_LEASE_LOST",
-            loss: workerLoss.leaseLoss,
+            loss,
             cause,
           })
         : cause;
@@ -263,7 +279,7 @@ export function startOpenClawStateLeaseHeartbeat(
     if (Atomics.load(shared, state.status) !== state.ready) {
       const error = new OpenClawStateLeaseError("state lease heartbeat is not running", {
         code: "OPENCLAW_STATE_LEASE_LOST",
-        loss: workerLoss?.leaseLoss,
+        loss: readWorkerLoss()?.leaseLoss,
       });
       fail(error);
       throw error;
@@ -454,6 +470,8 @@ export function startOpenClawStateLeaseHeartbeat(
   const finishAdmission = () => {
     databaseAdmission.finish();
     releaseAdmissionService();
+    lossPort.close();
+    workerLossPort.close();
   };
   const stateAccess = captureStateDatabaseAccess(databasePath);
   void stateAccess.catch((error: unknown) =>
@@ -472,6 +490,7 @@ export function startOpenClawStateLeaseHeartbeat(
     const data = {
       databaseEngineSelection,
       databaseAdmissionPort: databaseAdmission.port,
+      lossPort: workerLossPort,
       postgresPool: createPostgresPoolEndpoints(databaseEngineSelection),
       path: databasePath,
       expectedIdentity,
@@ -498,6 +517,7 @@ export function startOpenClawStateLeaseHeartbeat(
               workerData: data,
               transferList: [
                 databaseAdmission.port,
+                workerLossPort,
                 ...postgresPoolTransferList(data.postgresPool),
               ],
               env: sourceTsconfig ? { TSX_TSCONFIG_PATH: sourceTsconfig } : {},
@@ -552,11 +572,6 @@ export function startOpenClawStateLeaseHeartbeat(
       return;
     }
     if ("closed" in reply) {
-      return;
-    }
-    if ("loss" in reply) {
-      // Diagnostic delivery never changes readiness, authority, or failure timing.
-      workerLoss ??= reply.loss;
       return;
     }
     if ("attempt" in reply) {

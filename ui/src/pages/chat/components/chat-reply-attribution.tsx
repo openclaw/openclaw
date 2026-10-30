@@ -11,6 +11,7 @@ export function ReplyLineView(props: {
   actions: {
     onOpenReply?: (id: string) => void;
     replyNavigationId?: string | null;
+    mediaReadAllowed?: boolean;
   };
   inline?: boolean;
   elements?: ReplyConnectorElements;
@@ -22,7 +23,11 @@ export function ReplyLineView(props: {
   const person = () => (
     <>
       <Show when={named()}>
-        <ChatAuthorAvatar sender={props.line.sender} agentAvatar={props.line.agentAvatar} />
+        <ChatAuthorAvatar
+          sender={props.line.sender}
+          agentAvatar={props.line.agentAvatar}
+          mediaReadAllowed={props.actions.mediaReadAllowed}
+        />
       </Show>
       <span class="chat-reply-attribution__name" title={name()}>
         {name()}

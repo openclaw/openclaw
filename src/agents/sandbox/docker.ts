@@ -63,11 +63,7 @@ export type {
   SandboxContainerEngine,
   SandboxContainerEngineTarget,
 } from "./container-engine.js";
-export {
-  bindPodmanSandboxEngine,
-  resolvePodmanSandboxRuntimeInfo,
-  validateSandboxContainerEngineTarget,
-} from "./podman-runtime.js";
+export { bindPodmanSandboxEngine, validateSandboxContainerEngineTarget } from "./podman-runtime.js";
 export {
   containerState,
   dockerContainerState,
@@ -381,6 +377,7 @@ async function ensureSandboxContainerLifecycle(
       return {
         containerName,
         containerId,
+        ...(podmanRuntimeInfo ? { podmanTarget: podmanRuntimeInfo.target } : {}),
         configHash: expectedHash,
         mountPlan,
         currentConfig: true,
@@ -437,6 +434,7 @@ async function ensureSandboxContainerLifecycle(
   return {
     containerName,
     containerId,
+    ...(podmanRuntimeInfo ? { podmanTarget: podmanRuntimeInfo.target } : {}),
     configHash: hashMismatch ? currentHash : expectedHash,
     mountPlan,
     currentConfig: !hashMismatch,

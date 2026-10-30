@@ -232,7 +232,9 @@ export function mutableCompensationFixtureSource(): string {
         }));
         if(publishing) {
           const {swapStagedPackageInstall} = await import(${url("packageSwap")});
+          const {createUpdateRunProgress} = await import(${url("commandRun")});
           const guards=createUpdateCommandExecutionGuards(currentOptions,installRoot);
+          const progress=createUpdateRunProgress(run,{},guards.recordStep);
           let transaction;
           let stopped;
           const nativeFs=await import('node:fs/promises');
@@ -256,6 +258,7 @@ export function mutableCompensationFixtureSource(): string {
               assertCurrent:()=>run.executorFence.assertCurrent(),
               beforeActivate:async()=>{
                 await guards.recordPhase('activating');
+                progress.deferLedgerWrites();
                 stopped=await maybeStopManagedServiceBeforeMutableUpdate({root:installRoot,updateInstallKind:'package',shouldRestart:true,jsonMode:true,expectedService:before,updateRun:run,recordPhase:guards.recordPhase,assertCurrent:guards.assertCurrent,timeoutMs:1000});
                 assert.equal(stopped.stopped,true,JSON.stringify(stopped));
               },

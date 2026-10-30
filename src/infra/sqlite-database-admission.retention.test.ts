@@ -206,18 +206,24 @@ it("retains active source receipts until their last release without suppressing 
     const committed = scopedToken(database, key);
     expect(committed).not.toBe(before);
     releaseSibling();
-    expect(recordsFor(location)[0]!.writeScopes.size).toBe(0);
+    expect(
+      recordsFor(location)[0]!.writeScopes.reduce((size, bucket) => size + bucket.size, 0),
+    ).toBe(0);
     const releaseDeleted = retainScopes(location, ["deleted"])!;
     try {
       retireScopes(database, ["deleted"]);
-      expect(recordsFor(location)[0]!.writeScopes.size).toBe(0);
+      expect(
+        recordsFor(location)[0]!.writeScopes.reduce((size, bucket) => size + bucket.size, 0),
+      ).toBe(0);
     } finally {
       releaseDeleted();
     }
   } finally {
     release();
     releaseSibling();
-    expect(recordsFor(location)[0]!.writeScopes.size).toBe(0);
+    expect(
+      recordsFor(location)[0]!.writeScopes.reduce((size, bucket) => size + bucket.size, 0),
+    ).toBe(0);
   }
 });
 
@@ -233,7 +239,8 @@ it("bounds cold session receipts by bytes without evicting hot receipts or reviv
     expect(scopedToken(database, key)).toBeTypeOf("string");
     expect(scopedToken(database, "hot")).toBe(hot);
   }
-  const retained = () => recordsFor(location)[0]!.writeScopes;
+  const retained = () =>
+    new Map(recordsFor(location)[0]!.writeScopes.flatMap((bucket) => Array.from(bucket)));
   expect([...retained().keys()].reduce((bytes, key) => bytes + key.length * 2, 0)).toBeLessThan(
     1024 * 1024,
   );

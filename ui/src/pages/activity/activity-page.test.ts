@@ -13,7 +13,6 @@ import {
   createGatewayEvent,
   createGatewayStoreTestStore,
 } from "../../app/gateway-store.test-support.ts";
-import { loadSettings } from "../../app/settings.ts";
 import { presentResult } from "../../e2e/activity-run-inspector.test-fixtures.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
@@ -27,6 +26,7 @@ import {
   activityHello,
   activityResponse,
   activityRoster,
+  activitySettings,
   createActivityGatewayStub,
   inspectorGateway,
   createActivityPage,
@@ -66,13 +66,7 @@ function activityContext(source: ApplicationContext["gateway"], basePath = ""): 
 
 function activityGateway() {
   const store = createGatewayStoreTestStore({
-    settings: {
-      ...loadSettings(),
-      gatewayUrl: "wss://activity.example.test",
-      token: "",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-    },
+    settings: activitySettings(),
   });
   activeGateways.add(store.gateway);
   activityContext(store.gateway);
@@ -460,6 +454,11 @@ describe("ActivityPage gateway lifecycle", () => {
   it("starts empty on initial bind and source replacement", async () => {
     const first = activityGateway();
     const page = await bindActivity(first.gateway);
+    // A frame may arrive before the queued Live Activity publication task.
+    using _ = vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      queueMicrotask(() => callback(performance.now()));
+      return 0;
+    });
     first.current().testOptions.onEvent?.(toolEvent("old"));
     await waitForSolid(() => expect(previews(page)).toEqual(["old output"]));
     page.dispose();

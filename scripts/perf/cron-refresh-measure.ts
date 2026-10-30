@@ -11,6 +11,12 @@
  * --owner accepts a baseline scheduler-actor.ts whose relative imports resolve in
  * this checkout. Counterbalance baseline/candidate launches. State is created next
  * to --output and removed after all actor/worker resources close.
+ * --workload runs instead executes four concurrent mock job executions per iteration
+ * through the service's real request, queue, finalization, and refresh owners.
+ * Add --count-commands for a separate producer census; its instrumentation distorts
+ * CPU/allocation and those fields must not be used as performance evidence.
+ * Counts/min use 20 synthetic completed runs/min,
+ * not an estimate of the production request mix.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -22,6 +28,9 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronJob } from "../../src/cron/types.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -32,9 +41,12 @@ const { values } = parseArgs({
     owner: { type: "string" },
     output: { type: "string" },
     iterations: { type: "string", default: "100" },
+    workload: { type: "string", default: "refresh" },
+    "count-commands": { type: "boolean", default: false },
   },
 });
 assert(values.mode === "timing" || values.mode === "allocation");
+assert(values.workload === "refresh" || values.workload === "runs");
 assert(values.output, "--output is required");
 assert(global.gc, "Run with --expose-gc");
 const iterations = parseStrictIntegerOption({
@@ -73,10 +85,12 @@ const { onWorkerRequestMetrics } = await import("../../src/infra/worker-request-
 const { createCronServiceState, prepareCronServiceStore } =
   await import("../../src/cron/service/state.js");
 const { ensureLoaded } = await import("../../src/cron/service/store.js");
+const { run } = await import("../../src/cron/service/ops-run.js");
+const { waitForCronRunQueue } = await import("../../src/cron/service/run-queue.js");
 const { saveCronStore, loadCronStore } = await import("../../src/cron/store.js");
 const { closeOpenClawAgentDatabasesAsync } = await import("../../src/state/openclaw-agent-db.js");
 const { closeOpenClawStateDatabaseAsync } = await import("../../src/state/openclaw-state-db.js");
-const nowMs = Date.now();
+let nowMs = Date.now();
 const storePath = path.join(stateDir, "cron", "jobs.json");
 const jobs: CronJob[] = Array.from({ length: 40 }, (_, index) => ({
   id: `synthetic-${index}`,
@@ -92,7 +106,9 @@ const jobs: CronJob[] = Array.from({ length: 40 }, (_, index) => ({
   delivery: { mode: "none" },
   state: {
     nextRunAtMs: nowMs + ((index % 4) + 1) * 3_600_000,
-    ...(index < 3 ? { runningAtMs: nowMs, runningReceiptId: `synthetic-run-${index}` } : {}),
+    ...(values.workload === "refresh" && index < 3
+      ? { runningAtMs: nowMs, runningReceiptId: `synthetic-run-${index}` }
+      : {}),
   },
 }));
 const scheduler = new GatewayScheduler();
@@ -106,7 +122,8 @@ const state = createCronServiceState({
   nowMs: () => nowMs,
   enqueueSystemEvent() {},
   runIsolatedAgentJob: async () => {
-    throw new Error("Future jobs must not run during refresh measurement");
+    assert.equal(values.workload, "runs", "Future jobs must not run during refresh measurement");
+    return { status: "ok", summary: "Synthetic provider completed" };
   },
   listConfiguredChannels() {
     preparations++;
@@ -126,11 +143,60 @@ const state = createCronServiceState({
 const inspector = new Session();
 let unsubscribe = () => {};
 let completed = 0;
+let queued = 0;
 let writerMs = 0;
 let changed = () => {};
 const burstSize = 20;
 const warmup = 5;
+const commands = new Map<string, number>();
+const postDescriptor = Object.getOwnPropertyDescriptor(Worker.prototype, "postMessage");
+const originalPost: unknown = postDescriptor?.value;
+assert(postDescriptor && typeof originalPost === "function");
+if (values["count-commands"]) {
+  Worker.prototype.postMessage = function (...args: Parameters<Worker["postMessage"]>) {
+    const [request] = args;
+    if (isRecord(request) && request.type === "execute" && request.input instanceof Uint8Array) {
+      const command: unknown = deserialize(request.input);
+      if (
+        isRecord(command) &&
+        typeof command.type === "string" &&
+        command.type.startsWith("cron.")
+      ) {
+        commands.set(command.type, (commands.get(command.type) ?? 0) + 1);
+      }
+    }
+    Reflect.apply(originalPost, this, args);
+  };
+}
+
 async function burst() {
+  if (values.workload === "runs") {
+    nowMs += 100;
+    const results = await Promise.all(jobs.slice(0, 4).map((job) => run(state, job.id, "force")));
+    assert(results.every((result) => result.ok && "ran" in result && result.ran));
+    await waitForCronRunQueue(state);
+    // Join post-completion scheduler refreshes before the next measurement unit.
+    await nextTurn();
+    if (completed < queued) {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("Cron run requests did not settle")),
+          30_000,
+        );
+        changed = () => {
+          if (completed >= queued) {
+            clearTimeout(timer);
+            changed = () => {};
+            resolve();
+          }
+        };
+        changed();
+      });
+    }
+    await nextTurn();
+    assert.deepEqual(errors, []);
+    return;
+  }
   for (let index = 0; index < burstSize; index++) {
     owner.refreshCronScheduler(state);
   }
@@ -162,9 +228,16 @@ try {
   await owner.startCronScheduler(state, new Set());
   const before = await loadCronStore(storePath);
   preparations = 0;
+  commands.clear();
   setDiagnosticsEnabledForProcess(true);
   unsubscribe = onWorkerRequestMetrics((kind, requestClass, phase, _depth, _wait, durationMs) => {
-    if (kind === "sqlite_writer" && requestClass === "cron" && phase === "completed") {
+    if (kind !== "sqlite_writer" || requestClass !== "cron") {
+      return;
+    }
+    if (phase === "queued") {
+      queued++;
+    }
+    if (phase === "completed") {
       completed++;
       writerMs += durationMs ?? 0;
       changed();
@@ -173,7 +246,8 @@ try {
   for (let index = 0; index < warmup; index++) {
     await burst();
   }
-  preparations = completed = writerMs = 0;
+  preparations = completed = queued = writerMs = 0;
+  commands.clear();
   global.gc();
   if (values.mode === "allocation") {
     inspector.connect();
@@ -201,31 +275,48 @@ try {
       ? (await inspector.post("HeapProfiler.stopSampling")).profile
       : undefined;
   const measuredRequests = completed;
+  const measuredCommands = Object.fromEntries(commands);
   unsubscribe();
   const after = await loadCronStore(storePath);
-  assert.deepEqual(after, before);
+  if (values.workload === "refresh") {
+    assert.deepEqual(after, before);
+  } else {
+    assert(after.jobs.slice(0, 4).every((job) => job.state.lastRunStatus === "ok"));
+  }
   const sampledBytes = (node: HeapProfiler.SamplingHeapProfileNode): number =>
     node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
-  const notifications = iterations * burstSize;
+  const notifications = values.workload === "refresh" ? iterations * burstSize : undefined;
   const report = {
-    scope: "Real cron refresh host and SQLite worker; no job execution or whole-Gateway claim",
+    scope:
+      values.workload === "runs"
+        ? "Real cron request/queue/finalization owners with mock job execution; no whole-Gateway claim"
+        : "Real cron refresh host and SQLite worker; no job execution or whole-Gateway claim",
     mode: values.mode,
+    workload: values.workload,
     node: process.version,
     owner: ownerUrl.href,
     ownerSha256,
     iterations,
-    burstSize,
+    burstSize: values.workload === "refresh" ? burstSize : 4,
     notifications,
     jobs: jobs.length,
-    activeJobMarkers: 3,
+    activeJobMarkers: values.workload === "refresh" ? 3 : 0,
     warmupBursts: warmup,
     workerRequests: measuredRequests,
+    commandCensus: values["count-commands"],
+    commands: measuredCommands,
+    ...(values.workload === "runs"
+      ? {
+          syntheticRunsPerMinute: 20,
+          writerRequestsPerSyntheticMinute: (measuredRequests / iterations) * 5,
+        }
+      : {}),
     writerMs,
     elapsedMs,
     processCpuMs: (cpuUsed.user + cpuUsed.system) / 1000,
     mainThreadCpuMs: (threadUsed.user + threadUsed.system) / 1000,
     sampledMainThreadBytes: profile ? sampledBytes(profile.head) : null,
-    unchangedJobs: true,
+    unchangedJobs: values.workload === "refresh",
     scheduleDigest: createHash("sha256")
       .update(
         JSON.stringify(after.jobs.map((job) => [job.id, (job.state.nextRunAtMs ?? 0) - nowMs])),
@@ -240,6 +331,9 @@ try {
   console.log(JSON.stringify(report));
 } finally {
   unsubscribe();
+  if (values["count-commands"]) {
+    Object.defineProperty(Worker.prototype, "postMessage", postDescriptor);
+  }
   inspector.disconnect();
   state.stopped = true;
   await owner.stopCronScheduler(state);

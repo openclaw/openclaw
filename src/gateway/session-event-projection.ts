@@ -222,7 +222,12 @@ export function prepareSessionEventProjection(
         const hiddenAncestors: Array<{ key: string; histories: Map<object, object> }> = [];
         const ancestorRows = ancestors?.every((ancestor) => projection.isCurrent(ancestor))
           ? ancestors.flatMap((ancestor) => {
-              if (presentation.sharing.entryFilter?.(ancestor.key, ancestor.entry) === false) {
+              const target = presentation.target({
+                key: ancestor.key,
+                agentId: ancestor.agentId,
+                storePath: ancestor.storeTarget.storePath,
+              });
+              if (!target || !presentation.sharing.canReadTarget(target)) {
                 hiddenAncestors.push({ key: ancestor.key, histories: new Map() });
                 return [];
               }
@@ -303,10 +308,17 @@ export function prepareSessionEventProjection(
           variants: [],
           envelope,
           plan,
-          serializeSession: () =>
-            (sessionJSON ??= plan.rows
-              ? JSON.stringify(plan.rows.wire[0])
-              : serializeSessionRow(row)),
+          serializeSession: () => {
+            if (sessionJSON === undefined) {
+              const encoded = serializeSessionRow(row);
+              const wire = plan.rows?.wire[0];
+              // Patches already carry their encoding; full wrappers vary only by history.
+              sessionJSON = wire
+                ? `${JSON.stringify({ key: wire.key, agentId: wire.agentId, version: wire.version }).slice(0, -1)},"full":${encoded}${"retain" in wire ? ',"retain":false' : ""}}`
+                : encoded;
+            }
+            return sessionJSON;
+          },
           delivered: (viewer) => connection.references(viewer).deliver(plan),
         };
         deliveries.set(references.history, delivery);

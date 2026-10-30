@@ -1,10 +1,9 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -216,6 +215,33 @@ function reuseCreatedBrowser() {
   registryMocks.readBrowserRegistry.mockResolvedValue({ entries: [entry] });
 }
 
+const browserName = "openclaw-sbx-browser-session-test-0661d10a";
+function seedExistingBrowser(
+  hash: string | null = null,
+  token: string | null = null,
+  cached = true,
+) {
+  dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
+  dockerMocks.readDockerContainerEnvVar.mockResolvedValue(token);
+  dockerMocks.readDockerContainerLabel.mockResolvedValue(hash);
+  const bridge = { containerName: browserName, bridge: { server: { listening: true } } };
+  if (cached) {
+    BROWSER_BRIDGES.set(scopeKey, bridge);
+  }
+  return bridge;
+}
+
+function inspectWorkspace(tmpfs: Record<string, string> | null = null) {
+  namespaceMocks.execContainer.mockResolvedValue({
+    stdout: JSON.stringify({
+      Mounts: [{ Type: "bind", Source: testWorkspaceDir, Destination: "/workspace", RW: true }],
+      Tmpfs: tmpfs,
+    }),
+    stderr: "",
+    code: 0,
+  });
+}
+
 function bridgeFixture(resolved: unknown = { profiles: {} }) {
   return {
     server: { listening: true },
@@ -237,14 +263,7 @@ beforeEach(() => {
   vi.restoreAllMocks();
   BROWSER_BRIDGES.clear();
   namespaceMocks.resolveDockerSourceNamespace.mockResolvedValue(undefined);
-  namespaceMocks.execContainer.mockResolvedValue({
-    stdout: JSON.stringify({
-      Mounts: [{ Type: "bind", Source: testWorkspaceDir, Destination: "/workspace", RW: true }],
-      Tmpfs: null,
-    }),
-    stderr: "",
-    code: 0,
-  });
+  inspectWorkspace();
   for (const mock of [dockerMocks, registryMocks, bridgeMocks, runtimeMocks].flatMap(
     Object.values,
   )) {
@@ -339,37 +358,44 @@ describe("sandbox browser lifecycle", () => {
     expect(label).toBe(SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH);
   });
 
-  it("delivers configured browser and generated CDP/noVNC environment without exposing values in Docker argv", async () => {
-    const configuredSentinel = "synthetic-browser-transport-value";
-    const cfg = buildConfig(true);
-    cfg.docker.env = { ...cfg.docker.env, BROWSER_TRANSPORT_SENTINEL: configuredSentinel };
-    const result = await ensureTestSandboxBrowser({ cfg });
+  it.each([undefined, "10.0.0.0/24"])(
+    "delivers configured browser and generated CDP/noVNC environment without argv values (relay filter=%s)",
+    async (cdpSourceRange) => {
+      const configuredSentinel = "synthetic-browser-transport-value";
+      const cfg = buildConfig(true);
+      cfg.docker.env = { ...cfg.docker.env, BROWSER_TRANSPORT_SENTINEL: configuredSentinel };
+      cfg.browser.cdpSourceRange = cdpSourceRange;
+      const result = await ensureTestSandboxBrowser({ cfg });
 
-    const createArgs = requireDockerCreateArgs();
-    expect(createArgs.filter((arg) => arg === "--init")).toHaveLength(1);
-    expect(createArgs).toContain(`openclaw.createArgsEpoch=${SANDBOX_DOCKER_CREATE_ARGS_EPOCH}`);
+      const createArgs = requireDockerCreateArgs();
+      expect(createArgs.filter((arg) => arg === "--init")).toHaveLength(1);
+      expect(createArgs).toContain(`openclaw.createArgsEpoch=${SANDBOX_DOCKER_CREATE_ARGS_EPOCH}`);
 
-    expect(createArgs.some((arg) => arg.includes(configuredSentinel))).toBe(false);
-    expect(createArgs).toContain("127.0.0.1::6080");
-    expect(collectDockerFlagValues(createArgs, "--env-file")).toHaveLength(1);
-    expect(createArgs).not.toContain("-e");
-    expect(createArgs).not.toContain("--env");
-    const envEntries = requireDockerCreateEnvEntries();
-    expect(envEntries).toContain(`BROWSER_TRANSPORT_SENTINEL=${configuredSentinel}`);
-    expect(envEntries).toContain("OPENCLAW_BROWSER_NO_SANDBOX=1");
-    const noVncPassword = envValue("OPENCLAW_BROWSER_NOVNC_PASSWORD");
-    const cdpAuthToken = envValue("OPENCLAW_BROWSER_CDP_AUTH_TOKEN");
-    expect(noVncPassword).toMatch(/^[A-Za-z0-9]{8}$/);
-    expect(cdpAuthToken).toMatch(/^[0-9a-f]{48}$/);
-    expect(createArgs.some((arg) => arg.includes(noVncPassword))).toBe(false);
-    expect(createArgs.some((arg) => arg.includes(cdpAuthToken))).toBe(false);
-    expect(envEntries).not.toContain("OPENCLAW_BROWSER_CDP_SOURCE_RANGE=172.21.0.1/32");
-    expect(latestBridgeResolved().profiles).toMatchObject({
-      openclaw: { cdpPort: 49100, cdpUrl: `http://openclaw:${cdpAuthToken}@127.0.0.1:49100` },
-    });
-    expect(result?.noVncUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/sandbox\/novnc\?token=/);
-    expect(result?.noVncUrl).not.toContain("password=");
-  });
+      expect(createArgs.some((arg) => arg.includes(configuredSentinel))).toBe(false);
+      expect(createArgs).toContain("127.0.0.1::6080");
+      expect(collectDockerFlagValues(createArgs, "--env-file")).toHaveLength(1);
+      expect(createArgs).not.toContain("-e");
+      expect(createArgs).not.toContain("--env");
+      const envEntries = requireDockerCreateEnvEntries();
+      expect(envEntries).toContain(`BROWSER_TRANSPORT_SENTINEL=${configuredSentinel}`);
+      expect(envEntries).toContain("OPENCLAW_BROWSER_NO_SANDBOX=1");
+      const noVncPassword = envValue("OPENCLAW_BROWSER_NOVNC_PASSWORD");
+      const cdpAuthToken = envValue("OPENCLAW_BROWSER_CDP_AUTH_TOKEN");
+      expect(noVncPassword).toMatch(/^[A-Za-z0-9]{8}$/);
+      expect(cdpAuthToken).toMatch(/^[0-9a-f]{48}$/);
+      expect(createArgs.some((arg) => arg.includes(noVncPassword))).toBe(false);
+      expect(createArgs.some((arg) => arg.includes(cdpAuthToken))).toBe(false);
+      expect(envEntries).not.toContain("OPENCLAW_BROWSER_CDP_SOURCE_RANGE=172.21.0.1/32");
+      if (cdpSourceRange) {
+        expect(envEntries).toContain(`OPENCLAW_BROWSER_CDP_SOURCE_RANGE=${cdpSourceRange}`);
+      }
+      expect(latestBridgeResolved().profiles).toMatchObject({
+        openclaw: { cdpPort: 49100, cdpUrl: `http://openclaw:${cdpAuthToken}@127.0.0.1:49100` },
+      });
+      expect(result?.noVncUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/sandbox\/novnc\?token=/);
+      expect(result?.noVncUrl).not.toContain("password=");
+    },
+  );
 
   it("serializes concurrent provisioning for the same browser container", async () => {
     let created = false;
@@ -413,15 +439,12 @@ describe("sandbox browser lifecycle", () => {
   it.each([false, true])("handles a pre-init browser epoch (hot=%s)", async (hot) => {
     const cfg = buildConfig(false);
     const oldHash = await computeTestBrowserHash({ cfg, createArgsEpoch: "pre-init" });
-    const containerName = "openclaw-sbx-browser-session-test-0661d10a";
-    dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
-    dockerMocks.readDockerContainerEnvVar.mockResolvedValue("existing-cdp-token");
-    dockerMocks.readDockerContainerLabel.mockResolvedValue(oldHash);
+    seedExistingBrowser(oldHash, "existing-cdp-token", !hot);
     registryMocks.readBrowserRegistry.mockResolvedValue({
       entries: [
         {
-          containerName,
-          sessionKey: "session:test",
+          containerName: browserName,
+          sessionKey: scopeKey,
           createdAtMs: 1,
           lastUsedAtMs: hot ? Date.now() : 0,
           image: cfg.browser.image,
@@ -430,12 +453,6 @@ describe("sandbox browser lifecycle", () => {
         },
       ],
     });
-    if (!hot) {
-      BROWSER_BRIDGES.set("session:test", {
-        containerName,
-        bridge: { server: { listening: true } },
-      });
-    }
     const result = await ensureTestSandboxBrowser({ cfg });
     if (hot) {
       expect(dockerArgs("rm")).toBeUndefined();
@@ -447,7 +464,7 @@ describe("sandbox browser lifecycle", () => {
       );
       expect(registryMocks.updateBrowserRegistry.mock.calls.at(-1)?.[0]?.configHash).toBe(oldHash);
     } else {
-      expect(dockerMocks.execDocker).toHaveBeenCalledWith(["rm", "-f", containerName], {
+      expect(dockerMocks.execDocker).toHaveBeenCalledWith(["rm", "-f", browserName], {
         allowFailure: true,
       });
       expectBridgeStoppedBeforeRemoval();
@@ -518,19 +535,10 @@ describe("sandbox browser lifecycle", () => {
     },
   );
 
-  it("keeps a stalled CDP request inside the browser startup deadline", async () => {
+  it("keeps a stalled CDP request inside the browser startup deadline", async ({ signal }) => {
     const requestReceived = createDeferredCore();
     const responseClosed = createDeferredCore();
     const probeAdmitted = createDeferredCore();
-    const waitForNetwork = <T>(pending: Promise<T>, message: string): Promise<T> => {
-      const controller = new AbortController();
-      return Promise.race([
-        pending,
-        delay(2_000, undefined, { signal: controller.signal, ref: false }).then(() => {
-          throw new Error(message);
-        }),
-      ]).finally(() => controller.abort());
-    };
     let requestPath: string | undefined;
     await withServer(
       (req, res) => {
@@ -561,7 +569,7 @@ describe("sandbox browser lifecycle", () => {
           // Keep the production deadline clock still while native HTTP establishes
           // the fixture's stalled request. Advance that same 250ms deadline only
           // after real request admission; never replace fetch or its abort signal.
-          vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+          vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
           startupResult = ensureTestSandboxBrowser({ cfg })
             .then(
               () => new Error("Sandbox browser startup completed before the stalled request"),
@@ -573,22 +581,14 @@ describe("sandbox browser lifecycle", () => {
           const earlySettlement = startupResult.then((error) => {
             throw error;
           });
-          // Do not charge mount/container preparation to the network-admission
-          // guard, or hide an actual startup error behind an absent request.
-          await Promise.race([probeAdmitted.promise, earlySettlement]);
-          await waitForNetwork(
-            Promise.race([requestReceived.promise, earlySettlement]),
-            "CDP request was not received",
-          );
+          await withinTest(Promise.race([probeAdmitted.promise, earlySettlement]), signal);
+          await withinTest(Promise.race([requestReceived.promise, earlySettlement]), signal);
 
           expect(requestPath).toBe("/json/version");
           await vi.advanceTimersByTimeAsync(cfg.browser.autoStartTimeoutMs - 1);
           expect(settled).toBe(false);
           await vi.advanceTimersByTimeAsync(1);
-          const result = await waitForNetwork(
-            startupResult,
-            "CDP startup did not settle at its deadline",
-          );
+          const result = await withinTest(startupResult, signal);
           expect(result).toBeInstanceOf(Error);
           expect((result as Error).message).toContain(
             `within ${cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,
@@ -597,17 +597,14 @@ describe("sandbox browser lifecycle", () => {
             ["rm", "-f", "openclaw-sbx-browser-session-test-0661d10a"],
             { allowFailure: true },
           );
-          await waitForNetwork(responseClosed.promise, "Aborted CDP response did not close");
+          await withinTest(responseClosed.promise, signal);
         } catch (error) {
           errors.push(error);
         }
         try {
           if (startupResult && !settled) {
             await vi.advanceTimersByTimeAsync(cfg.browser.autoStartTimeoutMs);
-            await waitForNetwork(
-              startupResult,
-              "CDP startup did not settle during fixture cleanup",
-            );
+            await withinTest(startupResult, signal);
           }
         } catch (error) {
           errors.push(error);
@@ -624,23 +621,8 @@ describe("sandbox browser lifecycle", () => {
     );
   });
 
-  it("passes explicit cdpSourceRange as an additional relay filter", async () => {
-    const cfg = buildConfig(false);
-    cfg.browser.cdpSourceRange = "10.0.0.0/24";
-
-    await ensureTestSandboxBrowser({ cfg });
-
-    expect(requireDockerCreateEnvEntries()).toContain(
-      "OPENCLAW_BROWSER_CDP_SOURCE_RANGE=10.0.0.0/24",
-    );
-  });
-
   it("retains a stale container and cached bridge until bridge cleanup can retry", async () => {
-    const containerName = "openclaw-sbx-browser-session-test-0661d10a";
-    const cached = { containerName, bridge: { server: { listening: true } } };
-    BROWSER_BRIDGES.set("session:test", cached);
-    dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
-    dockerMocks.readDockerContainerEnvVar.mockResolvedValue(null);
+    const cached = seedExistingBrowser();
     bridgeMocks.stopBrowserBridgeServer.mockRejectedValueOnce(new Error("bridge cleanup failed"));
 
     await expect(ensureTestSandboxBrowser()).rejects.toThrow("bridge cleanup failed");
@@ -670,20 +652,8 @@ describe("sandbox browser lifecycle", () => {
   });
 
   it("preserves a hot browser and bridge when a descendant tmpfs was removed", async () => {
-    const containerName = "openclaw-sbx-browser-session-test-0661d10a";
-    const bridge = { containerName, bridge: { server: { listening: true } } };
-    BROWSER_BRIDGES.set("session:test", bridge);
-    dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
-    dockerMocks.readDockerContainerEnvVar.mockResolvedValue("existing-cdp-token");
-    dockerMocks.readDockerContainerLabel.mockResolvedValue("old-tmpfs-config");
-    namespaceMocks.execContainer.mockResolvedValue({
-      stdout: JSON.stringify({
-        Mounts: [{ Type: "bind", Source: testWorkspaceDir, Destination: "/workspace", RW: true }],
-        Tmpfs: { "/workspace/cache": "rw" },
-      }),
-      stderr: "",
-      code: 0,
-    });
+    const bridge = seedExistingBrowser("old-tmpfs-config", "existing-cdp-token");
+    inspectWorkspace({ "/workspace/cache": "rw" });
     const cfg = buildConfig(false);
     cfg.docker.tmpfs = [];
     await expect(ensureTestSandboxBrowser({ cfg })).rejects.toThrow(
@@ -728,7 +698,7 @@ describe("sandbox browser lifecycle", () => {
     "quota attach",
   ])("rejects lost custody or failed publication at %s", async (phase) => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: testWorkspaceDir }, async () => {
-      const owner = acquireSandboxGatewayOwner(testWorkspaceDir);
+      using owner = acquireSandboxGatewayOwner(testWorkspaceDir);
       const entered = createDeferredCore();
       const resume = createDeferredCore();
       const publicationError = new Error("synthetic registry publication failure");
@@ -810,7 +780,6 @@ describe("sandbox browser lifecycle", () => {
       } finally {
         resume.resolve();
         await preparation?.catch(() => {});
-        owner.release();
       }
     });
   });

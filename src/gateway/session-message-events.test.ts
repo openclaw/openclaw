@@ -35,7 +35,7 @@ import {
 } from "./session-message-client.test-support.js";
 import { registerCronSessionCompletionEventTests } from "./session-message-cron.test-support.js";
 import { findWatchedPresenceEntry, getConnId } from "./session-message-presence.test-support.js";
-import { registerRecoveredSubagentSessionEventTest } from "./session-message-subagent.test-support.js";
+import { registerTerminalSubagentSessionEventTest } from "./session-message-subagent.test-support.js";
 import { createWorkerFanoutFixture } from "./session-message-worker.test-support.js";
 import { removeSessionTestDirectories } from "./session-test-directories.test-support.js";
 import { testState } from "./test-helpers.runtime-state.js";
@@ -541,7 +541,7 @@ describe("session.message websocket events", () => {
     expect(downgrade.error?.message).toContain("dedicated paired device identity");
   });
 
-  registerRecoveredSubagentSessionEventTest({
+  registerTerminalSubagentSessionEventTest({
     createSessionStoreFile,
     withOperatorSessionSubscriber,
     expectNoMessageWithin,

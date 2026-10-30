@@ -19,8 +19,15 @@ import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { getOpenClawAgentMigrationSchema } from "../state/openclaw-agent-schema-history.js";
 import { preflightOpenClawDatabaseSchemas } from "../state/openclaw-database-preflight.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { ensureGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { restorePreTemplateStateIdentifiersForTest } from "../state/openclaw-state-schema.test-support.js";
 import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
 import { assertSqliteMigrationScopePreserved } from "../state/sqlite-migration-scope.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -551,3 +558,109 @@ it("preserves orphan history before admitting a group of scoped version migratio
     expect(readHistory(backup)).toEqual(original);
   });
 });
+
+it.each([
+  { versionPhase: true, drift: false },
+  { versionPhase: false, drift: false },
+  { versionPhase: false, drift: true },
+])(
+  "prepares shared state before agent writes (versionPhase=$versionPhase, drift=$drift)",
+  async ({ versionPhase, drift }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const shared = openOpenClawStateDatabase({ env: state.env });
+      ensureGitHubPublicationSchema(shared.db);
+      const sharedPath = shared.path;
+      await closeOpenClawStateDatabaseAsync();
+      {
+        using database = new DatabaseSync(sharedPath);
+        database.exec("ALTER TABLE github_publication_requests DROP COLUMN draft");
+        if (versionPhase) {
+          // The v34 source predates Template names; workspace CAS tables stay absent.
+          restorePreTemplateStateIdentifiersForTest(database);
+          database.exec(
+            "PRAGMA user_version = 34; UPDATE schema_meta SET schema_version = 34 WHERE meta_key = 'primary'",
+          );
+        }
+        if (drift) {
+          database.exec(
+            "ALTER TABLE github_publication_requests RENAME COLUMN branch TO unknown_branch",
+          );
+        }
+      }
+      const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
+      fs.mkdirSync(path.dirname(pathname), { recursive: true });
+      const agentVersion = versionPhase ? 26 : OPENCLAW_AGENT_SCHEMA_VERSION;
+      {
+        using database = new DatabaseSync(pathname);
+        database.exec(getOpenClawAgentMigrationSchema(agentVersion));
+        database.exec("PRAGMA user_version = " + agentVersion);
+        database
+          .prepare(
+            "INSERT INTO schema_meta(meta_key,role,schema_version,agent_id,created_at,updated_at) VALUES ('primary','agent',?,'main',1,1)",
+          )
+          .run(agentVersion);
+        database.exec("ALTER TABLE session_nodes DROP COLUMN project_id");
+      }
+      const originalAgent = fs.readFileSync(pathname);
+      const generations = readUpdateDatabaseGenerations([sharedPath, pathname]);
+      const capture = versionPhase
+        ? undefined
+        : createUpdateDoctorDatabaseWriteCapture(generations, {
+            env: state.env,
+            signal: new AbortController().signal,
+            warn: () => {},
+          });
+      await withMaintenance(async () => {
+        await capture?.admit();
+        const prepare = () =>
+          prepareDoctorDatabaseMigrations({
+            env: state.env,
+            pendingDatabasePaths: versionPhase ? [sharedPath, pathname] : [],
+            pendingMigrations: versionPhase
+              ? [
+                  {
+                    kind: "state",
+                    path: sharedPath,
+                    foundVersion: 34,
+                    supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+                  },
+                  {
+                    kind: "agent",
+                    path: pathname,
+                    foundVersion: 26,
+                    supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+                  },
+                ]
+              : [],
+            databasePaths: [pathname],
+            agentDatabaseTargets: [
+              { agentId: "main", path: pathname, realPath: pathname, source: "disk" },
+            ],
+          });
+        const preparation = capture ? capture.run(prepare) : prepare();
+        if (drift) {
+          await expect(preparation).rejects.toThrow(/github_publication_requests|unknown_branch/);
+        } else {
+          expect((await preparation).warnings).toEqual([]);
+        }
+        await capture?.settle();
+      });
+      if (drift) {
+        expect(fs.readFileSync(pathname)).toEqual(originalAgent);
+      } else {
+        using agent = new DatabaseSync(pathname, { readOnly: true });
+        expect(agent.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+        if (!versionPhase) {
+          expect(agent.prepare("SELECT project_id FROM session_nodes").all()).toEqual([]);
+        }
+        using database = new DatabaseSync(sharedPath, { readOnly: true });
+        expect(database.prepare("SELECT draft FROM github_publication_requests").all()).toEqual([]);
+        if (capture) {
+          expect(capture.receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
+        }
+      }
+    });
+  },
+);

@@ -275,7 +275,7 @@ it.skipIf(process.platform === "win32")(
       await fs.mkdir(cwd);
       await promisify(execFile)("git", ["-C", cwd, "init", "-b", "main"]);
       await fs.writeFile(path.join(cwd, "created.txt"), "created\n");
-      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1_001);
+      vi.spyOn(performance, "now").mockReturnValue(performance.now() + 1_001);
       const recreated = await read();
       expect(recreated.unavailableReason).toBeUndefined();
       expect(recreated.files).toEqual([

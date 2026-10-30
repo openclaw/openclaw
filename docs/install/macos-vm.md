@@ -232,6 +232,10 @@ Keep the VM running by:
 - Disabling sleep in System Settings -> Energy Saver
 - Using `caffeinate` if needed
 
+Those controls are on the host Mac, and they limit idle sleep. Closing a Mac laptop lid forces the host to sleep, so the VM and the Gateway inside it stop until the host wakes. Sleep settings inside the VM affect the guest.
+
+The host can keep running with the lid closed in Apple's closed-display setup: a connected external display, power, an external keyboard, and a mouse ([If your external display is dark or low resolution](https://support.apple.com/en-us/102501)). On a Mac laptop with Apple silicon, allow that display, keyboard, and mouse to connect before closing the lid ([Allow USB and other accessories to connect to your Mac](https://support.apple.com/en-us/102282)). [QA1340](https://developer.apple.com/library/archive/qa/qa1340/_index.html) describes closing the lid as forced sleep, separate from the idle sleep these settings can prevent.
+
 For true always-on, consider a dedicated Mac mini or a small VPS. See [VPS hosting](/vps).
 
 ## Troubleshooting

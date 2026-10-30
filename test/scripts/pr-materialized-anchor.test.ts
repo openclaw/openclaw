@@ -1,87 +1,98 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, symlinkSync, utimesSync } from "node:fs";
-import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { sweepMaterializedAnchors } from "../../scripts/pr-lib/materialized-anchor.mjs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { join, resolve } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
 const describePosix = process.platform === "win32" ? describe.skip : describe;
+const helper = resolve("scripts/pr-lib/materialized-anchor.mjs");
 
-function reapedPid() {
-  const result = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
-    encoding: "utf8",
-  });
-  expect(result.status, result.stderr).toBe(0);
-  return Number(result.stdout);
+function retire(path: string) {
+  const fd = openSync(path, "r");
+  try {
+    return spawnSync(process.execPath, [helper, "retire-created", path], {
+      encoding: "utf8",
+      env: { ...process.env, HOME: path },
+      stdio: [
+        "ignore",
+        "pipe",
+        "pipe",
+        "ignore",
+        "ignore",
+        "ignore",
+        "ignore",
+        "ignore",
+        "ignore",
+        fd,
+      ],
+    });
+  } finally {
+    closeSync(fd);
+  }
 }
 
-function directory(root: string, name: string) {
-  const path = join(root, name);
-  mkdirSync(path, { mode: 0o700 });
-  utimesSync(path, 0, 0);
-  return path;
-}
-
-// Advancing the clock ages ctime as well as the utimes-controlled mtime, without
-// weakening production's rule that either recent timestamp retains an anchor.
-function ageFixtures() {
-  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 25 * 60 * 60 * 1000);
-}
-
-describePosix("materialized PR anchor sweep", () => {
-  it("removes only old dead creators and legacy directories, excluding its own anchor", () => {
-    const root = tempDirs.make("pr-anchor-sweep-");
-    const dead = reapedPid();
-    const stale = directory(root, `openclaw-pr-anchor.${dead}.stale`);
-    const legacy = directory(root, "openclaw-pr-anchor.legacy");
-    const live = directory(root, `openclaw-pr-anchor.${process.pid}.live`);
-    const young = directory(root, `openclaw-pr-anchor.${dead}.young`);
-    const recentMetadata = directory(root, `openclaw-pr-anchor.${dead}.ctime`);
-    const wrongMode = directory(root, `openclaw-pr-anchor.${dead}.mode`);
-    chmodSync(wrongMode, 0o755);
-    const unrelated = directory(root, "other-anchor.stale");
-    const own = directory(root, `openclaw-pr-anchor.${dead}.own`);
-    const ownIdentity = { path: own, ...lstatSync(own, { bigint: true }) };
-    const alias = join(root, `openclaw-pr-anchor.${dead}.alias`);
-    symlinkSync(unrelated, alias);
-    const warning = vi.spyOn(console, "error").mockImplementation(() => {});
-    ageFixtures();
-    const now = Date.now() / 1000;
-    utimesSync(young, now, now);
-    // Simulate an old mtime with a recent metadata change.
-    vi.spyOn(Date, "now").mockReturnValue(lstatSync(recentMetadata).ctimeMs + 60 * 60 * 1000);
-    vi.stubEnv("TMPDIR", root);
-    sweepMaterializedAnchors(ownIdentity);
-    expect(existsSync(recentMetadata)).toBe(true);
-    ageFixtures();
-    sweepMaterializedAnchors(ownIdentity);
-    expect(existsSync(stale)).toBe(false);
-    expect(existsSync(legacy)).toBe(false);
-    for (const path of [live, young, wrongMode, unrelated, own, alias]) {
-      expect(existsSync(path), path).toBe(true);
-    }
-    expect(warning).toHaveBeenCalledTimes(1);
-    expect(warning).toHaveBeenCalledWith("Removed 3 stale materialized PR wrapper directories.");
-  });
-
-  it("removes at most four stale anchors per supervisor startup", () => {
-    const root = tempDirs.make("pr-anchor-sweep-limit-");
-    const dead = reapedPid();
-    const anchors = Array.from({ length: 6 }, (_, index) =>
-      directory(root, `openclaw-pr-anchor.${dead}.anchor${index}`),
+describePosix("materialized PR anchor retirement", () => {
+  it("retires the Git snapshot when supervisor startup fails before any operation child", () => {
+    const root = realpathSync(tempDirs.make("pr-startup-retirement-"));
+    const anchor = join(root, "openclaw-pr-anchor-v3.startup");
+    mkdirSync(anchor, { mode: 0o700 });
+    copyPrWrapperSources(anchor);
+    const childStarted = join(root, "child-started");
+    writeFileSync(join(anchor, "scripts/pr"), `#!/bin/sh\ntouch '${childStarted}'\n`);
+    // Fail after the snapshot is created but before spawning the operation.
+    rmSync(join(anchor, "scripts/pr-lib/github.sh"));
+    const result = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        'exec 9< "$1"; export OPENCLAW_PR_ANCHOR_CREATOR_PID=$$ OPENCLAW_PR_ANCHOR_FD=9; exec "$2" "$1/scripts/pr-lib/process-group-runner.mjs" "$3" "$1/scripts/pr"',
+        "startup-fixture",
+        anchor,
+        requireNodeTool("node"),
+        root,
+      ],
+      { encoding: "utf8", env: { ...process.env, HOME: root, TMPDIR: root } },
     );
-    ageFixtures();
-    vi.stubEnv("TMPDIR", root);
-    const report = vi.spyOn(console, "error").mockImplementation(() => {});
-    sweepMaterializedAnchors();
-    expect(anchors.filter((path) => existsSync(path))).toHaveLength(2);
-    expect(report).toHaveBeenCalledExactlyOnceWith(
-      "Removed 4 stale materialized PR wrapper directories.",
-    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("github.sh");
+    expect(existsSync(childStarted)).toBe(false);
+    expect(existsSync(anchor)).toBe(false);
+    expect(
+      readdirSync(root).filter((name) => name.startsWith("openclaw-pr-lock-release-")),
+    ).toEqual([]);
+  });
+
+  it("retires a newly created anchor before helper extraction or child startup", () => {
+    const root = realpathSync(tempDirs.make("pr-anchor-retirement-"));
+    const anchor = join(root, `openclaw-pr-anchor-v3.${process.pid}.created`);
+    mkdirSync(anchor, { mode: 0o700 });
+    const result = retire(anchor);
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(anchor)).toBe(false);
+  });
+
+  it.each([
+    "openclaw-pr-anchor.legacy",
+    "openclaw-pr-anchor.2147483647.dead",
+    "openclaw-pr-anchor-v3.2147483647.foreign",
+  ])("does not adopt or sweep %s", (name) => {
+    const root = realpathSync(tempDirs.make("pr-anchor-legacy-"));
+    const path = join(root, name);
+    mkdirSync(path, { mode: 0o700 });
+    const result = retire(path);
+    expect(existsSync(path)).toBe(true);
+    expect(result.stderr).toContain("creation evidence differs");
   });
 });

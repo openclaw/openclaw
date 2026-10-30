@@ -110,6 +110,7 @@ export type ProjectedMessageContent =
   | AssistantAttachmentItem;
 
 type ChatMediaResourceKind =
+  | "comment-preview"
   | "assistant-attachment"
   | "managed-image"
   | "managed-media"
@@ -191,8 +192,7 @@ function detachChatMediaResourceSubscriber(
   const resourceKey = chatMediaResourceKey(resource.kind, resource.cacheKey);
   if (chatMediaResources.get(resourceKey) === resource) {
     chatMediaResources.delete(resourceKey);
-    // Virtual rows release every subscriber while offscreen. Keep only settled
-    // successes so remounts reuse their signed URL without retaining failed work.
+    // Offscreen virtual rows retain only settled, reusable resources.
     if (
       resource.retainUntil !== undefined &&
       resource.retainUntil > Date.now() &&
@@ -390,12 +390,11 @@ export function trimManagedImageMissResources() {
 
 export function readManagedImageBlobUrl(cacheKey: string): string | undefined {
   const cached = managedImageBlobUrls.get(cacheKey);
-  if (!cached) {
-    return undefined;
+  if (cached) {
+    managedImageBlobUrls.delete(cacheKey);
+    managedImageBlobUrls.set(cacheKey, cached);
   }
-  managedImageBlobUrls.delete(cacheKey);
-  managedImageBlobUrls.set(cacheKey, cached);
-  return cached.url;
+  return cached?.url;
 }
 
 export function readManagedImageBlob(cacheKey: string): Blob | undefined {

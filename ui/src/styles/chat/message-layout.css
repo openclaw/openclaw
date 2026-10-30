@@ -533,7 +533,7 @@
     gap: 2px;
   }
 
-  .chat-assistant-attachment-card__status-meta,
+  .chat-assistant-attachment-card__status-meta:not(.skeleton),
   .chat-assistant-attachment-card__status-reason {
     overflow: visible;
     white-space: normal;
@@ -739,7 +739,7 @@
     align-items: flex-start;
   }
 
-  .chat-assistant-attachment-card__status-meta {
+  .chat-assistant-attachment-card__status-meta:not(.skeleton) {
     display: grid;
     gap: 3px;
     overflow: visible;

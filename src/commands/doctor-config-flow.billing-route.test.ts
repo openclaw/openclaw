@@ -14,7 +14,7 @@ import {
 } from "../flows/doctor-health-contribution-runners.config.js";
 import { createUpdatePostInstallDoctorResultPath } from "../infra/update-doctor-result.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../infra/update-run-report.js";
+import { updateRunWarningMessages } from "../infra/update-run-step.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
@@ -208,7 +208,10 @@ it.each(["run-id", "result-channel"] as const)(
         await runInitialConfigWriteHealth(swap);
         expect(resolveAgentEffectiveModelPrimary(swap.cfg, "main")).toBe("openai/gpt-5.4");
         await expectInheritedHeartbeatAutomation(swap.cfg);
-        expect(f.receipt()).toMatchObject({ status: "skipped" });
+        expect(f.receipt()).toMatchObject({
+          status: "skipped",
+          detail: expect.stringContaining("the updating parent still owns plugin installation"),
+        });
       }
       await withEnvAsync({ OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" }, async () => {
         {
@@ -239,9 +242,9 @@ it.each(["run-id", "result-channel"] as const)(
           if (!completedRun) {
             throw new Error("Expected the update run after Doctor committed its repair.");
           }
-          expect(renderUpdateRunReport(completedRun).lines).toContain(
-            "Warning: Deferred model retirement repair completed after plugin convergence.",
-          );
+          expect(updateRunWarningMessages(completedRun.steps)).toEqual([
+            "Deferred model retirement repair completed after plugin convergence.",
+          ]);
         }
 
         f.defer();

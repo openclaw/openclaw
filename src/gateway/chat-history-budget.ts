@@ -52,6 +52,7 @@ export function createChatHistoryActivityProjection(
 
 export function createChatHistoryByteCounter(
   activity?: ReadonlyMap<unknown, AgentHistoryActivity>,
+  measureJsonBytes = jsonUtf8Bytes,
 ) {
   const sizes = new Map<unknown, number>();
   const messageBytes = (message: unknown): number => {
@@ -60,7 +61,7 @@ export function createChatHistoryByteCounter(
       return cached;
     }
     const descriptor = activity?.get(message);
-    const bytes = jsonUtf8Bytes(message) + (descriptor ? jsonUtf8Bytes(descriptor) + 1 : 0);
+    const bytes = measureJsonBytes(message) + (descriptor ? measureJsonBytes(descriptor) + 1 : 0);
     sizes.set(message, bytes);
     return bytes;
   };

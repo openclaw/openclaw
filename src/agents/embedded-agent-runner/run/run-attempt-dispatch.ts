@@ -106,8 +106,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
   });
   const attemptFastMode = resolveAttemptFastModeParam();
-  const existingSessionTarget = sessionPromptState.sessionTarget;
-  const selectedPromptTarget = { ...existingSessionTarget };
+  const selectedPromptTarget = { ...sessionPromptState.sessionTarget };
   const resolvedSessionTarget = await resolveAttemptDispatchSessionTarget({
     agentId: workspaceResolution.agentId,
     config: params.config,
@@ -366,8 +365,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
             assertTargetCurrent();
             try {
               assertSource();
-            } catch {
-              throw new Error("Session target preparation outlived its attempt");
+            } catch (cause) {
+              throw new Error(`Session target preparation outlived its attempt: ${String(cause)}`, {
+                cause,
+              });
             }
             // Source callbacks can retire this attempt or replace its selected target.
             assertTargetCurrent();
@@ -647,10 +648,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     disableMessageTool: params.disableMessageTool,
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
-    forceRestartSafeTools: params.forceRestartSafeTools,
-    forceCodeModeTools: params.forceCodeModeTools,
     codeModeOverride: params.codeModeOverride,
     disableToolSearch: params.disableToolSearch,
+    compactionForbidden: params.disableCompactionRecovery,
     sessionReadScopeKey: params.sessionReadScopeKey,
     blindPrompt: params.blindPrompt,
     forceMessageTool: params.forceMessageTool,

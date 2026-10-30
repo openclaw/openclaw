@@ -126,13 +126,16 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   };
   assertRequester();
   const binding = entry.worktree?.githubPullRequest;
-  const receipt = binding
+  const readCurrent = () => target.selected.readCurrent();
+  let receipt = binding
     ? undefined
     : ownPublicationAction
-      ? await service.latestPublishedShared(session, () => target.selected.readCurrent())
-      : await service.latestShared(session, undefined, undefined, () =>
-          target.selected.readCurrent(),
-        );
+      ? await service.latestPublishedShared(session, readCurrent)
+      : await service.latestShared(session, undefined, undefined, readCurrent);
+  // A failed later push leaves the published PR as it was; an in-flight one still refuses.
+  if (receipt?.result.status === "failed") {
+    receipt = await service.latestPublishedShared(session, readCurrent);
+  }
   assertRequester();
   const publication = receipt?.result.status === "published" ? receipt.result : undefined;
   if (!binding && !publication) {
@@ -151,7 +154,9 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     publication &&
     ((params.action !== "inspect" && (!edit || editsMetadata) && !params.requestId) ||
       (params.requestId && params.requestId !== publication.requestId) ||
-      (params.expectedHeadCommit && params.expectedHeadCommit !== publication.headCommit))
+      (!editsMetadata &&
+        params.expectedHeadCommit &&
+        params.expectedHeadCommit !== publication.headCommit))
   ) {
     throw new Error(
       "The publication changed; inspect the current PR and review its head before retrying.",
@@ -211,7 +216,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     if (binding && !fullWrite) {
       inspection = await inspectOwnGitHubPullRequest({
         pullRequestUrl: binding.url,
-        agentId: session.agentId,
+        session,
         requester: admitted.requester,
         assertCurrent: assertIdentity,
       });

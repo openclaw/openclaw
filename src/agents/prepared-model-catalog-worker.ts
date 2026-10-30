@@ -1,5 +1,3 @@
-/** Runs complete model-catalog discovery outside the Gateway event loop. */
-import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import {
   getConfigResolutionFacts,
   serializeConfigResolutionFacts,
@@ -29,6 +27,8 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getActiveSkillEnvKeysCore } from "../skills/runtime/env-overrides.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { beginAuthProfileCredentialBatch } from "../state/user-model-account-authority.js";
+/** Runs complete model-catalog discovery outside the Gateway event loop. */
+import { captureTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
@@ -508,7 +508,9 @@ export function createPreparedModelCatalogWorker(
           task.onRecovery = onRecovery;
           const workerRequest = {
             ...value,
-            clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: input.env }),
+            templateInstallSchemaVersions: captureTemplateInstallSchemaVersionFacts({
+              env: input.env,
+            }),
           };
           const publication = beginAuthProfileCredentialBatch(
             captureOpenClawStateWorkerContext({ env: input.env }),

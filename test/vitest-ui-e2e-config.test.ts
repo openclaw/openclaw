@@ -34,7 +34,7 @@ const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ] as const;
 const serialGatewayFiles = `chat-daybreak chat-session-companion-private chat-steer-deferred-custody
-  deepseek-search desktop-resize peer-followup-restart plugin-inline-view quiet-automations`
+  deepseek-search desktop-resize plugin-inline-view quiet-automations`
   .split(/\s+/u)
   .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
   .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");

@@ -11,8 +11,8 @@ import { resolveSessionTranscriptReadTargetCore } from "../config/sessions/sessi
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
-import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
+import { SessionTranscriptColdError } from "../config/sessions/session-transcript-cold-error.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { resolveSessionTitleSource } from "../sessions/session-title-source.js";

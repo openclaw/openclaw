@@ -15,11 +15,9 @@ import {
   type GatewayServiceNativeCommand,
 } from "./service-update-authority.js";
 import { nativeExit } from "./systemd-exec.test-support.js";
-import {
-  prepareSystemdGatewayMaintenance,
-  readSystemdGatewayStopTimeout,
-} from "./systemd-maintenance.js";
+import { prepareSystemdGatewayMaintenance } from "./systemd-maintenance.js";
 import * as systemdScope from "./systemd-scope.js";
+import { readSystemdGatewayStopTimeout } from "./systemd-stop-policy.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
 
 vi.mock("./service-layout.js", async (original) => ({
@@ -248,25 +246,52 @@ it.each([
   expect(await fs.readFile(`${f.sourcePath}.bak`, "utf8")).toBe("previous backup\n");
 });
 
-it.each([false, true])("rechecks system ownership (live=%s)", async (liveSystemUnit) => {
-  const f = await policyFixture(30);
-  native.identity.mockResolvedValue(nativeResult(30));
-  if (liveSystemUnit) {
-    vi.spyOn(systemdScope, "assertNoSystemGatewayOwnership").mockRejectedValue(
-      new Error("A live system unit owns this Gateway"),
-    );
-  }
-  const { warnings } = f;
-  const result = await prepare(f, {
-    stopping: false,
-    state: {
-      ...installedState(f, false),
-      definitionMutationCapability: { kind: "sealed", reason: "system-owned" },
-    },
-  });
-  expect(result).toEqual({ kind: liveSystemUnit ? "failed" : "refreshed" });
-  expect(await f.read()).toContain(`TimeoutStopSec=${liveSystemUnit ? 30 : 330}`);
-  if (liveSystemUnit) {
-    expect(warnings.join(" ")).toContain("A live system unit owns this Gateway");
-  }
-});
+it.each(["selected sealed", "removed", "live"] as const)(
+  "rechecks system ownership: %s",
+  async (owner) => {
+    const selected = owner === "selected sealed";
+    const live = owner === "live";
+    const f = await policyFixture(selected ? 330 : 30);
+    native.identity.mockResolvedValue(nativeResult(selected ? 330 : 30));
+    if (live) {
+      vi.spyOn(systemdScope, "assertNoSystemGatewayOwnership").mockRejectedValue(
+        new Error("A live system unit owns this Gateway"),
+      );
+    }
+    const state = {
+      ...installedState(f, selected),
+      definitionMutationCapability: { kind: "sealed", reason: "system-owned" } as const,
+    };
+    if (selected) {
+      expect(
+        await readSystemdGatewayStopTimeout({
+          ...state,
+          systemdInstallation: {
+            kind: "system",
+            system: {
+              scope: "system",
+              unitName: "openclaw.service",
+              unitPath: "/etc/systemd/system/openclaw.service",
+            },
+          },
+        }),
+      ).toBe(330_000);
+      expect(native.identity.mock.calls.at(-1)?.[1]).toEqual([
+        "show",
+        "openclaw.service",
+        "--no-page",
+        "--property",
+        "LoadState,TimeoutStopUSec",
+      ]);
+      expect(native.transport).not.toHaveBeenCalled();
+    } else {
+      expect(await prepare(f, { stopping: false, state })).toEqual({
+        kind: live ? "failed" : "refreshed",
+      });
+      expect(await f.read()).toContain(`TimeoutStopSec=${live ? 30 : 330}`);
+      if (live) {
+        expect(f.warnings.join(" ")).toContain("A live system unit owns this Gateway");
+      }
+    }
+  },
+);

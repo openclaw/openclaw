@@ -159,8 +159,27 @@ export function connectorItems(
   readExpanded: () => string | null,
 ): MenuEntry[] {
   const entries: MenuEntry[] = [];
-  if (!menu.mcpServers.length) {
-    entries.push(renderCapabilityMenuState("no-connectors", t("chat.composer.menu.noServers")));
+  if (menu.mcpServersReadState !== "ready") {
+    entries.push(
+      renderCapabilityMenuState(
+        "connectors-unavailable",
+        t(
+          menu.mcpServersReadState === "restricted"
+            ? "chat.composer.menu.pluginSettingsRestricted"
+            : menu.mcpServersReadState === "loading"
+              ? "common.loading"
+              : "chat.composer.menu.pluginSettingsUnavailable",
+        ),
+        menu.mcpServersReadState === "loading" ? "status" : undefined,
+      ),
+    );
+  } else if (!menu.mcpServers.length) {
+    entries.push(
+      renderCapabilityMenuState(
+        "no-connectors",
+        t(menu.canAdmin ? "chat.composer.menu.noServers" : "chat.composer.menu.noConnectors"),
+      ),
+    );
   }
   for (const server of menu.mcpServers) {
     entries.push({

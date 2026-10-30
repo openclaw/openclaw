@@ -19,7 +19,12 @@ export async function captureNativeWorkspaceFailure(page: Page): Promise<void> {
 }
 
 export type NativePluginWindow = Window & {
-  nativePluginProof?: { release?: () => void };
+  nativePluginProof?: {
+    release?: () => void;
+    open?: (view: string) => void;
+    mounts?: number;
+    view?: string;
+  };
   nativeActionProof?: {
     runs: number;
     current?: {
@@ -66,6 +71,7 @@ export function pluginModule(revision: string, replacements = true) {
       }
       proof.host = host;
       host.ui.registerPage({id:"proof", label:"UI fixture", mount(container, context) {
+        proof.mounts = (proof.mounts ?? 0) + 1; proof.open = view => context.host.navigation.openPage({id:"proof", params:{view}});
         const title = document.createElement("h1"); title.textContent = "Fixture revision ${revision}";
         const output = document.createElement("output"); output.setAttribute("aria-label", "Fixture outcome");
         const button = (label, action) => { const element = document.createElement("button"); element.textContent = label; element.onclick = async () => { try { await action(); output.textContent = "completed"; } catch(error) { output.textContent = error.message; } }; return element; };
@@ -77,6 +83,7 @@ export function pluginModule(revision: string, replacements = true) {
           button("Call retired composer", () => proof.composer.setDraft("retired draft")),
           button("Call previous activation", () => previous.request("fixture.stale")),
           button("Release pending initializer", () => { proof.release(); throw new Error("released"); }));
+        return { update(next) { proof.view = next.props.view; } };
       }});
       host.ui.registerNavigation({id:"proof", label:"UI fixture", page:{id:"proof"}});
       host.ui.registerAccessory({id:"session", placement:"session-header", mount(container, context) {

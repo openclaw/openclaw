@@ -36,6 +36,33 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
 });
 it.each([
+  ["24.16.0", true],
+  ["26.1.0", false],
+] as const)(
+  "warns without refusing an update preview under compatible service Node %s",
+  async (version, json) => {
+    stubNodeRuntime();
+    fixture.managedServiceNodeRunner = process.execPath;
+    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockResolvedValue(
+      runtimeFixture(version, "3.53.0"),
+    );
+    vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
+      ...targetMetadata,
+      nodeEngine: ">=24.16.0 <25 || >=26.1.0",
+    });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+
+    await updateCommand({ tag: targetMetadata.version, yes: true, dryRun: true, json });
+
+    const output = json ? JSON.stringify(lastJson()) : log.mock.calls.flat().join("\n");
+    expect(output).toContain("SECURITY WARNING");
+    expect(output).toContain(`Node.js ${version}`);
+    expect(output).not.toContain("Would refuse update");
+    expectUnstaged();
+  },
+);
+
+it.each([
   { name: "no restart", restart: false, debugCapture: true },
   { name: "replacement" },
   { name: "compatible", compatible: true },

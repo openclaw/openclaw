@@ -353,7 +353,11 @@ successful run, the last meaningful result is saved with the job and included as
 bounded context in its next prompt, even when the final reply is silent. Quiet
 checks and execution failures do not overwrite that result or append result
 boilerplate to the conversation. This is not a delivery retry queue. `no_change`
-keeps runner delivery silent without hiding execution failures. Adaptive scheduling still uses `next_check` on a paced
+keeps runner delivery silent without hiding execution failures. A `progress`,
+`done`, `blocked`, or `needs_attention` summary is the run's authored outcome:
+an earlier tool failure the run moved past no longer adds a generic
+`⚠️ <tool> failed` notice to an otherwise silent run. The failure stays visible
+in the transcript and progress lane. Adaptive scheduling still uses `next_check` on a paced
 job. Scratch is context, not another scheduler:
 runtime does not parse `tasks:` blocks or read `HEARTBEAT.md`.
 

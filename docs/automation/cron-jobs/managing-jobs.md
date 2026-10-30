@@ -107,6 +107,15 @@ Automations created before owner attribution have no recorded owner. Chat can
 still enable, disable, reschedule or remove them, but only a Gateway owner or an
 operator can change their prompt or tools.
 
+Operator-created automations that name an owner conversation run with operator
+authority. That conversation can list, enable, disable, reschedule, run
+or remove them; other conversations cannot see them. Enabling, disabling and
+schedule or timing changes keep operator authority. Any other change
+from the owner conversation, such as the name, prompt, tools, trigger, delivery,
+failure alerts or session target, drops the job to that conversation's own authority. If its owner record has no account, those
+changes need a Gateway owner or an operator, or a new automation. Only a Gateway
+owner or an operator can write its scratch.
+
 ```bash
 # List enabled jobs
 openclaw automations list
@@ -234,6 +243,23 @@ Automation jobs, run history, and quarantined malformed jobs live in the shared 
 Set `cron.skipMissedJobs: true` to skip recurring (`cron` and `every`) slots missed while the Gateway was offline. At startup, those jobs advance to their next future occurrence instead of catching up, avoiding stale reminders and unnecessary model calls at the cost of dropping missed work. The default is `false` (catch up); one-shot (`at`) jobs retain their normal catch-up behavior either way.
 
 Disable automatic runs: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`. These settings do not prevent manual runs.
+
+Set `cron.defaultTools: ["read"]` to add common prerequisites when the agent's
+automations tool creates or explicitly revises a nonempty `payload.toolsAllow`
+selection. For example, `["execute_code"]` becomes `["execute_code", "read"]`
+before creator-policy checks and approval. The setting accepts any tool names;
+it does not grant unavailable tools or change filesystem, provider, or recurring
+approval enforcement. Unset or `[]` adds nothing.
+
+Use the request-level `toolsAllowMode: "exact"` beside `action` and `job` to opt
+out when the supplied list is an intentional restriction. An explicit
+`payload.toolsAllow: []` always remains tool-less. Omitted or cleared selections
+keep their existing native semantics. The mode is not stored in the job.
+Saved jobs and edits that leave `toolsAllow` alone are unchanged; intentionally
+revise a job's tool selection to adopt new defaults. CLI and direct Gateway
+writes retain their explicit selections. Hosts that construct approval proposals
+use the [shared SDK helper](/plugins/sdk-subpaths) before binding the proposal;
+already approved shapes must be replayed unchanged.
 
 A caller who can define a host-executed automation can make the Gateway start a process with its host privileges. That process can access credentials readable by the Gateway or alter configuration files writable by it. Direct file writes bypass Gateway API restrictions such as `OPENCLAW_CONFIG_READONLY` even when local terminals are disabled.
 

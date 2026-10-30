@@ -10,10 +10,7 @@ type SubagentSessionRuntimeRecord = Pick<SubagentRunRecord, "accumulatedRuntimeM
 };
 type SubagentSessionStatusRecord = Pick<SubagentRunRecord, "endedReason" | "pauseReason"> & {
   delivery?: Pick<NonNullable<SubagentRunRecord["delivery"]>, "status" | "disposition">;
-  execution: Pick<
-    SubagentRunRecord["execution"],
-    "status" | "endedAt" | "outcome" | "interruptionReason"
-  >;
+  execution: Pick<SubagentRunRecord["execution"], "status" | "endedAt" | "outcome">;
 };
 
 /** Returns a recorded execution start, never the earlier admission time. */
@@ -59,16 +56,6 @@ export function resolveSubagentSessionStatus(
     return "killed";
   }
   const status = entry.execution.outcome?.status;
-  if (status === "error" && entry.execution.interruptionReason === "gateway-restart") {
-    const delivery = entry.delivery;
-    return delivery &&
-      delivery.disposition !== "intentional_non_delivery" &&
-      (delivery.status === "failed" ||
-        delivery.status === "suspended" ||
-        delivery.status === "discarded")
-      ? "failed"
-      : "interrupted";
-  }
   if (status === "error") {
     return "failed";
   }

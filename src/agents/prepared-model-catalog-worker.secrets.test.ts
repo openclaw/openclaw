@@ -2,7 +2,6 @@ import { once } from "node:events";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { getConfigResolutionFacts } from "../config/resolution-facts.js";
 import * as configRuntime from "../config/runtime-snapshot.js";
@@ -10,6 +9,7 @@ import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
+import { captureTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import {
@@ -209,7 +209,7 @@ module.exports = {
               request: {
                 kind: "catalog",
                 syntheticAuth: [],
-                clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env }),
+                templateInstallSchemaVersions: captureTemplateInstallSchemaVersionFacts({ env }),
               },
               inspection: { provider, expectedCredential: expectedAuth, failCatalog },
             },

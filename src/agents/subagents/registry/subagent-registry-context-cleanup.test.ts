@@ -120,7 +120,7 @@ describe("subagent registry context cleanup", () => {
             }
           : {}),
       });
-      const { sweeper, runs, warn, ...harness } = createSubagentSweeperHarness({}, entry);
+      const { sweeper, runs, warn, ...harness } = createSubagentSweeperHarness(entry);
       const { cleanup } = createCleanup({ onSubagentEnded, dispose }, true, warn);
       const runCleanup: typeof cleanup.notifyContextEngineSubagentEnded = async (params) => {
         try {

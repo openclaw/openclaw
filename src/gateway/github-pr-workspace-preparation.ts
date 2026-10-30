@@ -19,6 +19,7 @@ import { integrateManagedWorkspaceSource } from "./github-publication-base-refre
 import { inspectOwnGitHubPullRequest } from "./github-publication-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
+import { prepareManagedWorkspaceReviewBase } from "./github-publication-workspace-review.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { isSessionOwnRequester } from "./session-sharing-policy.js";
@@ -73,6 +74,7 @@ export async function performSessionGitHubPreparation(
     throw new Error("The PR preparation session is unavailable.");
   }
   const session = { agentId: loaded.agentId, sessionKey: loaded.canonicalKey };
+  const publicationSession = { ...session, sessionId: loaded.entry.sessionId };
   const admitted = await prepareGitHubPublicationRequesterV2(options, session);
   using _ = { [Symbol.dispose]: admitted.release };
   // Publication admits other writers; replacing this conversation's source is its own requester's.
@@ -86,7 +88,9 @@ export async function performSessionGitHubPreparation(
         : undefined,
     )
   ) {
-    throw new Error("Only this conversation's owner can prepare a PR in it.");
+    throw new Error(
+      "Only the person who started this conversation can prepare a PR in it. Assigning a new owner does not transfer this.",
+    );
   }
   const assertSession = () => {
     options.signal?.throwIfAborted();
@@ -106,7 +110,7 @@ export async function performSessionGitHubPreparation(
   const inspectCurrent = async (assertWorkspace: () => void) => {
     const inspected = await inspectOwnGitHubPullRequest({
       pullRequestUrl: params.pullRequestUrl,
-      agentId: session.agentId,
+      session: publicationSession,
       requester: admitted.requester,
       assertCurrent: assertWorkspace,
     });
@@ -251,6 +255,9 @@ export async function performSessionGitHubPreparation(
       throw new Error("The conversation disappeared before PR workspace preparation.");
     }
     const previous = assertEntry(initialEntry).githubPullRequest;
+    // A PR this conversation published continues from its published head, so commits
+    // another writer appended merge into the saved work like any advanced PR head.
+    const preparedHead = previous ? previous.preparedHeadCommit : inspected.publishedHeadCommit;
     if (
       previous &&
       (previous.host !== pullRequest.host ||
@@ -261,11 +268,6 @@ export async function performSessionGitHubPreparation(
     ) {
       throw new Error(
         "This workspace already continues another PR or head branch. Its original association and saved work were preserved.",
-      );
-    }
-    if (previous && previous.base.branch !== pullRequest.base.branch) {
-      throw new Error(
-        `The original PR base branch changed. Have the PR author restore its base branch to ${JSON.stringify(previous.base.branch)} on GitHub, then retry prepare_pr. Its original association and saved work were preserved.`,
       );
     }
     if (!previous) {
@@ -287,7 +289,9 @@ export async function performSessionGitHubPreparation(
     if (
       previous &&
       previous.preparedHeadCommit === previous.head.commit &&
-      previous.preparedHeadCommit === pullRequest.head.commit
+      previous.preparedHeadCommit === pullRequest.head.commit &&
+      previous.base.branch === pullRequest.base.branch &&
+      previous.base.commit === pullRequest.base.commit
     ) {
       const reviewBase = await withWorktreeGitConfig(
         owner.worktree.path,
@@ -300,6 +304,17 @@ export async function performSessionGitHubPreparation(
             { beforeRun: assertCurrent },
           ),
       );
+      // A failed destination adoption may have prepared its review ref before the
+      // binding write. Repair that projection without restaging any guest work.
+      const review = await prepareManagedWorkspaceReviewBase({
+        owner,
+        sandbox: publicationSandbox,
+        reviewCommit: reviewBase,
+        signal,
+        assertCurrent,
+        stageChanges: false,
+        reviewPreparationError: "The PR review base could not be prepared; retry prepare_pr.",
+      });
       initial.readCurrent();
       return {
         status: "prepared" as const,
@@ -308,19 +323,18 @@ export async function performSessionGitHubPreparation(
         headChanged: false,
         changedPaths: [],
         conflictPaths: [],
-        review: { mode: "local" as const, base: reviewBase },
+        review,
       };
     }
     // Finish the accepted source before admitting another head, including after a restart.
     const binding: SessionGitHubPullRequestBinding =
       previous && previous.preparedHeadCommit !== previous.head.commit
-        ? previous
+        ? { ...previous, base: structuredClone(pullRequest.base) }
         : {
             ...structuredClone(pullRequest),
-            ...(previous?.preparedHeadCommit
-              ? { preparedHeadCommit: previous.preparedHeadCommit }
-              : {}),
+            ...(preparedHead ? { preparedHeadCommit: preparedHead } : {}),
           };
+    const reviewOnly = preparedHead === binding.head.commit;
     using sourceResources = new DisposableStack();
     let reserved: Awaited<ReturnType<typeof prepareGitHubPublicationSession>> | undefined;
     const assertReserved = () => {
@@ -334,7 +348,7 @@ export async function performSessionGitHubPreparation(
       }
     };
     const accept = async () => {
-      if (previous?.preparedHeadCommit) {
+      if (preparedHead) {
         // Source fetches can outlive a remote head or permission observation.
         await assertExistingPullRequestWriteAccess({
           pullRequest: inspected.result,
@@ -384,13 +398,14 @@ export async function performSessionGitHubPreparation(
         githubHost: binding.host,
         review: { repository: binding.base.repository, commit: binding.base.commit },
         initial: binding.preparedHeadCommit === undefined,
+        reviewOnly,
         emptySource,
         resuming: previous !== undefined && previous.preparedHeadCommit !== previous.head.commit,
         accept,
       },
     });
     assertReserved();
-    if (integration.status !== "conflicts") {
+    if (integration.status !== "conflicts" && !reviewOnly) {
       await patchSessionEntryCore(
         scope,
         (entry) => {

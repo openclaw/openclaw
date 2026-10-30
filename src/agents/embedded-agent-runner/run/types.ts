@@ -112,6 +112,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Recomputed by the host for this attempt; never inherited from the requesting turn. */
   githubPublicationAvailable?: boolean;
   disableToolSearch?: true;
+  /** Recovery checkpoints preserve their input until memory extraction finishes. */
+  compactionForbidden?: boolean;
   sessionReadScopeKey?: string;
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
   /**
@@ -276,7 +278,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   };
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
-  model: Model;
+  model: Model & { requestTimeoutMs?: number };
   authStorage: AuthStorage;
   /** Auth profile store already resolved during startup for this attempt. */
   authProfileStore: AuthProfileStore;
@@ -375,6 +377,8 @@ export type EmbeddedRunAttemptResult = {
   modelIterations?: number;
   /** Saved provider retry setting resolved by the prepared session owner. */
   providerRetryMaxRetries?: number;
+  /** Explicit provider/session request timeouts retain their configured retry policy. */
+  providerRequestTimeoutExplicit?: boolean;
   /** Saved retry.provider.maxRetryDelayMs from the same owner; 0 disables the cap. */
   providerRetryMaxDelayMs?: number;
   messagesSnapshot: AgentMessage[];

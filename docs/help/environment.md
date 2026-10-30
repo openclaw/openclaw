@@ -148,6 +148,7 @@ Installed third-party plugins may declare additional credential variables in the
 | Variable                             | Purpose                                                                                      |
 | ------------------------------------ | -------------------------------------------------------------------------------------------- |
 | `OPENCLAW_CONFIG_READONLY`           | Set to `1` for [externally managed immutable config](/cli/config#externally-managed-config). |
+| `OPENCLAW_CONFIG_READONLY_NOTICE`    | Customize the read-only configuration banner in the [Control UI](/web/control-ui).           |
 | `OPENCLAW_LOAD_SHELL_ENV`            | Import missing expected variables from the login shell.                                      |
 | `OPENCLAW_SHELL_ENV_TIMEOUT_MS`      | Set the login-shell import timeout.                                                          |
 | `OPENCLAW_EXEC_SHELL_SNAPSHOT`       | Disable exec shell snapshots with `0`.                                                       |

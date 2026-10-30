@@ -210,7 +210,7 @@ it("rejects a changed main image beside an empty WAL", () => {
 
   expect(() =>
     prepareSqliteReadOnlyLocationSyncInProcess(fixture.sourcePath, fixture.stagingRoot),
-  ).toThrow(/did not stabilize/);
+  ).toThrow(/reason=main-changed-during-copy, attempts=10/);
   expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
 });
 
@@ -427,9 +427,7 @@ it.each(["raw-copy", "online-backup"] as const)(
     expect(error).toBeInstanceOf(AggregateError);
     expect(error).toMatchObject({
       message: expect.stringContaining(
-        mode === "raw-copy"
-          ? "SQLite journal state changed while copying"
-          : "SQLite destination is read-only",
+        mode === "raw-copy" ? "reason=journal-state-changed" : "SQLite destination is read-only",
       ),
     });
     if (!(error instanceof AggregateError)) {
@@ -740,7 +738,7 @@ it.each(["source replacement", "cancel", "io-error"])(
       await expect(result).rejects.toBe(error);
     } else {
       await expect(result).rejects.toThrow(
-        failure === "io-error" ? /EIO/u : "SQLite source changed while copying",
+        failure === "io-error" ? /EIO/u : "reason=source-identity-changed",
       );
     }
     expect(copies).toBe(failure === "source replacement" ? MAX_SNAPSHOT_ATTEMPTS : 1);

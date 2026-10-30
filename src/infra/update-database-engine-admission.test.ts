@@ -1,10 +1,10 @@
-import "../snapshot/database-backup.js";
-import "./backup-sqlite-snapshot.js";
 import fs from "node:fs/promises";
+import "./backup-sqlite-snapshot.js";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readPostgresBackupFamily } from "../snapshot/database-backup.js";
+import { DatabaseSearchCapabilityUnavailableError } from "./database-engine/capability-unavailable.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { assertUpdateDatabaseEngineContexts as admitEngines } from "./update-database-engine-admission.js";
 
@@ -16,12 +16,12 @@ vi.mock("../snapshot/database-backup.js", async (importOriginal) => ({
 const directories = useAutoCleanupTempDirTracker(afterEach);
 const engines = ["sqlite", "postgres"];
 const families = ["state", "agent", "workboard", "logbook", "team-reports"];
-type Context = Parameters<typeof admitEngines>[0][number];
-
-function withDatabase(context: Context, database: OpenClawConfig["database"]): Context {
-  const postgres = { connection: "postgresql://synthetic.invalid/update-admission" };
-  return { ...context, config: { ...context.config, database: { ...database, postgres } } };
-}
+const workboardPostgres = { families: { workboard: { engine: "postgres" } } } as const;
+const statePostgres = { families: { state: { engine: "postgres" } } } as const;
+const capabilityError = new DatabaseSearchCapabilityUnavailableError(
+  "fullText",
+  'PostgreSQL unaccent capability unavailable. Have a database administrator run: CREATE EXTENSION IF NOT EXISTS "unaccent" WITH SCHEMA "public";',
+);
 
 async function store(engine: "sqlite" | "postgres", enabled = true) {
   const stateDir = directories.make("update-engine-admission-");
@@ -54,13 +54,31 @@ it.each([
   ["postgres", true, engines, null],
   ["sqlite", true, undefined, null],
   ["postgres", false, undefined, /target does not support the PostgreSQL store/],
+  ["postgres", true, engines, capabilityError, workboardPostgres],
+  ["sqlite", true, engines, null, { engine: "sqlite", ...workboardPostgres }],
+  ["sqlite", true, ["sqlite"], /configured PostgreSQL families/, { engine: "postgres" }],
+  ["sqlite", true, engines, null, { engine: "postgres" }],
+  ["sqlite", true, engines, /PostgreSQL state family/, statePostgres],
 ] as const)(
-  "preserves the %s store (enabled=%s, target=%j)",
-  async (engine, enabled, declaration, error) => {
+  "preserves the %s store (enabled=%s, target=%j, error=%s, database=%j)",
+  async (...[engine, enabled, declaration, error, database]) => {
     const { file, context } = await store(engine, enabled);
     const before = await fs.readFile(file);
-    const admission = admitEngines([context], declaration, ["workboard"]);
-    if (error) {
+    if (error instanceof Error) {
+      vi.mocked(readPostgresBackupFamily).mockRejectedValueOnce(error);
+    }
+    const postgres = { connection: "postgresql://synthetic.invalid/update-admission" };
+    const config = { ...context.config, database: { ...database, postgres } };
+    const contexts = database ? [context, { ...context, config }] : [context];
+    const admission = admitEngines(contexts, declaration, error ? ["workboard"] : families);
+    if (error instanceof Error) {
+      await expect(admission).rejects.toMatchObject({
+        reason: "database-engine-preflight",
+        cause: error,
+        message: expect.stringContaining(error.message),
+      });
+      await expect(admission).rejects.not.toThrow(/Reverse-port|cannot be captured/);
+    } else if (error) {
       await expect(admission).rejects.toThrow(error);
     } else {
       await admission;
@@ -93,29 +111,6 @@ it.each(["sqlite", "postgres"] as const)(
     expect(await Promise.all([fs.readFile(registry), fs.readFile(retained)])).toEqual(before);
   },
 );
-
-it.each([
-  [{ engine: "sqlite", families: { workboard: { engine: "postgres" } } }, null],
-  [{ engine: "postgres" }, "configured"],
-  [{ engine: "postgres" }, null],
-  [{ families: { state: { engine: "postgres" } } }, "state"],
-] as const)("checks every context without modifying stores: %j", async (database, error) => {
-  const { file, context } = await store("sqlite");
-  const before = await fs.readFile(file);
-  const admission = admitEngines(
-    [context, withDatabase(context, database)],
-    error === "configured" ? ["sqlite"] : engines,
-    error === "state" ? ["workboard"] : families,
-  );
-  if (error) {
-    await expect(admission).rejects.toThrow(
-      error === "configured" ? /configured PostgreSQL families/ : /PostgreSQL state family/,
-    );
-  } else {
-    await expect(admission).resolves.toBeUndefined();
-  }
-  expect(await fs.readFile(file)).toEqual(before);
-});
 
 it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
   "admits known stores without traversing another user's private historical backup",

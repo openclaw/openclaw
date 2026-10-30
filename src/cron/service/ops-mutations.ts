@@ -81,7 +81,7 @@ export async function quiesceJobs(
       }
       cancelled = true;
       for (const job of jobs) {
-        requestActiveCronJobCancellation(job.id, "Claw agent removal.");
+        requestActiveCronJobCancellation(job.id, "Template agent removal.");
       }
     };
     await commitGuard(cancel);

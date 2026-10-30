@@ -34,6 +34,8 @@ export type ChatSessionAbortParams = {
   beforeAbort?: () => Promise<void>;
   preserveSideRuns?: boolean;
   cascadeDescendants?: true;
+  /** Current session lifecycle owner; reporting only, never descendant selection. */
+  yieldedRequesterRunId?: string;
   /** Exact lifecycle owners may include hidden and side runs for this one session. */
   includeProtectedRuns?: boolean;
   /** Captures exact registrations before cancellation can remove them. */

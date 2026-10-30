@@ -21,6 +21,7 @@ import {
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { readTranscriptContextFacts } from "./session-transcript-context-facts.js";
 
 type SessionColdFact = {
@@ -113,16 +114,6 @@ export function readSessionColdTranscript(
     return actor.transcript.coldArchive && { ...actor.transcript.coldArchive };
   }
   return getColdTranscriptQueries(db).metadata(sessionId).rows[0];
-}
-
-export class SessionTranscriptColdError extends Error {
-  readonly code = "TRANSCRIPT_COLD";
-  constructor(readonly sessionId: string) {
-    super(
-      `Transcript ${sessionId} is in cold storage. Restore its archive before reading or changing the transcript.`,
-    );
-    this.name = "SessionTranscriptColdError";
-  }
 }
 
 export function assertSessionTranscriptHot(db: EngineConnection, sessionId: string): void {

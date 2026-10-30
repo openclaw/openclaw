@@ -20,6 +20,7 @@ import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import {
   copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   isReplyPayloadTerminalContent,
   isReplyPayloadTtsSupplement,
@@ -254,6 +255,8 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
         : undefined;
       const prepared = routed
         ? normalizeReplyPayloadOutcome(payload, {
+            preserveLeadingSourceBoundary:
+              kind === "block" && getReplyPayloadMetadata(payload)?.streamedSourceBoundary === true,
             transformReplyPayload: createChannelReplyTransform({
               messaging,
               cfg: params.cfg,
@@ -292,7 +295,11 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
         if (!visiblePayload.isCommentary && !visiblePayload.isReasoning) {
           blockSource = pendingBlockSource ?? createBlockReplySource();
         }
-        const text = state.cleanBlockTtsDirectiveText.push(rawBlockPayloadText);
+        const text = state.cleanBlockTtsDirectiveText.push(
+          // Keep authored line boundaries without restoring padding removed by
+          // the existing speech-cleaning path (including private-context gaps).
+          visiblePayload.text?.replace(/^[^\S\r\n]+|[^\S\r\n]+$/g, "") ?? rawBlockPayloadText,
+        );
         if (blockSource) {
           const hasPendingText = state.cleanBlockTtsDirectiveText.hasBufferedDirectiveText();
           blockSource.setComplete(!hasPendingText);

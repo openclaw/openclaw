@@ -137,7 +137,12 @@ export function createBlockReplyDeliveryHandler(params: {
     }
   };
 
-  return async (payload, options) => {
+  let acceptedSourceMessage: number | undefined;
+  let admissionTail: Promise<void> = Promise.resolve();
+  const deliver = async (
+    payload: ReplyPayload,
+    options?: BlockReplyContext & { completed?: boolean },
+  ): Promise<{ delivery: Promise<void> } | undefined> => {
     // Suppressed display lanes must not enter delivery bookkeeping: callers use
     // that evidence to decide whether an otherwise empty turn needs a fallback.
     if (
@@ -145,8 +150,24 @@ export function createBlockReplyDeliveryHandler(params: {
       (payload.isReasoning === true && params.reasoningPayloadsEnabled !== true) ||
       (payload.isCommentary === true && params.commentaryPayloadsEnabled !== true)
     ) {
-      return;
+      return undefined;
     }
+    const metadata = getReplyPayloadMetadata(payload);
+    const sourceMessage = metadata?.assistantMessageIndex;
+    const sourceRange = metadata?.blockSourceRange;
+    const isSourceTextBlock =
+      params.blockStreamingEnabled &&
+      !options?.completed &&
+      isReplyPayloadTerminalContent(payload) &&
+      !payload.isError &&
+      sourceMessage !== undefined &&
+      sourceRange !== undefined;
+    const preserveLeadingSourceBoundary =
+      isSourceTextBlock && acceptedSourceMessage === sourceMessage && sourceRange[0] > 0;
+    setReplyPayloadMetadata(payload, {
+      streamedSourceBoundary:
+        preserveLeadingSourceBoundary && payload.text?.startsWith("\n") ? true : undefined,
+    });
     const { text, skip } = params.normalizeStreamingText(payload);
     const isSilent = getReplyPayloadMetadata(payload)?.silentReply === true;
     if (
@@ -154,14 +175,19 @@ export function createBlockReplyDeliveryHandler(params: {
       !hasOutboundReplyContent({ ...payload, text: undefined }) &&
       !payload.audioAsVoice
     ) {
-      return;
+      return undefined;
     }
 
     // Reply-to-current is implicit for block replies unless per-turn threading disables it.
     const implicitCurrentMessageAllowed =
       payload.replyToCurrent ?? params.replyThreading?.implicitCurrentMessage !== "deny";
 
-    const normalizedText = text ? trimTextPreservingCode(text, "start") : undefined;
+    const normalizedText =
+      text && preserveLeadingSourceBoundary && text.startsWith("\n")
+        ? text
+        : text
+          ? trimTextPreservingCode(text, "start")
+          : undefined;
     const normalizedPayload = copyReplyPayloadMetadata(payload, {
       ...payload,
       text: isSilent ? undefined : normalizedText || undefined,
@@ -173,7 +199,7 @@ export function createBlockReplyDeliveryHandler(params: {
 
     // Let through payloads with audioAsVoice flag even if empty (need to track it).
     if (!isRenderablePayload(normalizedPayload) && !payload.audioAsVoice) {
-      return;
+      return undefined;
     }
 
     const mediaNormalizedPayload = params.normalizeMediaPaths
@@ -196,10 +222,13 @@ export function createBlockReplyDeliveryHandler(params: {
 
     // Skip empty payloads unless they have audioAsVoice flag (need to track it).
     if (!blockPayload.text && !blockHasNonTextContent && !blockPayload.audioAsVoice) {
-      return;
+      return undefined;
     }
 
     if (blockPayload.text) {
+      if (isSourceTextBlock && !isSilent) {
+        acceptedSourceMessage = sourceMessage;
+      }
       void params.typingSignals.signalTextDelta(blockPayload.text).catch((err: unknown) => {
         logVerbose(`block reply typing signal failed: ${String(err)}`);
       });
@@ -220,7 +249,7 @@ export function createBlockReplyDeliveryHandler(params: {
       if (options?.completed) {
         await params.blockReplyPipeline.flush({ force: true });
       }
-      return;
+      return undefined;
     } else if (
       !params.blockStreamingEnabled &&
       options?.completed !== true &&
@@ -229,12 +258,25 @@ export function createBlockReplyDeliveryHandler(params: {
       blockPayload.isCommentary !== true
     ) {
       // With streaming off, text-only blocks are accumulated in final text.
-      return;
+      return undefined;
     }
     // Enabled display lanes never merge into final text, even with streaming off.
-    await sendDirectBlockReply(
-      blockPayload,
-      options?.deliveryIntentId !== undefined ? options : undefined,
+    return {
+      delivery: sendDirectBlockReply(
+        blockPayload,
+        options?.deliveryIntentId !== undefined ? options : undefined,
+      ),
+    };
+  };
+  return (payload, options) => {
+    // Order preparation without making a direct send wait for a prior send's receipt.
+    const admission = params.normalizeMediaPaths
+      ? admissionTail.then(() => deliver(payload, options))
+      : deliver(payload, options);
+    admissionTail = admission.then(
+      () => undefined,
+      () => undefined,
     );
+    return admission.then((accepted) => accepted?.delivery);
   };
 }

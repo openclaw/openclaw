@@ -18,7 +18,6 @@ const enPluginManagement = {
     dashboardEmpty: "This session has no dashboard widgets yet.",
     customPluginsDisabled: en.pluginUi.customPluginsDisabled,
     customPluginsEnableHint: en.pluginUi.customPluginsEnableHint,
-    openLabs: en.pluginUi.openLabs,
     surface: {
       "session-list": "Session list",
       composer: "Composer",
@@ -541,6 +540,8 @@ const enPluginManagement = {
       "Plugin availability changed. Refresh the catalog to see its current state.",
     installDestinationChanged:
       "The Gateway or operator changed. Install the plugin again to request a fresh review.",
+    installBlockedByUpdate:
+      "Installation blocked: an OpenClaw upgrade is in progress, try again when it finishes.",
   },
 } satisfies TranslationMap;
 

@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import type {
@@ -314,14 +315,10 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
 
   it("keeps fallback enabled for auto-selected routes and traces the winning execution", async () => {
     await withDefaultAuth(async ({ agentDir, workspaceDir }) => {
-      const observedModelRoutingProvenance: Array<{
-        stage: "initial" | "fallback";
-        fallbackReason?: string;
-      }> = [];
+      using diagnostics = vi.spyOn(diagnosticLogger, "error").mockImplementation(() => {});
       mockPrimaryOverloadedThenFallbackSuccess();
       const { decisionWork, result } = await captureRoutingDecisionWork(() =>
         runEmbeddedEntryFallback({ agentDir, workspaceDir }, "execution-trace-fallback", {
-          onModelRoutingProvenance: (value) => observedModelRoutingProvenance.push(value),
           fallbacksOverride: ["groq/mock-2"],
           modelFallbackAvailability: {
             kind: "active",
@@ -362,10 +359,10 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           decision: { reasonCode: "overloaded" },
         },
       ]);
-      expect(observedModelRoutingProvenance).toMatchObject([
-        { stage: "initial" },
-        { stage: "fallback", fallbackReason: "overloaded" },
-      ]);
+      expect(diagnostics).not.toHaveBeenCalledWith(
+        expect.stringContaining("lane task error:"),
+        expect.any(Object),
+      );
     });
   });
 
