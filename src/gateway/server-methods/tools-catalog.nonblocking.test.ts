@@ -42,6 +42,7 @@ it.each(["success", "retired", "failed"] as const)(
       async (state) => {
         const probe = {
           progressed: false,
+          progressBeforeRegistration: [] as boolean[],
           registrations: 0,
           disposals: 0,
           workspaces: [] as string[],
@@ -57,7 +58,9 @@ it.each(["success", "retired", "failed"] as const)(
               `module.exports = {
   id: "${id}", register(api) {
     const probe = globalThis["${probeKey}"];
+    probe.progressBeforeRegistration.push(probe.progressed);
     probe.registrations++;
+    if (probe.registrations === 1) setImmediate(() => { probe.progressed = true; });
     api.lifecycle.registerRuntimeLifecycle({ id: "catalog", dispose() { probe.disposals++; } });
     if (probe.registrations === 2) probe.retire();
     if (probe.failRegistration && "${id}" === "catalog-beta") throw new Error("synthetic registration failure");
@@ -102,12 +105,6 @@ it.each(["success", "retired", "failed"] as const)(
         if (mode === "retired") {
           probe.retire = () => markPluginRegistryRetired(root);
         }
-        const progress = new Promise<void>((resolve) => {
-          setImmediate(() => {
-            probe.progressed = true;
-            resolve();
-          });
-        });
         try {
           const invocation = withPluginRuntimeRegistryScope(owner.registry, () =>
             handler({
@@ -123,12 +120,13 @@ it.each(["success", "retired", "failed"] as const)(
             await expect(invocation).rejects.toThrow(
               "Plugin catalog generation is no longer available",
             );
+            expect(probe.progressBeforeRegistration).toEqual([false, true]);
             expect(respond).not.toHaveBeenCalled();
             expect(probe).toMatchObject({ registrations: 2, disposals: 2, workspaces: [] });
             return;
           }
           await invocation;
-          expect(probe.progressed).toBe(true);
+          expect(probe.progressBeforeRegistration).toEqual([false, true]);
           expect(contextPreparation).not.toHaveBeenCalled();
           expect(manifestPreparation).not.toHaveBeenCalled();
           expect(probe).toMatchObject({ registrations: 2, disposals: 2 });
@@ -156,7 +154,6 @@ it.each(["success", "retired", "failed"] as const)(
           expect(owner.registry).toBe(root);
           expect(root.tools).toHaveLength(0);
         } finally {
-          await progress;
           await owner.close();
         }
       },
