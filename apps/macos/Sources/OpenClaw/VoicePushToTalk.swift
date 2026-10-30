@@ -305,7 +305,7 @@ final class VoicePushToTalk {
             if forward {
                 self.sessions.finalize(
                     token: token, text: finalText, sendChime: chime, autoSendAfter: nil)
-                self.sessions.sendNow(token: token, reason: reason)
+                self.sessions.sendNow(token: token, reason: .pushToTalk)
             } else {
                 self.sessions.dismiss(token: token, reason: .explicit, outcome: .empty)
             }

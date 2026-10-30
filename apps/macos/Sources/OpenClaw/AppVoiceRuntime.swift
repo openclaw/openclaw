@@ -17,7 +17,9 @@ final class AppVoiceRuntime {
     typealias State = @MainActor @Sendable () -> AppState?
     typealias Controller = @MainActor @Sendable () -> TalkModeController?
     typealias UIAction = @MainActor @Sendable () -> Void
-    typealias Forward = @Sendable (String, String?) async -> Result<Void, VoiceWakeForwarder.VoiceWakeForwardError>
+    typealias PrepareForward = @Sendable (String, String?) async -> GatewayAgentInvocation
+    typealias Forward = @Sendable (GatewayAgentInvocation) async
+        -> Result<Void, VoiceWakeForwarder.VoiceWakeForwardError>
     typealias PublishTalk = @Sendable (Bool, String) async -> Void
     typealias Bootstrap = @Sendable () async throws -> GatewayConnection.RealtimeTalkBootstrap
 
@@ -36,6 +38,7 @@ final class AppVoiceRuntime {
         let stopMLX: @Sendable () async -> Void
         let talkBootstrap: Bootstrap
         let publishTalk: PublishTalk
+        let prepareForward: PrepareForward
         let forward: Forward
         let wakePresentation: VoiceWakeOverlayController.Presentation
         let talkPresentation: TalkOverlayController.Presentation
@@ -58,9 +61,10 @@ final class AppVoiceRuntime {
             stopMLX: { await TalkMLXSpeechSynthesizer.shared.cancelCurrent() },
             talkBootstrap: AppVoiceRuntime.liveBootstrap,
             publishTalk: AppVoiceRuntime.livePublishTalk,
-            forward: {
-                await VoiceWakeForwarder.forwardToSelectedSession(transcript: $0, voiceWakeTrigger: $1)
+            prepareForward: {
+                await VoiceWakeForwarder.selectedSessionInvocation(transcript: $0, voiceWakeTrigger: $1)
             },
+            forward: { await VoiceWakeForwarder.forward(invocation: $0) },
             wakePresentation: .live,
             talkPresentation: .live,
             interruptRegistration: .live)
@@ -92,6 +96,7 @@ final class AppVoiceRuntime {
             })
         let sessions = VoiceSessionCoordinator(
             overlay: overlay,
+            prepareForward: environment.prepareForward,
             forward: environment.forward,
             didDismiss: { [weak state] _ in
                 guard let state else { return }
@@ -101,8 +106,8 @@ final class AppVoiceRuntime {
         let wake = VoiceWakeRuntime(
             state: stateProvider,
             sessions: sessions,
-            overlay: overlay,
             permissions: environment.wakePermissions,
+            prepareForward: environment.prepareForward,
             forward: environment.forward)
         let ptt = VoicePushToTalk(
             state: stateProvider, wake: wake, sessions: sessions, permissions: environment.pttPermissions)

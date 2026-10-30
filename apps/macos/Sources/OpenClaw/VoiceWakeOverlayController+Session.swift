@@ -67,7 +67,7 @@ extension VoiceWakeOverlayController {
         if let delay {
             if delay <= 0 {
                 self.logger.log(level: .info, "overlay autoSend immediate token=\(token.uuidString)")
-                self.actions()?.send(token, "autoSendImmediate")
+                self.actions()?.send(token, .autoSendImmediate)
             } else {
                 self.scheduleAutoSend(token: token, after: delay)
             }
@@ -84,12 +84,15 @@ extension VoiceWakeOverlayController {
         self.model.isFinal = isFinal
         self.model.forwardEnabled = forwardEnabled
         self.model.isSending = false
+        self.model.isSent = false
+        self.model.sendError = nil
         self.model.isEditing = false
         self.model.attributed = attributed ?? self.makeAttributed(from: transcript)
         self.model.level = 0
     }
 
     func userBeganEditing() {
+        guard !self.model.isSending, !self.model.isSent else { return }
         self.autoSendTask?.cancel()
         self.model.isSending = false
         self.model.isEditing = true
@@ -107,6 +110,7 @@ extension VoiceWakeOverlayController {
     }
 
     func updateText(_ text: String) {
+        guard !self.model.isSending, !self.model.isSent else { return }
         if let token = self.activeToken {
             self.actions()?.updateEditedText(token, text)
         }
@@ -116,8 +120,8 @@ extension VoiceWakeOverlayController {
         self.updateWindowFrame(animate: true)
     }
 
-    /// UI-only path: show sending state and dismiss; actual forwarding is handled by the coordinator.
-    func beginSendUI(token: UUID, sendChime: VoiceWakeChime = .none) {
+    /// Presentation only; the coordinator owns admission and consumes the RPC result.
+    func beginSendUI(token: UUID) {
         guard self.guardToken(token, context: "beginSendUI") else { return }
         self.autoSendTask?.cancel()
         let message = """
@@ -127,25 +131,33 @@ extension VoiceWakeOverlayController {
         textLen=\(self.model.text.count)
         """
         self.logger.log(level: .info, "\(message)")
-        if self.model.isSending { return }
         self.model.isEditing = false
+        self.model.sendError = nil
+        self.model.isSent = false
+        self.model.isSending = true
+        self.updateWindowFrame(animate: true)
+    }
 
+    func completeSendUI(token: UUID, sendChime: VoiceWakeChime) {
+        guard self.guardToken(token, context: "sendCompletion") else { return }
+        self.model.isSending = false
+        self.model.isSent = true
         if sendChime != .none {
-            let message = "overlay beginSendUI playing sendChime=\(String(describing: sendChime))"
+            let message = "overlay completeSendUI playing sendChime=\(String(describing: sendChime))"
             self.logger.log(level: .info, "\(message)")
             VoiceWakeChimePlayer.play(sendChime, reason: "overlay.send")
         }
-
-        self.model.isSending = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
-            self.logger.log(
-                level: .info,
-                "overlay beginSendUI dismiss ticking token=\(self.activeToken?.uuidString ?? "nil")")
-            self.dismiss(token: token, reason: .explicit, outcome: .sent)
-        }
+        self.dismiss(token: token, reason: .explicit, outcome: .sent)
     }
 
-    func requestSend(token: UUID? = nil, reason: String = "overlay_request") {
+    func failSendUI(token: UUID, message: String) {
+        guard self.guardToken(token, context: "sendFailure") else { return }
+        self.model.isSending = false
+        self.model.sendError = message
+        self.updateWindowFrame(animate: true)
+    }
+
+    func requestSend(token: UUID? = nil, reason: VoiceSessionCoordinator.SendReason = .explicit) {
         guard self.guardToken(token, context: "requestSend") else { return }
         guard let active = token ?? self.activeToken else { return }
         self.actions()?.send(active, reason)
@@ -169,6 +181,7 @@ extension VoiceWakeOverlayController {
         // Retain the admitted notification owner through the animation. Resolving it
         // later could lose cleanup when the graph is no longer available.
         let actions = self.actions()
+        actions?.willDismiss(dismissedToken)
         self.presentation.animateDismiss(self, reason, outcome) { completion in
             switch completion {
             case .disabledUI:
@@ -239,7 +252,7 @@ extension VoiceWakeOverlayController {
         SimpleTaskSupport.schedule(task: &self.autoSendTask, delay: max(0, delay)) { [weak self] in
             guard let self, self.guardToken(token, context: "autoSend") else { return }
             self.logger.log(level: .info, "overlay autoSend firing token=\(token.uuidString, privacy: .public)")
-            self.actions()?.send(token, "autoSendDelay")
+            self.actions()?.send(token, .autoSendDelay)
             self.autoSendTask = nil
         }
     }
