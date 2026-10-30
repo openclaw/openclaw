@@ -128,7 +128,6 @@ openclaw-chat-context-panel {
   .chat-context__compact {
     width: 100px;
     height: 28px;
-    gap: 6px;
     padding: 0;
     font-size: 12px;
   }

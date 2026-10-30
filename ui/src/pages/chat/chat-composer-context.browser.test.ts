@@ -1,16 +1,18 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import { registerChatDetailsEnglish } from "../../i18n/locales/en-chat-details.ts";
+import "../../styles.css";
+import "../../styles/chat.ts";
+import "../../styles/chat/composer.css";
+import "../../styles/chat/composer-progress.css";
+
+import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import {
   createComposerContainer,
   createComposerProps,
   disposeComposer,
   renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import "../../styles.css";
-import "../../styles/chat.ts";
-import "../../styles/chat/composer.css";
-import "../../styles/chat/composer-progress.css";
-
 import { resetChatComposerState } from "./components/chat-composer.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
@@ -162,6 +164,8 @@ it.each([
 it.each([1280, 320] as const)(
   "centers a secondary Compact on the View context row at %spx and stays open while it runs",
   async (width) => {
+    // The breakdown module registers the View context label; measure the real copy, not its key.
+    registerEnglishCatalog(registerChatDetailsEnglish);
     await page.viewport(width, 720);
     container.style.cssText = "position:fixed;bottom:16px;left:16px;right:16px";
     const pending = Promise.withResolvers<void>();
@@ -189,9 +193,11 @@ it.each([1280, 320] as const)(
     const action = compact.getBoundingClientRect();
     const linkText = labelBox(open);
     const actionText = labelBox(compact);
-    // One baseline for both labels, and the outline centered on that shared line.
+    expect(open.textContent).toBe("View context");
+    // One baseline for both labels, and the outline centered on that shared line
+    // (WebKit rounds text boxes to whole pixels).
     expect(Math.abs(linkText.bottom - actionText.bottom)).toBeLessThan(0.5);
-    expect(Math.abs(center(action) - center(actionText))).toBeLessThan(0.5);
+    expect(Math.abs(center(action) - center(actionText))).toBeLessThanOrEqual(1);
     expect(open.parentElement!.getBoundingClientRect().height).toBe(26);
     expect(link.right).toBeLessThan(action.left);
     expect(action.right).toBeLessThanOrEqual(popover.getBoundingClientRect().right);
