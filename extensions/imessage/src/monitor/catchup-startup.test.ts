@@ -21,7 +21,10 @@ import {
   resolveIMessageCatchupCursorKey,
   type IMessageCatchupCursor,
 } from "../state-contract.js";
-import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
+import {
+  importIMessageLegacyPluginStateForTest,
+  installIMessageStateRuntimeForTest,
+} from "../test-support/runtime.js";
 import { resolveIMessageRecoveryCursorDbIdentity } from "./recovery-cursor.js";
 
 const { createClient, probe } = vi.hoisted(() => ({
@@ -170,14 +173,16 @@ describe("registered iMessage account startup", () => {
       seedChatDb();
       const state = getIMessageRuntime().state;
       if (kind === "current") {
-        state
-          .openSyncKeyedStore<{ lastRowid: number }>({
-            namespace: "imessage.recovery-cursor",
-            maxEntries: 64,
-          })
-          .register(`default\u0000${resolveIMessageRecoveryCursorDbIdentity({ dbPath })}`, {
-            lastRowid: 4990,
-          });
+        importIMessageLegacyPluginStateForTest(
+          { namespace: "imessage.recovery-cursor", maxEntries: 64 },
+          [
+            {
+              key: `default\u0000${resolveIMessageRecoveryCursorDbIdentity({ dbPath })}`,
+              value: { lastRowid: 4990 },
+              createdAt: Date.now(),
+            },
+          ],
+        );
       } else {
         catchupStore().register(resolveIMessageCatchupCursorKey("default"), {
           lastSeenMs: Date.now(),
