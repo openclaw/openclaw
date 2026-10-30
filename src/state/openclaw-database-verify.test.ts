@@ -15,10 +15,10 @@ import {
   readSqliteDatabaseIntegrityVerification,
 } from "../infra/sqlite-database-admission.js";
 import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import { assertSqliteDatabaseHeader } from "../infra/sqlite-integrity.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
 import {
-  assertAgentDatabaseStartupStructure,
   captureAgentDatabaseStartupIntegrity,
   prepareAgentDatabaseStartupIntegrity,
 } from "./agent-database-startup-integrity.js";
@@ -133,20 +133,19 @@ it("retains a recorded corruption verdict across writes until verified Doctor re
 it("rejects an impossible freelist header without a full database scan", () => {
   const database = openDatabase(f.databasePath);
   database.exec("CREATE TABLE probe(id INTEGER PRIMARY KEY)");
-  assertAgentDatabaseStartupStructure(database, f.databasePath);
+  assertSqliteDatabaseHeader(database, f.databasePath);
   database.close();
   const bytes = fs.readFileSync(f.databasePath);
   bytes.writeUInt32BE(0xffff_ffff, 36);
   fs.writeFileSync(f.databasePath, bytes);
   using damaged = openDatabase(f.databasePath, true);
-  expect(() => assertAgentDatabaseStartupStructure(damaged, f.databasePath)).toThrow(
+  expect(() => assertSqliteDatabaseHeader(damaged, f.databasePath)).toThrow(
     /header is inconsistent|malformed/iu,
   );
 });
 
 it("binds provisional startup admission to its original lifetime and physical file", () => {
   const database = f.agent();
-  assertAgentDatabaseStartupStructure(database.db, database.path);
   const owner = prepareAgentDatabaseStartupIntegrity(database.path, database.agentId);
   const policy = captureAgentDatabaseStartupIntegrity(database.path, database.agentId)!;
   expect(captureAgentDatabaseStartupIntegrity(database.path, "other")).toBeUndefined();

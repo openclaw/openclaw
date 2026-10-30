@@ -10,7 +10,7 @@ import {
   listAgentDatabaseAdmissionRefusals,
   recordAgentDatabaseAdmissions,
 } from "./agent-database-admission.js";
-import type { AgentDatabaseStartupActivation } from "./agent-database-startup.types.js";
+import type { AgentDatabaseStartupVerifier } from "./agent-database-startup-integrity.js";
 import { recordOpenClawAgentDatabaseOpenFailure } from "./openclaw-agent-db-lifecycle.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
@@ -24,9 +24,13 @@ const log = createSubsystemLogger("state/agent-admission");
  * Ordinary writes may proceed until proven corruption revokes the physical owner's
  * admission. Only a completed full check supplies verification age and restart seals.
  */
-export const verifyAgentDatabaseStartupIntegrity: NonNullable<
-  AgentDatabaseStartupActivation["verifyIntegrity"]
-> = async ({ agentId, paths, env, signal, assertCurrent }) => {
+export const verifyAgentDatabaseStartupIntegrity: AgentDatabaseStartupVerifier = async ({
+  agentId,
+  paths,
+  env,
+  signal,
+  assertCurrent,
+}) => {
   for (const pathname of paths) {
     assertCurrent();
     const execution = captureOpenClawAgentDatabaseExecution({ agentId, path: pathname, env });

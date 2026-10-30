@@ -1,4 +1,5 @@
 import type { AgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
+import type { AgentDatabaseStartupVerifier } from "./agent-database-startup-integrity.js";
 import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
 
@@ -24,7 +25,7 @@ export type AgentDatabaseStartupActivation = {
   publishAgent: (input: AgentDatabaseStartupPreparationInput) => Promise<void>;
   captureReadAdmission?: (input: AgentDatabaseStartupPreparationInput) => () => void;
   /** The Gateway owns full verification after bounded current-schema admission. */
-  verifyIntegrity?: (input: Omit<AgentDatabaseStartupPreparationInput, "phase">) => Promise<void>;
+  verifyIntegrity?: AgentDatabaseStartupVerifier;
 };
 export type AgentDatabaseStartupPreparationPhase =
   | "inspection"

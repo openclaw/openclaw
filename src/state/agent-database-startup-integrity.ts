@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
-  SqliteIntegrityError,
+  assertSqliteDatabaseHeader,
   type SqliteIntegrityDiagnostics,
 } from "../infra/sqlite-integrity.js";
 import {
@@ -11,10 +11,16 @@ import {
 } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { createPermitPool } from "../shared/permit-pool.js";
-import type { AgentDatabaseStartupActivation } from "./agent-database-startup.types.js";
 import { assertOpenClawAgentCurrentRuntimeSchema } from "./openclaw-agent-db-schema-helpers.js";
 
 export type AgentDatabaseStartupIntegrity = { valid: SharedArrayBuffer };
+export type AgentDatabaseStartupVerifier = (input: {
+  agentId: string;
+  paths: readonly string[];
+  env: NodeJS.ProcessEnv;
+  signal: AbortSignal;
+  assertCurrent: () => void;
+}) => Promise<void>;
 
 const pending = new Map<
   string,
@@ -67,7 +73,7 @@ export function admitAgentDatabaseStartupStructure(
   if (!policy || Atomics.load(new Int32Array(policy.valid), 0) !== 1) {
     return false;
   }
-  assertAgentDatabaseStartupStructure(database, pathname);
+  assertSqliteDatabaseHeader(database, pathname);
   assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
   if (diagnostics) {
     diagnostics.integrityGateMode = "deferred";
@@ -78,11 +84,8 @@ export function admitAgentDatabaseStartupStructure(
 
 /** The startup owner releases readiness before running this cancellable verification. */
 export function prepareAgentDatabaseStartupVerification(
-  input: Omit<
-    Parameters<NonNullable<AgentDatabaseStartupActivation["verifyIntegrity"]>>[0],
-    "assertCurrent"
-  >,
-  activation: Pick<AgentDatabaseStartupActivation, "isCurrent" | "verifyIntegrity">,
+  input: Omit<Parameters<AgentDatabaseStartupVerifier>[0], "assertCurrent">,
+  activation: { isCurrent: () => boolean; verifyIntegrity?: AgentDatabaseStartupVerifier },
   permits: ReturnType<typeof createPermitPool>,
 ) {
   const verify = activation.verifyIntegrity;
@@ -140,27 +143,4 @@ export function captureAgentDatabaseStartupIntegrity(
   }
   owner.assertCurrent();
   return owner.policy;
-}
-
-/** SQLite recovers committed WAL frames on open; these header probes never walk data pages.
- * This is bounded admission, not full verification: no seal may be minted until the
- * background integrity and foreign-key checks succeed. Known corruption still refuses use.
- */
-export function assertAgentDatabaseStartupStructure(
-  database: DatabaseSync,
-  pathname: string,
-): void {
-  const pages = database.prepare("PRAGMA page_count").get()?.page_count;
-  const free = database.prepare("PRAGMA freelist_count").get()?.freelist_count;
-  if (
-    typeof pages !== "number" ||
-    !Number.isSafeInteger(pages) ||
-    pages < 1 ||
-    typeof free !== "number" ||
-    !Number.isSafeInteger(free) ||
-    free < 0 ||
-    free >= pages
-  ) {
-    throw new SqliteIntegrityError(`SQLite database header is inconsistent for ${pathname}`);
-  }
 }

@@ -25,10 +25,7 @@ import {
   invalidateOpenClawAgentDatabaseIntegrityBeforeMutation,
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
-import {
-  closeCachedOpenClawAgentDatabase,
-  closeOpenClawAgentDatabaseByPathAsync,
-} from "./openclaw-agent-db-lifecycle.js";
+import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import * as schema from "./openclaw-agent-db-schema.js";
 import {
@@ -97,7 +94,9 @@ it("certifies shutdown handles after dependent readers and final borrowers relea
     expect(idle.db.isOpen).toBe(true);
     beginGatewayShutdownCleanup();
     await vi.advanceTimersByTimeAsync(0);
-    await closeOpenClawAgentDatabaseByPathAsync(idle.path);
+    expect(idle.db.isOpen).toBe(true);
+    reader.database.close();
+    await vi.advanceTimersByTimeAsync(0);
     expect(reader.database.db.isOpen).toBe(false);
     expect(idle.db.isOpen).toBe(false);
     expect(readSqliteDatabaseCleanClose(idle.path)).toBe(true);
