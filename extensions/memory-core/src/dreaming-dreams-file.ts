@@ -11,6 +11,8 @@ import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { readStore } from "./short-term-promotion-store.js";
 
 export const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
+export const FALLBACK_NARRATIVE =
+  "A memory trace surfaced, but details were unavailable in this run.";
 const DEEP_START_MARKER = "<!-- openclaw:dreaming:deep:start -->";
 const DEEP_END_MARKER = "<!-- openclaw:dreaming:deep:end -->";
 
@@ -194,10 +196,7 @@ function ensureDiarySection(existing: string): string {
     return existing;
   }
   const diarySection = `# Dream Diary\n\n${DIARY_START_MARKER}\n${DIARY_END_MARKER}\n`;
-  if (existing.trim().length === 0) {
-    return diarySection;
-  }
-  return diarySection + "\n" + existing;
+  return existing.trim().length === 0 ? diarySection : `${diarySection}\n${existing}`;
 }
 
 function replaceDiaryContent(existing: string, diaryContent: string): string {
@@ -265,7 +264,7 @@ function readDiaryBlocks(existing: string): string[] | null {
 function getDiaryContextEntries(existing: string): string[] {
   return (readDiaryBlocks(existing) ?? [])
     .map(normalizeDiaryBlockBody)
-    .filter((entry) => entry.length > 0);
+    .filter((entry) => entry.length > 0 && entry !== FALLBACK_NARRATIVE);
 }
 
 export async function readRecentDreamDiaryEntries(params: {

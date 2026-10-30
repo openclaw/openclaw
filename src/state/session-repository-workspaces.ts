@@ -290,6 +290,7 @@ export function createSessionRepositoryWorkspaceStore(
               url: input.url,
               requestedRef: input.requestedRef,
               runSetupScript: input.runSetupScript,
+              branchPrefix: input.branchPrefix,
               branch: input.branch,
             },
           },

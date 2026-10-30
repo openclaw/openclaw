@@ -648,11 +648,38 @@ function pruneAfterInsert(
   auditEventRetention.set(db, { ...retention, nextSequence });
 }
 
+function getAuditSingleStatementRetention(
+  db: EngineConnection,
+  now: number,
+  at: number,
+  count: 1 | 2,
+  inPlainBatch = false,
+) {
+  const retention = auditEventRetention.get(db);
+  return (!db.isTransaction || inPlainBatch) &&
+    !isPostgresSqlConnection(db) &&
+    retention &&
+    retention.rowCount + count <= AUDIT_EVENT_MAX_ROWS &&
+    retention.nextExpiryAt >= now &&
+    at + AUDIT_EVENT_RETENTION_MS >= now &&
+    Number.isSafeInteger(retention.nextSequence + (count - 1))
+    ? retention
+    : undefined;
+}
+
+function parseInsertedAuditSequence(value: string): number {
+  const sequence = Number(value);
+  if (!Number.isSafeInteger(sequence) || sequence < 1) {
+    throw new Error("audit event sequence is outside the supported integer range");
+  }
+  return sequence;
+}
 /** Persist one projected event idempotently and prune fixed retention bounds. */
 export function recordAuditEventInDatabase(
   input: AuditEventInput,
   options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
   eventId: string = randomUUID(),
+  inPlainBatch = false,
 ): AuditEventRecord | undefined {
   const executionToken =
     input.kind === "message" && input.direction === "outbound"
@@ -671,17 +698,28 @@ export function recordAuditEventInDatabase(
   try {
     const retention =
       input.kind !== "message"
-        ? getAuditAutocommitRetention(db, Date.now(), input.occurredAt, 1)
+        ? getAuditSingleStatementRetention(db, Date.now(), input.occurredAt, 1, inPlainBatch)
         : undefined;
     if (retention) {
       const values = bindAuditEvent(db, input, eventId);
-      // Validate the complete result before autocommit; even a duplicate
+      // Validate the complete result before the statement; even a duplicate
       // source consumes an AUTOINCREMENT sequence.
       const record = rowToAuditEvent({ ...values, sequence: retention.nextSequence });
       const queries = getAuditEventQueries(db);
-      const inserted = runOpenClawStateWriteTransaction(() => queries.insert(values), options, {
-        singleStatement: true,
-      });
+      // The batch owns admission and commit. SQLite ABORT undoes this complete
+      // statement; retention and terminal bindings never enter this path.
+      const inserted = inPlainBatch
+        ? queries.insert(values)
+        : runOpenClawStateWriteTransaction(() => queries.insert(values), options, {
+            singleStatement: true,
+          });
+      if (inPlainBatch) {
+        stageSqliteTransactionState(db, {
+          commit: () => {},
+          rollback: () => auditEventRetention.delete(db),
+          invalidate: () => auditEventRetention.delete(db),
+        });
+      }
       retention.nextSequence += 1;
       if (inserted) {
         retention.rowCount += 1;
@@ -725,27 +763,6 @@ export function recordAuditEventInDatabase(
   }
 }
 
-function getAuditAutocommitRetention(db: EngineConnection, now: number, at: number, count: 1 | 2) {
-  const retention = auditEventRetention.get(db);
-  return !db.isTransaction &&
-    !isPostgresSqlConnection(db) &&
-    retention &&
-    retention.rowCount + count <= AUDIT_EVENT_MAX_ROWS &&
-    retention.nextExpiryAt >= now &&
-    at + AUDIT_EVENT_RETENTION_MS >= now &&
-    Number.isSafeInteger(retention.nextSequence + (count - 1))
-    ? retention
-    : undefined;
-}
-
-function parseInsertedAuditSequence(value: string): number {
-  const sequence = Number(value);
-  if (!Number.isSafeInteger(sequence) || sequence < 1) {
-    throw new Error("audit event sequence is outside the supported integer range");
-  }
-  return sequence;
-}
-
 /** Persist a completed run as one replay-safe insert and one retention pass. */
 export function recordAuditRunInDatabase(
   start: AgentRunStartedAuditEventInput,
@@ -764,7 +781,7 @@ export function recordAuditRunInDatabase(
   }
   const queries = getAuditEventQueries(db);
   try {
-    const retention = getAuditAutocommitRetention(
+    const retention = getAuditSingleStatementRetention(
       db,
       Date.now(),
       Math.min(start.occurredAt, finish.occurredAt),

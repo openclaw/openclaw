@@ -223,6 +223,8 @@ async function handleSessionGoalMutation(
     }
     if (request.action === "resume") {
       const { handleSessionGoalResumeChat } = await import("./chat-send-handler.js");
+      const message =
+        "Continue pursuing the current goal.\nBefore continuing, call get_goal to read its current objective and constraints.";
       await handleSessionGoalResumeChat(
         {
           ...options,
@@ -231,9 +233,7 @@ async function handleSessionGoalMutation(
             sessionKey: target.canonicalKey,
             agentId: target.agentId,
             sessionId: target.entry.sessionId,
-            message: request.note
-              ? `Continue pursuing the current goal.\nOperator note: ${request.note}`
-              : "Continue pursuing the current goal.",
+            message: request.note ? `${message}\nOperator note: ${request.note}` : message,
             idempotencyKey: request.operationId,
             deliver: false,
           },

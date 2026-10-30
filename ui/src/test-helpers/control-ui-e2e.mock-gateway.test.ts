@@ -15,6 +15,7 @@ import {
   createControlUiMockGatewayInitScript,
   type ControlUiMockRequestHandler,
 } from "./control-ui-e2e.ts";
+import { collectGarbageForTest } from "./garbage-collection.ts";
 import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
 
 const getGateway = (window: MockGatewayWindow) =>
@@ -151,6 +152,34 @@ it("takes existing mock sockets offline without closing their replacement", asyn
 
   controls.setOnline(true);
   expect(replacement?.readyState).toBe(window.WebSocket.OPEN);
+});
+
+it("releases closed transports while preserving their connection history", async ({
+  gatewayPage,
+}) => {
+  const { window, execute } = gatewayPage;
+  execute(createControlUiMockGatewayInitScript());
+  const retired = (() => {
+    const socket = new window.WebSocket("ws://mock-gateway/retired");
+    window.setTimeout(() => socket.close(), 0);
+    return new WeakRef(socket);
+  })();
+  await flushMockTimers();
+  const current = new window.WebSocket("ws://mock-gateway/current");
+  await flushMockTimers();
+  const gateway = getGateway(window);
+  expect(gateway.socketCount()).toBe(2);
+  expect(gateway.socketUrls()).toEqual(["ws://mock-gateway/retired", "ws://mock-gateway/current"]);
+  expect(gateway.socketStates()).toEqual([
+    { readyState: window.WebSocket.CLOSED, state: "closed", url: "ws://mock-gateway/retired" },
+    { readyState: window.WebSocket.OPEN, state: "open", url: "ws://mock-gateway/current" },
+  ]);
+
+  const control = new WeakRef({ unowned: true });
+  await collectGarbageForTest();
+  expect(control.deref()).toBeUndefined();
+  expect(retired.deref()).toBeUndefined();
+  expect(current.readyState).toBe(window.WebSocket.OPEN);
 });
 
 it.for(["absent", "null", "explicit"] as const)(

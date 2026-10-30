@@ -55,7 +55,16 @@ export const controlUiParticipantPalette = {
 
 let operatorSeamColor: string | undefined;
 let userAccentOverride: string | undefined;
-const systemChromeRevisions = new WeakMap<HTMLElement, { source: string; palette: string }>();
+const systemChromeRevisions = new WeakMap<
+  HTMLElement,
+  {
+    source: string;
+    palette: string;
+    narrowChat: boolean;
+    pageBackground: string;
+    chatBackground: string;
+  }
+>();
 
 // Project the independently rendered shell into the static document's chrome and head metadata.
 export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: boolean): void {
@@ -70,17 +79,45 @@ export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: bo
   const narrow = globalThis.matchMedia?.(
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
   ).matches;
+  const narrowChat = narrow && hasChatShell;
   const revision = (style: string | null) =>
-    JSON.stringify([root.dataset.theme, root.dataset.themeMode, style, narrow && hasChatShell]);
+    JSON.stringify([root.dataset.theme, root.dataset.themeMode, style, narrowChat]);
   const source = revision(root.getAttribute("style"));
   const previous = systemChromeRevisions.get(root);
   // Most shell commits do not touch styles. Keep that path free of declaration scans.
   if (!paletteChanged && previous?.source === source) {
     return;
   }
-  const palette = revision(controlUiPaletteStyle(root));
+  const palette = JSON.stringify([
+    root.dataset.theme,
+    root.dataset.themeMode,
+    controlUiPaletteStyle(root),
+  ]);
+  const publishBackground = (pageBackground: string, chatBackground: string) => {
+    const background = narrowChat ? chatBackground || pageBackground : pageBackground;
+    if (!background) {
+      return;
+    }
+    root.style.setProperty("--control-ui-system-chrome-background", background);
+    for (const meta of controlUiDocumentHead().themeColors) {
+      meta.content = background;
+      meta.removeAttribute("media");
+    }
+    systemChromeRevisions.set(root, {
+      source: revision(root.getAttribute("style")),
+      palette,
+      narrowChat,
+      pageBackground,
+      chatBackground,
+    });
+  };
   if (!paletteChanged && previous?.palette === palette) {
-    systemChromeRevisions.set(root, { source, palette });
+    // Routes and breakpoints select a prepared surface; they do not change its palette.
+    if (previous.narrowChat === narrowChat) {
+      systemChromeRevisions.set(root, { ...previous, source });
+    } else {
+      publishBackground(previous.pageBackground, previous.chatBackground);
+    }
     return;
   }
   // Derived ink must not survive a reset or become the next palette's input.
@@ -141,19 +178,7 @@ export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: bo
     }
   }
   const pageBackground = computedStyle.getPropertyValue("--bg").trim();
-  const background =
-    narrow && hasChatShell
-      ? computedStyle.getPropertyValue("--bg-content").trim() || pageBackground
-      : pageBackground;
-  if (!background) {
-    return;
-  }
-  root.style.setProperty("--control-ui-system-chrome-background", background);
-  for (const meta of controlUiDocumentHead().themeColors) {
-    meta.content = background;
-    meta.removeAttribute("media");
-  }
-  systemChromeRevisions.set(root, { source: revision(root.getAttribute("style")), palette });
+  publishBackground(pageBackground, computedStyle.getPropertyValue("--bg-content").trim());
 }
 
 export function applyControlUiAccent(userAccent?: string): void {
