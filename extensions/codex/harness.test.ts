@@ -114,7 +114,9 @@ describe("Codex agent harness supports()", () => {
   const harness = supportHarness;
 
   it("rejects a missing managed native binary without declaring explicit fallback", async () => {
+    const originalPlatform = process.platform;
     const originalArch = process.arch;
+    Object.defineProperty(process, "platform", { value: "linux" });
     Object.defineProperty(process, "arch", { value: "riscv64" });
     vi.stubEnv("PATH", "/missing-codex-path");
     vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_BIN", "");
@@ -141,7 +143,7 @@ describe("Codex agent harness supports()", () => {
       expect(supports({})).toEqual({ supported: true, priority: 100 });
 
       const nativeDir = sessionDirs.make();
-      const native = path.join(nativeDir, process.platform === "win32" ? "codex.exe" : "codex");
+      const native = path.join(nativeDir, "codex");
       await writeFile(native, "\u007fELF native artifact fixture");
       await chmod(native, 0o755);
       vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_BIN", "");
@@ -149,6 +151,7 @@ describe("Codex agent harness supports()", () => {
       // Source-built native executables need no published platform package.
       expect(supports({})).toEqual({ supported: true, priority: 100 });
     } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
       Object.defineProperty(process, "arch", { value: originalArch });
       vi.unstubAllEnvs();
       setManagedCodexPluginRoot(import.meta.dirname);
