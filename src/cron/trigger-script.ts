@@ -76,11 +76,9 @@ import {
   resolveCronAgentConfig,
 } from "./isolated-agent/run-config.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
+import { resolveCronJobToolPolicyContext } from "./job-tool-policy-context.js";
 import { prepareCronRunAdmission } from "./run-admission.js";
-import {
-  resolveCronScheduledToolPolicy,
-  type CronScheduledToolCallerOrigin,
-} from "./scheduled-tool-policy.js";
+import type { CronScheduledToolCallerOrigin } from "./scheduled-tool-policy.js";
 import {
   DEFAULT_CRON_SCRIPT_TIMEOUT_SECONDS,
   DEFAULT_CRON_SCRIPT_TOOL_BUDGET,
@@ -493,13 +491,11 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         jobId: params.job.id,
         agentId: params.job.agentId,
         toolsAllow: params.job.payload.toolsAllow,
-        scheduledToolPolicy: resolveCronScheduledToolPolicy({
-          toolsAllow: params.job.payload.toolsAllow,
-          scheduledToolPolicy: params.job.scheduledToolPolicy,
-          owner: params.job.owner,
-        }),
+        scheduledToolPolicy: resolveCronJobToolPolicyContext(
+          params.job,
+          params.job.payload.toolsAllow,
+        ),
         execTarget: params.job.toolsAllowExecTarget,
-        callerOrigin: params.job.toolsAllowProvenance?.callerOrigin,
       };
       const retained = await resolveCachedRuntime(request, evaluationScope);
       const runtime = retained.runtime;

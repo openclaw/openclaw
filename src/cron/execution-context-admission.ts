@@ -7,7 +7,6 @@
 import { access } from "node:fs/promises";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import { resolveScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { prepareCommandOwnerAuthority } from "../auto-reply/command-auth.js";
 import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
@@ -36,7 +35,6 @@ import {
   type ScheduledOccurrence,
   unadmittedScheduledOccurrence,
 } from "./scheduled-occurrence.js";
-import { resolveCronScheduledToolPolicy } from "./scheduled-tool-policy.js";
 import { resolveCronSessionTargetSessionKey } from "./session-target.js";
 import type { CronParentUnavailable, CronStoredJob } from "./types.js";
 
@@ -433,21 +431,4 @@ export async function admitScheduledOccurrence(
       generation = undefined;
     },
   };
-}
-
-/** The prompt executor's scheduled tool policy, from the job's stored authority fields. */
-export function resolveCronJobToolPolicyContext(
-  job: CronStoredJob,
-  toolsAllow: string[] | undefined,
-) {
-  return resolveScheduledToolPolicyContext({
-    toolsAllow,
-    scheduledToolPolicy: resolveCronScheduledToolPolicy({
-      toolsAllow,
-      scheduledToolPolicy: job.scheduledToolPolicy,
-      owner: job.owner,
-    }),
-    callerOrigin: job.toolsAllowProvenance?.callerOrigin,
-    execTarget: job.toolsAllowExecTarget,
-  });
 }

@@ -9,11 +9,10 @@ import { resolveSandboxContextForPersistentExecution } from "../agents/sandbox/c
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { captureCronStreamSandboxTarget } from "../agents/sandbox/stream-context.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
-import { resolveScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import { projectEffectiveExecPolicy } from "../agents/session-permission-exec-mode.js";
 import type { SessionSharingEntry } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
+import { resolveCronJobToolPolicyContext } from "../cron/job-tool-policy-context.js";
 import { parseCronStreamSandboxTarget } from "../cron/stream-sandbox-target.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
@@ -181,15 +180,10 @@ export async function prepareCronStreamSandboxAuthority(params: {
       source: { entry, readSourceEntry: readEntry },
       manifestPlugins: metadata ?? [],
     });
-    const scheduledToolPolicy = resolveScheduledToolPolicyContext({
-      toolsAllow: params.job.payload.toolsAllow,
-      scheduledToolPolicy: resolveCronScheduledToolPolicy({
-        toolsAllow: params.job.payload.toolsAllow,
-        scheduledToolPolicy: params.job.scheduledToolPolicy,
-        owner: params.job.owner,
-      }),
-      callerOrigin: params.job.toolsAllowProvenance?.callerOrigin,
-    });
+    const scheduledToolPolicy = resolveCronJobToolPolicyContext(
+      params.job,
+      params.job.payload.toolsAllow,
+    );
     const capability = resolveConversationCapabilityProfile({
       config: currentConfig,
       agentId: target.agentId,
