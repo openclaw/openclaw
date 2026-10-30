@@ -167,6 +167,18 @@ describe("secrets store CLI", () => {
     expect(mocks.write).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["set --value-file", ["set", "MISSING_VALUE", "--kind", "env", "--value-file"]],
+    ["import --from", ["import", "--from"]],
+  ] as const)("reports an unreadable %s path as a usage error", async (_name, args) => {
+    const missing = path.join(tempDirs.make("store-cli-"), "missing.txt");
+    await expect(run(...args, missing)).rejects.toThrow("__exit__:2");
+    expect(mocks.runtimeErrors.join("\n")).toContain("Input file could not be read");
+    expect(mocks.runtimeErrors.join("\n")).toContain("Check that the path exists and is readable");
+    expect(mocks.write).not.toHaveBeenCalled();
+    expect(mocks.writeBatch).not.toHaveBeenCalled();
+  });
+
   it.each(["secret", "env"])("validates an empty %s value during set dry-run", async (kind) => {
     const valueFile = await inputFile("");
     const command = run(
