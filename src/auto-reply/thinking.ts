@@ -229,13 +229,20 @@ function resolveModelThinkingProfile(params: ThinkingProfileParams): ResolvedThi
     ...(candidate?.params ? { params: candidate.params } : {}),
     compat: candidate?.compat,
   };
+  const compat = context.compat;
+  // A row that sets `compat.defaultThinkingLevel` owns its profile; provider hooks only cover
+  // rows without it.
+  const rowDefaultLevel = compat?.defaultThinkingLevel
+    ? normalizeThinkLevel(compat.defaultThinkingLevel)
+    : undefined;
   const providerProfileParams = {
     provider,
     context,
     ...(candidate ? { catalogEntry: candidate } : {}),
   };
-  const providerProfile =
-    typeof params.providerPolicySource === "object"
+  const providerProfile = rowDefaultLevel
+    ? undefined
+    : typeof params.providerPolicySource === "object"
       ? resolveEffectiveThinkingProfile(providerProfileParams, {
           registry: params.providerPolicySource,
         })
@@ -250,7 +257,7 @@ function resolveModelThinkingProfile(params: ThinkingProfileParams): ResolvedThi
   // base set, deliberately bypassing the later compat-driven xhigh upgrade —
   // anthropic-messages does not carry a generic xhigh contract.
   const anthropicMessagesProfile =
-    context.api === "anthropic-messages"
+    !rowDefaultLevel && context.api === "anthropic-messages"
       ? resolveClaudeThinkingProfile(context.modelId, context.params, {
           includeNativeMax: true,
         })
@@ -269,7 +276,7 @@ function resolveModelThinkingProfile(params: ThinkingProfileParams): ResolvedThi
   ) {
     return normalizeThinkingProfile(pluginProfile, context.thinkingLevelMap, mappedLevels);
   }
-  if (context.reasoning === false) {
+  if (context.reasoning === false && compat?.thinkingRequired !== true) {
     return {
       levels: [{ id: "off", label: "off", rank: THINKING_LEVEL_RANKS.off }],
       defaultLevel: "off",
@@ -277,7 +284,14 @@ function resolveModelThinkingProfile(params: ThinkingProfileParams): ResolvedThi
   }
 
   const profile = buildBaseThinkingProfile();
-  appendCatalogAdvancedThinkingLevels(profile, context.compat, context.thinkingLevelMap);
+  appendCatalogAdvancedThinkingLevels(profile, compat, context.thinkingLevelMap);
+  if (compat?.adaptiveThinking) {
+    appendProfileLevel(profile, "adaptive");
+  }
+  for (const level of profile.levels) {
+    level.label = compat?.thinkingLevelLabels?.[level.id] ?? level.id;
+  }
+  profile.defaultLevel = rowDefaultLevel;
   return normalizeThinkingProfile(profile, context.thinkingLevelMap, mappedLevels);
 }
 

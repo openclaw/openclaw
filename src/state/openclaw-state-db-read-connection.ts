@@ -64,6 +64,11 @@ export type OpenClawStateReadConnection = {
   close: (retain?: boolean) => boolean;
 };
 
+type StateReadSource =
+  | string
+  | PreparedSqliteReadOnlyLocation
+  | { location: string; connection: OpenClawStateReadConnection };
+
 type RetainedReader = {
   connection: OpenClawStateReadConnection;
   identity: DatabasePathIdentity;
@@ -216,7 +221,7 @@ export function assertStateReadSchema(
 export function withOpenClawStateReadOnlyLocation<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   pathname: string,
-  source: string | PreparedSqliteReadOnlyLocation,
+  source: StateReadSource,
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
   expectedIdentity?: string,
   snapshotRoot?: string,
@@ -243,17 +248,22 @@ export function withOpenClawStateReadOnlyLocation<T>(
 export function readOpenClawStateReadOnlyLocation<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   pathname: string,
-  source: string | PreparedSqliteReadOnlyLocation,
+  source: StateReadSource,
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
   expectedIdentity?: string,
   snapshotRoot?: string,
   retainConnection = false,
   readContentVersionRow?: StateSchemaContentVersionRowReader,
 ): OpenClawStateSettledRead<T> {
-  const opening =
-    retainConnection && source === pathname && !snapshotRoot
+  const retained =
+    typeof source !== "string" && "connection" in source ? source.connection : undefined;
+  const ownedSource =
+    typeof source !== "string" && "connection" in source ? source.location : source;
+  const opening = retained
+    ? ({ status: "available", value: retained } as const)
+    : retainConnection && ownedSource === pathname && !snapshotRoot
       ? borrowStateReadConnection(pathname, expectedIdentity)
-      : openStateReadConnectionResult(pathname, source, expectedIdentity, snapshotRoot, true);
+      : openStateReadConnectionResult(pathname, ownedSource, expectedIdentity, snapshotRoot, true);
   if (opening.status === "unavailable") {
     return opening;
   }
@@ -337,6 +347,7 @@ export function readOpenClawStateReadOnlyLocation<T>(
       result?.status === "available" &&
       !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources;
     if (
+      !retained &&
       !opened.close(
         errors.length === 0 &&
           result?.status === "available" &&

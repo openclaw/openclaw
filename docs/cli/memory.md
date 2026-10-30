@@ -102,10 +102,18 @@ refresh the Gateway's readiness cache.
 Repair preserves recorded recall days, including local dates that differ from
 UTC. It fills in a day from the last recall timestamp only when no day is recorded.
 
-If the `Dreaming` line stays `off` even with `dreaming.enabled: true`, or
-scheduled sweeps never seem to run, the managed dreaming cron depends on the
-default agent's heartbeat firing to trigger reconciliation. See
-[Dreaming](/concepts/dreaming) for scheduling details.
+The `Dreaming` line summarizes the loaded
+`plugins.entries.memory-core.config.dreaming` settings; it does not report
+whether a sweep is scheduled or has run. If it shows `off` with
+`dreaming.enabled: true`, check that the setting sits under that path in the
+configuration the CLI loads.
+
+Scheduled sweeps do not depend on heartbeat. They run as the isolated
+`Memory Dreaming Promotion` cron job, which memory-core reconciles at Gateway
+startup and again during runtime. If sweeps never seem to run, look for that job
+with `openclaw automations list --all`, then see
+[Dreaming scheduling](/concepts/dreaming#scheduling) for the cron scheduler,
+ambient system owner, and `openclaw doctor --fix` requirements.
 
 Status also lists any extra search paths from `memory.search.extraPaths`.
 Storage diagnostics show the shared agent database file, WAL, reusable free pages,

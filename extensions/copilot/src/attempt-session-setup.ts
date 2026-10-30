@@ -4,11 +4,10 @@ import {
   buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
   buildHarnessVisibleReplyGuidance,
-  buildSkillWorkshopPromptSection,
+  listToolPromptGuidance,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveMainSessionDelegationMode,
   runAgentHarnessLlmInputHook,
-  SKILL_WORKSHOP_TOOL_NAME,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   normalizeUniqueStringEntries,
@@ -127,9 +126,7 @@ export async function createCopilotSessionSetup(params: {
           const sections = [
             COPILOT_HARNESS_IDENTITY,
             promptPolicyResult.toolSchemaDirectoryPrompt,
-            callableTools.has(SKILL_WORKSHOP_TOOL_NAME)
-              ? buildSkillWorkshopPromptSection().join("\n")
-              : undefined,
+            listToolPromptGuidance(callableTools).join("\n\n"),
             delegationGuidance,
             buildHarnessVisibleReplyGuidance({
               sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,

@@ -413,26 +413,35 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
                 }
               };
               assertPreparedOwner();
-              if (!operation && caller && "kind" in caller) {
-                const selected = direct?.requestedRoute;
-                if (
-                  selected &&
-                  (selected.provider !== caller.selectedRoute.provider ||
-                    selected.model !== caller.selectedRoute.model)
-                ) {
-                  throw new MessageInjectionPolicyMismatchError(
-                    "model-fallback-changed",
-                    "The selected model changed before steering",
-                  );
-                }
-              }
-              return captureReplyToolAuthorityCallerBinding(
+              const selectedBinding = captureReplyToolAuthorityCallerBinding(
                 operation?.projectToolAuthorityFingerprintAsync ?? direct?.projectAsync,
                 caller,
                 expected,
                 route,
                 assertPreparedOwner,
               );
+              if (!selectedBinding) {
+                return undefined;
+              }
+              return {
+                ...selectedBinding,
+                prepare: async () => {
+                  if (!operation && caller && "kind" in caller) {
+                    const selected = direct?.requestedRoute;
+                    if (
+                      selected &&
+                      (selected.provider !== caller.selectedRoute.provider ||
+                        selected.model !== caller.selectedRoute.model)
+                    ) {
+                      throw new MessageInjectionPolicyMismatchError(
+                        "model-fallback-changed",
+                        "The selected model changed before steering",
+                      );
+                    }
+                  }
+                  return selectedBinding.prepare();
+                },
+              };
             },
           );
           const binding: ReturnType<EmbeddedRunToolAuthorityBinding> = {

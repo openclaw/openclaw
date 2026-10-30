@@ -48,7 +48,7 @@ When a `message` tool call runs inside a Slack thread and targets the same chann
 `replyToMode="off"` disables optional outbound Slack reply threading, including explicit `[[reply_to_*]]` tags. Agent View and Assistant View are Slack-managed threaded experiences, so their replies and status remain on the visible root regardless of this setting. It does not flatten other inbound Slack thread sessions. This differs from Telegram, where explicit tags are still honored in `"off"` mode. Slack threads hide messages from the channel while Telegram replies stay visible inline.
 </Note>
 
-Delayed `sessions_send` completions retain the request's admitted destination. With `replyToMode: "off"`, a top-level request stays top-level; the triggering message timestamp is only a reply anchor, not a thread root. Requests made inside a genuine Slack thread retain that thread.
+Delayed `sessions_send` completions and visible `sessions_spawn` completions retain the request's admitted destination. With `replyToMode: "off"`, a top-level request stays top-level; the triggering message timestamp is only a reply anchor, not a thread root. Requests made inside a genuine Slack thread retain that thread.
 
 ### Agent View DMs
 

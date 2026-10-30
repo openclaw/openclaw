@@ -24,6 +24,7 @@ import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-message-fixtures.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
 import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
@@ -301,6 +302,7 @@ describe("control-ui-i18n generated ownership", () => {
     const catalog: unknown = JSON.parse(result.stdout);
     const source = flattenCatalog(catalog, "en");
     for (const fragment of [
+      registerChatDetailsEnglish.catalog,
       registerChatSessionEnglish.catalog,
       registerChatSessionOptionalEnglish.catalog,
       registerCodeBlocksEnglish.catalog,
@@ -453,6 +455,50 @@ describe("control-ui-i18n generated ownership", () => {
       "disconnected",
       "queryRouted",
       "unavailable",
+    ]);
+    expect(
+      [...source.keys()]
+        .filter((key) => key.startsWith("chat.sessionDetails.context"))
+        .map((key) => key.slice("chat.sessionDetails.".length)),
+    ).toEqual([
+      "context",
+      "contextMessages",
+      "contextFiles",
+      "contextTools",
+      "contextAgentWorkspace",
+      "contextProject",
+      "contextPersonal",
+      "contextOtherFiles",
+      "contextSystemTools",
+      "contextMcpTools",
+      "contextClientTools",
+      "contextAvailableOnDemand",
+      "contextDeferredEstimate",
+      "contextSkills",
+      "contextSystem",
+      "contextFree",
+      "contextUnverified",
+      "contextOpen",
+      "contextLoading",
+      "contextError",
+      "contextOffline",
+      "contextUnavailable",
+      "contextReserve",
+      "contextCompactDescription",
+      "contextCompact",
+      "contextCompacting",
+      "contextCompactShort",
+      "contextExactCount",
+      "contextFreeShort",
+      "contextReserveShort",
+      "contextInputShort",
+      "contextOutputShort",
+      "contextSearch",
+      "contextSearchCount",
+      "contextSearchSkills",
+      "contextSearchFiles",
+      "contextSearchTools",
+      "contextShowAll",
     ]);
     expect(source.get("meetingCapture.title")).toBe("Meeting capture");
     expect(source.get("meetingCapture.sources")).toBe("Auto-start sources");
