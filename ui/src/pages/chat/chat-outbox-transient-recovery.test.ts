@@ -117,7 +117,12 @@ describe("transient outbox delivery recovery", () => {
         expect(send).toHaveBeenCalledTimes(2);
         expect(host.chatQueue).toEqual([]);
       });
-      expect(send.mock.calls[1]).toEqual(send.mock.calls[0]);
+      expect(send.mock.calls[1]).toEqual([
+        {
+          ...requireRecord(send.mock.calls[0]?.[0], "original send"),
+          __controlUiReconnectResume: true,
+        },
+      ]);
     },
   );
 
@@ -228,7 +233,7 @@ describe("transient outbox delivery recovery", () => {
       host.connected = true;
       host.connectionEpoch += 1;
       await resumeStoredChatOutboxes(host);
-      expect(frames[1]?.params).toEqual(frames[0]?.params);
+      expect(frames[1]?.params).toEqual({ ...original, __controlUiReconnectResume: true });
       expect(frames[1]?.params).toMatchObject({ sessionId: "original-physical-session" });
       expect(host.chatMessage).toBe("Newer draft");
       if (outcome === "rejected") {

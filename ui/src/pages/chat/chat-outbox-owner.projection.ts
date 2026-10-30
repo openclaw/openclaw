@@ -119,9 +119,18 @@ export function reconcileChatOutboxProjection(
   }
 }
 
-/** Merge pane presentation only; the outbox owner retains custody and authority. */
+/** Merge pane-local submission and presentation state; durable rows never restore ownership. */
 export function projectChatOutboxItem(item: ChatQueueItem, local: ChatQueueItem): ChatQueueItem {
   const projected: ChatQueueItem = { ...item };
+  if (
+    local.isFreshSubmission &&
+    local.sendRunId === item.sendRunId &&
+    !local.sendAttempts &&
+    !item.sendAttempts &&
+    local.sendRequestStartedAtMs === undefined
+  ) {
+    projected.isFreshSubmission = local.isFreshSubmission;
+  }
   if (local.attachments) {
     const presented = new Map(local.attachments.map((attachment) => [attachment.id, attachment]));
     projected.attachments = (item.attachments ?? local.attachments).map((attachment) =>

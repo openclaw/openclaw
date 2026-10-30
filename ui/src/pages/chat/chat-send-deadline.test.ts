@@ -141,7 +141,10 @@ it.each(["ready", "discard"])(
     await vi.advanceTimersByTimeAsync(1_000);
     await waitForFast(() => expect(fixture.writes).toHaveLength(ending === "ready" ? 1 : 0));
     if (ending === "ready") {
-      expect(fixture.writes[0]?.params).toEqual(original.params);
+      expect(fixture.writes[0]?.params).toEqual({
+        ...asOptionalRecord(original.params),
+        __controlUiReconnectResume: true,
+      });
     }
     await vi.advanceTimersByTimeAsync(GATEWAY_STARTUP_ADMISSION_WAIT_MS);
     expect(fixture.writes).toHaveLength(ending === "ready" ? 1 : 0);

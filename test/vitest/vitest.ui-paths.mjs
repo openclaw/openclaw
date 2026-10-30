@@ -165,6 +165,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/chat-html-csp.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-html-publication.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-reconnect-automations.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-long-turn.real-gateway.e2e.test.ts",

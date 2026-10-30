@@ -1,4 +1,8 @@
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
 import type {
   ChatSendIntent,
   QueueMode,
@@ -35,6 +39,7 @@ export async function requestChatSend(
     sessionId?: string;
     replyToId?: string;
     expectedLeafEntryId?: string | null;
+    isFreshSubmission?: boolean;
   },
 ): Promise<ChatSendAck> {
   if (params.attachments?.length) {
@@ -61,8 +66,18 @@ export async function requestChatSend(
     throw new Error(t("chat.providerReview.pausedBody"));
   }
   const sessionId = params.sessionId ?? (params.intent ? undefined : routingSessionId);
+  const clientInfo = state.client?.clientInfo;
+  // Embedded native apps retain their accepted boolean reconnect envelope.
+  const freshBrowserInput =
+    params.isFreshSubmission &&
+    clientInfo?.id === GATEWAY_CLIENT_IDS.CONTROL_UI &&
+    (clientInfo.mode === GATEWAY_CLIENT_MODES.UI ||
+      clientInfo.mode === GATEWAY_CLIENT_MODES.WEBCHAT);
   const controlUiReconnectResume = Boolean(
-    !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,
+    !params.intent &&
+    sessionId &&
+    // Durable drains and retries lose the pane's reconnect marker on reload.
+    (params.isFreshSubmission === false || state.reconnectResumeSessionId === sessionId),
   );
   const attachments = buildChatApiAttachments(params.attachments);
   const hasAudio = attachments?.some((attachment) =>
@@ -83,7 +98,9 @@ export async function requestChatSend(
           ? { agentId: selectedAgentId }
           : {}),
         ...(sessionId ? { sessionId } : {}),
-        ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
+        ...(controlUiReconnectResume
+          ? { __controlUiReconnectResume: freshBrowserInput ? "fresh" : true }
+          : {}),
         message: params.message,
         ...(params.workContext ? { workContext: params.workContext } : {}),
         ...(params.mentions?.length ? { mentions: params.mentions } : {}),
@@ -108,7 +125,7 @@ export async function requestChatSend(
   } finally {
     request.release();
   }
-  if (controlUiReconnectResume) {
+  if (controlUiReconnectResume && state.reconnectResumeSessionId === sessionId) {
     state.reconnectResumeSessionId = null;
   }
   return normalizeChatSendAck(payload, params.runId);

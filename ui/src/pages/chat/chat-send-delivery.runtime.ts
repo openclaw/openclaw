@@ -280,6 +280,10 @@ export async function sendPreparedChatQueueItem(
         }
         const ack = await requestChatSend(host, {
           message,
+          isFreshSubmission:
+            (prepared.sendAttempts ?? 0) === 0 &&
+            prepared.sendRequestStartedAtMs === undefined &&
+            (options?.isFreshSubmission ?? prepared.isFreshSubmission)?.() === true,
           workContext: prepared.workContext,
           mentions: submitted.mentions,
           attachments: attachments.length ? attachments : undefined,

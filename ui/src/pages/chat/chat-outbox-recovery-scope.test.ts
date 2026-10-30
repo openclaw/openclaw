@@ -89,7 +89,10 @@ it.each(["retained", "recreated"] as const)(
 
     const sends = requestCalls(host.request, "chat.send");
     expect(sends).toHaveLength(2);
-    expect(sends[1]?.[1]).toEqual(firstSend);
+    expect(sends[1]?.[1]).toEqual({
+      ...requireRecord(firstSend, "original send"),
+      __controlUiReconnectResume: true,
+    });
     expect(target.chatQueue).toEqual([]);
   },
 );

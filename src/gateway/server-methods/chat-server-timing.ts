@@ -1,5 +1,9 @@
 import { performance } from "node:perf_hooks";
-import { isNativeAppUiClient } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+  isNativeAppUiClient,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-events.js";
 import {
@@ -80,20 +84,31 @@ const CONTROL_UI_RECONNECT_RESUME_PARAM = "__controlUiReconnectResume";
 export function resolveControlUiReconnectResumeParams(
   params: unknown,
   clientInfo?: { id?: string | null; mode?: string | null },
-): { params: unknown; resumeRequested: boolean } {
+): { params: unknown; resumeRequested: boolean; freshInput?: true } {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
     return { params, resumeRequested: false };
   }
   const record = params as Record<string, unknown>;
+  // The displayed session resumes independently of this turn's recovery classification.
+  const freshInput =
+    record[CONTROL_UI_RECONNECT_RESUME_PARAM] === "fresh" &&
+    clientInfo?.id === GATEWAY_CLIENT_IDS.CONTROL_UI &&
+    (clientInfo.mode === GATEWAY_CLIENT_MODES.UI ||
+      clientInfo.mode === GATEWAY_CLIENT_MODES.WEBCHAT);
   const resumeRequested =
-    record[CONTROL_UI_RECONNECT_RESUME_PARAM] === true &&
-    (isOperatorUiClient(clientInfo) || isNativeAppUiClient(clientInfo));
+    freshInput ||
+    (record[CONTROL_UI_RECONNECT_RESUME_PARAM] === true &&
+      (isOperatorUiClient(clientInfo) || isNativeAppUiClient(clientInfo)));
   if (!resumeRequested) {
     return { params, resumeRequested: false };
   }
   const validatedParams = { ...record };
   delete validatedParams[CONTROL_UI_RECONNECT_RESUME_PARAM];
-  return { params: validatedParams, resumeRequested: true };
+  return {
+    params: validatedParams,
+    resumeRequested: true,
+    ...(freshInput ? { freshInput: true as const } : {}),
+  };
 }
 
 export function createOperatorChatSendServerTiming({

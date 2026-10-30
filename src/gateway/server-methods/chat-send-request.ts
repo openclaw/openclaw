@@ -84,6 +84,8 @@ export type NormalizedChatSendRequest = {
   mentions?: HumanMention[];
   workContext?: AttachedChatWorkContext;
   reconnectResumeRequested: boolean;
+  /** Current browser input only; durable recovery never retains freshness. */
+  freshReconnectInput?: true;
 };
 
 type NormalizeChatSendRequestResult =
@@ -317,6 +319,9 @@ export function normalizeChatSendRequest(params: {
     rawMessage: modelMessage,
     ...(mentions.value ? { mentions: mentions.value } : {}),
     reconnectResumeRequested: controlUiReconnectResume.resumeRequested,
+    ...(controlUiReconnectResume.freshInput && !recoveredInput
+      ? { freshReconnectInput: true as const }
+      : {}),
   };
   if (stopCommand) {
     return { ok: true, value };

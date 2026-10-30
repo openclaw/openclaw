@@ -28,6 +28,10 @@ export function createGatewayRequestMock(
 export function createTestGatewayClient(request: GatewayRequestHandler): GatewayBrowserClient {
   const client = new GatewayBrowserClient({ url: "ws://test.invalid" });
   // Request stubs represent an authenticated client whose recovery scope has settled.
+  Object.defineProperty(client, "clientInfo", {
+    configurable: true,
+    get: () => ({ id: "openclaw-control-ui", mode: "webchat", version: "test", platform: "web" }),
+  });
   Object.defineProperty(client, "recoveryScope", {
     configurable: true,
     get: () => "test-recovery-scope",

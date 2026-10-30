@@ -208,6 +208,8 @@ export type ChatQueueItem = {
     // Provider review requires a new operator decision even if delivery has prior attempts.
     | "held"
     | "failed";
+  /** Live submitter ownership; never serialized or restored from the outbox. */
+  isFreshSubmission?: () => boolean;
   sendSubmittedAtMs?: number;
   sendRequestStartedAtMs?: number;
   sessionKey?: string;

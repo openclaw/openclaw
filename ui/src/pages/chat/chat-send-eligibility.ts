@@ -50,3 +50,11 @@ export async function waitForPendingChatSettings(
   }
   return false;
 }
+
+export async function waitForSubmittedRoute(host: ChatHost, sessionKey: string): Promise<boolean> {
+  const pending = getPendingChatPickerPatch(host, sessionKey);
+  if (pending && !(await waitForPendingChatSettings(host, sessionKey, pending))) {
+    return false;
+  }
+  return host.sessionKey === sessionKey;
+}

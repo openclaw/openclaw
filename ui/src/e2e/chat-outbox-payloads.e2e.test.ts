@@ -112,7 +112,10 @@ suite.define(() => {
       await expectPayload(page, original.attachmentPayload.key);
       await expectPayload(page, recovered.attachmentPayload.key);
       const retried = await gateway.waitForRequest("chat.send");
-      expect(retried.params).toEqual(sent.params);
+      expect(retried.params).toEqual({
+        ...requireRecord(sent.params),
+        __controlUiReconnectResume: true,
+      });
       await gateway.resolveDeferred("chat.send");
       await expect.poll(async () => (await readQueue(page)).length).toBe(0);
       await expect.poll(() => readPayloadBytes(page, recovered.attachmentPayload!.key)).toBeNull();

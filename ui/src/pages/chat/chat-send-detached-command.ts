@@ -25,6 +25,7 @@ export async function sendDetachedCommandMessage(
   opts: {
     attachments?: ChatAttachment[];
     recovery: ChatCommandComposerRecovery;
+    isFreshSubmission?: () => boolean;
   },
 ) {
   let ack: ChatSendAck | null = null;
@@ -35,6 +36,7 @@ export async function sendDetachedCommandMessage(
     try {
       ack = await requestChatSend(host, {
         message: message.trim(),
+        isFreshSubmission: opts.isFreshSubmission?.() === true,
         attachments: opts.attachments,
         runId: generateUUID(),
         expectedLeafEntryId: resolveDisplayedLeafEntryId(host),

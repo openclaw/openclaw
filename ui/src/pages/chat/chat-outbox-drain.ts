@@ -44,6 +44,8 @@ export type QueuedChatSendOptions = PendingComposerSnapshot & {
   allowActiveRunSend?: boolean;
   /** Confirmation-triggered sends retain their UI owner across preparation waits. */
   canDispatch?: () => boolean;
+  /** Ephemeral foreground input ownership; never restored from the outbox. */
+  isFreshSubmission?: () => boolean;
   /** Exact submit-time leaf; restored drains omit it so intervening advances park the draft. */
   expectedLeafEntryId?: string | null;
   pendingSettings?: Promise<boolean>;

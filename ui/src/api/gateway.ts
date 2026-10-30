@@ -95,6 +95,7 @@ export class GatewayBrowserClient {
   private maxPayloadBytes: number | undefined;
   private scopeUpgradeRuntime: Promise<GatewayScopeUpgrade> | null = null;
   private connectionHello: GatewayHelloOk | null = null;
+  private connectedClientInfo: ConnectPlan["params"]["client"] | null = null;
   private lastInboundActivityAtMs: number | null = null;
   private firstUnansweredRequestAtMs: number | null = null;
   private maxInboundSilenceMs: number | null = null;
@@ -326,6 +327,10 @@ export class GatewayBrowserClient {
     return this.connectionHello;
   }
 
+  get clientInfo(): Readonly<ConnectPlan["params"]["client"]> | null {
+    return this.connectionHello ? this.connectedClientInfo : null;
+  }
+
   get needsWakeReconnect() {
     // Replacing an in-flight upgrade drops it before a busy Gateway can answer.
     if (
@@ -413,6 +418,7 @@ export class GatewayBrowserClient {
 
   private handleConnectHello(hello: GatewayHelloOk, plan: ConnectPlan) {
     this.connectionHello = hello;
+    this.connectedClientInfo = plan.params.client;
     // Publish this connection's identity before listeners can capture recovery intent.
     // A legacy hello must not retain its predecessor while its digest is pending.
     this.recovery.value = hello.auth?.recoveryScope ?? "";

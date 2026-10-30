@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { expect, it, vi } from "vitest";
 import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
+import { queuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -85,27 +86,63 @@ function humanClient(): NonNullable<Client> {
   return client;
 }
 
-it.each(["openclaw-control-ui", "openclaw-macos"] as const)(
-  "accepts the embedded Control UI reconnect envelope from %s",
-  async (id) => {
-    const client = humanClient();
-    client.connect.client.id = id;
-    client.pairedClientId = id;
-    const params = requestParams({ __controlUiReconnectResume: true });
-    const result = await normalizeChatSendRequest({ params, client });
-    expect(result).toMatchObject({ ok: true, value: { reconnectResumeRequested: true } });
-    if (result.ok) {
-      expect(result.value.p).not.toHaveProperty("__controlUiReconnectResume");
-    }
-    expect(params).toHaveProperty("__controlUiReconnectResume", true);
-  },
-);
-
-it("rejects reconnect metadata from a native client outside UI mode", async () => {
+it.each([
+  { id: "openclaw-control-ui", resume: true, fresh: undefined },
+  { id: "openclaw-macos", resume: true, fresh: undefined },
+  { id: "openclaw-control-ui", resume: "fresh", fresh: true },
+] as const)("accepts the $resume reconnect envelope from $id", async ({ id, resume, fresh }) => {
   const client = humanClient();
-  client.connect.client.id = "openclaw-macos";
-  client.connect.client.mode = "backend";
-  expect(await normalize({ __controlUiReconnectResume: true }, client)).toMatchObject({
+  client.connect.client.id = id;
+  client.pairedClientId = id;
+  const params = requestParams({ __controlUiReconnectResume: resume });
+  const result = await normalizeChatSendRequest({ params, client });
+  expect(result).toMatchObject({ ok: true, value: { reconnectResumeRequested: true } });
+  if (result.ok) {
+    expect(result.value.p).not.toHaveProperty("__controlUiReconnectResume");
+    expect(result.value.freshReconnectInput).toBe(fresh);
+  }
+  expect(params).toHaveProperty("__controlUiReconnectResume", resume);
+});
+
+it("does not restore fresh authority from an accepted queued input", async () => {
+  const result = await queuedChatInputAdmission.run(
+    {
+      target: {
+        agentId: "main",
+        storePath: "/synthetic/queued-input/sessions",
+        sessionKey: "agent:main:main",
+        sessionId: "queued-session",
+        runId: "request-1",
+        message: {
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+          __openclaw: { chatRequestIdentity: "accepted-request-identity" },
+        },
+        requestHash: "accepted-request-hash",
+      },
+      requestFingerprint: "accepted-request-fingerprint",
+    },
+    () => normalizeValue({ __controlUiReconnectResume: "fresh" }),
+  );
+  expect(result.reconnectResumeRequested).toBe(true);
+  expect(result.freshReconnectInput).toBeUndefined();
+  expect(result.requestIdentity).toBe("accepted-request-identity");
+});
+
+it.each([
+  { id: "openclaw-macos", mode: "backend", resume: true },
+  { id: "openclaw-macos", mode: "ui", resume: "fresh" },
+  { id: "openclaw-browser-copilot", mode: "ui", resume: "fresh" },
+  { id: "openclaw-tui", mode: "ui", resume: "fresh" },
+  { id: "cli", mode: "cli", resume: "fresh" },
+  { id: "openclaw-control-ui", mode: "backend", resume: "fresh" },
+  { id: "openclaw-control-ui", mode: "ui", resume: "invalid" },
+] as const)("rejects $resume reconnect metadata from $id/$mode", async ({ id, mode, resume }) => {
+  const client = humanClient();
+  client.connect.client.id = id;
+  client.connect.client.mode = mode;
+  expect(await normalize({ __controlUiReconnectResume: resume }, client)).toMatchObject({
     ok: false,
     error: expect.stringContaining("unexpected property"),
   });

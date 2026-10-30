@@ -1,0 +1,3 @@
+# Covers real UI connect/send normalization for browser and four native identities,
+# authenticated-client fixture identity, and recovery-intent deadline assertions.
+87

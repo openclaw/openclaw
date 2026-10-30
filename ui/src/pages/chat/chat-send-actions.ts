@@ -183,7 +183,7 @@ export async function retryQueuedChatMessage(
   ) {
     return;
   }
-  const item = host.chatQueue.find((entry) => entry.id === id);
+  let item = host.chatQueue.find((entry) => entry.id === id);
   if (isExpiredIncognitoSession(host, item?.sessionKey ?? host.sessionKey)) {
     return;
   }
@@ -221,6 +221,9 @@ export async function retryQueuedChatMessage(
   if (needsReviewedBinding && !reviewedSessionId) {
     return;
   }
+  // Retry is recovered input even when preparation failed before transport or
+  // the delivery identity stays unchanged. Retire the document-local callback.
+  item = owner.change(host, id, (entry) => ({ ...entry, isFreshSubmission: undefined })) ?? item;
   if (!located.durable) {
     const wasVolatile = chatOutboxOwner(host).hasVolatile(host, item.id);
     const admission = {
