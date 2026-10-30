@@ -499,22 +499,22 @@ describe("interrupted canonical user replay", () => {
         .spyOn(persistedReplay, "preparePersistedCurrentUserTurn")
         .mockImplementation(async (...args) => {
           const prepared = await observe(() => prepare(...args));
-          return (
-            prepared &&
-            (async (signal) => {
-              const admit = await observe(() => prepared(signal));
-              return (
-                admit &&
-                (async (onAdmitted) =>
-                  observe(async (beforeConsume) => {
-                    await admit(() => {
-                      beforeConsume();
-                      onAdmitted();
-                    });
-                  }))
-              );
-            })
-          );
+          if (typeof prepared !== "function") {
+            return prepared;
+          }
+          return async (signal) => {
+            const admit = await observe(() => prepared(signal));
+            return (
+              admit &&
+              (async (onAdmitted) =>
+                observe(async (beforeConsume) => {
+                  await admit(() => {
+                    beforeConsume();
+                    onAdmitted();
+                  });
+                }))
+            );
+          };
         });
       onTestFinished(() => replayRead.mockRestore());
       await withInterruptedTurn(

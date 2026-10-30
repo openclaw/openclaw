@@ -18,6 +18,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { SessionMessageEntry } from "../../src/agents/sessions/session-manager-types.js";
 import { CURRENT_SESSION_VERSION } from "../../src/config/sessions/version.js";
+import type { PersistedUserTurnMessage } from "../../src/sessions/user-turn-transcript.types.js";
 
 const { values } = parseArgs({
   options: {
@@ -43,7 +44,7 @@ class ReceiptManager extends SessionManagerAppend {
     );
   }
 }
-const message = (index: number): SessionMessageEntry => ({
+const message = (index: number): SessionMessageEntry & { message: PersistedUserTurnMessage } => ({
   type: "message",
   id: `entry-${index}`,
   parentId: index ? `entry-${index - 1}` : null,
