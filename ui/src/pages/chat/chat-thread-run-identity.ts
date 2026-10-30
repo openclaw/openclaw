@@ -138,7 +138,11 @@ export function createRunTurnLookup(items: ChatItem[]) {
       return null;
     }
     const ceiling = items.find(
-      (item, index) => index >= interval.start && index < interval.end && startsExecutionTurn(item),
+      (item, index) =>
+        index >= interval.start &&
+        index < interval.end &&
+        startsExecutionTurn(item) &&
+        (item.kind !== "message" || transcriptRunId(item.message) !== runId),
     );
     return {
       afterKey: items[interval.start - 1]?.key,
