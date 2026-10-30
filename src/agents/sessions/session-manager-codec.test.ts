@@ -289,3 +289,8 @@ it.each(parentTraversalCases)(
     expect(entries).toEqual(before);
   },
 );
+
+// Claimed for #188799 by scripts/claim-window.sh; replaced by the real regression.
+it.todo(
+  "Direct Talk voice transcripts leave interaction time unset and disappear from recent session pages",
+);
