@@ -298,8 +298,10 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
           ? opts.stopTimeoutMs
           : DEFAULT_SIGNAL_DAEMON_STOP_TIMEOUT_MS,
       );
+      const POST_SIGKILL_MAX_WAIT_MS = 2_000;
       stopPromise = new Promise<void>((resolve) => {
         let sigkillSent = false;
+        let sigkillTimer: NodeJS.Timeout | undefined;
         const timeout = setTimeout(() => {
           if (!exited && !sigkillSent) {
             sigkillSent = true;
@@ -308,6 +310,23 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
             } catch (err) {
               error(`signal-cli force-stop error: ${String(err)}`);
             }
+            // If a grandchild holds the stdio fds open, the process may have
+            // exited but the streams never end. Bound the post-SIGKILL wait
+            // and force-resolve so stop() cannot hang indefinitely.
+            sigkillTimer = setTimeout(() => {
+              const pending: string[] = [];
+              if (!exited) pending.push("exit");
+              if (child.stdout && !child.stdout.readableEnded) pending.push("stdout");
+              if (child.stderr && !child.stderr.readableEnded) pending.push("stderr");
+              error(
+                `signal-cli stop warning: force-resolving after ${POST_SIGKILL_MAX_WAIT_MS}ms; still pending: ${pending.join(", ") || "none"}`,
+              );
+              child.stdout?.destroy();
+              child.stderr?.destroy();
+              clearTimeout(timeout);
+              resolve();
+            }, POST_SIGKILL_MAX_WAIT_MS);
+            sigkillTimer.unref?.();
           }
         }, stopTimeoutMs);
         timeout.unref?.();
@@ -322,6 +341,7 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
             child.stderr?.readableEnded !== false
           ) {
             clearTimeout(timeout);
+            clearTimeout(sigkillTimer);
             resolve();
           }
         };

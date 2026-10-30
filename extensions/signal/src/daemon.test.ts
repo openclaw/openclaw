@@ -343,4 +343,42 @@ describe("spawnSignalDaemon", () => {
     child.emit("close", null, "SIGKILL");
     await stopPromise;
   });
+
+  it("force-resolves stop when stdio never ends after SIGKILL", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const errors: string[] = [];
+    const handle = spawnSignalDaemon({
+      cliPath: "signal-cli",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+      stopTimeoutMs: 1_000,
+      runtime: { log: vi.fn(), error: (message: string) => errors.push(message), exit: vi.fn() },
+    });
+
+    const stopPromise = handle.stop();
+    await Promise.resolve();
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+
+    // Process exits, but a grandchild holds the stdio fds open.
+    child.emit("exit", null, "SIGKILL");
+    await vi.advanceTimersByTimeAsync(500);
+    let resolved = false;
+    void stopPromise.then(() => {
+      resolved = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resolved).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await stopPromise;
+    expect(resolved).toBe(true);
+    expect(
+      errors.some((message) =>
+        /force-resolving after 2000ms.*pending: (stdout|stderr|exit)/.test(message),
+      ),
+    ).toBe(true);
+  });
 });
