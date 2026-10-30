@@ -1566,12 +1566,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   margin-top: -7px;
 }
 
-[data-session-section^="catalog:"].sidebar-recent-sessions__group--collapsed
-  > .sidebar-recent-sessions__head
-  .session-run-spinner {
-  right: 34px;
-}
-
 [data-session-section^="catalog:"] > .sidebar-recent-sessions__head:hover .session-run-spinner {
   opacity: 0;
 }
