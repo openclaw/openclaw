@@ -203,6 +203,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
@@ -251,6 +252,7 @@ import androidx.window.layout.DisplayFeature
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -4555,9 +4557,21 @@ private fun LiveTalkButton(
   }
 }
 
+/** Stop replaces Send under the finger, so it stays dimmed and inert for a moment after it appears. */
 @Composable
 private fun StopButton(onClick: () -> Unit) {
-  ChatRoundButton(onClick, contentColor = ClawTheme.colors.danger, background = ClawTheme.colors.dangerSoft) {
+  var armed by remember { mutableStateOf(false) }
+  LaunchedEffect(Unit) {
+    delay(700)
+    armed = true
+  }
+  ChatRoundButton(
+    onClick,
+    enabled = armed,
+    modifier = Modifier.alpha(if (armed) 1f else 0.35f),
+    contentColor = ClawTheme.colors.danger,
+    background = ClawTheme.colors.dangerSoft,
+  ) {
     Icon(imageVector = Icons.Default.Stop, contentDescription = nativeString("Stop"), modifier = Modifier.size(20.dp))
   }
 }

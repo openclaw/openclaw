@@ -1173,6 +1173,41 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  fun stopThatReplacesSendIgnoresTapsUntilItIsArmed() {
+    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
+
+    @Suppress("UNCHECKED_CAST")
+    val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
+    val armed = AtomicBoolean(false)
+    val abortsByArmedState = ConcurrentLinkedQueue<Boolean>()
+    val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
+      if (method == "chat.abort") {
+        abortsByArmedState += armed.get()
+        "{}"
+      } else {
+        originalRequest(gatewayId, method, params)
+      }
+    }
+    requestField.set(controller, request)
+    showChat()
+    val editor = composerEditor()
+    editor.performTextReplacement("hello")
+    assertComposerControlsVisible(primaryAction = "Send")
+    composeRule.mainClock.autoAdvance = false
+    editor.performTextReplacement("")
+    composeRule.mainClock.advanceTimeByFrame()
+    val stop = composeRule.onNodeWithContentDescription(nativeString("Stop"))
+    // Stop entering the slot (as after Send) must ignore taps until it is armed.
+    stop.assertIsDisplayed().assertIsNotEnabled().performClick()
+    composeRule.waitForIdle()
+    composeRule.mainClock.advanceTimeBy(1_000)
+    armed.set(true)
+    stop.performClick()
+    composeRule.waitUntil(timeoutMillis = 5_000) { abortsByArmedState.isNotEmpty() }
+    assertEquals("Only the armed Stop may abort the run", listOf(true), abortsByArmedState.distinct())
+  }
+
+  @Test
   fun physicalEnterPreservesTheDraftDuringTalkWithAnActiveRun() {
     assertPhysicalEnterDuringActiveRun(talkActive = true, expectedSends = 0)
   }
