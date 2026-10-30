@@ -7,7 +7,9 @@ import type { Model } from "../../../llm/types.js";
 import type { ReplyMessageJoinObservation } from "../../../sessions/session-controller.message-join-observation.js";
 import type { SessionControllerWatchdogAttempt } from "../../../sessions/session-controller.watchdog.js";
 import type { PreparedTtsPreferences } from "../../../tts/tts-preferences.js";
+import type { RunCliAgentParams } from "../../cli-runner/types.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
+import type { RuntimeContextFragment } from "../../internal-runtime-context.js";
 import type { ModelFallbackRouteResolution } from "../../model-fallback.types.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-runtime.types.js";
 import type { ReplyDeliveryFactsObserver } from "../../reply-completion.js";
@@ -50,6 +52,10 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** Pure run-bound guidance, resolved by the host against the final callable tool surface. */
+  resolveRuntimeContextForTools?: (params: {
+    messageToolAvailable: boolean;
+  }) => RuntimeContextFragment[];
   /** The reply owner checkpoints the source before recovery rewrites its context. */
   beforeRecoveryCompaction?: (context: {
     sessionId: string;
@@ -119,6 +125,8 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
     RunEmbeddedAgentInternalParams,
     | "onContextAccountingEvent"
     | "onCompactionRequestBudget"
+    | "resolveRuntimeContextForTools"
+    | "systemAgentTool"
     | "runCleanupSettlement"
     | "joinObservation"
   > & {
@@ -140,3 +148,7 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
 export type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {
   sessionFile: string;
 };
+
+/** CLI preparation consumes the resolver before handing a request to a backend. */
+export type RunCliAgentInternalParams = RunCliAgentParams &
+  Pick<RunEmbeddedAgentInternalParams, "resolveRuntimeContextForTools">;

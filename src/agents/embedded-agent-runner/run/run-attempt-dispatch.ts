@@ -27,7 +27,7 @@ import { mapThinkingLevelForProvider } from "../utils.js";
 import { createAttemptContinuationRetryCount } from "./attempt-continuation-retry.js";
 import { withPreparedEmbeddedGatewayTools } from "./attempt-gateway-tools.js";
 import { resolveEmbeddedAttemptMemoryAudience } from "./attempt-memory-audience.js";
-import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
+import { prepareEmbeddedAttemptPromptDispatch } from "./attempt-prompt-support.js";
 import { EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE } from "./attempt-stage-timing.js";
 import { prepareAttemptSystemPromptAdditions } from "./attempt-system-prompt-additions.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush.js";
@@ -268,16 +268,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
         pluginHarness: true,
       })
     : { images: params.images, imageOrder: params.imageOrder, media: params.media };
-  // Plugin harnesses own their tool materialization, so the host cannot attest
-  // a message tool. Finalize conservatively instead of leaking phantom guidance.
-  const pluginHarnessPrompt =
-    runtime.pluginHarnessOwnsTransport && params.finalizePromptForResolvedTools
-      ? applyResolvedToolPromptFinalizer({
-          prompt: preparedExecApprovalContinuation.prompt,
-          activeToolNames: [],
-          finalize: params.finalizePromptForResolvedTools,
-        })
-      : undefined;
+  const promptDispatch = prepareEmbeddedAttemptPromptDispatch({
+    params,
+    preparedPrompt: preparedExecApprovalContinuation,
+    ownsTransport: runtime.pluginHarnessOwnsTransport,
+  });
   const pluginSandbox = placement?.sandbox ?? pluginWorkspace?.sandbox;
   if (params.permissionMode) {
     // Attempts narrow this shared run-owned policy before recovery can reuse it.
@@ -465,16 +460,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       ? {}
       : { authoredContextTokenCap: runtime.authoredContextTokenCap }),
     skillsSnapshot,
-    prompt: remapSkillReferencePaths(
-      pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
-      skillReferencePaths,
-    ),
-    transcriptPrompt:
-      pluginHarnessPrompt !== undefined && params.transcriptPrompt === undefined
-        ? preparedExecApprovalContinuation.prompt
-        : preparedExecApprovalContinuation.transcriptPrompt,
-    finalizePromptForResolvedTools:
-      pluginHarnessPrompt === undefined ? params.finalizePromptForResolvedTools : undefined,
+    ...promptDispatch,
+    prompt: remapSkillReferencePaths(promptDispatch.prompt, skillReferencePaths),
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
     // The outer run-loop owns the begun lease; the inner attempt reports only
     // the accepted candidate boundary to that owner.
@@ -656,7 +643,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     forceMessageTool: params.forceMessageTool,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     internalEvents: params.internalEvents,
-    runtimeContextFragments: params.runtimeContextFragments,
     bootstrapPromptWarningSignaturesSeen: input.bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature: input.bootstrapPromptWarningSignaturesSeen.at(-1),
     suppressNextUserMessagePersistence,

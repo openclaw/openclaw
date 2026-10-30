@@ -23,6 +23,7 @@ import { log } from "../logger.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import { summarizeSessionContext } from "./attempt-context-summary.js";
 import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type NamedTool = { name: string };
@@ -117,6 +118,55 @@ export function applyResolvedToolPromptFinalizer(params: {
       (toolName) => normalizeToolPolicyName(toolName) === "message",
     ),
   });
+}
+
+type PromptDispatchParams = Pick<
+  RunEmbeddedAgentInternalParams,
+  | "prompt"
+  | "transcriptPrompt"
+  | "finalizePromptForResolvedTools"
+  | "resolveRuntimeContextForTools"
+  | "runtimeContextFragments"
+>;
+
+/** Bind prompt projection and callback ownership together before harness dispatch. */
+export function prepareEmbeddedAttemptPromptDispatch(input: {
+  params: Omit<PromptDispatchParams, "prompt">;
+  preparedPrompt: Pick<PromptDispatchParams, "prompt" | "transcriptPrompt">;
+  ownsTransport: boolean;
+}): PromptDispatchParams {
+  const { params, preparedPrompt, ownsTransport } = input;
+  if (
+    !ownsTransport ||
+    (!params.finalizePromptForResolvedTools && !params.resolveRuntimeContextForTools)
+  ) {
+    return {
+      ...preparedPrompt,
+      finalizePromptForResolvedTools: params.finalizePromptForResolvedTools,
+      resolveRuntimeContextForTools: params.resolveRuntimeContextForTools,
+      runtimeContextFragments: params.runtimeContextFragments,
+    };
+  }
+  // Native tools are not host-attested. The existing plugin handoff owner folds
+  // these fragments into currentInboundContext; do not render them a second time.
+  const prompt = applyResolvedToolPromptFinalizer({
+    prompt: preparedPrompt.prompt,
+    activeToolNames: [],
+    finalize: params.finalizePromptForResolvedTools,
+  });
+  const fragments = params.resolveRuntimeContextForTools?.({ messageToolAvailable: false });
+  return {
+    prompt,
+    transcriptPrompt:
+      params.transcriptPrompt === undefined
+        ? preparedPrompt.prompt
+        : preparedPrompt.transcriptPrompt,
+    finalizePromptForResolvedTools: undefined,
+    resolveRuntimeContextForTools: undefined,
+    runtimeContextFragments: fragments?.length
+      ? [...(params.runtimeContextFragments ?? []), ...fragments]
+      : params.runtimeContextFragments,
+  };
 }
 
 /**

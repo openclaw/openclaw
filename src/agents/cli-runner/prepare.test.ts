@@ -3270,11 +3270,13 @@ describe("prepareCliRunContext", () => {
         ({ prompt, messageToolAvailable }: { prompt: string; messageToolAvailable: boolean }) =>
           `${prompt}\nmessage-tool-available:${messageToolAvailable}`,
       );
+      const resolveRuntimeContextForTools = vi.fn(() => []);
 
       const context = await fixture.prepare({
         provider: "claude-cli",
         ...(cliToolAvailability ? { cliToolAvailability } : {}),
         finalizePromptForResolvedTools,
+        resolveRuntimeContextForTools,
       });
 
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
@@ -3296,6 +3298,9 @@ describe("prepareCliRunContext", () => {
         prompt: "latest ask",
         messageToolAvailable: false,
       });
+      expect(resolveRuntimeContextForTools).toHaveBeenCalledExactlyOnceWith({
+        messageToolAvailable: false,
+      });
       expect(context.params.prompt).toContain("message-tool-available:false");
       expect(context.params.prompt).toContain(
         "This turn has no current conversation. Reply normally in your final assistant message",
@@ -3303,6 +3308,81 @@ describe("prepareCliRunContext", () => {
       expect(context.params.prompt).not.toContain("message(action=send)");
       expect(context.params.prompt).not.toContain("target required this turn");
       expect(context.params.transcriptPrompt).toBe("latest ask");
+      await context.preparedBackend.cleanup?.();
+    },
+  );
+
+  it.each([
+    { transport: "raw", withFinalizer: false },
+    { transport: "private", withFinalizer: false },
+    { transport: "side-question", withFinalizer: false },
+    { transport: "raw", withFinalizer: true },
+    { transport: "private", withFinalizer: true },
+    { transport: "side-question", withFinalizer: true },
+    { transport: "control", withFinalizer: true },
+  ])(
+    "keeps host context separate ($transport, string finalizer=$withFinalizer)",
+    async ({ transport, withFinalizer }) => {
+      if (transport === "private") {
+        setCliBackendForPrepareTest({
+          id: "test-cli",
+          prepareExecution: () => ({
+            async *execute() {
+              yield { type: "result" };
+            },
+          }),
+        });
+      }
+      const finalizePromptForResolvedTools = vi.fn(
+        ({ prompt }: { prompt: string }) => `${prompt}:finalized`,
+      );
+      const resolveRuntimeContextForTools = vi.fn(
+        ({ messageToolAvailable }: { messageToolAvailable: boolean }) => [
+          {
+            kind: "runtime-instruction" as const,
+            text: `Delivery context: message=${messageToolAvailable}.`,
+          },
+        ],
+      );
+      const context = await fixture.prepare({
+        ...(transport === "side-question" ? { executionMode: "side-question" as const } : {}),
+        ...(transport === "control" ? { controlOperation: "compact" as const } : {}),
+        runtimeContextFragments: [
+          { kind: "runtime-instruction", text: "Existing producer context." },
+        ],
+        ...(withFinalizer ? { finalizePromptForResolvedTools } : {}),
+        resolveRuntimeContextForTools,
+      });
+      const deliveryContext = context.promptContext?.appendContext ?? context.params.prompt;
+      expect(context.params).not.toHaveProperty("resolveRuntimeContextForTools");
+      if (transport === "control") {
+        expect(finalizePromptForResolvedTools).not.toHaveBeenCalled();
+        expect(resolveRuntimeContextForTools).not.toHaveBeenCalled();
+        expect(context.params.prompt).toBe("latest ask");
+        await context.preparedBackend.cleanup?.();
+        return;
+      }
+      expect(finalizePromptForResolvedTools).toHaveBeenCalledTimes(withFinalizer ? 1 : 0);
+      if (withFinalizer) {
+        expect(finalizePromptForResolvedTools).toHaveBeenCalledWith({
+          prompt: "latest ask",
+          messageToolAvailable: false,
+        });
+      }
+      expect(resolveRuntimeContextForTools).toHaveBeenCalledExactlyOnceWith({
+        messageToolAvailable: false,
+      });
+      expect(deliveryContext).toContain("Delivery context: message=false.");
+      expect(deliveryContext.match(/Delivery context/g)).toHaveLength(1);
+      const expectedPrompt = withFinalizer ? "latest ask:finalized" : "latest ask";
+      expect(context.params.prompt).toContain(expectedPrompt);
+      expect(context.params.transcriptPrompt).toBe("latest ask");
+      if (transport !== "side-question") {
+        expect(deliveryContext).toContain("Existing producer context.");
+      }
+      if (transport === "private") {
+        expect(context.params.prompt).toBe(expectedPrompt);
+      }
       await context.preparedBackend.cleanup?.();
     },
   );

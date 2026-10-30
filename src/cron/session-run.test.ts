@@ -229,7 +229,7 @@ describe("scheduled session prompts", () => {
     { mode: "none", messageToolAvailable: true },
     { mode: "none", messageToolAvailable: false },
   ] as const)(
-    "finalizes $mode delivery guidance with message tool available=$messageToolAvailable",
+    "resolves $mode delivery context with message tool available=$messageToolAvailable",
     async ({ mode, messageToolAvailable }) => {
       const deliveryPlan = {
         source: "delivery" as const,
@@ -257,13 +257,12 @@ describe("scheduled session prompts", () => {
       params.job.delivery = { mode, channel: "telegram", to: "scheduled-chat" };
       await runCronSessionTurn(params);
       const options = fixture.enqueue.mock.calls[0]?.[1];
-      const candidatePrompt = "Instructions after candidate preparation";
-      const prompt =
-        options?.scheduledAutomation?.finalizePromptForResolvedTools?.({
-          prompt: candidatePrompt,
-          messageToolAvailable,
-        }) ?? candidatePrompt;
-      expect(prompt).toContain(candidatePrompt);
+      expect(fixture.enqueue.mock.calls[0]?.[0]).toBe(params.text);
+      expect(options?.scheduledAutomation).not.toHaveProperty("finalizePromptForResolvedTools");
+      const fragments = options?.scheduledAutomation?.resolveRuntimeContextForTools?.({
+        messageToolAvailable,
+      });
+      const prompt = fragments?.map((fragment) => fragment.text).join("\n\n") ?? "";
       expect(prompt).not.toContain("Routed formatting already supplied");
       if (mode === "announce") {
         expect(prompt).toContain("delivered automatically");
@@ -280,7 +279,7 @@ describe("scheduled session prompts", () => {
         expect(prompt).toContain("Message-only channel formatting");
         expect(prompt).not.toContain("delivered automatically");
       } else {
-        expect(prompt).toBe(candidatePrompt);
+        expect(fragments).toEqual([]);
       }
     },
   );

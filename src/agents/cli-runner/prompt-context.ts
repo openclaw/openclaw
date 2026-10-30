@@ -120,7 +120,10 @@ export async function prepareCliTurnPromptContext(
     .filter((value): value is string => Boolean(value?.trim()))
     .join("\n\n");
   // Optional context failures must not erase Runtime facts or delivery instructions.
-  let appendContext = [runtimeFacts?.relocatable, params.deliveryGuidance]
+  const producerContext = params.runtimeContextFragments?.length
+    ? labelRuntimeContextText(projectRuntimeContextFragments(params.runtimeContextFragments))
+    : undefined;
+  let appendContext = [runtimeFacts?.relocatable, params.deliveryGuidance, producerContext]
     .filter((value): value is string => Boolean(value?.trim()))
     .join("\n\n");
   try {
@@ -137,9 +140,7 @@ export async function prepareCliTurnPromptContext(
       runtimeFacts?.relocatable,
       ...params.context,
       params.deliveryGuidance,
-      params.runtimeContextFragments?.length
-        ? labelRuntimeContextText(projectRuntimeContextFragments(params.runtimeContextFragments))
-        : undefined,
+      producerContext,
       buildProactiveSubagentOrchestrationSection({
         enabled: params.thinkLevel === "ultra",
         hasSessionsSpawn: params.capabilityToolNames.has("sessions_spawn"),

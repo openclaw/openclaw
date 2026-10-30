@@ -26,6 +26,7 @@ import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
+import { labelRuntimeContextText } from "../../llm/types.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
@@ -93,8 +94,10 @@ import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import type { RunCliAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { remapSkillReferencePaths } from "../embedded-agent-runner/sandbox-skills.js";
 import { beginContextEngineLogicalTurn } from "../harness/context-engine-turn-begin.js";
+import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../model-catalog.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
@@ -191,7 +194,7 @@ type RunCliAgentPrepareParams = RunCliAgentParams & {
 };
 
 export async function prepareCliRunContext(
-  inputParams: RunCliAgentParams,
+  inputParams: RunCliAgentInternalParams,
 ): Promise<PreparedCliRunContext> {
   return runWithCliPreparationSource(inputParams, () =>
     prepareCliRunContextWithinReadFence(inputParams),
@@ -199,8 +202,10 @@ export async function prepareCliRunContext(
 }
 
 async function prepareCliRunContextWithinReadFence(
-  inputParams: RunCliAgentParams,
+  input: RunCliAgentInternalParams,
 ): Promise<PreparedCliRunContext> {
+  // Consume host guidance here, never in a plugin's preparation or execution request.
+  const { resolveRuntimeContextForTools, ...inputParams } = input;
   let params = inputParams.config ? inputParams : { ...inputParams, config: getRuntimeConfig() };
   if (params.sessionManager) {
     // Caller-owned memory is authoritative even when empty. Correlation and native
@@ -1516,6 +1521,7 @@ async function prepareCliRunContextWithinReadFence(
           });
     const finalizedTranscriptPrompt =
       (params.finalizePromptForResolvedTools ||
+        resolveRuntimeContextForTools ||
         sessionPromptContext?.durableContext ||
         sessionPromptContext?.sessionGapContext ||
         sessionPromptContext?.resumeContext ||
@@ -1531,8 +1537,18 @@ async function prepareCliRunContextWithinReadFence(
           prompt: params.prompt,
           messageToolAvailable,
         }) ?? params.prompt);
+    const finalizedRuntimeContext = isControlOperation
+      ? undefined
+      : resolveRuntimeContextForTools?.({ messageToolAvailable });
     if (!isControlOperation && params.skillsSnapshot?.librarySelections?.length) {
       preparedPrompt = remapSkillReferencePaths(preparedPrompt, preparedSkills.usagePaths);
+    }
+    if (skipsTurnPreparation && finalizedRuntimeContext?.length) {
+      preparedPrompt = composeCliPromptContext(preparedPrompt, {
+        appendContext: labelRuntimeContextText(
+          projectRuntimeContextFragments(finalizedRuntimeContext),
+        ),
+      });
     }
     let historyPromptCurrentTurn = preparedPrompt;
     if (!skipsTurnPreparation) {
@@ -1570,7 +1586,10 @@ async function prepareCliRunContextWithinReadFence(
         thinkLevel: params.thinkLevel,
         // Operator-kept orchestration tools that survived every later native-tool cap.
         nativeDelegationTools: keptManagedNativeTools(managedNativeTools, params),
-        runtimeContextFragments: params.runtimeContextFragments,
+        runtimeContextFragments: [
+          ...(params.runtimeContextFragments ?? []),
+          ...(finalizedRuntimeContext ?? []),
+        ],
         sessionTarget: params.isolatedCompletion ? undefined : replayableTarget(cliHistoryWriter),
         context: [promptBuildHookResult?.appendContext, authorizedPromptBuildResult?.appendContext],
       }));

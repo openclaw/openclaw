@@ -97,7 +97,7 @@ export function createOpenClawAgentHarness(): AgentHarnessV2 {
         currentInboundContext: params.currentInboundContext,
       });
       const attempt = {
-        ...(params as EmbeddedRunAttemptParams),
+        ...(params as EmbeddedRunAttemptInternalParams),
         ...(currentInboundContext ? { currentInboundContext } : {}),
         supportsTurnScopedToolRestrictions: harnessSupportsTurnScopedToolRestrictions(harness),
       };
