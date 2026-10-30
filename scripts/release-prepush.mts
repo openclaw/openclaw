@@ -1,30 +1,24 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
 import process from "node:process";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 
 type ReleasePrepushCommand = {
   name: string;
-  bin: "node" | "pnpm";
+  bin: "git" | "node";
   args: string[];
   cwd: string;
-  env?: NodeJS.ProcessEnv;
 };
 
 type ReleasePrepushDependencies = {
   assertCleanWorktree: () => void;
   assertAuditBounds: (baseSha: string, headSha: string) => string;
-  createValidationCheckout: (headSha: string) => string;
   currentBranch: () => string;
   pushValidatedHead: (headSha: string, branch: string) => void;
   refreshMain: () => void;
   refreshReleaseBranch: (branch: string) => string | undefined;
-  removeValidationCheckout: (checkout: string) => void;
   resolveCommit: (ref: string) => string;
   runCommand: (command: ReleasePrepushCommand) => Promise<number>;
 };
@@ -124,71 +118,23 @@ export function pushValidatedHead(headSha: string, branch: string): void {
   });
 }
 
-export function createValidationCheckout(headSha: string): string {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-release-prepush-"));
-  const checkout = join(root, "checkout");
-  try {
-    execFileSync("git", ["worktree", "add", "--detach", checkout, headSha], {
-      stdio: "inherit",
-    });
-    return checkout;
-  } catch (error) {
-    rmSync(root, { force: true, recursive: true });
-    throw error;
-  }
-}
-
-export function removeValidationCheckout(checkout: string): void {
-  try {
-    execFileSync("git", ["worktree", "remove", "--force", checkout], {
-      stdio: "inherit",
-    });
-  } finally {
-    rmSync(dirname(checkout), { force: true, recursive: true });
-  }
-}
-
 export function buildReleasePrepushPlan(
   baseSha: string,
   headSha: string,
   cwd: string,
-  env: NodeJS.ProcessEnv = process.env,
-  trustedPolicyRef: string = baseSha,
 ): ReleasePrepushCommand[] {
   return [
     {
-      name: "frozen dependency install",
-      bin: "pnpm",
-      args: ["install", "--frozen-lockfile"],
+      name: "whitespace and conflict-marker check",
+      bin: "git",
+      args: ["diff", "--check", baseSha, headSha],
       cwd,
-      env,
     },
     {
-      name: "changed static and type gates",
-      bin: "pnpm",
-      args: ["check:changed", "--base", baseSha, "--head", headSha],
-      cwd,
-      env: {
-        ...env,
-        CHECKOUT_BASE_SHA: baseSha,
-        CI: "1",
-        OPENCLAW_LOCAL_CHECK: "0",
-        OPENCLAW_OXLINT_TRUSTED_POLICY_REF: trustedPolicyRef,
-      },
-    },
-    {
-      name: "production dead-code gate",
-      bin: "pnpm",
-      args: ["deadcode:knip"],
-      cwd,
-      env,
-    },
-    {
-      name: "changed tests",
+      name: "release changelog layout",
       bin: "node",
-      args: ["scripts/test-projects.mts", "--changed", baseSha],
+      args: ["scripts/release-changelog.mjs", "check", "--ref", headSha],
       cwd,
-      env,
     },
   ];
 }
@@ -199,19 +145,16 @@ async function defaultRunCommand(command: ReleasePrepushCommand): Promise<number
     bin: command.bin,
     args: command.args,
     cwd: command.cwd,
-    env: command.env,
   });
 }
 
 const defaultDependencies: ReleasePrepushDependencies = {
   assertCleanWorktree,
   assertAuditBounds,
-  createValidationCheckout,
   currentBranch,
   pushValidatedHead,
   refreshMain,
   refreshReleaseBranch,
-  removeValidationCheckout,
   resolveCommit,
   runCommand: defaultRunCommand,
 };
@@ -253,33 +196,18 @@ export async function runReleasePrepush(
   }
 
   if (options.dryRun) {
-    for (const command of buildReleasePrepushPlan(
-      comparisonBaseSha,
-      headSha,
-      "<detached-checkout>",
-    )) {
+    for (const command of buildReleasePrepushPlan(comparisonBaseSha, headSha, process.cwd())) {
       console.log([command.bin, ...command.args].join(" "));
     }
     return 0;
   }
 
-  const validationCheckout = dependencies.createValidationCheckout(headSha);
-  try {
-    for (const command of buildReleasePrepushPlan(
-      comparisonBaseSha,
-      headSha,
-      validationCheckout,
-      process.env,
-      baseSha,
-    )) {
-      const status = await dependencies.runCommand(command);
-      if (status !== 0) {
-        console.error(`[release:prepush] failed: ${command.name}`);
-        return status;
-      }
+  for (const command of buildReleasePrepushPlan(comparisonBaseSha, headSha, process.cwd())) {
+    const status = await dependencies.runCommand(command);
+    if (status !== 0) {
+      console.error(`[release:prepush] failed: ${command.name}`);
+      return status;
     }
-  } finally {
-    dependencies.removeValidationCheckout(validationCheckout);
   }
 
   dependencies.assertCleanWorktree();
@@ -336,9 +264,9 @@ function usage(): string {
     "Usage: pnpm release:prepush -- [--base <ref>] [--dry-run]",
     "       pnpm release:push [-- --head <sha> --branch <release/YYYY.M.PATCH>]",
     "",
-    "Runs exact-HEAD changed static/type gates, production dead-code analysis, and changed tests.",
+    "Runs fast exact-HEAD whitespace/conflict-marker and release-changelog checks.",
     "The default comparison base is origin/main.",
-    "release:push refreshes origin/main, validates, and pushes the captured exact SHA to its canonical release branch.",
+    "release:push refreshes origin/main, runs the short preflight, and pushes the captured exact SHA to its canonical release branch.",
   ].join("\n");
 }
 

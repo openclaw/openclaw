@@ -92,75 +92,56 @@ describe("release:prepush", () => {
     );
   });
 
-  it("uses the audited merge base for gates on a divergent release branch", async () => {
+  it("uses the audited merge base for the short preflight on a divergent release branch", async () => {
     const runCommand = vi.fn().mockResolvedValue(0);
     const status = await runReleasePrepush(
       { base: "origin/main", dryRun: false, push: false },
       {
         assertCleanWorktree: vi.fn(),
         assertAuditBounds: vi.fn().mockReturnValue(MERGE_BASE_SHA),
-        createValidationCheckout: vi.fn().mockReturnValue("/snapshot"),
         currentBranch: vi.fn(),
         pushValidatedHead: vi.fn(),
         refreshMain: vi.fn(),
         refreshReleaseBranch: vi.fn(),
-        removeValidationCheckout: vi.fn(),
         resolveCommit: vi.fn((ref) => (ref === "HEAD" ? HEAD_SHA : BASE_SHA)),
         runCommand,
       },
     );
     expect(status).toBe(0);
     expect(runCommand.mock.calls.map(([command]) => [command.bin, command.args])).toEqual([
-      ["pnpm", ["install", "--frozen-lockfile"]],
-      ["pnpm", ["check:changed", "--base", MERGE_BASE_SHA, "--head", HEAD_SHA]],
-      ["pnpm", ["deadcode:knip"]],
-      ["node", ["scripts/test-projects.mts", "--changed", MERGE_BASE_SHA]],
+      ["git", ["diff", "--check", MERGE_BASE_SHA, HEAD_SHA]],
+      ["node", ["scripts/release-changelog.mjs", "check", "--ref", HEAD_SHA]],
     ]);
-    expect(runCommand.mock.calls[1]?.[0].env).toMatchObject({
-      CHECKOUT_BASE_SHA: MERGE_BASE_SHA,
-      OPENCLAW_OXLINT_TRUSTED_POLICY_REF: BASE_SHA,
-    });
+    expect(runCommand.mock.calls.every(([command]) => command.cwd === process.cwd())).toBe(true);
   });
 
-  it("pins changed static/type checks, dead-code analysis, and changed tests", () => {
-    const plan = buildReleasePrepushPlan(BASE_SHA, HEAD_SHA, "/snapshot", { PATH: "/bin" });
+  it("pins only the fast exact-SHA whitespace and changelog checks", () => {
+    const plan = buildReleasePrepushPlan(BASE_SHA, HEAD_SHA, process.cwd());
     expect(plan.map(({ bin, args }) => [bin, ...args])).toEqual([
-      ["pnpm", "install", "--frozen-lockfile"],
-      ["pnpm", "check:changed", "--base", BASE_SHA, "--head", HEAD_SHA],
-      ["pnpm", "deadcode:knip"],
-      ["node", "scripts/test-projects.mts", "--changed", BASE_SHA],
+      ["git", "diff", "--check", BASE_SHA, HEAD_SHA],
+      ["node", "scripts/release-changelog.mjs", "check", "--ref", HEAD_SHA],
     ]);
-    expect(plan.every((command) => command.cwd === "/snapshot")).toBe(true);
-    expect(plan[1]?.env).toMatchObject({
-      CHECKOUT_BASE_SHA: BASE_SHA,
-      CI: "1",
-      OPENCLAW_LOCAL_CHECK: "0",
-      OPENCLAW_OXLINT_TRUSTED_POLICY_REF: BASE_SHA,
-    });
+    expect(plan.every((command) => command.cwd === process.cwd())).toBe(true);
   });
 
   it("stops at the first failed integrated gate", async () => {
     const runCommand = vi.fn().mockResolvedValueOnce(0).mockResolvedValueOnce(9);
-    const removeValidationCheckout = vi.fn();
     const status = await runReleasePrepush(
       { base: "origin/main", dryRun: false, push: false },
       {
         assertCleanWorktree: vi.fn(),
         assertAuditBounds: vi.fn().mockReturnValue(BASE_SHA),
-        createValidationCheckout: vi.fn().mockReturnValue("/snapshot"),
         currentBranch: vi.fn(),
         pushValidatedHead: vi.fn(),
         refreshMain: vi.fn(),
         refreshReleaseBranch: vi.fn(),
-        removeValidationCheckout,
         resolveCommit: vi.fn((ref) => (ref === "HEAD" ? HEAD_SHA : BASE_SHA)),
         runCommand,
       },
     );
     expect(status).toBe(9);
     expect(runCommand).toHaveBeenCalledTimes(2);
-    expect(runCommand.mock.calls.every(([command]) => command.cwd === "/snapshot")).toBe(true);
-    expect(removeValidationCheckout).toHaveBeenCalledWith("/snapshot");
+    expect(runCommand.mock.calls.every(([command]) => command.cwd === process.cwd())).toBe(true);
   });
 
   it("rejects a head that changes during validation", async () => {
@@ -176,12 +157,10 @@ describe("release:prepush", () => {
         {
           assertCleanWorktree,
           assertAuditBounds: vi.fn().mockReturnValue(BASE_SHA),
-          createValidationCheckout: vi.fn().mockReturnValue("/snapshot"),
           currentBranch: vi.fn(),
           pushValidatedHead: vi.fn(),
           refreshMain: vi.fn(),
           refreshReleaseBranch: vi.fn(),
-          removeValidationCheckout: vi.fn(),
           resolveCommit: resolve,
           runCommand: vi.fn().mockResolvedValue(0),
         },
@@ -203,12 +182,10 @@ describe("release:prepush", () => {
           .fn()
           .mockReturnValueOnce(MERGE_BASE_SHA)
           .mockReturnValueOnce(RELEASE_SHA),
-        createValidationCheckout: vi.fn().mockReturnValue("/snapshot"),
         currentBranch,
         pushValidatedHead,
         refreshMain,
         refreshReleaseBranch: vi.fn().mockReturnValue(RELEASE_SHA),
-        removeValidationCheckout: vi.fn(),
         resolveCommit: vi.fn((ref) => (ref === "HEAD" ? HEAD_SHA : BASE_SHA)),
         runCommand,
       },
@@ -216,13 +193,7 @@ describe("release:prepush", () => {
     expect(status).toBe(0);
     expect(refreshMain).toHaveBeenCalledOnce();
     expect(currentBranch).toHaveBeenCalledTimes(2);
-    expect(runCommand.mock.calls[1]?.[0].args).toEqual([
-      "check:changed",
-      "--base",
-      RELEASE_SHA,
-      "--head",
-      HEAD_SHA,
-    ]);
+    expect(runCommand.mock.calls[0]?.[0].args).toEqual(["diff", "--check", RELEASE_SHA, HEAD_SHA]);
     expect(pushValidatedHead).toHaveBeenCalledWith(HEAD_SHA, "release/2026.10.6");
   });
 
@@ -244,12 +215,10 @@ describe("release:prepush", () => {
           .fn()
           .mockReturnValueOnce(MERGE_BASE_SHA)
           .mockReturnValueOnce(RELEASE_SHA),
-        createValidationCheckout: vi.fn().mockReturnValue("/snapshot"),
         currentBranch,
         pushValidatedHead,
         refreshMain: vi.fn(),
         refreshReleaseBranch: vi.fn().mockReturnValue(RELEASE_SHA),
-        removeValidationCheckout: vi.fn(),
         resolveCommit,
         runCommand: vi.fn().mockResolvedValue(0),
       },
@@ -274,18 +243,16 @@ describe("release:prepush", () => {
       {
         assertCleanWorktree: vi.fn(),
         assertAuditBounds,
-        createValidationCheckout: vi.fn().mockReturnValue("/snapshot"),
         currentBranch: vi.fn(),
         pushValidatedHead,
         refreshMain: vi.fn(),
         refreshReleaseBranch: vi.fn(),
-        removeValidationCheckout: vi.fn(),
         resolveCommit: vi.fn().mockReturnValue(HEAD_SHA),
         runCommand,
       },
     );
     expect(status).toBe(0);
-    expect(runCommand).toHaveBeenCalledTimes(4);
+    expect(runCommand).toHaveBeenCalledTimes(2);
     expect(pushValidatedHead).toHaveBeenCalledWith(HEAD_SHA, "release/2026.10.6");
   });
 
@@ -297,12 +264,10 @@ describe("release:prepush", () => {
         {
           assertCleanWorktree: vi.fn(),
           assertAuditBounds: vi.fn(),
-          createValidationCheckout: vi.fn(),
           currentBranch: vi.fn().mockReturnValue("release/2026.10.6"),
           pushValidatedHead: vi.fn(),
           refreshMain,
           refreshReleaseBranch: vi.fn(),
-          removeValidationCheckout: vi.fn(),
           resolveCommit: vi.fn(),
           runCommand: vi.fn(),
         },
