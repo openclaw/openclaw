@@ -340,6 +340,11 @@ incognito exclusions still apply.
 provider-owned batch deadlines. Run `openclaw memory status --deep` to inspect
 the managed server endpoints before rebuilding the index.
 
+`local`, `ollama`, and `openai-compatible` endpoints on a loopback address
+(`localhost`, `127.0.0.1`, `::1`) send one indexing request at a time, so a
+search waits behind at most one indexing request on the same server. Other
+endpoints send up to four at once.
+
 OpenAI-compatible embedding requests honor the caller's deadline, including
 the longer indexing budget, without an earlier HTTP header or body timeout.
 Deep status probes make one attempt using the provider's query budget: normally

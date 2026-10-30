@@ -317,6 +317,11 @@ describe("ollama embedding provider", () => {
     );
   });
 
+  it("indexes one job at a time", async () => {
+    const { runtime } = await ollamaMemoryEmbeddingProviderAdapter.create(embeddingOptions());
+    expect(runtime?.inlineIndexConcurrency).toBe(1);
+  });
+
   it("preserves the legacy identity only for the default Ollama endpoint", async () => {
     const defaultEndpoint = await memoryKey({ dimensions: 2 });
     const customEndpoint = await memoryKey({

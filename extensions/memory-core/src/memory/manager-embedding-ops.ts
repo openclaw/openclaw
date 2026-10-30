@@ -438,10 +438,16 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     if (this.batch.enabled) {
       return this.batch.concurrency;
     }
-    const provider = this.syncProviderGeneration
-      ? this.syncProviderGeneration.provider
-      : this.provider;
-    return provider?.id === "local" || provider?.id === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
+    const generation = this.syncProviderGeneration;
+    const runtime = generation
+      ? generation.kind === "semantic"
+        ? generation.runtime
+        : undefined
+      : this.providerRuntime;
+    const declared = runtime?.inlineIndexConcurrency;
+    return declared !== undefined && Number.isSafeInteger(declared) && declared > 0
+      ? declared
+      : EMBEDDING_INDEX_CONCURRENCY;
   }
 
   private sourceReplacement(

@@ -105,6 +105,15 @@ merging a nested value such as voice settings.
     This optional field preserves existing plugin contracts, index contents,
     and embedding-cache identities.
 
+    The returned `runtime` can set `inlineIndexConcurrency` to cap how many
+    inline embedding requests memory indexing sends at once. Use a positive safe
+    integer; omit it to keep the host default of 4. Invalid declarations are
+    ignored, and provider batch jobs keep their own concurrency. Servers that
+    answer requests in arrival order on the same host, such as Ollama and the
+    managed `local` llama-server, declare 1 so a search does not queue behind
+    several indexing requests. The generic OpenAI-compatible adapter declares 1
+    only when its base URL is a loopback address.
+
     `embed` and `embedBatch` accept an optional `onUsage` call option. A provider
     that reports usage calls it once per successful upstream request, before
     resolving, with `{ promptTokens, totalTokens }` or `undefined` when that
