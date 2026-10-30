@@ -26,7 +26,6 @@ it("does not report a missing public webhook for outbound-only LiveKit", () => {
     resolveWebhookExposureStatus({ provider: "livekit", inboundPolicy: "disabled" }),
   ).toMatchObject({
     ok: true,
-    configured: true,
     message: expect.stringContaining("Outbound-only LiveKit"),
   });
   for (const provider of ["twilio", "telnyx", "plivo"]) {

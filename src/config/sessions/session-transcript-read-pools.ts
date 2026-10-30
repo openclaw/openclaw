@@ -102,3 +102,11 @@ export type SessionDatabaseWorkerLane = {
   idleTimer?: NodeJS.Timeout;
   rotation?: Promise<void>;
 };
+
+export type SessionCostWorkerLane = SessionDatabaseWorkerLane & {
+  pool: WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>;
+};
+
+export type SessionHistoryWorkerLane = SessionDatabaseWorkerLane & {
+  pool: ReturnType<typeof createSessionTranscriptHistoryPool>;
+};

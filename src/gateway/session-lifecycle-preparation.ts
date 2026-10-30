@@ -8,10 +8,8 @@ import {
 import { prepareSessionEntryMutationDatabases } from "../config/sessions/session-accessor.entry-mutation.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntryCreateWithTranscriptOptions } from "../config/sessions/session-accessor.types.js";
-import {
-  acquireSessionActorStorage,
-  getSessionActorStorageBinding,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import {
   composeSessionSourceAssertion,
   sessionEntryCommitGuardOptions,
@@ -428,6 +426,7 @@ export async function commitPreparedSessionWorkspace(params: {
           ...(params.projectId ? { projectId: params.projectId } : {}),
           sessionRoot: prepared.sessionRoot,
           spawnedCwd: prepared.spawnedCwd,
+          spawnedWorkspaceDir: undefined,
           ...(prepared.worktree ? { worktree: prepared.worktree } : {}),
           ...(params.priorWorkspace ? { priorWorkspace: params.priorWorkspace } : {}),
           ...(params.clearPendingIntent

@@ -175,7 +175,7 @@ export function registerNodeCli(program: Command) {
   )
     .option("--share-installed-apps", "Share installed macOS applications with the Gateway")
     .option("--no-share-installed-apps", "Disable installed application sharing")
-    .option("--runtime <runtime>", "Service runtime (node|bun). Default: node")
+    .option("--runtime <runtime>", "Service runtime (node|bun|standalone). Default: node")
     .option("--runtime-path <path>", "Pin an absolute Node/Bun executable path")
     .addOption(
       new Option("--expected-runtime-pin <json>", "Require the observed runtime intent").hideHelp(),

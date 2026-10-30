@@ -217,23 +217,31 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       .fn<() => AssistantMessageEvent>()
       .mockReturnValueOnce(firstChunk)
       .mockReturnValue({ type: "text_delta", contentIndex: 0, delta: "second value" });
+    let nextReads = 0;
+    let nextCalls = 0;
     const source: Awaited<ReturnType<StreamFn>> = {
       [Symbol.asyncIterator]() {
         let emitted = false;
-        return {
-          async next(): Promise<IteratorResult<AssistantMessageEvent>> {
-            if (emitted) {
-              return { done: true, value: undefined };
-            }
-            emitted = true;
-            return {
-              done: false,
-              get value() {
-                return readChunk();
-              },
+        const iterator: AsyncIterator<AssistantMessageEvent> = {
+          get next() {
+            nextReads++;
+            return async function (this: AsyncIterator<AssistantMessageEvent>) {
+              expect(this).toBe(iterator);
+              nextCalls++;
+              if (emitted) {
+                return { done: true as const, value: undefined };
+              }
+              emitted = true;
+              return {
+                done: false as const,
+                get value() {
+                  return readChunk();
+                },
+              };
             };
           },
         };
+        return iterator;
       },
       async result() {
         return makeAssistantMessageFixture({
@@ -260,6 +268,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
 
     expect(chunks).toEqual([firstChunk]);
     expect(readChunk).toHaveBeenCalledOnce();
+    expect(nextReads).toBe(1);
+    expect(nextCalls).toBe(2);
     expect(events.map((event) => event.type)).toEqual([
       "model.call.started",
       "model.call.completed",
@@ -573,7 +583,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     const nativeStringify = JSON.stringify;
     const visits: string[] = [];
     type FunctionReplacer = (this: unknown, key: string, part: unknown) => unknown;
-    const stringify = vi.spyOn(JSON, "stringify");
+    using stringify = vi.spyOn(JSON, "stringify");
     stringify.mockImplementation(
       (
         value: unknown,
@@ -595,24 +605,21 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
         );
       },
     );
-    try {
-      const events = await collectModelCallEvents(async () => {
-        await wrapped({} as never, { messages });
-        visits.length = 0;
-        await wrapped({} as never, { messages });
-        expect(visits).toEqual([]);
-        messages.push(second);
-        await wrapped({} as never, { messages });
-        expect(visits).toEqual(["owned append"]);
-      });
-      expect(
-        events.flatMap((event) =>
-          event.type === "model.call.started" ? [event.promptStats?.inputMessagesChars] : [],
-        ),
-      ).toEqual([expected[0], expected[0], expected[1]]);
-    } finally {
-      stringify.mockRestore();
-    }
+
+    const events = await collectModelCallEvents(async () => {
+      await wrapped({} as never, { messages });
+      visits.length = 0;
+      await wrapped({} as never, { messages });
+      expect(visits).toEqual([]);
+      messages.push(second);
+      await wrapped({} as never, { messages });
+      expect(visits).toEqual(["owned append"]);
+    });
+    expect(
+      events.flatMap((event) =>
+        event.type === "model.call.started" ? [event.promptStats?.inputMessagesChars] : [],
+      ),
+    ).toEqual([expected[0], expected[0], expected[1]]);
   });
 
   it("reuses prompt text sizes across appends while observing rewrites and compaction", async () => {
@@ -643,24 +650,15 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
           toolDefinitionsChars: 2,
           totalChars: inputMessagesChars + 8,
         });
-        const stringify = vi.spyOn(JSON, "stringify");
-        try {
-          await wrapped({} as never, context);
-          // Unchanged prefix text must not be encoded again on an append.
-          if (
-            messages.length === 2 &&
-            messages[0] === first &&
-            first.content.startsWith("prefix")
-          ) {
-            expect(stringify.mock.calls.filter(([value]) => value === first.content)).toHaveLength(
-              0,
-            );
-            expect(stringify.mock.calls.filter(([value]) => value === second.content)).toHaveLength(
-              1,
-            );
-          }
-        } finally {
-          stringify.mockRestore();
+        using stringify = vi.spyOn(JSON, "stringify");
+
+        await wrapped({} as never, context);
+        // Unchanged prefix text must not be encoded again on an append.
+        if (messages.length === 2 && messages[0] === first && first.content.startsWith("prefix")) {
+          expect(stringify.mock.calls.filter(([value]) => value === first.content)).toHaveLength(0);
+          expect(stringify.mock.calls.filter(([value]) => value === second.content)).toHaveLength(
+            1,
+          );
         }
       }
     });

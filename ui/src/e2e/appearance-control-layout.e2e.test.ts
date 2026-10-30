@@ -60,12 +60,8 @@ suite.define(() => {
         await expectStyles(customSwatch, { "box-shadow": expect.not.stringMatching(/^none$/) });
 
         const grid = page.locator("#settings-appearance-theme .settings-theme-grid");
-        for (const [width, expectedColumns] of [
-          [560, 3],
-          [320, 1],
-        ] as const) {
-          await page.setViewportSize({ height: 1000, width });
-          const layout = await grid.evaluate((element) => {
+        const readLayout = () =>
+          grid.evaluate((element) => {
             const cards = Array.from(element.children, (card) =>
               (card as HTMLElement).getBoundingClientRect(),
             );
@@ -74,6 +70,14 @@ suite.define(() => {
               minWidth: Math.min(...cards.map((card) => card.width)),
             };
           });
+        for (const [width, expectedColumns] of [
+          [560, 3],
+          [320, 1],
+        ] as const) {
+          await page.setViewportSize({ height: 1000, width });
+          // Resize schedules shell rendering and a grid-track transition; observe the rendered result.
+          await expect.poll(async () => (await readLayout()).columns).toBe(expectedColumns);
+          const layout = await readLayout();
           expect(layout.columns).toBe(expectedColumns);
           expect(layout.minWidth).toBeGreaterThanOrEqual(150);
         }

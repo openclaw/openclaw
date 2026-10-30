@@ -10,6 +10,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../packages/gateway-protocol/src/client-info.js";
+import { withDistArtifactOwnership } from "../scripts/lib/dist-artifact-ownership.mts";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { extractFirstTextBlock } from "../src/shared/chat-message-content.js";
 import { connectRestartClient } from "./gateway-restart.test-support.js";
@@ -36,7 +37,7 @@ type CronJobView = { id: string; enabled: boolean; state?: Record<string, unknow
 async function linkTree(from: string, to: string): Promise<void> {
   await fs.mkdir(to, { recursive: true });
   const entries = await fs.readdir(from, { withFileTypes: true });
-  await Promise.all(
+  const results = await Promise.allSettled(
     entries.map(async (entry) => {
       const source = path.join(from, entry.name);
       const target = path.join(to, entry.name);
@@ -55,6 +56,11 @@ async function linkTree(from: string, to: string): Promise<void> {
       }
     }),
   );
+  for (const result of results) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+  }
 }
 
 /** Replaces, never edits, a file that may share its data with the checkout's build. */
@@ -67,12 +73,21 @@ async function replaceFile(file: string, content: string) {
  * A private installed package of the checkout's build, as a package manager lays it out: its own
  * `dist` and `dist-runtime` trees, so a bundled plugin's real path lies in that package's build.
  */
-async function stagePackage(root: string, tickFile: string) {
+async function stagePackage(root: string, tickFile: string, signal: AbortSignal) {
   const packageRoot = path.join(root, "openclaw");
-  for (const output of ["dist", "dist-runtime"]) {
-    await linkTree(path.join(repoRoot, output), path.join(packageRoot, output));
-  }
-  await fs.copyFile(path.join(repoRoot, "package.json"), path.join(packageRoot, "package.json"));
+  await withDistArtifactOwnership(
+    repoRoot,
+    async () => {
+      for (const output of ["dist", "dist-runtime"]) {
+        await linkTree(path.join(repoRoot, output), path.join(packageRoot, output));
+      }
+      await fs.copyFile(
+        path.join(repoRoot, "package.json"),
+        path.join(packageRoot, "package.json"),
+      );
+    },
+    signal,
+  );
   for (const entry of await fs.readdir(repoRoot)) {
     if (
       entry === "node_modules" ||
@@ -180,13 +195,13 @@ export default {
 it.skipIf(process.platform === "win32")(
   "resumes a core-bundled plugin's schedule on the same build and ends it on another build",
   { timeout: 600_000 },
-  async () => {
+  async ({ signal }) => {
     const root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "plugin-scheduled-restart-bundled-")),
     );
     onTestFinished(() => fs.rm(root, { recursive: true, force: true }));
     const tickFile = path.join(root, "ticks.jsonl");
-    const pkg = await stagePackage(root, tickFile);
+    const pkg = await stagePackage(root, tickFile, signal);
     const modelRequests: unknown[] = [];
     const server = await startOpenAiResponsesModelServer({
       modelId: MODEL,

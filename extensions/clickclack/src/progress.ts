@@ -37,7 +37,7 @@ function progressText(payload: ClickClackItemEventPayload): string {
     ...payload,
     event: "item",
     itemKind: payload.kind,
-  })?.text?.trim();
+  })?.text;
   if (line) {
     return line;
   }

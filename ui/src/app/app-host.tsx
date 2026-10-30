@@ -254,6 +254,10 @@ export class ShellOwner
         const next = selectShellRouteState(runtime.router.getState());
         if (!equalShellRouteState(this.routeState, next)) {
           this.shellNavigation.updateRouteState(next);
+        } else if (this.routeState.sessionUrlPending !== next.sessionUrlPending) {
+          // URL eligibility can settle without a route change. Do not replay recovery.
+          this.routeState = next;
+          this.shellNavigation.synchronizeSessionUrl();
         }
       };
       this.cleanups.push(runtime.router.subscribe(updateRoute));
@@ -556,62 +560,57 @@ declare module "@solidjs/web" {
 export function OpenClawShell(props: OpenClawShellProps): SolidJSX.Element {
   return (
     <Show when={props.runtime} keyed>
-      {(runtime) => renderShellRuntime(runtime, props)}
-    </Show>
-  );
-}
-
-function renderShellRuntime(
-  runtime: ApplicationRuntime,
-  props: OpenClawShellProps,
-): SolidJSX.Element {
-  const element = document.createElement("openclaw-app-shell");
-  const initialShellOptions = untrack(() => ({
-    readiness: props.getReadiness?.(),
-    onboarding: props.onboarding,
-  }));
-  const owner = new ShellOwner(
-    element,
-    runtime,
-    initialShellOptions.readiness,
-    initialShellOptions.onboarding,
-  );
-  const view = <ApplicationShell host={owner} />;
-  onSettled(() => {
-    const initialOnShell = props.onShell;
-    owner.connect();
-    const unmountPresentation = owner.mountPresentation();
-    initialOnShell?.(owner);
-    return () => {
-      // A disconnect preserves reload intent; a replacement context retires it first.
-      if (props.runtime.context !== runtime.context) {
-        owner.replaceRuntime(props.runtime);
-      }
-      unmountPresentation();
-      owner.disconnect();
-      initialOnShell?.(undefined);
-    };
-  });
-  return (
-    <openclaw-app-shell
-      onOpenclaw-route-element={owner.renderedShellElements.register}
-      ref={(host) => {
-        owner.element = host;
-        // The optional observer reads committed owner facts without rendering the shell again.
-        Object.defineProperties(host, {
-          readiness: {
-            get: () => owner.readiness,
-            set: (value: ControlUiReadiness | undefined) => {
-              owner.readiness = value;
-            },
-          },
-          updateComplete: { get: () => owner.updateComplete },
-          navigationSidebar: { get: () => owner.navigationSidebar },
-          activeSessionKey: { get: () => owner.activeSessionKey },
+      {(runtime): SolidJSX.Element => {
+        const element = document.createElement("openclaw-app-shell");
+        const initialShellOptions = untrack(() => ({
+          readiness: props.getReadiness?.(),
+          onboarding: props.onboarding,
+        }));
+        const owner = new ShellOwner(
+          element,
+          runtime,
+          initialShellOptions.readiness,
+          initialShellOptions.onboarding,
+        );
+        const view = <ApplicationShell host={owner} />;
+        onSettled(() => {
+          const initialOnShell = props.onShell;
+          owner.connect();
+          const unmountPresentation = owner.mountPresentation();
+          initialOnShell?.(owner);
+          return () => {
+            // A disconnect preserves reload intent; a replacement context retires it first.
+            if (props.runtime.context !== runtime.context) {
+              owner.replaceRuntime(props.runtime);
+            }
+            unmountPresentation();
+            owner.disconnect();
+            initialOnShell?.(undefined);
+          };
         });
+        return (
+          <openclaw-app-shell
+            onOpenclaw-route-element={owner.renderedShellElements.register}
+            ref={(host) => {
+              owner.element = host;
+              // The optional observer reads committed owner facts without rendering the shell again.
+              Object.defineProperties(host, {
+                readiness: {
+                  get: () => owner.readiness,
+                  set: (value: ControlUiReadiness | undefined) => {
+                    owner.readiness = value;
+                  },
+                },
+                updateComplete: { get: () => owner.updateComplete },
+                navigationSidebar: { get: () => owner.navigationSidebar },
+                activeSessionKey: { get: () => owner.activeSessionKey },
+              });
+            }}
+          >
+            {view}
+          </openclaw-app-shell>
+        );
       }}
-    >
-      {view}
-    </openclaw-app-shell>
+    </Show>
   );
 }

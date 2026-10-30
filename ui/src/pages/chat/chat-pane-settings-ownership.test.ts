@@ -16,17 +16,26 @@ import {
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
-it.each(["rejected", "older-clock ACK"] as const)(
-  "retains settled thinking facts after an older direct capability patch returns %s",
-  async (outcome) => {
+it.each([
+  { outcome: "rejected", field: "thinking" },
+  { outcome: "older-clock ACK", field: "thinking" },
+  { outcome: "rejected", field: "access program" },
+  { outcome: "older-clock ACK", field: "access program" },
+] as const)(
+  "retains settled $field facts after an older direct capability patch returns $outcome",
+  async ({ outcome, field }) => {
     const initial = settingsRow("settings-ownership", {
       label: "Original label",
       fastMode: false,
       effectiveFastMode: false,
       contextWindow: "64k",
     });
-    const firstFields = { thinkingLevel: "off" };
-    const secondFields = { thinkingLevel: "low" };
+    const firstFields =
+      field === "thinking"
+        ? { thinkingLevel: "off" }
+        : { cyberAccessProgram: "daybreak_blue" as const };
+    const secondFields =
+      field === "thinking" ? { thinkingLevel: "low" } : { cyberAccessProgram: "standard" as const };
     const firstReply = createDeferred<unknown>();
     const secondReply = createDeferred<unknown>();
     const firstAcknowledgement = settingsAck(initial, { updatedAt: 2, ...firstFields });

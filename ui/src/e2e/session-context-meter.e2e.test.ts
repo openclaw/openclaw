@@ -62,7 +62,7 @@ suite.define(() => {
             },
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-          await gateway.waitForRequest("chat.startup");
+          await gateway.waitForRequest("sessions.messages.subscribe");
           if (viewport.width <= 900) {
             await page
               .locator(".agent-chat__composer-combobox > textarea")

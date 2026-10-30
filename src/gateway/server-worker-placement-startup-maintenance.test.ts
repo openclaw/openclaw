@@ -333,7 +333,7 @@ describe("worker placement session maintenance ownership", () => {
           .mockImplementationOnce(async () => {
             const prepared = await prepare();
             try {
-              expect(prepared.placements).toEqual([]);
+              expect([...prepared.placements]).toEqual([]);
               if (publication === "worker dispatch") {
                 await store.startDispatch(localTurn);
               } else if (claim) {

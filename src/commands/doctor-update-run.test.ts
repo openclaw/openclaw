@@ -16,6 +16,7 @@ import {
 } from "../infra/update-run-ledger.js";
 import { getUpdateRun, listUpdateRunsAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import { createUpdateRunRecordFixture } from "../infra/update-run-record.test-support.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../infra/update-run-timeouts.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
@@ -76,26 +77,10 @@ function recordWarning(runId: string, detail: string, endedAtMs = 1, suffix = ""
 }
 
 function makeHistory(overrides: Partial<UpdateRunRecord>): UpdateRunRecord {
-  return {
-    runId: "interrupted-update",
-    createdAtMs: 1,
-    updatedAtMs: 2,
-    trigger: "cli",
-    phase: "finished",
-    status: "failed",
+  return createUpdateRunRecordFixture("interrupted-update", {
     reason: "abandoned",
-    origin: {},
-    target: {},
-    before: {},
-    after: {},
-    steps: [],
-    verification: {},
-    repair: [],
-    confirmedAtMs: null,
-    finishedAtMs: 2,
-    downtimeMs: null,
     ...overrides,
-  };
+  });
 }
 
 function expectHistoryNote(message: string) {
@@ -290,3 +275,33 @@ it("stops replaying resolved state migration warnings without erasing history", 
     expect(getUpdateRun(later.runId)).toEqual(laterHistory);
   });
 });
+
+it.each(["completed", "skipped", undefined] as const)(
+  "uses the selected historical run's model retirement receipt (%s)",
+  async (status) => {
+    await withOpenClawTestState({ label: "model-retirement-history" }, async () => {
+      const warning = "Model retirement deferred until configured plugin installation converges.";
+      const run = createUpdateRun({ trigger: "cli" });
+      recordWarning(run.runId, warning);
+      recordWarning(run.runId, "Unrelated update warning", 2, ":unrelated");
+      if (status) {
+        recordUpdateRunStep(run.runId, { step: "finalize:doctor:model-retirement", status });
+      }
+      const history = finishUpdateRun(run.runId, { status: "succeeded" });
+      // Another run's completion must not settle the selected history's warning.
+      const active = createUpdateRun({ trigger: "cli" });
+      recordUpdateRunStep(active.runId, {
+        step: "finalize:doctor:model-retirement",
+        status: "completed",
+      });
+      listRuns.mockImplementation(async (input) => (input?.active ? [active] : [history!]));
+
+      await noteStaleUpdateRuns({ migrateState: false });
+
+      const output = noteMock.mock.calls.map(([message]) => message).join("\n");
+      expect(output.includes(warning)).toBe(status !== "completed");
+      expect(output).toContain("Unrelated update warning");
+      expect(getUpdateRun(run.runId)).toEqual(history);
+    });
+  },
+);

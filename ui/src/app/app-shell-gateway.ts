@@ -29,6 +29,7 @@ import { retireSessionPaneHandoffs } from "../pages/chat/chat-pane-handoff-lifec
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import type { ApplicationContext } from "./context.ts";
+import { isNativeMobileHost } from "./native-web-chrome.ts";
 import { hasOperatorWriteAccess } from "./operator-access.ts";
 import { profilePreferencesState } from "./server-prefs-profile.ts";
 import { flushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
@@ -59,7 +60,7 @@ export interface ShellGatewayHost {
   readonly outboxStoreImport: { load: () => Promise<unknown> };
   readonly shellNavigation: Pick<
     ShellNavigationCapability,
-    "recoverDeletedActiveSession" | "selectChatSession"
+    "recoverDeletedActiveSession" | "selectChatSession" | "synchronizeSessionUrl"
   >;
   invalidate(): void;
 }
@@ -99,6 +100,7 @@ export class ShellGatewayOwner {
       }
       this.observeDeletedSessions(sessions.state);
       this.host.shellNavigation.recoverDeletedActiveSession();
+      this.host.shellNavigation.synchronizeSessionUrl();
       synchronizeTitle();
     };
     synchronize();
@@ -316,7 +318,7 @@ export class ShellGatewayOwner {
       }
       return;
     }
-    if (event.event !== "ui.command" || !event.payload) {
+    if (event.event !== "ui.command" || !event.payload || isNativeMobileHost()) {
       return;
     }
     const context = this.host.context;

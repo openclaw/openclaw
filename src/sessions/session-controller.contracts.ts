@@ -1,6 +1,9 @@
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import type {
+  AdmittedRunOperatorAuthority,
+  OperationalRunInstanceRef,
+} from "../agents/admitted-run-context.js";
 import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
 import type { LlmBoundaryOptions } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.types.js";
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.types.js";
@@ -298,6 +301,17 @@ export class ReplyRunAlreadyActiveError extends Error {
   }
 }
 
+/** A mutation or finishing owner fences admission without owning an active run. */
+export class ReplyRunLifecycleAdmissionBlockedError extends Error {
+  constructor(
+    sessionKey: string,
+    readonly databaseIncarnation?: string,
+  ) {
+    super(`Session "${sessionKey}" changed during turn admission. Retry.`);
+    this.name = "ReplyRunLifecycleAdmissionBlockedError";
+  }
+}
+
 export class ReplyRunFollowupAdmissionBlockedError extends Error {
   constructor(sessionKey: string) {
     super(`Reply follow-up admission is blocked for ${sessionKey}`);
@@ -428,6 +442,10 @@ export type SessionEffectRef = {
   run: <T>(run: () => Promise<T>) => Promise<T>;
 };
 export type Effect = {
+  admissionTransitions?: Map<
+    object,
+    (transition: SessionAdmissionTransition, isActive: SessionEffectRef["isActive"]) => void
+  >;
   diagnostic?: LifecycleDiagnosticOperation;
   sourceInput?: SessionControllerInput;
   agent?: AgentWorkAdmissionIdentity;
@@ -598,10 +616,16 @@ export type SessionControllerMailbox = {
     sourceRefs: Map<FollowupRun, FollowupRun>;
   }>;
   lastRun?: FollowupRun["run"];
-  recentSources: Map<string, { input: SessionControllerInput; expires: number }>;
+  // Redelivery records outlive runs; retain only the exact input identity.
+  recentSources: Map<
+    string,
+    { inputInstance: SessionControllerInput["instance"]; expires: number }
+  >;
 };
 
 export type SessionControllerSourceAdapter = {
+  /** Original personal ingress, bound at admission; identity evidence, not an execution grant. */
+  initiatingPersonalOperator?: AdmittedRunOperatorAuthority;
   readonly scope?: string;
   readonly authority?: { assertCurrent(): void; signal?: AbortSignal };
   readonly signal?: AbortSignal;
@@ -635,6 +659,8 @@ export type SessionControllerWithdrawalHold = (() => void) & {
 export const inputCancellation = Symbol.for("openclaw.sessionControllerInputCancellation");
 
 export type FollowupRun = FollowupRunPayload & {
+  /** @internal Host-only fallback eligibility; false preserves a caller without a profile grant. */
+  sessionPrincipalTurn?: boolean;
   run: FollowupRunPayload["run"] & {
     /** Observe admission without transferring the runner's settlement custody. */
     onOperationAdmitted?: (operation: ReplyOperation) => void;
@@ -652,7 +678,11 @@ type ReplyOperationAdmissionSnapshot =
   | {
       status: "accepted";
       mode: "steer" | "followup";
-      reason?: "requester-mismatch" | "steering-unavailable" | "explicit-followup";
+      reason?:
+        | "requester-mismatch"
+        | "steering-unavailable"
+        | "explicit-followup"
+        | "collaborative-steering-disabled";
     }
   | {
       status: "skipped";

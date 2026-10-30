@@ -7,10 +7,6 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 const mocks = vi.hoisted(() => ({
   load: vi.fn(),
   deletedAgent: vi.fn(),
-  latest: vi.fn(),
-  live: vi.fn(),
-  replace: vi.fn(),
-  terminate: vi.fn(),
   send: vi.fn(),
 }));
 const started = { runId: "run-new", status: "started" };
@@ -26,32 +22,6 @@ vi.mock("../session-utils-store-worker.js", () => ({
       typeof import("../session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
     >[0],
   ) => mocks.load(params.key, { agentId: params.agentId }),
-}));
-vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../agents/subagents/registry/subagent-registry-read.js")
-  >("../../agents/subagents/registry/subagent-registry-read.js");
-  return {
-    ...actual,
-    getLatestSubagentRunByChildSessionKey: mocks.latest,
-    getLatestLiveSubagentRunByChildSessionKey: (
-      ...args: Parameters<typeof actual.getLatestLiveSubagentRunByChildSessionKey>
-    ) => {
-      const run = mocks.live(...args);
-      return run && run.childSessionKey === args[0].trim() && (!args[1] || args[1](run))
-        ? run
-        : null;
-    },
-  };
-});
-
-// mock-isolation: capture replacement without changing the shared subagent registry.
-vi.mock("../../agents/subagents/registry/subagent-registry.js", () => ({
-  replaceSubagentRunAfterSteerCore: mocks.replace,
-}));
-// mock-isolation: observe collector termination without starting cleanup work.
-vi.mock("../../agents/subagents/spawn/subagent-spawn-cleanup.js", () => ({
-  terminateAcceptedCollectorRun: mocks.terminate,
 }));
 // mock-isolation: supply send outcomes without executing external chat turns.
 vi.mock("./chat-send-external-entry.js", () => ({
@@ -89,34 +59,13 @@ function loadSession(
   mocks.load.mockReturnValue({ cfg, canonicalKey, storePath, entry: { sessionId } });
 }
 
-function completedRun(childSessionKey: string) {
-  const run = {
-    runId: "run-old",
-    childSessionKey,
-    controllerSessionKey: "agent:main:main",
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
-    task: "initial task",
-    cleanup: "keep" as const,
-    createdAt: 1,
-    execution: {
-      status: "terminal" as const,
-      startedAt: 2,
-      endedAt: 3,
-      outcome: { status: "ok" as const },
-    },
-  };
-  mocks.latest.mockResolvedValue(run);
-  mocks.live.mockReturnValue(run);
-}
-
 function respondWith(payload: unknown) {
   mocks.send.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
     respond(true, payload, undefined, undefined);
   });
 }
 
-describe("sessions.send completed subagent follow-up status", () => {
+describe("sessions.send follow-up status", () => {
   afterEach(() => flushPendingSessionsChangedEvents());
   beforeEach(() => {
     context = {
@@ -141,25 +90,6 @@ describe("sessions.send completed subagent follow-up status", () => {
     expect(respond).toHaveBeenCalledWith(false, undefined, {
       code: ErrorCodes.INVALID_REQUEST,
       message: 'Agent "deleted-agent" no longer exists in configuration',
-    });
-  });
-
-  it("terminates a started follow-up when its completed owner cannot be replaced", async () => {
-    const childSessionKey = "agent:main:subagent:followup-rejected";
-    loadSession(childSessionKey, "sess-followup-rejected");
-    completedRun(childSessionKey);
-    mocks.replace.mockImplementationOnce(() => {
-      throw new Error("database unavailable");
-    });
-    mocks.terminate.mockResolvedValueOnce(undefined);
-    await expect(send({ key: childSessionKey, message: "follow-up" })).rejects.toThrow(
-      "database unavailable",
-    );
-    expect(mocks.replace).toHaveBeenCalledWith(expect.objectContaining({ task: "follow-up" }));
-    expect(mocks.terminate).toHaveBeenCalledWith({
-      childSessionKey,
-      gatewayRunId: "run-new",
-      sessionCleanup: "preserve",
     });
   });
 

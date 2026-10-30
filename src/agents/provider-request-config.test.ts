@@ -59,6 +59,8 @@ const proxy = {
   url: "http://proxy.internal:8443",
   tls: { ca: "proxy-ca" },
 } as const;
+const tenantHeaders = { "X-Tenant": "acme" };
+const bearerAuth = { mode: "authorization-bearer", token: "secret" } as const;
 
 describe("provider request config", () => {
   it("carries lifecycle plugin metadata ownership through model projections", () => {
@@ -207,33 +209,24 @@ describe("provider request config", () => {
     expect(resolved.headers).toEqual({ "X-Tenant": "acme", "api-key": "secret" });
   });
 
-  it("builds explicit proxy dispatcher policy from normalized transport config", () => {
-    const resolved = requestConfig({
-      request: {
-        proxy,
-        tls: { cert: "client-cert", key: "client-key" },
+  it.each([
+    {
+      request: { proxy, tls: { cert: "client-cert", key: "client-key" } },
+      expected: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://proxy.internal:8443",
+        proxyTls: { ca: "proxy-ca" },
       },
-    });
-
-    expect(buildProviderRequestDispatcherPolicy(resolved)).toEqual({
-      mode: "explicit-proxy",
-      proxyUrl: "http://proxy.internal:8443",
-      proxyTls: { ca: "proxy-ca" },
-    });
-  });
-
-  it("does not copy target TLS into env proxy TLS", () => {
-    const resolved = requestConfig({
-      request: {
-        proxy: { mode: "env-proxy" },
-        tls: clientTls,
+    },
+    {
+      request: { proxy: { mode: "env-proxy" as const }, tls: clientTls },
+      expected: {
+        mode: "env-proxy",
+        connect: { cert: "client-cert", key: "client-key", servername: "gateway.internal" },
       },
-    });
-
-    expect(buildProviderRequestDispatcherPolicy(resolved)).toEqual({
-      mode: "env-proxy",
-      connect: { cert: "client-cert", key: "client-key", servername: "gateway.internal" },
-    });
+    },
+  ])("isolates target and proxy TLS for $expected.mode", ({ request, expected }) => {
+    expect(buildProviderRequestDispatcherPolicy(requestConfig({ request }))).toEqual(expected);
   });
 
   it("rejects insecure TLS transport overrides", () => {
@@ -246,9 +239,7 @@ describe("provider request config", () => {
     expect(() =>
       applyPreparedRuntimeAuthToModel(
         { provider: "custom-openai" },
-        {
-          request: { proxy: { mode: "explicit-proxy", url: "http://proxy.internal:8443" } },
-        },
+        { request: { proxy: { mode: "explicit-proxy", url: proxy.url } } },
       ),
     ).toThrow(/runtime auth request overrides do not allow proxy or tls/i);
   });
@@ -263,20 +254,16 @@ describe("provider request config", () => {
 
   it("sanitizes configured request overrides into runtime transport overrides", () => {
     const configured: ConfiguredProviderRequest = {
-      headers: { "X-Tenant": "acme" },
-      auth: { mode: "authorization-bearer", token: "secret" },
+      headers: tenantHeaders,
+      auth: bearerAuth,
       proxy: { ...proxy, tls: { ...proxy.tls } },
       tls: { ...clientTls },
     };
     expect(sanitizeConfiguredProviderRequest(configured)).toEqual({
-      headers: { "X-Tenant": "acme" },
-      auth: { mode: "authorization-bearer", token: "secret" },
-      proxy: {
-        mode: "explicit-proxy",
-        url: "http://proxy.internal:8443",
-        tls: { ca: "proxy-ca" },
-      },
-      tls: { cert: "client-cert", key: "client-key", serverName: "gateway.internal" },
+      headers: tenantHeaders,
+      auth: bearerAuth,
+      proxy,
+      tls: clientTls,
     });
   });
 
@@ -294,11 +281,11 @@ describe("provider request config", () => {
   it("keeps model-provider transport overrides once the llm path can carry them", () => {
     expect(
       sanitizeConfiguredModelProviderRequest({
-        headers: { "X-Tenant": "acme" },
+        headers: tenantHeaders,
         proxy: { mode: "explicit-proxy", url: "http://proxy.internal:8443" },
       }),
     ).toEqual({
-      headers: { "X-Tenant": "acme" },
+      headers: tenantHeaders,
       proxy: { mode: "explicit-proxy", url: "http://proxy.internal:8443" },
     });
   });
@@ -315,20 +302,17 @@ describe("provider request config", () => {
     ).toBeUndefined();
   });
 
-  it("merges allowPrivateNetwork with later override winning", () => {
-    expect(
-      mergeModelProviderRequestOverrides(
-        { allowPrivateNetwork: true },
-        { allowPrivateNetwork: false },
-      ),
-    ).toEqual({ allowPrivateNetwork: false });
-    expect(
-      mergeModelProviderRequestOverrides(
-        { allowPrivateNetwork: false },
-        { allowPrivateNetwork: true },
-      ),
-    ).toEqual({ allowPrivateNetwork: true });
-  });
+  it.each([false, true])(
+    "merges allowPrivateNetwork with later %s winning",
+    (allowPrivateNetwork) => {
+      expect(
+        mergeModelProviderRequestOverrides(
+          { allowPrivateNetwork: !allowPrivateNetwork },
+          { allowPrivateNetwork },
+        ),
+      ).toEqual({ allowPrivateNetwork });
+    },
+  );
 
   it("merges configured request overrides with later entries winning", () => {
     expect(
@@ -471,33 +455,25 @@ describe("provider request config", () => {
     },
   );
 
-  it("keeps explicit private-network denial for loopback model requests", () => {
-    const resolved = resolveProviderRequestPolicyConfig({
+  it.each([
+    {
       provider: "local-agent-proxy",
-      api: "openai-completions",
       baseUrl: "http://127.0.0.1:3000/v1",
-      ...streaming,
       request: { allowPrivateNetwork: false },
-    });
-
-    expect(resolved).toMatchObject({
-      allowPrivateNetwork: false,
-      trustConfiguredBaseUrlOrigin: false,
-    });
-  });
-
-  it("classifies vllm configured baseUrl as exact-origin trusted endpoint class", () => {
-    const resolved = resolveProviderRequestPolicyConfig({
+      expected: { allowPrivateNetwork: false, trustConfiguredBaseUrlOrigin: false },
+    },
+    {
       provider: "vllm",
-      api: "openai-completions",
       baseUrl: "http://192.168.1.20:8000/v1",
-      ...streaming,
-    });
-
-    expect(resolved).toMatchObject({
-      capabilities: { endpointClass: "custom" },
-      allowPrivateNetwork: false,
-      trustConfiguredBaseUrlOrigin: true,
-    });
+      expected: {
+        capabilities: { endpointClass: "custom" },
+        allowPrivateNetwork: false,
+        trustConfiguredBaseUrlOrigin: true,
+      },
+    },
+  ])("keeps $provider exact-origin network policy", ({ expected, ...route }) => {
+    expect(
+      resolveProviderRequestPolicyConfig({ ...route, api: "openai-completions", ...streaming }),
+    ).toMatchObject(expected);
   });
 });

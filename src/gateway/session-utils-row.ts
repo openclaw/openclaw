@@ -41,7 +41,6 @@ import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.j
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionCommunicationPolicy } from "../sessions/communication-policy.js";
-import { canContinueSessionProviderReview } from "../sessions/provider-review.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
@@ -63,22 +62,24 @@ import {
 import { sessionModelRevision } from "./session-model-revision.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
+import { projectSessionRowProviderReview } from "./session-row-provider-review.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import type {
   GatewaySessionModelSource,
+  SessionChildActivity,
   SessionListRowContext,
 } from "./session-utils-contracts.js";
 import {
   resolveEstimatedSessionCostUsd,
   readStoreChildSessionLinks,
   type SessionChildLink,
-  resolveSessionChildOwners,
   resolveSessionChildController,
 } from "./session-utils-core.js";
 import {
   resolveGatewaySessionDisplayName,
   projectGatewaySessionRunState,
+  projectPreparedSessionChild,
   resolveGatewaySessionKind,
   resolveGatewaySessionGoal,
 } from "./session-utils-display.js";
@@ -427,21 +428,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
   const pinnable = isPinnableSessionEntry(key, entry);
   const pinnedAt = pinnable ? entry?.pinnedAt : undefined;
 
-  const review = entry?.providerReview;
-  let providerReview: GatewaySessionRow["providerReview"];
-  if (review && review.sessionId === entry?.sessionId) {
-    const canContinue = canContinueSessionProviderReview(review, key);
-    providerReview = {
-      id: review.id,
-      runId: review.runId,
-      ...(review.review ? { explanation: review.review.explanation } : {}),
-      ...(canContinue && review.review?.continuation
-        ? { continuationMessage: review.review.continuation.message }
-        : {}),
-      canContinue,
-    };
-  }
-
   const row = omitUndefinedFields<GatewaySessionRow>({
     key,
     sessionModelRevision: sessionModelRevision(entry, undefined, input.preparedRuntimeOwnership),
@@ -531,10 +517,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     lifecycleRevision: entry?.lifecycleRevision,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
-    restartRecoveryStatus: entry?.mainRestartRecovery?.tombstone ? "tombstoned" : undefined,
-    restartRecoveryCycleId: entry?.mainRestartRecovery?.tombstone
-      ? entry.mainRestartRecovery.cycleId
-      : undefined,
     thinkingLevel: input.thinkingProjection.thinkingLevel,
     contextWindow: input.contextWindowProfile.contextWindow,
     contextWindows: input.contextWindowProfile.contextWindows,
@@ -542,6 +524,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     thinkingLevels: input.thinkingProjection.thinkingLevels,
     thinkingOptions: input.thinkingProjection.thinkingOptions,
     thinkingDefault: input.thinkingProjection.thinkingDefault,
+    cyberAccessProgram: entry?.cyberAccessProgram,
     fastMode: entry?.fastMode,
     toolOverrides: entry?.toolOverrides,
     effectiveFastMode: input.fastModeState.mode,
@@ -558,7 +541,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     inputTokens: entry?.inputTokens,
     outputTokens: entry?.outputTokens,
     usageReport: entry?.usageReport,
-    providerReview,
+    providerReview: projectSessionRowProviderReview(key, entry),
     lastRunId: entry?.lastRunId,
     hasAutomation: input.hasAutomation,
     // Navigation lineage is persisted; runtime control is exposed separately above.
@@ -646,7 +629,10 @@ export function replaceSessionRowFacts(
 
 export function presentSessionRow(
   materialized: ReturnType<typeof materializeSessionRow>,
-  options: Partial<ReturnType<typeof readSessionRowInputs>["presentation"]> & { now: number },
+  options: Partial<ReturnType<typeof readSessionRowInputs>["presentation"]> & {
+    now: number;
+    childActivity?: SessionChildActivity;
+  },
 ): GatewaySessionRow {
   const row = { ...materialized.row };
   const { source } = materialized;
@@ -687,39 +673,30 @@ export function presentSessionRow(
   row.estimatedCostUsd =
     source.estimatedCostUsd ??
     asNonNegativeFiniteNumber(source.lightweight ? undefined : usage?.estimatedCostUsd);
-  const children = source.childLinks?.flatMap(({ key, parsedKey, entry: childEntry }) => {
-    if (options.excludedChildKeys?.has(key)) {
-      return [];
-    }
-    const childActive = projectGatewaySessionRunState({
-      key,
-      entry: childEntry,
-      parsedKey,
-      now,
-      rowContext: {
+  let children = options.childActivity;
+  if (!children) {
+    const keys: string[] = [];
+    let active = false;
+    for (const child of source.childLinks ?? []) {
+      if (options.excludedChildKeys?.has(child.key)) {
+        continue;
+      }
+      const contribution = projectPreparedSessionChild(child, row.key, now, {
         subagentRuns,
         projectedAgentRuns: options.projectedAgentRuns,
         projectedSubagentActivity: options.projectedSubagentActivity,
-      },
-    }).fields.hasActiveSubagentRun;
-    if (
-      !resolveSessionChildOwners({
-        key,
-        entry: childEntry,
-        parsedKey,
-        now,
-        subagentRuns,
-        hasActiveRun: childActive,
-      }).includes(row.key)
-    ) {
-      return [];
+      });
+      if (contribution.included) {
+        keys.push(child.key);
+        active ||= contribution.active === true;
+      }
     }
-    if (childActive) {
-      row.hasActiveSubagentRun = true;
-    }
-    return [key];
-  });
-  row.childSessions = children?.length ? children : undefined;
+    children = { childSessions: keys.length ? keys : undefined, hasActiveSubagentRun: active };
+  }
+  row.childSessions = children.childSessions;
+  if (children.hasActiveSubagentRun) {
+    row.hasActiveSubagentRun = true;
+  }
   row.activeModelProvider = options.activeModel?.provider;
   row.activeModel = options.activeModel?.model;
   return row;

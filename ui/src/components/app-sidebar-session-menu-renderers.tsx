@@ -14,6 +14,7 @@ import {
   SIDEBAR_SESSION_SORT_OPTIONS,
   SIDEBAR_SESSION_STATUS_OPTIONS,
 } from "./app-sidebar-session-types.ts";
+import { createPersonalSessionGroupActions } from "./personal-session-group-actions.ts";
 import type { PickerFocusHandle } from "./select-picker-types.ts";
 import {
   createSessionGroup,
@@ -291,32 +292,6 @@ export function renderSidebarSessionSortMenuForMenus(
   );
   // The mobile sheet has no hover or room for flyouts: choices open as sheet pages.
   const sheet = () => isMobileNavLayout();
-  const segmented = <T extends string>(
-    id: string,
-    label: () => string,
-    value: () => T,
-    options: () => ReadonlyArray<{ value: T; label: string }>,
-    onChange: (value: T) => void,
-    inputRef?: (value: T, element: HTMLInputElement) => void,
-  ) => (
-    <div id={id} class="sidebar-session-menu-row sidebar-session-menu-row--segmented">
-      <span aria-hidden="true" title={label()}>
-        {label()}
-      </span>
-      <SettingsSegmented
-        value={value()}
-        inputRef={inputRef}
-        options={options().map((option) => ({
-          value: option.value,
-          label: option.label,
-          title: option.label,
-        }))}
-        ariaLabel={label()}
-        class="sidebar-session-menu-segmented"
-        onChange={onChange}
-      />
-    </div>
-  );
   const switchItem = (
     id: string,
     label: () => string,
@@ -384,23 +359,33 @@ export function renderSidebarSessionSortMenuForMenus(
                 </button>
               ) : undefined}
             </div>
-            {segmented(
-              "sidebar-sessions-status",
-              () => t("sessionsView.status"),
-              () => host.sessionsStatusFilter,
-              () =>
-                SIDEBAR_SESSION_STATUS_OPTIONS.map((value) => ({
-                  value,
-                  label: value === "active" ? t("common.active") : t(`sessionsView.${value}`),
-                })),
-              (statusFilter) => setSessionsStatusFilter(host.sessionOrganizer, statusFilter),
-              (value, element) => {
-                statusInputs.set(value, element);
-                if (value === "active") {
-                  defaultStatus = element;
+            <div
+              id="sidebar-sessions-status"
+              class="sidebar-session-menu-row sidebar-session-menu-row--segmented"
+            >
+              <span aria-hidden="true" title={t("sessionsView.status")}>
+                {t("sessionsView.status")}
+              </span>
+              <SettingsSegmented
+                value={host.sessionsStatusFilter}
+                inputRef={(value, element) => {
+                  statusInputs.set(value, element);
+                  if (value === "active") {
+                    defaultStatus = element;
+                  }
+                }}
+                options={SIDEBAR_SESSION_STATUS_OPTIONS.map((value) => {
+                  const label =
+                    value === "active" ? t("common.active") : t(`sessionsView.${value}`);
+                  return { value, label, title: label };
+                })}
+                ariaLabel={t("sessionsView.status")}
+                class="sidebar-session-menu-segmented"
+                onChange={(statusFilter) =>
+                  setSessionsStatusFilter(host.sessionOrganizer, statusFilter)
                 }
-              },
-            )}
+              />
+            </div>
             {switchItem(
               "sidebar-sessions-cron",
               () => t("sessionsView.showCronSessions"),
@@ -491,6 +476,24 @@ export function renderSidebarSessionSortMenuForMenus(
             )}
           </section>
           <footer class="sidebar-session-menu-footer">
+            <button
+              ref={(element) => controls.set("new-collection", element)}
+              type="button"
+              class="sidebar-session-filter-footer"
+              disabled={!host.connected}
+              onClick={() => {
+                const context = host.sessionDataContext;
+                if (context && host.connected) {
+                  menus.closePositionedMenu("sessionSort");
+                  void createPersonalSessionGroupActions(context).edit();
+                }
+              }}
+            >
+              <span aria-hidden="true">
+                <Icon name="plus" />
+              </span>
+              {t("sessionsView.personalGroupNew")}
+            </button>
             <a
               ref={(element) => controls.set("sources", element)}
               id="sidebar-sessions-sources"

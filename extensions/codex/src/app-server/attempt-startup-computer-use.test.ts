@@ -29,22 +29,18 @@ describe("Computer Use attempt startup", () => {
   setupStartupLifecycle(tempRoots, () => vi.useRealTimers());
 
   it("charges initial client acquisition to the one-off status deadline", async () => {
-    const { harness, requests, status } = await statusProbe({
+    const { harness, timeout, status } = await statusProbe({
       initialize: 800,
       "mcpServerStatus/list": 1_050,
     });
     expect(status.ready).toBe(false);
-    expect(requests).toHaveBeenCalledWith(
-      "plugin/list",
-      expect.anything(),
-      expect.objectContaining({ timeoutMs: 200 }),
-    );
+    expect(timeout("plugin/list")).toBe(200);
     expect(readHarnessRequestMethods(harness)).not.toContain("thread/start");
     expect(readHarnessRequestMethods(harness)).not.toContain("mcpServer/tool/call");
   });
 
   it("preserves cleanup after the one-off status probe exhausts its deadline", async () => {
-    const { harness, requests, status } = await statusProbe(
+    const { harness, requests, timeout, status } = await statusProbe(
       { "mcpServer/tool/call": 2_000 },
       { liveTestTimeoutMs: 1_500, toolCallTimeoutMs: 100 },
     );
@@ -55,16 +51,7 @@ describe("Computer Use attempt startup", () => {
       expect.objectContaining({ timeoutMs: 1_500, signal: expect.any(AbortSignal) }),
     );
     expect(harness.stdinDestroyed).toBe(false);
-    for (const [method, timeoutMs] of [
-      ["thread/start", 1_000],
-      ["mcpServer/tool/call", 100],
-    ] as const) {
-      expect(requests).toHaveBeenCalledWith(
-        method,
-        expect.anything(),
-        expect.objectContaining({ timeoutMs }),
-      );
-    }
+    expect(["thread/start", "mcpServer/tool/call"].map(timeout)).toEqual([1_000, 100]);
   });
 
   it.each([false, true])(
@@ -205,5 +192,7 @@ async function statusProbe(
       computerUse: { enabled: true, marketplaceName: "desktop-tools", ...overrides },
     },
   });
-  return { harness, requests, status };
+  const timeout = (method: string) =>
+    requests.mock.calls.find(([called]) => called === method)?.[2]?.timeoutMs;
+  return { harness, requests, timeout, status };
 }

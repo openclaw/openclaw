@@ -44,6 +44,15 @@ export function inspectStaleLockOwner(params: LockOwnerInspection): {
     // An incomplete sidecar can belong to a suspended live writer.
     return null;
   }
+  if ((params.isPidDefinitelyDead ?? defaultIsPidDefinitelyDead)(payload.pid)) {
+    // Windows start-time fallback spawns subprocesses even for an absent PID.
+    return {
+      reason: "owner-process-exited",
+      pid: payload.pid,
+      recordedStarttime: payload.starttime ?? null,
+      observedStarttime: null,
+    };
+  }
   const observedStarttime =
     payload.starttime === undefined
       ? null
@@ -64,9 +73,7 @@ export function inspectStaleLockOwner(params: LockOwnerInspection): {
   if (observedStarttime !== null && observedStarttime !== normalizedStored) {
     return { reason: "owner-starttime-changed", ...identity };
   }
-  return (params.isPidDefinitelyDead ?? defaultIsPidDefinitelyDead)(payload.pid)
-    ? { reason: "owner-process-exited", ...identity }
-    : null;
+  return null;
 }
 
 export function isLockOwnerDefinitelyStale(params: LockOwnerInspection): boolean {

@@ -38,10 +38,12 @@ import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.native.js";
 import * as legacyMainMigration from "./legacy-main-session-migration.js";
 import { replaceSessionEntry } from "./session-accessor.js";
+import { withSqliteCanonicalValidationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
 import {
   readCanonicalSessionMainKey,
   setCanonicalSqliteSessionMainKey,
 } from "./session-canonical-key.js";
+import { certifySessionCanonicalValidationPending } from "./session-canonical-validation-readiness.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { reconcileSessionTranscriptIndexes } from "./session-transcript-reconcile.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
@@ -118,7 +120,7 @@ it.each(["cold", "preexisting"] as const)(
     if (lifetime === "preexisting") {
       expect(
         statements.queries.filter((sql) =>
-          /select "main_key" from "session_key_contract"/iu.test(sql),
+          /select "main_key"(?:, "canonical_ready")? from "session_key_contract"/iu.test(sql),
         ),
       ).toEqual([]);
     }
@@ -132,6 +134,37 @@ it.each(["cold", "preexisting"] as const)(
     }
   },
 );
+
+it("reads the cold certified startup contract and session inventory once each", async () => {
+  const { stateDir, env, options } = fixture("openclaw-startup-certified-counts-");
+  const cfg = mainConfig();
+  setRuntimeConfigSnapshot(cfg);
+  await replaceSessionEntry(
+    { ...options, sessionKey: "agent:main:retained" },
+    { sessionId: "retained-session", updatedAt: 1 },
+  );
+  await withSqliteCanonicalValidationWorker((withWorker) =>
+    certifySessionCanonicalValidationPending(options, withWorker),
+  );
+  await closeAgents(stateDir);
+
+  const statements = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
+  try {
+    await runSessionStartupMigration({ cfg, env, log: logger() });
+    const readsFrom = (table: string) =>
+      statements.queries.filter((sql) =>
+        new RegExp(`^select\\b[\\s\\S]+ from "${table}"`, "iu").test(sql),
+      ).length;
+    expect({
+      contractReads: readsFrom("session_key_contract"),
+      sessionInventoryReads: readsFrom("session_nodes"),
+    }).toEqual({ contractReads: 1, sessionInventoryReads: 1 });
+  } finally {
+    statements.restore();
+  }
+  expectMainKey(options);
+  expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env })).not.toThrow();
+});
 
 it("does not create a missing configured agent database during startup maintenance", async () => {
   const root = fs.realpathSync.native(tempDirs.make("openclaw-startup-missing-agent-db-"));

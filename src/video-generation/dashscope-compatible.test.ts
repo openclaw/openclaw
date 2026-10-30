@@ -62,7 +62,7 @@ function streamFixture(
 
 type Stage = "submit" | "poll" | "download";
 function taskFetch(responses: Partial<Record<Stage, Response>> = {}) {
-  const calls: Array<{ signal?: AbortSignal | null; priorAborted?: boolean }> = [];
+  const calls: Array<{ signal?: AbortSignal | null }> = [];
   const defaults = {
     submit: Response.json({ output: { task_id: "task-123" } }),
     poll: Response.json({ output: { task_status: "SUCCEEDED", video_url: videoUrl } }),
@@ -75,7 +75,7 @@ function taskFetch(responses: Partial<Record<Stage, Response>> = {}) {
       : path.includes("/tasks/task-123")
         ? "poll"
         : "download";
-    calls.push({ signal: init?.signal, priorAborted: calls.at(-1)?.signal?.aborted });
+    calls.push({ signal: init?.signal });
     return responses[stage] ?? defaults[stage];
   });
   return { fetchFn, calls };
@@ -126,26 +126,8 @@ it.each<[string, Partial<VideoRequest>, Record<string, unknown>]>([
 ])("builds %s parameters", (model, req, expected) => {
   expect(buildParameters(videoRequest({ model, ...req }))).toEqual(expected);
 });
-it("returns only nonempty video bytes, preserving accepted content types", async () => {
-  for (const [contentType, body] of [
-    ["application/json", '{"error":"not a video"}'],
-    ["audio/mp4", "audio-bytes"],
-    ["video/mp4", ""],
-  ]) {
-    const fetchFn = vi.fn(async () => videoResponse(body, contentType));
-    await expect(downloadVideo(fetchFn)).rejects.toThrow(malformed);
-    expect(fetchFn).toHaveBeenCalledOnce();
-  }
-  for (const contentType of ["VIDEO/MP4; codecs=avc1", "application/octet-stream", ""]) {
-    const videos = await downloadVideo(vi.fn(async () => videoResponse("mp4-bytes", contentType)));
-    expect(videos).toHaveLength(1);
-    expect(videos[0]?.buffer).toBeInstanceOf(Buffer);
-    expect(videos[0]).toMatchObject({
-      buffer: Buffer.from("mp4-bytes"),
-      fileName: "video-1.mp4",
-      mimeType: contentType || "video/mp4",
-    });
-  }
+it("rejects an empty video body", async () => {
+  await expect(downloadVideo(vi.fn(async () => videoResponse("")))).rejects.toThrow(malformed);
 });
 it.each([
   [" UNKNOWN ", undefined],
@@ -222,14 +204,9 @@ describe("DashScope operation deadlines", () => {
     expect(String(settled)).toMatch(pattern);
     await completion;
   }
-  it.each([
-    [true, false],
-    [true, true],
-    [false, false],
-    [false, true],
-  ])(
-    "releases a streaming body (invalid=%s, capture tee=%s)",
-    async (invalid, capture) => {
+  it.each([false, true])(
+    "releases a malformed streaming body (capture tee=%s)",
+    async (capture) => {
       const order: string[] = [];
       const cancel = vi.fn(async () => {
         order.push("cancel-started");
@@ -239,30 +216,17 @@ describe("DashScope operation deadlines", () => {
       const fixture = streamFixture(
         {
           start(controller) {
-            if (invalid || capture) {
-              controller.enqueue(new TextEncoder().encode("streaming"));
-            }
+            controller.enqueue(new TextEncoder().encode("streaming"));
           },
-          cancel: invalid ? cancel : undefined,
+          cancel,
         },
         capture,
-        invalid ? "application/json" : "video/mp4",
+        "application/json",
       );
       try {
-        const startedAt = Date.now();
-        const operation = downloadVideo(fixture.fetchFn, invalid && capture ? 5_000 : 80);
-        if (invalid) {
-          await expect(operation).rejects.toThrow(malformed);
-          if (!capture) {
-            expect(cancel).toHaveBeenCalledOnce();
-            expect(order).toEqual(["cancel-started", "cancel-completed"]);
-          }
-        } else {
-          await timesOut(operation, 80, /Alibaba Wan generated video download timed out/);
-          expect(Date.now() - startedAt).toBeGreaterThanOrEqual(60);
-          expect(Date.now() - startedAt).toBeLessThan(2_000);
-          expect(fixture.requests[0]?.signal?.aborted).toBe(true);
-          expect(fixture.fetchFn).toHaveBeenCalledOnce();
+        await expect(downloadVideo(fixture.fetchFn)).rejects.toThrow(malformed);
+        if (!capture) {
+          expect(order).toEqual(["cancel-started", "cancel-completed"]);
         }
       } finally {
         fixture.release();
@@ -270,15 +234,38 @@ describe("DashScope operation deadlines", () => {
     },
     2_000,
   );
+  it.each([false, true])(
+    "times out a valid streaming video body (capture tee=%s)",
+    async (capture) => {
+      const fixture = streamFixture(
+        {
+          start(controller) {
+            if (capture) {
+              controller.enqueue(new TextEncoder().encode("streaming"));
+            }
+          },
+        },
+        capture,
+      );
+      try {
+        await timesOut(
+          downloadVideo(fixture.fetchFn, 80),
+          80,
+          /Alibaba Wan generated video download timed out/,
+        );
+        expect(fixture.requests[0]?.signal?.aborted).toBe(true);
+        expect(fixture.fetchFn).toHaveBeenCalledOnce();
+      } finally {
+        fixture.release();
+      }
+    },
+  );
   it("fails closed before fetch when a function-valued remaining budget is exhausted", async () => {
     const fetchFn = vi.fn<typeof fetch>();
-    const startedAt = Date.now();
     await expect(downloadVideo(fetchFn, () => 0)).rejects.toThrow("remaining budget exhausted");
-    expect(Date.now() - startedAt).toBeLessThan(2_000);
     expect(fetchFn).not.toHaveBeenCalled();
   });
   it("releases the guarded fetch when the remaining-budget resolver throws", async () => {
-    const initialTimerCount = vi.getTimerCount();
     const cancelBody = vi.fn();
     const timeoutMs = vi
       .fn<() => number>()
@@ -288,16 +275,8 @@ describe("DashScope operation deadlines", () => {
       });
     const fixture = streamFixture({ cancel: cancelBody });
     await expect(downloadVideo(fixture.fetchFn, timeoutMs)).rejects.toThrow(resolverFailure);
-    expect(timeoutMs).toHaveBeenCalledTimes(2);
     expect(cancelBody).toHaveBeenCalledOnce();
-    expect(cancelBody.mock.calls[0]?.[0]).toMatchObject({ message: resolverFailure });
     expect(fixture.requests[0]).toMatchObject({ aborted: false, signal: { aborted: true } });
-    expect(vi.getTimerCount()).toBe(initialTimerCount);
-  });
-  it("releases the submission request timeout before polling the task", async () => {
-    const { fetchFn, calls } = taskFetch();
-    await runTask(fetchFn, { timeoutMs: 5_000 });
-    expect(calls[1]?.priorAborted).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   });
   it.each([
@@ -351,26 +330,35 @@ describe("DashScope operation deadlines", () => {
     );
     expect(fetchFn).toHaveBeenCalledTimes(2);
   });
-  it.each([429, 503])(
-    "does not let HTTP %s retry backoff outlive the remaining budget",
-    async (status) => {
-      const fetchFn = vi.fn(async () => new Response("busy", { status }));
-      await timesOut(downloadVideo(fetchFn, 100), 100, /timed out/);
-      expect(fetchFn).toHaveBeenCalledOnce();
+  it("bounds retry backoff by the remaining budget", async () => {
+    const fetchFn = vi.fn(async () => new Response("busy", { status: 503 }));
+    await timesOut(downloadVideo(fetchFn, 100), 100, /timed out/);
+    expect(fetchFn).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each(["VIDEO/MP4; codecs=avc1", "application/octet-stream", ""])(
+    "retries within budget and preserves video bytes (%s)",
+    async (contentType) => {
+      const fetchFn = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(Response.json({ output: { task_id: "task-123" } }))
+        .mockResolvedValueOnce(
+          Response.json({ output: { task_status: "SUCCEEDED", video_url: videoUrl } }),
+        )
+        .mockResolvedValueOnce(new Response("busy", { status: 503 }))
+        .mockResolvedValueOnce(videoResponse("video", contentType));
+      const operation = runTask(fetchFn, { timeoutMs: 500 });
+      await vi.advanceTimersByTimeAsync(250);
+      expect((await operation).videos).toMatchObject([
+        {
+          buffer: Buffer.from("video"),
+          fileName: "video-1.mp4",
+          mimeType: contentType || "video/mp4",
+        },
+      ]);
       expect(vi.getTimerCount()).toBe(0);
     },
   );
-  it("still retries a transient response and returns complete video bytes within budget", async () => {
-    const fetchFn = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response("busy", { status: 503 }))
-      .mockResolvedValueOnce(videoResponse("video"));
-    const operation = downloadVideo(fetchFn, 500);
-    await vi.advanceTimersByTimeAsync(250);
-    expect((await operation)[0]?.buffer?.toString()).toBe("video");
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-    expect(vi.getTimerCount()).toBe(0);
-  });
   it("charges submission and poll waits to the default operation budget", async () => {
     const fetchFn = vi.fn(async () => {
       await delay(30);

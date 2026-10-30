@@ -12,6 +12,7 @@ import {
   readSqliteDatabaseFactRevision,
   readSqliteDatabaseGeneration,
   readSqliteDatabaseAdmissionFact,
+  SqliteDatabaseGenerationSlot,
   admitSqliteDatabaseFactValue,
   type Admission,
   type AdmissionFactValue,
@@ -165,6 +166,39 @@ export function createSqliteDatabaseAdmissionReader(owner: {
       : undefined;
   }
 
+  /** Retain revision cells while following the owner's current publication. */
+  function prepareSqliteDatabaseAdmissionForPath<T>(
+    location: string,
+    key: SqliteDatabaseFactKey<T>,
+  ): () => T | undefined {
+    const record = pathAdmission(location);
+    if (!record) {
+      return () => undefined;
+    }
+    const generation = new Int32Array(record.generation);
+    const revisionSlot = key.schemaDependent
+      ? SqliteDatabaseGenerationSlot.schemaRevision
+      : SqliteDatabaseGenerationSlot.factRevision;
+    let fact = record.facts.get(key.name);
+    let current = fact && new Int32Array(fact.current);
+    return () => {
+      if (Atomics.load(generation, SqliteDatabaseGenerationSlot.retired) !== 0) {
+        return undefined;
+      }
+      const published = record.facts.get(key.name);
+      if (published !== fact) {
+        fact = published;
+        current = fact && new Int32Array(fact.current);
+      }
+      return fact &&
+        current &&
+        Atomics.load(current, 0) === 1 &&
+        fact.revision === Atomics.load(generation, revisionSlot)
+        ? readSqliteDatabaseAdmissionFact(fact, key)
+        : undefined;
+    };
+  }
+
   function getSqliteDatabaseSchemaRevision(
     connection: EngineConnection,
     options: { existingOnly?: boolean } = {},
@@ -201,6 +235,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     getSqliteDatabaseSchemaRevision,
     getOrLoadSqliteDatabaseAdmissionForPath,
     peekSqliteDatabaseAdmissionForPath,
+    prepareSqliteDatabaseAdmissionForPath,
     hasSqliteDatabaseSchemaAdmissionForPath,
     getSqliteDatabaseAdmissionIdentityForPath,
     hasSqliteDatabaseSchemaAdmissionForIdentity,

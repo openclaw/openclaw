@@ -17,8 +17,8 @@ import {
   onTrustedToolExecutionEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
-  type TrustedToolExecutionEvent,
   waitForDiagnosticEventsDrained,
+  type TrustedToolExecutionEvent,
 } from "../../infra/diagnostic-events.js";
 import {
   closeDiagnosticEmbeddedRunOwner,
@@ -88,6 +88,7 @@ function terminal(result = "done", session_id = "session-jsonl") {
 function messageUse(id: string, input: Record<string, unknown>) {
   return toolUse(id, "mcp__openclaw__message", input);
 }
+
 function streamDelta(delta: unknown, index?: number) {
   return jsonl({
     type: "stream_event",
@@ -213,17 +214,12 @@ function buildPreparedCliRunContext(params: {
     input: "stdin" as const,
     serialize: true,
   };
-  return createPreparedCliContext(
+  const context = createPreparedCliContext(
     { provider, model: "model", runId, agentId: "main", sessionKey: "agent:main:main" },
     { id: provider, config: backend, bundleMcp: false, parseJsonlEvent: params.parseJsonlEvent },
-    {
-      preparedBackend: {
-        backend,
-        env: {},
-        ...(params.beforeExecution ? { beforeExecution: params.beforeExecution } : {}),
-      },
-    },
   );
+  context.preparedBackend.beforeExecution = params.beforeExecution;
+  return context;
 }
 
 function claudeJsonlContext() {
@@ -234,6 +230,7 @@ function captureContext(provider = "claude-cli", output: "text" | "jsonl" = "jso
   context.mcpDeliveryCapture = true;
   return context;
 }
+
 function settledResult(
   context: PreparedCliRunContext,
   output: Awaited<ReturnType<typeof executePreparedCliRun>>,
@@ -264,11 +261,9 @@ function installCaptureGrant(context: PreparedCliRunContext) {
 }
 
 function requireSupervisorSpawnInput(index = 0): SupervisorSpawnInput {
-  const call = supervisorSpawnMock.mock.calls[index];
-  if (!call) {
-    throw new Error("Expected supervisor spawn");
-  }
-  return call[0] as SupervisorSpawnInput;
+  const input = supervisorSpawnMock.mock.calls[index]?.[0];
+  assert.isDefined(input, "Expected supervisor spawn");
+  return input;
 }
 beforeEach(() => {
   vi.unstubAllEnvs();
@@ -289,6 +284,7 @@ beforeEach(() => {
   });
   setActivePluginRegistry(registry);
 });
+
 function createDiagnosticFixture() {
   const time = { now: 1_000_000 };
   const clock = vi.spyOn(Date, "now").mockImplementation(() => time.now);
@@ -783,47 +779,63 @@ it("surfaces a Claude hook-stopped terminal result from JSON output", async () =
   });
 });
 
-it("preserves the terminal failure through fork persistence errors", async () => {
-  const stdout = jsonl({
-    type: "result",
-    subtype: "error_max_turns",
-    session_id: "fork-successor",
-    terminal_reason: "max_turns",
-    errors: ["Reached maximum number of turns (1)"],
-  });
-  mockOutput([stdout], { exitCode: 1 }, true);
-  const persistenceError = new Error("fork successor persistence failed");
-  persistenceError.name = "TimeoutError";
-  const persistCliSessionForkSuccessor = vi.fn().mockRejectedValue(persistenceError);
-  const restoreCliSessionFork = vi.fn().mockResolvedValue(undefined);
-  const context = buildPreparedCliRunContext({
-    output: "jsonl",
-    provider: "claude-cli",
-    runId: "run-fork-primary-failure",
-  });
-  context.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
-  context.preparedBackend.backend.forkArg = "--fork-session";
-  context.params.forkCliSessionOnResume = true;
-  const admission = prepareSystemAgentRunAdmission({}, context.params.runId, "main", "fork-test");
-  onTestFinished(admission.close);
-  context.params.admittedRunContext = await admission.admit("embedded");
-  context.params.claimCliSessionFork = vi.fn().mockResolvedValue(true);
-  context.params.persistCliSessionForkSuccessor = persistCliSessionForkSuccessor;
-  context.params.restoreCliSessionFork = restoreCliSessionFork;
-  const failure = await executePreparedCliRun(context, "fork-source").catch(
-    (error: unknown) => error,
-  );
-  expect(failure).toBeInstanceOf(AggregateError);
-  expect((failure as AggregateError).errors).toEqual([
-    expect.objectContaining({ code: "cli_max_turns" }),
-    persistenceError,
-  ]);
-  expect(findCliTerminalStopError(failure)).toMatchObject({ code: "cli_max_turns" });
-  expect(resolveAgentRunErrorLifecycleFields(failure, undefined)).toEqual({});
-  expect((failure as AggregateError).cause).toBe((failure as AggregateError).errors[0]);
-  expect(persistCliSessionForkSuccessor).toHaveBeenCalledWith("fork-successor");
-  expect(restoreCliSessionFork).toHaveBeenCalledTimes(1);
-});
+it.each([false, true])(
+  "preserves the terminal failure through fork persistence errors (restore fails: %s)",
+  async (restoreFails) => {
+    const stdout = jsonl({
+      type: "result",
+      subtype: "error_max_turns",
+      session_id: "fork-successor",
+      terminal_reason: "max_turns",
+      errors: ["Reached maximum number of turns (1)"],
+    });
+    mockOutput([stdout], { exitCode: 1 }, true);
+    const persistenceError = new Error("fork successor persistence failed");
+    persistenceError.name = "TimeoutError";
+    const persistCliSessionForkSuccessor = vi.fn().mockRejectedValue(persistenceError);
+    const restoreError = new Error("fork restoration lost its session ownership");
+    const restoreCliSessionFork = restoreFails
+      ? vi.fn().mockRejectedValue(restoreError)
+      : vi.fn().mockResolvedValue(undefined);
+    const context = buildPreparedCliRunContext({
+      output: "jsonl",
+      provider: "claude-cli",
+      runId: "run-fork-primary-failure",
+    });
+    context.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
+    context.preparedBackend.backend.forkArg = "--fork-session";
+    context.params.forkCliSessionOnResume = true;
+    const admission = prepareSystemAgentRunAdmission({}, context.params.runId, "main", "fork-test");
+    onTestFinished(admission.close);
+    context.params.admittedRunContext = await admission.admit("embedded");
+    context.params.claimCliSessionFork = vi.fn().mockResolvedValue(true);
+    context.params.persistCliSessionForkSuccessor = persistCliSessionForkSuccessor;
+    context.params.restoreCliSessionFork = restoreCliSessionFork;
+    const failure = await executePreparedCliRun(context, "fork-source").catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(AggregateError);
+    const persistenceFailure = restoreFails ? (failure as AggregateError).errors[0] : failure;
+    if (restoreFails) {
+      expect((failure as AggregateError).errors).toEqual([persistenceFailure, restoreError]);
+      expect((failure as AggregateError).cause).toBe(persistenceFailure);
+    }
+    expect((persistenceFailure as AggregateError).errors).toEqual([
+      expect.objectContaining({ code: "cli_max_turns" }),
+      persistenceError,
+    ]);
+    expect(findCliTerminalStopError(failure)).toMatchObject({ code: "cli_max_turns" });
+    expect(resolveAgentRunErrorLifecycleFields(failure, undefined)).toEqual({});
+    expect((persistenceFailure as AggregateError).cause).toBe(
+      (persistenceFailure as AggregateError).errors[0],
+    );
+    expect((failure as AggregateError).message).toContain(
+      "CLI turn failed and its fork successor could not be persisted",
+    );
+    expect(persistCliSessionForkSuccessor).toHaveBeenCalledWith("fork-successor");
+    expect(restoreCliSessionFork).toHaveBeenCalledTimes(1);
+  },
+);
 
 it("composes plugin-owned JSONL parsing into the production executor", async () => {
   const agentEvents = captureAgentEvents();
@@ -1020,28 +1032,30 @@ it("correlates parallel same-name loopback calls by arguments instead of admissi
 
 it("keeps identical parallel outcomes unknown with first tool finishes before second CLI identity", async () => {
   const toolEvents = captureToolEvents();
+  const recordEvent = vi.fn();
   mockCaptureSpawn((input, captureKey) => {
     const toolArgs = { action: "react", emoji: "same" };
-    const emitToolStarts = (...ids: string[]) =>
-      input.onStdout?.(assistant(...ids.map((id) => messageUse(id, toolArgs))));
-    const recordOutcome = (outcome: "completed" | "failed") =>
-      recordToolOutcome(captureKey, "message", toolArgs, outcome);
-    const emitToolResults = (...ids: string[]) =>
-      input.onStdout?.(user(...ids.map((id) => toolResult(id, "ok"))));
-    emitToolStarts("call-identical-a");
-    recordOutcome("failed");
-    recordOutcome("completed");
-    emitToolResults("call-identical-a");
-    emitToolStarts("call-identical-b");
-    emitToolResults("call-identical-b");
-    emitToolStarts("call-identical-later");
-    recordOutcome("completed");
+    input.onStdout?.(assistant(messageUse("call-identical-a", toolArgs)));
+    recordToolOutcome(captureKey, "message", toolArgs, "failed");
+    recordToolOutcome(captureKey, "message", toolArgs, "completed");
+    input.onStdout?.(user(toolResult("call-identical-a", "ok")));
+    input.onStdout?.(assistant(messageUse("call-identical-b", toolArgs)));
+    input.onStdout?.(user(toolResult("call-identical-b", "ok")));
+    input.onStdout?.(assistant(messageUse("call-identical-later", toolArgs)));
+    recordToolOutcome(captureKey, "message", toolArgs, "completed");
     input.onStdout?.(`${user(toolResult("call-identical-later", "ok"))}${terminal()}`);
   });
   const context = captureContext();
+  context.trajectoryRecorder = { recordEvent };
 
   await executePreparedCliRun(context);
-
+  const results = recordEvent.mock.calls.filter(([type]) => type === "tool.result");
+  const outcomes = results.map(([, row]) => [row?.toolCallId, row?.status, row?.success]);
+  expect(outcomes).toEqual([
+    ["call-identical-a", "unknown", undefined],
+    ["call-identical-b", "unknown", undefined],
+    ["call-identical-later", "completed", true],
+  ]);
   expect(toolEvents).toHaveLength(6);
   expectToolEvents(
     toolEvents,
@@ -1161,8 +1175,9 @@ it.each([
       timedOut: true,
     },
   );
-
   const context = captureContext();
+  const recordEvent = vi.fn();
+  context.trajectoryRecorder = { recordEvent };
   context.params.onExecutionPhase = vi.fn();
   await expect(executePreparedCliRun(context)).rejects.toMatchObject({
     message: expect.stringMatching(/exceeded timeout/i),
@@ -1181,6 +1196,7 @@ it.each([
     model: "model",
     backend: "claude-cli",
   });
+  expect(recordEvent.mock.calls.map(([type]) => type)).not.toContain("tool.result");
 
   expectToolEvents(toolEvents, [
     ["started", fixture.toolCallId],

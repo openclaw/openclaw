@@ -11,6 +11,7 @@ import * as programArgs from "../daemon/program-args.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
 import {
   createFinalizeArgs,
   createLaterPrompter,
@@ -19,6 +20,7 @@ import {
   sessionGatewayTuiTarget,
   type FinalizeArgs,
   type FinalizeArgsOverrides,
+  createGatewayPasswordRefConfig,
 } from "./setup.finalize.fixtures.test-support.js";
 import { readPin } from "./setup.finalize.runtime-pin.test-support.js";
 import {
@@ -259,14 +261,6 @@ function finalize(flow: FinalizeArgs["flow"], overrides: FinalizeArgsOverrides =
   return finalizeSetupWizard(createFinalizeArgs(flow, overrides));
 }
 
-function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
-}
-
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
@@ -298,25 +292,14 @@ describe("finalizeSetupWizard", () => {
       await finalizeSetupWizard(
         createFinalizeArgs("quickstart", {
           settings: { authMode: "password" },
-          nextConfig: {
-            gateway: {
-              auth: {
-                mode: "password",
-                password: {
-                  source: "env",
-                  provider: "default",
-                  id: "OPENCLAW_GATEWAY_PASSWORD",
-                },
-              },
-            },
-          },
+          nextConfig: createGatewayPasswordRefConfig(),
           prompter,
           runtime,
         }),
       );
     });
 
-    const probeParams = requireMockArg(probeGatewayReachable) as {
+    const probeParams = mockCall(probeGatewayReachable)[0] as {
       url?: string;
       password?: string;
     };
@@ -712,13 +695,13 @@ describe("finalizeSetupWizard", () => {
       typeof import("../commands/daemon-install-helpers.js")
     >("../commands/daemon-install-helpers.js");
     const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.4" });
     const discoverNode = vi
       .spyOn(runtimePaths, "resolvePreferredNodePath")
       .mockResolvedValue(undefined);
     const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
       status: "supported",
-      version: "1.4.3",
+      version: "1.4.4",
       sqliteVersion: "3.53.4",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       nodeSharedSqlite: false,
@@ -834,7 +817,7 @@ describe("finalizeSetupWizard", () => {
         const managedStartup = action !== "reused";
         const startupTiming = resolveGatewayStartupTiming(platform);
         expect(waitForGatewayReachable).toHaveBeenCalledOnce();
-        const timing = requireMockArg(waitForGatewayReachable) as {
+        const timing = mockCall(waitForGatewayReachable)[0] as {
           deadlineMs?: number;
           probeTimeoutMs?: number;
         };
@@ -1212,7 +1195,7 @@ describe("finalizeSetupWizard", () => {
     "reinstalls recorded Bun through $flow with choice=$choice",
     async ({ flow, choice }) => {
       const recordedPath = "/opt/recorded/bin/bun";
-      runExec.mockResolvedValue(createRuntimeProbeResult("1.4.3"));
+      runExec.mockResolvedValue(createRuntimeProbeResult("1.4.4"));
       gatewayServiceIsLoaded.mockResolvedValue(true);
       gatewayServiceReadCommand.mockResolvedValue({
         programArguments: [recordedPath, "/app/openclaw.mjs", "gateway"],
@@ -1238,7 +1221,7 @@ describe("finalizeSetupWizard", () => {
         );
       }
       expect(selectRuntime).toHaveBeenCalledTimes(flow === "advanced" ? 2 : 1);
-      expect(requireMockArg(buildGatewayInstallPlan)).toMatchObject({
+      expect(mockCall(buildGatewayInstallPlan)[0]).toMatchObject({
         runtime: choice,
         runtimePath: choice === "bun" ? recordedPath : undefined,
         pinnedRuntimePath: undefined,
@@ -1424,13 +1407,13 @@ describe("finalizeSetupWizard", () => {
       },
     });
 
-    expect(requireMockArg(healthCommand)).toMatchObject({
+    expect(mockCall(healthCommand)[0]).toMatchObject({
       json: false,
       timeoutMs: 10_000,
       token: "session-token",
       config: { gateway: { auth: { mode: "token", token: "session-token" } } },
     });
-    expect(requireMockArg(healthCommand, 0, 1)).toBeTypeOf("object");
+    expect(mockCall(healthCommand)[1]).toBeTypeOf("object");
   });
 
   it("ends with a health-failure outro when the health check exits after a reachable probe", async () => {
@@ -1585,34 +1568,23 @@ describe("finalizeSetupWizard", () => {
     await finalize("quickstart", {
       opts: { skipHealth: false, skipUi: true },
       settings: { authMode: "password" },
-      nextConfig: {
-        gateway: {
-          auth: {
-            mode: "password",
-            password: {
-              source: "env",
-              provider: "default",
-              id: "OPENCLAW_GATEWAY_PASSWORD",
-            },
-          },
-        },
-      },
+      nextConfig: createGatewayPasswordRefConfig(),
       prompter,
     });
 
-    expect(requireMockArg(probeGatewayReachable)).toMatchObject({
+    expect(mockCall(probeGatewayReachable)[0]).toMatchObject({
       url: "ws://127.0.0.1:18789",
       token: undefined,
       password: "session-password",
     });
-    expect(requireMockArg(healthCommand)).toMatchObject({
+    expect(mockCall(healthCommand)[0]).toMatchObject({
       json: false,
       timeoutMs: 10_000,
       token: undefined,
       password: "session-password",
       config: { gateway: { auth: { mode: "password" } } },
     });
-    expect(requireMockArg(healthCommand, 0, 1)).toBeTypeOf("object");
+    expect(mockCall(healthCommand)[1]).toBeTypeOf("object");
   });
 
   it("shows actionable gateway guidance instead of a hard error in no-daemon onboarding", async () => {

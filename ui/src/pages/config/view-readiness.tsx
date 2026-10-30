@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Errored, Loading } from "solid-js";
+import { createMemo, Errored, Loading, Show } from "solid-js";
 import { RetryAction } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -24,12 +24,16 @@ export function ConfigReadError(props: { message: string; onRetry: () => void })
   );
 }
 
+type ConfigReadState = Pick<
+  ConfigProps,
+  "configRead" | "configLoaded" | "configRecoveryError" | "onRetryConfig"
+>;
+
 export function ConfigReadBoundary(props: {
-  config: Pick<
-    ConfigProps,
-    "configRead" | "configLoaded" | "configRecoveryError" | "onRetryConfig"
-  >;
+  config: ConfigReadState;
   children: JSX.Element;
+  fallback?: JSX.Element;
+  displayReady?: boolean;
 }) {
   const configResult = createMemo(() => props.config.configRead ?? undefined);
   const configReady = () => {
@@ -43,23 +47,40 @@ export function ConfigReadBoundary(props: {
     return true;
   };
   return (
-    <Loading
-      on={!props.config.configLoaded ? props.config.configRead : undefined}
-      fallback={<ConfigReadLoading message={t("common.loading")} />}
+    <Show
+      when={props.displayReady}
+      fallback={
+        <Loading
+          on={!props.config.configLoaded ? props.config.configRead : undefined}
+          fallback={props.fallback ?? <ConfigReadLoading message={t("common.loading")} />}
+        >
+          <Errored
+            fallback={(error, reset) => (
+              <ConfigReadError
+                message={formatUiError(error())}
+                onRetry={() => {
+                  props.config.onRetryConfig();
+                  reset();
+                }}
+              />
+            )}
+          >
+            {configReady() ? props.children : null}
+          </Errored>
+        </Loading>
+      }
     >
-      <Errored
-        fallback={(error, reset) => (
-          <ConfigReadError
-            message={formatUiError(error())}
-            onRetry={() => {
-              props.config.onRetryConfig();
-              reset();
-            }}
-          />
-        )}
-      >
-        {configReady() ? props.children : null}
-      </Errored>
-    </Loading>
+      {props.children}
+    </Show>
+  );
+}
+
+/** Keep section controls mounted while their shared config owner loads or retries. */
+export function ConfigReadStatus(props: { config: ConfigReadState }) {
+  const loading = () => <p class="settings-section__desc">{t("common.loading")}</p>;
+  return (
+    <ConfigReadBoundary config={props.config} fallback={loading()}>
+      {!props.config.configLoaded && !props.config.configRead ? loading() : null}
+    </ConfigReadBoundary>
   );
 }

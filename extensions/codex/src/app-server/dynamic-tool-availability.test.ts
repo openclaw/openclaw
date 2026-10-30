@@ -143,52 +143,39 @@ describe("Codex collector availability", () => {
   it.each(["direct", "searchable"] as const)(
     "keeps native catalogs frozen across the default-on upgrade with %s loading",
     async (loading) => {
-      const legacy = createBridge(createCollectorTools(false), { loading });
-      const nativeFingerprint = codexDynamicToolsFingerprint(legacy.specs);
-      const nativeSpecs = parseCodexNativeToolCatalog(
-        { id: "thread", dynamic_tools: legacy.specs },
-        "thread",
-        nativeFingerprint,
-      );
-      const legacyFunctions = functions(nativeSpecs);
-      expect(legacyFunctions.map((tool) => tool.name)).toEqual(["sessions_spawn"]);
-      expect(legacyFunctions[0]?.inputSchema).not.toHaveProperty("properties.collect");
-
-      const currentTools = createCollectorTools();
-      expect(currentTools.find((tool) => tool.name === "agents_wait")).toBeDefined();
-      const resumed = createBridge(currentTools, {
-        registeredTools: [],
-        registeredSpecs: nativeSpecs,
-        loading,
-      });
-      expect([resumed.specs, resumed.availableSpecs]).toEqual([nativeSpecs, nativeSpecs]);
-      expect(resumed.availableTools.map((tool) => tool.name)).toEqual(["sessions_spawn"]);
-      expectUncollectableSpawn(
-        resumed.availableTools.find((tool) => tool.name === "sessions_spawn"),
-      );
-      await expectCollectionRejected(resumed);
-
-      const tools = createCollectorTools();
-      const initial = createBridge(tools, { registeredTools: tools, loading });
-      const inherited = createBridge(tools, {
-        registeredTools: [],
-        registeredSpecs: initial.specs,
-        loading,
-      });
-      expect(codexDynamicToolsFingerprint(initial.specs)).not.toBe(nativeFingerprint);
-      expect(inherited.specs).toEqual(initial.specs);
-      for (const bridge of [initial, inherited]) {
-        const spawn = bridge.availableTools.find((tool) => tool.name === "sessions_spawn");
-        const projected = functions(bridge.specs);
+      for (const swarm of [false, undefined] as const) {
+        const tools = createCollectorTools(swarm);
+        const initial = createBridge(tools, { registeredTools: tools, loading });
+        const nativeSpecs = parseCodexNativeToolCatalog(
+          { id: "thread", dynamic_tools: initial.specs },
+          "thread",
+          codexDynamicToolsFingerprint(initial.specs),
+        );
+        const resumed = createBridge(createCollectorTools(), {
+          registeredTools: [],
+          registeredSpecs: nativeSpecs,
+          loading,
+        });
+        expect([resumed.specs, resumed.availableSpecs]).toEqual([nativeSpecs, nativeSpecs]);
+        const projected = functions(resumed.specs);
+        expect(resumed.availableTools.map((tool) => tool.name)).toEqual(
+          swarm === false
+            ? ["sessions_spawn"]
+            : expect.arrayContaining(["sessions_spawn", "agents_wait"]),
+        );
+        const spawn = resumed.availableTools.find((tool) => tool.name === "sessions_spawn");
+        if (swarm === false) {
+          expectUncollectableSpawn(spawn);
+          expect(projected[0]?.inputSchema).not.toHaveProperty("properties.collect");
+          await expectCollectionRejected(resumed);
+          continue;
+        }
         const projectedSpawn = projected.find((tool) => tool.name === "sessions_spawn");
         for (const field of ["collect", "outputSchema", "groupId"]) {
           expect(spawn?.parameters).toHaveProperty(`properties.${field}`);
           expect(projectedSpawn?.inputSchema).toHaveProperty(`properties.${field}`);
         }
         expect(spawn?.description).toContain("await with agents_wait");
-        expect(projected.map((tool) => tool.name)).toEqual(
-          expect.arrayContaining(["sessions_spawn", "agents_wait"]),
-        );
       }
     },
   );

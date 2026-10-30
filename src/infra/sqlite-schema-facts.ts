@@ -36,6 +36,7 @@ import { canPreserveTransactionSnapshot } from "./sqlite-schema-mutation.js";
 import {
   finishSqliteReadScope,
   observeSqliteTransactionState as observeTransactionState,
+  sqliteSchemaOwners as owners,
   type SqliteSchemaOwner as SchemaOwner,
   type SchemaMutationListener,
   type SqliteReadOperationRevision,
@@ -52,11 +53,6 @@ export type {
   SqliteReadOperationRevision,
   SqliteReadScopeRevision,
 } from "./sqlite-schema-scope.js";
-
-const owners = resolveGlobalSingleton(
-  Symbol.for("openclaw.sqliteSchemaFacts"),
-  () => new WeakMap<DatabaseSync, SchemaOwner>(),
-);
 
 const postgresReadSnapshots = resolveGlobalSingleton(
   Symbol.for("openclaw.postgresReadSnapshots"),
@@ -466,7 +462,9 @@ export function readSqliteNativeMutationRevision(database: EngineConnection): nu
 /** Derived caches may retain reads from a tracked transaction until its first mutation. */
 export function hasUncommittedSqliteWrites(database: EngineConnection): boolean {
   if (isPostgresSqlConnection(database)) {
-    return database.isTransaction;
+    // PostgreSQL read-only snapshots are cacheable; only writable transaction ownership
+    // invalidates derived facts. The scope is installed after the read-only BEGIN.
+    return database.isTransaction && !postgresReadSnapshots.has(database);
   }
   const owner = owners.get(database);
   if (owner) {

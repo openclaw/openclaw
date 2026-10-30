@@ -29,17 +29,21 @@ export async function bundleStandaloneModules(options, build) {
 }
 
 /**
- * Bun can retain exports used only by an eliminated dynamic-import facade. Link
- * once from the declared emitted roots after source discovery has stabilized.
- * Original TypeScript loads and provenance remain the native compiler's inputs.
+ * Source AOT needs a final link to remove exports used only by an eliminated
+ * dynamic-import facade before validating source-module URLs. Emitted JS keeps
+ * its first bundle and resource ownership without expanding that graph again.
  * @template {{root: string, outdir: string, entrypoints: string[]}} Options
  * @template {StandaloneBundleResult & {entryOutputs: string[]}} Result
  * @param {Options} options
  * @param {Result} result
  * @param {(options: Options) => Promise<StandaloneBundleResult>} build
  * @param {import("./bun-standalone-parser.mjs").StandaloneParser} parse
+ * @param {{sourceAot: boolean}} mode
  */
-export async function relinkStandaloneModules(options, result, build, parse) {
+export async function finalizeStandaloneModules(options, result, build, parse, { sourceAot }) {
+  if (!sourceAot) {
+    return { ...result, runtimeMetafile: result.metafile };
+  }
   const inputRoot = `${options.outdir}-input`;
   const artifacts = new Map(result.outputs.map((output) => [output.path, output]));
   const roots = new Set(result.entryOutputs);

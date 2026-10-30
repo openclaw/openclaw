@@ -6,7 +6,7 @@ import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi
 import { SessionsGoalUpdateParamsSchema } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.test-support.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { SessionsListResult, SessionGoal } from "../../api/types.ts";
 import { retireStoredGoalOperations } from "../../lib/chat/goal-operation-storage.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
@@ -98,6 +98,8 @@ describe("Goal control requests", () => {
       value: activeGoal,
       executionConfirmed: false,
     });
+    host.chatSending = false;
+    host.chatRunId = null;
     const submitted = mutateChatGoal(host, { action: "resume", goalId: goal.id });
     expect(chatGoalPresentation(host, activeGoal)?.executionConfirmed).toBe(false);
     pending.resolve({ status: "started", goalId: goal.id, runId: "goal-run", goal: activeGoal });
@@ -717,6 +719,40 @@ describe("Goal control requests", () => {
     await firstRecovery?.onCheck();
     expect(host.request).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["sending", "queued", "running"] as const)(
+    "keeps a fresh Resume unsent while the session is %s, then admits it after settlement",
+    async (busy) => {
+      const host = goalHost({
+        "sessions.goal.update": { status: "started", goalId: goal.id, runId: "goal-run", goal },
+      });
+      host.chatSending = busy === "sending";
+      host.chatRunId = busy === "running" ? "current-run" : null;
+      if (busy === "queued") {
+        host.sessionsResult!.sessions[0] = {
+          ...host.sessionsResult!.sessions[0]!,
+          status: "queued",
+          hasActiveRun: true,
+          activeRunIds: ["waiting-human-input"],
+        };
+      }
+      expect(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(false);
+      expect(host.request).not.toHaveBeenCalled();
+      expect(chatGoalRecovery(host)).toBeUndefined();
+      host.chatSending = false;
+      host.chatRunId = null;
+      host.sessionsResult!.sessions[0] = {
+        ...host.sessionsResult!.sessions[0]!,
+        status: "done",
+        hasActiveRun: false,
+        activeRunIds: [],
+      };
+      expect(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(true);
+      expect(
+        host.request.mock.calls.filter(([method]) => method === "sessions.goal.update"),
+      ).toHaveLength(1);
+    },
+  );
 
   it("retires a busy Resume refusal without retrying and permits a distinct later Resume", async () => {
     vi.useFakeTimers();

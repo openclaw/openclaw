@@ -38,7 +38,10 @@ function readConnectAuth(request: MockGatewayRequest): Record<string, unknown> |
 async function createCredentialPage() {
   const context = await suite.newBrowserContext({
     locale: "en-US",
-    recordVideo: { dir: artifactDir, size: viewport },
+    recordVideo:
+      process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+        ? { dir: artifactDir, size: viewport }
+        : undefined,
     serviceWorkers: "block",
     viewport,
   });

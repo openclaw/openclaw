@@ -397,5 +397,8 @@ export function stripMentions(
     });
   }
   result = result.replace(/@[0-9+]{5,}/g, " ");
-  return result.replace(/\s+/g, " ").trim();
+  // A slash command keeps its text as in a direct message: /btw, /loop and other commands take
+  // multiline arguments, and collapsing whitespace would join their lines and drop indentation.
+  const stripped = result.trim();
+  return stripped.startsWith("/") ? stripped : stripped.replace(/\s+/g, " ");
 }

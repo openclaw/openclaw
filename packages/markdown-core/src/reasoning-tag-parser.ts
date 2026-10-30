@@ -3,10 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { fromMarkdown, type Extension, type Handle } from "mdast-util-from-markdown";
 import { gfmTableFromMarkdown } from "mdast-util-gfm-table";
 import { gfmTable } from "micromark-extension-gfm-table";
-import { hasUnresolvedImageCode } from "./image-code-retention.js";
-import { findListItemRetentionStart } from "./list-code-retention.js";
-import { findReferenceDefinitionRetention } from "./reference-definition-retention.js";
-import { retainTableParagraph } from "./table-code-retention.js";
 export {
   parseReasoningTagAt,
   parseReasoningTagName,
@@ -21,7 +17,7 @@ const DISABLE_HTML_MARKDOWN = {
   disable: { null: ["htmlFlow", "htmlText"] },
 };
 
-export type PositionedNode = {
+type PositionedNode = {
   type?: string;
   value?: string;
   identifier?: string;
@@ -325,7 +321,7 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
       hasInlineCode &&
       blockStart !== undefined &&
       blockEnd !== undefined &&
-      hasUnresolvedImageCode(text, blockStart, blockEnd, regions, regionStart)
+      scanBracketOwnership(text, blockStart, blockEnd, regions, regionStart).hasImageCode
     ) {
       unresolvedImageCodeStart = blockStart;
       retainStart = Math.min(retainStart, blockStart);
@@ -335,11 +331,13 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
     findReferenceDefinitionRetention(text, definitions);
   retainStart = findListItemRetentionStart(text, blocks, Math.min(retainStart, referenceStart));
   regions.sort((left, right) => left.start - right.start);
+  const continuation = findContainerContinuation(text, blocks.at(-1), retainStart);
   return {
     regions,
     codeSpans: regions.map(({ start, end }): [number, number] => [start, end]),
     textSpans,
     retainStart,
+    ...(continuation ? { continuation } : {}),
     ...(unresolvedImageCodeStart === undefined ? {} : { unresolvedImageCodeStart }),
     completedParagraphs,
     definitions,
@@ -354,4 +352,269 @@ export function findMarkdownCodeRegions(
   options?: MarkdownOwnershipOptions,
 ): MarkdownCodeRegion[] {
   return /[`~\t]| {4}/u.test(text) ? parseMarkdownOwnership(text, options).regions : [];
+}
+
+function scanBracketOwnership(
+  text: string,
+  start: number,
+  end: number,
+  regions: readonly { start: number; end: number; block: boolean }[],
+  regionStart: number,
+) {
+  let regionIndex = regionStart;
+  const brackets: Array<{ image: boolean; code: boolean }> = [];
+  let hasImageCode = false;
+  for (let cursor = start; cursor < end; cursor += 1) {
+    const region = regions[regionIndex];
+    if (region?.start === cursor) {
+      if (!region.block) {
+        for (const bracket of brackets) {
+          bracket.code ||= bracket.image;
+        }
+      }
+      cursor = region.end - 1;
+      regionIndex += 1;
+    } else if (text[cursor] === "\\") {
+      cursor += 1;
+    } else if (text[cursor] === "!" && text[cursor + 1] === "[") {
+      brackets.push({ image: true, code: false });
+      cursor += 1;
+    } else if (text[cursor] === "[") {
+      brackets.push({ image: false, code: false });
+    } else if (text[cursor] === "]" && brackets.pop()?.code) {
+      hasImageCode = true;
+    }
+  }
+  return {
+    hasImageCode: hasImageCode || brackets.some((bracket) => bracket.image && bracket.code),
+    hasOpenLabel: brackets.length > 0,
+  };
+}
+
+/** Preserve an open container without retaining its already-stable literal lines. */
+function findContainerContinuation(
+  text: string,
+  block: PositionedNode | undefined,
+  retainStart: number,
+) {
+  const start = block?.position?.start?.offset;
+  const end = block?.position?.end?.offset;
+  if (start === undefined || end === undefined || retainStart < start || /\r(?!\n)/u.test(text)) {
+    return undefined;
+  }
+  // Keep the last content line and trailing blanks: the next line may terminate the container.
+  const offset = text.lastIndexOf("\n", end - 1) + 1;
+  if (offset <= start) {
+    return undefined;
+  }
+  if (block?.type === "code" && /^(?: {4}| {0,3}\t)/u.test(text.slice(start))) {
+    return { offset, context: "    x\n" };
+  }
+  const paragraph = block?.children?.length === 1 ? block.children[0] : undefined;
+  const paragraphStart = paragraph?.position?.start?.offset;
+  if (
+    block?.type !== "blockquote" ||
+    paragraph?.type !== "paragraph" ||
+    paragraphStart === undefined
+  ) {
+    return undefined;
+  }
+  const prefix = text.slice(paragraphStart, offset);
+  // Labels, link or reference titles, and code delimiters can gain ownership after an append.
+  if (
+    /[`|]|\][(:]/u.test(prefix) ||
+    scanBracketOwnership(text, paragraphStart, offset, [], 0).hasOpenLabel
+  ) {
+    return undefined;
+  }
+  return { offset, context: text.slice(start, paragraphStart) + "x\n" };
+}
+
+/** Retain the current item, including any container framing an earlier reference needs. */
+function findListItemRetentionStart(
+  text: string,
+  blocks: readonly PositionedNode[],
+  retainStart?: number,
+): number {
+  const offset = retainStart ?? blocks.at(-1)?.position?.start?.offset ?? text.length;
+  const block = blocks.findLast((entry) => (entry.position?.start?.offset ?? Infinity) <= offset);
+  if (block?.type !== "list") {
+    return offset;
+  }
+  // A partial marker can still become continuation text; keep it with its predecessor.
+  const completeLineEnd = Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r"));
+  return (
+    block.children?.findLast((item) => {
+      const start = item.position?.start?.offset;
+      return (
+        start !== undefined && start <= (retainStart ?? text.length) && start < completeLineEnd
+      );
+    })?.position?.start?.offset ?? offset
+  );
+}
+
+function findReferenceDefinitionRetention(
+  text: string,
+  definitions: readonly { identifier: string; start: number; end: number }[],
+) {
+  const unsettledDefinitionStarts = definitions
+    .filter((definition) => canStillHaveReferenceTitle(text, definition.end))
+    .map(({ start }) => start);
+  // Expanded labels cannot be serialized as carried CommonMark definitions (999 source
+  // characters maximum); keep their original source just like unfinished titles.
+  const retainStart = definitions.reduce(
+    (offset, { identifier, start }) => (identifier.length > 999 ? Math.min(offset, start) : offset),
+    Math.min(text.length, ...unsettledDefinitionStarts),
+  );
+  return { unsettledDefinitionStarts, retainStart };
+}
+
+function canStillHaveReferenceTitle(text: string, start: number): boolean {
+  let cursor = start;
+  while (text[cursor] === " " || text[cursor] === "\t") {
+    cursor += 1;
+  }
+  if (cursor === text.length) {
+    return true;
+  }
+
+  const lineEndingWidth = getLineEndingWidth(text, cursor);
+  if (lineEndingWidth > 0) {
+    cursor += lineEndingWidth;
+    if (cursor === text.length) {
+      return true;
+    }
+  }
+
+  const titleStart = findPossibleTitleStart(text, cursor);
+  if (titleStart === undefined) {
+    return false;
+  }
+  return hasUnclosedTitle(text, titleStart);
+}
+
+function findPossibleTitleStart(text: string, start: number): number | undefined {
+  let cursor = skipContainerPrefixes(text, start);
+
+  while (text[cursor] === " " || text[cursor] === "\t") {
+    cursor += 1;
+  }
+  if (cursor === text.length) {
+    return cursor;
+  }
+  const opening = text[cursor];
+  return opening === '"' || opening === "'" || opening === "(" ? cursor : undefined;
+}
+
+function skipContainerPrefixes(text: string, start: number) {
+  let cursor = start;
+  while (cursor < text.length) {
+    let markerStart = cursor;
+    while (text[markerStart] === " " || text[markerStart] === "\t") {
+      markerStart += 1;
+    }
+
+    if (text[markerStart] === ">") {
+      cursor = markerStart + 1;
+      if (text[cursor] === " " || text[cursor] === "\t") {
+        cursor += 1;
+      }
+      continue;
+    }
+
+    const markerEnd = listMarkerEnd(text, markerStart);
+    if (markerEnd > markerStart) {
+      cursor = markerEnd;
+      while (text[cursor] === " " || text[cursor] === "\t") {
+        cursor += 1;
+      }
+      continue;
+    }
+    break;
+  }
+  return cursor;
+}
+
+function listMarkerEnd(text: string, start: number) {
+  const first = text[start] ?? "";
+  let markerEnd = start;
+  if (first === "-" || first === "+" || first === "*") {
+    markerEnd += 1;
+  } else if (first >= "0" && first <= "9") {
+    while ((text[markerEnd] ?? "") >= "0" && (text[markerEnd] ?? "") <= "9") {
+      markerEnd += 1;
+    }
+    const delimiter = text[markerEnd] ?? "";
+    if (markerEnd - start > 9 || (delimiter !== "." && delimiter !== ")")) {
+      return start;
+    }
+    markerEnd += 1;
+  } else {
+    return start;
+  }
+  const trailingSpace = text[markerEnd];
+  return trailingSpace === " " || trailingSpace === "\t" ? markerEnd : start;
+}
+
+function hasUnclosedTitle(text: string, start: number): boolean {
+  if (start === text.length) {
+    return true;
+  }
+  const opening = text[start];
+  if (opening !== '"' && opening !== "'" && opening !== "(") {
+    return false;
+  }
+  const closing = opening === "(" ? ")" : opening;
+  let escaped = false;
+  for (let cursor = start + 1; cursor < text.length; cursor += 1) {
+    const character = text[cursor];
+    if (escaped) {
+      escaped = false;
+    } else if (character === "\\") {
+      escaped = true;
+    } else if (character === closing) {
+      return false;
+    }
+
+    const lineEndingWidth = getLineEndingWidth(text, cursor);
+    if (lineEndingWidth > 0) {
+      let nextLine = cursor + lineEndingWidth;
+      while (text[nextLine] === " " || text[nextLine] === "\t") {
+        nextLine += 1;
+      }
+      if (getLineEndingWidth(text, nextLine) > 0) {
+        return false;
+      }
+      cursor += lineEndingWidth - 1;
+    }
+  }
+  return true;
+}
+
+function getLineEndingWidth(text: string, index: number): number {
+  if (text[index] === "\n") {
+    return 1;
+  }
+  if (text[index] !== "\r") {
+    return 0;
+  }
+  return text[index + 1] === "\n" ? 2 : 1;
+}
+
+/** An unfinished table delimiter can still rejoin its preceding paragraph. */
+function retainTableParagraph(
+  retainStart: number,
+  textLength: number,
+  block: PositionedNode,
+  previous: PositionedNode | undefined,
+): number {
+  const startLine = block.position?.start?.line;
+  return block.type === "table" &&
+    block.children?.length === 1 &&
+    block.position?.end?.offset === textLength &&
+    previous?.type === "paragraph" &&
+    startLine !== undefined &&
+    previous.position?.end?.line === startLine - 1
+    ? Math.min(retainStart, previous.position?.start?.offset ?? retainStart)
+    : retainStart;
 }

@@ -157,6 +157,27 @@ describe("ensureConfigReady", () => {
     fs.rmSync(home, { recursive: true, force: true });
   });
 
+  it("publishes valid config without loading error-location rendering", async () => {
+    vi.resetModules();
+    const loadRenderer = vi.fn(() => {
+      throw new Error("Valid startup must not load error-location rendering");
+    });
+    // mock-isolation: Importing the real renderer would defeat this load-boundary assertion.
+    vi.doMock("../../config/issue-location.js", loadRenderer);
+    try {
+      const config = { gateway: { mode: "local" as const } };
+      readSnapshotMock.mockResolvedValue({ ...makeSnapshot(config), exists: true });
+      const { ensureConfigReady: ensureFreshConfigReady } = await import("./config-guard.js");
+      await ensureFreshConfigReady({ runtime, commandPath: ["health"] });
+      expect(publishConfigMock).toHaveBeenCalledWith(config, config);
+      expect(loadRenderer).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock("../../config/issue-location.js");
+      vi.resetModules();
+    }
+  });
+
   it.each([
     { command: "connect", valid: true },
     { command: "node run", valid: false },

@@ -83,13 +83,19 @@ next idle gap without another quiet period. Explicit cost and overview reads
 flush and await pending updates, so a completed turn does not need to wait for
 that timer. This display batching does not delay Goal budgets or provider billing
 limits. A restart or pricing change can require background backfill;
-the page shows partial totals while it advances. Sessions without a cached
+the page shows partial totals while it advances. A pricing change (a new build or
+model catalog update) rescans only sessions with a turn that has no recorded cost;
+sessions whose turns all recorded their cost keep their projection. Sessions without a cached
 projection remain pending without waiting for transcript statistics. Background
 backfill yields between completed transcripts after ten seconds of scanning or
 50 transcripts, whichever comes first. One large transcript or the initial
 inventory can take longer. Transcripts
 remain the source of truth. Detailed reports retain exact timestamp boundaries and the recorded
 order of floating-point cost additions.
+
+Background refresh budgets use elapsed time, so wall-clock corrections do not
+extend the quiet period or retry delays. Report dates and recorded timestamps
+still follow the wall clock.
 
 ## Usage date ranges
 

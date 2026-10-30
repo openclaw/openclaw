@@ -126,6 +126,26 @@ export async function runQaParityReportCommand(opts: {
   writeQaCommandVerdict("QA parity", comparison.pass);
 }
 
+async function assertCoverageOutputPreservesInput(
+  inputPath: string,
+  outputPath: string | undefined,
+  inputKind: "evidence" | "summary",
+) {
+  if (!outputPath) {
+    return;
+  }
+  const input = await fs.stat(inputPath);
+  const output = await fs.stat(outputPath).catch((error: unknown) => {
+    if (!hasNodeErrorCode(error, "ENOENT")) {
+      throw error;
+    }
+    return undefined;
+  });
+  if (output && input.dev === output.dev && input.ino === output.ino) {
+    throw new Error(`--output must not overwrite the input ${inputKind} artifact.`);
+  }
+}
+
 export async function runQaCoverageReportCommand(opts: {
   repoRoot?: string;
   output?: string;
@@ -145,18 +165,7 @@ export async function runQaCoverageReportCommand(opts: {
       throw new Error("--evidence cannot be combined with --tools, --summary, or --match.");
     }
     const evidencePath = path.resolve(repoRoot, opts.evidence);
-    if (outputPath) {
-      const input = await fs.stat(evidencePath);
-      const output = await fs.stat(outputPath).catch((error: unknown) => {
-        if (!hasNodeErrorCode(error, "ENOENT")) {
-          throw error;
-        }
-        return undefined;
-      });
-      if (output && input.dev === output.dev && input.ino === output.ino) {
-        throw new Error("--output must not overwrite the input evidence artifact.");
-      }
-    }
+    await assertCoverageOutputPreservesInput(evidencePath, outputPath, "evidence");
     const evidence = validateQaEvidenceSummaryJson(
       JSON.parse(await fs.readFile(evidencePath, "utf8")),
     );
@@ -175,7 +184,9 @@ export async function runQaCoverageReportCommand(opts: {
     }
     let summary: QaParitySuiteSummary | undefined;
     if (opts.summary?.trim()) {
-      const completed = await readCompletedQaSuiteSummaryFile(path.resolve(repoRoot, opts.summary));
+      const summaryPath = path.resolve(repoRoot, opts.summary);
+      const completed = await readCompletedQaSuiteSummaryFile(summaryPath);
+      await assertCoverageOutputPreservesInput(summaryPath, outputPath, "summary");
       // SAFETY: --summary consumes buildQaSuiteSummaryJson's runtime-parity artifact; the reader checks completion only.
       summary = completed as QaParitySuiteSummary;
     }

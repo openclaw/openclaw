@@ -15,13 +15,6 @@ type TelegramPollingLeaseEntry = {
 
 type TelegramPollingLeaseRegistry = Map<string, TelegramPollingLeaseEntry>;
 
-type TelegramPollingLease = {
-  tokenFingerprint: string;
-  waitedForPrevious: boolean;
-  replacedStoppingPrevious: boolean;
-  release: () => void;
-};
-
 type AcquireTelegramPollingLeaseOpts = {
   token: string;
   accountId: string;
@@ -58,9 +51,7 @@ async function waitForPreviousRelease(params: {
   );
 }
 
-export async function acquireTelegramPollingLease(
-  opts: AcquireTelegramPollingLeaseOpts,
-): Promise<TelegramPollingLease> {
+export async function acquireTelegramPollingLease(opts: AcquireTelegramPollingLeaseOpts) {
   const registry = pollingLeaseRegistry();
   const fingerprint = fingerprintTelegramBotToken(opts.token);
   let waitedForPrevious = false;

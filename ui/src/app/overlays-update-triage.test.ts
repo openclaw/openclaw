@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";

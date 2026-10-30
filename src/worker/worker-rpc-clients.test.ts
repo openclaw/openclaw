@@ -1,9 +1,11 @@
 import { expect, it, onTestFinished, vi } from "vitest";
-import type {
-  WorkerHelloOk,
-  WorkerLiveEvent,
-  WorkerLiveEventErrorShape,
-  WorkerTranscriptMessage,
+import {
+  WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES,
+  type WorkerTranscriptCommitRequestFrame,
+  type WorkerHelloOk,
+  type WorkerLiveEvent,
+  type WorkerLiveEventErrorShape,
+  type WorkerTranscriptMessage,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceEventFrame,
@@ -11,6 +13,11 @@ import type {
   WorkerInferenceTerminalFrame,
   WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES,
+  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+} from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import * as transcriptBudget from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { createUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
@@ -223,6 +230,145 @@ it("splits semantic batches at the gateway frame byte ceiling", async () => {
     { seq: 1, baseLeafId: null, messages: [messages[0]] },
     { seq: 2, baseLeafId: "leaf-1", messages: [messages[1]] },
   ]);
+});
+
+it("reads and serializes bounded transcript batches with linear work", async () => {
+  const { client, ...harness } = transcriptHarness();
+  const messages = Array.from({ length: 129 }, (_, index) => userMessage(String(index)));
+  let reads = 0;
+  const input = new Proxy(messages, {
+    get(target, key, receiver) {
+      if (typeof key === "string" && /^\d+$/.test(key)) {
+        reads += 1;
+      }
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  harness.commit.mockImplementation(async (_kind, request) =>
+    successResponse({ entryIds: [`entry-${request.seq}`], newLeafId: `leaf-${request.seq}` }),
+  );
+
+  const stringify = JSON.stringify;
+  let serializedBytes = 0;
+  const serialization = vi.spyOn(JSON, "stringify").mockImplementation((value) => {
+    const json = stringify(value);
+    serializedBytes += Buffer.byteLength(json, "utf8");
+    return json;
+  });
+  onTestFinished(() => serialization.mockRestore());
+  await client.commit(input);
+  serialization.mockRestore();
+
+  // Permit envelope and transport overhead, but never growing-prefix serialization.
+  expect(serializedBytes).toBeLessThan(2 * Buffer.byteLength(stringify(messages), "utf8"));
+  const requests = harness.commit.mock.calls.map(([, request]) => request);
+  expect(requests.map((request) => request.messages.length)).toEqual([64, 64, 1]);
+  expect(requests.flatMap((request) => request.messages)).toEqual(messages);
+  expect(reads).toBe(messages.length);
+  for (const request of requests) {
+    expect(request.messages).not.toBe(messages);
+  }
+});
+
+it("preserves exact frame-budget batch boundaries for UTF-8, escapes and images", async () => {
+  const frame = (messages: WorkerTranscriptMessage[], seq: number, baseLeafId: string | null) =>
+    ({
+      type: "req",
+      id: "00000000-0000-4000-8000-000000000000",
+      method: "worker.transcript.commit",
+      params: { runEpoch: Number.MAX_SAFE_INTEGER, seq, baseLeafId, messages },
+    }) satisfies WorkerTranscriptCommitRequestFrame;
+  const leaf = 'leaf-🦞-"\\';
+  const fixtures: WorkerTranscriptMessage[][] = [];
+  let seed = 81;
+  const random = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed;
+  };
+  const alphabet = ["a", "é", "🦞", '"', "\\", "\n", "\u0000", "\ud800"];
+  for (const character of alphabet) {
+    fixtures.push(
+      Array.from({ length: 70 }, (_, index) => {
+        const text = character.repeat(100 + (random() % 1400));
+        return index % 2 === 0
+          ? userMessage(text)
+          : {
+              role: "custom",
+              customType: "openclaw.system-update",
+              content: text,
+              display: false,
+              timestamp: index,
+              details: { kind: "runtime-context", turnScoped: true },
+            };
+      }),
+    );
+  }
+  // The second message takes the first frame to exactly the control ceiling ±1 byte.
+  const prefix = userMessage('🦞"\\\n'.repeat(100));
+  const controlRoom =
+    WORKER_PROTOCOL_MAX_PAYLOAD_BYTES -
+    Buffer.byteLength(JSON.stringify(frame([prefix, userMessage("")], 9, null)), "utf8");
+  for (const delta of [-1, 0, 1]) {
+    fixtures.push([prefix, userMessage("x".repeat(controlRoom + delta)), userMessage("tail")]);
+  }
+  const imageMessage = (data: string): WorkerTranscriptMessage => ({
+    role: "user",
+    content: [{ type: "image", mimeType: "image/png", data }],
+    timestamp: 1,
+  });
+  const imageRoom =
+    WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES -
+    Buffer.byteLength(JSON.stringify(frame([prefix, imageMessage("")], 9, null)), "utf8");
+  for (const delta of [0, 1]) {
+    fixtures.push([prefix, imageMessage("a".repeat(imageRoom + delta))]);
+  }
+  fixtures.push([imageMessage('é🦞"\\\n'.repeat(500)), userMessage("x".repeat(65_000))]);
+  fixtures.push([userMessage("accepted"), userMessage("x".repeat(80_000))]);
+
+  for (const messages of fixtures) {
+    // Oracle: try whole frames, independently of incremental byte accounting.
+    const expected: WorkerTranscriptCommitRequestFrame["params"][] = [];
+    let offset = 0;
+    let seq = 9;
+    let baseLeafId: string | null = null;
+    while (offset < messages.length) {
+      let length = 0;
+      for (
+        let size = 1;
+        size <= Math.min(WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES, messages.length - offset);
+        size++
+      ) {
+        if (
+          !transcriptBudget.isWorkerTranscriptFrameWithinBudget(
+            frame(messages.slice(offset, offset + size), seq, baseLeafId),
+          )
+        ) {
+          break;
+        }
+        length = size;
+      }
+      if (length === 0) {
+        break;
+      }
+      expected.push(frame(messages.slice(offset, offset + length), seq, baseLeafId).params);
+      offset += length;
+      baseLeafId = leaf;
+      seq++;
+    }
+    const harness = connectionHarness();
+    harness.commit.mockResolvedValue(successResponse({ entryIds: ["entry"], newLeafId: leaf }));
+    const client = new WorkerTranscriptCommitClient(harness.connection, {
+      runEpoch: Number.MAX_SAFE_INTEGER,
+      baseLeafId: null,
+      initialSeq: 9,
+    });
+    if (offset < messages.length) {
+      await expect(client.commit(messages)).rejects.toThrow("protocol payload limit");
+    } else {
+      await client.commit(messages);
+    }
+    expect(harness.commit.mock.calls.map(([, request]) => request)).toEqual(expected);
+  }
 });
 
 it("does not send retired previews after connection readiness returns", async () => {

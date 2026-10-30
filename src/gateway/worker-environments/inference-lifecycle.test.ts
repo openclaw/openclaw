@@ -36,6 +36,7 @@ import {
   type Manager,
   REQUEST,
   SESSION_TARGET,
+  startInference,
   terminalFrames,
   waitForFast,
 } from "./inference.test-support.js";
@@ -60,19 +61,6 @@ function expectRejected(result: PromiseSettledResult<unknown>, failure: Error) {
     throw new Error("Expected original settlement failure");
   }
   expect(result.reason).toBe(failure);
-}
-
-function startInference(
-  instance: Manager,
-  overrides: Partial<Parameters<Manager["start"]>[0]> = {},
-) {
-  return instance.start({
-    identity: IDENTITY,
-    request: REQUEST,
-    sessionTarget: SESSION_TARGET,
-    sink: overrides.sink ?? createSink().sink,
-    ...overrides,
-  });
 }
 
 function expectCancelled(sink: ReturnType<typeof createSink>) {

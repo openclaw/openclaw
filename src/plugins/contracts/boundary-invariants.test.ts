@@ -26,6 +26,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/discord/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/facetime/index.ts": ["before_tool_call"],
   "extensions/feishu/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
+  "extensions/knowledge/src/memory-index-hook.ts": ["before_prompt_build"],
   "extensions/matrix/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/mcp-events/index.ts": ["cron_changed", "cron_reconciled"],
   "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start"],

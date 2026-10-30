@@ -1,4 +1,4 @@
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { shortestFileLabels } from "./file-kind.ts";
 import { markdownFileLinkFromEvent } from "./markdown-file-links.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
@@ -32,11 +32,12 @@ function linkInfo(input: string) {
   }));
 }
 
-it("links multi-segment paths only when enabled", () => {
-  workspaceLink(render("see src/lib/foo.ts for details"), "src/lib/foo.ts");
-
-  const disabled = render("see src/lib/foo.ts and src/lib/foo.ts:42 for details", {});
-  expect(disabled.querySelector("a[data-file-path]")).toBeNull();
+it.each([
+  ["see src/lib/foo.ts for details", "src/lib/foo.ts"],
+  ["[x](/Users/a/b.ts)", "/Users/a/b.ts"],
+])("links %s only when enabled", (source, path) => {
+  workspaceLink(render(source), path);
+  expect(render(source, {}).querySelector("a[href], a[data-file-path]")).toBeNull();
 });
 
 it.each<[string, string[], string[]?]>([
@@ -58,58 +59,26 @@ it.each<[string, string[], string[]?]>([
   }
 });
 
-it("converts explicit relative and absolute local file links", () => {
-  const links = fileLinks(render("[foo.ts](src/utils/foo.ts:42) [x](/Users/a/b.ts)"));
-  expect(links).toHaveLength(2);
-  expect(links[0]?.dataset).toMatchObject({ filePath: "src/utils/foo.ts", fileLine: "42" });
-  expect(links[1]?.dataset.filePath).toBe("/Users/a/b.ts");
-  expect(links.every((link) => !link.hasAttribute("href"))).toBe(true);
-
-  const disabled = render("[x](/Users/a/b.ts)", {});
-  expect(
-    ["href", "data-file-path"].map((name) => disabled.querySelector("a")?.hasAttribute(name)),
-  ).toEqual([false, false]);
-});
-
 it("keeps authored CSV focusable and non-navigating", () => {
   const path = "inventory report.CSV";
   const markdown = `[Read inventory](${encodeURI(path)})`;
   const fragment = render(markdown);
   const link = workspaceLink(fragment, path);
   expect(link?.textContent).toBe("Read inventory");
-  document.body.append(fragment);
-  onTestFinished(() => fragment.remove());
-  link?.focus();
-  expect(document.activeElement).toBe(link);
 
   const disabled = render(markdown, {});
   expect(disabled.querySelector("a[data-file-path]")).toBeNull();
   expect(disabled.querySelector("a")?.getAttribute("href")).toBe(encodeURI(path));
 });
 
-it.each<[string, boolean]>([
-  ...["文档/说明.md", "qa-cafe\u0301/re\u0301sume\u0301.md"].map((path): [string, boolean] => [
-    path,
-    true,
-  ]),
-  ...["qa files/reader's [draft] (v2).md", "literal%20name.txt"].map((path): [string, boolean] => [
-    path,
-    false,
-  ]),
-])("preserves Unicode and authored punctuation in %s", (name, unicode) => {
-  for (const line of unicode ? ["17"] : [undefined, "17"]) {
-    const target = `${encodeURI(name)}${line ? ":17" : ""}`;
-    const forms = [`[Read file](${target})`];
-    if (unicode) {
-      forms.push(`[Read file](${name}:17)`, `\`${name}:17\``, `Inspect ${name}:17 now.`);
-    }
-    for (const source of forms) {
-      const link = workspaceLink(render(source), name, line);
-      if (source.startsWith("[")) {
-        expect(link?.textContent).toBe("Read file");
-      }
-    }
-  }
+it.each([
+  "文档/说明.md",
+  "qa-cafe\u0301/re\u0301sume\u0301.md",
+  "qa files/reader's [draft] (v2).md",
+  "literal%20name.txt",
+])("preserves encoded Unicode and authored punctuation in %s", (path) => {
+  const link = workspaceLink(render(`[Read file](${encodeURI(path)}:17)`), path, "17");
+  expect(link?.textContent).toBe("Read file");
 });
 
 it("keeps authored URL and session destinations out of workspace file handling", () => {
@@ -131,6 +100,48 @@ it("keeps authored URL and session destinations out of workspace file handling",
   expect([...fragment.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual(
     destinations,
   );
+});
+
+it("scopes authored relative file links to document readers without changing message links", () => {
+  const source = [
+    "[Evidence](evidence/log.md#details)",
+    "[Plain](evidence/log.md)",
+    "[Encoded](evidence/hash%23name.md#details)",
+    "[Parent](../summary.md)",
+    "[Extensionless](./evidence/README)",
+    "[Heading](#details)",
+    "[Query](evidence/log.md?raw=1)",
+    "[External](https://example.com/log.md#details)",
+    "[Session](/chat/main/notes/readme.md)",
+    "`evidence/log.md`",
+  ].join("\n\n");
+  const options = { fileLinks: true, sessionLinks: true };
+  const message = render(source, options);
+  const document = render(source, { ...options, documentFileLinks: true });
+  const relative = [
+    ...document.querySelectorAll<HTMLAnchorElement>("[data-file-document-relative]"),
+  ];
+  expect(relative.map((link) => link.dataset.filePath)).toEqual([
+    "evidence/log.md",
+    "evidence/log.md",
+    "evidence/hash#name.md",
+    "../summary.md",
+    "./evidence/README",
+  ]);
+  expect(relative.every((link) => !link.hasAttribute("href"))).toBe(true);
+  expect(
+    [...document.querySelectorAll("a[href]")].map((link) => link.getAttribute("href")),
+  ).toEqual([
+    "#details",
+    "evidence/log.md?raw=1",
+    "https://example.com/log.md#details",
+    "/chat/main/notes/readme.md",
+  ]);
+  expect(fileLinks(document).at(-1)?.dataset.fileDocumentRelative).toBeUndefined();
+  // The render cache must not let either context lend its link behavior to the other.
+  expect(render(source, options).innerHTML).toBe(message.innerHTML);
+  expect(message.querySelector("[data-file-document-relative]")).toBeNull();
+  expect(message.querySelector('a[href="evidence/log.md#details"]')).not.toBeNull();
 });
 
 it.each(["portal.example/service.test", "münich.de/guide.md", "example.xn--p1ai/guide.md"])(

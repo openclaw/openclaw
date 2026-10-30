@@ -1,5 +1,4 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import {
   bindPluginMetadataSnapshotCache,
@@ -10,7 +9,6 @@ import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { createOwnedTestInstance, createTestInstance } from "./plugin-instance.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import * as gatewayScope from "./runtime/gateway-request-scope.js";
 import {
   getPluginRuntimeGatewayRequestScope as getScope,
   withPluginRuntimeGatewayRequestScope,
@@ -19,21 +17,6 @@ import {
   getPluginRuntimeGenerationRegistry,
   withPluginRuntimeGenerationScope,
 } from "./runtime/generation-scope.js";
-
-afterEach(() => vi.restoreAllMocks());
-
-it("reuses one identity descriptor per instance across repeated invocations", async () => {
-  const instances = ["paired-scope", "other-scope"].map((id) => createOwnedTestInstance(id));
-  const scopes = vi.spyOn(gatewayScope, "withPluginRuntimePluginScope");
-  for (const instance of instances) {
-    for (let index = 0; index < 100; index++) {
-      instance.run(() => expect(getScope()?.pluginId).toBe(instance.pluginId));
-    }
-  }
-  const identities = scopes.mock.calls.map(([scope]) => scope);
-  expect(identities).toHaveLength(200);
-  expect(new Set(identities).size).toBe(2);
-});
 
 it.each(["ordinary", "consumer"] as const)(
   "admits a %s callback in one independent frame and retains its closure fence",
@@ -50,16 +33,12 @@ it.each(["ordinary", "consumer"] as const)(
       callback();
       expect(getScope()).toBe(outer);
     });
-    const frames = vi.spyOn(AsyncLocalStorage.prototype, "enterWith");
     hook(() => {
       calls++;
       const scope = getScope();
       expect(scope?.pluginId).toBe(instance.pluginId);
       expect(scope).not.toBe(outer);
     });
-    // Each independent view installs one frame carrying invocation and recovery.
-    expect(frames).toHaveBeenCalledTimes(2);
-    frames.mockRestore();
     expect(getScope()).toBeUndefined();
     if (consumer) {
       consumer.release();

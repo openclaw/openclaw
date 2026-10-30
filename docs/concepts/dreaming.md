@@ -101,6 +101,9 @@ Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep
 
 Dreaming can ingest session transcripts into the dreaming corpus. Only interactive sessions are eligible. Cron, heartbeat, subagent, and unknown sessions stay out of durable candidate ingestion. Transcript text is not secret-masked before ingestion. Runtime-marked recalled context is removed so recalled snippets cannot be learned again as new memory.
 
+Discovery skips unused transcript revisions. Freshness is checked when each
+transcript is scanned, so later appends remain eligible for ingestion.
+
 Two operator controls exclude sessions from automatic ingestion, each with a recorded reason: the [memory admission policy](/concepts/memory-provenance#admission-keeping-sources-out-of-memory) matches retained hook-source, channel, or chat-type metadata, and [`memory forget`](/cli/memory#memory-forget) records selected session IDs as `forgotten` for future scans. Policy changes do not erase existing candidates or prevent direct file writes. Manual session backfill applies both controls in preview, REM, and apply modes, and preserves source-session origins when staging candidates.
 
 ## Consolidation safety
@@ -204,6 +207,9 @@ When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep,
 Startup reconciles that job in the background so Gateway connections do not wait
 for the cron store. Failures are logged and retried by runtime reconciliation.
 Stopping or replacing the plugin waits for pending reconciliation to settle.
+Reconciliation preserves a job paused by the operator or auto-disabled by cron,
+including its failure history. Use `openclaw cron enable <job-id>` to resume it;
+schedule and payload repairs still apply while it is stopped.
 
 Plugin reloads preserve the managed schedule. The previous instance stops its
 background callbacks and settles pending diary publication before its replacement

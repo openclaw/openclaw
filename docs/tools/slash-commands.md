@@ -347,7 +347,7 @@ list of requirements reaches the agent complete.
     | Command | Description |
     | --- | --- |
     | `/skill <name> [input]` | Run a skill by name |
-    | `/learn [request]` | Draft one reviewable skill from the current conversation or named sources through [Skill Workshop](/tools/skill-workshop) |
+    | `/learn [request]` | Learn from the current conversation or named sources: procedures become [Skill Workshop](/tools/skill-workshop) skills, and facts and preferences go to the selected memory plugin when it supports learning |
     | `/learn undo <id>` | Owner-only. Revert every skill change one background review made, as the notice's **Undo** button does |
     | `/loop [interval] <prompt>` | Owner-only. Repeat a prompt in this conversation; omit the interval for self-paced checks |
     | `/loop status` | Owner-only. List loops bound to this conversation |
@@ -449,6 +449,9 @@ conversation** — not a static config catalog.
 Results are session-scoped. Changing agent, channel, thread, sender
 authorization, or model can change the output. For profile and override editing,
 use the Control UI Tools panel or config surfaces.
+
+Managed sessions on supported runtimes include brokered GitHub tools when tool
+policy allows them. Listing a tool does not grant permission to run its actions.
 
 ## `/loop`: recurring conversation work
 

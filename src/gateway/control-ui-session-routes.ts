@@ -88,7 +88,8 @@ export function createControlUiSessionRoutes(options: {
     ): Promise<true> {
       const { req, res, config } = params;
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      const projection = getSessionRowProjection(options.getGatewayRequestContext?.());
+      const context = options.getGatewayRequestContext?.();
+      const projection = getSessionRowProjection(context);
       const serveApp = async (path: string, isCurrent?: () => boolean) => {
         // Select only the SPA document and preloads, never another HTTP handler.
         // Authenticated handoffs additionally recheck their live authority.
@@ -283,6 +284,7 @@ export function createControlUiSessionRoutes(options: {
         ...params,
         basePath,
         projection,
+        agentDatabaseStartup: context?.agentDatabaseStartup,
         serveApp,
       });
     },

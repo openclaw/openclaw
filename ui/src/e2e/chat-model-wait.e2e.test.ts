@@ -31,7 +31,7 @@ suite.define(() => {
     const artifactDir = createControlUiE2eArtifactDir("model-wait");
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await expect.poll(() => page.locator(".chat--bubbles").count()).toBe(1);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.fill("Compare these synthetic local model results.");

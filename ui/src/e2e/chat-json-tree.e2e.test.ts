@@ -1,12 +1,10 @@
 import { expect, it } from "vitest";
-import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { exactButton } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI JSON tree and source views",
-  startServer: () => startControlUiE2eServer(undefined, { source: true }),
-  startServerBeforeBrowser: true,
   unavailableMessage: (executable) => `Playwright Chromium is unavailable at ${executable}`,
 });
 const source = String.raw`{"id":9007199254740993,"status":"ready","status":"verified","escaped":"\u0061","overflow":1e400}`;

@@ -666,6 +666,12 @@ export const CronRemoveParamsSchema = cronIdOrJobIdParams({
   expectedConfigRevision: Type.Optional(CronConfigRevisionSchema),
 });
 
+/**
+ * Records the current incarnation of a key-only automation's parent conversation.
+ * The conversation is the caller's signed agent-runtime session, never a parameter.
+ */
+export const CronBindParamsSchema = cronIdOrJobIdParams({});
+
 /** Runs a cron job immediately, immediately if enabled, or only if due. */
 export const CronRunParamsSchema = cronIdOrJobIdParams({
   mode: Type.Optional(stringLiteralUnion(["due", "force", "if-enabled"])),

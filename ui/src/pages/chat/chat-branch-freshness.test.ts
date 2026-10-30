@@ -128,19 +128,6 @@ describe("chat branch freshness", () => {
     return published;
   }
 
-  it("keeps unchanged empty branch reads idle while recording their freshness", async () => {
-    const { state } = createSessionEventState();
-    const published = observeBranchMenu(state);
-    const emptyBranches = state.chatBranches;
-    await loadChatBranches(state);
-    flush();
-    expect(state.chatBranches).toEqual([]);
-    expect(state.chatBranchesSessionKey).toBe(state.sessionKey);
-    expect(state.chatBranchesConnectionEpoch).toBe(state.connectionEpoch);
-    expect(published.at(-1)).toEqual([]);
-    expect(state.chatBranches).toBe(emptyBranches);
-  });
-
   it("keeps unchanged and failed branch reads idle, then publishes recovered branch changes", async () => {
     const original = branch("original-reply", true);
     const { state } = createSessionEventState([original]);

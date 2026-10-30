@@ -138,9 +138,7 @@ function pendingResponse(chunks: Buffer[]) {
     new ReadableStream<Uint8Array>({
       start(value) {
         controller = value;
-        for (const chunk of chunks) {
-          controller.enqueue(chunk);
-        }
+        chunks.forEach((chunk) => controller.enqueue(chunk));
       },
     }),
     { status: 200, headers: { "content-type": "text/plain" } },
@@ -152,15 +150,11 @@ function pendingResponse(chunks: Buffer[]) {
     const read = reader.read.bind(reader);
     let reads = 0;
     reader.read = () => {
-      const last = ++reads === chunks.length + 1;
-      if (last) {
-        pending.resolve();
+      if (++reads !== chunks.length + 1) {
+        return read();
       }
-      return read().finally(() => {
-        if (last) {
-          settled.resolve();
-        }
-      });
+      pending.resolve();
+      return read().finally(settled.resolve);
     };
     Object.defineProperty(captured.body, "getReader", { value: () => reader });
     return captured;
@@ -465,11 +459,7 @@ it.skipIf(process.platform === "win32")(
     const persisted = readCapture(root, settings);
     expect(persisted?.session?.endedAt).toBeTypeOf("number");
     expect(persisted?.rows).toEqual([
-      expect.objectContaining({
-        kind: "ws-frame",
-        flowId: "queued-at-signal",
-        dataText: payload,
-      }),
+      expect.objectContaining({ kind: "ws-frame", flowId: "queued-at-signal", dataText: payload }),
     ]);
     expect(persisted?.payload).toBe(payload);
   },
@@ -504,11 +494,7 @@ it.each(["host-only", "legacy-first", "async-first"])(
     const wsBytes = Buffer.from("websocket original");
     const wsMeta = { provider: "fixture", detail: { phase: "accepted" } };
     const wsWriting = captureWsEventAsync(
-      {
-        ...frame(wsBytes, "ws-before-admission"),
-        direction: "outbound",
-        meta: wsMeta,
-      },
+      { ...frame(wsBytes, "ws-before-admission"), direction: "outbound", meta: wsMeta },
       settings,
       deps,
     );

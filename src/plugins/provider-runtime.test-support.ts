@@ -41,15 +41,11 @@ export const DEMO_TOOL = {
 } as unknown as AnyAgentTool;
 
 const openaiCodexCatalogEntries = [
-  { provider: "openai", id: "gpt-5.5", name: "gpt-5.5" },
-  { provider: "openai", id: "gpt-5.5-pro", name: "gpt-5.5-pro" },
   { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
   { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
   { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
-  { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
   { provider: "openai", id: "gpt-5-mini", name: "GPT-5 mini" },
   { provider: "openai", id: "gpt-5-nano", name: "GPT-5 nano" },
-  { provider: "openai", id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
 ];
 
 const expectedAugmentedOpenaiCodexCatalogEntries = [

@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeChatSendShortcut,
   patchSettings,
@@ -40,6 +41,7 @@ import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu-state.ts";
 import { resolveChatSlashCommandArgOptions, resolveComposerMenus } from "./chat-composer-menus.ts";
 import type { ComposerPrediction } from "./chat-composer-prediction.ts";
+import { createQueuedSubmit } from "./chat-composer-queued-submit.ts";
 import { isSkillMenuVisible, type SkillMenuHost } from "./chat-composer-skill-menu-state.ts";
 import type { SlashMenuHost } from "./chat-composer-slash-menu-state.ts";
 import {
@@ -125,7 +127,11 @@ export function createChatComposerContext(
     }
     state.composerTextarea = nextTextarea;
     if (nextTextarea) {
-      observeTextareaOverflow(nextTextarea, () => props.getTranscriptElement?.() ?? null);
+      observeTextareaOverflow(
+        nextTextarea,
+        () => props.getTranscriptElement?.() ?? null,
+        () => state.composerContext,
+      );
       scheduleTextareaHeightAdjustment(nextTextarea);
       if (state.restoreComposerFocus) {
         state.restoreComposerFocus = false;
@@ -229,8 +235,8 @@ export function createChatComposerContext(
     questionPanelProps.model.nonBlocking === true ||
     questionPanelProps.model.collapsed;
 
-  // Offline text and attachments may enter the persisted reconnect queue, but
-  // slash commands are live controls and must not execute against stale state.
+  // Offline slash commands need live state, except /stop: its send owner captures
+  // an exact-run intent and revalidates authority after reconnect.
   const canSubmitDraft = (draft: string) =>
     props.canSend &&
     (!props.modelRequiredReason ||
@@ -243,7 +249,9 @@ export function createChatComposerContext(
     state.dictation?.locksComposer !== true &&
     !(state.skillMenu.state.skillMenuOpen && state.skillMenu.state.skillCommandRefreshPending) &&
     (props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0) === 0 &&
-    (props.connected || !draft.trimStart().startsWith("/"));
+    (props.connected ||
+      !draft.trimStart().startsWith("/") ||
+      normalizeLowercaseStringOrEmpty(draft) === "/stop");
 
   const syncComposerDraftAfterSend = (target: HTMLTextAreaElement | null) => {
     state.emojiMenu.close();
@@ -266,6 +274,14 @@ export function createChatComposerContext(
     }
   };
 
+  const settleSubmittedCommandMenus = () => {
+    if (state.composerDraftScope !== draftScope || (props.getDraft?.() ?? props.draft) !== "") {
+      return;
+    }
+    state.slashMenu.reset();
+    state.skillMenu.reset();
+  };
+
   const submitDraft = (
     draft: string,
     submissionAction?: Event,
@@ -285,9 +301,16 @@ export function createChatComposerContext(
       void goalComposer.submit(submissionAction);
       return;
     }
-    void props.onSend(followUpModeOverride, submissionAction);
+    const completion = props.onSend(followUpModeOverride, submissionAction);
     syncComposerDraftAfterSend(state.composerTextarea);
+    if (completion) {
+      void completion.then(settleSubmittedCommandMenus, () => undefined);
+    } else {
+      settleSubmittedCommandMenus();
+    }
   };
+
+  const queuedSubmit = createQueuedSubmit(props, state, visibleDraft, canSubmitDraft, submitDraft);
 
   const acceptPrediction = () => {
     if (state.composerComposing || !canCompose) {
@@ -306,6 +329,7 @@ export function createChatComposerContext(
     sendShortcut,
     canSubmitDraft,
     submitDraft,
+    queueSubmit: queuedSubmit.queueSubmit,
     showAbortableUi,
     alternateFollowUpMode,
     goalComposer,
@@ -608,6 +632,9 @@ export function createChatComposerContext(
     canCompose,
     showAbortableUi,
     visibleDraft,
+    submitQueued: queuedSubmit.submitQueued,
+    queuedSubmitDue: queuedSubmit.queuedSubmitDue,
+    flushQueuedSubmit: queuedSubmit.flushQueuedSubmit,
     predictionText: prediction?.text ?? null,
     acceptPrediction,
     dismissPrediction: () => prediction?.dismiss(),

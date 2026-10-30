@@ -158,7 +158,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
   ...["create", "validate", "build", "dev"].map((subcommand): CliCommandCatalogEntry => ({
-    commandPath: ["claws", subcommand],
+    commandPath: ["templates", subcommand],
     exact: true,
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   })),

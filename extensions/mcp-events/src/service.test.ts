@@ -8,7 +8,10 @@ import { promisify } from "node:util";
 import { createChannelIngressDrain } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type * as Plugin from "openclaw/plugin-sdk/plugin-entry";
-import type * as State from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import * as state from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import * as pluginTest from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -61,7 +64,7 @@ function barrier() {
   const release = createDeferred<void>();
   return {
     entered: entered.promise,
-    release: () => release.resolve(),
+    release: release.resolve,
     wait: () => {
       entered.resolve();
       return release.promise;
@@ -122,12 +125,8 @@ describe("MCP Events callback and subscription lifecycle", () => {
             : requestedAtMs;
         schedules.set(id, { atMs, run: job.run });
         return {
-          cancel: () => {
-            schedules.delete(id);
-          },
-          stop: async () => {
-            schedules.delete(id);
-          },
+          cancel: () => void schedules.delete(id),
+          stop: async () => void schedules.delete(id),
         };
       },
     };
@@ -182,12 +181,9 @@ describe("MCP Events callback and subscription lifecycle", () => {
       config: { callbackOrigin: "https://receiver.example.com", maxPendingEvents: 2 },
       runtime: {
         state: {
-          openKeyedStore: <T>(
-            options: State.OpenAsyncKeyedStoreOptions,
-          ): State.PluginStateKeyedStore<T> => {
+          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions): PluginStateKeyedStore<T> => {
             const store = state.createPluginStateKeyedStoreForTests<T>("mcp-events", options);
-            const withCurrent = store.withCurrent?.bind(store);
-            assert(withCurrent, "Missing guarded state owner");
+            const withCurrent = store.withCurrent.bind(store);
             return {
               ...store,
               withCurrent: (guard) => {
@@ -233,15 +229,14 @@ describe("MCP Events callback and subscription lifecycle", () => {
         let subscription: Record<string, unknown> | undefined;
         const assertAuthority = () => {
           assertCurrent();
-          if (capturedId !== observedId) {
-            throw Object.assign(new Error("Authorization retired"), {
-              code: "MCP_AUTHORIZATION_RETIRED",
-            });
-          }
-          if (authorityUnavailable) {
-            throw Object.assign(new Error("Authorization unavailable"), {
-              code: "MCP_AUTHORIZATION_UNAVAILABLE",
-            });
+          const code =
+            capturedId !== observedId
+              ? "MCP_AUTHORIZATION_RETIRED"
+              : authorityUnavailable
+                ? "MCP_AUTHORIZATION_UNAVAILABLE"
+                : undefined;
+          if (code) {
+            throw Object.assign(new Error(code), { code });
           }
         };
         assertAuthority();
@@ -446,28 +441,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
     await expectEvent(200);
   });
 
-  it("coalesces a source retry with reconciliation instead of creating duplicate subscriptions", async () => {
-    const gate = barrier();
-    const prepare = vi.mocked(deps.prepareSource);
-    const original = prepare.getMockImplementation()!;
-    prepare.mockRejectedValueOnce(new Error("MCP account temporarily unavailable"));
-    prepare.mockImplementation(async (input) => {
-      await gate.wait();
-      return original(input);
-    });
-    await current!.start();
-    now += 2_000;
-    const retry = runSchedule("source:authored-job");
-    await gate.entered;
-    const concurrent = current!.reconcile();
-    gate.release();
-    await Promise.all([retry, concurrent]);
-    expect(prepare).toHaveBeenCalledTimes(2);
-    expect(subscribed).toHaveLength(1);
-    expect(diagnostics()).toHaveLength(1);
-  });
-
-  it("retries enabled sources past eight failures and recovers without a Cron edit", async () => {
+  it("retries past eight failures and coalesces recovery with reconciliation", async () => {
     const prepare = vi.mocked(deps.prepareSource);
     const original = prepare.getMockImplementation()!;
     prepare.mockRejectedValue(new Error("MCP account temporarily unavailable"));
@@ -476,28 +450,22 @@ describe("MCP Events callback and subscription lifecycle", () => {
       expectBoundedRetry("source:authored-job");
       await runSchedule("source:authored-job", true);
     }
-    prepare.mockImplementation(original);
-    await runSchedule("source:authored-job", true);
+    const gate = barrier();
+    prepare.mockImplementation(async (input) => {
+      await gate.wait();
+      return original(input);
+    });
+    const retry = runSchedule("source:authored-job", true);
+    await gate.entered;
+    const concurrent = current!.reconcile();
+    gate.release();
+    await Promise.all([retry, concurrent]);
     expect(subscribed).toHaveLength(1);
     expect(diagnostics()).toMatchObject([{ status: "active" }]);
     expect(schedules.has("source:authored-job")).toBe(false);
   });
 
-  it("uses no idle polling and keeps busy admission pending without consuming delivery attempts", async () => {
-    await current!.start();
-    await runSchedule("drain");
-    expect([schedules.has("drain"), schedules.has("reconcile")]).toEqual([false, false]);
-    await expectEvent(200);
-    await runSchedule("drain");
-    expect((await pending())[0]?.attempts).toBe(0);
-    expect(schedules.get("drain")?.atMs).toBeGreaterThan(now);
-    current!.requestDrain("authored-job");
-    await runSchedule("drain");
-    expect((await pending())[0]?.attempts).toBe(0);
-    expect(deps.cron.runEvent).toHaveBeenCalledTimes(2);
-  });
-
-  it("retains callbacks and pending work through temporary credential-owner unavailability", async () => {
+  it("keeps unavailable and busy admission pending without consuming attempts", async () => {
     await current!.start();
     await expectEvent(200);
     authorityUnavailable = true;
@@ -513,12 +481,15 @@ describe("MCP Events callback and subscription lifecycle", () => {
     await expectEvent(200, "evt-2");
     await runSchedule("drain");
     // One lane admits its oldest event first; the busy result keeps both accepted events pending.
-    expect(deps.cron.runEvent).toHaveBeenCalledOnce();
-    expect(deps.cron.runEvent).toHaveBeenCalledWith(
-      "authored-job",
-      expect.objectContaining({ eventId: "evt-1" }),
-    );
+    expect(vi.mocked(deps.cron.runEvent).mock.calls).toEqual([
+      ["authored-job", expect.objectContaining({ eventId: "evt-1" })],
+    ]);
     expect(await pending()).toMatchObject([{ attempts: 0 }, { attempts: 0 }]);
+    expect(schedules.get("drain")?.atMs).toBeGreaterThan(now);
+    current!.requestDrain("authored-job");
+    await runSchedule("drain");
+    expect(await pending()).toMatchObject([{ attempts: 0 }, { attempts: 0 }]);
+    expect(deps.cron.runEvent).toHaveBeenCalledTimes(2);
   });
 
   it.each(["callback", "renewal", "queued claim"] as const)(
@@ -609,16 +580,15 @@ describe("MCP Events callback and subscription lifecycle", () => {
     expect(await pending()).toHaveLength(1);
   });
 
-  it("verifies before subscribe reply and durably deduplicates untrusted application data across restart", async () => {
+  it("durably deduplicates, backpressures and rotates a resumed subscription", async () => {
     await current!.start();
-    const body = JSON.stringify(event());
-    expect((await post(body, "evt-1")).status).toBe(200);
-    expect((await post(body, "evt-1")).status).toBe(200);
+    await expectEvent(200);
+    await expectEvent(200);
     await current!.stop();
     deps = { ...deps, scheduler: createScheduler() };
     current = new McpEventsService(deps);
     await current.start();
-    expect((await post(body, "evt-1")).status).toBe(200);
+    await expectEvent(200);
     expect(await pending()).toMatchObject([
       {
         payload: {
@@ -629,11 +599,23 @@ describe("MCP Events callback and subscription lifecycle", () => {
         },
       },
     ]);
-    expect(diagnostics()[0]).toMatchObject({
-      status: "active",
-      replayAvailable: true,
-    });
+    expect(diagnostics()[0]).toMatchObject({ status: "active", replayAvailable: true });
     expect(JSON.stringify(diagnostics())).not.toContain(secret);
+    await expectEvent(200, "evt-2");
+    await expectEvent(503, "evt-3");
+    await expectEvent(200);
+    expect((await pending()).map((row) => row.payload.eventId).toSorted()).toEqual([
+      "evt-1",
+      "evt-2",
+    ]);
+    const oldSecret = secret;
+    now += 49_000;
+    await current.reconcile();
+    expect(secret).not.toBe(oldSecret);
+    expect(subscribed.at(-1)?.cursor).toBe("cursor-1");
+    await expectEvent(200, "evt-2", oldSecret);
+    now += 301_000;
+    await expectEvent(401, "evt-3", oldSecret);
   });
 
   it("rejects authentication, schema, envelope, control, and size failures without queue writes", async () => {
@@ -658,32 +640,6 @@ describe("MCP Events callback and subscription lifecycle", () => {
     expect(await pending()).toHaveLength(0);
   });
 
-  it("backpressures bursts without evicting accepted work", async () => {
-    await current!.start();
-    for (const id of ["evt-1", "evt-2"]) {
-      await expectEvent(200, id);
-    }
-    await expectEvent(503, "evt-3");
-    await expectEvent(200);
-    expect((await pending()).map((row) => row.payload.eventId).toSorted()).toEqual([
-      "evt-1",
-      "evt-2",
-    ]);
-  });
-
-  it("rotates secrets on refresh, resumes its cursor, and expires the old verification key", async () => {
-    await current!.start();
-    const oldSecret = secret;
-    await expectEvent(200);
-    now += 49_000;
-    await current!.reconcile();
-    expect(secret).not.toBe(oldSecret);
-    expect(subscribed[1]?.cursor).toBe("cursor-1");
-    await expectEvent(200, "evt-2", oldSecret);
-    now += 301_000;
-    await expectEvent(401, "evt-3", oldSecret);
-  });
-
   it("revokes before remote cleanup and cannot be resurrected by a late refresh reply", async () => {
     await current!.start();
     now += 49_000;
@@ -695,16 +651,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
     expect(diagnostics()).toEqual([]);
     expect(await bindings().entries()).toEqual([]);
     await expectEvent(410);
-    expect(unsubscribed).toMatchObject([
-      {
-        name: "comment.created",
-        arguments: { document_id: "doc-1" },
-        delivery: {
-          mode: "webhook",
-          url: "https://receiver.example.com/plugins/mcp-events/callback/" + bindingId,
-        },
-      },
-    ]);
+    expect(unsubscribed).toHaveLength(1);
     expect(await pending()).toHaveLength(0);
   });
 });

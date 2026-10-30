@@ -121,6 +121,56 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     });
   }
 
+  it("executes static assignments and blocks recursive assignments before process creation", async () => {
+    const echoPath = fs.realpathSync("/bin/echo");
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
+      agents: { main: { allowlist: [{ pattern: echoPath }] } },
+    });
+    const review = reviewer();
+
+    const allowed = await tool(review, "allowlist").execute("static-assignment", {
+      command: `STATIC=value; ${echoPath} static-ok`,
+    });
+    if (allowed.details.status !== "completed") {
+      throw new Error(`Unexpected exec status: ${allowed.details.status}`);
+    }
+    expect(allowed.details.exitCode).toBe(0);
+    expect(allowed.details.aggregated).toBe("static-ok");
+    expect(boundary.spawn).toHaveBeenCalledOnce();
+    expect(review).not.toHaveBeenCalled();
+    expect(callGatewayTool).not.toHaveBeenCalled();
+
+    const expectBlocked = async (id: string, command: string, marker: string) => {
+      boundary.spawn.mockClear();
+      const denied = await tool(review, "ask").execute(id, { command });
+      expect(denied.details.status).toBe("failed");
+      expect(boundary.spawn).not.toHaveBeenCalled();
+      expect(fs.existsSync(marker)).toBe(false);
+      expect(review).not.toHaveBeenCalled();
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    };
+    const scalarMarker = path.join(root, "recursive-scalar-assignment-ran");
+    await expectBlocked(
+      "recursive-scalar-assignment",
+      `y='a[$(touch ${JSON.stringify(scalarMarker)})]'; x=$((y)); ${echoPath} unsafe`,
+      scalarMarker,
+    );
+    const compoundMarker = path.join(root, "recursive-compound-assignment-ran");
+    await expectBlocked(
+      "recursive-compound-assignment",
+      `y='a[$(touch ${JSON.stringify(compoundMarker)})]'; x=([y]=1); ${echoPath} unsafe`,
+      compoundMarker,
+    );
+    const compoundAppendMarker = path.join(root, "recursive-compound-append-ran");
+    await expectBlocked(
+      "recursive-compound-append-assignment",
+      `y='a[$(touch ${JSON.stringify(compoundAppendMarker)})]'; x=([y]+=1); ${echoPath} unsafe`,
+      compoundAppendMarker,
+    );
+  });
+
   for (const shell of ["/bin/bash", "/bin/zsh"]) {
     it.skipIf(!fs.existsSync(shell))(
       `executes bound globs and chains without startup substitutions in ${shell}`,

@@ -8,6 +8,7 @@ import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -45,12 +46,7 @@ async function setup(page: Page) {
       },
     ],
     historyMessages: [
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "The project notes and release checklist are ready for review." },
-        ],
-      },
+      chatMessage("assistant", "The project notes and release checklist are ready for review."),
     ],
     featureMethods: [
       "board.get",

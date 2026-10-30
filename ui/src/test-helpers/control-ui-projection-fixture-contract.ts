@@ -2,7 +2,13 @@ import type { ProjectionResourceSnapshot } from "./control-ui-projection-resourc
 
 export type CoreProjectionFamily = "agent-rows" | "outbox" | "board-pins";
 export type SdkAvatarFamily = "sdk-avatars" | "sdk-avatar-identities";
-export type ProjectionFamily = CoreProjectionFamily | SdkAvatarFamily;
+export type InstanceResourceFamily =
+  | "tooltips"
+  | "link-providers"
+  | "link-metadata"
+  | "ci-pairs"
+  | "clawhub-cards";
+export type ProjectionFamily = CoreProjectionFamily | SdkAvatarFamily | InstanceResourceFamily;
 export type ProjectionFixtureFacts = {
   family: ProjectionFamily;
   instrumented: boolean;

@@ -21,6 +21,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "../method-scopes.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
+import { isHostPluginApprovalCall } from "../operator-approval-authorization.js";
 import {
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
@@ -74,13 +75,7 @@ export function authorizeGatewayMethod(
     return { error: null };
   }
   const registeredScope = methodRegistry.getScope(method);
-  if (
-    method === "plugin.approval.request" &&
-    registeredScope === APPROVALS_SCOPE &&
-    client.internal?.syntheticClient === true &&
-    client.internal.pluginApprovalRequestOwnerId?.trim() &&
-    roleScopesAllow({ role: "operator", requestedScopes: [WRITE_SCOPE], allowedScopes: scopes })
-  ) {
+  if (registeredScope === APPROVALS_SCOPE && isHostPluginApprovalCall(method, client)) {
     return { error: null };
   }
   let scopeAuth = isOperatorScope(registeredScope)

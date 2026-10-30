@@ -14,6 +14,7 @@ import { registerContextEngineInRegistry } from "../context-engine/registry.js";
 import { getModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import * as llmStream from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -22,6 +23,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { cleanupNativeFixture, nativeFixtureEnv } from "../plugins/native-resource.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -184,14 +186,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   });
 }};`,
   });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      providers: [id],
-      configSchema: { type: "object", properties: {}, additionalProperties: false },
-    }),
-  );
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    providers: [id],
+    configSchema: { type: "object", properties: {}, additionalProperties: false },
+  });
   const config: OpenClawConfig = {
     models: {
       providers: {
@@ -234,26 +233,14 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       timeoutMs: 1000,
     },
     environment: <T>(run: () => Promise<T>) =>
-      withEnvAsync(
-        {
-          OPENCLAW_HOME: dir,
-          OPENCLAW_STATE_DIR: path.join(dir, "state"),
-          OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
-        },
-        run,
-      ),
+      withEnvAsync(nativeFixtureEnv(dir, path.join(dir, "state")), run),
     cleanup() {
       state.finish.resolve();
       state.resumeSetup.resolve();
       state.finishCleanup.resolve();
       state.finishWork.resolve();
       state.finishSetupTail.resolve();
-      for (const connection of connections) {
-        if (connection.database.isOpen) {
-          connection.database.close();
-        }
-      }
-      Reflect.deleteProperty(globalThis, stateKey);
+      cleanupNativeFixture(stateKey, connections);
     },
   };
 }

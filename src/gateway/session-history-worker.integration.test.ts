@@ -6,7 +6,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
-import { readMainSessionRecoveryCheckpoint } from "../agents/main-session-recovery/main-session-restart-recovery-checkpoint.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
@@ -16,7 +15,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.test-support.js";
-import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-admitted-read.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
@@ -533,11 +532,6 @@ it("reduces full transcript recovery, usage, and MCP facts without caller-thread
       /\b(?:transcript_events|session_transcript_active_events)\b/iu.test(sql),
     );
     try {
-      expect(await readMainSessionRecoveryCheckpoint(target)).toEqual({
-        replaySafe: true,
-        source: "external_user",
-      });
-      expect(scans).toEqual([]);
       expect(await readLatestSessionUsageFromTranscriptAsync(target)).toMatchObject({
         inputTokens: 2400,
         outputTokens: 1200,

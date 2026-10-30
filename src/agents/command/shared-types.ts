@@ -115,7 +115,12 @@ export type AgentRunChannelContext = Pick<
 
 type AgentRunModelOptions = Pick<
   QueuedAgentRunParams,
-  "authProfileId" | "thinkLevel" | "thinkingExplicit" | "fastMode" | "fastModeAutoOnSeconds"
+  | "authProfileId"
+  | "thinkLevel"
+  | "thinkingExplicit"
+  | "fastMode"
+  | "fastModeAutoOnSeconds"
+  | "cyberAccessProgram"
 > & {
   /** Vision capability resolved by the run owner from its prepared model catalog. */
   modelHasVision?: boolean;

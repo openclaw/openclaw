@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
@@ -39,6 +40,10 @@ import type {
 } from "./session-actor-contract.js";
 import type { SessionActorExecutor, SessionActorExecutorGuards } from "./session-actor-executor.js";
 import { SessionActorReadInvalidatedError } from "./session-actor-read-error.js";
+import {
+  restoreSessionActorCommittedOutcome,
+  type SessionActorCommittedWireOutcome,
+} from "./session-actor-receipt.js";
 import type { createSessionActorReplica } from "./session-actor-replica.js";
 import { publishCommittedSessionTranscriptReceipts } from "./session-transcript-authority.js";
 
@@ -78,7 +83,7 @@ const executePhase: {
   [Phase in SessionActorPhase]: (
     scope: TransportScope,
     input: SessionActorCommandContext &
-      SessionActorPhaseInputs[Phase] & { target: SessionActorTarget },
+      SessionActorPhaseInputs[Phase] & { target: SessionActorTarget; entryReference?: string },
   ) => Promise<SessionActorOperations[`session.actor.${Phase}`]["output"]>;
 } = {
   acceptInput: (scope, input) => scope.execute({ type: "session.actor.acceptInput", input }),
@@ -88,8 +93,6 @@ const executePhase: {
   appendTranscriptEvent: (scope, input) =>
     scope.execute({ type: "session.actor.appendTranscriptEvent", input }),
   completeTurn: (scope, input) => scope.execute({ type: "session.actor.completeTurn", input }),
-  deliveryPending: (scope, input) =>
-    scope.execute({ type: "session.actor.deliveryPending", input }),
   deliverySettled: (scope, input) =>
     scope.execute({ type: "session.actor.deliverySettled", input }),
   patch: (scope, input) => scope.execute({ type: "session.actor.patch", input }),
@@ -120,6 +123,7 @@ export function createSqliteSessionActorExecutor(
       snapshot: SessionActorAuthorityFacts,
     ) => void,
     beforeFinalGrant?: (conversationPublication: unknown) => void,
+    entryReference?: () => SessionActorHotState | undefined,
   ) => {
     let actorAdmissionSeen = false;
     return (
@@ -144,8 +148,15 @@ export function createSqliteSessionActorExecutor(
         ) {
           throw new Error("Session actor admission belongs to another target");
         }
-        // SAFETY: The private MessagePort already detached this snapshot from the paired kernel.
-        const snapshot = facts.snapshot as SessionActorAuthorityFacts;
+        // SAFETY: The paired kernel owns these facts; references require its exact preimage.
+        let snapshot = facts.snapshot as SessionActorAuthorityFacts;
+        if ("entryReference" in facts.snapshot) {
+          const preimage = entryReference?.();
+          if (!preimage || facts.snapshot.entryReference !== preimage.writeToken) {
+            throw new Error("Session actor admission entry reference is unavailable");
+          }
+          snapshot = { target: preimage.target, entry: preimage.entry };
+        }
         const publication = facts.publication;
         observe?.(native, publication, request.stage, snapshot);
         authority.authorize(
@@ -223,6 +234,7 @@ export function createSqliteSessionActorExecutor(
     let native: NativeAdmission | undefined;
     let previousEntry: SessionActorAuthorityFacts["entry"];
     let capturedPreviousEntry = false;
+    let entryReference: SessionActorHotState | undefined;
     let running: Promise<Outcome> | undefined;
     let committed: Extract<Outcome, { kind: "committed" }> | undefined;
     let candidate: unknown;
@@ -277,6 +289,7 @@ export function createSqliteSessionActorExecutor(
       outcome = await params.transport.run(
         (scope) => {
           running = (async (): Promise<Outcome> => {
+            using phase = observeDiagnosticsTimelinePhases("session.actor.command.commit");
             if (fenced) {
               return unknown(
                 new Error("Session actor requires reconciliation before another command", {
@@ -285,7 +298,12 @@ export function createSqliteSessionActorExecutor(
               );
             }
             const pending = params.replica.beginCommand();
-            const reply = await executePhase[name](scope, { ...captured, target }).then(
+            entryReference = pending.preimage;
+            const reply = await executePhase[name](scope, {
+              ...captured,
+              target,
+              entryReference: entryReference?.writeToken,
+            }).then(
               (value) => ({ ok: true as const, value }),
               (error: unknown) => ({ ok: false as const, error }),
             );
@@ -327,14 +345,18 @@ export function createSqliteSessionActorExecutor(
                 receipt.phaseId === captured.phaseId &&
                 receipt.phase === name
               ) {
-                // SAFETY: The paired worker constructs the typed result; native admission validates its settlement envelope.
-                committed = evidence as Extract<Outcome, { kind: "committed" }>;
+                committed = restoreSessionActorCommittedOutcome(
+                  // SAFETY: The paired worker constructs the typed result; native admission validates its settlement envelope.
+                  evidence as SessionActorCommittedWireOutcome<SessionActorPhaseResults[Phase]>,
+                  entryReference,
+                );
                 if (!reply.ok) {
                   preserveFailure(reply.error, "response");
                 } else if (reply.value.kind === "committed" && reply.value.failure) {
                   committed = { ...committed, failure: reply.value.failure };
                 }
                 result = committed;
+                phase.mark("session.actor.command.publication");
                 try {
                   conversation?.settle(committed.receipt.conversationPublication);
                   const metadata = committed.receipt.entryMetadata;
@@ -493,6 +515,7 @@ export function createSqliteSessionActorExecutor(
             }
             conversation?.begin(receipts);
           },
+          () => entryReference,
         ),
         (name === "appendTranscriptEvent" || name === "appendToolResult") &&
           "append" in captured &&
@@ -547,10 +570,13 @@ export function createSqliteSessionActorExecutor(
     }
     return outcome;
   };
-  const snapshot = (authority: SessionActorAuthority): SessionActorHotState | undefined => {
+  const snapshot = <State extends SessionActorAuthorityFacts>(
+    authority: SessionActorAuthority,
+    readFacts: () => State | undefined,
+  ): State | undefined => {
     params.assertReadable();
     authority.assertCurrent();
-    const installed = fenced ? undefined : params.replica.read();
+    const installed = fenced ? undefined : readFacts();
     if (installed) {
       authority.authorize("commit", installed);
       authority.assertCurrent();
@@ -559,7 +585,8 @@ export function createSqliteSessionActorExecutor(
     return installed;
   };
   return {
-    snapshot,
+    snapshot: (authority) => snapshot(authority, params.replica.read),
+    snapshotEntry: (authority) => snapshot(authority, params.replica.readEntry),
     read,
     command,
     retain: params.transport.retain?.bind(params.transport),

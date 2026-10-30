@@ -389,12 +389,12 @@ export async function resolveIMessageInboundDecision(params: {
   // Outbound sends persist one target shape; inbound rows must probe every
   // equivalent shape so a GUID-keyed send also matches a chat_id-bearing echo.
   const echoScope: string[] = [];
-  if (isGroup) {
-    const chatIdScope = formatIMessageChatTarget(chatId);
-    if (chatIdScope) {
-      echoScope.push(`${params.accountId}:${chatIdScope}`);
-    }
-  } else {
+  // Only self-chats need direct chat_id echo lookup; ordinary DMs keep handle scopes.
+  const chatIdScope = formatIMessageChatTarget(chatId);
+  if (chatIdScope && (isGroup || isSelfChat)) {
+    echoScope.push(`${params.accountId}:${chatIdScope}`);
+  }
+  if (!isGroup) {
     echoScope.push(`${params.accountId}:imessage:${sender}`);
   }
   if (chatGuid) {

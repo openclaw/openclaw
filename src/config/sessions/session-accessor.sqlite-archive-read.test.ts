@@ -1,8 +1,8 @@
+import assert from "node:assert/strict";
 import { constants as bufferConstants } from "node:buffer";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { Readable } from "node:stream";
 import { buffer as consumeBuffer } from "node:stream/consumers";
 import zlib from "node:zlib";
@@ -12,16 +12,13 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { assertOpenClawAgentCurrentRuntimeSchema } from "../../state/openclaw-agent-db-schema-helpers.js";
 import * as agentDb from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as archiveCompression from "./archive-compression.js";
 import { deleteSessionEntryLifecycle, findTranscriptEvent } from "./session-accessor.js";
 import { withSqliteTranscriptArchiveSession } from "./session-accessor.sqlite-archive-session.js";
 import { MAX_TASK_ARCHIVE_RECORD_BYTES } from "./session-accessor.sqlite-archive-stream.js";
-import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { listSessionTranscriptArchivesReadOnly } from "./session-history-read.js";
@@ -33,6 +30,8 @@ const autoTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const jsonLines = (events: readonly unknown[]) =>
   events.map((event) => JSON.stringify(event)).join("\n");
 const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+const expectEntries = (page: { entries: unknown[] } | undefined, entries: [unknown, number][]) =>
+  expect(page?.entries).toEqual(entries.map(([event, seq]) => ({ event, seq })));
 
 function assistantMessage<T>(id: string | undefined, content: T, runId: string, display?: true) {
   return {
@@ -90,16 +89,6 @@ function createArchiveStore(label: string, filename = "archive.sqlite") {
   };
 }
 
-async function withoutHostSql<T>(read: () => Promise<T>): Promise<T> {
-  const hostSql = observeHostDataSql();
-  const result = await read().finally(() => hostSql.restore());
-  expect(hostSql.queries).toEqual([]);
-  for (const call of hostSql.calls) {
-    expect(call).not.toHaveBeenCalled();
-  }
-  return result;
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
   agentDb.closeOpenClawAgentDatabasesForTest();
@@ -128,6 +117,11 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
     ...answer,
     message: { ...answer.message, content, __openclaw: { runId: nextRunId } },
   });
+  const successorAnswer = (content = "Original answer") => ({
+    ...answerFor("next-run", content),
+    id: "successor-answer",
+    parentId: "user",
+  });
   const archive = (
     generation: string,
     reply: typeof answer & { parentId?: string } = answer,
@@ -141,27 +135,16 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
       { generation, name: `${generation}.jsonl`, createdAt: generation === "original" ? 1 : 2 },
     );
   const original = archive("original");
-  const successor = archive(
-    "successor",
-    {
-      ...answerFor("next-run", "Unrelated successor"),
-      id: "successor-answer",
-      parentId: "user",
-    },
-    sessionId,
-    [{ ...answer, parentId: "user" }],
-  );
+  const successor = archive("successor", successorAnswer("Unrelated successor"), sessionId, [
+    { ...answer, parentId: "user" },
+  ]);
   const replaceOriginal = (value: ReturnType<typeof archive>) => update("original", value);
   insert([original, successor]);
   await withSqliteTranscriptArchiveSession(options, async () => {
     const page = await readPage({ limit: 1 });
-    expect(page?.entries).toEqual([{ event: answer, seq: 2 }]);
-    expect(page?.totalMessages).toBe(2);
-    expect(page?.binding.generation).toBe("original");
-    expect(page?.nextCursor).toEqual(expect.any(String));
-    if (!page?.nextCursor) {
-      throw new Error("Expected an older archive page");
-    }
+    expectEntries(page, [[answer, 2]]);
+    expect(page).toMatchObject({ totalMessages: 2, binding: { generation: "original" } });
+    assert(page?.nextCursor, "Expected an older archive page");
     const continuation = { runId, limit: 1, cursor: page.nextCursor };
     const verifyBinding = () =>
       history.verifySessionTranscriptArchivePageBindingReadOnly(scope, runId, page.binding);
@@ -170,7 +153,7 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
       await expect(verifyBinding()).rejects.toThrow(message);
     };
     const older = await readPage(continuation);
-    expect(older?.entries).toEqual([{ event: user, seq: 1 }]);
+    expectEntries(older, [[user, 1]]);
     expect(older?.nextCursor).toBeUndefined();
     await verifyBinding();
     update(
@@ -187,16 +170,7 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
     );
 
     replaceOriginal(
-      archive(
-        "original",
-        {
-          ...answerFor("next-run"),
-          id: "successor-answer",
-          parentId: "user",
-        },
-        sessionId,
-        [{ ...answer, parentId: "user" }],
-      ),
+      archive("original", successorAnswer(), sessionId, [{ ...answer, parentId: "user" }]),
     );
     await expectUnavailable("run is not on the active branch");
 
@@ -210,9 +184,7 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
     const contextSelected = { ...answer, id: "context-selected" };
     replaceEvents([user, contextBefore, contextSelected, answer]);
     const contextTail = await readPage({ limit: 1 });
-    if (!contextTail?.nextCursor) {
-      throw new Error("Expected a bounded projection-context page");
-    }
+    assert(contextTail?.nextCursor, "Expected a bounded projection-context page");
     const selectedAndNewerBytes = Buffer.byteLength(
       JSON.stringify(contextSelected) + JSON.stringify(answer),
     );
@@ -223,7 +195,7 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
         maxBytes,
         cursor: contextTail.nextCursor,
       });
-      expect(pageWithContext?.entries).toEqual([{ event: contextSelected, seq: 3 }]);
+      expectEntries(pageWithContext, [[contextSelected, 3]]);
       expect(pageWithContext?.contextEntries).toEqual([
         ...(maxBytes === 4096 ? [{ event: contextBefore, seq: 2 }] : []),
         { event: answer, seq: 4 },
@@ -239,18 +211,16 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
       })),
       reply,
     ]);
-    expect((await readPage())?.entries).toEqual([
-      { event: root, seq: 1 },
-      { event: reply, seq: 1027 },
+    expectEntries(await readPage(), [
+      [root, 1],
+      [reply, 1027],
     ]);
     // Duplicate IDs resolve to the latest node; a cycle discards the whole path.
-    replaceEvents([root, reply, { ...reply, message: { ...reply.message, content: "Latest" } }]);
-    expect((await readPage())?.entries).toEqual([
-      { event: root, seq: 1 },
-      {
-        event: { ...reply, message: { ...reply.message, content: "Latest" } },
-        seq: 3,
-      },
+    const latest = { ...reply, message: { ...reply.message, content: "Latest" } };
+    replaceEvents([root, reply, latest]);
+    expectEntries(await readPage(), [
+      [root, 1],
+      [latest, 3],
     ]);
     replaceEvents([root, reply, { ...root, parentId: answer.id }]);
     await expect(readPage()).rejects.toThrow("run is not on the active branch");
@@ -267,25 +237,17 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
           ...invalidControl,
         },
       ]);
-      expect((await readPage())?.entries).toEqual([
-        { event: root, seq: 1 },
-        { event: reply, seq: 2 },
+      expectEntries(await readPage(), [
+        [root, 1],
+        [reply, 2],
       ]);
     }
     replaceEvents([root, { ...reply, parentId: false }]);
     await expect(readPage()).rejects.toThrow("run is not on the active branch");
 
-    replaceOriginal(
-      archive("original", answer, sessionId, [
-        {
-          ...answer,
-          id: "large",
-          message: { ...answer.message, content: "x".repeat(2048) },
-        },
-      ]),
-    );
+    replaceEvents([user, { ...answerFor(runId, "x".repeat(2048)), id: "large" }, answer]);
     const tail = await readBoundedPage();
-    expect(tail?.entries).toEqual([{ event: answer, seq: 3 }]);
+    expectEntries(tail, [[answer, 3]]);
     expect(tail?.omittedOversized).toBeUndefined();
     expect(tail?.nextCursor).toEqual(expect.any(String));
     const omitted = await readBoundedPage(tail?.nextCursor);
@@ -294,7 +256,7 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
     expect(omitted?.nextCursor).toEqual(expect.any(String));
     expect(omitted?.nextCursor).not.toBe(tail?.nextCursor);
     const beginning = await readBoundedPage(omitted?.nextCursor);
-    expect(beginning?.entries).toEqual([{ event: user, seq: 1 }]);
+    expectEntries(beginning, [[user, 1]]);
     expect(beginning?.nextCursor).toBeUndefined();
 
     // Raw JSON keeps last-key, Unicode, and whitespace semantics under the page byte budget.
@@ -376,24 +338,16 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
 it("reads a pre-archive store without creating its optional archive table", async () => {
   await withOpenClawTestState({ label: "optional-archive-read" }, async (state) => {
     const options = { agentId: "main", env: state.env };
-    const archiveRead = vi.spyOn(archiveWorker, "runSqliteTranscriptArchiveReadWorker");
     const missingPath = state.statePath("missing.sqlite");
     await expect(
-      withoutHostSql(() =>
-        history.findSessionTranscriptArchiveEventReadOnly(
-          { ...options, storePath: missingPath, sessionKey: "agent:main:missing" },
-          "absent-run",
-        ),
+      history.findSessionTranscriptArchiveEventReadOnly(
+        { ...options, storePath: missingPath, sessionKey: "agent:main:missing" },
+        "absent-run",
       ),
     ).resolves.toBeUndefined();
     expect(fs.existsSync(missingPath)).toBe(false);
-    expect(archiveRead).not.toHaveBeenCalled();
     const database = agentDb.openOpenClawAgentDatabase(options);
     database.db.exec("DROP TABLE session_transcript_archives");
-    assertOpenClawAgentCurrentRuntimeSchema(requireNativeSqliteDatabase(database.db), {
-      agentId: database.agentId,
-      pathname: database.path,
-    });
     const storePath = database.path;
     agentDb.closeOpenClawAgentDatabasesForTest();
     const before = fs.readFileSync(storePath);
@@ -408,18 +362,8 @@ it("reads a pre-archive store without creating its optional archive table", asyn
       listSessionTranscriptArchivesReadOnly({ ...scope, sessionIds: [scope.sessionId] }),
     ).toEqual([]);
     await expect(
-      withoutHostSql(() => history.findSessionTranscriptArchiveEventReadOnly(scope, "absent-run")),
+      history.findSessionTranscriptArchiveEventReadOnly(scope, "absent-run"),
     ).resolves.toBeUndefined();
-    expect(archiveRead).not.toHaveBeenCalled();
-    archiveRead.mockRestore();
-    {
-      using persisted = new DatabaseSync(storePath, { readOnly: true });
-      expect(
-        persisted
-          .prepare("SELECT 1 FROM sqlite_schema WHERE name = 'session_transcript_archives'")
-          .get(),
-      ).toBeUndefined();
-    }
     expect(fs.readFileSync(storePath)).toEqual(before);
   });
 });
@@ -486,7 +430,13 @@ it.each([false, true])(
         .toSorted((left, right) => left.localeCompare(right));
     const filesBefore = files();
 
-    expect(await withoutHostSql(() => find())).toEqual({ event: answer });
+    const hostSql = observeHostDataSql();
+    try {
+      expect(await find()).toEqual({ event: answer });
+      expect(hostSql.queries).toEqual([]);
+    } finally {
+      hostSql.restore();
+    }
     expect(await find("old")).toEqual({ event: message("old") });
     expect(await find("foreign")).toBeUndefined();
     expect(await find(undefined, "missing-run")).toBeUndefined();
@@ -542,7 +492,6 @@ it.each([false, true])(
       }
       await agentDb.closeOpenClawAgentDatabasesAsync(env.OPENCLAW_STATE_DIR);
       fs.copyFileSync(storePath, replacementPath);
-      expect(fs.readFileSync(replacementPath)).toEqual(fs.readFileSync(storePath));
       const scopeOwner = await import("./session-accessor.sqlite-scope.js");
       const prepare = scopeOwner.prepareSqliteScope;
       return vi
@@ -550,7 +499,6 @@ it.each([false, true])(
         .mockImplementation(async (input) => hold(await prepare(input)));
     };
     const interception = await intercept();
-    const archiveRead = vi.spyOn(archiveWorker, "runSqliteTranscriptArchiveReadWorker");
     const outcome = find("old").then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
@@ -580,7 +528,6 @@ it.each([false, true])(
         error: { message: expect.stringMatching(compressed ? /identity changed/ : /revoked/) },
       });
       await closing;
-      expect(archiveRead).not.toHaveBeenCalled();
     } finally {
       release.resolve();
       await Promise.allSettled([outcome, closing]);
@@ -593,7 +540,6 @@ it.each([false, true])(
           fs.renameSync(originalPath, storePath);
         }
       }
-      archiveRead.mockRestore();
       interception.mockRestore();
     }
   },

@@ -200,6 +200,8 @@ openclaw doctor
 openclaw gateway status --json
 ```
 
+If PowerShell reports that running scripts is disabled, use [npm's `openclaw.cmd`](/platforms/windows#powershell-execution-policy) and leave the execution policy unchanged.
+
 Local `read`, `write`, and `edit` tools accept Git Bash (`/f/...`), Cygwin
 (`/cygdrive/f/...`), and WSL-style (`/mnt/f/...`) drive paths when the Gateway runs
 natively on Windows. These paths resolve to the corresponding Windows drive.
@@ -268,6 +270,9 @@ the service owner's existing recovery to restore the previous definition and
 running policy when ownership can still be verified. During an update, the
 updater retains recovery ownership. If recovery cannot be confirmed, inspect the
 reported Task Scheduler state before retrying.
+
+Scheduler takeover evidence and Startup login-item reprobes use elapsed-time budgets,
+so wall-clock corrections do not extend or prematurely expire those waits.
 
 Publication accepts filesystem timestamp changes when the launcher's identity,
 permissions, and contents still match. Reinstallation reports the retained
@@ -488,6 +493,35 @@ Notes:
 - Use `listenaddress=0.0.0.0` for LAN access, `127.0.0.1` for local-only access.
 
 ## Troubleshooting
+
+<a id="powershell-execution-policy" />
+
+### PowerShell refuses to run `openclaw.ps1`
+
+Windows PowerShell with an effective execution policy of Restricted resolves a
+bare `openclaw` command to npm's `openclaw.ps1` shim and stops before OpenClaw
+starts. Leave the execution policy unchanged. The install also includes
+`openclaw.cmd` in that same directory. This is npm's global shim, not the
+desktop app launcher at `%USERPROFILE%\.openclaw\bin\openclaw.cmd`. For the
+default npm prefix:
+
+```powershell
+& "$env:APPDATA\npm\openclaw.cmd" --version
+& "$env:APPDATA\npm\openclaw.cmd" doctor --generate-gateway-token
+```
+
+If the error names a different `openclaw.ps1` path, that directory is the npm
+prefix. Run the `openclaw.cmd` beside it:
+
+```powershell
+$shim = (Get-Command openclaw.ps1).Source
+& (Join-Path (Split-Path $shim) "openclaw.cmd") doctor --generate-gateway-token
+```
+
+Doctor can ask to pause the managed Gateway while you review repairs. If you
+accept, Doctor restores the previous service state when it finishes. A new
+token, and the Gateway restart after it, disconnects clients that still use
+the previous secret.
 
 ### The Gateway Scheduled Task is disabled
 

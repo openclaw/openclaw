@@ -134,7 +134,7 @@ export async function withGatewayServiceUpdateAuthority<T>(
           baseEnv: { ...commandOptions.baseEnv },
           env: { ...commandOptions.env },
         };
-        const now = getServiceInspectionClock(() => Date.now());
+        const now = getServiceInspectionClock();
         const deadline =
           selected.timeoutMs === undefined
             ? undefined

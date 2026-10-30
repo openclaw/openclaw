@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { createPostCorePluginUpdateResult } from "../cli/update-cli/update-command-plugins-internals.js";
 import { applyPostPluginUpdateReadiness } from "../cli/update-cli/update-command-post-plugin-readiness.js";
 import { createConfigIO } from "../config/config.js";
@@ -77,7 +78,7 @@ function writePlugin(
   source = "throw new Error('must not execute');\n",
 ) {
   fs.mkdirSync(directory);
-  fs.writeFileSync(path.join(directory, "openclaw.plugin.json"), JSON.stringify(manifest));
+  writeFixtureJsonSync(path.join(directory, "openclaw.plugin.json"), manifest);
   fs.writeFileSync(path.join(directory, "index.js"), source);
 }
 function expectUninspectedConfig(config: OpenClawConfig) {
@@ -110,15 +111,12 @@ it.each([
   const pluginPath = path.join(root, "local-plugin");
   const pluginId = "compatibility-fixture";
   writePlugin(pluginPath, { id: pluginId, configSchema: { type: "object" } });
-  fs.writeFileSync(
-    path.join(pluginPath, "package.json"),
-    JSON.stringify({
-      name: pluginId,
-      version: "1.0.0",
-      type: "module",
-      openclaw: { extensions: ["./index.js"], compat: { pluginApi } },
-    }),
-  );
+  writeFixtureJsonSync(path.join(pluginPath, "package.json"), {
+    name: pluginId,
+    version: "1.0.0",
+    type: "module",
+    openclaw: { extensions: ["./index.js"], compat: { pluginApi } },
+  });
   const config: OpenClawConfig = {
     plugins: {
       allow: [pluginId],

@@ -4,7 +4,8 @@ import type {
   SessionsCatalogHostEvent,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {

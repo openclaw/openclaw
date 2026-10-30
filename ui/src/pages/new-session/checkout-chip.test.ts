@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { resolveCheckoutChip } from "./checkout-chip.ts";
 import { CheckoutChip } from "./checkout-chip.tsx";
 import type { DraftRepositoryState } from "./discovery.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
@@ -13,6 +12,7 @@ import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 type CheckoutFixture = ReturnType<typeof checkoutDefaults> & {
   currentCheckoutUnavailableReason?: string;
   remoteRepository?: boolean;
+  cloudProfileId?: string;
   repository: DraftRepositoryState;
   repositoryRead?: DraftRepositoryRead<unknown>;
   checkoutRead?: DraftRepositoryRead<unknown>;
@@ -47,7 +47,6 @@ function waitForOpen(container: Element) {
 
 function checkoutDefaults() {
   return {
-    state: { label: "New worktree from main" },
     remotePlacement: false,
     folderLabel: "OpenClaw",
     worktree: true,
@@ -82,6 +81,7 @@ function mountCheckout(initial: CheckoutFixture) {
   const { state: place, browser, gateway } = createRepositoryFixture();
   Object.defineProperties(place, {
     worktree: { get: () => params().worktree },
+    cloudProfileId: { get: () => params().cloudProfileId },
     worktreeName: { get: () => params().worktreeName },
     baseRef: { get: () => params().baseRef },
     remotePlacement: { get: () => params().remotePlacement },
@@ -118,9 +118,6 @@ function mountCheckout(initial: CheckoutFixture) {
   const mounted = mountSolid(() =>
     createComponent(CheckoutChip, {
       params: options,
-      get state() {
-        return params().state;
-      },
       get folderLabel() {
         return params().folderLabel;
       },
@@ -150,16 +147,18 @@ describe("Checkout chip state", () => {
   ] as const)(
     "%s repository=%s worktree=%s base=%s head=%s name=%s: %s",
     (destination, repository, worktree, baseRef, headBranch, worktreeName, label) => {
-      expect(
-        resolveCheckoutChip({
-          destination,
-          repository,
+      const { container } = mountCheckout(
+        checkoutFixture({
+          remotePlacement: destination === "remote",
+          cloudProfileId: destination === "cloud" ? "fixture-cloud" : undefined,
+          remoteRepository: repository,
           worktree,
           baseRef,
-          headBranch,
           worktreeName,
+          repository: { kind: "git", repoRoot: "/repo", branches: [], headBranch },
         }),
-      ).toEqual({ label });
+      );
+      expect(container.querySelector(".new-session-page__trigger-label")?.textContent).toBe(label);
     },
   );
 
@@ -253,7 +252,6 @@ describe("Checkout chip state", () => {
     const initial = createDeferred();
     const initialRead = { completed: initial.promise };
     const params = checkoutFixture({
-      state: { label: "New worktree" },
       folderLabel: "Fixture project",
       worktreeAvailable: false,
       repository: { kind: "checking", repoRoot: "/fixture" },
@@ -325,6 +323,21 @@ describe("Checkout chip state", () => {
     input(name, " picker-fixes ");
     expect(params.onBaseRefInput).toHaveBeenLastCalledWith(" release ");
     expect(params.onWorktreeNameInput).toHaveBeenLastCalledWith(" picker-fixes ");
+    for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
+      for (const key of ["ArrowDown", "ArrowUp", "Enter"]) {
+        const event = new KeyboardEvent("keydown", {
+          key,
+          ...composition,
+          bubbles: true,
+          cancelable: true,
+        });
+        baseRef.dispatchEvent(event);
+        flush();
+        expect(event.defaultPrevented).toBe(false);
+        expect(baseRef.hasAttribute("aria-activedescendant")).toBe(false);
+        expect(onPopoverHide).not.toHaveBeenCalled();
+      }
+    }
     keydown(baseRef, "ArrowDown");
     const suggestion = container.querySelector('[data-worktree-suggestion="main"]')!;
     expect(baseRef.getAttribute("aria-activedescendant")).toBe(suggestion.id);
@@ -373,6 +386,9 @@ describe("Checkout chip state", () => {
     expect(onConfirm).toHaveBeenCalledOnce();
 
     renderNamed("Not Valid");
+    expect(trigger.querySelector(".new-session-page__trigger-label")?.textContent).toBe(
+      "Worktree · Not Valid",
+    );
     keydown(container.querySelectorAll("input")[1]!, "Enter");
     expect(onConfirm).toHaveBeenCalledOnce();
 

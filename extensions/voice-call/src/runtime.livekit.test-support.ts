@@ -19,6 +19,8 @@ export function registerLiveKitRuntimeTests(mocks: {
     config.livekit = {
       url: "wss://livekit.example.test",
       allowInsecureWs: false,
+      apiKey: "synthetic-key",
+      apiSecret: "synthetic-secret",
       outboundTrunkId: "ST_out",
       inboundTrunkIds: ["ST_in"],
       roomPrefix: "openclaw-call-",

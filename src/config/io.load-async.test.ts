@@ -20,7 +20,7 @@ import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-rea
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { withoutMainThreadSql as withoutMainSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as configContext from "./io.context.js";
 import { createConfigIO } from "./io.factory.js";
 import * as configHealth from "./io.health-state.js";
@@ -111,17 +111,6 @@ async function pendingFixture() {
   };
 }
 
-async function withoutMainSql<T>(run: () => Promise<T>) {
-  const sql = observeMainThreadSql();
-  try {
-    const result = await run();
-    sql.expectIdle();
-    return result;
-  } finally {
-    sql.restore();
-  }
-}
-
 function barrier<T = void>() {
   const entered = createDeferredCore<T>();
   const release = createDeferredCore();
@@ -208,13 +197,20 @@ it("offline reads consume canonical config without reading pending migrations or
       expect(synchronousSnapshot).not.toHaveBeenCalled();
     });
     expect(fs.readFileSync(options.configPath, "utf8")).toBe(raw);
-    expect(family.map((file) => (fs.existsSync(file) ? fs.readFileSync(file) : null))).toEqual(
-      familyBefore,
-    );
+    for (const [index, before] of familyBefore.entries()) {
+      const file = family[index]!;
+      const after = fs.existsSync(file) ? fs.readFileSync(file) : null;
+      expect(
+        before === null ? after === null : after?.equals(before),
+        `${file}: before=${before?.length ?? "absent"}, after=${after?.length ?? "absent"}`,
+      ).toBe(true);
+    }
     await closeOpenClawStateDatabaseAsync();
     clearBundledDiscoveryModeMemo();
   }
-  expect(readDeferredPluginMigrations({ env: options.env })).toEqual([pending]);
+  expect(
+    readDeferredPluginMigrations({ env: options.env, artifactPreservingReadOnly: false }),
+  ).toEqual([pending]);
 });
 
 it("validates config and update ownership snapshots while a verified live writer checkpoints", async () => {

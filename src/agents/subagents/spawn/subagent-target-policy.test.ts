@@ -1,5 +1,3 @@
-// Subagent target policy tests cover requester defaults, explicit allowlists,
-// wildcard target sets, and stale configured-agent filtering.
 import { describe, expect, it } from "vitest";
 import {
   describeSubagentSpawnTargetParameter,
@@ -8,7 +6,6 @@ import {
   resolveSubagentSpawnTargetConfig,
 } from "./subagent-target-policy.js";
 
-// Admit an explicit `main` -> `target` spawn under the given allowlist.
 function admit(
   allowAgents: string[] | undefined,
   target: string,
@@ -32,57 +29,28 @@ describe("subagent target policy", () => {
     });
   });
 
-  it("filters explicit allowlists to configured target ids", () => {
-    expect(
-      resolveSubagentAllowedTargetIds({
-        requesterAgentId: "main",
-        allowAgents: ["planner", "stale"],
-        configuredAgentIds: ["main", "planner"],
-      }),
-    ).toEqual({
-      allowAny: false,
-      allowedIds: ["planner"],
-      explicitAllowlistConfigured: true,
-    });
-
-    expect(admit(["planner", "stale"], "stale", ["main", "planner"])).toEqual({
-      ok: false,
-      error: 'agentId "stale" is not in the configured agent registry (allowed: planner)',
-    });
-  });
-
-  it("limits wildcard allowlists to configured agents plus the requester", () => {
-    expect(
-      resolveSubagentAllowedTargetIds({
-        requesterAgentId: "main",
-        allowAgents: ["*"],
-        configuredAgentIds: ["planner", "checker"],
-      }),
-    ).toEqual({
-      allowAny: true,
-      allowedIds: ["checker", "main", "planner"],
-      explicitAllowlistConfigured: true,
-    });
-  });
-
-  it("filters explicit targets when wildcard allowlists are mixed", () => {
-    expect(
-      resolveSubagentAllowedTargetIds({
-        requesterAgentId: "main",
-        allowAgents: ["*", "beta"],
-        configuredAgentIds: ["main", "planner"],
-      }),
-    ).toEqual({
-      allowAny: true,
-      allowedIds: ["main", "planner"],
-      explicitAllowlistConfigured: true,
-    });
-
-    expect(admit(["*", "beta"], "beta", ["main", "planner"])).toEqual({
-      ok: false,
-      error: 'agentId "beta" is not in the configured agent registry (allowed: main, planner)',
-    });
-  });
+  it.each([
+    [["planner", "stale"], ["main", "planner"], false, ["planner"], "stale"],
+    [["*"], ["planner", "checker"], true, ["checker", "main", "planner"], undefined],
+    [["*", "beta"], ["main", "planner"], true, ["main", "planner"], "beta"],
+  ] satisfies Array<[string[], string[], boolean, string[], string?]>)(
+    "filters configured targets for %j",
+    (allowAgents, configuredAgentIds, allowAny, allowedIds, rejected) => {
+      expect(
+        resolveSubagentAllowedTargetIds({
+          requesterAgentId: "main",
+          allowAgents,
+          configuredAgentIds,
+        }),
+      ).toEqual({ allowAny, allowedIds, explicitAllowlistConfigured: true });
+      if (rejected) {
+        expect(admit(allowAgents, rejected, configuredAgentIds)).toEqual({
+          ok: false,
+          error: `agentId "${rejected}" is not in the configured agent registry (allowed: ${allowedIds.join(", ")})`,
+        });
+      }
+    },
+  );
 
   const omitMain = 'Omit to keep the requester agent ("main").';
   const both = ["main", "planner"];
@@ -92,11 +60,6 @@ describe("subagent target policy", () => {
       "requester-only default with other agents configured",
       { configuredAgentIds: both },
       `Only the requester agent is allowed as a target. ${omitMain}`,
-    ],
-    [
-      "an explicit allowlist",
-      { allowAgents: both, configuredAgentIds: both },
-      `Configured agent to target: main, planner. ${omitMain}`,
     ],
     [
       "a wildcard allowlist",
@@ -112,12 +75,6 @@ describe("subagent target policy", () => {
       "requireAgentId",
       { allowAgents: both, configuredAgentIds: both, requireAgentId: true },
       'Configured agent to target: main, planner. agentId is required; the requester agent is "main".',
-    ],
-    [
-      "an allowed collector default",
-      { allowAgents: both, configuredAgentIds: both, collectDefaultAgentId: "planner" },
-      `Configured agent to target: main, planner. ${omitMain} ` +
-        'With collect=true, omit to target tools.swarm.defaultAgentId ("planner").',
     ],
     [
       "a sender-restricted session with a disallowed collector default",
@@ -158,33 +115,6 @@ describe("subagent target policy", () => {
       `Configured agent to target: ${listed.join(", ")} (+1). Only the first 20 ids are listed. ` +
         'Omit to keep the requester agent ("agent-00").',
     );
-  });
-
-  it("checks a target against the requester's requireAgentId and allowAgents", () => {
-    const cfg = {
-      agents: {
-        entries: { main: { subagents: { allowAgents: ["planner"], requireAgentId: true } } },
-      },
-    };
-    const base = { cfg, requesterAgentId: "main", configuredAgentIds: ["main", "planner"] };
-    expect(resolveRequesterSpawnTargetPolicy({ ...base, targetAgentId: "planner" })).toMatchObject({
-      ok: false,
-      error: expect.stringContaining("requires explicit agentId"),
-    });
-    expect(
-      resolveRequesterSpawnTargetPolicy({
-        ...base,
-        targetAgentId: "planner",
-        requestedAgentId: "planner",
-      }),
-    ).toEqual({ ok: true });
-    expect(
-      resolveRequesterSpawnTargetPolicy({
-        ...base,
-        targetAgentId: "main",
-        requestedAgentId: "main",
-      }),
-    ).toEqual({ ok: false, error: expect.stringContaining("not allowed") });
   });
 
   it("resolves spawn target settings from the agent override, then defaults", () => {

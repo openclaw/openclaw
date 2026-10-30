@@ -45,6 +45,7 @@ suite.define(() => {
       const foreign = sharedSession("agent:main:shared-notes", "Shared notes");
       const otherAgentSession = sharedSession("agent:research:other-work", "Research notes");
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         operatorScopes: ["operator.sessions.write"],
         agentModel: "openai/model-a",
         models,
@@ -212,6 +213,8 @@ suite.define(() => {
             sessionKey: key,
             message: "Help me plan my own work.",
           });
+          await expect.poll(() => initialMessage.locator(".chat-send-status").count()).toBe(0);
+          await initialMessage.locator("time.chat-group-timestamp").waitFor();
           expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
           return;
         }

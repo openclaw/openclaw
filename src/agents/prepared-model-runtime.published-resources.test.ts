@@ -10,6 +10,7 @@ import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
 } from "../plugins/loader.test-fixtures.js";
+import { cleanupNativeFixture } from "../plugins/native-resource.test-support.js";
 import { getPluginInstance, type PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
@@ -298,12 +299,7 @@ module.exports = {
           clearPluginMetadataLifecycleCaches();
           resetPluginLoaderTestStateForTest();
           cleanupPluginLoaderFixturesForTest();
-          for (const connection of connections) {
-            if (connection.database.isOpen) {
-              connection.database.close();
-            }
-          }
-          Reflect.deleteProperty(globalThis, key);
+          cleanupNativeFixture(key, connections);
         }
       },
     );

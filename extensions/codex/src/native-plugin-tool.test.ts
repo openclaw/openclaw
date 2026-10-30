@@ -66,7 +66,6 @@ function toolFixture(
 }
 
 it("denies nonowner calls before reading native plugin state", async () => {
-  expect(toolFixture().tool?.name).toBe("codex_plugins");
   const { tool, read, request } = toolFixture({ owner: false });
   await expect(tool.execute("denied", {})).rejects.toThrow("owner-authorized sender");
   expect(read).not.toHaveBeenCalled();

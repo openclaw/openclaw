@@ -16,12 +16,13 @@ import { finalizeUpdatedJob } from "../cron/service/jobs-mutation.js";
 import { computeJobNextRunAtMs } from "../cron/service/jobs-scheduling.js";
 import { assertExecutionPolicy } from "../cron/service/jobs-validation.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import { cronStoreKey } from "../cron/store/key.js";
+import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import { loadCronRows, upsertCronJobRow } from "../cron/store/row-codec.js";
 import {
   loadCronRuntimeAuthorities,
   replaceCronRuntimeAuthorityRows,
 } from "../cron/store/runtime-authority-store.js";
+import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { CronStoredJob as CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -239,7 +240,12 @@ export async function ensureHeartbeatMonitorJobs(
     loaded,
     (agentId) =>
       withExistingOpenClawStateDatabaseReadOnly(
-        ({ db }) => readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId),
+        ({ db }) =>
+          readDefaultProactiveJobReceiptInDatabase(
+            db,
+            resolveCronStoreKeyInDatabase(db, storePath, env),
+            agentId,
+          ),
         { env },
       ),
     legacyFileAgentIds,
@@ -273,7 +279,8 @@ export async function ensureHeartbeatMonitorJobs(
   });
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const rows = loadCronRows(db, cronStoreKey(storePath));
+      const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
+      const rows = loadCronRows(db, storeKey);
       const currentJobs = decodeDoctorHeartbeatJobRows(rows);
       const result = new Map<string, CronJob>();
       let nextSortOrder = rows.reduce((max, row) => Math.max(max, row.sort_order + 1), 0);
@@ -293,7 +300,7 @@ export async function ensureHeartbeatMonitorJobs(
         // it to cron's existing catch-up owner without rewriting history or cadence.
         upsertCronJobRow(
           db,
-          cronStoreKey(storePath),
+          storeKey,
           {
             ...current,
             payload: current.payload,
@@ -304,7 +311,7 @@ export async function ensureHeartbeatMonitorJobs(
       }
       for (const item of planned) {
         const receipt = item.defaultMonitor
-          ? readDefaultProactiveJobReceiptInDatabase(db, storePath, item.agentId)
+          ? readDefaultProactiveJobReceiptInDatabase(db, storeKey, item.agentId)
           : undefined;
         if (receipt) {
           const current = resolveDoctorHeartbeatReceiptJob(
@@ -357,7 +364,7 @@ export async function ensureHeartbeatMonitorJobs(
           : item.job;
         loadCronRuntimeAuthorities({
           db,
-          storeKey: cronStoreKey(storePath),
+          storeKey,
           jobs: [authoritySource],
         });
         item.job.runtimeAuthority = authoritySource.runtimeAuthority;
@@ -365,16 +372,16 @@ export async function ensureHeartbeatMonitorJobs(
           authoritySource.runtimeAuthorityRecoveryRequired;
         // The transaction already revalidated the full row. Persist scheduling state
         // together with its changed definition instead of retaining the stale slot.
-        const job = upsertCronJobRow(db, cronStoreKey(storePath), item.job, sortOrder);
+        const job = upsertCronJobRow(db, storeKey, item.job, sortOrder);
         replaceCronRuntimeAuthorityRows({
           db,
-          storeKey: cronStoreKey(storePath),
+          storeKey,
           jobs: [item.job],
         });
         if (item.defaultMonitor) {
           recordDefaultProactiveJobInDatabase(
             db,
-            storePath,
+            storeKey,
             item.agentId,
             job.id,
             nowMs,
@@ -383,7 +390,7 @@ export async function ensureHeartbeatMonitorJobs(
           );
           result.set(item.agentId, job);
         } else {
-          recordConvertedProactiveJobInDatabase(db, storePath, item.agentId, job.id);
+          recordConvertedProactiveJobInDatabase(db, storeKey, item.agentId, job.id);
         }
       }
       return result;
@@ -401,7 +408,7 @@ export function hasPendingHeartbeatCadenceMigration(
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   const rows =
     withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => loadCronRows(db, cronStoreKey(storePath)),
+      ({ db }) => loadCronRows(db, resolveCronStoreKeyInDatabase(db, storePath, env)),
       { env },
     ) ?? [];
   const loaded = decodeDoctorHeartbeatJobRows(rows);
@@ -426,9 +433,10 @@ export function hasPendingHeartbeatCadenceMigration(
   }
   return (
     withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) =>
-        [...agentIds].some((agentId) => {
-          const receipt = readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId);
+      ({ db }) => {
+        const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
+        return [...agentIds].some((agentId) => {
+          const receipt = readDefaultProactiveJobReceiptInDatabase(db, storeKey, agentId);
           return (
             receipt?.phase === "pending" ||
             (configured.has(agentId) && !receipt) ||
@@ -442,7 +450,8 @@ export function hasPendingHeartbeatCadenceMigration(
                 ),
             )
           );
-        }),
+        });
+      },
       { env },
     ) ?? configured.size > 0
   );
@@ -468,14 +477,17 @@ export async function collectHeartbeatCadenceMigrationFindings(
       },
     ];
   } catch (error) {
+    const deferred = error instanceof CronStoreSelectionRequiredError;
     return [
       {
         checkId: CHECK_ID,
-        severity: "error",
+        severity: deferred ? "warning" : "error",
         path: storePath,
         message: formatErrorMessage(error),
-        requirement: "heartbeat-retirement-inspection",
-        fixHint: "Resolve the state error and rerun openclaw doctor --fix.",
+        requirement: deferred ? "heartbeat-migration-deferred" : "heartbeat-retirement-inspection",
+        fixHint: deferred
+          ? "Run openclaw doctor --fix in an interactive terminal and complete Select the default cron partition. --yes does not choose a partition."
+          : "Resolve the state error and rerun openclaw doctor --fix.",
       },
     ];
   }

@@ -13,24 +13,14 @@ import {
   normalizeReplyPayloadDirectives,
 } from "./reply-delivery.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { createQuietTypingSignaler } from "./reply.test-helpers.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 type BlockReplyPipelineLike = NonNullable<
   Parameters<typeof createBlockReplyDeliveryHandler>[0]["blockReplyPipeline"]
 >;
 
-const quietTypingSignals: TypingSignaler = {
-  mode: "never",
-  shouldStartImmediately: false,
-  shouldStartOnMessageStart: false,
-  shouldStartOnText: false,
-  shouldStartOnReasoning: false,
-  signalRunStart: async () => {},
-  signalMessageStart: async () => {},
-  signalTextDelta: async () => {},
-  signalReasoningDelta: async () => {},
-  signalToolStart: async () => {},
-};
+const quietTypingSignals: TypingSignaler = createQuietTypingSignaler();
 
 type HandlerOptions = Parameters<typeof createBlockReplyDeliveryHandler>[0];
 const defaultCoalescing = { minChars: 100, maxChars: 200, idleMs: 0, joiner: " " };

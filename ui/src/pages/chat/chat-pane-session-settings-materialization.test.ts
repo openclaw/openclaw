@@ -371,16 +371,23 @@ it.each([
       entry: { sessionId: "unobserved-ack-session", updatedAt: 2, thinkingLevel: "high" },
     } satisfies SessionsPatchResult;
     const firstReply = createDeferred<SessionsPatchResult>();
-    const replies = Array.from({ length: 3 }, () => createDeferred<SessionsPatchResult>());
-    const dispatched = Array.from({ length: 3 }, () => createDeferred());
+    const replies = Array.from({ length: 4 }, () => createDeferred<SessionsPatchResult>());
+    const dispatched = Array.from({ length: 4 }, () => createDeferred());
     const requested = [
       { thinkingLevel: "low" },
       { fastMode: true },
       { contextWindow: "128k" },
+      { cyberAccessProgram: "daybreak_blue" },
     ] as const;
     const remainingPreviews = [
-      { fastMode: true, effectiveFastMode: true, contextWindow: "128k" },
-      { contextWindow: "128k" },
+      {
+        fastMode: true,
+        effectiveFastMode: true,
+        contextWindow: "128k",
+        cyberAccessProgram: "daybreak_blue",
+      },
+      { contextWindow: "128k", cyberAccessProgram: "daybreak_blue" },
+      { cyberAccessProgram: "daybreak_blue" },
       undefined,
     ];
     const patch = vi.fn<GatewayRequestHandler>((_method, raw): Promise<SessionsPatchResult> => {
@@ -415,11 +422,15 @@ it.each([
       queued.push(switchChatSetting(pane.state, { kind: "thinkingLevel", value: "low" }));
       queued.push(switchChatSetting(pane.state, { kind: "fastMode", value: "on" }));
       queued.push(switchChatSetting(pane.state, { kind: "contextWindow", value: "128k" }));
+      queued.push(
+        switchChatSetting(pane.state, { kind: "cyberAccessProgram", value: "daybreak_blue" }),
+      );
       const pendingPreview = {
         thinkingLevel: "low",
         fastMode: true,
         effectiveFastMode: true,
         contextWindow: "128k",
+        cyberAccessProgram: "daybreak_blue",
       };
       expect(sessions.settingsPreview(key, "main")).toEqual(pendingPreview);
       await withSessionMutationOperations(() => undefined);
@@ -480,7 +491,7 @@ it.each([
         expect(pane.state.chatError).toContain(
           outcome === "reasoning rejection"
             ? "Synthetic queued setting 0 rejection"
-            : "Synthetic queued setting 2 rejection",
+            : "Synthetic queued setting 3 rejection",
         );
         expect(pane.state.lastError).toBe(pane.state.chatError);
       } else {

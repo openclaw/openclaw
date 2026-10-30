@@ -12,11 +12,16 @@ type Directory = {
   watchRoot: string;
   recursive: boolean;
   reconcileIntervalMs: number;
-  listeners: Set<Listener>;
+  listeners: readonly Listener[];
   nextFallback: { atMs: number; elapsedAtMs: number };
   source?: Source;
 };
-type Source = { key: string; path: string; watcher: DirectoryWatch; directories: Set<Directory> };
+type Source = {
+  key: string;
+  path: string;
+  watcher: DirectoryWatch;
+  directories: readonly Directory[];
+};
 
 const directories = new Map<string, Directory>();
 const sources = new Map<string, Source>();
@@ -101,15 +106,18 @@ function scheduleFallback(changed?: Directory) {
 function detach(directory: Directory) {
   const source = directory.source;
   directory.source = undefined;
-  if (source && source.directories.delete(directory) && !source.directories.size) {
+  if (!source) {
+    return;
+  }
+  source.directories = source.directories.filter((entry) => entry !== directory);
+  if (!source.directories.length) {
     sources.delete(source.key);
     source.watcher.close();
   }
 }
 
 function notify(directory: Directory, filename?: string, event?: string) {
-  const listeners = Array.from(directory.listeners);
-  for (const listener of listeners) {
+  for (const listener of directory.listeners) {
     listener(filename, event);
   }
 }
@@ -132,11 +140,12 @@ function attach(directory: Directory) {
     const sourceKey = JSON.stringify([candidate, recursive]);
     const shared = sources.get(sourceKey);
     if (shared) {
-      shared.directories.add(directory);
+      shared.directories = [...shared.directories, directory];
       directory.source = shared;
       return;
     }
     try {
+      const candidateName = path.basename(candidate);
       const watcher = runInDetachedAsyncContext(() =>
         watchDirectory(
           watchPath(candidate),
@@ -145,9 +154,9 @@ function attach(directory: Directory) {
             if (!source || source.watcher !== watcher) {
               return;
             }
-            const affected = [...source.directories];
-            const renamedRoot =
-              event === "rename" && (!filename || filename === path.basename(candidate));
+            // Attach/detach replace this snapshot, including during reentrant delivery.
+            const affected = source.directories;
+            const renamedRoot = event === "rename" && (!filename || filename === candidateName);
             let changedPath: string | undefined;
             for (const entry of affected) {
               if (
@@ -166,13 +175,23 @@ function attach(directory: Directory) {
               // An absent directory waits on its nearest ancestor. Only the next segment
               // toward it can move that attach point; closing a native watch for other
               // children (SQLite sidecars) can block the main thread for seconds on macOS.
-              const readmit = affected.filter(
-                ({ watchRoot }) =>
+              let readmit: Directory[] | undefined;
+              for (const entry of affected) {
+                if (
                   renamedRoot ||
-                  (watchRoot !== candidate &&
+                  (entry.watchRoot !== candidate &&
                     filename !== undefined &&
-                    isPathInside((changedPath ??= path.resolve(candidate, filename)), watchRoot)),
-              );
+                    isPathInside(
+                      (changedPath ??= path.resolve(candidate, filename)),
+                      entry.watchRoot,
+                    ))
+                ) {
+                  (readmit ??= []).push(entry);
+                }
+              }
+              if (!readmit) {
+                return;
+              }
               for (const entry of readmit) {
                 detach(entry);
               }
@@ -192,13 +211,12 @@ function attach(directory: Directory) {
         key: sourceKey,
         path: candidate,
         watcher,
-        directories: new Set([directory]),
+        directories: [directory],
       };
       sources.set(sourceKey, source);
       directory.source = source;
       watcher.on("error", () => {
-        const affected = Array.from(source.directories);
-        for (const entry of affected) {
+        for (const entry of source.directories) {
           detach(entry);
           notify(entry);
           retainEarlierFallback(entry, nextFallback());
@@ -240,19 +258,20 @@ export function observeOwnedDirectory(
       watchRoot,
       recursive,
       reconcileIntervalMs,
-      listeners: new Set(),
+      listeners: [],
       nextFallback: { atMs: Infinity, elapsedAtMs: Infinity },
     };
     directories.set(key, selected);
     attach(selected);
   }
   const listener: Listener = (filename, event) => onChange(filename, event);
-  selected.listeners.add(listener);
+  selected.listeners = [...selected.listeners, listener];
   retainEarlierFallback(selected, nextFallback(reconcileIntervalMs));
   scheduleFallback(selected);
   return {
     close() {
-      if (!selected.listeners.delete(listener) || selected.listeners.size) {
+      selected.listeners = selected.listeners.filter((entry) => entry !== listener);
+      if (selected.listeners.length || directories.get(key) !== selected) {
         return;
       }
       directories.delete(key);

@@ -397,16 +397,28 @@ describe("durable model prompt projection at provider dispatch", () => {
     });
   });
 
-  it.each([false, true])(
-    "keeps a dispatched user's projection across model fallback (enriched=%s)",
-    async (enriched) => {
+  it.each(
+    [0, 1, 2].flatMap((imageCount) => [false, true].map((enriched) => ({ imageCount, enriched }))),
+  )(
+    "keeps one dispatched user turn across fallback ($imageCount images, enriched=$enriched)",
+    async ({ imageCount, enriched }) => {
       await withOpenClawTestState({ label: "fallback-model-projection" }, async (state) => {
         const target = await prepareTarget(state, "fallback-model-projection");
         const original = "Keep the original user request.";
         const firstProjection = enriched ? "Original request with captured context." : original;
         const retry = "[Retry after the previous model attempt failed or timed out]\n\n" + original;
+        const imageBuffers = Array.from({ length: imageCount }, (_, index) =>
+          createSolidPngBuffer(1, 1, { r: 50 + index * 100, g: 40, b: 30 }),
+        );
+        const media = await Promise.all(
+          imageBuffers.map(async (buffer, index) => {
+            const imagePath = path.join(state.workspaceDir, `fallback-${index}.png`);
+            await fs.writeFile(imagePath, buffer);
+            return { path: imagePath, contentType: "image/png" };
+          }),
+        );
         const recorder = createUserTurnTranscriptRecorder({
-          input: { text: original, timestamp: 1, idempotencyKey: "fallback:user" },
+          input: { text: original, timestamp: 1, idempotencyKey: "fallback:user", media },
           target: { ...target, sessionEntry: undefined },
         });
         const requests: Context["messages"][] = [];
@@ -464,12 +476,24 @@ describe("durable model prompt projection at provider dispatch", () => {
           );
           const { session } = await createTestSession({
             sessionManager: manager,
-            model: { ...testModel, id: fallback ? "backup" : "primary" },
+            model: { ...testModel, id: fallback ? "backup" : "primary", input: ["text", "image"] },
           });
-          normalizeSession(session, () => ({
-            userTranscriptContexts: contexts.list(),
-            includeTimestamp: false,
-          }));
+          const convert = session.agent.convertToLlm;
+          session.agent.convertToLlm = async (messages) =>
+            convert(
+              await hydratePromptMediaMessages(
+                normalizeMessagesForLlmBoundary(messages, {
+                  sessionVersion: manager.getHeader()?.version,
+                  userTranscriptContexts: contexts.list(),
+                  includeTimestamp: false,
+                }),
+                {
+                  workspaceDir: state.workspaceDir,
+                  model: { input: ["text", "image"] },
+                  workspaceOnly: true,
+                },
+              ),
+            );
           await submit(session, {
             attempt: {
               sessionId,
@@ -478,6 +502,16 @@ describe("durable model prompt projection at provider dispatch", () => {
             },
             transcriptPrompt: internal ? retry : original,
             modelPrompt: fallback ? retry : firstProjection,
+            images: finalizeRuntimePromptImages(
+              imageBuffers.map((buffer, factIndex) => ({
+                image: {
+                  type: "image" as const,
+                  data: buffer.toString("base64"),
+                  mimeType: "image/png",
+                },
+                factIndex,
+              })),
+            ).images,
             prependContext: undefined,
             appendContext: undefined,
             getUserTranscriptContexts: () => contexts.list(),
@@ -490,15 +524,32 @@ describe("durable model prompt projection at provider dispatch", () => {
           });
         }
         expect(requests).toHaveLength(2);
-        const userText = (messages: Context["messages"]) =>
-          messages.filter((message) => message.role === "user").map((message) => message.content);
-        expect(userText(requests[0]!)).toEqual([firstProjection]);
-        expect(userText(requests[1]!)).toEqual([firstProjection, retry]);
+        const primaryUsers = requests[0]!.filter((message) => message.role === "user");
+        const fallbackUsers = requests[1]!.filter((message) => message.role === "user");
+        expect(primaryUsers).toHaveLength(1);
+        expect(fallbackUsers).toEqual(primaryUsers);
+        expect(JSON.stringify(fallbackUsers).match(/"type":"image"/g) ?? []).toHaveLength(
+          imageCount,
+        );
+        expect(JSON.stringify(fallbackUsers)).toContain(firstProjection);
+        expect(JSON.stringify(fallbackUsers)).not.toContain("Retry after");
         const users = (await readTranscriptMessages(target)).filter(
           (message) => message.role === "user",
         );
         expect(users).toHaveLength(1);
-        expect(users[0]).toMatchObject({ content: original, idempotencyKey: "fallback:user" });
+        expect(users[0]).toMatchObject({
+          content: imageCount
+            ? [
+                { type: "text", text: original },
+                ...imageBuffers.map((buffer) => ({
+                  type: "image",
+                  data: buffer.toString("base64"),
+                  mimeType: "image/png",
+                })),
+              ]
+            : original,
+          idempotencyKey: "fallback:user",
+        });
         expect(users[0]).toHaveProperty("__openclaw.modelPromptProjection", {
           version: 1,
           text: firstProjection,

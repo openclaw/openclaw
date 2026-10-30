@@ -3,6 +3,7 @@ import type { Question, QuestionRecord, QuestionResolveResult } from "@openclaw/
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
   recordControlUiE2eFailureFacts,
@@ -26,26 +27,31 @@ export function defineQuestionFooterTests({
   questionRecord,
   questionSessionKey,
 }: QuestionFooterFixtures) {
-  it.each([
-    { height: 844, orientation: "portrait", width: 390 },
-    { height: 390, orientation: "landscape", width: 844 },
-  ])(
-    "keeps a collapsed question separate from PRs, notices, and the input on $orientation",
-    async ({ height, width }) => {
-      const { gateway, page } = await openQuestionPage({ height, width }, true);
+  it("keeps a collapsed question separate from PRs, notices, and the input in portrait and landscape", async () => {
+    const { gateway, page } = await openQuestionPage({ height: 844, width: 390 }, true);
+    for (const { height, width, orientation } of [
+      { height: 844, orientation: "portrait", width: 390 },
+      { height: 390, orientation: "landscape", width: 844 },
+    ]) {
+      await page.setViewportSize({ height, width });
+      const sentCount = (await gateway.getRequests("chat.send")).length;
+      const resolutionCount = (await gateway.getRequests("question.resolve")).length;
       const composer = page.locator(".agent-chat__input");
       const draft = composer.locator(".agent-chat__composer-combobox > textarea");
       await draft.fill("Review the footer controls");
       await draft.press("Enter");
-      const sent = requireRecord((await gateway.waitForRequest("chat.send")).params);
+      const sent = requireRecord(
+        (await gateway.waitForRequest("chat.send", { after: sentCount })).params,
+      );
       const runId = requireString(sent.idempotencyKey, "sent run ID");
+      const errorMessage = `The ${orientation} verification run failed. Please try again.`;
       await gateway.emitGatewayEvent("chat", {
         sessionKey: questionSessionKey,
         runId,
         state: "error",
-        errorMessage: "The verification run failed. Please try again.",
+        errorMessage,
       });
-      await page.locator(".chat-error").waitFor();
+      await page.locator(".chat-error").filter({ hasText: errorMessage }).waitFor();
       const watchedKey = await waitForWatchedSessionKey(gateway, questionSessionKey);
       await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
         sessions: {
@@ -72,7 +78,7 @@ export function defineQuestionFooterTests({
       await page.keyboard.press("Escape");
       await draft.fill("Keep this follow-up draft");
       const prompt = "Which progress note should I use?";
-      const request = questionRecord("question-mobile-context", [
+      const request = questionRecord(`question-mobile-context-${orientation}`, [
         {
           questionId: "progress_note",
           header: "Progress note",
@@ -125,6 +131,8 @@ export function defineQuestionFooterTests({
       await openDetailsPullRequests(page);
       await pullRequest.click({ trial: true });
       await page.keyboard.press("Escape");
+      // Closing Details animates the footer back into place before it can be tapped.
+      await waitForLayoutSettled(page, ".chat-question-panel__collapsed-button");
       await expand.tap();
       try {
         await expect.poll(() => composer.count()).toBe(0);
@@ -163,7 +171,9 @@ export function defineQuestionFooterTests({
         answers,
       } satisfies QuestionResolveResult);
       await panel.getByRole("button", { name: "Submit", exact: true }).tap();
-      expect((await gateway.waitForRequest("question.resolve")).params).toEqual({
+      expect(
+        (await gateway.waitForRequest("question.resolve", { after: resolutionCount })).params,
+      ).toEqual({
         id: request.id,
         answers,
       });
@@ -173,6 +183,6 @@ export function defineQuestionFooterTests({
       await openDetailsPullRequests(page);
       await pullRequest.click({ trial: true });
       await page.keyboard.press("Escape");
-    },
-  );
+    }
+  });
 }

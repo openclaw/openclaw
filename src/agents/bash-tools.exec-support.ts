@@ -53,7 +53,8 @@ export function buildExecForegroundResult(params: {
           "Check cgroup memory events or kernel logs. If they show memory pressure, narrow the command or adjust memory, concurrency, or resource limits."
         : "";
     const outputText = `${retentionCapNote}${warningText}${params.outcome.reason}${linuxOomGuidance}`;
-    return failedTextResult(outputText, { ...details, status: "failed" });
+    const message = `${retentionCapNote}${warningText}${params.outcome.message}${linuxOomGuidance}`;
+    return failedTextResult(outputText, { ...details, status: "failed", message });
   }
   const outputText = `${retentionCapNote}${warningText}${renderExecOutputText(params.outcome.aggregated)}`;
   return textResult(outputText, details);

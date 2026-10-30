@@ -29,6 +29,7 @@ import { WRITE_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { respondError } from "./response.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -67,7 +68,8 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
   "plugins.sessionAction": defineValidatedGatewayHandler(
     "plugins.sessionAction",
     validatePluginsSessionActionParams,
-    async ({ params, client, respond, context }) => {
+    async (options) => {
+      const { params, client, respond, context } = options;
       // A reload can refuse the selected action between quiesce and publish. Wait
       // for it once, then select and authorize again from the current registry.
       const dispatch = async (afterReplacement: boolean): Promise<void> => {
@@ -169,6 +171,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
                 return !roleAgents || roleAgents.includes(agentId);
               },
               isSharedGateway: () => hasMultipleResidentSessionSharingIdentities(),
+              assertCurrent: () => readGatewayRequestMutationAuthority(options).assertCurrent(),
             },
           });
           if (result !== undefined && !isRecord(result)) {

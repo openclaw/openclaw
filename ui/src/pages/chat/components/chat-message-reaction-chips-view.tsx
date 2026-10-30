@@ -38,7 +38,13 @@ export function GroupMessageReactions(props: {
   const own = () => ownReactionEmoji(reactions(), options().userId);
   return (
     <Show when={messageId() && reactions()?.length}>
-      <div class="chat-message-reactions" data-message-id={messageId()}>
+      <div
+        class={[
+          "chat-message-reactions",
+          { "chat-message-reactions--single": reactions()?.length === 1 },
+        ]}
+        data-message-id={messageId()}
+      >
         <For each={reactions()} keyed={(reaction) => reaction.emoji}>
           {(reaction) => {
             const pressed = () => own().has(reaction().emoji);

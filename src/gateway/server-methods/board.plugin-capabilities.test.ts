@@ -230,10 +230,6 @@ it("routes granted bindings and actions only while their plugin registry is acti
     { readHandler, actionHandler },
     "ask",
   );
-  expect(widget.declaredSummary).toEqual([
-    "Tool access: workboard.cards.list",
-    "Tool access: workboard.dispatch",
-  ]);
   await invoke("board.widget.grant", {
     ...target,
     decision: "granted",

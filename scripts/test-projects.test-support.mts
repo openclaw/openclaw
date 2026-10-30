@@ -772,7 +772,6 @@ const MERMAID_RENDERER_TEST_TARGETS = [
 const MARKDOWN_RENDER_CHUNKING_TEST_TARGETS = [
   "packages/markdown-core/src/ir.test.ts",
   "packages/markdown-core/src/render-aware-chunking.test.ts",
-  "packages/markdown-core/src/render.annotations.test.ts",
   "src/plugin-sdk/format-capabilities.test.ts",
   "src/plugin-sdk/text-chunking.test.ts",
   "extensions/googlechat/src/format.test.ts",
@@ -3409,6 +3408,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "src/plugins/contracts/deprecated-internal-config-api.test.ts",
     ],
   ],
+  [/^scripts\/ci-check-plan\.mts$/u, ["ci-check-plan", workflowPlanning]],
   [
     /^\.github\/workflows\/ci\.yml$/u,
     [

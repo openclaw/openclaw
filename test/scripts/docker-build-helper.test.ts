@@ -34,6 +34,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
+import { waitForFixtureFile } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
@@ -1304,7 +1305,6 @@ printf 'rpc error: code = Unavailable\\n'
 trap 'printf "term\\n" >"$TMPDIR/docker.term"; exit 0' TERM
 mkfifo "$TMPDIR/docker.block"
 printf 'ready\\n' >"$TMPDIR/docker.ready"
-printf 'ready\\n' >&3
 while true; do
   read -r -t 1 _ <> "$TMPDIR/docker.block" || true
 done
@@ -1336,7 +1336,7 @@ docker_build_run e2e-build -t demo-image .
       }
       const runner = spawn(join(workDir, "runner.sh"), {
         env: { ...process.env, TMPDIR: workDir },
-        stdio: ["ignore", "ignore", "ignore", "pipe"],
+        stdio: "ignore",
       });
       const exited = waitForProcessExit(runner);
       const closed = ownChildCompletion(
@@ -1345,29 +1345,20 @@ docker_build_run e2e-build -t demo-image .
           runner.once("close", resolve);
         }),
       );
-      const ready = new Promise<void>((resolve, reject) => {
-        runner.stdio[3]!.once("data", () => resolve());
-        runner.stdio[3]!.once("error", reject);
-      });
       try {
         const pidPath = join(workDir, "docker.pid");
-        // A builtin FD write leaves no foreground reporter that tree shutdown could
-        // kill first, making errexit bypass the fixture's own TERM trap.
-        await withinTest(
-          awaitGateBeforeSettlement(ready, exited, `file was not written: ${pidPath}`),
-          signal,
-        );
-        expect(existsSync(join(workDir, "docker.ready"))).toBe(true);
+        const readyPath = join(workDir, "docker.ready");
+        await withinTest(waitForFixtureFile(readyPath, exited), signal);
+        expect(existsSync(readyPath)).toBe(true);
         const buildPid = Number.parseInt(readFileSync(pidPath, "utf8"), 10);
 
         runner.kill(childSignal);
         expect(await withinTest(closed, signal)).toBe(expectedCode);
         expect(runner.signalCode).toBeNull();
-        // The timeout wrapper can exit first; the Docker fixture holds FD 3 until
-        // its TERM trap finishes, so runner close also joins that fixture's output.
+        // The timeout wrapper can exit before the Docker fixture finishes its trap.
+        await waitForForeignProcessExit(buildPid, signal);
         expect(existsSync(join(workDir, "docker.term"))).toBe(true);
         expect(readFileSync(join(workDir, "docker-count"), "utf8").trim()).toBe("1");
-        await waitForForeignProcessExit(buildPid, signal);
         expect(isPidAlive(buildPid)).toBe(false);
       } finally {
         if (runner.exitCode === null && runner.signalCode === null) {
@@ -3570,9 +3561,15 @@ exit ${exitCode}
     },
   );
 
-  it.each([false, true])(
-    "publishes only on the host and preserves Docker outcomes (published baseline: %s)",
-    (publishedBaseline) => {
+  it.each([
+    { publishedBaseline: false, scenario: "base", timeout: "" },
+    { publishedBaseline: true, scenario: "base", timeout: "" },
+    { publishedBaseline: false, scenario: "package-installed-recovery", timeout: "" },
+    { publishedBaseline: false, scenario: "package-installed-recovery", timeout: "1.5s" },
+    { publishedBaseline: false, scenario: "package-installed-recovery", timeout: "0" },
+  ])(
+    "publishes on the host and preserves Docker outcomes/budget: $scenario, published=$publishedBaseline, timeout=$timeout",
+    ({ publishedBaseline, scenario, timeout }) => {
       for (const [exitCode, capturePresent, summaryStatus] of [
         [42, true, null],
         [42, false, null],
@@ -3689,13 +3686,31 @@ exit 0
               OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registry,
               OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR: artifacts,
               OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE: publishedBaseline ? "1" : "0",
-              OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.7.1-2",
+              OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+              OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT: timeout,
+              OPENCLAW_E2E_COMMAND_TIMEOUT: "23s",
+              OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:
+                scenario === "package-installed-recovery" ? "" : "openclaw@2026.7.1-2",
+              OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "manual",
+              OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS: "0",
+              OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS: "",
+              OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI: "0",
+              OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT: "",
               OPENCLAW_DOCKER_ALL_LOG_DIR: "public",
             },
           });
         const result = runWrapper();
         expect(result.status, result.stdout + result.stderr).toBe(exitCode);
         const dockerArgs = readFileSync(join(workDir, "docker-args"), "utf8");
+        const budgetEnv =
+          scenario === "package-installed-recovery"
+            ? "OPENCLAW_E2E_COMMAND_TIMEOUT"
+            : "OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT";
+        // Docker keeps the last value when package arguments repeat an environment key.
+        const effectiveBudget = dockerArgs
+          .split("\n")
+          .findLast((arg) => arg.startsWith(`${budgetEnv}=`));
+        expect(effectiveBudget).toBe(`${budgetEnv}=${timeout || "900s"}`);
         expect(dockerArgs).toContain(`${artifacts}:/tmp/openclaw-upgrade-survivor-artifacts`);
         expect(dockerArgs).not.toContain(publicRoot);
         expect(dockerArgs).not.toContain(":/tmp/openclaw-upgrade-survivor-artifacts/diagnostics");
@@ -4158,6 +4173,7 @@ export async function sha256File(file) {
       "scripts/lib/docker-e2e-logs.sh",
       "scripts/lib/docker-e2e-container.sh",
       "scripts/lib/docker-e2e-watchdog.mjs",
+      "scripts/lib/direct-run.mjs",
       "scripts/lib/docker-e2e-resource-diagnostics.sh",
       PREPUBLISH_PLUGIN_REGISTRY_HELPER_PATH,
     ]) {

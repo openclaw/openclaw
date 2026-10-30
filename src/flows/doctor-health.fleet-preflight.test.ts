@@ -3,8 +3,10 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs, { readFileSync as read } from "node:fs";
 import path from "node:path";
+import { expectDefined as required } from "@openclaw/normalization-core";
 import * as processIdentity from "@openclaw/proc-safe/identity";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { migrationStepInput } from "../infra/state-migrations.step.test-support.js";
 const { mocks, createDoctorRuntime, stubDoctorEnv } =
   await import("./doctor-health.test-support.js");
 // Start with a cold migration owner; fixture hooks only reset mocks before the first case.
@@ -58,12 +60,6 @@ const withDoctorState: typeof import("./doctor-health.test-support.js").withDoct
 ) => withOpenClawTestState({ scenario: "minimal", env }, run);
 
 const repairOptions = { repair: true, nonInteractive: true };
-function required<T>(value: T | null | undefined, message: string): T {
-  if (value == null) {
-    throw new Error(message);
-  }
-  return value;
-}
 
 function installAdmissionContribution() {
   const noOp = async () => {};
@@ -393,14 +389,7 @@ it.each(["hardlink", "relocated-copy"] as const)(
           ...result,
           stateMigrationStepReceipts: [
             createLegacyStateMigrationStepReceipt(
-              {
-                id: "media-persistence",
-                phase: "shared",
-                source: [],
-                target: [],
-                requiredness: "conditional",
-                reversibility: "checkpoint-required",
-              },
+              migrationStepInput("media-persistence", "conditional", "checkpoint-required"),
               repaired,
             ),
           ],

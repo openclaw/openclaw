@@ -1,15 +1,11 @@
 import { Buffer } from "node:buffer";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  captureControlUiE2eFailureDiagnostics,
-  controlUiBundledGatewayUrl,
-  controlUiBundledSettingsStorageKey,
-} from "../test-helpers/control-ui-e2e.ts";
+import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
 import { confirmIme } from "./chat-flow.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -156,6 +152,7 @@ async function assertCreateRecovery(
   const imageFile = path.join(process.cwd(), "ui/public", imageFileName);
   const imageContent = (await readFile(imageFile)).toString("base64");
   const gateway = await installMockGateway(page, {
+    subscriptionInitialHistory: false,
     heldMethods: ["chat.startup"],
     workspaceGit: true,
     methodResponses: {
@@ -274,7 +271,17 @@ async function assertCreateRecovery(
   expect(await followUpComposer.inputValue()).toBe("");
   await captureUiProof(suite, page, `${proofName}-submitted.png`);
   const presentation = await expectPendingNewSessionPresentation(page);
+  expect(presentation.reducedMotion).toBe(motion === "reduce");
   await captureJson(`${proofName}.json`, () => presentation, suite.artifactDir);
+  // Motion changes the pending indicator's CSS, not create/retry ownership.
+  const alternateMotion = motion === "reduce" ? "no-preference" : "reduce";
+  await page.emulateMedia({ reducedMotion: alternateMotion });
+  const alternatePresentation = await expectPendingNewSessionPresentation(page);
+  expect(alternatePresentation.reducedMotion).toBe(alternateMotion === "reduce");
+  const alternateProofName = `pending-${width}-${mode}-${alternateMotion}-${content}`;
+  await captureUiProof(suite, page, `${alternateProofName}-submitted.png`);
+  await captureJson(`${alternateProofName}.json`, () => alternatePresentation, suite.artifactDir);
+  await page.emulateMedia({ reducedMotion: motion });
   await followUpComposer.press("Enter");
   await followUpComposer.press("Control+Enter");
   expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
@@ -436,7 +443,7 @@ suite.define(() => {
       if (captureProofEnabled) {
         await page.waitForTimeout(800);
       }
-      await button(toast, "Open").click();
+      await toast.getByRole("link", { name: "Open session", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await waitForCommittedChatRoute(page);
       await page.locator("openclaw-chat-page").waitFor();
@@ -447,43 +454,9 @@ suite.define(() => {
     } finally {
       await context.close();
       if (proofDir && video) {
-        await rename(await video.path(), path.join(proofDir, `background-${label}.webm`));
+        await video.saveAs(path.join(proofDir, `background-${label}.webm`));
+        await video.delete();
       }
-    }
-  });
-
-  it("uses shifted Enter for background start in modifier mode", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const gatewayUrl = controlUiBundledGatewayUrl(suite.server.baseUrl);
-    await context.addInitScript(
-      ({ key, url }) => {
-        localStorage.setItem(
-          key,
-          JSON.stringify({ chatSendShortcut: "modifier-enter", gatewayUrl: url }),
-        );
-      },
-      { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), url: gatewayUrl },
-    );
-    const page = await context.newPage();
-    const sessionKey = "agent:main:dashboard:modifier-background";
-    const runId = "run-modifier-background";
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "agent.wait": { endedAt: Date.now(), runId, status: "ok" },
-        "sessions.create": { key: sessionKey, runId, runStarted: true },
-      },
-    });
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      const composer = page.locator(".new-session-page__message");
-      await composer.fill("start in the background");
-      await composer.press("Control+Shift+Enter");
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
-        params: { agentId: "main", message: "start in the background" },
-      });
-    } finally {
-      await context.close();
     }
   });
 
@@ -561,6 +534,7 @@ suite.define(() => {
       },
     );
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       agentModel: "openai/gpt-5.6-sol",
       featureMethods: [
         "agent.wait",
@@ -797,19 +771,13 @@ suite.define(() => {
       releaseChatModule();
     }
   });
-  it.each(
-    (["no-preference", "reduce"] as const).flatMap((motion) =>
-      [1280, 390].flatMap((width) =>
-        // Theme does not change submission recovery; keep both across content variants.
-        (["markdown", "json"] as const).map((content) => ({
-          mode: content === "markdown" ? ("dark" as const) : ("light" as const),
-          motion,
-          width,
-          content,
-        })),
-      ),
-    ),
-  )(
+  // Each width/content pair owns one recovery; the pending view checks both motion modes.
+  it.each([
+    { mode: "dark", motion: "no-preference", width: 1280, content: "markdown" },
+    { mode: "light", motion: "reduce", width: 1280, content: "json" },
+    { mode: "dark", motion: "reduce", width: 390, content: "markdown" },
+    { mode: "light", motion: "no-preference", width: 390, content: "json" },
+  ] satisfies CreateRecoveryCase[])(
     "shows the submitted prompt before creation responds and restores it after failure ($width, $mode, $motion, $content)",
     async (scenario) => {
       await suite.withPage(

@@ -239,6 +239,8 @@ export function resolveAcpxPluginConfig(params: {
     pluginToolsMcpBridge,
     openClawToolsMcpBridge,
     timeoutSeconds: normalized.timeoutSeconds,
+    agentProcessEnvAllow: normalized.agentProcessEnvAllow,
+    agentProcessEnvBlock: normalized.agentProcessEnvBlock,
     mcpServers,
     agents,
   };

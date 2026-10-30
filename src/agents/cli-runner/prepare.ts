@@ -98,9 +98,9 @@ import { beginContextEngineLogicalTurn } from "../harness/context-engine-turn-be
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../model-catalog.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
-import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
 import { resolveRuntimeChannelPromptContext } from "../runtime-capabilities.js";
+import { createUnrecordedScheduledAccountRefusal } from "../scheduled-unrecorded-account.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
@@ -138,12 +138,19 @@ import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
 import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
 import * as mcp from "./prepare-mcp.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
-import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
+import {
+  capCliToolAvailability,
+  keptManagedNativeTools,
+  withCliToolSearch,
+  resolveCliBootstrapFileAccess,
+  resolveCliRuntimeToolPolicy,
+  resolveCliToolAvailabilityHash,
+} from "./prepare-tool-policy.js";
 import {
   buildCliVisibleReplyGuidance,
   finalizeCliSystemPrompt,
   composeCliPromptContext,
-  createCliCurrentPromptRenderer,
+  buildCliCurrentPrompt,
   prepareCliSystemPrompt,
   prepareCliTurnPromptContext,
 } from "./prompt-context.js";
@@ -316,12 +323,13 @@ async function prepareCliRunContextWithinReadFence(
     bundleMcp: backendResolved.bundleMcp,
     canEnforceExactToolAvailability,
     projectNativeToolAuthority: backendResolved.projectNativeToolAuthority,
+    resolveManagedNativeTools: backendResolved.resolveManagedNativeTools,
     sideQuestionToolMode: backendResolved.sideQuestionToolMode,
     isSideQuestion,
     skipsTurnPreparation,
   });
   params = toolPolicy.params;
-  const { runtimeToolsAllowPolicy } = toolPolicy;
+  const { runtimeToolsAllowPolicy, managedNativeTools } = toolPolicy;
   const internalParams = params as RunCliAgentPrepareParams;
   const nodeClaudePlacement = detectNodeClaudePlacement({
     backendId: backendResolved.id,
@@ -423,12 +431,11 @@ async function prepareCliRunContextWithinReadFence(
     effectiveAuthProfileId = undefined;
     authCredential = undefined;
   } else if (params.nativeAuthOnly && effectiveAuthProfileId) {
-    const refusal = new Error(
-      "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
-    );
-    // Another model would only bypass the operator's account choice.
-    recordModelFallbackStop(refusal);
-    throw refusal;
+    throw createUnrecordedScheduledAccountRefusal({
+      runtime: backendResolved.id,
+      modelRef: `${params.modelProvider ?? params.provider}/${params.model ?? "default"}`,
+      profileId: effectiveAuthProfileId,
+    });
   } else if (
     effectiveAuthProfileId &&
     backendAuthPolicy &&
@@ -825,23 +832,16 @@ async function prepareCliRunContextWithinReadFence(
     params = {
       ...params,
       cliToolAvailability: {
-        native: [],
+        native: params.cliToolAvailability?.native ?? [], // empty or operator-managed
         openClaw: hookFilteredProjectedTools.map((tool) => tool.name),
       },
     };
   }
   if (params.cliToolAvailability && promptBuildToolsAllow !== undefined) {
-    const filterToolNames = (names: string[]) =>
-      applyEmbeddedAttemptToolsAllow(
-        names.map((name) => ({ name })),
-        promptBuildToolsAllow,
-      ).map((tool) => tool.name);
+    const { cliToolAvailability } = params;
     params = {
       ...params,
-      cliToolAvailability: {
-        native: filterToolNames(params.cliToolAvailability.native),
-        openClaw: filterToolNames(params.cliToolAvailability.openClaw),
-      },
+      cliToolAvailability: capCliToolAvailability(cliToolAvailability, promptBuildToolsAllow),
     };
   }
   const projectedTools = applyEmbeddedAttemptToolsAllow(
@@ -850,18 +850,13 @@ async function prepareCliRunContextWithinReadFence(
   );
   // Mirror the embedded runner's bootstrap routing for backends that transport
   // OpenClaw's system prompt, using the final native or mediated file access.
-  const selectedNativeToolsProvideFileAccess =
-    params.cliToolAvailability === undefined || params.cliToolAvailability.native.length > 0;
-  const mediatedBootstrapFileAccess =
-    backendResolved.id === "claude-cli" &&
-    projectedTools.some((tool) => tool.name === "read") &&
-    projectedTools.some((tool) => ["write", "apply_patch"].includes(tool.name));
-  const hasBootstrapFileAccess =
-    (((backendResolved.nativeToolMode === "always-on" ||
-      backendResolved.nativeToolMode === "selectable") &&
-      selectedNativeToolsProvideFileAccess) ||
-      mediatedBootstrapFileAccess) &&
-    params.disableTools !== true;
+  params = withCliToolSearch(params, backendResolved.nativeToolSearch);
+  const hasBootstrapFileAccess = resolveCliBootstrapFileAccess({
+    backend: backendResolved,
+    params,
+    managedNativeTools,
+    projectedToolNames: projectedTools.map((tool) => tool.name),
+  });
   const bootstrapRouting =
     skipsTurnPreparation || !canTransportSystemPrompt(backendResolved.config)
       ? undefined
@@ -960,17 +955,8 @@ async function prepareCliRunContextWithinReadFence(
     nativeAuthorityAllowed: !skipsTurnPreparation && !nodeClaudePlacement,
     projectNativeToolAuthority: backendResolved.projectNativeToolAuthority,
   });
-  const toolBoundExtraSystemPromptHash = params.cliToolAvailability
-    ? hashCliSessionText(
-        JSON.stringify([
-          baseExtraSystemPromptHash ?? null,
-          params.cliToolAvailability.native.toSorted(),
-          params.cliToolAvailability.openClaw.toSorted(),
-        ]),
-      )
-    : baseExtraSystemPromptHash;
   const extraSystemPromptHash = resolveCliBootstrapPromptHash({
-    baseHash: toolBoundExtraSystemPromptHash,
+    baseHash: resolveCliToolAvailabilityHash(baseExtraSystemPromptHash, params.cliToolAvailability),
     bootstrapMode,
     bootstrapTruncationNotice,
     contextFiles,
@@ -1096,7 +1082,9 @@ async function prepareCliRunContextWithinReadFence(
           })()
         : undefined;
     const rawLoopbackServerConfig = mcpLoopbackRuntime
-      ? createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
+      ? createMcpLoopbackServerConfig(mcpLoopbackRuntime.port, {
+          deferTools: Boolean(params.cliToolAvailability?.discovery?.length),
+        })
       : undefined;
     const loopbackServerConfig =
       rawLoopbackServerConfig && backendResolved.bundleMcpMode === "claude-config-file"
@@ -1548,6 +1536,10 @@ async function prepareCliRunContextWithinReadFence(
     }
     let historyPromptCurrentTurn = preparedPrompt;
     if (!skipsTurnPreparation) {
+      const current = buildCliCurrentPrompt(params, reusableCliSession, {
+        ...sessionPromptContext,
+        privateContext: executionTarget.kind === "plugin",
+      });
       ({
         prompt: preparedPrompt,
         systemPrompt,
@@ -1563,6 +1555,7 @@ async function prepareCliRunContextWithinReadFence(
         deliveryGuidance: effectiveReplyGuidance,
         hookResult: promptBuildHookResult,
         prependContext: [
+          current.prependContext,
           sessionPromptContext?.durableContext,
           promptBuildHookResult?.prependContext,
           authorizedPromptBuildResult?.prependContext,
@@ -1575,24 +1568,20 @@ async function prepareCliRunContextWithinReadFence(
         isNewSession:
           !reusableCliSessionId?.trim() || reusableCliSession.mode === "reuse-with-drift",
         thinkLevel: params.thinkLevel,
+        // Operator-kept orchestration tools that survived every later native-tool cap.
+        nativeDelegationTools: keptManagedNativeTools(managedNativeTools, params),
         runtimeContextFragments: params.runtimeContextFragments,
-        // Caller-owned memory cannot grant access to persisted interrupted inputs.
         sessionTarget: params.isolatedCompletion ? undefined : replayableTarget(cliHistoryWriter),
         context: [promptBuildHookResult?.appendContext, authorizedPromptBuildResult?.appendContext],
       }));
       params.assertCurrent?.();
       params.abortSignal?.throwIfAborted();
-      const renderCurrentPrompt = createCliCurrentPromptRenderer(
-        params,
-        reusableCliSession,
-        sessionPromptContext,
-      );
       const preferResumableText =
         params.currentInboundEventKind === "room_event" && Boolean(reusableCliSessionId);
-      historyPromptCurrentTurn = renderCurrentPrompt(preparedPrompt);
-      preparedPrompt = renderCurrentPrompt(preparedPrompt, preferResumableText);
+      historyPromptCurrentTurn = current.renderPrompt(preparedPrompt);
+      preparedPrompt = current.renderPrompt(preparedPrompt, preferResumableText);
       if (promptForHooks !== undefined) {
-        promptForHooks = renderCurrentPrompt(promptForHooks, preferResumableText);
+        promptForHooks = current.renderPrompt(promptForHooks, preferResumableText);
       }
     }
     // Fresh native sessions receive only account-owned history via stdin.
@@ -1607,7 +1596,7 @@ async function prepareCliRunContextWithinReadFence(
       : undefined;
     systemPrompt = skipsTurnPreparation
       ? systemPrompt
-      : finalizeCliSystemPrompt(systemPrompt, modelDisplay, backendResolved.textTransforms?.input);
+      : finalizeCliSystemPrompt(systemPrompt, { modelDisplay, backendResolved, params });
     if (sessionPromptContext?.resumeContext) {
       promptForHooks = composeCliPromptContext(promptForHooks ?? preparedPrompt, {
         prependContext: sessionPromptContext.resumeContext,
@@ -1669,7 +1658,7 @@ async function prepareCliRunContextWithinReadFence(
       contextWindowInfo,
       systemPrompt,
       systemPromptReport,
-      claudeSkillsPluginArgs: claudeSkillsPlugin.args,
+      claudeSkillsPlugin,
       ...(cliHistoryWriter ? { cliHistoryWriter } : {}),
       resumeContext: sessionPromptContext?.resumeContext,
       transcriptCursor: sessionPromptContext?.transcriptCursor,

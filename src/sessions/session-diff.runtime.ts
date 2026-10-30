@@ -13,6 +13,7 @@ import type { SessionDiffBaseline } from "../config/sessions/types.js";
 import { normalizeGitPathForFilesystem } from "../infra/git-exec.js";
 import type { GitCheckoutDiffInput, GitReadOperations } from "../infra/git-read-operations.js";
 import { hasGitWorkerContext, requestGitWorkerEffect } from "../infra/git-worker-context.js";
+import type { GitWorkerOperations } from "../infra/git-worker-contract.js";
 import { isSqliteFilePath } from "../infra/sqlite-file-path.js";
 import { parseDiffInventoryZ, parseNameStatusZ, splitPatchByFile } from "./session-diff-parser.js";
 import {
@@ -161,7 +162,7 @@ async function collectUntrackedFiles(
   if (listing === null) {
     throw new Error("Unable to read untracked Git changes");
   }
-  const paths = listing.split("\0").filter(Boolean);
+  const paths = listing.split("\0", MAX_UNTRACKED_FILES + 1).filter(Boolean);
   const truncated = paths.length > MAX_UNTRACKED_FILES;
   const files: SessionDiffFile[] = [];
   const safePaths: string[] = [];
@@ -351,8 +352,9 @@ async function collectTrackedFiles(
       continue;
     }
     // Like the deleted-file exemption, two-revision commit diffs read every
-    // path from the object DB. Only working-tree content needs the hardlink guard.
+    // path from the object DB. Only emitted working-tree content needs the hardlink guard.
     const safe =
+      !chunk ||
       revisions.length === 2 ||
       entry.status === "deleted" ||
       (await isPatchableWorkingTreePath(realRoot, entry.path));
@@ -370,7 +372,7 @@ async function collectTrackedFiles(
 type CheckoutDiffResult = GitReadOperations["checkout.diff"]["output"];
 
 export async function collectCheckoutDiff(
-  params: GitCheckoutDiffInput,
+  params: GitWorkerOperations["checkout.diff"]["input"],
 ): Promise<CheckoutDiffResult> {
   const empty = (
     unavailableReason?: NonNullable<SessionsDiffResult["unavailableReason"]>,
@@ -411,6 +413,9 @@ export async function collectCheckoutDiff(
     unavailableReason: "unknown_commit",
   });
   const scope = params.scope ?? "all";
+  // Fresh status already inventoried tracked and untracked changes at this HEAD.
+  const cleanWorktree =
+    params.cleanWorktree?.root === realRoot && params.cleanWorktree.head === head;
   let revisions: readonly [string] | readonly [string, string] | undefined;
   if (scope === "commit") {
     if (!head || !branchBase || branchBase.base === "HEAD" || branchBase.base === head) {
@@ -447,12 +452,15 @@ export async function collectCheckoutDiff(
   } else {
     revisions = branchBase ? [branchBase.base] : undefined;
   }
+  if (cleanWorktree && revisions?.length === 1 && revisions[0] === head) {
+    return { ...repositoryFields, files: [], additions: 0, deletions: 0 };
+  }
   const budget: PatchBudget = { remaining: MAX_TOTAL_PATCH_BYTES };
   const tracked = revisions
     ? await collectTrackedFiles(root, realRoot, revisions, budget, params.summaryOnly === true)
     : { files: [], truncated: false };
   const untracked =
-    scope === "commit"
+    scope === "commit" || cleanWorktree
       ? { files: [], truncated: false }
       : await collectUntrackedFiles(root, realRoot, budget, params.summaryOnly === true);
   const files = [...tracked.files, ...untracked.files].toSorted((a, b) =>
@@ -473,6 +481,8 @@ export async function collectCheckoutDiff(
     ? await applySessionDiffBaseline({
         baseline: params.baseline,
         checkout,
+        // Stored fingerprints use the default base, not an explicit managed review base.
+        defaultBase: params.baseCommit ? undefined : branchBase,
         diff,
         scope,
         sessionId: params.sessionId,
@@ -574,11 +584,15 @@ async function gitOutForBaseline(cwd: string, args: string[]): Promise<string | 
 async function collectBaselineCandidates(
   checkout: NonNullable<Awaited<ReturnType<typeof loadCheckoutRevision>>>,
   untrackedPaths?: string[],
+  defaultBase?: { base: string } | null,
 ): Promise<{ candidates: BaselineCandidate[]; root: string; truncated: boolean }> {
   const { root, head, branch, objectFormat } = checkout;
-  const baseInfo = head
-    ? await resolveSessionDiffBase({ branch, gitOut, head, root })
-    : await resolveSessionDiffEmptyTree(root, objectFormat);
+  const baseInfo =
+    defaultBase !== undefined
+      ? defaultBase
+      : head
+        ? await resolveSessionDiffBase({ branch, gitOut, head, root })
+        : await resolveSessionDiffEmptyTree(root, objectFormat);
   const [trackedText, untracked] = await Promise.all([
     baseInfo
       ? gitOutForBaseline(root, ["diff", "-M", baseInfo.base, "--name-status", "-z"])
@@ -651,6 +665,7 @@ async function fingerprintBaselineCandidates(params: {
 async function applySessionDiffBaseline(params: {
   baseline: SessionDiffBaseline | undefined;
   checkout: NonNullable<Awaited<ReturnType<typeof loadCheckoutRevision>>>;
+  defaultBase: { base: string } | null | undefined;
   diff: CheckoutDiffResult;
   scope: NonNullable<GitCheckoutDiffInput["scope"]>;
   sessionId: string;
@@ -670,11 +685,13 @@ async function applySessionDiffBaseline(params: {
     return diff;
   }
   const candidates =
-    params.scope === "uncommitted"
+    params.scope === "uncommitted" &&
+    diff.files.some((file) => !file.untracked && fingerprints.has(file.path))
       ? (
           await collectBaselineCandidates(
             params.checkout,
             diff.files.filter((file) => file.untracked).map((file) => file.path),
+            params.defaultBase,
           )
         ).candidates
       : diff.files;

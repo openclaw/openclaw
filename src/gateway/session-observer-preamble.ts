@@ -124,8 +124,7 @@ export function createSessionObserverPreamblePublisher(params: {
       } else if (!entry.timer) {
         entry.timer = setTimeout(() => {
           void publish(state, entry);
-        }, PREAMBLE_PUBLISH_INTERVAL_MS - elapsed);
-        entry.timer.unref?.();
+        }, PREAMBLE_PUBLISH_INTERVAL_MS - elapsed).unref();
       }
       return true;
     },

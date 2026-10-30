@@ -6,11 +6,13 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { valid as validVersion } from "semver";
 import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
+import { REDACTED_SENTINEL } from "../config/redact-sentinel.js";
 import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { UPDATE_CANDIDATE_STARTUP_FAILURES } from "../infra/update-preflight-details.js";
 import { tokenizeConcreteConfigPath } from "../shared/dot-path.js";
+import { readPublicSupportCauses } from "./diagnostic-support-causes.js";
+import { createSupportKeyChecker } from "./diagnostic-support-key-check.js";
 import { replaceRedactPattern } from "./redact-pattern-runtime.js";
 import { AWS_SECRET_ACCESS_KEY_MATCHER, VENDOR_TOKEN_REDACT_PATTERNS } from "./redact-patterns.js";
 import { redactSensitiveText, redactText, resolveRedactOptions } from "./redact.js";
@@ -77,6 +79,8 @@ type SupportObjectEntry = {
   value: unknown;
 };
 
+const isUnchangedSupportKey = createSupportKeyChecker(redactTextForSupport);
+
 function isPrivateSupportField(key: string): boolean {
   return (
     SECRET_SUPPORT_FIELD_RE.test(key) ||
@@ -103,7 +107,7 @@ function sanitizeSupportKey(
   privateMap: boolean,
 ): string {
   // Reserve the placeholder namespace so literal keys cannot overwrite redacted entries.
-  if (!privateMap && !key.startsWith("<identifier#") && redactTextForSupport(key) === key) {
+  if (!privateMap && !key.startsWith("<identifier#") && isUnchangedSupportKey(key, redaction)) {
     return key;
   }
   const identifiers = (redaction.identifierKeys ??= new Map<string, string>());
@@ -655,11 +659,7 @@ export function redactPublicSupportDiagnosticLine(
   const codes = (lines.match(/\b[A-Z][A-Z0-9_]+\b/gu) ?? []).filter((code) =>
     normalizeSupportDiagnosticErrorCode(code),
   );
-  const causes = (
-    lines.match(
-      /\b(?:GLIBC_\d{1,3}(?:\.\d{1,3}){1,2} not found|[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory|SQLite (?:snapshot (?:hash|size) mismatch|file generation (?:changed while reading|did not stabilize)|source did not stabilize|WAL commit (?:header is unavailable or changing|publication could not be verified))|Package rollback (?:launcher backup changed|verification (?:timed out|failed))|attempt state write refused|sentinel transaction (?:refused|unavailable)|pipe closed|managed update handoff (?:exited before (?:responding|signaling readiness)|did not (?:respond|signal readiness)))\b/gu,
-    ) ?? []
-  ).map((cause) => cause.replace(/^permission denied$/u, "Permission denied"));
+  const causes = readPublicSupportCauses(lines);
   // Candidate admission's existing text protocol carries only these fixed validation lines.
   const configFields = parsePublicConfigDiagnosticLines(value).map(
     (issue) =>

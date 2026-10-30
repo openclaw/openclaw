@@ -113,7 +113,7 @@ suite.define(() => {
         await waitForControlUiSettingsTakeover(page);
         await expect.poll(read).toMatchObject(defaults);
         await page.getByRole("radio", { name: "Light", exact: true }).click();
-        await expect.poll(read).toMatchObject({ theme: "absolutely-light", accent: "#a8452a" });
+        await expect.poll(read).toMatchObject({ theme: "absolutely-light", accent: "#cc7d5d" });
 
         for (const field of ["ui", "chat"]) {
           await selectPickerValue(

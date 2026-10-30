@@ -125,14 +125,19 @@ export const agentsHandlers: GatewayRequestHandlers = {
       const modelCatalogByAgentId = emptyAgentAllowlist
         ? new Map<string, PreparedGatewayModelCatalog | undefined>()
         : context.readPreparedGatewayModelCatalogBatch
-          ? await readPreparedServerMethodModelCatalogs(context, agentIds)
+          ? await readPreparedServerMethodModelCatalogs(context, agentIds, {
+              includeSessionRowPolicy: false,
+            })
           : new Map(
               await Promise.all(
                 agentIds.map(
                   async (agentId) =>
                     [
                       agentId,
-                      await readPreparedServerMethodModelCatalog(context, { agentId }),
+                      await readPreparedServerMethodModelCatalog(context, {
+                        agentId,
+                        includeSessionRowPolicy: false,
+                      }),
                     ] as const,
                 ),
               ),

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
@@ -28,9 +29,10 @@ async function createSourceHost(
   operatorAuthority?: AdmittedRunOperatorAuthority,
   abortSignal?: AbortSignal,
   nativeModelPolicySupport?: "exact",
+  attempt: Partial<Parameters<typeof createAdmittedHostCapabilityTestFixture>[0]> = {},
 ) {
   const host = await createAdmittedHostCapabilityTestFixture(
-    { runId: "retained-source", abortSignal },
+    { runId: "retained-source", abortSignal, ...attempt },
     { operatorAuthority, nativeModelPolicySupport },
   );
   cleanup.push(host.closeAdmission, host.closeHost);
@@ -39,18 +41,14 @@ async function createSourceHost(
 
 function retain(host: Awaited<ReturnType<typeof createSourceHost>>) {
   const retained = host.hostCapabilities.retainSourceAuthority?.();
-  if (!retained) {
-    throw new Error("expected retained source authority");
-  }
+  assert(retained, "expected retained source authority");
   cleanup.push(retained.release);
   return retained;
 }
 
 function bindModel(retained: ReturnType<typeof retain>) {
   const binding = retained.bindModelExecution?.({ provider: "fixture", model: "a" });
-  if (!binding) {
-    throw new Error("expected retained model execution authority");
-  }
+  assert(binding, "expected retained model execution authority");
   cleanup.push(binding.release);
   return binding;
 }
@@ -81,16 +79,12 @@ it("records completed turn bookkeeping while revocation blocks the next tool eff
     },
   });
   const recorder = { recordEvent: vi.fn(), flush: vi.fn(async () => {}) };
-  const fixture = await createAdmittedHostCapabilityTestFixture(
-    {
-      runId: "bookkeeping-source",
-      agentId: "main",
-      sessionKey: "agent:main:bookkeeping",
-      trajectoryRecorder: recorder,
-    },
-    { operatorAuthority: source },
-  );
-  cleanup.push(fixture.closeAdmission, fixture.closeHost);
+  const fixture = await createSourceHost(source, undefined, undefined, {
+    runId: "bookkeeping-source",
+    agentId: "main",
+    sessionKey: "agent:main:bookkeeping",
+    trajectoryRecorder: recorder,
+  });
   const host = await withGatewayToolCallerIdentity(
     createAdmittedGatewayToolCallerIdentity(fixture.attempt),
     () => createAgentHarnessHostCapabilities({ attempt: fixture.attempt, pluginId: "codex" }),
@@ -122,7 +116,7 @@ it.each([
     const controller = new AbortController();
     const revoked = new Error("operator access revoked");
     let current = true;
-    let revoke = false;
+    let duringAssertion: (() => void) | undefined;
     const source = createAdmittedRunOperatorAuthority({
       profileId: "guest-source",
       scopes: ["operator.write"],
@@ -131,13 +125,7 @@ it.each([
         if (!current) {
           throw revoked;
         }
-        if (revoke) {
-          if (revocation === "synchronous signal") {
-            controller.abort(new Error("source revoked during validation"));
-          } else {
-            rotateAgentRunRegistryLifecycleGeneration();
-          }
-        }
+        duringAssertion?.();
       },
     });
     const foregroundAbort = !synchronous && revocation !== "gateway rotation";
@@ -153,7 +141,10 @@ it.each([
     host.closeHost();
     host.closeAdmission();
     if (synchronous) {
-      revoke = true;
+      duringAssertion =
+        revocation === "synchronous signal"
+          ? () => controller.abort(new Error("source revoked during validation"))
+          : rotateAgentRunRegistryLifecycleGeneration;
       expect(() => retained.assertCurrent()).toThrow();
       if (revocation === "synchronous signal") {
         expect(retained.signal?.aborted).toBe(true);
@@ -165,23 +156,21 @@ it.each([
       expect(() => retained.assertCurrent()).not.toThrow();
     }
     const modelBinding = bindModel(retained);
-    if (revocation === "gateway rotation") {
+    if (revocation === "source assertion") {
+      current = false;
+    } else if (revocation === "gateway rotation") {
       rotateAgentEventLifecycleGeneration();
       expect(retained.signal?.aborted).toBe(true);
       expect(modelBinding.signal.aborted).toBe(true);
-      expect(modelBinding.assertCurrent).toThrow("no longer active");
-      expect(() => retained.assertCurrent()).toThrow("no longer active");
-      return;
-    }
-    if (revocation === "source assertion") {
-      current = false;
     } else {
       rotateAgentRunRegistryLifecycleGeneration();
       expect(() => source.assertCurrent()).not.toThrow();
     }
-    const expected = revocation === "lifecycle rotation" ? "no longer active" : revoked;
+    const expected = revocation === "source assertion" ? revoked : "no longer active";
     expect(() => retained.assertCurrent()).toThrow(expected);
-    expect(modelBinding.assertCurrent).toThrow();
+    expect(modelBinding.assertCurrent).toThrow(
+      revocation === "gateway rotation" ? expected : undefined,
+    );
     if (revocation === "source assertion") {
       expect(modelBinding.signal.aborted).toBe(true);
     }
@@ -261,8 +250,7 @@ it("guards retained unknown-model work through policy introduction and releases 
   expect(() => retained.assertCurrent()).toThrow("operator role cannot use this model");
   retained.release();
   retained.release();
-  expect(holds).toBe(0);
-  expect(listeners.size).toBe(0);
+  expect([holds, listeners.size]).toEqual([0, 0]);
 });
 
 it("captures request custody before plugin handoff and retains continuation ancestry", async () => {
@@ -273,8 +261,7 @@ it("captures request custody before plugin handoff and retains continuation ance
     ownerConnId: "request-owner",
   };
   const captured = await withExecRequestTurn({ identity }, async () => {
-    const host = await createAdmittedHostCapabilityTestFixture(identity);
-    cleanup.push(host.closeAdmission, host.closeHost);
+    const host = await createSourceHost(undefined, undefined, undefined, identity);
     return { host, owners: captureExecRequestOwners(identity) };
   });
   const host = captured.host.hostCapabilities;

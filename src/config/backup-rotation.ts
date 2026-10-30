@@ -15,6 +15,7 @@ export async function prepareConfigFileWrite(
     configPath: string;
     content: string;
     previousRaw: string | null;
+    warn?: (message: string) => void;
     fsModule: typeof fs;
     assertCurrent?: () => void;
     destinationHardlinks?: "reject";
@@ -27,6 +28,20 @@ export async function prepareConfigFileWrite(
   const assertBeforeMutation = createConfigWriteAuthorityGuard(
     params.assertBeforeMutation ?? assertCurrent,
   );
+  let backupRotationWarningIssued = false;
+  const warnBackupRotationFailure = () => {
+    if (backupRotationWarningIssued) {
+      return;
+    }
+    backupRotationWarningIssued = true;
+    try {
+      params.warn?.(
+        "Config backup rotation failed; the config write is continuing without a guaranteed current backup. Before making further config changes, create and verify a backup with `openclaw backup create --verify`.",
+      );
+    } catch {
+      // Logging must not turn best-effort backup maintenance into a failed config write.
+    }
+  };
   assertCurrent?.();
   let backup: Awaited<ReturnType<typeof tempFile>> | undefined;
   try {
@@ -59,6 +74,7 @@ export async function prepareConfigFileWrite(
     backup = undefined;
     // Backup creation remains best effort; failed preparation never consumes history.
     assertCurrent?.();
+    warnBackupRotationFailure();
   }
   return {
     publish() {
@@ -131,10 +147,14 @@ export async function prepareConfigFileWrite(
             try {
               using destination = to ? openBackupArtifact(to) : undefined;
               if (destination && !destination.ok && !isRootFileMissingFailure(destination)) {
+                warnBackupRotationFailure();
                 return;
               }
               using source = openBackupArtifact(from);
               if (!source.ok) {
+                if (!isRootFileMissingFailure(source)) {
+                  warnBackupRotationFailure();
+                }
                 return;
               }
               const assertSource = captureBackupIdentity(source.path, source.fd, "source");
@@ -163,6 +183,7 @@ export async function prepareConfigFileWrite(
               if (error instanceof ConfigMutationConflictError) {
                 throw error;
               }
+              warnBackupRotationFailure();
             }
           };
           const base = `${configPath}.bak`;

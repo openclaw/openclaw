@@ -379,7 +379,8 @@ describe("gateway WebSocket chat abort ownership", () => {
   test.for([false, true])(
     "retains dispatch failure and rejects late abort after yielded waiting end=%s",
     async (yielded, { signal }) => {
-      const { storePath } = await prepareChatSession("error-late-abort");
+      const scope = await prepareChatSession("error-late-abort");
+      const { storePath } = scope;
 
       const socket = await gateway.openWs();
       const dispatchEntered = createDeferred();
@@ -398,7 +399,7 @@ describe("gateway WebSocket chat abort ownership", () => {
           }
           dispatchEntered.resolve();
           await dispatchRelease.promise;
-          throw new Error("dispatch rejected before a late abort");
+          throw new Error(`${"warning: ".repeat(80)}dispatch rejected before a late abort`);
         });
 
         const sendParameters = {
@@ -447,7 +448,16 @@ describe("gateway WebSocket chat abort ownership", () => {
           containingMessages({
             role: "custom",
             customType: "run-failed-before-reply",
-            content: expect.stringContaining("dispatch rejected before a late abort"),
+            content: "Your request couldn't be completed.",
+          }),
+        );
+        expect(loadTranscriptEventsSync(scope)).toContainEqual(
+          expect.objectContaining({
+            customType: "run-failed-before-reply",
+            details: expect.objectContaining({
+              runId,
+              error: expect.stringContaining("dispatch rejected before a late abort"),
+            }),
           }),
         );
 
@@ -873,7 +883,7 @@ describe("gateway WebSocket chat abort ownership", () => {
           import("./server-methods/chat-send-handler.js"),
         ]);
         const parse = attachments.parseMessageWithAttachments;
-        const ensureSandbox = sandboxContext.ensureSandboxWorkspaceForSession;
+        const prepareSandbox = sandboxContext.prepareSandboxWorkspaceForSession;
         const discard = attachments.discardPreparedInboundMedia;
         const handleSend = chatSend.handleChatSend;
         const parseSpy = vi
@@ -885,9 +895,9 @@ describe("gateway WebSocket chat abort ownership", () => {
           });
         restoreSpies.push(() => parseSpy.mockRestore());
         const sandboxSpy = vi
-          .spyOn(sandboxContext, "ensureSandboxWorkspaceForSession")
+          .spyOn(sandboxContext, "prepareSandboxWorkspaceForSession")
           .mockImplementation(async (...args) => {
-            const result = await ensureSandbox(...args);
+            const result = await prepareSandbox(...args);
             if (inboundPath) {
               expect(result).toBeNull();
               prepared.resolve();

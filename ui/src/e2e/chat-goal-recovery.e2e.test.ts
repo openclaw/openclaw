@@ -83,6 +83,7 @@ suite.define(() => {
         goal: committed,
       });
       await expect.poll(() => save.count()).toBe(0);
+      await page.clock.install();
       // Release the Goal refresh after the ACK to exercise the losing read order.
       const lists = await gateway.deferNext("sessions.list");
       await gateway.emitGatewayEvent("sessions.changed", {
@@ -90,6 +91,7 @@ suite.define(() => {
         agentId: "main",
         reason: "goal",
       });
+      await page.clock.fastForward(5_001);
       await gateway.waitForRequest("sessions.list", { after: lists });
       await gateway.resolveDeferred("sessions.list");
       await expect
@@ -258,6 +260,7 @@ suite.define(() => {
       const now = Date.now();
       const method = "sessions.goal.update";
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         sessionKey: "agent:main:main",
         heldMethods: [method, "chat.startup"],
         historyMessages: [

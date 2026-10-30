@@ -22,6 +22,7 @@ import {
   expectDefined,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { observe } from "./desktop-panel.test-support.ts";
 import { createRfbRawFrame, installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -55,12 +56,7 @@ suite.define(() => {
               status: "starting",
               desktop: false,
             },
-            "desktop.observe": {
-              transport: "rfb",
-              wsPath: "/desktop/observe?token=synthetic",
-              expiresAtMs: 60_000,
-              control: false,
-            },
+            "desktop.observe": observe("synthetic"),
             "portal.list": {
               portals: [
                 {
@@ -87,7 +83,7 @@ suite.define(() => {
           }),
         );
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, source));
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await page.getByText("Synthetic navigation proof.").first().waitFor();
         const client = {
           connId,
@@ -221,12 +217,10 @@ suite.define(() => {
     await rfb.send([createRfbRawFrame()]);
     expect(await other.gateway.getRequests("desktop.observe")).toHaveLength(0);
 
-    await requester.gateway.setMethodResponse("desktop.observe", {
-      transport: "rfb",
-      wsPath: "/desktop/observe?token=synthetic-control",
-      expiresAtMs: 60_000,
-      control: true,
-    });
+    await requester.gateway.setMethodResponse(
+      "desktop.observe",
+      observe("synthetic-control", true),
+    );
     const desktopControls = desktop.locator(".desktop-connection-rail");
     await desktopControls.getByRole("button", { name: "Take control", exact: true }).click();
     await expect.poll(rfb.events).toContain("authenticated:2");
@@ -276,12 +270,7 @@ suite.define(() => {
       "screen-requester-routing",
       "human-control-preserved.png",
     );
-    await requester.gateway.setMethodResponse("desktop.observe", {
-      transport: "rfb",
-      wsPath: "/desktop/observe?token=synthetic",
-      expiresAtMs: 60_000,
-      control: false,
-    });
+    await requester.gateway.setMethodResponse("desktop.observe", observe("synthetic"));
     // The Gateway revokes the human controller when the agent explicitly takes over.
     await rfb.disconnect("control-taken:Agent", 4000);
     await desktop.getByText("Agent took control", { exact: true }).waitFor();

@@ -473,7 +473,12 @@ export function registerBrowserManageCommands(
       .action(async (index: number | undefined, _opts, cmd) => {
         const parent = parentOpts(cmd);
         if (index !== undefined && (!Number.isSafeInteger(index) || index < 1)) {
-          defaultRuntime.error(danger("index must be a positive integer"));
+          const message = "index must be a positive integer";
+          // Let the host render JSON; a completed runtime exit would leave stdout empty.
+          if (parent.json) {
+            throw new Error(message);
+          }
+          defaultRuntime.error(danger(message));
           defaultRuntime.exit(1);
           return;
         }

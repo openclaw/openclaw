@@ -8,9 +8,12 @@ import * as admission from "../../state/agent-database-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import * as execution from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { runSessionStartupMigration } from "./startup-migration.js";
 import {
   listKnownSessionStoreAgentIdsAsync as knownOwners,
   resolveAllAgentSessionStoreTargetsAsync as allTargets,
@@ -38,14 +41,11 @@ it("discovers committed owners and stores without executing host SQL", async () 
     expect(await existing()).toEqual([]);
     await write("ops", { env: state.env, storePath });
     const observed = observeHostDataSql();
-    try {
-      expect(await existing()).toEqual([{ agentId: "ops", storePath }]);
-      expect(await knownOwners(cfg, state)).toEqual(["main", "ops"]);
-      expect(await allTargets(cfg, state)).toContainEqual({ agentId: "main", storePath });
-      expect(observed.queries).toEqual([]);
-    } finally {
-      observed.restore();
-    }
+    using _ = { [Symbol.dispose]: observed.restore };
+    expect(await existing()).toEqual([{ agentId: "ops", storePath }]);
+    expect(await knownOwners(cfg, state)).toEqual(["main", "ops"]);
+    expect(await allTargets(cfg, state)).toContainEqual({ agentId: "main", storePath });
+    expect(observed.queries).toEqual([]);
   });
 });
 it.for(["canonical", "refused unsuffixed", "refused suffixed"] as const)(
@@ -107,3 +107,80 @@ it.for(["canonical", "refused unsuffixed", "refused suffixed"] as const)(
     });
   },
 );
+
+it("prepares a healthy custom agent while a sibling database is still opening", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ label: "startup-migration-pending-sibling" }, async (state) => {
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { healthy: {}, slow: {} } },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    for (const agentId of ["healthy", "slow"]) {
+      await write(agentId, { env: state.env });
+    }
+    await closeOpenClawAgentDatabasesAsync(state.stateDir);
+    const dbScope = { agentId: "slow", env: state.env };
+    const db = state.statePath("agents", "slow", "agent", "openclaw-agent.sqlite");
+    const refusal = admission.createAgentDatabaseInspectionRefusal({
+      agentId: "slow",
+      paths: [db],
+      reason: "Database integrity check is running",
+      pending: true,
+    });
+    admission.recordAgentDatabaseAdmissions([refusal], state);
+    const [entered, release] = [createDeferredCore(), createDeferredCore()];
+    const open = worker.openAgentDatabaseSqliteWorkerStore;
+    const gate = vi.spyOn(worker, "openAgentDatabaseSqliteWorkerStore");
+    gate.mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return open(...args);
+    });
+    const opening = admission.preparePendingAgentDatabase(
+      refusal,
+      { env: state.env, assertCurrent() {} },
+      () => execution.prepareOpenClawAgentDatabaseExecution({ ...dbScope, path: db }, () => {}),
+    );
+    let migration: Promise<void> | undefined;
+    try {
+      await withinTest(entered.promise, signal);
+      const handoffDatabase = vi.fn(async () => {});
+      migration = runSessionStartupMigration({
+        cfg,
+        env: state.env,
+        agentIds: new Set(["healthy"]),
+        log: { info() {}, warn() {} },
+        handoffDatabase,
+      });
+      await withinTest(migration, signal);
+      expect(handoffDatabase).toHaveBeenCalledOnce();
+      expect(handoffDatabase).toHaveBeenCalledWith(expect.objectContaining({ agentId: "healthy" }));
+      expect(admission.readAgentDatabaseAdmissionRefusal("slow", state)).toBe(refusal);
+      expect(
+        await migrateLegacyMainSessionKeys({ cfg, env: state.env, mode: "detect" }),
+      ).toMatchObject({
+        complete: false,
+        ledgerComplete: false,
+      });
+      expect(
+        await migrateLegacyMainSessionKeys({
+          cfg: {
+            ...cfg,
+            agents: { ...cfg.agents, defaults: { sessionStore: { agentId: "healthy" } } },
+          },
+          env: state.env,
+          mode: "detect",
+        }),
+      ).toMatchObject({ armed: true, complete: false, ledgerComplete: false });
+    } finally {
+      release.resolve();
+      gate.mockRestore();
+      await opening;
+      await migration;
+    }
+    expect(
+      await migrateLegacyMainSessionKeys({ cfg, env: state.env, mode: "detect" }),
+    ).toMatchObject({ complete: true });
+  });
+});

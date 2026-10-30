@@ -208,7 +208,7 @@ it.each(["cached-writer", "admitted-read-only", "cold-read-only"] as const)(
             if (source === "cold-read-only") {
               const observe = fs.lstatSync;
               let pendingCommit = true;
-              const stat = vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
+              using _ = vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
                 const observed = observe(...args);
                 // Commit after the last file observation used to select a cached revision.
                 if (pendingCommit && args[0] === `${database}-journal`) {
@@ -217,12 +217,9 @@ it.each(["cached-writer", "admitted-read-only", "cold-read-only"] as const)(
                 }
                 return observed;
               });
-              try {
-                expect(() => maintenance.assertAdmission()).toThrow(String(runId));
-                expect(pendingCommit).toBe(false);
-              } finally {
-                stat.mockRestore();
-              }
+
+              expect(() => maintenance.assertAdmission()).toThrow(String(runId));
+              expect(pendingCommit).toBe(false);
             } else {
               peer.exec("COMMIT");
               expect(() => maintenance.assertAdmission()).toThrow(String(runId));

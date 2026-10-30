@@ -349,6 +349,27 @@ available from `native-command-registry`. Their synchronous compatibility APIs
 remain deprecated through 2026-12-31. See
 [session and command preparation](/plugins/sdk-migration#session-and-command-preparation).
 
+For descriptive metadata, use `listSessionEntriesAsync`. For bounded disclosure
+after awaited preparation, use
+`runtime.agent.session.withSessionEntriesAsync` (also exported by
+`session-store-runtime`) with `stores: [{ agentId, storePath, sessionKeys }]`.
+It retains all selected physical sources until its synchronous callback returns.
+An optional `involvingProfileId` matches exact canonical owners or direct profile
+participants, including merge aliases; it never matches mentions or display
+prefixes. After preparing the selected stores, the shared-state worker reads a
+fresh canonical profile snapshot, without reusing an earlier inspection snapshot
+or resident catalog. Local identity changes invalidate that prepared selection.
+Final native reads observe the selected session rows after the last await. Profile
+and session reads are separate snapshots, not atomic serialization across databases.
+Revalidate current configuration, selected groups, exact session IDs and any other
+caller-owned policy inside the callback, then serialize without awaiting. Returning
+a Promise is rejected. Returned metadata is not retained authority.
+
+When awaiting further preparation after `readSessionTranscriptCatalogPage`, its
+optional second argument captures an actor-currentness assertion. Call it at final
+serialization along with the caller's session/source checks. It does not grant
+access to the transcript or extend the session reader's lifetime.
+
 ## Stateful CLI commands
 
 `openclaw/plugin-sdk/cli-state-owner` exports `runWithLocalStateOwner`. Supply the
@@ -415,3 +436,16 @@ type and `omitNullRequestHeaders`. Runtime headers can contain `null` deletion
 markers; preserve them through header merges and OpenAI SDK calls. Use the helper
 after the final merge when a direct HTTP client needs a string-only header map.
 This entrypoint loads no provider policy, transport host, or credential runtime.
+
+### Node workspace process environment
+
+A node-host workspace lease may expose `processEnvironment`. Call `prepare` after
+generic environment sanitization and `assertCurrent` synchronously immediately
+before a process effect. The lease and invocation own its lifetime; saved copies
+do not survive release or cancellation. Use `redactOutput` at diagnostic egress.
+This capability is host-local and is never a wire environment override.
+
+`process-runtime` exports `createBoundedLineFramer` for bounded LF-delimited byte
+streams. It preserves incomplete lines and leaves CR handling to the consumer.
+Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
+the runtime's existing dispatch and delivery authority.

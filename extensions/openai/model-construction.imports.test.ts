@@ -33,7 +33,6 @@ describe("OpenAI model construction imports", () => {
       expect(
         await findSourceImportBackedges(entry, [
           "src/plugins/provider-model-compat.ts",
-          "src/plugins/provider-model-helpers.ts",
           "src/plugins/plugin-metadata-snapshot.ts",
           "src/agents/provider-attribution.ts",
         ]),

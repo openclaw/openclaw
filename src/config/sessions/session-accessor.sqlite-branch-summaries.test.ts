@@ -6,6 +6,7 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as sqliteRuntime from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -27,6 +28,7 @@ import {
   readSessionBranchSnapshot,
   readSessionBranchSummariesInWorker,
 } from "./session-accessor.sqlite-branches.worker.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionBranchSummary } from "./session-accessor.types.js";
@@ -197,6 +199,33 @@ it.each(cases)("$name", async ({ events, branches }) => {
 
 const seedCanonicalBranchEvents = (events: Record<string, unknown>[]) =>
   seedStoredBranchEvents(events, true);
+
+it("reads branch summaries without loading participant display data", async () => {
+  const scope = await seedCanonicalBranchEvents([
+    message("root", null, "root headline"),
+    message("answer", "root", "final answer", { role: "assistant" }),
+  ]);
+  recordSessionParticipant(scope, {
+    identity: { type: "profile", id: "branch-viewer" },
+    promptedAt: 1,
+  });
+  const result = withFreshOpenClawAgentDatabaseReadOnly((database) => {
+    const tracked = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["participants"],
+      (sql) => (sql.includes('from "session_participants"') ? "participants" : null),
+    );
+    using _ = { [Symbol.dispose]: tracked.restore };
+    const snapshot = readSessionBranchSnapshot(database, scope);
+    expect(snapshot).toMatchObject({
+      status: "ok",
+      branches: [branch("answer", "final answer", 2, true)],
+    });
+    expect(tracked.counts.participants).toBe(0);
+    return snapshot;
+  }, scope);
+  expect(result.found).toBe(true);
+});
 
 const append = (
   scope: Awaited<ReturnType<typeof seedStoredBranchEvents>>,

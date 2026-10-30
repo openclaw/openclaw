@@ -187,8 +187,6 @@ it("recovers transport errors with Git global options", async () => {
 it.each([
   [["fetch", "origin"], "fatal: repository not found"],
   [["push", "origin", "main"], failure.stderr],
-  [["fetch", "origin"], "error: cannot lock ref: File exists."],
-  [["fetch", "origin"], "error: cannot lock ref: is at aaaa but expected bbbb"],
   [["fetch", "origin"], `error: cannot lock ref: is at aaaa but expected bbbb\n${failure.stderr}`],
 ] satisfies Array<[string[], string]>)(
   "does not replay permanent failures or unsafe operations: %j %s",

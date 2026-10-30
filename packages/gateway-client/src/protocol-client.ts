@@ -66,6 +66,7 @@ export class GatewayProtocolClient<TPlan> {
   private reconnectSignal: AbortSignal | null = null;
   private socketOpened = false;
   private helloReceived = false;
+  private readyForRequests = false;
   private connectFailure: GatewayProtocolCloseContext["connectFailure"];
   private connectTiming: ConnectTimingState | null = null;
   private stoppedSocket?: { socket: GatewayProtocolSocket; context: CloseSnapshot };
@@ -144,13 +145,13 @@ export class GatewayProtocolClient<TPlan> {
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
     const socket = this.socket;
-    if (!socket?.isOpen()) {
+    if (!socket || (this.socketOpened && !socket.isOpen())) {
       return Promise.reject(new Error("gateway not connected"));
     }
     if (typeof method !== "string" || method.length === 0) {
       return Promise.reject(new Error("invalid request frame: method must be a non-empty string"));
     }
-    return this.requests.request<T>(socket, method, params, options);
+    return this.requests.request<T>(socket, method, params, options, !this.readyForRequests);
   }
 
   addEventListener(listener: (event: EventFrame) => void): () => void {
@@ -210,6 +211,7 @@ export class GatewayProtocolClient<TPlan> {
     this.connectSent = this.connectRequestSent = false;
     this.socketOpened = false;
     this.helloReceived = false;
+    this.readyForRequests = false;
     this.connectFailure = undefined;
     let socket: GatewayProtocolSocket;
     try {
@@ -402,12 +404,13 @@ export class GatewayProtocolClient<TPlan> {
       plan,
     };
     this.recordTiming("connect-plan-ready", generation, plan);
-    void this.request<HelloOk>("connect", this.opts.buildConnectParams(plan), {
-      onSent: () => {
-        this.connectRequestSent = true;
-        this.recordTiming("request-sent", generation, plan);
-      },
-    })
+    void this.requests
+      .request<HelloOk>(socket, "connect", this.opts.buildConnectParams(plan), {
+        onSent: () => {
+          this.connectRequestSent = true;
+          this.recordTiming("request-sent", generation, plan);
+        },
+      })
       .then((hello) => {
         // Closing transports remain current until their close callback runs;
         // a late response must not publish readiness or reset reconnect backoff.
@@ -425,6 +428,14 @@ export class GatewayProtocolClient<TPlan> {
             return;
           }
           this.invoke("hello", () => this.opts.onHello?.(hello));
+          if (!this.isConnectCurrent(socket, generation)) {
+            return;
+          }
+          // Keep reentrant hello/onSent requests behind earlier held work.
+          this.requests.releaseHeldRequests(() => this.isConnectCurrent(socket, generation));
+          if (this.isConnectCurrent(socket, generation)) {
+            this.readyForRequests = true;
+          }
         };
         const accepted = this.opts.onConnectHello?.(hello, context);
         if (accepted instanceof Promise) {

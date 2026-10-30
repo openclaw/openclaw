@@ -8,7 +8,12 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { copyOwnedBuffer } from "../shared/owned-buffer.js";
 import { hasChildProcessExited, releaseChildProcessOutputAfterExit } from "./child-process.js";
 import { resolveMaxOutputBytes, type CommandOutputStream } from "./exec-output.js";
-import { createSanitizedCommandError } from "./exec-result.js";
+import {
+  CommandProcessCleanupError,
+  createSanitizedCommandError,
+  hasCommandProcessCleanupError,
+  readCommandProcessFailure,
+} from "./exec-result.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
 import {
   COMMAND_PROCESS_TREE_KILL_GRACE_MS,
@@ -314,7 +319,9 @@ export async function runCommandBuffered(
         : Math.max(0, maxCombinedOutputBytes - combinedBytes);
     const remaining = Math.max(0, Math.min(maxBytes - capturedBytes[stream], combinedRemaining));
     if (remaining > 0) {
-      const captured = copyOwnedBuffer(chunk.subarray(0, remaining));
+      // Pipe chunks stay immutable until concatenation; only clipped views need owned storage.
+      const captured =
+        chunk.byteLength > remaining ? copyOwnedBuffer(chunk.subarray(0, remaining)) : chunk;
       chunks[stream].push(captured);
       capturedBytes[stream] += captured.byteLength;
     }
@@ -359,6 +366,7 @@ export async function runCommandBuffered(
       termination,
       ...(outputLimitStream ? { outputLimitStream } : {}),
       ...(result.outputErrorStream ? { errorStream: result.outputErrorStream } : {}),
+      ...(result.cleanup === "uncertain" ? { error: new CommandProcessCleanupError() } : {}),
     };
   } catch (error) {
     const commandError = error instanceof Error ? error : new Error("Command execution failed");
@@ -378,7 +386,11 @@ export async function runCommandBuffered(
       killed: false,
       termination: "error",
       ...(errorStream ? { errorStream } : {}),
-      error: commandError,
+      error:
+        readCommandProcessFailure(commandError)?.cleanup === "uncertain" &&
+        !hasCommandProcessCleanupError(commandError)
+          ? new CommandProcessCleanupError({ cause: commandError })
+          : commandError,
     };
   }
 }

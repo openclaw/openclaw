@@ -32,6 +32,7 @@ import {
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { registerUpdateCli } from "../update-cli.js";
 import { updateCleanupCommand } from "./cleanup.js";
 
@@ -81,34 +82,31 @@ function orphan(f: Fixture) {
     UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
   );
   fs.writeFileSync(path.join(directory, "payload", "original"), "capture payload");
-  fs.writeFileSync(
-    path.join(directory, "manifest.json"),
-    JSON.stringify({
-      schemaVersion: 2,
-      kind: "update-recovery",
-      generation: { kind: "baseline" },
-      databases: [],
-      runId,
-      installRoot: f.home,
-      stateDir: f.stateDir,
-      configPath: f.env.OPENCLAW_CONFIG_PATH,
-      configPaths: [f.env.OPENCLAW_CONFIG_PATH],
-      creator: { host: "fixture", pid: 1, startIdentity: "1" },
-      drivers: [],
-      createdAt: "2026-01-01T00:00:00.000Z",
-      roots: [f.env.OPENCLAW_CONFIG_PATH],
-      excludedRoots: [],
-      protectedPaths: [f.env.OPENCLAW_CONFIG_PATH],
-      entries: [
-        {
-          kind: "missing",
-          sourcePath: f.env.OPENCLAW_CONFIG_PATH,
-          sqlite: false,
-          directory: false,
-        },
-      ],
-    }),
-  );
+  writeFixtureJsonSync(path.join(directory, "manifest.json"), {
+    schemaVersion: 2,
+    kind: "update-recovery",
+    generation: { kind: "baseline" },
+    databases: [],
+    runId,
+    installRoot: f.home,
+    stateDir: f.stateDir,
+    configPath: f.env.OPENCLAW_CONFIG_PATH,
+    configPaths: [f.env.OPENCLAW_CONFIG_PATH],
+    creator: { host: "fixture", pid: 1, startIdentity: "1" },
+    drivers: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    roots: [f.env.OPENCLAW_CONFIG_PATH],
+    excludedRoots: [],
+    protectedPaths: [f.env.OPENCLAW_CONFIG_PATH],
+    entries: [
+      {
+        kind: "missing",
+        sourcePath: f.env.OPENCLAW_CONFIG_PATH,
+        sqlite: false,
+        directory: false,
+      },
+    ],
+  });
   return directory;
 }
 
@@ -120,6 +118,31 @@ function preview(f: Fixture, paths: string[]) {
 function report(): RecoveryCleanupReport {
   return vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)![0] as RecoveryCleanupReport;
 }
+
+function preserveOriginalTimestamps(file: string) {
+  const timestamp = new Date("2026-01-01T00:00:00.000Z");
+  fs.utimesSync(file, timestamp, timestamp);
+  const original = fs.lstatSync(file, { bigint: true });
+  // Model a runtime whose ctime precision cannot distinguish the in-place rewrite.
+  const lstatSync = fs.lstatSync;
+  vi.spyOn(fs, "lstatSync").mockImplementation((candidate, options) => {
+    const stat = lstatSync(candidate, options);
+    if (candidate === file && stat && "ctimeNs" in stat) {
+      Object.defineProperty(stat, "ctimeNs", { value: original.ctimeNs });
+    }
+    return stat;
+  });
+  const fstatSync = fs.fstatSync;
+  vi.spyOn(fs, "fstatSync").mockImplementation((fd, options) => {
+    const stat = fstatSync(fd, options);
+    if (stat.ino === original.ino && "ctimeNs" in stat) {
+      Object.defineProperty(stat, "ctimeNs", { value: original.ctimeNs });
+    }
+    return stat;
+  });
+  return () => fs.utimesSync(file, timestamp, timestamp);
+}
+
 function pendingRecovery(f: Fixture, manifestPath: string) {
   const options = { env: f.env };
   const runId = createUpdateRun({ trigger: "cli" }, options).runId;
@@ -309,6 +332,8 @@ it.each(["replacement", "same-size-edit", "pending-reference", "new-sidecar"])(
   "rechecks explicit originals after confirmation: %s",
   async (change) => {
     const f = fixture();
+    const restoreTimestamp =
+      change === "same-size-edit" ? preserveOriginalTimestamps(f.original) : undefined;
     const initial = preview(f, [f.original]);
     await expect(
       retireSessionSqliteRecovery({
@@ -322,6 +347,7 @@ it.each(["replacement", "same-size-edit", "pending-reference", "new-sidecar"])(
             fs.writeFileSync(f.original, "retained original");
           } else if (change === "same-size-edit") {
             fs.writeFileSync(f.original, "modified original");
+            restoreTimestamp!();
           } else if (change === "pending-reference") {
             pendingRecovery(f, f.original);
           } else {
@@ -332,6 +358,9 @@ it.each(["replacement", "same-size-edit", "pending-reference", "new-sidecar"])(
       }),
     ).rejects.toThrow(/changed|pending|sidecar/);
     expect(fs.existsSync(f.original)).toBe(true);
+    expect(fs.readFileSync(f.original, "utf8")).toBe(
+      change === "same-size-edit" ? "modified original" : "retained original",
+    );
     expect(fs.readFileSync(f.other, "utf8")).toBe("other retained original");
   },
 );
@@ -340,6 +369,8 @@ it.each(["file replacement", "configured live store"])(
   "rechecks %s at the removal effect after progress callbacks",
   async (change) => {
     const f = fixture();
+    const restoreTimestamp =
+      change === "file replacement" ? preserveOriginalTimestamps(f.original) : undefined;
     let cfg: OpenClawConfig = {};
     const result = await retireSessionSqliteRecovery({
       env: f.env,
@@ -351,6 +382,7 @@ it.each(["file replacement", "configured live store"])(
         if (phase === "removing-unmanifested") {
           if (change === "file replacement") {
             fs.writeFileSync(f.original, "modified original");
+            restoreTimestamp!();
           } else {
             cfg = { session: { store: f.original } };
           }
@@ -414,11 +446,8 @@ it.each(["selection", "removal"] as const)(
   async (phase) => {
     const f = fixture();
     const include = path.join(f.stateDir, "selection.json");
-    fs.writeFileSync(f.env.OPENCLAW_CONFIG_PATH, JSON.stringify({ $include: "selection.json" }));
-    fs.writeFileSync(
-      include,
-      JSON.stringify(phase === "selection" ? { session: { store: f.original } } : {}),
-    );
+    writeFixtureJsonSync(f.env.OPENCLAW_CONFIG_PATH, { $include: "selection.json" });
+    writeFixtureJsonSync(include, phase === "selection" ? { session: { store: f.original } } : {});
     const hideInclude = () => fs.renameSync(include, `${include}.saved`);
     if (phase === "selection") {
       hideInclude();

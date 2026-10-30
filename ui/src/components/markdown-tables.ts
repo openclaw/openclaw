@@ -7,8 +7,8 @@ import { listen } from "../lib/reactive/listener.ts";
 import { showToast } from "../lib/toast.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
 import { createIconElement } from "./markdown-icon.ts";
+import { registerSessionTitleTarget } from "./markdown-link-display.ts";
 import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
-import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
 
 const tableShellSelector = ".chat-text .markdown-table[data-table-interactions]";
 const tableViewportSelector = ".markdown-table__viewport";
@@ -135,6 +135,10 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
           if (node.matches(tableShellSelector)) {
             shells.add(node);
           }
+          // Syntax highlighting inserts many leaf spans, which cannot contain tables.
+          if (!node.firstElementChild) {
+            continue;
+          }
           for (const added of node.querySelectorAll<HTMLElement>(tableShellSelector)) {
             shells.add(added);
           }
@@ -145,7 +149,9 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
           }
           const removed = [
             node,
-            ...node.querySelectorAll<HTMLElement>(`${tableViewportSelector}, table`),
+            ...(node.firstElementChild
+              ? node.querySelectorAll<HTMLElement>(`${tableViewportSelector}, table`)
+              : []),
           ];
           for (const observed of removed) {
             if (observedNodes.delete(observed)) {

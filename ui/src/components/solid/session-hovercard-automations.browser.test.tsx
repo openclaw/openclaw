@@ -1,8 +1,8 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { registerGitHubEnglish } from "../../i18n/locales/en-github.ts";
-import { createCronJob, cronJobsListResponse } from "../../lib/cron/cron.test-support.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
+import { createCronJob, cronJobsListResponse } from "../../test-helpers/cron.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,

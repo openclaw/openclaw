@@ -33,7 +33,6 @@ import {
   assertPreparedConversationBindingRoute,
   readPreparedConversationBindingRouteCurrent,
 } from "./session-conversation-binding.js";
-import { canReplaceRestartTombstoneFromParent } from "./session-parent-fork-prepare.js";
 import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
 
 export function shouldLetSlackRoutedThreadBypassBusyReplyOperation(params: {
@@ -182,55 +181,15 @@ export async function resolveDispatchResetAdmission(params: {
   entry?: SessionEntry;
   hasPluginOwnedBinding: boolean;
   sessionKey?: string;
-  storePath?: string;
 }): Promise<{
-  allowRestartTombstoneParentFork: boolean;
-  allowRestartTombstoneReset: boolean;
   resetTriggered: boolean;
 }> {
   const { ctx, entry } = params;
-  const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const commandTarget = resolveCommandTurnTargetSessionKey(ctx);
   const nativeCommandTarget = isNativeCommandTurn(ctx.CommandTurn) ? commandTarget : undefined;
   const actorType = classifySessionStateActor({
     inputProvenance: ctx.InputProvenance,
   }).actorType;
-  const mayReplaceRestartTombstoneFromParent = canReplaceRestartTombstoneFromParent({
-    actorType,
-    entry,
-    // Parent existence is the only remaining fact. Avoid its synchronous store
-    // lookup until the already-loaded child and inbound authority require it.
-    hasParentForkSource: true,
-    hasPluginOwnedBinding: params.hasPluginOwnedBinding,
-    inboundAccessAuthorized: ctx.InboundAccessAuthorized,
-    inboundEventKind: ctx.InboundEventKind,
-    nativeCommandTarget: commandTarget,
-    sessionKey: params.sessionKey,
-  });
-  let hasParentForkSource = false;
-  if (
-    mayReplaceRestartTombstoneFromParent &&
-    parentSessionKey &&
-    parentSessionKey !== params.sessionKey &&
-    params.storePath
-  ) {
-    try {
-      hasParentForkSource = Boolean(
-        (
-          await readSessionEntryReadOnlyInWorker({
-            agentId: params.agentId,
-            storePath: params.storePath,
-            sessionKey: parentSessionKey,
-            readConsistency: "latest",
-          })
-        )?.sessionId,
-      );
-    } catch {
-      hasParentForkSource = false;
-    }
-  }
-  const allowRestartTombstoneParentFork =
-    mayReplaceRestartTombstoneFromParent && hasParentForkSource;
   let resetTriggered = false;
   if (
     !params.hasPluginOwnedBinding &&
@@ -255,8 +214,5 @@ export async function resolveDispatchResetAdmission(params: {
   }
   return {
     resetTriggered,
-    allowRestartTombstoneParentFork,
-    // Admission rereads lifecycle state after waits; carry authority, not the earlier tombstone state.
-    allowRestartTombstoneReset: resetTriggered,
   };
 }

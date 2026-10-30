@@ -87,6 +87,26 @@ it("reuses admitted policy and observes writes", () => {
   expect(read()).toBe("replacement");
 });
 
+it.each([true, false])("reads startup policy with receipt column present=%s", (receiptColumn) => {
+  const db = connect(":memory:");
+  db.exec(`BEGIN; ${OPENCLAW_AGENT_SCHEMA_SQL} COMMIT;`);
+  if (!receiptColumn) {
+    db.exec("ALTER TABLE session_key_contract DROP COLUMN canonical_ready");
+  }
+  admitSqliteSchema(db);
+  const database = { db, agentId: "main" };
+  const read = () => runSqliteReadOperationSync(db, () => storedKey(database, database.agentId));
+  using observation = observeReads();
+  expect(read()).toBe("main");
+  const queries = observation.queries.filter((query) =>
+    query.includes('from "session_key_contract"'),
+  );
+  expect(queries).toHaveLength(1);
+  expect(queries[0]?.includes('"canonical_ready"')).toBe(receiptColumn);
+  setKey(database, "configured");
+  expect(read()).toBe("configured");
+});
+
 it("keeps current policy inside read transactions and refreshes after savepoint rollback", () => {
   const { db, read } = fixture();
   using observation = observeReads();
@@ -157,12 +177,12 @@ it("shares the physical policy across handles and unrelated writes without rerea
   const peer = connect(filename, true);
   admitSqliteSchema(peer);
   using observation = observeReads();
-  expect(readKey({ db: peer })).toBe("main");
+  expect(storedKey({ db: peer }, "main")).toBe("main");
   db.exec("UPDATE session_nodes SET updated_at = updated_at + 1");
   expect(read()).toBe("main");
   setKey(database, "configured");
   expect(read()).toBe("configured");
-  expect(readKey({ db: peer })).toBe("configured");
+  expect(storedKey({ db: peer }, "main")).toBe("configured");
   db.exec("CREATE TABLE unrelated_policy_data (value TEXT)");
   admitSqliteSchema(db);
   expect(read()).toBe("configured");

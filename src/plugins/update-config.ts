@@ -14,8 +14,6 @@ import { resolvePluginInstallDir } from "./install.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import { reconcileRegisteredOpenClawHostLinks } from "./plugin-peer-link.js";
-import { resetPluginSlotsToDefaults, resolveRetainedContextEngineIds } from "./slots.js";
-import { setPluginEnabledInConfig } from "./toggle-config.js";
 import type { PluginUpdateLogger } from "./update-source.js";
 
 export async function hasRunnableInstalledNpmPayload(params: {
@@ -328,41 +326,21 @@ export function migratePluginConfigId(
   return nextPlugins === plugins ? cfg : { ...cfg, plugins: nextPlugins };
 }
 
-export function disablePluginAfterUpdateFailure(
-  config: OpenClawConfig,
-  pluginId: string,
-): OpenClawConfig {
-  const disabled = setPluginEnabledInConfig(config, pluginId, false, {
-    updateChannelConfig: false,
-  });
-  const pluginsConfig = disabled.plugins ?? {};
-  return {
-    ...disabled,
-    plugins: {
-      ...pluginsConfig,
-      // Failed updates are reversible activation changes; only explicit uninstall removes trust policy.
-      slots: resetPluginSlotsToDefaults(
-        pluginsConfig.slots,
-        pluginId,
-        resolveRetainedContextEngineIds(config, pluginId),
-      ),
-    },
-  };
-}
-
 /** Repairs a legacy npm-owned extensions-root host without reinstalling its package. */
 export async function repairRegisteredOpenClawHostLink(params: {
   pluginId: string;
   record: PluginInstallRecord;
   logger: PluginUpdateLogger;
-  beforePersistentEffect?: () => void;
+  beforePersistentApply?: () => void;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<boolean> {
   const result = await reconcileRegisteredOpenClawHostLinks({
     installRecords: { [params.pluginId]: params.record },
     extensionsDir: resolveDefaultPluginExtensionsDir(),
     mode: "repair",
     logger: params.logger,
-    beforePersistentApply: params.beforePersistentEffect,
+    beforePersistentApply: params.beforePersistentApply,
+    beforePersistentEffect: params.beforePersistentEffect,
   });
   return result.repaired > 0;
 }
@@ -370,14 +348,16 @@ export async function repairRegisteredOpenClawHostLink(params: {
 export async function repairOpenClawPeerLinksForNpmInstalls(params: {
   config: OpenClawConfig;
   logger: PluginUpdateLogger;
-  beforePersistentEffect?: () => void;
+  beforePersistentApply?: () => void;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<boolean> {
   const result = await reconcileRegisteredOpenClawHostLinks({
     installRecords: params.config.plugins?.installs ?? {},
     extensionsDir: resolveDefaultPluginExtensionsDir(),
     mode: "repair",
     logger: params.logger,
-    beforePersistentApply: params.beforePersistentEffect,
+    beforePersistentApply: params.beforePersistentApply,
+    beforePersistentEffect: params.beforePersistentEffect,
     onPackageReadError: (error, packageDir) => {
       params.logger.warn?.(
         `Could not repair openclaw peer link at ${packageDir}: ${String(error)}`,

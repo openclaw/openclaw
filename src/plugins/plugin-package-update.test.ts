@@ -7,6 +7,7 @@ import {
   pluginPackageUpdateMayMutateConfig,
   reconcilePluginPackageUpdateConfig,
 } from "./plugin-package-update.js";
+import { createIndexFixture } from "./test-helpers/installed-plugin-index-fixture.js";
 
 const beforeRoot = "/packages/pack-v1";
 const afterRoot = "/packages/pack-v2";
@@ -46,19 +47,12 @@ function record(
 }
 
 function index(rootDir: string, plugins: InstalledPluginIndexRecord[]): InstalledPluginIndex {
-  return {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test",
-    generatedAtMs: 1,
+  return createIndexFixture({
     installRecords: {
       pack: { source: "npm", installPath: rootDir, spec: "@openclaw/pack@latest" },
     },
     plugins,
-    diagnostics: [],
-  };
+  });
 }
 
 function captureSnapshot(pluginIndex: InstalledPluginIndex, installOwners = ["pack"]) {

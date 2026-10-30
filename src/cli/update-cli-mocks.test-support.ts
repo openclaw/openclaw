@@ -412,6 +412,10 @@ vi.mock("node:child_process", async () => {
     },
     spawn: (...args: Parameters<typeof actual.spawn>) => {
       const brokerArgv = resolveRuntimeWorkerArgv(brokerUrl);
+      const directoryWatchArgv = [
+        ...resolveRuntimeWorkerArgv(resolveRuntimeProcessEntrypointUrl("directoryWatchHost")),
+        String(process.pid),
+      ];
       const childArgs = Array.isArray(args[1]) ? args[1] : [];
       if (
         args[0] === process.execPath &&
@@ -423,6 +427,9 @@ vi.mock("node:child_process", async () => {
       }
       if (
         remapSqliteChild(args) ||
+        (args[0] === process.execPath &&
+          childArgs.length === directoryWatchArgv.length &&
+          childArgs.every((arg, index) => arg === directoryWatchArgv[index])) ||
         (args[0] === process.execPath &&
           childArgs.length === 3 &&
           childArgs[0] === "-e" &&

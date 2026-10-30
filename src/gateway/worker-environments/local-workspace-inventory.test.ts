@@ -13,6 +13,7 @@ it("expands shared ancestors with linear path-insertion work", async () => {
       root: "/unused-prepared-inventory",
       admittedPaths: "[]",
       preparedPaths,
+      baselinePaths: new Set(["source/saved/retained.txt"]),
       assertCurrent() {},
     });
     insertions = observed.mock.calls.filter(
@@ -21,7 +22,9 @@ it("expands shared ancestors with linear path-insertion work", async () => {
   } finally {
     observed.mockRestore();
   }
-  expect(paths).toEqual(new Set([...files, ...directories]));
+  expect(paths).toEqual(
+    new Set([...files, ...directories, "source/saved/retained.txt", "source/saved"]),
+  );
   // Each admitted path and directory can enter the inventory and contribute a
   // parent; shared ancestors must not multiply that work by directory depth.
   expect(insertions).toBeLessThanOrEqual(2 * paths.size);

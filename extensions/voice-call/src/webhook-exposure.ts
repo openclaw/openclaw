@@ -1,17 +1,5 @@
 import { isBlockedHostnameOrIp } from "../api.js";
 
-type VoiceCallWebhookExposureConfig = {
-  provider?: string;
-  inboundPolicy?: string;
-  publicUrl?: string;
-  tunnel?: {
-    provider?: string;
-  };
-  tailscale?: {
-    mode?: string;
-  };
-};
-
 export function providerRequiresPublicWebhook(providerName: string | undefined): boolean {
   return providerName === "twilio" || providerName === "telnyx" || providerName === "plivo";
 }
@@ -23,7 +11,17 @@ export function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
 }
 
 /** Resolve a human-readable webhook exposure status for doctor/setup surfaces. */
-export function resolveWebhookExposureStatus(config: VoiceCallWebhookExposureConfig) {
+export function resolveWebhookExposureStatus(config: {
+  provider?: string;
+  inboundPolicy?: string;
+  publicUrl?: string;
+  tunnel?: {
+    provider?: string;
+  };
+  tailscale?: {
+    mode?: string;
+  };
+}) {
   if (config.provider === "mock") {
     return {
       ok: true,
@@ -34,7 +32,6 @@ export function resolveWebhookExposureStatus(config: VoiceCallWebhookExposureCon
   if (config.provider === "livekit" && config.inboundPolicy === "disabled") {
     return {
       ok: true,
-      configured: true,
       message:
         "Outbound-only LiveKit uses RTC and does not need a public webhook; inbound calls require signed LiveKit webhooks",
     };

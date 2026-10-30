@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
@@ -7,6 +7,11 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
+import { subscribeLinkReaderMetadata } from "./link-reader-metadata.ts";
+import {
+  LINK_READER_METADATA_REQUEST_EVENT,
+  LINK_READER_METADATA_UPDATED_EVENT,
+} from "./link-reader-response.ts";
 import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "./link-reader-panel.tsx";
 
@@ -36,20 +41,19 @@ const merged: ControlUiLinkReaderDocument = {
   badge: { label: "Merged", tone: "accent" },
   metadata: [{ label: "Additions", value: "42" }],
 };
-function makeProvider(request: Parameters<typeof createTestGatewayClient>[0]) {
-  const client = createTestGatewayClient(request);
+function makeProvider(client: GatewayBrowserClient) {
   const host = document.createElement(tag);
   if (!(host instanceof LinkReaderHovercardProvider)) {
     throw new Error("Missing reader bridge");
   }
   host.readers = [reader];
+  host.client = client;
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.className = "markdown-github-item";
   anchor.textContent = "PR #99816";
   host.append(anchor);
   document.body.append(host);
-  host.client = client;
   return { host, anchor, client };
 }
 async function hover(anchor: HTMLAnchorElement) {
@@ -101,6 +105,133 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("shares metadata delivery and panel replay across a mounting batch of providers", async () => {
+  const client = createTestGatewayClient(() => Promise.resolve(merged));
+  const panel = await openPanel({ client });
+  await waitForSolid(() =>
+    expect(panel.querySelector(".lr-state")?.textContent).toContain("Merged"),
+  );
+  const requestMetadata = vi.fn();
+  window.addEventListener(LINK_READER_METADATA_REQUEST_EVENT, requestMetadata);
+  onTestFinished(() =>
+    window.removeEventListener(LINK_READER_METADATA_REQUEST_EVENT, requestMetadata),
+  );
+  const listen = vi.spyOn(window, "addEventListener");
+  const unlisten = vi.spyOn(window, "removeEventListener");
+  const rows = Array.from({ length: 100 }, () => makeProvider(client));
+  expect(
+    listen.mock.calls.filter(([type]) => type === LINK_READER_METADATA_UPDATED_EVENT),
+  ).toHaveLength(1);
+  await waitForSolid(() =>
+    expect(rows.every(({ anchor }) => anchor.getAttribute("aria-description") === "Merged")).toBe(
+      true,
+    ),
+  );
+  expect(requestMetadata).toHaveBeenCalledOnce();
+
+  rows[0]!.host.agentId = "another-agent";
+  await Promise.resolve();
+  expect(rows[0]!.anchor.hasAttribute("aria-description")).toBe(false);
+  expect(rows[1]!.anchor.getAttribute("aria-description")).toBe("Merged");
+  rows.slice(0, 99).forEach(({ host }) => host.remove());
+  expect(
+    unlisten.mock.calls.filter(([type]) => type === LINK_READER_METADATA_UPDATED_EVENT),
+  ).toHaveLength(0);
+  rows[99]!.host.remove();
+  expect(
+    unlisten.mock.calls.filter(([type]) => type === LINK_READER_METADATA_UPDATED_EVENT),
+  ).toHaveLength(1);
+
+  requestMetadata.mockClear();
+  const retired = makeProvider(client);
+  retired.host.remove();
+  await Promise.resolve();
+  expect(requestMetadata).not.toHaveBeenCalled();
+});
+
+it("writes inline badge attributes only when metadata changes", async () => {
+  const client = createTestGatewayClient(() => Promise.resolve(open));
+  const { anchor } = makeProvider(client);
+  await Promise.resolve();
+  const observer = new MutationObserver(() => {});
+  observer.observe(anchor, {
+    attributes: true,
+    attributeFilter: ["aria-description", "data-link-reader-tone"],
+  });
+  onTestFinished(() => observer.disconnect());
+  const mutations = () =>
+    observer
+      .takeRecords()
+      .map((record) => record.attributeName)
+      .toSorted((left, right) => String(left).localeCompare(String(right)));
+  const publish = (preview: ControlUiLinkReaderDocument) =>
+    window.dispatchEvent(
+      new CustomEvent(LINK_READER_METADATA_UPDATED_EVENT, {
+        detail: {
+          client,
+          agentId: undefined,
+          sessionKey: undefined,
+          target: { href: url, reader },
+          preview,
+        },
+      }),
+    );
+
+  publish(open);
+  expect(mutations()).toEqual(["aria-description", "data-link-reader-tone"]);
+  for (let index = 0; index < 20; index += 1) {
+    publish(open);
+  }
+  expect(mutations()).toEqual([]);
+  expect(anchor.getAttribute("aria-description")).toBe("Open");
+  expect(anchor.dataset.linkReaderTone).toBe("positive");
+
+  publish(merged);
+  expect(mutations()).toEqual(["aria-description", "data-link-reader-tone"]);
+  expect(anchor.getAttribute("aria-description")).toBe("Merged");
+  expect(anchor.dataset.linkReaderTone).toBe("accent");
+
+  const cleared = { ...merged, badge: undefined };
+  publish(cleared);
+  expect(mutations()).toEqual(["aria-description", "data-link-reader-tone"]);
+  expect(anchor.hasAttribute("aria-description")).toBe(false);
+  expect(anchor.hasAttribute("data-link-reader-tone")).toBe(false);
+  publish(cleared);
+  expect(mutations()).toEqual([]);
+});
+
+it("isolates metadata callbacks and retires duplicate registrations independently", () => {
+  const client = createTestGatewayClient(() => Promise.resolve(merged));
+  const scope = { client, agentId: undefined, sessionKey: undefined };
+  const report = vi.fn();
+  vi.stubGlobal("reportError", report);
+  const notify = vi.fn();
+  const failure = new Error("Metadata presentation failed");
+  let stopRetired = () => {};
+  const stopFirst = subscribeLinkReaderMetadata(window, scope, () => {
+    stopRetired();
+    throw failure;
+  });
+  stopRetired = subscribeLinkReaderMetadata(window, scope, notify);
+  const stopLast = subscribeLinkReaderMetadata(window, scope, notify);
+  onTestFinished(() => {
+    stopFirst();
+    stopRetired();
+    stopLast();
+  });
+  window.dispatchEvent(
+    new CustomEvent(LINK_READER_METADATA_UPDATED_EVENT, {
+      detail: {
+        ...scope,
+        target: { href: url, reader },
+        preview: merged,
+      },
+    }),
+  );
+  expect(notify).toHaveBeenCalledOnce();
+  expect(report).toHaveBeenCalledExactlyOnceWith(failure);
+});
+
 it.each([
   ...["same", "other-client", "other-agent", "other-session"].flatMap((scope) =>
     [false, true].map((late) => ({ scope, late })),
@@ -110,7 +241,7 @@ it.each([
   "reconciles detail metadata only in the matching $scope scope (late provider: $late)",
   async ({ scope, late }) => {
     const request = detailRequest(() => Promise.resolve(open));
-    const { host, anchor, client } = makeProvider(request);
+    const { host, anchor, client } = makeProvider(createTestGatewayClient(request));
     host.agentId = "main";
     host.sessionKey = "agent:main:pane-one";
     if (late) {
@@ -153,7 +284,7 @@ it.each([false, true])(
       .mockResolvedValueOnce(stale)
       .mockResolvedValueOnce(stale)
       .mockResolvedValue(merged);
-    const { host, anchor } = makeProvider(request);
+    const { host, anchor } = makeProvider(createTestGatewayClient(request));
     host.sessionKey = "agent:main:pane-one";
     host.readers = [{ ...reader, linkReader: { ...reader.linkReader, sessionScoped } }];
     await hover(anchor);
@@ -188,7 +319,7 @@ it.each([false, true])(
       previewReads += 1;
       return pendingPreview && previewReads === 1 ? pending.promise : Promise.resolve(open);
     });
-    const { anchor, client } = makeProvider(request);
+    const { anchor, client } = makeProvider(createTestGatewayClient(request));
     if (pendingPreview) {
       await hover(anchor);
     }
@@ -214,7 +345,7 @@ it("keeps reader facts visible when compact preview enrichment fails", async () 
   const pending = Promise.withResolvers<ControlUiLinkReaderDocument>();
   let previewResponse = pending.promise;
   const request = detailRequest(() => previewResponse);
-  const { anchor, client } = makeProvider(request);
+  const { anchor, client } = makeProvider(createTestGatewayClient(request));
   await openPanel({ client });
   await waitForSolid(() => expect(anchor.getAttribute("aria-description")).toBe("Merged"));
   await hover(anchor);

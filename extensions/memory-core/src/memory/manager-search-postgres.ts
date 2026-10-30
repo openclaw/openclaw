@@ -7,6 +7,7 @@ import {
   type TextQuery,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { memoryPathPostgresExpressions } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   DatabaseSearchCapabilityUnavailableError,
   type MemorySource,
@@ -259,22 +260,17 @@ function calibrateTextRank(
   return tokenizer === "trigram" ? rank : sql<number>`${rank} / (${rank} + 0.0027)`;
 }
 
-function pathSpecificity(query: string): RawBuilder<ExactPathSpecificity> {
-  const normalized = query
-    .trim()
-    .replaceAll("\\", "/")
-    .replace(/^\.\//, "")
-    .normalize("NFC")
-    .toLowerCase();
+function pathSpecificity(normalized: string): RawBuilder<ExactPathSpecificity> {
   if (!normalized || normalized === ".") {
     return sql<ExactPathSpecificity>`0`;
   }
-  const path = sql<string>`lower(normalize(regexp_replace(replace(btrim(s.path), E'\\\\', '/'), '^\\./', ''), NFC))`;
+  const expressions = memoryPathPostgresExpressions("s.path");
+  const path = sql.raw<string>(expressions.normalized);
   if (normalized.includes("/")) {
     return sql<ExactPathSpecificity>`CASE WHEN ${path} = ${normalized} THEN 3 ELSE 0 END`;
   }
-  const basename = sql<string>`regexp_replace(${path}, '^.*/', '')`;
-  const stem = sql<string>`regexp_replace(${basename}, '^(.+)\\.[^.]*$', '\\1')`;
+  const basename = sql.raw<string>(expressions.basename);
+  const stem = sql.raw<string>(expressions.stem);
   return sql<ExactPathSpecificity>`CASE WHEN ${path} = ${normalized} THEN 3 WHEN ${basename} = ${normalized} THEN 2 WHEN ${stem} = ${normalized} THEN 1 ELSE 0 END`;
 }
 
@@ -290,13 +286,41 @@ function pathStatements(database: EngineConnection, query: MemoryKeywordWorkerQu
     ? calibrateTextRank(textRank(fullText, index, intent, query.ftsTokenizer), query.ftsTokenizer)
     : sql<number>`0`;
   const k = getNodeSqliteKysely<SearchDatabase>(database);
-  const specificity = pathSpecificity(query.query);
+  const normalized = query.query
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^\.\//, "")
+    .normalize("NFC")
+    .toLowerCase();
+  const specificity = pathSpecificity(normalized);
   const select = (exact: boolean, limit: number) => {
     if (limit <= 0 || (!exact && !intent)) {
       return undefined;
     }
-    let paths = k
+    // Fresh-table estimates must not choose a broad source index before the exact-path lookup.
+    const candidates = k
       .selectFrom("memory_index_sources as s")
+      .select(["s.path", "s.source", "s.openclaw_search"]);
+    const source = exact
+      ? k
+          .with(
+            (cte) => cte("exact_candidates").materialized(),
+            () =>
+              candidates.where(
+                sql<boolean>`(${sql.join(
+                  memoryPathPostgresExpressions("s.path")
+                    .keys.slice(0, normalized.includes("/") ? 1 : undefined)
+                    .map((key) => sql`${sql.raw(key)} = pg_catalog.md5(${normalized})`),
+                  sql` OR `,
+                )})`,
+              ),
+          )
+          .selectFrom("exact_candidates")
+          .selectAll()
+          .as("s")
+      : candidates.as("s");
+    let paths = k
+      .selectFrom(source)
       .select(["s.path", "s.source", rank.as("rank"), specificity.as("specificity")])
       .where(specificity, exact ? ">" : "=", 0)
       .where((eb) =>

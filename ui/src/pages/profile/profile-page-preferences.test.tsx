@@ -10,12 +10,27 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 // Settle the lazy preference reader before the bounded UI waits begin.
 import "../../app/user-prefs-request.ts";
 import { i18n } from "../../i18n/index.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid as waitForFast } from "../../test-helpers/solid-settle.ts";
 import {
   createConnectedContext,
   modelAccountProfile,
   mountProfilePage,
 } from "./profile-page.test-support.tsx";
+import { mockRpc } from "./profile-rpc.test-support.ts";
+
+function mountPreferences(request: GatewayBrowserClient["request"], id: string) {
+  const harness = createConnectedContext(request, { id });
+  return { ...harness, page: mountProfilePage(harness.context) };
+}
+
+function profileRpc(profile: () => UserProfile, handlers: Parameters<typeof mockRpc>[0]) {
+  return mockRpc({
+    "users.self": () => ({ profile: profile() }),
+    "users.listModelAccounts": () => ({ profileId: profile().id, accounts: [], links: [] }),
+    ...handlers,
+  });
+}
 
 beforeEach(async () => {
   await i18n.setLocale("en");
@@ -48,14 +63,8 @@ it.each([
           }
         : null,
     };
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "users.self") {
-        return { profile };
-      }
-      if (method === "users.listModelAccounts") {
-        return { profileId: "profile-1", accounts: [], links: [] };
-      }
-      if (method === "users.prefs.get") {
+    const request = profileRpc(() => profile, {
+      "users.prefs.get": (params) => {
         expect(params).toEqual({
           keys: [GIT_COAUTHOR_PREFERENCE_KEY, "github.prAttribution.enabled"],
         });
@@ -63,12 +72,11 @@ it.each([
           status: "ok",
           entries: stored === undefined ? {} : { [GIT_COAUTHOR_PREFERENCE_KEY]: stored },
         };
-      }
-      if (method === "users.prefs.set") {
+      },
+      "users.prefs.set": (params) => {
         expect(params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: updated } });
         return { status: "ok" };
-      }
-      throw new Error(`unexpected method: ${method}`);
+      },
     });
     const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
       id: profile.id,
@@ -81,8 +89,7 @@ it.each([
     expect(Boolean(page.querySelector(".settings-account"))).toBe(primary);
     const toggle = page.querySelector<HTMLInputElement>("input.settings-toggle__input");
     await waitForFast(() => {
-      expect(toggle?.disabled).toBe(false);
-      expect(toggle?.checked).toBe(enabled);
+      expect(toggle).toMatchObject({ disabled: false, checked: enabled });
     });
     expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
       ["users.self", "users.listModelAccounts", "users.prefs.get"].toSorted(),
@@ -124,32 +131,36 @@ it.each([
     const profile = {
       ...modelAccountProfile,
       id: owner ? "gateway-owner" : modelAccountProfile.id,
+      emails: owner ? [] : modelAccountProfile.emails,
     };
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "users.self") {
-        return { profile };
-      }
-      if (method === "users.listModelAccounts") {
-        return { profileId: profile.id, accounts: [], links: [] };
-      }
-      if (method === "users.prefs.get") {
-        return { status: "ok", entries: { "github.prAttribution.enabled": stored } };
-      }
-      if (method === "users.prefs.set") {
+    const request = profileRpc(() => profile, {
+      "users.prefs.get": () => ({
+        status: "ok",
+        entries: { "github.prAttribution.enabled": stored },
+      }),
+      "users.prefs.set": (params) => {
         expect(params).toEqual({ entries: { "github.prAttribution.enabled": !enabled } });
         return { status: "ok" };
-      }
-      throw new Error("unexpected method: " + method);
+      },
     });
-    const { context } = createConnectedContext(request as GatewayBrowserClient["request"], {
-      id: profile.id,
-    });
-    const page = mountProfilePage(context);
+    const { page } = mountPreferences(request as GatewayBrowserClient["request"], profile.id);
     await waitForFast(() => {
-      expect(attributionToggle(page)).toBeDefined();
-      expect(attributionToggle(page)?.disabled).toBe(false);
-      expect(attributionToggle(page)?.checked).toBe(enabled);
+      expect(attributionToggle(page)).toMatchObject({ disabled: false, checked: enabled });
     });
+    if (owner) {
+      const identity = page.querySelector("#settings-profile-identity")!;
+      expect(identity.textContent).toContain(
+        "GitHub-backed sign-in through Cloudflare Access or Tailscale Serve provides this identity.",
+      );
+      expect(identity.textContent).toContain(
+        "Requires GitHub-backed sign-in through Cloudflare Access or Tailscale Serve.",
+      );
+      expect(identity.textContent).not.toContain("Linked emails");
+      expect(identity.textContent).not.toContain("Refresh to retry");
+      expect(
+        identity.querySelector<HTMLInputElement>("input.settings-toggle__input"),
+      ).toMatchObject({ checked: false, disabled: true });
+    }
     const displayName = page.querySelector<HTMLInputElement>(".identity-name-control input")!;
     displayName.value = "Unsaved name";
     displayName.dispatchEvent(new Event("input", { bubbles: true }));
@@ -168,22 +179,14 @@ it.each(["read", "write"])(
   "keeps personal PR attribution off and shows %s errors",
   async (failure) => {
     const profile = modelAccountProfile;
-    const request = vi.fn(async (method: string) => {
-      if (method === "users.self") {
-        return { profile };
-      }
-      if (method === "users.listModelAccounts") {
-        return { profileId: profile.id, accounts: [], links: [] };
-      }
-      if (method === "users.prefs.get" && failure !== "read") {
-        return { status: "ok", entries: {} };
-      }
+    const unavailable = () => {
       throw new Error("Preference service unavailable");
+    };
+    const request = profileRpc(() => profile, {
+      "users.prefs.get": () => (failure === "read" ? unavailable() : { status: "ok", entries: {} }),
+      "users.prefs.set": unavailable,
     });
-    const { context } = createConnectedContext(request as GatewayBrowserClient["request"], {
-      id: profile.id,
-    });
-    const page = mountProfilePage(context);
+    const { page } = mountPreferences(request as GatewayBrowserClient["request"], profile.id);
     await waitForFast(() => expect(attributionToggle(page)?.disabled).toBe(false));
     if (failure === "write") {
       attributionToggle(page)!.click();
@@ -200,55 +203,45 @@ it.each(["read", "write"])(
 it("shows pending attribution, rolls back a rejected save, and reloads the accepted retry", async () => {
   const pending = createDeferred<{ status: "ok" }>();
   let enabled = false;
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "users.self") {
-      return { profile: modelAccountProfile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: modelAccountProfile.id, accounts: [], links: [] };
-    }
-    if (method === "users.prefs.get") {
-      return {
-        status: "ok",
-        entries: { "github.prAttribution.enabled": enabled, [GIT_COAUTHOR_PREFERENCE_KEY]: false },
-      };
-    }
-    if (method === "users.prefs.set") {
+  const request = profileRpc(() => modelAccountProfile, {
+    "users.prefs.get": () => ({
+      status: "ok",
+      entries: { "github.prAttribution.enabled": enabled, [GIT_COAUTHOR_PREFERENCE_KEY]: false },
+    }),
+    "users.prefs.set": (params) => {
       expect(params).toEqual({ entries: { "github.prAttribution.enabled": true } });
       if (request.mock.calls.filter(([name]) => name === "users.prefs.set").length === 1) {
         return pending.promise;
       }
       enabled = true;
       return { status: "ok" };
-    }
-    throw new Error("unexpected method: " + method);
+    },
   });
-  const { context } = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: modelAccountProfile.id,
-  });
-  let page = mountProfilePage(context);
+  const mounted = mountPreferences(
+    request as GatewayBrowserClient["request"],
+    modelAccountProfile.id,
+  );
+  const { context } = mounted;
+  let { page } = mounted;
   await waitForFast(() => expect(attributionToggle(page)?.disabled).toBe(false));
   const toggle = attributionToggle(page)!;
   toggle.click();
   await waitForFast(() => {
     expect(attributionToggle(page)).toBe(toggle);
-    expect(toggle.checked).toBe(true);
-    expect(toggle.disabled).toBe(true);
+    expect(toggle).toMatchObject({ checked: true, disabled: true });
   });
   toggle.click();
   expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1);
   pending.reject(new Error("Attribution could not be saved"));
   await waitForFast(() => {
-    expect(toggle.checked).toBe(false);
-    expect(toggle.disabled).toBe(false);
+    expect(toggle).toMatchObject({ checked: false, disabled: false });
     expect(page.querySelector('[role="alert"]')?.textContent).toContain(
       "Attribution could not be saved",
     );
   });
   toggle.click();
   await waitForFast(() => {
-    expect(toggle.checked).toBe(true);
-    expect(toggle.disabled).toBe(false);
+    expect(toggle).toMatchObject({ checked: true, disabled: false });
     expect(page.querySelector('[role="alert"]')).toBeNull();
   });
   expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(1);
@@ -256,23 +249,17 @@ it("shows pending attribution, rolls back a rejected save, and reloads the accep
   page.unmount();
   page = mountProfilePage(context);
   await waitForFast(() => {
-    expect(attributionToggle(page)?.disabled).toBe(false);
-    expect(attributionToggle(page)?.checked).toBe(true);
+    expect(attributionToggle(page)).toMatchObject({ disabled: false, checked: true });
   });
   expect(request.mock.calls.filter(([method]) => method === "users.prefs.get")).toHaveLength(2);
 });
 
 it("does not offer personal PR attribution without a durable profile", async () => {
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.self") {
-      return { profile: null };
-    }
-    throw new Error("unexpected method: " + method);
-  });
-  const { context } = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: "unresolved-profile",
-  });
-  const page = mountProfilePage(context);
+  const request = mockRpc({ "users.self": () => ({ profile: null }) });
+  const { page } = mountPreferences(
+    request as GatewayBrowserClient["request"],
+    "unresolved-profile",
+  );
   await waitForFast(() =>
     expect(page.textContent).toContain("Your identity profile could not be loaded."),
   );
@@ -283,25 +270,12 @@ it("does not offer personal PR attribution without a durable profile", async () 
 it("retires a pending attribution save when the requester changes", async () => {
   const save = createDeferred<{ status: "ok" }>();
   let profile = modelAccountProfile;
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.self") {
-      return { profile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: profile.id, accounts: [], links: [] };
-    }
-    if (method === "users.prefs.get") {
-      return { status: "ok", entries: {} };
-    }
-    if (method === "users.prefs.set") {
-      return save.promise;
-    }
-    throw new Error("unexpected method: " + method);
+  const request = profileRpc(() => profile, {
+    "users.prefs.get": () => ({ status: "ok", entries: {} }),
+    "users.prefs.set": () => save.promise,
   });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: profile.id,
-  });
-  const page = mountProfilePage(harness.context);
+  const harness = mountPreferences(request as GatewayBrowserClient["request"], profile.id);
+  const { page } = harness;
   await waitForFast(() => expect(attributionToggle(page)?.disabled).toBe(false));
   attributionToggle(page)!.click();
   await waitForFast(() => expect(attributionToggle(page)?.disabled).toBe(true));
@@ -313,10 +287,96 @@ it("retires a pending attribution save when the requester changes", async () => 
     ),
   );
   await waitForFast(() => {
-    expect(attributionToggle(page)?.disabled).toBe(false);
-    expect(attributionToggle(page)?.checked).toBe(false);
+    expect(attributionToggle(page)).toMatchObject({ disabled: false, checked: false });
   });
   save.resolve({ status: "ok" });
   await waitForFast(() => expect(attributionToggle(page)?.disabled).toBe(false));
   expect(attributionToggle(page)?.checked).toBe(false);
 });
+
+it("shows pending coauthor consent and restores the accepted value after failure", async () => {
+  const saved = createDeferred();
+  const request = profileRpc(() => modelAccountProfile, {
+    "users.prefs.get": () => ({ status: "ok", entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: true } }),
+    "users.prefs.set": () => saved.promise,
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: modelAccountProfile.id,
+    name: "Ada",
+  });
+  harness.emitHello(gatewayHelloForMethods([], ["operator.write"]));
+  const page = mountProfilePage(harness.context);
+  const toggle = () =>
+    page.querySelector<HTMLInputElement>('#settings-profile-identity [role="switch"]');
+  await waitForFast(() => {
+    expect(toggle()?.checked).toBe(true);
+    expect(toggle()?.getAttribute("aria-disabled")).toBeNull();
+    expect(toggle()?.disabled).toBe(false);
+  });
+  toggle()!.click();
+  await waitForFast(() => {
+    expect(toggle()?.checked).toBe(false);
+    expect(toggle()?.getAttribute("aria-disabled")).toBe("true");
+    expect(toggle()?.disabled).toBe(false);
+  });
+  toggle()!.click();
+  expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1);
+  saved.reject(new Error("Consent could not be saved"));
+  await waitForFast(() => {
+    expect(toggle()?.checked).toBe(true);
+    expect(toggle()?.getAttribute("aria-disabled")).toBeNull();
+    expect(page.textContent).toContain("Consent could not be saved");
+  });
+});
+
+it.each(["identity", "navigation"])(
+  "releases a pending identity action on %s change",
+  async (change) => {
+    const saved = createDeferred();
+    let profile = modelAccountProfile;
+    const request = profileRpc(() => profile, {
+      "users.prefs.get": () => ({ status: "ok", entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: true } }),
+      "users.prefs.set": () => saved.promise,
+    });
+    const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+      id: profile.id,
+      name: "Ada",
+    });
+    harness.emitHello(gatewayHelloForMethods([], ["operator.write"]));
+    let page = mountProfilePage(harness.context);
+    const toggle = () =>
+      page.querySelector<HTMLInputElement>('#settings-profile-identity [role="switch"]');
+    await waitForFast(() => {
+      expect(toggle()?.checked).toBe(true);
+      expect(toggle()?.getAttribute("aria-disabled")).toBeNull();
+      expect(toggle()?.disabled).toBe(false);
+    });
+    toggle()!.click();
+    await waitForFast(() =>
+      expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1),
+    );
+    if (change === "navigation") {
+      harness.emitNavigation();
+      page.unmount();
+    }
+    profile = { ...modelAccountProfile, id: "profile-2", displayName: "Grace" };
+    harness.emitSnapshot({ selfUser: { id: profile.id, name: "Grace" } });
+    if (change === "navigation") {
+      page = mountProfilePage(harness.context);
+    }
+    await waitForFast(() => {
+      expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
+        "Grace",
+      );
+      expect(toggle()?.checked).toBe(true);
+      expect(toggle()?.getAttribute("aria-disabled")).toBeNull();
+    });
+    saved.reject(new Error("Retired consent failure"));
+    await saved.promise.catch(() => undefined);
+    await waitForFast(() => {
+      expect(toggle()?.checked).toBe(true);
+      expect(toggle()?.getAttribute("aria-disabled")).toBeNull();
+      expect(page.textContent).not.toContain("Retired consent failure");
+    });
+  },
+);

@@ -134,11 +134,6 @@ function describeExclusion(params: {
   };
 }
 
-type SkillWorkshopToolPolicyAvailability = {
-  available: boolean;
-  exclusion?: ToolPolicyFilterEvent;
-};
-
 const skillWorkshopPolicyProbe = {
   name: SKILL_WORKSHOP_TOOL_NAME,
   label: SKILL_WORKSHOP_TOOL_NAME,
@@ -183,7 +178,7 @@ export function resolveAllowedPluginToolNames(params: {
 export function resolveSkillWorkshopToolPolicyAvailability(params: {
   config: OpenClawConfig;
   conversationCapabilityProfile: ResolvedConversationCapabilityProfile;
-}): SkillWorkshopToolPolicyAvailability {
+}) {
   let exclusion: ToolPolicyFilterEvent | undefined;
   const tools = applyFinalEffectiveToolPolicy({
     bundledTools: [skillWorkshopPolicyProbe],
@@ -206,6 +201,28 @@ export function resolveSkillWorkshopToolPolicyAvailability(params: {
   };
 }
 
+function resolveAgentCapabilityProfile(config: OpenClawConfig, agentId: string) {
+  const model = resolveDefaultModelForAgent({ cfg: config, agentId });
+  return resolveConversationCapabilityProfile({
+    config,
+    agentId,
+    modelProvider: model.provider,
+    modelId: model.model,
+  });
+}
+
+// A deny is an intentional opt-out, even when a profile excludes the tool first.
+function deniesSkillWorkshop(profile: ResolvedConversationCapabilityProfile): boolean {
+  return !isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, {
+    deny: profile.policy.explicitToolDenylist,
+  });
+}
+
+/** True when the agent's tool policy explicitly denies skill_workshop: the agent opted out of Workshop. */
+export function isSkillWorkshopDeniedForAgent(config: OpenClawConfig, agentId: string): boolean {
+  return deniesSkillWorkshop(resolveAgentCapabilityProfile(config, normalizeAgentId(agentId)));
+}
+
 export function detectSkillWorkshopToolPolicyDiagnostic(params: {
   config: OpenClawConfig;
   workshopEnabled: boolean;
@@ -215,19 +232,8 @@ export function detectSkillWorkshopToolPolicyDiagnostic(params: {
     return null;
   }
   const agentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.config));
-  const model = resolveDefaultModelForAgent({ cfg: params.config, agentId });
-  const capabilityProfile = resolveConversationCapabilityProfile({
-    config: params.config,
-    agentId,
-    modelProvider: model.provider,
-    modelId: model.model,
-  });
-  // A deny is an intentional opt-out, even when a profile excludes the tool first.
-  if (
-    !isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, {
-      deny: capabilityProfile.policy.explicitToolDenylist,
-    })
-  ) {
+  const capabilityProfile = resolveAgentCapabilityProfile(params.config, agentId);
+  if (deniesSkillWorkshop(capabilityProfile)) {
     return null;
   }
   const prefix = `Skill Workshop is active, but ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)} is hidden for agent ${JSON.stringify(agentId)}:`;

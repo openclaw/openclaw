@@ -14,6 +14,7 @@ import {
   model,
   reply,
   TEST_USAGE,
+  toolResultMessages,
   user,
 } from "./agent-loop.test-support.js";
 import { Agent } from "./agent.js";
@@ -177,109 +178,6 @@ describe("Agent lifecycle and continuation", () => {
   );
 });
 
-describe("agentLoop streaming updates", () => {
-  it("rebuilds assistant message snapshots for text deltas without partial snapshots", async () => {
-    const firstDeltaConsumed = createDeferred();
-    const streamFn: StreamFn = () => {
-      const stream = createAssistantMessageEventStream();
-      const startMessage = makeAssistantMessage([]);
-      const finalMessage = makeAssistantMessage([{ type: "text", text: "Hello world" }]);
-      stream.push({ type: "start", partial: startMessage });
-      stream.push({
-        type: "text_start",
-        contentIndex: 0,
-        partial: { ...startMessage, content: [] },
-      });
-      stream.push({ type: "text_delta", contentIndex: 0, delta: "Hello" });
-      void firstDeltaConsumed.promise.then(() => {
-        stream.push({ type: "text_delta", contentIndex: 0, delta: " world" });
-        stream.push({
-          type: "text_end",
-          contentIndex: 0,
-          content: "Hello world",
-          partial: finalMessage,
-        });
-        stream.push({ type: "done", reason: "stop", message: finalMessage });
-      });
-      return stream;
-    };
-    const events: AgentEvent[] = [];
-    await runAgentLoop(
-      [user("hello")],
-      { systemPrompt: "", messages: [] },
-      config,
-      (event) => {
-        events.push(event);
-        if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-          firstDeltaConsumed.resolve();
-        }
-      },
-      undefined,
-      streamFn,
-    );
-    const deltas = events.filter(
-      (event): event is Extract<AgentEvent, { type: "message_update" }> =>
-        event.type === "message_update" && event.assistantMessageEvent.type === "text_delta",
-    );
-    expect(deltas).toHaveLength(2);
-    expect(deltas.map((event) => event.message)).toMatchObject([
-      { role: "assistant", content: [{ type: "text", text: "Hello" }] },
-      { role: "assistant", content: [{ type: "text", text: "Hello world" }] },
-    ]);
-    for (const event of deltas) {
-      expect(event.assistantMessageEvent).not.toHaveProperty("partial");
-    }
-  });
-
-  it("does not execute tool calls from a max-token-truncated assistant turn", async () => {
-    const execute = vi.fn(async () => ({ content: [], details: {} }));
-    const contexts: Context[] = [];
-    const streamFn: StreamFn = (_model, context) => {
-      contexts.push(context);
-      if (contexts.length > 1) {
-        return reply(makeAssistantMessage([{ type: "text", text: "continued" }]));
-      }
-      const call = makeCall("sessions_spawn", "call-truncated-spawn");
-      const message: AssistantMessage = {
-        ...makeAssistantMessage([{ type: "text", text: "spawning" }, call]),
-        stopReason: "length",
-      };
-      const stream = createAssistantMessageEventStream();
-      stream.push({ type: "start", partial: { ...message, content: [] } });
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial: message });
-      stream.push({ type: "toolcall_end", contentIndex: 1, toolCall: call, partial: message });
-      stream.push({ type: "done", reason: "length", message });
-      return stream;
-    };
-    const run = captureTools([{ ...makeTool("sessions_spawn"), execute }], streamFn, {
-      getFollowUpMessages: async () => (contexts.length === 1 ? [user("continue", 2)] : []),
-    });
-    const events = await collectEvents(run);
-    const messages = await run.result;
-    const emitted = events.find(
-      (event): event is Extract<AgentEvent, { type: "message_end" }> =>
-        event.type === "message_end" &&
-        event.message.role === "assistant" &&
-        event.message.stopReason === "length",
-    );
-    expect(execute).not.toHaveBeenCalled();
-    expect(events.some((event) => event.type === "tool_execution_start")).toBe(false);
-    expect(messages.map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-      "user",
-      "assistant",
-    ]);
-    expect(emitted).toBeDefined();
-    for (const message of [messages[1], emitted?.message, contexts[1]?.messages[1]]) {
-      expect(message).toMatchObject({ role: "assistant", stopReason: "length" });
-      expect(message).not.toMatchObject({
-        content: expect.arrayContaining([expect.objectContaining({ type: "toolCall" })]),
-      });
-    }
-  });
-});
-
 describe("deferred tool hydration", () => {
   it.each(["missing", "mismatched"] as const)(
     "rejects a %s deferred tool without executing it",
@@ -434,15 +332,7 @@ describe("agentLoop tool termination", () => {
           { id: "commit-third", started: false },
         ]),
       );
-      const toolResults = events
-        .filter(
-          (
-            event,
-          ): event is Extract<AgentEvent, { type: "message_end" }> & {
-            message: { role: "toolResult" };
-          } => event.type === "message_end" && event.message.role === "toolResult",
-        )
-        .map((event) => event.message);
+      const toolResults = toolResultMessages(events);
       expect(toolResults.map((message) => message.toolCallId)).toEqual([
         "commit-first",
         "commit-second",
@@ -682,15 +572,7 @@ describe("agentLoop tool termination", () => {
     expect(streamCalls).toBe(1);
     expect(resolverCalls).toEqual(["d_first_tool"]);
     expect(executed).toEqual([]);
-    const toolResults = events
-      .filter(
-        (
-          event,
-        ): event is Extract<AgentEvent, { type: "message_end" }> & {
-          message: { role: "toolResult" };
-        } => event.type === "message_end" && event.message.role === "toolResult",
-      )
-      .map((event) => event.message);
+    const toolResults = toolResultMessages(events);
     expect(toolResults).toHaveLength(3);
     for (const toolResult of toolResults) {
       expect(toolResult).toMatchObject({
@@ -1641,43 +1523,24 @@ describe("agentLoop argument-validation admission", () => {
     const executed: string[] = [];
     const admittedCalls: InternalToolBatchCall[][] = [];
     const events = await collectEvents(
-      captureAgentLoop(
-        [{ role: "user", content: "run", timestamp: 1 }],
-        {
-          systemPrompt: "",
-          messages: [],
-          tools: [
-            {
-              ...makeTool("edit", executed),
-              parameters: Type.Object({ path: Type.String() }, { additionalProperties: false }),
-            },
-          ],
-        },
-        {
-          ...config,
-          beforeToolBatch: async ({ calls }) => {
-            admittedCalls.push(calls);
-            const first = calls[0];
-            return first
-              ? {
-                  intervention: {
-                    kind: "critical-tool-loop",
-                    toolCallId: first.toolCall.id,
-                    toolName: first.toolCall.name,
-                    actionKey: "edit:same-action",
-                    detector: "generic_repeat",
-                    count: 20,
-                    reason: "CRITICAL: edit is looping",
-                  },
-                }
-              : undefined;
+      captureTools(
+        [
+          {
+            ...makeTool("edit", executed),
+            parameters: Type.Object({ path: Type.String() }, { additionalProperties: false }),
           },
-        },
-        undefined,
+        ],
         createTurnSequenceStream([
           [{ type: "toolCall", id: "invalid-1", name: "edit", arguments: {} }],
           [{ type: "text", text: "recovered" }],
         ]),
+        {
+          beforeToolBatch: async ({ calls }) => {
+            admittedCalls.push(calls);
+            const first = calls[0];
+            return first ? { intervention: criticalLoopFor(first.toolCall) } : undefined;
+          },
+        },
       ),
     );
 
@@ -1694,11 +1557,7 @@ describe("agentLoop argument-validation admission", () => {
       ],
     ]);
     expect(executed).toEqual([]);
-    expect(
-      events.flatMap((event) =>
-        event.type === "message_end" && event.message.role === "toolResult" ? [event.message] : [],
-      ),
-    ).toMatchObject([
+    expect(toolResultMessages(events)).toMatchObject([
       {
         toolCallId: "invalid-1",
         isError: true,

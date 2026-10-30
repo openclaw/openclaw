@@ -161,5 +161,11 @@ describe("AppSidebar project session activity", () => {
     expect(active?.classList.contains("session-row-host--running")).toBe(true);
     expect(idleLead?.childElementCount).toBe(0);
     expect(idle?.querySelector(".session-row-state")).toBeNull();
+    project?.click();
+    await sidebar.updateComplete;
+    expect(project?.querySelector('[aria-label="Active run"]')).not.toBeNull();
+    project?.click();
+    await sidebar.updateComplete;
+    expect(project?.querySelector('[aria-label="Active run"]')).toBeNull();
   });
 });

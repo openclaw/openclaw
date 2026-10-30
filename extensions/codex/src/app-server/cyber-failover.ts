@@ -1,32 +1,13 @@
-/**
- * Automatic Daybreak escalation for OpenAI cyber-policy refusals.
- *
- * OpenAI refuses some defensive-cyber work on its general models and directs
- * approved workspaces to a Daybreak model instead. When a turn is refused, the
- * harness retries it once on the configured Daybreak model so the refused work
- * reaches the tier allowed to answer it. Only a refused turn is ever routed
- * there, and the retry never changes the session's stored model selection.
- *
- * Authorization stays server-owned. `model/list` advertises Daybreak to every
- * client, but an unentitled workspace still gets 401/403 on use, and each such
- * attempt costs the transport's full five-try reconnect ladder. Entitlement is
- * therefore only ever observed from an actual attempt, and a failure is
- * remembered per workspace so siblings do not each pay for it.
- */
-
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { readCodexPluginConfig } from "./config-parsing.js";
 
 export type CodexCyberFailoverConfig = {
   mode: "auto" | "off";
-  model: string;
   cooloffMs: number;
 };
 
-// Codex catalog id for Daybreak Blue, verified against a live `model/list`.
 const DEFAULT_CYBER_FAILOVER: CodexCyberFailoverConfig = {
   mode: "auto",
-  model: "gpt-daybreak-blue-latest",
   cooloffMs: 600_000,
 };
 
@@ -37,7 +18,6 @@ export function resolveCodexCyberFailoverConfig(pluginConfig: unknown): CodexCyb
   }
   return {
     mode: configured.mode ?? DEFAULT_CYBER_FAILOVER.mode,
-    model: configured.model ?? DEFAULT_CYBER_FAILOVER.model,
     cooloffMs: configured.cooloffMs ?? DEFAULT_CYBER_FAILOVER.cooloffMs,
   };
 }
@@ -107,12 +87,12 @@ export function recordCodexCyberTargetUnavailable(params: {
 }
 
 export type CodexCyberEscalationPlan =
-  | { kind: "escalate"; model: string }
+  | { kind: "escalate"; model: string; cyberAccessProgram: "daybreak_blue" }
   | {
       kind: "skip";
       reason:
         | "disabled"
-        | "already_daybreak"
+        | "already_elevated"
         | "no_target"
         | "not_replay_safe"
         | "target_unavailable"
@@ -123,6 +103,7 @@ export function planCodexCyberEscalation(params: {
   config: CodexCyberFailoverConfig;
   currentModel: string | undefined;
   replaySafe: boolean;
+  currentAccessProgram?: "standard" | "daybreakBlue" | "daybreakRed";
   workspace?: CodexCyberWorkspace;
 }): CodexCyberEscalationPlan {
   const { config } = params;
@@ -133,13 +114,16 @@ export function planCodexCyberEscalation(params: {
   if (!params.replaySafe) {
     return { kind: "skip", reason: "not_replay_safe" };
   }
-  if (!config.model.trim()) {
+  if (
+    params.currentAccessProgram === "daybreakBlue" ||
+    params.currentAccessProgram === "daybreakRed"
+  ) {
+    return { kind: "skip", reason: "already_elevated" };
+  }
+  if (!params.currentModel?.trim()) {
     return { kind: "skip", reason: "no_target" };
   }
-  const key = targetKey(config.model, params.workspace);
-  if (params.currentModel && targetKey(params.currentModel, params.workspace) === key) {
-    return { kind: "skip", reason: "already_daybreak" };
-  }
+  const key = targetKey(params.currentModel, params.workspace);
   const now = Date.now();
   const expiresAt = unavailableTargets.get(key);
   if (expiresAt !== undefined && expiresAt <= now) {
@@ -150,7 +134,7 @@ export function planCodexCyberEscalation(params: {
   if (inFlightProbes.has(key)) {
     return { kind: "skip", reason: "probe_in_flight" };
   }
-  return { kind: "escalate", model: config.model };
+  return { kind: "escalate", model: params.currentModel, cyberAccessProgram: "daybreak_blue" };
 }
 
 export type CodexCyberAttemptOutcome = Pick<

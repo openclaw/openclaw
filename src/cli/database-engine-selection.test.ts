@@ -49,7 +49,7 @@ const recoveryOwnerCommands = commands(
   "gateway uninstall|daemon uninstall|node stop|node uninstall|node status",
   "cron status|automations list|devices list|nodes status|nodes camera snap|secrets reload",
   "approvals pending|exec-approvals pending|memory status|memory search fixture|memory session-backfill",
-  "claws build|update|update --dry-run|update --channel beta|update status --json",
+  "templates build|update|update --dry-run|update --channel beta|update status --json",
   "update repair|update finalize|update wizard|update migration-plan --snapshot-state /selected/state",
   "reset --scope config|reset --scope=config|reset --scope=full --scope=config",
   "uninstall --service|uninstall --service --app",

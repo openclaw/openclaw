@@ -6,7 +6,10 @@ import { resolveSilentReplySettings } from "../config/silent-reply.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
-import type { InputProvenance } from "../sessions/input-provenance.js";
+import {
+  isExecCompletionInputProvenance,
+  type InputProvenance,
+} from "../sessions/input-provenance.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
@@ -53,6 +56,18 @@ export function createMissingReplyNotice(text = MISSING_REPLY_NOTICE_TEXT): Repl
 
 const EMPTY_REPLY_CONFIG: OpenClawConfig = {};
 
+export function resolveCompletionInputReplyExpectation(
+  sourceTool: string,
+  params: { expectsCompletionMessage: boolean; requireVisibleReply?: boolean },
+): ReplyExpectation {
+  // Available child findings do not create a reply obligation for their parent.
+  const isSubagentCompletion =
+    sourceTool === "subagent_announce" || sourceTool === "subagent_settle";
+  return params.requireVisibleReply || (params.expectsCompletionMessage && !isSubagentCompletion)
+    ? "required"
+    : "optional";
+}
+
 export function resolveCommandReplyExpectation(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
@@ -65,6 +80,14 @@ export function resolveCommandReplyExpectation(params: {
     replyExpectation?: ReplyExpectation;
   };
 }): ReplyExpectation | undefined {
+  const provenance = params.opts.inputProvenance;
+  if (
+    provenance?.kind === "inter_session" &&
+    (provenance.sourceTool === "subagent_announce" || provenance.sourceTool === "subagent_settle")
+  ) {
+    // Completion processing is optional unless the caller assigns a reply obligation.
+    return params.opts.replyExpectation ?? "optional";
+  }
   const inputExpectation = params.opts.replyExpectation;
   if (inputExpectation === "optional" || inputExpectation === "result-required") {
     return inputExpectation;
@@ -72,7 +95,15 @@ export function resolveCommandReplyExpectation(params: {
   if (
     params.opts.privateCompletion ||
     params.opts.lane === AGENT_LANE_SUBAGENT ||
-    isSubagentSessionKey(params.sessionKey) ||
+    isSubagentSessionKey(params.sessionKey)
+  ) {
+    return "result-required";
+  }
+  // The wake prompt offers NO_REPLY, so silence stays valid on internal surfaces too.
+  if (isExecCompletionInputProvenance(params.opts.inputProvenance)) {
+    return "optional";
+  }
+  if (
     !params.messageChannel ||
     params.messageChannel === INTERNAL_MESSAGE_CHANNEL ||
     isInternalNonDeliveryChannel(params.messageChannel) ||

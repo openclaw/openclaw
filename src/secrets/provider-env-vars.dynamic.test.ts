@@ -2,6 +2,10 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sanitizeEnvVars } from "../agents/sandbox/sanitize-env-vars.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as pluginConfigState from "../plugins/config-state.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
@@ -336,6 +340,18 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(resolveProviderAuthLookupMaps({ config: mutable })).not.toBe(
       resolveProviderAuthLookupMaps({ config: mutable }),
     );
+
+    // The live runtime snapshot is mutable, but each publication advances its revision key.
+    try {
+      setRuntimeConfigSnapshot(mutable);
+      const published = resolveProviderAuthLookupMaps({ config: mutable });
+      expect(resolveProviderAuthLookupMaps({ config: mutable })).toBe(published);
+      mutable.plugins = { allow: ["edited-in-place"] };
+      setRuntimeConfigSnapshot(mutable);
+      expect(resolveProviderAuthLookupMaps({ config: mutable })).not.toBe(published);
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it.each([false, true])("requires workspace trust for auth evidence (trusted: %s)", (trusted) => {

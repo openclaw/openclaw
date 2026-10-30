@@ -32,6 +32,7 @@ import {
   getAgentDeletionDatabaseCleanup,
 } from "./agent-deletion-cleanup.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
+import { retainAgentDatabase } from "./openclaw-agent-db-borrower.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -42,7 +43,6 @@ import { assertOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identit
 import type { prepareOpenClawAgentDatabaseWorkerLease } from "./openclaw-agent-db-lease.js";
 import {
   agentDatabaseLifecycle as cache,
-  retainAgentDatabase,
   type PendingAgentDatabaseOpen,
 } from "./openclaw-agent-db-lifecycle.js";
 import { assertAgentDatabaseResourceAdmission } from "./openclaw-agent-db-resources.js";

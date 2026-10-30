@@ -228,33 +228,6 @@ function createPluginConfig(params: {
   };
 }
 
-function expectRemainingChannels(
-  channels: OpenClawConfig["channels"],
-  expected: Record<string, unknown> | undefined,
-) {
-  expect(channels as Record<string, unknown> | undefined).toEqual(expected);
-}
-
-function expectChannelCleanupResult(params: {
-  config: OpenClawConfig;
-  pluginId: string;
-  expectedChannels: Record<string, unknown> | undefined;
-  expectedChanged: boolean;
-  options?: { channelIds?: readonly string[] };
-}) {
-  const { config: result, actions } = removePluginFromConfig(
-    params.config,
-    params.pluginId,
-    params.options
-      ? params.options.channelIds
-        ? { channelIds: [...params.options.channelIds] }
-        : {}
-      : undefined,
-  );
-  expectRemainingChannels(result.channels, params.expectedChannels);
-  expect(actions.channelConfig).toBe(params.expectedChanged);
-}
-
 function createSinglePluginWithEmptySlotsConfig(): OpenClawConfig {
   return createPluginConfig({
     entries: createSinglePluginEntries(),
@@ -693,130 +666,66 @@ describe("removePluginFromConfig", () => {
   it.each([
     {
       name: "removes channel config for installed extension plugin",
-      config: createPluginConfig({
-        entries: {
-          timbot: { enabled: true },
-        },
-        installs: {
-          timbot: createNpmInstallRecord("timbot"),
-        },
-        channels: {
-          timbot: { sdkAppId: "123", secretKey: "abc" },
-          telegram: { enabled: true },
-        },
-      }),
       pluginId: "timbot",
-      expectedChannels: {
-        telegram: { enabled: true },
-      },
+      installed: true,
+      channels: { timbot: { sdkAppId: "123", secretKey: "abc" }, telegram: { enabled: true } },
+      expectedChannels: { telegram: { enabled: true } },
       expectedChanged: true,
     },
     {
       name: "does not remove channel config for built-in channel without install record",
-      config: createPluginConfig({
-        entries: {
-          telegram: { enabled: true },
-        },
-        channels: {
-          telegram: { enabled: true },
-          discord: { enabled: true },
-        },
-      }),
       pluginId: "telegram",
-      expectedChannels: {
-        telegram: { enabled: true },
-        discord: { enabled: true },
-      },
+      installed: false,
+      channels: { telegram: { enabled: true }, discord: { enabled: true } },
+      expectedChannels: { telegram: { enabled: true }, discord: { enabled: true } },
       expectedChanged: false,
     },
     {
       name: "cleans up channels object when removing the only channel config",
-      config: createPluginConfig({
-        entries: {
-          timbot: { enabled: true },
-        },
-        installs: {
-          timbot: createNpmInstallRecord("timbot"),
-        },
-        channels: {
-          timbot: { sdkAppId: "123" },
-        },
-      }),
       pluginId: "timbot",
+      installed: true,
+      channels: { timbot: { sdkAppId: "123" } },
       expectedChannels: undefined,
       expectedChanged: true,
     },
     {
       name: "does not set channelConfig action when no channel config exists",
-      config: createPluginConfig({
-        entries: createSinglePluginEntries(),
-        installs: {
-          "my-plugin": createNpmInstallRecord(),
-        },
-      }),
       pluginId: "my-plugin",
+      installed: true,
+      channels: undefined,
       expectedChannels: undefined,
       expectedChanged: false,
     },
     {
       name: "does not remove channel config when plugin has no install record",
-      config: createPluginConfig({
-        entries: {
-          discord: { enabled: true },
-        },
-        channels: {
-          discord: { enabled: true, token: "abc" },
-        },
-      }),
       pluginId: "discord",
-      expectedChannels: {
-        discord: {
-          enabled: true,
-          token: "abc",
-        },
-      },
+      installed: false,
+      channels: { discord: { enabled: true, token: "abc" } },
+      expectedChannels: { discord: { enabled: true, token: "abc" } },
       expectedChanged: false,
     },
     {
       name: "removes channel config using explicit channelIds when pluginId differs",
-      config: createPluginConfig({
-        entries: {
-          "timbot-plugin": { enabled: true },
-        },
-        installs: {
-          "timbot-plugin": createNpmInstallRecord("timbot-plugin"),
-        },
-        channels: {
-          timbot: { sdkAppId: "123" },
-          "timbot-v2": { sdkAppId: "456" },
-          telegram: { enabled: true },
-        },
-      }),
       pluginId: "timbot-plugin",
-      options: {
-        channelIds: ["timbot", "timbot-v2"],
-      },
-      expectedChannels: {
+      installed: true,
+      channels: {
+        timbot: { sdkAppId: "123" },
+        "timbot-v2": { sdkAppId: "456" },
         telegram: { enabled: true },
       },
+      options: { channelIds: ["timbot", "timbot-v2"] },
+      expectedChannels: { telegram: { enabled: true } },
       expectedChanged: true,
     },
     {
       name: "preserves shared channel keys (defaults, modelByChannel)",
-      config: createPluginConfig({
-        entries: {
-          timbot: { enabled: true },
-        },
-        installs: {
-          timbot: createNpmInstallRecord("timbot"),
-        },
-        channels: {
-          defaults: { groupPolicy: "opt-in" },
-          modelByChannel: { timbot: "gpt-3.5" } as Record<string, string>,
-          timbot: { sdkAppId: "123" },
-        } as unknown as OpenClawConfig["channels"],
-      }),
       pluginId: "timbot",
+      installed: true,
+      channels: {
+        defaults: { groupPolicy: "opt-in" },
+        modelByChannel: { timbot: "gpt-3.5" },
+        timbot: { sdkAppId: "123" },
+      } as unknown as OpenClawConfig["channels"],
       expectedChannels: {
         defaults: { groupPolicy: "opt-in" },
         modelByChannel: { timbot: "gpt-3.5" },
@@ -825,57 +734,39 @@ describe("removePluginFromConfig", () => {
     },
     {
       name: "does not remove shared keys even when passed as channelIds",
-      config: createPluginConfig({
-        entries: {
-          "bad-plugin": { enabled: true },
-        },
-        installs: {
-          "bad-plugin": createNpmInstallRecord("bad-plugin"),
-        },
-        channels: {
-          defaults: { groupPolicy: "opt-in" },
-        } as unknown as OpenClawConfig["channels"],
-      }),
       pluginId: "bad-plugin",
-      options: {
-        channelIds: ["defaults"],
-      },
-      expectedChannels: {
-        defaults: { groupPolicy: "opt-in" },
-      },
+      installed: true,
+      channels: { defaults: { groupPolicy: "opt-in" } } as unknown as OpenClawConfig["channels"],
+      options: { channelIds: ["defaults"] },
+      expectedChannels: { defaults: { groupPolicy: "opt-in" } },
       expectedChanged: false,
     },
     {
       name: "skips channel cleanup when channelIds is empty array (non-channel plugin)",
-      config: createPluginConfig({
-        entries: {
-          telegram: { enabled: true },
-        },
-        installs: {
-          telegram: createNpmInstallRecord("telegram"),
-        },
-        channels: {
-          telegram: { enabled: true },
-        },
-      }),
       pluginId: "telegram",
-      options: {
-        channelIds: [],
-      },
-      expectedChannels: {
-        telegram: { enabled: true },
-      },
+      installed: true,
+      channels: { telegram: { enabled: true } },
+      options: { channelIds: [] },
+      expectedChannels: { telegram: { enabled: true } },
       expectedChanged: false,
     },
-  ] as const)("$name", ({ config, pluginId, expectedChannels, expectedChanged, options }) => {
-    expectChannelCleanupResult({
-      config,
-      pluginId,
-      expectedChannels,
-      expectedChanged,
-      options,
-    });
-  });
+  ] as const)(
+    "$name",
+    ({ pluginId, installed, channels, expectedChannels, expectedChanged, options }) => {
+      const config = createPluginConfig({
+        entries: createSinglePluginEntries(pluginId),
+        installs: installed ? { [pluginId]: createNpmInstallRecord(pluginId) } : undefined,
+        channels,
+      });
+      const { config: result, actions } = removePluginFromConfig(
+        config,
+        pluginId,
+        options ? { channelIds: [...options.channelIds] } : undefined,
+      );
+      expect(result.channels).toEqual(expectedChannels);
+      expect(actions.channelConfig).toBe(expectedChanged);
+    },
+  );
 });
 
 describe("uninstallPlugin", () => {
@@ -1986,50 +1877,28 @@ describe("uninstallPlugin", () => {
     }
   });
 
-  it("never deletes arbitrary configured install paths", async () => {
-    const outsideDir = path.join(tempDir, "outside-dir");
-    const extensionsDir = path.join(tempDir, "extensions");
-    await fs.mkdir(outsideDir, { recursive: true });
-    await fs.writeFile(path.join(outsideDir, "index.js"), "// keep me");
-
-    const config = createSingleNpmInstallConfig(outsideDir);
-
-    const result = await uninstallPlugin({
-      config,
-      pluginId: "my-plugin",
-      deleteFiles: true,
-      extensionsDir,
-    });
-
-    expectSuccessfulUninstallActions(result, {
-      directory: false,
-    });
-    await fs.access(outsideDir);
-  });
-
-  it("deletes tracked managed install paths even when they are not the default target", async () => {
-    const extensionsDir = path.join(tempDir, "extensions");
-    const managedDir = path.join(extensionsDir, "archive-installs", "my-plugin");
-    await fs.mkdir(managedDir, { recursive: true });
-    await fs.writeFile(path.join(managedDir, "index.js"), "// plugin");
-
-    const result = await uninstallPlugin({
-      config: createSingleNpmInstallConfig(managedDir),
-      pluginId: "my-plugin",
-      deleteFiles: true,
-      extensionsDir,
-    });
-
-    expectSuccessfulUninstallActions(result, {
-      directory: true,
-    });
-    await expectPathAccessState(managedDir, "missing");
-  });
-
-  it("deletes tracked installs from a recorded managed extensions root", async () => {
-    const currentExtensionsDir = path.join(tempDir, "current", "extensions");
-    const recordedExtensionsDir = path.join(tempDir, "recorded", "extensions");
-    const installPath = resolvePluginInstallDir("my-plugin", recordedExtensionsDir);
+  it.each([
+    {
+      name: "never deletes arbitrary configured install paths",
+      installParts: ["outside-dir"],
+      currentParts: ["extensions"],
+      removed: false,
+    },
+    {
+      name: "deletes tracked managed install paths even when they are not the default target",
+      installParts: ["extensions", "archive-installs", "my-plugin"],
+      currentParts: ["extensions"],
+      removed: true,
+    },
+    {
+      name: "deletes tracked installs from a recorded managed extensions root",
+      installParts: ["recorded", "extensions", "my-plugin"],
+      currentParts: ["current", "extensions"],
+      removed: true,
+    },
+  ])("$name", async ({ installParts, currentParts, removed }) => {
+    const installPath = path.join(tempDir, ...installParts);
+    const extensionsDir = path.join(tempDir, ...currentParts);
     await fs.mkdir(installPath, { recursive: true });
     await fs.writeFile(path.join(installPath, "index.js"), "// plugin");
 
@@ -2037,13 +1906,11 @@ describe("uninstallPlugin", () => {
       config: createSingleNpmInstallConfig(installPath),
       pluginId: "my-plugin",
       deleteFiles: true,
-      extensionsDir: currentExtensionsDir,
+      extensionsDir,
     });
 
-    expectSuccessfulUninstallActions(result, {
-      directory: true,
-    });
-    await expectPathAccessState(installPath, "missing");
+    expectSuccessfulUninstallActions(result, { directory: removed });
+    await expectPathAccessState(installPath, removed ? "missing" : "exists");
   });
 
   it("deletes managed ClawHub install directories", async () => {
@@ -2089,59 +1956,43 @@ describe("uninstallPlugin", () => {
     await expectPathAccessState(installPath, "missing");
   });
 
-  it("deletes managed git install repos outside the extensions directory", async () => {
+  it.each([
+    {
+      name: "deletes managed git install repos outside the extensions directory",
+      keepSibling: false,
+    },
+    {
+      name: "keeps non-empty managed git install parents after deleting the repo",
+      keepSibling: true,
+    },
+  ])("$name", async ({ keepSibling }) => {
     const stateDir = path.join(tempDir, "state");
     const extensionsDir = path.join(stateDir, "extensions");
     const installParent = path.join(stateDir, "git", "git-abc123");
     const installPath = path.join(installParent, "repo");
+    const siblingPath = path.join(installParent, "keep.txt");
     await fs.mkdir(installPath, { recursive: true });
     await fs.writeFile(path.join(installPath, "index.js"), "// git plugin");
+    if (keepSibling) {
+      await fs.writeFile(siblingPath, "keep");
+    }
 
     const result = await uninstallPlugin({
       config: createPluginConfig({
         entries: createSinglePluginEntries(),
-        installs: {
-          "my-plugin": createGitInstallRecord("my-plugin", installPath),
-        },
+        installs: { "my-plugin": createGitInstallRecord("my-plugin", installPath) },
       }),
       pluginId: "my-plugin",
       deleteFiles: true,
       extensionsDir,
     });
 
-    expectSuccessfulUninstallActions(result, {
-      directory: true,
-    });
+    expectSuccessfulUninstallActions(result, { directory: true });
     await expectPathAccessState(installPath, "missing");
-    await expectPathAccessState(installParent, "missing");
-  });
-
-  it("keeps non-empty managed git install parents after deleting the repo", async () => {
-    const stateDir = path.join(tempDir, "state");
-    const extensionsDir = path.join(stateDir, "extensions");
-    const installParent = path.join(stateDir, "git", "git-abc123");
-    const installPath = path.join(installParent, "repo");
-    await fs.mkdir(installPath, { recursive: true });
-    await fs.writeFile(path.join(installPath, "index.js"), "// git plugin");
-    await fs.writeFile(path.join(installParent, "keep.txt"), "keep");
-
-    const result = await uninstallPlugin({
-      config: createPluginConfig({
-        entries: createSinglePluginEntries(),
-        installs: {
-          "my-plugin": createGitInstallRecord("my-plugin", installPath),
-        },
-      }),
-      pluginId: "my-plugin",
-      deleteFiles: true,
-      extensionsDir,
-    });
-
-    expectSuccessfulUninstallActions(result, {
-      directory: true,
-    });
-    await expectPathAccessState(installPath, "missing");
-    await fs.access(path.join(installParent, "keep.txt"));
+    await expectPathAccessState(
+      keepSibling ? siblingPath : installParent,
+      keepSibling ? "exists" : "missing",
+    );
   });
 
   it("does not delete symlinked git install targets that resolve outside the managed git root", async () => {

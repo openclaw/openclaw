@@ -111,7 +111,7 @@ describe("transcripts CLI", () => {
     // Keep real note emission and guard suppression; state migration is outside this output test.
     vi.spyOn(startupConfigPreflight, "runStartupConfigPreflight").mockImplementation(async () => {
       await noteStaleUpdateRuns();
-      return { snapshot, baseConfig: snapshot.config };
+      return { snapshot, baseConfig: snapshot.sourceConfig };
     });
     vi.stubEnv("OPENCLAW_SUPPRESS_NOTES", undefined);
     vi.stubEnv("NODE_NO_WARNINGS", process.env.NODE_NO_WARNINGS);

@@ -94,12 +94,12 @@ async function reconnect(gateway: Gateway) {
 }
 async function expectReconciled(page: Page, texts: string[]) {
   expect(await assistantTexts(page)).toEqual(texts);
-  expect(await page.locator(".chat-duplicate-count").count()).toBe(0);
   expect(await page.locator(".chat-bubble.streaming").count()).toBe(0);
 }
 async function openRun(runId: string, options: Parameters<typeof installMockGateway>[1]) {
   const page = await newChatPage(suite);
   const gateway = await installMockGateway(page, {
+    subscriptionInitialHistory: false,
     historyMessages: [],
     inFlightRun: activeRun(runId),
     sessionInfo: activeSession(runId),

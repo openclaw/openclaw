@@ -7,7 +7,6 @@ import {
   isRpcSourceExecuting,
 } from "../../../sessions/session-controller.rpc-sources.js";
 import type { AsyncWorkScope } from "../../../shared/async-work-scope.js";
-import { getPreparedModelRuntimeMocks } from "../../prepared-model-runtime.test-harness.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
 
@@ -51,11 +50,9 @@ export function readBoundExecutionState(
       childRunId ? resolveSubagentSessionStatus(subagentRuns.get(childRunId)) : undefined,
       ["queued", "running", "done", "failed", "killed", "timeout"],
     ),
-    queuedLaunchPresent: collector?.queuedLaunch !== undefined,
     collectorCleanupPending: collector?.collectorLaunchCleanupPending === true,
     collectorKillPending: collector?.killIntent !== undefined,
     outcomeStatus: label(execution?.outcome?.status, ["ok", "error", "timeout"]),
     gatewayWarningCount: vi.mocked(context.logGateway.warn).mock.calls.length,
-    runtimeWarningCount: getPreparedModelRuntimeMocks().warn.mock.calls.length,
   };
 }

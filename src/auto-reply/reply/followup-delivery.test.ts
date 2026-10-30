@@ -644,6 +644,62 @@ describe("deliverFollowupDecision", () => {
     expect(laterDispatcher).not.toHaveBeenCalled();
   });
 
+  it.each([true, false])(
+    "uses the retained completion owner only for its channel (matching: %s)",
+    async (matching) => {
+      const source = Object.assign(
+        vi.fn(async () => {}),
+        {
+          ownsCompletion: (channel: string | undefined) => matching && channel === "discord",
+        },
+      );
+      const turn = createTurn();
+      turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: source };
+      deliveryState.routeReply.mockReset();
+      deliveryState.routeReply.mockResolvedValue({ ok: true, delivered: true });
+      deliveryState.followupRoute = { route: "origin" };
+      const payloads = [{ text: "task-correlated answer" }];
+      try {
+        const result = await deliverDecision({
+          turn,
+          defaults: createDefaults(vi.fn()),
+          decision: { kind: "deliver", payloads },
+          runId: "queued-run",
+        });
+        expect(result).toEqual({ kind: "completed", payloads: matching ? payloads : [] });
+        expect(deliveryState.routeReply).toHaveBeenCalledTimes(matching ? 0 : 1);
+        expect(source).not.toHaveBeenCalled(); // The runner publishes the one terminal batch.
+      } finally {
+        deliveryState.followupRoute = undefined;
+      }
+    },
+  );
+
+  it("keeps a silent source event's successor off every automatic route", async () => {
+    const dispatcher = vi.fn(async (_payload: ReplyPayload) => {});
+    const turn = createTurn();
+    turn.queued.run.sessionEventOrigin = { deliver: false };
+    deliveryState.routeReply.mockReset();
+    deliveryState.routeReply.mockResolvedValue({ ok: true, delivered: true });
+    deliveryState.followupRoute = { route: "origin" };
+    try {
+      for (const kind of ["block", "final"] as const) {
+        await expect(
+          deliverDecision({
+            turn,
+            kind,
+            defaults: createDefaults(dispatcher),
+            decision: { kind: "deliver", payloads: [{ text: "Goal progress" }] },
+          }),
+        ).resolves.toEqual({ kind: "completed", payloads: [] });
+      }
+      expect(deliveryState.routeReply).not.toHaveBeenCalled();
+      expect(dispatcher).not.toHaveBeenCalled();
+    } finally {
+      deliveryState.followupRoute = undefined;
+    }
+  });
+
   it("keeps dispatcher-only delivery out of a routable origin", async () => {
     const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
     deliveryState.followupRoute = { route: "dispatcher" };

@@ -186,8 +186,8 @@ describe("runConfigureWizard", () => {
     await expect(runConfigureWizard({ sections: ["workspace"] })).rejects.toThrow(
       "config path changed since last load",
     );
-    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledOnce();
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 

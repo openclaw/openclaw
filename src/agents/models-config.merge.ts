@@ -198,6 +198,7 @@ export function mergeProviderModels(
       maxTokensSource: _maxTokensSource,
       parameterCount: _parameterCount,
       family: _family,
+      inference: _inference,
       ...implicitMetadata
     } = implicitModel;
     return Object.assign(
@@ -216,6 +217,18 @@ export function mergeProviderModels(
       maxTokens === undefined ? {} : { maxTokens },
       maxTokensSource === undefined ? {} : { maxTokensSource },
       { compat },
+      {
+        // Another route withdraws a plain chat grant to unknown, as if discovery had not
+        // matched this row. Only a typed route keeps the veto so it never becomes legacy chat.
+        inference:
+          explicitModel.inference ??
+          (catalogRouteMatches
+            ? implicitModel.inference
+            : implicitModel.inference &&
+                (!implicitModel.inference.chat || implicitModel.inference.decision)
+              ? { chat: false }
+              : undefined),
+      },
       {
         contextWindows: contextSelection?.contextWindows,
         contextWindowDefault: contextSelection?.contextWindowDefault,

@@ -2,7 +2,9 @@ import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { withRestoredMocks } from "openclaw/plugin-sdk/test-node-mocks";
 import type { AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import { vi } from "vitest";
 import type { GoogleMeetCalendarLookupResult } from "../calendar.js";
@@ -14,7 +16,7 @@ import type {
   GoogleMeetLatestConferenceRecordResult,
 } from "../meet-api.js";
 import type { GoogleMeetRuntime } from "../runtime.js";
-import { MEET_URL } from "./fixtures.test-helpers.js";
+import { MEET_URL, meetBrowserState } from "./fixtures.test-helpers.js";
 
 export { captureStdout } from "./fixtures.test-helpers.js";
 
@@ -50,17 +52,7 @@ export function withPlatform<T>(
   const originalPlatform = process.platform;
   const restore = () => Object.defineProperty(process, "platform", { value: originalPlatform });
   Object.defineProperty(process, "platform", { value: platform });
-  try {
-    const result = fn();
-    if (result instanceof Promise) {
-      return result.finally(restore);
-    }
-    restore();
-    return result;
-  } catch (error) {
-    restore();
-    throw error;
-  }
+  return withRestoredMocks([{ mockRestore: restore }], fn);
 }
 
 export function setupGoogleMeetPlugin(
@@ -122,12 +114,7 @@ export function setupGoogleMeetPlugin(
           result: JSON.stringify({
             audioInputRouted: true,
             audioOutputRouted: true,
-            ...(options.browserActResult ?? {
-              inCall: true,
-              micMuted: false,
-              title: "Meet call",
-              url: MEET_URL,
-            }),
+            ...(options.browserActResult ?? meetBrowserState()),
           }),
         });
       }
@@ -168,18 +155,16 @@ export function setupGoogleMeetPlugin(
     config: options.fullConfig ?? {},
     pluginConfig: config,
     runtime: {
-      ...(stateEnv
-        ? {
-            state: {
-              openKeyedStore<T>(storeOptions: OpenKeyedStoreOptions) {
-                return createPluginStateKeyedStoreForTests<T>("google-meet", {
-                  ...storeOptions,
-                  env: stateEnv,
-                });
-              },
-            },
-          }
-        : {}),
+      ...(stateEnv && {
+        state: {
+          openKeyedStore<T>(storeOptions: OpenKeyedStoreOptions) {
+            return createPluginStateKeyedStoreForTests<T>("google-meet", {
+              ...storeOptions,
+              env: stateEnv,
+            });
+          },
+        },
+      }),
       gateway: {
         isAvailable: vi.fn(async () => options.gatewayAvailable === true),
         request: gatewayRequest,
@@ -200,10 +185,8 @@ export function setupGoogleMeetPlugin(
         throw new Error("expected legacy Google Meet registration");
       }
       const registered = typeof tool === "function" ? tool(options.toolContext ?? {}) : tool;
-      if (Array.isArray(registered)) {
-        tools.push(...registered);
-      } else if (registered) {
-        tools.push(registered);
+      if (registered) {
+        tools.push(...(Array.isArray(registered) ? registered : [registered]));
       }
     },
     registerCli: (_registrar: unknown, opts: unknown) => cliRegistrations.push(opts),
@@ -285,24 +268,18 @@ export async function invokeGoogleMeetGatewayMethodForTest(
     throw new Error(`gateway method not registered: ${method}`);
   }
   return await new Promise((resolve, reject) => {
-    const respond: GatewayRespond = (ok, payload, error) => {
-      if (ok) {
-        resolve(payload);
-        return;
-      }
-      reject(
-        Object.assign(new Error(error?.message ?? "gateway request failed"), {
-          details: error?.details ?? payload,
-        }),
-      );
-    };
     void Promise.resolve(
       handler({
-        params: (params && typeof params === "object" && !Array.isArray(params)
-          ? params
-          : {}) as Record<string, unknown>,
+        params: asNonArrayRecord(params),
         ...(pluginRuntimeOwnerId ? { client: { internal: { pluginRuntimeOwnerId } } } : {}),
-        respond,
+        respond: (ok, payload, error) =>
+          ok
+            ? resolve(payload)
+            : reject(
+                Object.assign(new Error(error?.message ?? "gateway request failed"), {
+                  details: error?.details ?? payload,
+                }),
+              ),
       }),
     ).catch(reject);
   });

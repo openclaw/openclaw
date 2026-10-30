@@ -4,6 +4,7 @@ import {
   CodexNativeProcessAuthority,
   getCodexNativeProcessClient,
 } from "./native-process-authority.js";
+import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import { createClientHarness } from "./test-support.js";
 
 const cleanups: (() => void)[] = [];
@@ -54,7 +55,7 @@ function source(sharedClient?: ReturnType<typeof createClientHarness>) {
   };
 }
 
-const command = { threadId: "thread", turnId: "turn", itemId: "command" };
+const command = { threadId: "thread-1", turnId: "turn-1", itemId: "command" };
 const assertActive = () => {};
 const metadata = { threadId: command.threadId, toolCallId: command.itemId };
 
@@ -113,24 +114,49 @@ describe("native process custody", () => {
     earlier.owner.release();
     earlierProcess.settle();
     later.admit("successor");
-    client.send({
-      method: "item/completed",
-      params: {
-        threadId: command.threadId,
-        turnId: command.turnId,
-        item: { id: command.itemId, type: "commandExecution" },
-      },
-    });
-    client.send({
-      method: "turn/completed",
-      params: {
-        threadId: command.threadId,
-        turn: { id: command.turnId, status: "completed", items: [] },
-      },
-    });
+    client.send(
+      itemNotification("item/completed", { id: command.itemId, type: "commandExecution" }),
+    );
+    client.send(turnCompleted({ id: command.turnId, status: "completed" }));
     const current = later.claim();
     expect(() => current.assertAdmission()).not.toThrow();
     current.settle();
+  });
+
+  it("settles each source's admissions only for the selected child turn and physical client", async () => {
+    const origin = source();
+    const laterSource = source(origin.client);
+    const otherClient = createClientHarness();
+    closes.push(() => otherClient.client.close());
+    const processes = [
+      [origin.client.client, "child", "selected"],
+      [origin.client.client, "child", "earlier"],
+      [origin.client.client, "sibling", "selected"],
+      [otherClient.client, "child", "selected"],
+      [origin.client.client, "child", "selected"],
+    ] as const;
+    const stopped = new Set<number>();
+    const claims = processes.map(([client, threadId, turnId], index) => {
+      const owner = index === 4 ? laterSource.owner : origin.owner;
+      owner.bindTurn(client, "parent", "parent-turn");
+      const itemId = `command-${index}`;
+      owner.admit(client, { threadId, turnId, itemId }, assertActive, "parent");
+      const claim = getCodexNativeProcessClient(client).claim(
+        { threadId, toolCallId: itemId },
+        async () => {
+          stopped.add(index);
+        },
+      );
+      cleanups.push(() => claim.settle());
+      return claim;
+    });
+    await getCodexNativeProcessClient(origin.client.client).cancelTurn("child", "selected");
+    expect([...stopped]).toEqual([0, 4]);
+    expect(() => claims[0]!.assertAdmission()).toThrow("admission has ended");
+    expect(() => claims[4]!.assertAdmission()).toThrow("admission has ended");
+    for (const claim of claims.slice(1, 4)) {
+      expect(() => claim.assertAdmission()).not.toThrow();
+    }
   });
 
   it("settles confirmed background custody when Codex closes the thread", () => {

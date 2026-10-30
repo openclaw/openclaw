@@ -69,7 +69,10 @@ export function ChatToolOutput(props: Props) {
   function Output(view: { result: OutputResult }) {
     const card = () => view.result.card ?? props.content?.card;
     const text = () => card()?.outputText ?? "";
-    const displayText = () => (card() ? (formatToolOutput(card()!) ?? "") : "");
+    const displayText = createMemo(() => {
+      const current = card();
+      return current ? (formatToolOutput(current) ?? "") : "";
+    });
     return (
       <Show when={card()}>
         <section

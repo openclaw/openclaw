@@ -1,17 +1,15 @@
 import path from "node:path";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { assertSessionGoalOperationTime } from "./goals-operation-policy.js";
-import { SessionGoalOperationError } from "./goals-operations.js";
+import { SessionGoalOperationError } from "./goals-operations.types.js";
 import type {
   SessionGoalOperationLookup,
   SessionGoalOperationResult,
 } from "./goals-operations.types.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { prepareSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 

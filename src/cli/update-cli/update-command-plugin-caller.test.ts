@@ -25,6 +25,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import * as configPreparation from "./update-command-config.js";
 import {
   releaseUpdateCommandPreflightForHandoff,
@@ -120,14 +121,11 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
   const peerLink = path.join(peerPackageDir, "node_modules", "openclaw");
   if (scenario === "host-link-recovery") {
     await fs.mkdir(path.dirname(peerLink), { recursive: true });
-    await fs.writeFile(
-      path.join(peerPackageDir, "package.json"),
-      JSON.stringify({
-        name: "peer-plugin",
-        version: "1.0.0",
-        peerDependencies: { openclaw: "*" },
-      }),
-    );
+    await writeFixtureJson(path.join(peerPackageDir, "package.json"), {
+      name: "peer-plugin",
+      version: "1.0.0",
+      peerDependencies: { openclaw: "*" },
+    });
     await fs.symlink(state.root, peerLink, "junction");
   }
   const resolveInstallKind = updateCheck.resolveUpdateInstallKind;

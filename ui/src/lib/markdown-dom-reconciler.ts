@@ -97,7 +97,7 @@ function parseCanonical(
   html: MarkdownContent,
   prefix: string,
   incremental: boolean,
-  sessionTitles: boolean,
+  sessionTitleSelector: string | undefined,
 ): CanonicalNode[] {
   const template = document.createElement("template");
   const prepared = typeof html !== "string";
@@ -172,8 +172,9 @@ function parseCanonical(
       const opaque = Boolean(
         element &&
         ((!incremental && !hasMedia) ||
-          (sessionTitles && element.matches(SESSION_TITLE_TARGET_SELECTOR)) ||
+          (sessionTitleSelector && element.matches(sessionTitleSelector)) ||
           element.classList.contains("markdown-mermaid") ||
+          element.hasAttribute("data-code-highlight") ||
           element.localName.includes("-")),
       );
       return {
@@ -279,6 +280,7 @@ export class MarkdownDomReconciler {
   constructor(
     container: ParentNode,
     private readonly registerSessionTitle?: MarkdownSessionTitleRegistration,
+    private readonly sessionTitleSelector = SESSION_TITLE_TARGET_SELECTOR,
   ) {
     this.range = createRange(container);
   }
@@ -397,7 +399,7 @@ export class MarkdownDomReconciler {
             completed,
             media?.prefix ?? "",
             previous.incremental,
-            Boolean(this.registerSessionTitle),
+            this.registerSessionTitle ? this.sessionTitleSelector : undefined,
           );
           const remaining = previous.children.splice(completedNodes.length);
           if (remaining.length) {
@@ -496,7 +498,7 @@ export class MarkdownDomReconciler {
           fragment.html,
           prefix,
           fragment.incremental,
-          Boolean(this.registerSessionTitle),
+          this.registerSessionTitle ? this.sessionTitleSelector : undefined,
         );
         fragment.prefix = prefix;
         fragment.parsedHtml = fragment.html;
@@ -619,7 +621,7 @@ export class MarkdownDomReconciler {
         }
         const registerSessionTitle = this.registerSessionTitle;
         const targets = registerSessionTitle
-          ? [...template.content.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)]
+          ? [...template.content.querySelectorAll<HTMLElement>(this.sessionTitleSelector)]
           : [];
         node.end.before(template.content);
         if (registerSessionTitle && targets.length) {

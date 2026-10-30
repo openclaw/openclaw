@@ -24,6 +24,7 @@ import type { ReplyOperation } from "../../sessions/session-controller.contracts
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
+import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
 import { createEnteredGate } from "../entered-gate.test-support.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
@@ -209,12 +210,6 @@ async function nativeCompactionArgs(
 
 function expectCall(mock: Mock, fields: Record<string, unknown>, ...rest: unknown[]) {
   expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields), ...rest);
-}
-
-function expectNoCalls(...mocks: Mock[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 const abortedCompaction = { ok: false, compacted: false, reason: "compaction aborted" };
@@ -1218,17 +1213,17 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       config,
     });
     expect(result.ok, JSON.stringify(result)).toBe(true);
-    const expectedSelection = { provider: "anthropic", runtime: "codex" };
-    expect(plannedCompactionPluginSelections(config)).toContainEqual(
-      expect.objectContaining({ ...expectedSelection, modelId: "claude-fallback" }),
-    );
+    const fallback = { provider: "anthropic", modelId: "claude-fallback", agentId: "main" };
+    expect(plannedCompactionPluginSelections(config)).toContainEqual(fallback);
     const admittedConfig = defaultsConfig({
       ...config.agents?.defaults,
       compaction: { model: "anthropic/reloaded-summary" },
     });
-    expect(plannedCompactionPluginSelections(admittedConfig)).toContainEqual(
-      expect.objectContaining({ ...expectedSelection, modelId: "reloaded-summary" }),
-    );
+    expect(plannedCompactionPluginSelections(admittedConfig)).toContainEqual({
+      ...fallback,
+      modelId: "reloaded-summary",
+      runtime: "codex",
+    });
   });
 
   it("revalidates immutable Ultra for each fallback", async () => {

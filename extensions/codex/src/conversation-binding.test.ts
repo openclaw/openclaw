@@ -242,19 +242,15 @@ function turnEnded(status: string, error: unknown = null) {
   };
 }
 
-function clientListeners(
-  handlers?: Set<(notification: unknown) => unknown>,
-  onCleanup?: (kind: string) => void,
-) {
+function clientListeners(handlers?: Set<(notification: unknown) => unknown>) {
   return {
     addNotificationHandler: vi.fn((handler: (notification: unknown) => unknown) => {
       handlers?.add(handler);
       return () => {
         handlers?.delete(handler);
-        onCleanup?.("notification cleanup");
       };
     }),
-    addRequestHandler: vi.fn(() => () => onCleanup?.("request cleanup")),
+    addRequestHandler: vi.fn(() => () => undefined),
     addCloseHandler: vi.fn(() => () => undefined),
   };
 }
@@ -474,7 +470,17 @@ function claimConversation(
   });
 }
 
-function prepareBinding(params: {
+function prepareBinding({
+  sessionFile,
+  workspaceDir = tempDir,
+  sessionKey,
+  bindingStore = bindings,
+  config,
+  pluginConfig,
+  agentId,
+  agentDir,
+  ...start
+}: {
   bindingStore?: Parameters<typeof prepareCodexConversationBinding>[0]["bindingStore"];
   config?: Parameters<typeof prepareCodexConversationBinding>[0]["config"];
   pluginConfig?: unknown;
@@ -488,17 +494,6 @@ function prepareBinding(params: {
   modelProvider?: string;
   authProfileId?: string;
 }) {
-  const {
-    sessionFile,
-    workspaceDir = tempDir,
-    sessionKey,
-    bindingStore = bindings,
-    config,
-    pluginConfig,
-    agentId,
-    agentDir,
-    ...start
-  } = params;
   return prepareCodexConversationBinding({
     bindingStore,
     config,
@@ -549,6 +544,13 @@ function exposeRetainedClient(client: CodexAppServerClient) {
   initializeClient(client, { agentDir: tempDir });
   acquireClient.mockResolvedValue(client);
   retainClient.mockReturnValue({ client, release: vi.fn() });
+}
+
+function retireWithSiblingLeases() {
+  sharedClientMocks.clearSharedCodexAppServerClientIfCurrentAndUnclaimed
+    .mockReturnValueOnce({ found: true, closed: false })
+    .mockReturnValue({ found: false, closed: false });
+  retireClient.mockReturnValueOnce({ activeLeases: 2, closed: false }).mockReturnValue(undefined);
 }
 
 function expectMethods(
@@ -819,12 +821,10 @@ it("does not recreate a detached conversation queued behind retirement", async (
   await ownerCaptured.promise;
   retirementReady.resolve();
   await retirement;
-  await expect(queued).resolves.toEqual({
-    handled: true,
-    reply: {
-      text: "This Codex conversation was detached or changed before its message could run.",
-    },
-  });
+  await expectReply(
+    queued,
+    "This Codex conversation was detached or changed before its message could run.",
+  );
   expect(acquireClient).not.toHaveBeenCalled();
   expect(bindings.read(identity)).toBeUndefined();
 });
@@ -838,46 +838,39 @@ it.each([true, false])(
     const destinationSessionKey = ephemeral
       ? "agent:main:telegram:ordinary-destination"
       : "agent:main:dashboard:incognito-destination";
-    const sessionFile = path.join(tempDir, "mixed-source-lifecycle.jsonl");
-    const bindingId = "binding-mixed-source-lifecycle";
+    const bindingId = "binding-source-lifecycle";
     const storePath = path.join(tempDir, "mixed-source-lifecycle.sqlite");
+    const source = { ...sourceSession("source"), sessionKey: sourceSessionKey, storePath };
     try {
-      await seedSession(
-        { agentId: "main", sessionKey: sourceSessionKey, sessionId: "source-mixed-lifecycle" },
-        storePath,
-      );
-      const threadId = "thread-mixed-source-lifecycle";
+      await seedSession(source, storePath);
+      const threadId = "thread-1";
       const { client, operations } = replyingClient(
         threadId,
-        "turn-mixed-source-lifecycle",
+        "turn-1",
         "Bound reply",
-        "client-mixed-source-lifecycle",
+        "test-client",
         {
           "thread/start": () => threadResult(tempDir, threadId),
           "thread/unsubscribe": () => ({}),
         },
       );
       exposeRetainedClient(client);
-      const { event, ctx } = boundConversationClaim(sessionFile, destinationSessionKey);
       const data = conversationData(bindingId, {
-        source: {
-          agentId: "main",
-          sessionId: "source-mixed-lifecycle",
-          threadId: "thread-source-mixed-lifecycle",
-          sessionKey: sourceSessionKey,
-          storePath,
-        },
-        start: { id: "start-mixed-source-lifecycle" },
+        source,
+        start: { id: "start-source-lifecycle" },
       });
-      ctx.pluginBinding.data = data;
-
-      const run = () =>
-        claimConversation(event, ctx, {
-          config: { session: { store: path.join(tempDir, "unrelated-session.sqlite") } },
-        });
       const sql = ephemeral ? observeHostDataSql() : undefined;
       try {
-        await expectReply(run(), "Bound reply");
+        await expectReply(
+          claimData(
+            data,
+            {
+              config: { session: { store: path.join(tempDir, "unrelated-session.sqlite") } },
+            },
+            destinationSessionKey,
+          ),
+          "Bound reply",
+        );
         if (sql) {
           expect(sql.queries).toEqual([]);
         }
@@ -1320,12 +1313,7 @@ it("refuses legacy custom-provider bindings before connecting", async () => {
 
 it("retires an already-evicted conversation without disturbing its live client siblings", async () => {
   const identity = { kind: "conversation" as const, bindingId: "binding-evicted" };
-  const client = {
-    request: vi.fn(async () => ({})),
-    addCloseHandler: vi.fn(),
-    addNotificationHandler: vi.fn(),
-    addRequestHandler: vi.fn(),
-  } as unknown as CodexAppServerClient;
+  const { client } = conversationClient({ "thread/unsubscribe": {} });
   initializeClient(client, { agentDir: tempDir });
   const releaseEvicted = vi.fn(async (_threadId: string) => undefined);
   await retainThread(client, "thread-evicted", releaseEvicted);
@@ -1508,14 +1496,12 @@ it("blocks bound Codex CLI node turns when the current OpenClaw session is sandb
     { config, resumeCodexCliSessionOnNode },
   );
 
-  expect(result).toEqual({
-    handled: true,
-    reply: {
-      text: expect.stringContaining(
-        "Codex-native Codex CLI node conversation binding is unavailable because OpenClaw sandboxing is active for this session.",
-      ),
-    },
-  });
+  await expectReply(
+    result,
+    expect.stringContaining(
+      "Codex-native Codex CLI node conversation binding is unavailable because OpenClaw sandboxing is active for this session.",
+    ),
+  );
   expect(resumeCodexCliSessionOnNode).not.toHaveBeenCalled();
 });
 
@@ -1659,16 +1645,16 @@ it("moves session history while clamping rootless inherited cwd to the agent wor
   await seedSession(source, storePath, { permissionMode: "workspace" });
   await seedSession(sourceSession("destination-session"), storePath);
   codexRequirementsTomlMock.mockReturnValue(WORKSPACE_REQUIREMENTS);
-  await appendSessionTranscriptMessageByIdentity({
-    ...source,
-    storePath,
-    message: { role: "user", content: "Earlier question", timestamp: 1 },
-  });
-  await appendSessionTranscriptMessageByIdentity({
-    ...source,
-    storePath,
-    message: { role: "assistant", content: "Earlier answer", timestamp: 2 },
-  });
+  for (const [role, content, timestamp] of [
+    ["user", "Earlier question", 1],
+    ["assistant", "Earlier answer", 2],
+  ] as const) {
+    await appendSessionTranscriptMessageByIdentity({
+      ...source,
+      storePath,
+      message: { role, content, timestamp },
+    });
+  }
   const identity = sourceIdentity(source);
   await bindings.mutate(identity, {
     kind: "set",
@@ -1933,10 +1919,7 @@ it.each([
   const client = { request, closeAndWait, getInstanceId: () => "reconnected-client" };
   acquireClient.mockResolvedValue(client);
   if (retired) {
-    sharedClientMocks.clearSharedCodexAppServerClientIfCurrentAndUnclaimed
-      .mockReturnValueOnce({ found: true, closed: false })
-      .mockReturnValue({ found: false, closed: false });
-    retireClient.mockReturnValueOnce({ activeLeases: 2, closed: false }).mockReturnValue(undefined);
+    retireWithSiblingLeases();
   }
   await expectReply(
     runBoundClaim(sessionFile, {}, "agent:main:dashboard:incognito-reconnect"),
@@ -2004,19 +1987,13 @@ it("interrupts an indeterminate incognito native turn before cleanup", async () 
     clientId: harness.client.getInstanceId(),
   });
   acquireClient.mockResolvedValue(harness.client);
-  const waitForRequest = async (method: string) =>
-    await vi.waitFor(
-      () => {
-        const request = harness.writes
-          .map((write) => JSON.parse(write) as { id: number; method: string; params: unknown })
-          .find((message) => message.method === method);
-        if (!request) {
-          throw new Error(`Codex conversation harness did not write ${method}`);
-        }
-        return request;
-      },
-      { interval: 1, timeout: 5_000 },
-    );
+  const readRequest = async (
+    index: number,
+  ): Promise<{
+    id: number;
+    method: string;
+    params: unknown;
+  }> => JSON.parse(await harness.waitForWrite(index));
   const result = runBoundClaim(
     sessionFile,
     {
@@ -2025,12 +2002,12 @@ it("interrupts an indeterminate incognito native turn before cleanup", async () 
     sessionKey,
   );
   try {
-    const turnStart = await waitForRequest("turn/start");
-    const interrupt = await waitForRequest("turn/interrupt");
+    const turnStart = await readRequest(0);
+    const interrupt = await readRequest(1);
     expect(interrupt.params).toEqual({ threadId: "thread-1", turnId: "" });
     harness.send({ id: turnStart.id, result: { turn: { id: "turn-1" } } });
     harness.send({ id: interrupt.id, result: {} });
-    const unsubscribe = await waitForRequest("thread/unsubscribe");
+    const unsubscribe = await readRequest(2);
     harness.send({ id: unsubscribe.id, result: {} });
 
     await expectReply(result, "Codex app-server turn failed: turn/start timed out");
@@ -2060,49 +2037,45 @@ it.each([
       const sessionFile = await boundSession();
       const identity = bindingIdentity(sessionFile);
       const events: string[] = [];
-      const handlers = new Set<(notification: unknown) => void>();
       const confirmed = outcome === "confirmed";
       const closeAndWait = vi.fn(async () => true);
-      const request = vi.fn(async (method: string) => {
-        if (method === "turn/start") {
-          return { turn: { id: "turn-1" } };
-        }
-        if (method === "thread/unsubscribe" && confirmed) {
-          events.push("unsubscribe");
-          return {};
-        }
-        if (method !== "turn/interrupt") {
-          throw new Error(`unexpected method: ${method}`);
-        }
-        events.push("interrupt");
-        expect(activeTurn(identity)).toMatchObject({ threadId: "thread-1", turnId: "turn-1" });
-        if (outcome === "failed") {
-          throw new Error("turn interrupt could not be confirmed");
-        }
-        if (confirmed) {
-          queueMicrotask(() => {
-            events.push("turn completed");
-            expect(activeTurn(identity)).toMatchObject({ threadId: "thread-1", turnId: "turn-1" });
-            for (const handler of handlers) {
-              handler(turnEnded("interrupted"));
-            }
-          });
-        }
-        return {};
-      });
-      const client = {
+      const {
+        client: baseClient,
         request,
-        ...(!confirmed ? { closeAndWait } : {}),
-        ...clientListeners(handlers, (event) => events.push(event)),
-      };
+        notify,
+      } = conversationClient({
+        "turn/start": { turn: { id: "turn-1" } },
+        ...(confirmed
+          ? {
+              "thread/unsubscribe": () => {
+                events.push("unsubscribe");
+                return {};
+              },
+            }
+          : {}),
+        "turn/interrupt": () => {
+          events.push("interrupt");
+          expect(activeTurn(identity)).toMatchObject({ threadId: "thread-1", turnId: "turn-1" });
+          if (outcome === "failed") {
+            throw new Error("turn interrupt could not be confirmed");
+          }
+          if (confirmed) {
+            queueMicrotask(() => {
+              events.push("turn completed");
+              expect(activeTurn(identity)).toMatchObject({
+                threadId: "thread-1",
+                turnId: "turn-1",
+              });
+              notify(turnEnded("interrupted"));
+            });
+          }
+          return {};
+        },
+      });
+      const client = Object.assign(baseClient, !confirmed ? { closeAndWait } : {});
       acquireClient.mockResolvedValue(client);
       if (!confirmed) {
-        sharedClientMocks.clearSharedCodexAppServerClientIfCurrentAndUnclaimed
-          .mockReturnValueOnce({ found: true, closed: false })
-          .mockReturnValue({ found: false, closed: false });
-        retireClient
-          .mockReturnValueOnce({ activeLeases: 2, closed: false })
-          .mockReturnValue(undefined);
+        retireWithSiblingLeases();
       }
       const result = runBoundClaim(sessionFile, {}, sessionKey);
       await vi.advanceTimersByTimeAsync(0);

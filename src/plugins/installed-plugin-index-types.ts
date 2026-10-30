@@ -5,7 +5,7 @@ import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.types.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.types.js";
 import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
-import type { PluginManifestRecord } from "./manifest-registry.types.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.types.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { OpenClawPackageBuild, PluginPackageChannel } from "./package-manifest.types.js";
 import type { PluginSourceAdmissionReceipt } from "./plugin-source-admission.types.js";
@@ -140,6 +140,7 @@ export type InstalledPluginIndexFacts = {
   fingerprint?: string;
   scopeLookup?: InstalledPluginIndexScopeLookup;
   installRecords?: Record<string, PluginInstallRecord>;
+  idNormalizers?: WeakMap<PluginManifestRegistry, (pluginId: string) => string>;
 };
 
 export type LoadInstalledPluginIndexParams = {

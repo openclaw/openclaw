@@ -1,6 +1,7 @@
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { patchSettings } from "../../app/settings.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
@@ -224,7 +225,6 @@ export class NewSessionPageOwner {
           context.theme,
           context.agents,
           context.agentIdentity,
-          context.sessions,
           context.placementStartup,
           context.runtimeConfig,
           context.config,
@@ -417,6 +417,8 @@ export class NewSessionPageOwner {
       get submitting() {
         return submission.submitting;
       },
+      chatMessageMaxWidth: preferences?.chatMessageMaxWidth,
+      onComposerWidthChange: (value) => patchSettings({ chatMessageMaxWidth: value }),
 
       get messageLocked() {
         return Boolean(submission.pendingPlacement.sessionKey);

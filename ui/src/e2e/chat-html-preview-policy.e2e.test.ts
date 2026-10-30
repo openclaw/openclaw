@@ -85,7 +85,7 @@ suite.define(() => {
               fulfillWithControlUiCsp(route, "Content-Security-Policy"),
             );
             await page.goto(suite.server.baseUrl + "chat");
-            await gateway.waitForRequest("chat.startup");
+            await gateway.waitForRequest("sessions.messages.subscribe");
             const preview = page.locator("openclaw-chat-html-preview");
             for (const [index, mode] of (["strict", "scripts", "strict"] as const).entries()) {
               const rejection = page.waitForEvent("pageerror", {

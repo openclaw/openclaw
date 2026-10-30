@@ -1,5 +1,5 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { getRuntimeConfig } from "../../config/io.js";
+import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import * as events from "../../infra/system-events.js";
@@ -15,7 +15,7 @@ function resolveSystemEventSessionKey(sessionKey: string, agentId?: string): str
   if (parseAgentSessionKey(sessionKey)) {
     return resolveSystemEventQueueKey(sessionKey, normalizedAgentId);
   }
-  const cfg = getRuntimeConfig();
+  const cfg = readRuntimeConfig();
   const owner = resolveSessionAgentId({ config: cfg, sessionKey, agentId: normalizedAgentId });
   return resolveSystemEventQueueKey(
     canonicalizeMainSessionAlias({ cfg, agentId: owner, sessionKey }),

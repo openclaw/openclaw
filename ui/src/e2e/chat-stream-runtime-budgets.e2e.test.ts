@@ -504,15 +504,16 @@ suite.define(() => {
   it("commits a streamed delta burst in frame-bound transcript batches", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["sessions.describe", "models.list"],
+        deferredMethods: ["models.list"],
+        heldMethods: ["sessions.describe"],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await settleInitialModelCatalog(page, gateway);
       const runId = await openStreamingTurn(page, gateway, "burst coalescing probe");
 
-      // Release the startup fact read after Send so it observes the running turn,
-      // then join its publication before measuring stream invalidations.
+      // Keep every startup fact read parked until Send, then release them together
+      // so the latest observation publishes the running turn before measurement.
       await gateway.waitForRequest("sessions.describe");
       await gateway.resolveDeferred("sessions.describe");
       const applicationHandle = await getControlUiContextHandle(page);
@@ -590,7 +591,7 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const runId = await openStreamingTurn(page, gateway, "tool flood probe");
 
       await probeDeferredToolProjection(page, runId);
@@ -641,7 +642,7 @@ suite.define(() => {
 
       const loadStartedAt = Date.now();
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await page
         .locator(".chat-thread-inner")
         .getByText("LONG-TAIL-SENTINEL")
@@ -681,7 +682,7 @@ suite.define(() => {
         deferredMethods: ["models.list"],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await page.locator(".chat-thread-inner").getByText("LONG-TAIL-SENTINEL").waitFor();
       await settleInitialModelCatalog(page, gateway);
 
@@ -752,7 +753,7 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page, context }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
 
       const runId = await openStreamingTurn(page, gateway, "idle quiescence probe");
       await gateway.emitChatFinal({ runId, text: "short finalized turn" });

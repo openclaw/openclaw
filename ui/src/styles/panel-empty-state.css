@@ -33,7 +33,7 @@ openclaw-panel-empty-state {
     width: 32px;
     height: 32px;
     margin-bottom: 18px;
-    color: var(--muted);
+    color: var(--icon-decorative, var(--muted));
 
     stroke-width: 1.5px;
   }

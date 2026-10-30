@@ -18,6 +18,7 @@ import * as updateGlobal from "../../infra/update-global.js";
 import * as processExec from "../../process/exec.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import { registerUpdateCli } from "../update-cli.js";
 import * as shared from "./shared.js";
@@ -48,10 +49,7 @@ const refusal = "global-install-foreign-destination";
 
 async function writePackage(root: string, version: string, label: string) {
   await fs.mkdir(root, { recursive: true });
-  await fs.writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version }),
-  );
+  await writeFixtureJson(path.join(root, "package.json"), { name: "openclaw", version });
   await fs.writeFile(entrypoint(root), `// ${label} deployment\n`);
 }
 

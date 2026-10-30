@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createMemo, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { makeStallingStream } from "../../../../../src/infra/http-body.test-support.js";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
 import { mediaTicketPayload } from "../../../test-helpers/control-ui-attachment-fixtures.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -428,15 +429,9 @@ describe("attachment sidebar source ownership", () => {
       if (failure === "chunk") {
         intersect = stubAttachmentIntersection();
         fetchMock.mockResolvedValue(
-          new Response(
-            new ReadableStream<Uint8Array>({
-              start(controller) {
-                controller.enqueue(new Uint8Array(256 * 1024 + 1));
-              },
-              cancel,
-            }),
-            { headers: { "Content-Type": "image/svg+xml" } },
-          ),
+          new Response(makeStallingStream([new Uint8Array(256 * 1024 + 1)], cancel), {
+            headers: { "Content-Type": "image/svg+xml" },
+          }),
         );
       } else if (failure === "timeout") {
         vi.useFakeTimers();
@@ -581,7 +576,8 @@ describe("attachment sidebar source ownership", () => {
     {
       code: "unsupported-format",
       label: "settings.toml",
-      reason: "Rejected by the local attachment allowlist. Send a supported file type.",
+      reason:
+        "This file type cannot be attached here. If it is saved in this session, download it from Files, or ask for a ZIP containing the original file.",
     },
     {
       code: "invalid-reference",

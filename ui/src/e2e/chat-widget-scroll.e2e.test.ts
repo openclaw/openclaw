@@ -32,10 +32,8 @@ async function swipe(
         time: performance.timeOrigin + performance.now(),
         offset: element.scrollTop,
       });
-    let finish!: () => void;
-    const done = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
+    const { promise: done, resolve } = Promise.withResolvers<void>();
+    const finish: () => void = resolve;
     element.addEventListener("scroll", record, { passive: true });
     element.addEventListener("scrollend", finish, { once: true });
     return {

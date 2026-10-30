@@ -9,17 +9,32 @@ const configuredBun = process.env.OPENCLAW_BUN_PATH?.trim();
 const bunCommand = configuredBun || "bun";
 const hasBun = spawnSync(bunCommand, ["--version"], { timeout: 10_000 }).status === 0;
 
+function runBundleFixture(
+  prefix: string,
+  source: (root: string) => string,
+  expectedOutput: string,
+): void {
+  const root = temporary.make(prefix);
+  const script = path.join(root, "bundle.mjs");
+  fs.writeFileSync(script, source(root));
+  const result = spawnSync(bunCommand, [script], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout.trim()).toBe(expectedOutput);
+}
+
 it.skipIf(!configuredBun && !hasBun)(
   "excludes orphan dynamic chunks while rejecting reachable unrendered module URLs",
   () => {
-    const root = temporary.make("standalone-bundle-reachability-");
-    const script = path.join(root, "bundle.mjs");
-    fs.writeFileSync(
-      script,
-      `import assert from "node:assert/strict";
+    runBundleFixture(
+      "standalone-bundle-reachability-",
+      (root) => `import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { bundleStandaloneModules, relinkStandaloneModules } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-bundle.mjs", import.meta.url).href)};
+import { bundleStandaloneModules, finalizeStandaloneModules } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-bundle.mjs", import.meta.url).href)};
 import { assertNoUnrenderedModuleUrls } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-imports.mjs", import.meta.url).href)};
 import { createStandaloneSourceParser } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-source-parser.mjs", import.meta.url).href)};
 const root = ${JSON.stringify(root)};
@@ -43,7 +58,7 @@ for (const mode of ["orphan", "reachable", "declared"]) {
     metafile: true,
   };
   const first = await bundleStandaloneModules(options, Bun.build);
-  const built = await relinkStandaloneModules(options, first, Bun.build, createStandaloneSourceParser());
+  const built = await finalizeStandaloneModules(options, first, Bun.build, createStandaloneSourceParser(), { sourceAot: true });
   assert.equal(built.success, true, String(built.logs));
   const check = async () => {
     for (const artifact of built.outputs) {
@@ -67,14 +82,8 @@ for (const mode of ["orphan", "reachable", "declared"]) {
 }
 console.log("orphan removed; reachable and declared markers rejected");
 `,
+      "orphan removed; reachable and declared markers rejected",
     );
-    const result = spawnSync(bunCommand, [script], {
-      cwd: root,
-      encoding: "utf8",
-      timeout: 10_000,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("orphan removed; reachable and declared markers rejected");
   },
 );
 
@@ -82,15 +91,13 @@ console.log("orphan removed; reachable and declared markers rejected");
 it.skipIf(!configuredBun && !hasBun)(
   "removes dead exports inside live chunks without removing namespace or declared exports",
   () => {
-    const root = temporary.make("standalone-bundle-exports-");
-    const script = path.join(root, "bundle.mjs");
-    fs.writeFileSync(
-      script,
-      `import assert from "node:assert/strict";
+    runBundleFixture(
+      "standalone-bundle-exports-",
+      (root) => `import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { bundleStandaloneModules, relinkStandaloneModules } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-bundle.mjs", import.meta.url).href)};
+import { bundleStandaloneModules, finalizeStandaloneModules } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-bundle.mjs", import.meta.url).href)};
 import { assertNoUnrenderedModuleUrls } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-imports.mjs", import.meta.url).href)};
 import { createStandaloneSourceParser } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-source-parser.mjs", import.meta.url).href)};
 for (const mode of ["dead", "namespace", "declared"]) {
@@ -109,7 +116,7 @@ for (const mode of ["dead", "namespace", "declared"]) {
   };
   const first = await bundleStandaloneModules(options, Bun.build);
   assert.ok((await Promise.all(first.outputs.map(output => output.text()))).some(text => text.includes("OPENCLAW_UNRENDERED_MODULE_URL:")));
-  const built = await relinkStandaloneModules(options, first, Bun.build, createStandaloneSourceParser());
+  const built = await finalizeStandaloneModules(options, first, Bun.build, createStandaloneSourceParser(), { sourceAot: true });
   assert.equal(built.metafile, first.metafile);
   const check = async () => {
     for (const output of built.outputs) assertNoUnrenderedModuleUrls(await output.text(), output.path);
@@ -130,14 +137,6 @@ for (const mode of ["dead", "namespace", "declared"]) {
 }
 console.log("dead shared export removed; live namespace and declared exports preserved");
 `,
-    );
-    const result = spawnSync(bunCommand, [script], {
-      cwd: root,
-      encoding: "utf8",
-      timeout: 10_000,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe(
       "dead shared export removed; live namespace and declared exports preserved",
     );
   },
@@ -146,14 +145,12 @@ console.log("dead shared export removed; live namespace and declared exports pre
 it.skipIf(!configuredBun && !hasBun)(
   "rebases file-loader URLs when shared code moves into nested entry roots",
   () => {
-    const root = temporary.make("standalone-bundle-assets-");
-    const script = path.join(root, "bundle.mjs");
-    fs.writeFileSync(
-      script,
-      `import assert from "node:assert/strict";
+    runBundleFixture(
+      "standalone-bundle-assets-",
+      (root) => `import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { bundleStandaloneModules, relinkStandaloneModules } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-bundle.mjs", import.meta.url).href)};
+import { bundleStandaloneModules, finalizeStandaloneModules } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-bundle.mjs", import.meta.url).href)};
 import { createStandaloneSourceParser } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-source-parser.mjs", import.meta.url).href)};
 const root = ${JSON.stringify(root)};
 const entries = [];
@@ -182,35 +179,28 @@ const read = files => files.slice(0, 2).map(file => {
   return result.stdout.toString().trim();
 });
 assert.deepEqual(read(first.entryOutputs), ["asset first", "asset second"]);
-const linked = await relinkStandaloneModules(options, first, Bun.build, createStandaloneSourceParser());
+const linked = await finalizeStandaloneModules(options, first, Bun.build, createStandaloneSourceParser(), { sourceAot: true });
 assert.equal(linked.success, true, String(linked.logs));
 assert.deepEqual(read(linked.entryOutputs), ["asset first", "asset second"]);
 console.log("both nested roots read their assets after shared chunks move");
 `,
-    );
-    const result = spawnSync(bunCommand, [script], {
-      cwd: root,
-      encoding: "utf8",
-      timeout: 10_000,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe(
       "both nested roots read their assets after shared chunks move",
     );
   },
 );
 
-it.skipIf(!configuredBun && !hasBun)(
-  "keeps split modules reproducible and retains resources from metafile inputs",
-  () => {
-    const root = temporary.make("standalone-bundle-");
-    const script = path.join(root, "bundle.mjs");
-    fs.writeFileSync(
-      script,
-      `import assert from "node:assert/strict";
+it.skipIf(!configuredBun && !hasBun).each([
+  { sourceAot: false, mode: "emitted JS" },
+  { sourceAot: true, mode: "source AOT" },
+])(
+  "keeps $mode split modules reproducible and retains resources from metafile inputs",
+  ({ sourceAot }) => {
+    runBundleFixture(
+      "standalone-bundle-",
+      (root) => `import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { bundleStandaloneModules, relinkStandaloneModules } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-bundle.mjs", import.meta.url).href)};
+import { bundleStandaloneModules, finalizeStandaloneModules } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-bundle.mjs", import.meta.url).href)};
 import { rewriteStandaloneImports } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-imports.mjs", import.meta.url).href)};
 import { createStandaloneNativeAdapter } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-native.mjs", import.meta.url).href)};
 import { createStandaloneSourceParser } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-source-parser.mjs", import.meta.url).href)};
@@ -250,9 +240,23 @@ for (const directory of ["first", "second"]) {
       }));
     } }],
   };
-  const first = await bundleStandaloneModules(options, Bun.build);
-  const built = await relinkStandaloneModules(options, first, Bun.build, createStandaloneSourceParser());
+  const sourceAot = ${JSON.stringify(sourceAot)};
+  let builds = 0;
+  const build = async options => {
+    builds++;
+    assert.ok(builds <= (sourceAot ? 2 : 1), "emitted JS must not be bundled twice");
+    return Bun.build(options);
+  };
+  const first = await bundleStandaloneModules(options, build);
+  const built = await finalizeStandaloneModules(options, first, build, createStandaloneSourceParser(), { sourceAot });
   assert.equal(built.success, true, String(built.logs));
+  assert.equal(builds, sourceAot ? 2 : 1);
+  if (!sourceAot) {
+    assert.equal(built.outputs, first.outputs);
+    assert.equal(built.entryOutputs, first.entryOutputs);
+    assert.equal(built.runtimeMetafile, first.metafile);
+    assert.equal(fs.existsSync(output + "-input"), false);
+  }
   const resources = native.finalize({ metafile: built.runtimeMetafile }).files;
   assert.ok(resources.some(file => file.source === "node_modules/fixture-native/runtime.wasm"));
   const files = Object.fromEntries(await Promise.all(built.outputs.map(async file => [path.relative(output, file.path), await file.text()])));
@@ -265,13 +269,7 @@ for (const directory of ["first", "second"]) {
 assert.deepEqual(results[0], results[1]);
 console.log("identical split modules and valid metafile inputs");
 `,
+      "identical split modules and valid metafile inputs",
     );
-    const result = spawnSync(bunCommand, [script], {
-      cwd: root,
-      encoding: "utf8",
-      timeout: 10_000,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("identical split modules and valid metafile inputs");
   },
 );

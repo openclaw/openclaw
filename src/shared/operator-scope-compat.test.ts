@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   intersectOperatorScopes as intersect,
+  resolveMissingOperatorScope,
   resolveMissingRequestedScope,
   resolveScopeOutsideRequestedRoles,
   roleScopesAllow,
@@ -10,6 +11,45 @@ function allows(role: string, requestedScopes: string[], allowedScopes: string[]
   return roleScopesAllow({ role, requestedScopes, allowedScopes });
 }
 const operator = (scopes: string[]) => scopes.map((scope) => `operator.${scope}`);
+
+it.each([
+  ["admin", "read", true],
+  ["admin", "write", true],
+  ["admin", "talk", true],
+  ["admin", "sessions.read", true],
+  ["admin", "sessions.write", true],
+  ["admin", "pairing", true],
+  ["write", "read", true],
+  ["write", "talk", true],
+  ["write", "sessions.read", true],
+  ["write", "sessions.write", true],
+  ["read", "sessions.read", true],
+  ["sessions.write", "sessions.read", true],
+  ["sessions.write", "write", false],
+  ["read", "sessions.write", false],
+  ["read", "talk", false],
+  ["write", "pairing", false],
+  ["write", "talk.secrets", false],
+  ["talk.secrets", "talk.secrets", true],
+] as const)("checks %s granting %s without broadening authority", (grant, request, permitted) => {
+  const scope = ` operator.${request} \t`;
+  const expected = permitted ? null : scope;
+  expect(resolveMissingOperatorScope([" \t", scope], operator([grant]))).toBe(expected);
+  expect(
+    resolveMissingRequestedScope({
+      role: " operator ",
+      requestedScopes: [" \t", scope],
+      allowedScopes: [` operator.${grant} `],
+    }),
+  ).toBe(expected);
+});
+
+it("keeps normalized-grant checks inside the operator namespace", () => {
+  expect(resolveMissingOperatorScope(["", " \t"], [])).toBeNull();
+  expect(resolveMissingOperatorScope([" node.exec "], ["operator.admin", "node.exec"])).toBe(
+    " node.exec ",
+  );
+});
 
 it("does not broaden session write authority to general writes", () => {
   expect(allows("operator", ["operator.write"], ["operator.sessions.write"])).toBe(false);

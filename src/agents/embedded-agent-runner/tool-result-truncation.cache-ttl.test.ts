@@ -114,6 +114,64 @@ function toolText(messages: AgentMessage[], id: string): string {
 }
 
 describe("cache-TTL tool-result projection", () => {
+  it.each(["soft", "hard", "restored-hard", "restored-text"] as const)(
+    "freezes owned %s content without reinspecting its descriptors",
+    (mode) => {
+      const state = newState();
+      const key = "tool:old:42";
+      const messages = prunableHistory(
+        Array.from({ length: mode === "hard" ? 18 : 1 }, (_, index) =>
+          tool({ id: index === 0 ? "old" : `old-${index}`, text: "x".repeat(6_000) }),
+        ),
+      );
+      if (mode === "restored-hard") {
+        restore(
+          state,
+          checkpoint({
+            prunedToolResults: [{ key, mode: "hard", placeholder: "[restored]" }],
+          }),
+        );
+      }
+      using descriptors = vi.spyOn(Object, "getOwnPropertyDescriptor");
+      if (mode === "restored-text") {
+        restore(
+          state,
+          checkpoint({
+            prunedToolResults: [],
+            frozenToolResults: [{ key, sourceHash: "source", texts: ["first", "second"] }],
+          }),
+        );
+      } else {
+        project(messages, { projectionState: state });
+      }
+      const content = state.replacements.get(key)?.content;
+      expect(content).toBeDefined();
+      const inspected = new Set(descriptors.mock.calls.map(([value]) => value));
+      descriptors.mockRestore();
+      expect(Object.isFrozen(content)).toBe(true);
+      expect(inspected.has(content)).toBe(false);
+      for (const block of content!) {
+        expect(Object.isFrozen(block)).toBe(true);
+        expect(inspected.has(block)).toBe(false);
+        expect(Reflect.set(block, "text", "rewritten")).toBe(false);
+      }
+      expect(toolText(messages, "old")).toBe("x".repeat(6_000));
+      expect(content?.map((block) => (block.type === "text" ? block.text : ""))).toEqual(
+        mode === "restored-text"
+          ? ["first", "second"]
+          : [
+              expect.stringContaining(
+                mode === "restored-hard"
+                  ? "[restored]"
+                  : mode === "hard"
+                    ? "content cleared"
+                    : "Tool result trimmed",
+              ),
+            ],
+      );
+    },
+  );
+
   it("hashes each frozen source once across interleaved sessions and recreated attempt state", () => {
     using digest = vi.spyOn(cryptoDigest, "sha256Base64Url");
     const sessions = ["first", "second"].map((text) => ({

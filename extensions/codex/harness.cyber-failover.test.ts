@@ -16,19 +16,20 @@ const runAttempt = vi.hoisted(() => vi.fn<typeof runCodexAppServerAttempt>());
 vi.mock("./src/app-server/run-attempt.js", () => ({ runCodexAppServerAttempt: runAttempt }));
 
 import { createCodexAppServerAgentHarness } from "./harness.js";
+import { CodexAccessProgramUnavailableError } from "./src/app-server/access-program.js";
 import { attemptTerminal } from "./src/app-server/attempt-terminal.js";
 import { testCodexAppServerBindingStore } from "./src/app-server/session-binding.test-helpers.js";
 
 registerCodexEventProjectorTestLifecycle();
 
 const PRIMARY = "gpt-5.6-sol";
-const FALLBACK = "gpt-5.6-terra";
+const FALLBACK = PRIMARY;
 
 type AttemptParams = Awaited<ReturnType<typeof createParams>>;
 
 async function refused(agentId: string, sessionId = "first") {
   const params = await createParams();
-  const config = { appServer: { cyberFailover: { mode: "auto" as const, model: FALLBACK } } };
+  const config = { appServer: { cyberFailover: { mode: "auto" as const } } };
   const request = {
     ...params,
     agentId,
@@ -165,6 +166,7 @@ it("keeps the refusal and avoids repeating a target denied before assistant outp
   expect(runAttempt.mock.calls[1]?.[0]).toEqual({
     ...firstParams,
     suppressNextUserMessagePersistence: true,
+    cyberAccessProgram: "daybreak_blue",
   });
   for (const params of [firstParams, nextParams]) {
     expectNotice(params.onAgentEvent, "unavailable");
@@ -182,4 +184,28 @@ it("keeps the refusal and avoids repeating a target denied before assistant outp
   await expect(harness.runAttempt?.(otherParams)).resolves.toBe(answer);
   expectModelCalls(PRIMARY, FALLBACK);
   expectNotice(otherParams.onAgentEvent, "escalated");
+});
+
+it.each(["standard", "daybreak_blue", "daybreak_red"] as const)(
+  "does not retry %s Access",
+  async (cyberAccessProgram) => {
+    const { params, refusal } = await refused("elevated-" + cyberAccessProgram);
+    params.cyberAccessProgram = cyberAccessProgram;
+    runAttempt.mockReset().mockResolvedValue(refusal);
+    await expect(createHarness().runAttempt?.(params)).resolves.toBe(refusal);
+    expect(runAttempt).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("keeps the original refusal when the same account has no Blue grant", async () => {
+  const { params, refusal } = await refused("no-blue-grant");
+  runAttempt
+    .mockReset()
+    .mockResolvedValueOnce(refusal)
+    .mockRejectedValueOnce(
+      new CodexAccessProgramUnavailableError("Blue is not advertised for this account"),
+    );
+  await expect(createHarness().runAttempt?.(params)).resolves.toBe(refusal);
+  expectModelCalls(PRIMARY, PRIMARY);
+  expectNotice(params.onAgentEvent, "unavailable");
 });

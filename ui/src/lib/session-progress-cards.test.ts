@@ -2,7 +2,7 @@ import type { ProgressCard, ProgressCardGetParams } from "@openclaw/gateway-prot
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore,

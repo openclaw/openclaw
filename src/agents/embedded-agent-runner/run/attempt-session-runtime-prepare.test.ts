@@ -1,12 +1,22 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { Type } from "typebox";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSessionContext } from "../../../../packages/agent-core/src/harness/session/session.js";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
+import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { SessionEntryCohortReader } from "../../../config/sessions/session-entry-read-runtime.types.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptReader,
 } from "../../../config/sessions/transcript-write-context.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
+import {
+  closeAdmittedRunDelegatedAuthority,
+  prepareSystemAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
 import type { SessionEntry } from "../../sessions/session-manager-types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -14,12 +24,15 @@ const mocks = vi.hoisted(() => ({
   createCacheTrace: vi.fn(),
   createSessionSettleTracker: vi.fn(),
   retainSessionPromptState: vi.fn(),
-  beginSessionSystemPrompt: vi.fn(() => false),
   installContextGuards: vi.fn(),
   prepareAgentSession: vi.fn(),
   prepareSessionBoundary: vi.fn(),
   prepareSessionManager: vi.fn(),
-  prepareTrajectory: vi.fn(),
+  createTrajectory: vi.fn(),
+  trajectoryMetadata: vi.fn((_input: unknown) => ({ trace: "metadata" })),
+  trajectoryPath: vi.fn<
+    typeof import("./attempt-transcript-helpers.js").resolveAttemptTrajectorySessionFile
+  >(async () => "/tmp/trajectory.jsonl"),
   prepareTransport: vi.fn(),
   restoreProjections: vi.fn(),
 }));
@@ -31,7 +44,6 @@ vi.mock("../../cache-trace.js", () => ({ createCacheTrace: mocks.createCacheTrac
 vi.mock("../session-prompt-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-prompt-state.js")>()),
   retainEmbeddedSessionPromptState: mocks.retainSessionPromptState,
-  beginSessionSystemPrompt: mocks.beginSessionSystemPrompt,
 }));
 vi.mock("../tool-result-truncation.js", () => ({
   restoreCacheTtlToolResultProjections: mocks.restoreProjections,
@@ -50,8 +62,17 @@ vi.mock("./attempt-session-settle.js", () => ({
 vi.mock("./attempt-stream-settle.js", () => ({
   prepareEmbeddedAttemptTransport: mocks.prepareTransport,
 }));
-vi.mock("./attempt-trajectory.js", () => ({
-  prepareEmbeddedAttemptTrajectory: mocks.prepareTrajectory,
+// mock-isolation: Recorder persistence is outside the attempt metadata contract.
+vi.mock("../../../trajectory/runtime.js", () => ({
+  createTrajectoryRuntimeRecorder: mocks.createTrajectory,
+}));
+// mock-isolation: Capture attempt metadata without collecting real session/runtime metadata.
+vi.mock("../../../trajectory/metadata.js", () => ({
+  buildTrajectoryRunMetadata: mocks.trajectoryMetadata,
+}));
+// mock-isolation: Supply a synthetic transcript path without opening the session store.
+vi.mock("./attempt-transcript-helpers.js", () => ({
+  resolveAttemptTrajectorySessionFile: mocks.trajectoryPath,
 }));
 
 import { persistSessionSystemPrompt } from "../session-prompt-state.js";
@@ -62,6 +83,9 @@ import {
 } from "./runtime-context-prompt.js";
 
 type PrepareInput = Parameters<typeof prepareEmbeddedAttemptSessionRuntime>[0];
+const trajectoryRoots = createTempDirTracker();
+let trajectoryAdmission: ReturnType<typeof prepareSystemAgentRunAdmission>;
+let admittedRunContext: PrepareInput["attempt"]["admittedRunContext"];
 
 function createCheckpointWriter(entries: SessionEntry[], prefix: string) {
   return async (customType: string, data: unknown) => {
@@ -113,49 +137,56 @@ function createHistoryFixture(messages?: ReturnType<typeof buildSystemUpdateMess
 function createFixture() {
   const order: string[] = [];
   const activeMarker = { type: "custom", customType: "openclaw.cache-ttl", data: "active" };
-  const sessionManager = {
-    getBranch: () => [activeMarker],
-    getToolResultProjectionEntries: () => [activeMarker],
-  };
-  const activeSession = {
-    messages: [{ role: "user" }, { role: "assistant" }],
-    sessionId: "active-session",
+  const f = {
+    order,
+    sessionManager: {
+      getBranch: () => [activeMarker],
+      getBoundaryCount: () => 0,
+      getToolResultProjectionEntries: () => [activeMarker],
+    },
+    activeSession: {
+      messages: [{ role: "user" }, { role: "assistant" }],
+      sessionId: "active-session",
+    },
+    promptState: { toolResults: { projected: true } },
+    abortActiveSession: vi.fn(async () => undefined),
+    buildAbortSettlePromise: vi.fn(() => null),
+    contextGuards: { remove: vi.fn() },
+    trajectoryRecorder: { kind: "trajectory", recordEvent: vi.fn() },
+    transcriptPolicy: { repairToolUseResultPairing: true, inHistorySystemUpdates: false },
+    getUserTranscriptContexts: vi.fn(() => []),
+    onSessionYieldReady: vi.fn(() => order.push("own-yield")),
+    externalAbortController: {
+      setActiveSessionAbort: vi.fn(() => order.push("arm-session-abort")),
+    },
   };
   const agentSession = {
-    activeSession,
+    activeSession: f.activeSession,
     clientToolDefs: [{ name: "read" }, { name: "write" }],
     setActiveSessionSystemPrompt: vi.fn(),
   };
-  const promptState = { toolResults: { projected: true } };
-  const promptStateLease = { state: promptState, [Symbol.dispose]: vi.fn() };
-  const abortActiveSession = vi.fn(async () => undefined);
-  const buildAbortSettlePromise = vi.fn(() => null);
-  const contextGuards = { remove: vi.fn() };
-  const trajectoryRecorder = { kind: "trajectory" };
+  const promptStateLease = { state: f.promptState, [Symbol.dispose]: vi.fn() };
   const transport = {
     compactionReplayEnabled: true,
     effectivePromptCacheRetention: "long",
   };
-  const transcriptPolicy = { repairToolUseResultPairing: true, inHistorySystemUpdates: false };
-  const getUserTranscriptContexts = vi.fn(() => []);
-
   mocks.prepareSessionManager.mockImplementation(async (input) => {
     order.push("manager");
-    input.onSessionManagerCreated(sessionManager);
+    input.onSessionManagerCreated(f.sessionManager);
     return {
       isOpenAIResponsesApi: true,
       preparedUserTurnMessage: { role: "user", content: "hello" },
-      sessionManager,
-      transcriptPolicy,
+      sessionManager: f.sessionManager,
+      transcriptPolicy: f.transcriptPolicy,
       userMessageBoundary: {
-        getUserTranscriptContexts,
+        getUserTranscriptContexts: f.getUserTranscriptContexts,
         preparedUserTurnMessage: { role: "user", content: "hello" },
       },
     };
   });
   mocks.prepareAgentSession.mockImplementation(async (input) => {
     order.push("agent-session");
-    input.onSessionCreated(activeSession);
+    input.onSessionCreated(f.activeSession);
     input.onSystemPromptChanged("runtime prompt");
     return agentSession;
   });
@@ -168,12 +199,17 @@ function createFixture() {
   mocks.prepareSessionBoundary.mockImplementation(stage("boundary", {}));
   mocks.retainSessionPromptState.mockImplementation(stage("prompt-state", promptStateLease));
   mocks.createSessionSettleTracker.mockImplementation(
-    stage("settle-tracker", { abortActiveSession, buildAbortSettlePromise }),
+    stage("settle-tracker", {
+      abortActiveSession: f.abortActiveSession,
+      buildAbortSettlePromise: f.buildAbortSettlePromise,
+    }),
   );
-  mocks.installContextGuards.mockImplementation(stage("context-guards", contextGuards));
+  mocks.installContextGuards.mockImplementation(stage("context-guards", f.contextGuards));
   mocks.createCacheTrace.mockImplementation(stage("cache-trace", {}));
   mocks.createAnthropicPayloadLogger.mockImplementation(stage("payload-logger", {}));
-  mocks.prepareTrajectory.mockImplementation(async () => stage("trajectory", trajectoryRecorder)());
+  mocks.createTrajectory.mockImplementation(async () =>
+    stage("trajectory", f.trajectoryRecorder)(),
+  );
   mocks.prepareTransport.mockImplementation(async () => stage("transport", transport)());
 
   const resources = new Proxy<PrepareInput["resources"]>(
@@ -185,12 +221,14 @@ function createFixture() {
       },
     },
   );
-  const onSessionYieldReady = vi.fn(() => order.push("own-yield"));
-  const externalAbortController = {
-    setActiveSessionAbort: vi.fn(() => order.push("arm-session-abort")),
-  };
   const input = {
     attempt: {
+      config: {},
+      admittedRunContext,
+      fastMode: true,
+      workspaceDir: "/tmp/workspace",
+      sessionFile: "/tmp/session.jsonl",
+      sessionKey: "agent:main:session-1",
       model: { api: "openai-responses" },
       modelId: "gpt-5",
       provider: "openai",
@@ -202,10 +240,10 @@ function createFixture() {
     resolveActiveContextEnginePluginId: vi.fn(),
     setup: {
       prepStages: { mark: vi.fn() },
+      sessionAgentId: "main",
+      effectiveWorkspace: "/tmp/workspace",
     },
-    toolBase: {
-      codeModeControlsEnabledForRun: false,
-    },
+    toolBase: { codeModeControlsEnabledForRun: false },
     toolCatalog: {
       effectiveTools: [],
       toolSearchRunPlan: { replayAllowedToolNames: new Set(["read"]) },
@@ -223,36 +261,47 @@ function createFixture() {
       }),
     },
     runAbortSignal: new AbortController().signal,
-    externalAbortController,
+    externalAbortController: f.externalAbortController,
     resources,
-    onSessionYieldReady,
+    onSessionYieldReady: f.onSessionYieldReady,
   } as unknown as PrepareInput;
 
-  return {
-    abortActiveSession,
-    activeSession,
-    agentSession,
-    buildAbortSettlePromise,
-    contextGuards,
-    externalAbortController,
-    getUserTranscriptContexts,
-    input,
-    resources,
-    onSessionYieldReady,
-    order,
-    promptState,
-    promptStateLease,
-    sessionManager,
-    trajectoryRecorder,
-    transcriptPolicy,
-  };
+  const prepare = () => prepareEmbeddedAttemptSessionRuntime(input);
+  return { ...f, agentSession, input, resources, promptStateLease, prepare };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
+  trajectoryAdmission = prepareSystemAgentRunAdmission({}, "run-1", "main", "trajectory-test");
+  admittedRunContext = await trajectoryAdmission.admit("embedded");
+});
+afterEach(async () => {
+  trajectoryAdmission.close();
+  await closeOpenClawAgentDatabasesAsync();
+  vi.unstubAllEnvs();
+  trajectoryRoots.cleanup();
 });
 
 describe("prepareEmbeddedAttemptSessionRuntime", () => {
+  it("clears an unsent prompt without reading history when prompt updates remain enabled", async () => {
+    const fixture = createHistoryFixture();
+    const first = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+    const prompt = await first.prepareSystemPromptUpdate!("## Policy\nUnsent update");
+    prompt.commit();
+    expect(first.sessionPromptState.pendingSystemPrompt?.renderedPrefix).toBe(
+      "## Policy\nUnsent update",
+    );
+
+    const getBranch = vi.spyOn(fixture.sessionManager, "getBranch");
+    try {
+      const next = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      expect(getBranch).not.toHaveBeenCalled();
+      expect(next.sessionPromptState.pendingSystemPrompt).toBeUndefined();
+    } finally {
+      getBranch.mockRestore();
+    }
+  });
+
   it("re-pins personal bootstrap when the selected profile changes between attempts", async () => {
     const fixture = createHistoryFixture();
     mocks.retainSessionPromptState.mockImplementation(() => ({
@@ -261,7 +310,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     }));
     for (const profile of ["alice", "bob", undefined]) {
       fixture.input.attempt.bootstrapUserProfileId = profile;
-      const runtime = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const runtime = await fixture.prepare();
       const prompt = `## User\n${profile ?? "Shared"} guidance`;
       const prepared = await runtime.prepareSystemPromptUpdate!(prompt, true);
       expect(prepared).toMatchObject({ restart: true, systemPrompt: prompt });
@@ -317,7 +366,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
         input.onSessionCreated(fixture.activeSession);
         return fixture.agentSession;
       });
-      const preparing = prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const preparing = fixture.prepare();
       const refused = new Error(`Transcript preparation ${outcome}`);
       try {
         await awaitGateBeforeSettlement(entered.promise, preparing, "Constructor was not reached");
@@ -364,7 +413,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
         appendCustomEntryAsync,
       });
       const routeR = fixture.input.attempt.modelId;
-      const firstRuntime = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const firstRuntime = await fixture.prepare();
       const initial = await firstRuntime.prepareSystemPromptUpdate!("## Policy\nA");
       initial.commit();
       await persistSessionSystemPrompt(firstRuntime.sessionPromptState, appendCustomEntryAsync);
@@ -376,7 +425,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       expect(changed.systemPrompt).toBe("## Policy\nA");
 
       fixture.input.attempt.modelId = "route-S";
-      const secondRuntime = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const secondRuntime = await fixture.prepare();
       interruptRetirement = true;
       const preparedS = secondRuntime.prepareSystemPromptUpdate!("## Policy\nS");
       if (interruption === "unadmitted") {
@@ -386,7 +435,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       }
       interruptRetirement = false;
       fixture.input.attempt.modelId = routeR;
-      const resumedRuntime = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const resumedRuntime = await fixture.prepare();
       const resumed = await resumedRuntime.prepareSystemPromptUpdate!("## Policy\nB", true);
       expect(resumed.restart).toBe(true);
       expect(resumed.systemPrompt).toBe("## Policy\nB");
@@ -414,7 +463,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     const { entries, agentState, recordUpdate, persist } = fixture;
     const permissionNotice = "## Permission change\nWrite access was removed.";
     const prompt = `## Tools\nread\n<!-- openclaw:attempt:PERMISSION -->\n${permissionNotice}\n<!-- /openclaw:attempt:PERMISSION -->`;
-    const runtime = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+    const runtime = await fixture.prepare();
     const prepare = runtime.prepareSystemPromptUpdate!;
     const first = await prepare(prompt);
     expect(first.update?.content).toBe(permissionNotice);
@@ -444,7 +493,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
   it("prepares the session runtime in ownership-safe order and keeps prompt state live", async () => {
     const fixture = createFixture();
 
-    const result = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+    const result = await fixture.prepare();
 
     expect(mocks.restoreProjections).toHaveBeenCalledWith(
       fixture.promptState.toolResults,
@@ -499,9 +548,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     const fixture = createFixture();
     mocks.prepareTransport.mockRejectedValueOnce(new Error("transport failed"));
 
-    await expect(prepareEmbeddedAttemptSessionRuntime(fixture.input)).rejects.toThrow(
-      "transport failed",
-    );
+    await expect(fixture.prepare()).rejects.toThrow("transport failed");
 
     expect(fixture.resources.sessionManager).toBe(fixture.sessionManager);
     expect(fixture.resources.promptStateLease).toBe(fixture.promptStateLease);
@@ -519,7 +566,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       waitForRuntimePersistence,
     } as unknown as PrepareInput["attempt"]["userTurnTranscriptRecorder"];
 
-    const preparing = prepareEmbeddedAttemptSessionRuntime(fixture.input);
+    const preparing = fixture.prepare();
     await vi.waitFor(() => expect(waitForRuntimePersistence).toHaveBeenCalledOnce());
     expect(mocks.prepareSessionBoundary).not.toHaveBeenCalled();
 
@@ -527,5 +574,114 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     await preparing;
 
     expect(mocks.prepareSessionBoundary).toHaveBeenCalledOnce();
+  });
+});
+
+describe("trajectory preparation through the public runtime", () => {
+  const sessionTarget = {
+    agentId: "main",
+    sessionId: "active-session",
+    sessionKey: "agent:main:session-1",
+    storePath: "/tmp/openclaw-agent.sqlite",
+  };
+
+  it.each([false, true])("records metadata with retained target: %s", async (retained) => {
+    const f = createFixture();
+    f.input.attempt.provider = "provider-1";
+    f.input.toolCatalog.effectiveTools = Array.from({ length: 7 }, (_, index) => ({
+      name: "trajectory-tool-" + index,
+      label: "Trajectory fixture",
+      description: "Supplies a nonzero tool count to public preparation.",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [], details: {} }),
+    }));
+    f.input.attempt.sessionTarget = sessionTarget;
+    if (retained) {
+      Object.assign(f.input.sessionLock.ownedTranscriptWriteContext, {
+        sessionTarget,
+        assertCommitAllowed: resolveAdmittedRunActiveAssertion(admittedRunContext),
+      });
+    }
+    const result = await f.prepare();
+    expect(result.trajectoryRecorder).toBe(f.trajectoryRecorder);
+    if (retained) {
+      expect(mocks.trajectoryPath).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.trajectoryPath.mock.calls[0]?.[0]).toMatchObject({
+        agentId: "main",
+        sessionFile: "/tmp/session.jsonl",
+        sessionId: "active-session",
+      });
+    }
+    expect(mocks.createTrajectory.mock.calls[0]?.[0]).toMatchObject({
+      runId: "run-1",
+      sessionId: "active-session",
+      sessionTarget,
+      sessionFile: retained ? f.input.attempt.sessionKey : "/tmp/trajectory.jsonl",
+    });
+    expect(f.trajectoryRecorder.recordEvent.mock.calls.slice(0, 2)).toEqual([
+      ["session.started", expect.objectContaining({ toolCount: 7, clientToolCount: 2 })],
+      ["trace.metadata", { trace: "metadata" }],
+    ]);
+    expect(mocks.trajectoryMetadata.mock.calls[0]?.[0]).toMatchObject({
+      fastMode: true,
+      provider: "provider-1",
+    });
+  });
+
+  it.each(["revoke", "abort"])(
+    "rejects metadata after %s during sink preparation",
+    async (change) => {
+      const f = createFixture();
+      f.input.attempt.sessionTarget = sessionTarget;
+      Object.assign(f.input.sessionLock.ownedTranscriptWriteContext, {
+        sessionTarget,
+        assertCommitAllowed: resolveAdmittedRunActiveAssertion(admittedRunContext),
+      });
+      const abort = new AbortController();
+      f.input.attempt.abortSignal = abort.signal;
+      mocks.createTrajectory.mockImplementationOnce(async () => {
+        if (change === "revoke") {
+          closeAdmittedRunDelegatedAuthority(admittedRunContext);
+        } else {
+          abort.abort();
+        }
+        return f.trajectoryRecorder;
+      });
+      await expect(f.prepare()).rejects.toThrow("admitted run authority is no longer active");
+      expect(f.trajectoryRecorder.recordEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  it("resolves the transcript path but skips the recorder when disabled", async () => {
+    const f = createFixture();
+    f.input.attempt.disableTrajectory = true;
+    const result = await f.prepare();
+    expect(result.trajectoryRecorder).toBeNull();
+    expect([
+      mocks.trajectoryPath.mock.calls.length,
+      mocks.createTrajectory.mock.calls.length,
+      mocks.trajectoryMetadata.mock.calls.length,
+    ]).toEqual([1, 0, 0]);
+  });
+
+  it("keeps detached trajectory resolution native and leaves agent storage absent", async () => {
+    const root = trajectoryRoots.make("openclaw-trajectory-detached-");
+    const stateDir = path.join(root, "state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const native = await vi.importActual<typeof import("./attempt-transcript-helpers.js")>(
+      "./attempt-transcript-helpers.js",
+    );
+    mocks.trajectoryPath.mockImplementationOnce(native.resolveAttemptTrajectorySessionFile);
+    const f = createFixture();
+    f.input.attempt.sessionPersistence = "detached";
+    f.input.attempt.workspaceDir = root;
+    f.input.attempt.sessionFile = path.join(root, "detached.jsonl");
+    const result = await f.prepare();
+    expect(result.trajectoryRecorder).toBeNull();
+    expect(mocks.trajectoryPath).toHaveBeenCalledOnce();
+    expect(mocks.createTrajectory).not.toHaveBeenCalled();
+    expect(mocks.trajectoryMetadata).not.toHaveBeenCalled();
+    await expect(fs.access(path.join(stateDir, "agents"))).rejects.toThrow();
   });
 });

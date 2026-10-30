@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -9,13 +9,15 @@ import type { OpenClawConfig } from "../types.openclaw.js";
 import { extractDeliveryInfo, extractDeliveryInfoBatch } from "./delivery-info.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
-import { projectionLane } from "./session-transcript-worker-resources.js";
 
 const sessionKey = "agent:main:delivery-fallback";
 const deliveryContext = { channel: "telegram", to: "telegram:123456", accountId: "default" };
-const expected = { deliveryContext, threadId: undefined };
-const missing = { deliveryContext: undefined, threadId: undefined };
 type Route = typeof deliveryContext;
+const delivery = (context?: Route) => ({ deliveryContext: context, threadId: undefined });
+const expected = delivery(deliveryContext);
+const missing = delivery();
+const requestsFor = (keys: string[], agentId?: string) =>
+  keys.map((key) => ({ sessionKey: key, ...(agentId ? { agentId } : {}) }));
 const seed = (key: string, context: Route, agentId = "main") =>
   replaceSessionEntry(
     { agentId, sessionKey: key },
@@ -25,59 +27,6 @@ const seed = (key: string, context: Route, agentId = "main") =>
       delivery: normalizeSessionDeliveryState({ context }),
     },
   );
-
-it("reads distinct delivery targets once per batch and observes owner route writes", async () => {
-  await withOpenClawTestState({ label: "delivery-batch-owner" }, async () => {
-    const cfg = {};
-    setRuntimeConfigSnapshot(cfg);
-    const routes = Array.from({ length: 20 }, (_, index) => ({
-      sessionKey: `agent:main:delivery-${index}`,
-      context: { ...deliveryContext, to: `telegram:route-${index}` },
-    }));
-    for (const route of routes) {
-      await seed(route.sessionKey, route.context);
-    }
-    const ordered = [routes[19]!, ...routes.slice(0, 19), routes[19]!];
-    const requests = ordered.map((route) => ({ sessionKey: route.sessionKey }));
-    const expectedRoutes = ordered.map(({ context }) => ({
-      deliveryContext: context,
-      threadId: undefined,
-    }));
-    const selected: Array<readonly string[] | undefined> = [];
-    const run = projectionLane.pool.run.bind(projectionLane.pool);
-    using _ = vi.spyOn(projectionLane.pool, "run").mockImplementation((input, options) =>
-      run(async () => {
-        const request = typeof input === "function" ? await input() : input;
-        if (request.kind === "session-exact-entries" && request.projection === "list") {
-          selected.push(request.sessionKeys);
-        }
-        return request;
-      }, options),
-    );
-    const first = await extractDeliveryInfoBatch(requests, { cfg });
-    expect(first).toEqual(expectedRoutes);
-    expect(selected).toHaveLength(1);
-    expect(selected[0]).toHaveLength(20);
-
-    const changed = { ...deliveryContext, to: "telegram:updated-route" };
-    await seed(routes[0]!.sessionKey, changed);
-    const second = await extractDeliveryInfoBatch(requests, { cfg });
-    expect(second).toEqual(
-      expectedRoutes.map((route, index) =>
-        index === 1 ? { ...route, deliveryContext: changed } : route,
-      ),
-    );
-    expect(first).toEqual(expectedRoutes);
-    expect(selected).toHaveLength(2);
-
-    expect(await extractDeliveryInfo(routes[0]!.sessionKey, { cfg })).toEqual({
-      deliveryContext: changed,
-      threadId: undefined,
-    });
-    expect(selected).toHaveLength(3);
-    expect(selected[2]).toHaveLength(1);
-  });
-});
 
 it("preserves pending sibling validation when a combined delivery read fails", async () => {
   await withOpenClawTestState({ label: "delivery-batch-sibling" }, async ({ env }) => {
@@ -103,12 +52,43 @@ it("preserves pending sibling validation when a combined delivery read fails", a
     database.db
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(sibling);
-    expect(
-      await extractDeliveryInfoBatch(
-        keys.map((key) => ({ sessionKey: key })),
-        { cfg },
-      ),
-    ).toEqual([missing, missing]);
+    expect(await extractDeliveryInfoBatch(requestsFor(keys), { cfg })).toEqual([missing, missing]);
+  });
+});
+
+it("preserves ordered exact and folded routes across owner updates", async () => {
+  await withOpenClawTestState({ label: "delivery-batch-routes" }, async () => {
+    const cfg = {};
+    setRuntimeConfigSnapshot(cfg);
+    const key = "agent:main:signal:group:AbC";
+    const context = { channel: "signal", to: "signal:group:AbC", accountId: "first" };
+    await seed(key, context);
+    await seed(sessionKey, deliveryContext);
+    const requests = requestsFor([
+      sessionKey,
+      "agent:main:signal:group:abc",
+      "agent:main:missing",
+      "signal:group:abc",
+      key,
+      sessionKey,
+      "agent:main:matrix:channel:!Missing:example.org",
+    ]);
+    const expectedRoutes = (route: Route) => [
+      expected,
+      delivery(route),
+      missing,
+      delivery(route),
+      delivery(route),
+      expected,
+      missing,
+    ];
+    const first = await extractDeliveryInfoBatch(requests, { cfg });
+    expect(first).toEqual(expectedRoutes(context));
+    const changed = { ...context, accountId: "second" };
+    await seed(key, changed);
+    expect(await extractDeliveryInfoBatch(requests, { cfg })).toEqual(expectedRoutes(changed));
+    expect(first).toEqual(expectedRoutes(context));
+    expect(await extractDeliveryInfo(key, { cfg })).toEqual(delivery(changed));
   });
 });
 
@@ -158,19 +138,13 @@ it("keeps explicit delivery ownership through alias lookup and rejects conflicti
     for (const [agentId, context] of Object.entries(routes)) {
       await seed("global", context, agentId);
     }
-    const selected = { deliveryContext: routes.ops, threadId: undefined };
-    expect(await extractDeliveryInfo("global", { cfg })).toEqual({
-      deliveryContext: routes.main,
-      threadId: undefined,
-    });
+    const selected = delivery(routes.ops);
+    expect(await extractDeliveryInfo("global", { cfg })).toEqual(delivery(routes.main));
     expect(await extractDeliveryInfo("global", { cfg, agentId: "ops" })).toEqual(selected);
     expect(await extractDeliveryInfo("agent:ops:main", { cfg, agentId: "ops" })).toEqual(selected);
     expect(
       await extractDeliveryInfoBatch(
-        ["global", "agent:main:main", "agent::broken"].map((key) => ({
-          sessionKey: key,
-          agentId: "ops",
-        })),
+        requestsFor(["global", "agent:main:main", "agent::broken"], "ops"),
         { cfg },
       ),
     ).toEqual([selected, missing, missing]);

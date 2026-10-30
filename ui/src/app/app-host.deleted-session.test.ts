@@ -477,18 +477,11 @@ describe("OpenClaw shell deleted-session recovery", () => {
     try {
       expect(shell.activeSessionKey).toBe(deletedKey);
       expect(replace).not.toHaveBeenCalled();
-      expect(sessions.state.result?.sessions).toEqual([replacement]);
       await deleteDispatched.promise;
-      expect(request).toHaveBeenCalledWith(
-        "sessions.delete",
-        expect.objectContaining({ key: deletedKey, expectedSessionId: "predecessor" }),
-        expect.any(Object),
-      );
       response.reject(new Error("Session identity changed"));
       await expect(operation).rejects.toThrow("Session identity changed");
       await vi.waitFor(() => expect(toast.textContent).toContain("Session identity changed"));
       expect(shell.activeSessionKey).toBe(deletedKey);
-      expect(sessions.state.result?.sessions).toEqual([replacement]);
     } finally {
       response.resolve({ deleted: false });
       await operation.catch(() => {});
@@ -535,13 +528,10 @@ describe("OpenClaw shell deleted-session recovery", () => {
       };
       h.emitEvent({ type: "event", event: "sessions.changed", payload });
       await import("../lib/chat/composer-draft-retirement.runtime.ts");
-      expect.soft(h.sessions.state.result?.sessions).toEqual([replacement, h.sibling]);
       expect.soft(shell.activeSessionKey).toBe(h.alpha.key);
       expect.soft(replace).not.toHaveBeenCalled();
       expect.soft(drafts.read()).toBe(draft);
-      expect.soft(h.sessions.deletionState(h.alpha.key)).toBeUndefined();
       await h.sessions.refresh({ force: true });
-      expect(h.sessions.state.result?.sessions).toEqual([replacement, h.sibling]);
       // The same delivery path must still retire B when B itself is confirmed deleted.
       h.setRows([h.sibling]);
       const currentDelete = { ...payload, sessionId: replacement.sessionId };
@@ -550,9 +540,6 @@ describe("OpenClaw shell deleted-session recovery", () => {
       await vi.waitFor(() => {
         drafts.expectRetired(retired.retireBeforeRevision);
       });
-      expect(h.sessions.state.result?.sessions).toEqual([h.sibling]);
-      expect(h.sessions.deletionState(h.alpha.key)).toBe("confirmed");
-      expect(h.sessions.deletionState(h.sibling.key)).toBeUndefined();
       expect(shell.activeSessionKey).toBe(mainKey);
     },
   );

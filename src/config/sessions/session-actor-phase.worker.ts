@@ -24,7 +24,7 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-write.js";
 import { applySessionActorAppend } from "./session-actor-append.worker.js";
-import { projectSessionActorAuthority } from "./session-actor-command.js";
+import type { projectSessionActorAuthority } from "./session-actor-command.js";
 import type {
   SessionActorOutcome,
   SessionActorPhaseResults,
@@ -39,7 +39,6 @@ import {
   forkSessionActorStoredState,
   withSessionActorTransactionState,
 } from "./session-actor-transaction.js";
-import { readHarnessCompletionSourceInDatabase } from "./session-harness-completion-source.kernel.js";
 import { applySessionTranscriptEvent } from "./session-message-rewrite.worker.js";
 import { mutatePendingInput } from "./session-pending-input-operations.kernel.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
@@ -109,8 +108,6 @@ export function applySessionActorPhase(
       );
     },
     validateSources: (sources) => readSessionSourceValidation(database, sources, incarnation),
-    validateRecoveryInput: (claim) =>
-      readHarnessCompletionSourceInDatabase(database, claim).validInput,
     mutatePendingInput: (input) => mutatePendingInput(input, context, () => {}),
     admit: (stage, publication) => context.admit(stage, publication),
   });
@@ -212,6 +209,7 @@ export function deferSessionActorOutcome({
   database,
   outcome,
   state,
+  projectAuthority,
   publication,
   admit,
   diagnosticContext,
@@ -224,6 +222,7 @@ export function deferSessionActorOutcome({
     { kind: "committed" }
   >;
   state: SessionActorStoredState;
+  projectAuthority: typeof projectSessionActorAuthority;
   publication: unknown;
   admit: AgentWorkerOperationContext["admit"];
   diagnosticContext: Record<string, number | boolean | undefined>;
@@ -252,7 +251,7 @@ export function deferSessionActorOutcome({
         }
         admit("transaction", {
           kind: "session-actor-admission",
-          snapshot: projectSessionActorAuthority(state.hot),
+          snapshot: projectAuthority(state.hot),
           publication: {
             kind: "session-actor-outcome",
             transfer: { handle, frames: [frame] },
@@ -268,7 +267,7 @@ export function deferSessionActorOutcome({
       recordReceipt();
       admit("commit", {
         kind: "session-actor-admission",
-        snapshot: projectSessionActorAuthority(state.hot),
+        snapshot: projectAuthority(state.hot),
         publication: {
           kind: "session-actor-outcome",
           transfer: { handle, frames: finalFrames },
@@ -286,7 +285,7 @@ export function deferSessionActorOutcome({
   recordReceipt();
   admit("commit", {
     kind: "session-actor-admission",
-    snapshot: projectSessionActorAuthority(state.hot),
+    snapshot: projectAuthority(state.hot),
     publication,
     conversationPublication: outcome.receipt.conversationPublication,
     final: true,

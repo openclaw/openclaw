@@ -275,10 +275,12 @@ describePosix("prior-CI forward main admission", () => {
     "final GraphQL recalculation",
     "remote-only final main",
     "remote-only recalculation",
+    "remote-only delayed recalculation",
     "final known status",
   ] as const)("lands pinned head after %s advance", (stage) => {
     const remoteOnly = stage.startsWith("remote-only");
     const recalculating = stage.includes("recalculation");
+    const delayedRecalculation = stage === "remote-only delayed recalculation";
     let main = remoteOnly ? f.base : f.commit(f.tree("before\n", "advanced\n"), [f.base]);
     const state = f.state();
     const settled = {
@@ -292,7 +294,10 @@ describePosix("prior-CI forward main admission", () => {
         : [
             ...unchanged(final ? 4 : 1),
             remoteOnly
-              ? { advanceMain: true, ...(recalculating ? { pr: unknown } : {}) }
+              ? {
+                  advanceMain: true,
+                  ...(recalculating && !delayedRecalculation ? { pr: unknown } : {}),
+                }
               : {
                   main,
                   ...(recalculating
@@ -355,6 +360,16 @@ describePosix("prior-CI forward main admission", () => {
 
     admit();
     expect(f.state().settlementSleeps).toEqual([2, 4, 8, 8]);
+  });
+
+  it("refuses a final GraphQL fork from the preliminary observed tip", () => {
+    const first = f.commit(f.tree("before\n", "first advance\n"), [f.base]);
+    const fork = f.commit(f.tree("before\n", "forked advance\n"), [f.base]);
+    configureMerge(f, {
+      observations: [...unchanged(3), { main: first }, { main: fork }],
+    });
+
+    refuse("both observed and verified main");
   });
 
   it.each([
@@ -499,22 +514,27 @@ describePosix("prior-CI forward main admission", () => {
     }
   });
 
-  it.each(["head", "rewind"])("refuses changed %s during rematerialization", (fault) => {
-    const state = f.state();
-    state.observations = [
-      ...unchanged(4),
-      { advanceMain: true },
-      fault === "head" ? { pr: { headRefOid: f.base } } : { main: f.base },
-    ];
-    f.save(state);
-    const result = refuse(
-      fault === "rewind"
-        ? "both observed and verified main"
-        : "PR or main changed during observation",
-    );
-    expect(result.error, result.output).toBeUndefined();
-    expect(f.git(["cat-file", "-t", f.state().mainAdvances[0]!])).toBe("commit");
-  });
+  it.each(["head", "rewind", "rewind UNKNOWN"])(
+    "refuses changed %s during rematerialization",
+    (fault) => {
+      const state = f.state();
+      state.observations = [
+        ...unchanged(4),
+        { advanceMain: true },
+        fault === "head"
+          ? { pr: { headRefOid: f.base } }
+          : { main: f.base, ...(fault === "rewind UNKNOWN" ? { pr: unknown } : {}) },
+      ];
+      f.save(state);
+      const result = refuse(
+        fault === "rewind"
+          ? "both observed and verified main"
+          : "PR or main changed during observation",
+      );
+      expect(result.error, result.output).toBeUndefined();
+      expect(f.git(["cat-file", "-t", f.state().mainAdvances[0]!])).toBe("commit");
+    },
+  );
   it("refuses changed publisher source on new main", () => {
     const blob = f.git(["hash-object", "-w", "--stdin"], "changed protected publisher source\n");
     const replace = (tree: string, name: string, entry: string) =>

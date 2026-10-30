@@ -49,34 +49,27 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(["non-owner", "disabled", "requester-revoked"])(
-  "refuses %s without restarting",
-  async (change) => {
-    if (change === "disabled") {
-      config.commands!.restart = false;
-    }
-    await expect(
-      restart(
-        {
-          requester: { channel: "slack", senderId: change === "non-owner" ? "other" : "owner" },
-        },
-        change === "requester-revoked"
-          ? () => {
-              throw new Error("requester revoked");
-            }
-          : undefined,
-      ),
-    ).rejects.toThrow(
-      change === "disabled"
-        ? "commands.restart=false"
-        : change === "non-owner"
-          ? "current owner principal"
-          : "requester revoked",
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    expect(emitted).not.toHaveBeenCalled();
-  },
-);
+it.each([
+  ["non-owner", "other", "current owner principal"],
+  ["disabled", "owner", "commands.restart=false"],
+  ["requester-revoked", "owner", "requester revoked"],
+])("refuses %s without restarting", async (change, senderId, error) => {
+  if (change === "disabled") {
+    config.commands!.restart = false;
+  }
+  await expect(
+    restart(
+      { requester: { channel: "slack", senderId } },
+      change === "requester-revoked"
+        ? () => {
+            throw new Error("requester revoked");
+          }
+        : undefined,
+    ),
+  ).rejects.toThrow(error);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(emitted).not.toHaveBeenCalled();
+});
 
 it.each(["owner", "restart-policy"])(
   "cancels deferred restart when %s authority changes",

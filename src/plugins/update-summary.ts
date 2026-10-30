@@ -6,56 +6,12 @@ import {
   settlePluginInstallTransactions,
   type PluginInstallTransaction,
 } from "./install-transaction.js";
-import { PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
-import {
-  disablePluginAfterUpdateFailure,
-  repairOpenClawPeerLinksForNpmInstalls,
-} from "./update-config.js";
+import { repairOpenClawPeerLinksForNpmInstalls } from "./update-config.js";
 import type {
   PluginUpdateLogger,
   PluginUpdateOutcome,
   PluginUpdateSummary,
 } from "./update-source.js";
-
-export function recordPluginUpdateFailure(params: {
-  config: OpenClawConfig;
-  disableOnFailure?: boolean;
-  dryRun?: boolean;
-  logger: PluginUpdateLogger;
-  outcomes: PluginUpdateOutcome[];
-  pluginId: string;
-  message: string;
-  options?: {
-    code?: string;
-    installedPayloadRunnable?: boolean;
-  };
-}): { config: OpenClawConfig; changed: boolean } {
-  const options = params.options ?? {};
-  const preserveInstalledPayload =
-    options.code === PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE &&
-    options.installedPayloadRunnable === true;
-  if (params.disableOnFailure && !params.dryRun && !preserveInstalledPayload) {
-    const message =
-      `Disabled "${params.pluginId}" after plugin update failure; OpenClaw will continue without it. ` +
-      params.message;
-    params.logger.warn?.(message);
-    params.outcomes.push({
-      pluginId: params.pluginId,
-      status: "skipped",
-      message,
-    });
-    return {
-      config: disablePluginAfterUpdateFailure(params.config, params.pluginId),
-      changed: true,
-    };
-  }
-  params.outcomes.push({
-    pluginId: params.pluginId,
-    status: "error",
-    message: params.message,
-  });
-  return { config: params.config, changed: false };
-}
 
 export function createPluginUpdateTransactionState(params: object) {
   return {
@@ -88,7 +44,9 @@ export async function finalizePluginUpdateSummary(params: {
   ranNpmInstaller: boolean;
   logger: PluginUpdateLogger;
   transactionState: ReturnType<typeof createPluginUpdateTransactionState>;
-  beforePersistentEffect?: () => void;
+  prepareEffect?: () => void | Promise<void>;
+  beforePersistentApply?: () => void;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<PluginUpdateSummary> {
   let changed = params.changed;
   if (params.ranNpmInstaller) {
@@ -97,12 +55,16 @@ export async function finalizePluginUpdateSummary(params: {
         (await repairOpenClawPeerLinksForNpmInstalls({
           config: params.config,
           logger: params.logger,
+          beforePersistentApply: params.beforePersistentApply,
           beforePersistentEffect: params.beforePersistentEffect,
         })) || changed;
     } catch (error) {
-      await settlePluginInstallTransactions(params.transactionState.transactions, "rollback", {
-        error,
-      });
+      await settlePluginInstallTransactions(
+        params.transactionState.transactions,
+        "rollback",
+        { error },
+        params.prepareEffect,
+      );
       throw error;
     }
   }

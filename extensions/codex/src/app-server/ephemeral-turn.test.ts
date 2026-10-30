@@ -24,10 +24,7 @@ function setup(
       collector.wait(turn, { signal, abortError: () => new Error("caller aborted") }),
     stream: () => send("item/agentMessage/delta", { itemId: "answer", delta: "Still working." }),
     complete: (items: (typeof answer)[] | null = [answer]) =>
-      fixture.notify({
-        method: "turn/completed",
-        params: { threadId, turn: { ...turn, status: "completed", items } },
-      }),
+      send("turn/completed", { turn: { ...turn, status: "completed", items } }),
   };
 }
 afterEach(() => collectors.splice(0).forEach((collector) => collector.route.release()));

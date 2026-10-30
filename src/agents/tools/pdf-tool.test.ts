@@ -280,29 +280,36 @@ it("rejects extracted PDF responses without visible text", async () => {
   );
 });
 
-it.each([true, false])(
-  "reuses only successful extraction across fallbacks (overloaded=%s)",
-  async (overloaded) => {
-    const { pdf, extract } = await extraction("openai-responses", {
-      agents: { defaults: { pdfModel: { primary: OPENAI, fallbacks: [FALLBACK] } } },
-    });
-    extract.mockResolvedValue({ text: "Recovered document content", images: [] });
-    if (overloaded) {
-      extract.mockRejectedValueOnce(
-        new WorkerTaskError("worker task capacity reached", "overloaded"),
-      );
-    } else {
-      completeMock.mockRejectedValueOnce(new Error("temporary provider failure"));
-    }
-    completeMock.mockResolvedValue(summary("Recovered PDF summary"));
-    const result = await pdf.execute("pdf", { pdf: "/tmp/doc.pdf", prompt: "summarize" });
-    expect(result.content).toEqual(textContent("Recovered PDF summary"));
-    expect(result.details).toMatchObject({ model: FALLBACK, native: false });
-    expect(contextText()).toContain("Recovered document content");
-    expect(extract).toHaveBeenCalledTimes(overloaded ? 2 : 1);
-    expect(completeMock).toHaveBeenCalledTimes(overloaded ? 1 : 2);
-  },
-);
+it("keeps local extraction worker overload out of provider fallback", async () => {
+  const { pdf, extract } = await extraction("openai-responses", {
+    agents: { defaults: { pdfModel: { primary: OPENAI, fallbacks: [FALLBACK] } } },
+  });
+  const overload = new WorkerTaskError("worker task capacity reached", "overloaded");
+  extract.mockRejectedValueOnce(overload);
+
+  await expect(pdf.execute("pdf", { pdf: "/tmp/doc.pdf", prompt: "summarize" })).rejects.toBe(
+    overload,
+  );
+  expect(extract).toHaveBeenCalledOnce();
+  expect(completeMock).not.toHaveBeenCalled();
+});
+
+it("reuses successful extraction after a genuine provider failure", async () => {
+  const { pdf, extract } = await extraction("openai-responses", {
+    agents: { defaults: { pdfModel: { primary: OPENAI, fallbacks: [FALLBACK] } } },
+  });
+  extract.mockResolvedValue({ text: "Recovered document content", images: [] });
+  completeMock
+    .mockRejectedValueOnce(Object.assign(new Error("temporary provider failure"), { status: 503 }))
+    .mockResolvedValue(summary("Recovered PDF summary"));
+
+  const result = await pdf.execute("pdf", { pdf: "/tmp/doc.pdf", prompt: "summarize" });
+  expect(result.content).toEqual(textContent("Recovered PDF summary"));
+  expect(result.details).toMatchObject({ model: FALLBACK, native: false });
+  expect(contextText()).toContain("Recovered document content");
+  expect(extract).toHaveBeenCalledOnce();
+  expect(completeMock).toHaveBeenCalledTimes(2);
+});
 
 it.each(["bedrock-converse-stream", "openai-completions"])(
   "allows keyless AWS SDK auth only for the Bedrock transport (%s)",

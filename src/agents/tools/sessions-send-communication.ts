@@ -51,7 +51,7 @@ import {
 } from "./sessions-send-communication-endpoint.js";
 
 /** A current permission decision rejected delivery, rather than an unavailable dependency. */
-export class SessionCommunicationDeniedError extends Error {}
+class SessionCommunicationDeniedError extends Error {}
 
 /** A host-held return route minted only after the original request was accepted. */
 export type SessionSendReplyAdmission = (
@@ -79,6 +79,7 @@ export async function prepareSessionsSendCommunication(params: {
   /** Creates empty metadata through the caller's existing creation owner, never model input. */
   ensureTarget?: (assertCurrent: () => void) => Promise<CommunicationEndpoint>;
   signal?: AbortSignal;
+  expectedTask?: import("./sessions-send-tool.types.js").SessionsSendToolOptions["expectedTargetRun"];
   /** Recovery cannot ask for fresh consent on behalf of an ended sender turn. */
   allowApproval?: boolean;
   assertSourceCurrent?: () => void;
@@ -251,9 +252,21 @@ export async function prepareSessionsSendCommunication(params: {
     params.target.entry.parentSessionId === params.source.entry?.sessionId &&
     !task.killIntent &&
     !task.killReconciliation &&
-    !task.terminalOwner &&
     task.cleanupCompletedAt === undefined,
   );
+  if (
+    params.expectedTask !== undefined &&
+    (params.expectedTask === null
+      ? task !== null
+      : !task ||
+        task.runId !== params.expectedTask.runId ||
+        task.taskRunId !== params.expectedTask.taskRunId ||
+        task.generation !== params.expectedTask.generation ||
+        task.createdAt !== params.expectedTask.createdAt)
+  ) {
+    unsubscribe();
+    throw new Error("Retained send target task changed before admission.");
+  }
   const taskRunId = task?.runId;
   const taskGeneration = task?.generation;
   let resumedTask:
@@ -269,7 +282,7 @@ export async function prepareSessionsSendCommunication(params: {
       throw new SessionCommunicationDeniedError("Child controller access changed before delivery.");
     }
     if (
-      ownedTask &&
+      (ownedTask || params.expectedTask !== undefined) &&
       (getLatestLiveSubagentRunByChildSessionKey(
         params.target.sessionKey,
         undefined,
@@ -280,8 +293,7 @@ export async function prepareSessionsSendCommunication(params: {
         (task?.controllerSessionKey && task.controllerSessionKey !== params.source.sessionKey) ||
         task?.killIntent ||
         task?.killReconciliation ||
-        task?.terminalOwner ||
-        task?.cleanupCompletedAt !== undefined)
+        (ownedTask && task?.cleanupCompletedAt !== undefined))
     ) {
       if (resumedTask) {
         assertParentSubagentResumeSuccessorCurrent(resumedTask.resume, resumedTask.runId);
@@ -544,7 +556,9 @@ export async function prepareSessionsSendCommunication(params: {
       const runId = request.params.idempotencyKey;
       const hasRunId = typeof runId === "string";
       const resume = readInProcessSubagentResume(request);
-      if (ownedTask && resume && hasRunId) {
+      // A retained pin also fences tasks whose parent-lineage convenience flag is false.
+      // Only the private resume binding can advance that pin to this exact admitted successor.
+      if ((ownedTask || params.expectedTask !== undefined) && resume && hasRunId) {
         if (
           resume.childSessionKey !== targetSessionKey ||
           resume.childSessionId !== target[0]!.entry?.sessionId ||

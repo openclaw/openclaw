@@ -6,6 +6,7 @@ import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
+import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import type { ProviderQuotaGroup } from "../../../lib/provider-quota-summary.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type {
@@ -16,6 +17,7 @@ import type {
 const ChatContextBreakdown = lazy(() => import("./chat-context-breakdown.tsx"), {
   export: "ChatContextBreakdown",
 });
+warmWhenIdle(ChatContextBreakdown.preload);
 
 function ContextPopoverSkeleton() {
   return (
@@ -267,7 +269,8 @@ export function ChatComposerContextPanel(
                     : "chat.composer.contextUsage.contextWindow",
                 )}
               </span>
-              <strong class="context-usage__context-value">
+              {/* Translation replaces the text anchors used by live token updates. */}
+              <strong class="context-usage__context-value" translate="no">
                 {context().detail} · {context().approximate ? "~" : ""}
                 {context().pct}%
               </strong>

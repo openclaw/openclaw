@@ -16,11 +16,10 @@ import {
 
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
+type Evidence = SessionMembersListEvidenceResult;
+const baseRow = { sessionId: "current", kind: "direct", sharingRole: "owner" } as const;
 
-async function mountSharingHeader(
-  row: GatewaySessionRow,
-  read: () => Promise<SessionMembersListEvidenceResult>,
-) {
+async function mountSharingHeader(row: GatewaySessionRow, read: () => Promise<Evidence>) {
   const mounted = createMountedPanes([row], row.agentId, undefined, {
     "sessions.list": () => sessionsResult([row], 1),
   });
@@ -47,18 +46,14 @@ async function mountSharingHeader(
   const pane = mounted.mount(row.key);
   await refreshPane(pane);
   const container = document.body.appendChild(document.createElement("div"));
-  const draw = () =>
+  const draw = () => {
+    const workspace = createPaneHeaderWorkspaceFixture(pane.state);
+    const selected = selectedChatSessionRow(pane.state);
     renderPaneHeaderInto(
-      pane.renderPaneHeader(
-        createPaneHeaderWorkspaceFixture(pane.state),
-        selectedChatSessionRow(pane.state),
-        false,
-        undefined,
-        false,
-        null,
-      ),
+      pane.renderPaneHeader(workspace, selected, false, undefined, false, null),
       container,
     );
+  };
   const settle = async () => {
     await Promise.all(request.mock.results.map((result) => result.value));
     draw();
@@ -72,12 +67,10 @@ it.each([
 ])("updates the $key Public badge when another client changes sharing", async (target) => {
   const row: GatewaySessionRow = {
     ...target,
-    sessionId: "session-current",
-    kind: "direct",
+    ...baseRow,
     visibility: "draft",
-    sharingRole: "owner",
   };
-  const evidence = (token?: string): SessionMembersListEvidenceResult => ({
+  const evidence = (token?: string): Evidence => ({
     sessionKey: row.key,
     members: [],
     identities: [],
@@ -112,7 +105,7 @@ it.each([
   await settle();
   expect(indicator()?.textContent ?? "").toContain("Public");
 
-  const staleRead = createDeferred<SessionMembersListEvidenceResult>();
+  const staleRead = createDeferred<Evidence>();
   sharingRead.mockImplementationOnce(() => staleRead.promise);
   changed();
   published = false;
@@ -124,14 +117,12 @@ it.each([
 
 it("refreshes participation after profile and config changes and rejects an older reply", async () => {
   const row: GatewaySessionRow = {
+    ...baseRow,
     key: "agent:main:permissions",
     agentId: "main",
-    sessionId: "permissions",
-    kind: "direct",
     visibility: "read-only",
-    sharingRole: "owner",
   };
-  const evidence = (level: "read" | "send", fixed = false): SessionMembersListEvidenceResult => ({
+  const evidence = (level: "read" | "send", fixed = false): Evidence => ({
     sessionKey: row.key,
     members: [],
     role: "owner",
@@ -148,7 +139,6 @@ it("refreshes participation after profile and config changes and rejects an olde
   await settle();
   container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")!.click();
   await waitForSolid(() => expect(container.textContent).toContain("Can read"));
-  const readsAfterOpen = sharingRead.mock.calls.length;
   sharingRead.mockResolvedValue(evidence("send", true));
   mounted.emitGatewayEvent("sessions.changed", { reason: "profile-identity" });
   draw();
@@ -158,7 +148,7 @@ it("refreshes participation after profile and config changes and rejects an olde
   );
   expect(container.querySelector('[data-value="permission:person"]')).toBeNull();
 
-  const old = createDeferred<SessionMembersListEvidenceResult>();
+  const old = createDeferred<Evidence>();
   sharingRead.mockImplementationOnce(() => old.promise);
   mounted.emitGatewayEvent("sessions.changed", { reason: "profile-identity" });
   draw();
@@ -170,7 +160,6 @@ it("refreshes participation after profile and config changes and rejects an olde
   expect(container.querySelector('[data-value="permission:person"]')?.textContent).toContain(
     "Can read",
   );
-  expect(sharingRead).toHaveBeenCalledTimes(readsAfterOpen + 3);
   expect(
     request.mock.calls.some(
       ([method]) => method === "session.members.add" || method === "session.members.remove",

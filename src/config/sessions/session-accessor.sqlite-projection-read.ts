@@ -25,7 +25,7 @@ import type { VisibleHistoryProjection } from "./session-accessor.sqlite-history
 import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import { projectSessionActorContextMetadata } from "./session-actor-context-metadata.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { retainTranscriptContextFacts } from "./session-transcript-context-facts.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
 import { readSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
@@ -50,21 +50,22 @@ type ActiveTranscriptDatabase = Pick<
 >;
 
 type TranscriptReadDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">;
+type ReadonlyFacts<T> = { readonly [K in keyof T]: ReadonlyFacts<T[K]> };
 
 export type CurrentTranscriptProjection = {
   database: TranscriptReadDatabase;
   generation: string | undefined;
   version: SessionTranscriptContextVersion;
   hasUnindexedPrefix: boolean;
-  latestIndexedReset?: SessionTranscriptProjectionFacts["latestIndexedReset"];
+  latestIndexedReset?: ReadonlyFacts<SessionTranscriptProjectionFacts["latestIndexedReset"]>;
   unindexedHistoryControls?: {
     coveredThrough: number;
     rows: readonly UnindexedHistoryControl[];
   };
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>;
-  state: SessionTranscriptProjectionState;
-  contextMetadata?: SessionTranscriptContextMetadata;
-  contextStats?: SessionTranscriptContextStats;
+  state: ReadonlyFacts<SessionTranscriptProjectionState>;
+  contextMetadata?: ReadonlyFacts<SessionTranscriptContextMetadata>;
+  contextStats?: ReadonlyFacts<SessionTranscriptContextStats>;
   /** Installed by the history worker; accounting-only snapshots never resolve markers. */
   resolveVisibleHistory?: (projection: CurrentTranscriptProjection) => VisibleHistoryProjection;
 };

@@ -8,6 +8,7 @@ import {
   withoutGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { isHostPluginApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getCanonicalGatewayContextResolver,
@@ -23,7 +24,10 @@ import {
   bindInProcessSubagentResume,
   readInProcessSubagentResume,
 } from "./in-process-subagent-resume.js";
-import { projectOperatorScopesForMethod } from "./method-scopes.js";
+import {
+  projectOperatorScopesForMethod,
+  resolveLeastPrivilegeOperatorScopesForMethod,
+} from "./method-scopes.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
@@ -139,10 +143,12 @@ export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
   );
 }
 
-/** Captured while live; its accepting owner, not the original invocation, releases it. */
-export function captureOperatorToolGatewayContinuationContext(
+export function captureOperatorToolGatewayContinuationContextInternal(
   target?: { sessionKey: string; agentId?: string },
-  options?: { retainRequester?: true },
+  options?: {
+    retainRequester?: true;
+    request?: { method: string; params: Record<string, unknown> };
+  },
 ) {
   const scope = getPluginRuntimeGatewayRequestScope();
   const caller = getGatewayToolCallerIdentity();
@@ -162,11 +168,21 @@ export function captureOperatorToolGatewayContinuationContext(
   // Use the normal dispatch owner to intersect scopes and validate the live caller
   // before transferring its source. A cleanup scope alone retains request lifetime.
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
-  const resolved = resolveInProcessGatewayDispatch("agent", target, {
+  const method = options?.request?.method ?? "agent";
+  if (options?.request && method !== "plugins.reload") {
+    throw new Error("Request-bound continuation only supports plugin reload");
+  }
+  const requestParams = options?.request?.params ?? target;
+  const resolved = resolveInProcessGatewayDispatch(method, requestParams, {
     forceSyntheticClient: true,
     operatorRoleActor: { kind: "system" },
     resolveGatewayContext,
-    syntheticScopeMode: "exact",
+    ...(options?.request
+      ? {
+          syntheticScopes: resolveLeastPrivilegeOperatorScopesForMethod(method, requestParams),
+          syntheticScopeMode: "minimum" as const,
+        }
+      : { syntheticScopeMode: "exact" as const }),
   });
   return captureGatewayOperatorRunAuthority({
     client: resolved.operatorSourceClient,
@@ -178,7 +194,7 @@ export function captureOperatorToolGatewayContinuationContext(
       captured?.authority.assertCurrent();
       resolved.assertContextCurrent();
       resolved.assertInvocationCurrent();
-      assertCallerCurrent?.("agent");
+      assertCallerCurrent?.(method);
       const continuationScope = runWithOperatorToolGatewayCleanupContext(() => ({
         ...getPluginRuntimeGatewayRequestScope(),
         client: captured
@@ -244,7 +260,7 @@ export function captureOperatorToolGatewayContinuationContext(
         /** Re-enter only the requester selected before transfer, under this retained source. */
         runWithRequester<T>(run: () => Promise<T>): Promise<T> {
           return runInScope(() =>
-            requester?.origin
+            requester
               ? withGatewayToolCallerIdentity(
                   {
                     agentId: requester.agentId,
@@ -270,6 +286,14 @@ export function captureOperatorToolGatewayContinuationContext(
       throw error;
     }
   });
+}
+
+/** Captured while live; its accepting owner, not the original invocation, releases it. */
+export function captureOperatorToolGatewayContinuationContext(
+  target?: { sessionKey: string; agentId?: string },
+  options?: { retainRequester?: true },
+) {
+  return captureOperatorToolGatewayContinuationContextInternal(target, options);
 }
 
 /** Holds the original operator source until an accepted asynchronous follow-up settles. */
@@ -520,7 +544,7 @@ export function resolveInProcessGatewayDispatch(
   }
   const hostApprovalRequestEligible =
     options?.allowHostPluginApprovalRequest === true &&
-    method === "plugin.approval.request" &&
+    isHostPluginApprovalMethod(method) &&
     options.forceSyntheticClient === true;
   const trustedPluginApprovalOwnerId =
     hostApprovalRequestEligible &&
@@ -565,7 +589,8 @@ export function resolveInProcessGatewayDispatch(
         ? (trustedPluginApprovalOwnerId ?? signedAgentApprovalOwnerId)
         : signedAgentApprovalOwnerId
       : undefined;
-  // The host grants only request admission; it never gives the plugin reviewer scopes.
+  // The host grants only request admission and the wait for that request's own verdict;
+  // it never gives the plugin reviewer scopes.
   const requestScopes = hostApprovalRequestOwnerId ? [WRITE_SCOPE] : syntheticScopes;
   const baseSyntheticClient = createSyntheticPluginRuntimeClient({
     ...(operatorAuthority

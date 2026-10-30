@@ -19,6 +19,7 @@ import { prepareNativePackageStage } from "../../infra/update-native-package-sta
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../../version.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { updateResult, updateStep } from "./update-command-maintenance-fixtures.test-support.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
@@ -43,10 +44,7 @@ async function expectPackageVersion(root: string, version: string) {
 const packageRoot = (owner: string) => path.join(owner, "node_modules", "openclaw");
 async function writePackageOwner(owner: string, version: string) {
   await writePackageRoot(packageRoot(owner), version);
-  await fs.writeFile(
-    path.join(owner, "package.json"),
-    JSON.stringify({ dependencies: { openclaw: version } }),
-  );
+  await writeFixtureJson(path.join(owner, "package.json"), { dependencies: { openclaw: version } });
 }
 
 export function registerPackageRootRollbackTests(

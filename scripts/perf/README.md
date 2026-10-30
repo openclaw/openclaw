@@ -1,5 +1,26 @@
 # Team-shaped synthetic state
 
+## Update state I/O
+
+`update-state-io-measure.ts` measures candidate inventory and snapshot creation,
+runtime retention, and the complete candidate Doctor command against synthetic
+shared and agent databases (about 2 GiB) and a 256 MiB runtime tree. It freezes
+the baseline snapshot owner while using unchanged dependencies from the current
+checkout, then interleaves baseline and candidate samples. Retention and Doctor
+are unchanged controls. Full output integrity and payload checks run outside
+the timed snapshot phase.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/update-state-io-measure.ts \
+  --baseline <base-commit> --samples 5
+```
+
+The script creates a realpath-resolved temporary root, isolates HOME and state,
+selects a free Gateway port, and removes its synthetic files afterward. Set
+`TMPDIR` to a trusted per-user temporary directory if the host's default has
+unsafe ancestors. Results include operation counts, medians, p95, spread, source
+identity, and host load. These phase timings do not measure total update downtime.
+
 ## Plugin policy reads
 
 `plugin-policy-read-measure.mjs` measures warm Codex config resolution and registered
@@ -1404,44 +1425,6 @@ the next pair, and compare each pair's candidate-minus-baseline difference.
 Build and seed outside the measurement CPU allocation. Keep every root and
 temporary directory inside the task-owned sandbox and remove them after use.
 
-## Startup with interrupted subagent runs
-
-The `interruptedRegistry` case starts a real Gateway against 86 retained runs:
-78 completed rows and eight unfinished rows across eight synthetic child agents.
-Four unfinished rows remain `running`, and four are already `interrupted` with
-aborted session state. All rows retain completion expectations and requester-turn
-claims, including the delivered, cleanup-complete rows: all 86 are activation
-obligations, not cold history. They share eight requester cohorts; the unfinished
-rows share two of those cohorts, four per requester. The seed command
-commits the fixture in a child writer, then sends that writer `SIGKILL` while its
-SQLite handles remain open. This preserves actual unclean-close/WAL residue;
-the run/session records are synthetic, not captured from a predecessor Gateway
-or model execution. No models, credentials, or external channels are used.
-
-```sh
-node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts \
-  --case interruptedRegistry --fixture-root /path/to/new-fixture --seed-only
-node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts \
-  --case interruptedRegistry --fixture-root /path/to/new-fixture \
-  --runs 1 --warmup 0 --timeout-ms 90000 --output /path/to/result.json
-```
-
-The output includes spawn-to-`/readyz`, spawn-to-Gateway-ready, all activation
-trace spans, per-run recovery times, and database bytes. The driver waits for all
-eight recovery events and verifies exactly one event per unfinished run, eight
-durable terminal error outcomes, all 86 retained rows, and unchanged execution
-outcomes for the 78 completed rows after shutdown. Requester claim metadata may
-change during settlement. The synthetic rows have no saved operator source, so
-this proves orphan and missing-source settlement; it does not exercise successful
-operator authority restoration, resuming a model, or external delivery.
-Activation subspans can overlap or sum concurrent groups, so compare the outer
-activation elapsed time separately from the component totals.
-
-Prepare fresh roots sequentially for each side of every pair; recovery mutates
-the fixture. Use the same `--start-at <epoch-ms>` for concurrent A/B starts under
-the benchmark host's exclusive measurement lock, and swap the assigned CPU
-halves for the next pair. Build and seed outside the measurement allocation.
-
 ## Startup with one checking agent
 
 The startup benchmark has an opt-in `slowAgentDatabase` case. Prepare each side
@@ -1456,9 +1439,7 @@ node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts \
   --runs 1 --warmup 0 --timeout-ms 90000 --output /path/to/result.json
 ```
 
-The fixture contains five agents with one interrupted subagent each. All runs
-belong to independent requester sessions owned by the first healthy agent, so
-one parent's unrelated conversations must recover independently. Four agent
+The fixture contains five agents with one ordinary session each. Four agent
 databases are small; the fifth contains the requested MiB of synthetic cache
 payload. Its clean-close seal is removed under offline fixture custody, forcing
 the real integrity scan. A benchmark-only preload delays that scan by the
@@ -1467,13 +1448,18 @@ to measure the native scan separately. This simulates a long check without
 writing the incident's tens of gigabytes onto a shared host.
 
 Results retain `/readyz`, the integrity gate's start and completion times, and
-each agent's recovered session status event. The driver waits for all five
-recovery events before teardown and rejects missing observations. No models or
-external channels run. Generate a fresh fixture for every sample; recovery
-mutates the synthetic records. Use separate roots and identical inputs for
+each agent's successful keyed `chat.history` completion in `agentRecoveryMs`,
+measured from process spawn. These five reads start concurrently after `/healthz`
+responds, independently of the shared `sessions.list` projection. Each must
+return its seeded session identity through the selected agent's database worker;
+an empty response for an unsaved session does not count. The driver joins all
+five reads before teardown and rejects missing observations. No models or
+external channels run. Generate a fresh fixture for every sample so the slow
+database requires its full scan again. Use separate roots and identical inputs for
 concurrent A/B pairs, with the host's measurement lock and alternating CPU halves.
-The case also requires every healthy agent to recover before the slow integrity
-gate passes, the slow agent to recover afterward, and zero admission errors.
+The case also requires every healthy agent's database read to complete before the
+slow integrity gate passes, the slow agent's read to complete afterward, and zero
+admission errors.
 An unfixed baseline exits nonzero for the ordering failure while still writing
 its measurements; distinguish this expected result from setup or missing data.
 
@@ -4612,6 +4598,17 @@ owner measurements do not include Gateway transport or event-loop delay.
 For concurrent comparisons, pass the same future Unix millisecond timestamp with
 `--start-at` to both processes. They wait after warmup and explicit GC; a missed
 start deadline fails the run. The report records the actual measured start time.
+
+For the 10,800-row selection comparison, add `--team-shape --iterations 720`.
+This uses 4,300 subagents, 4,400 archived dashboards, 400 open dashboards, and
+1,700 other sessions, including global/unknown sentinels. It adds involving-me,
+owner-first, and owner-count requests to the three visibility scopes. Use
+`--reference-only` to isolate reference resolution over prepared visible identities,
+or `--selection` for complete page selection and facets. Compare each mode's golden
+outputs between revisions. Run `--mode timing` separately from the default
+`--mode allocation` so CPU comparisons exclude allocation-sampler overhead.
+These owner probes exclude transport and full row presentation; use the Team-shape
+stress harness for those boundaries and its populated subagent registry.
 
 For long RPC allocation windows, use `--warmup-operations` to warm fewer requests
 than the measured `--operations` count. For example, `--scenario sessions.list

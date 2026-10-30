@@ -495,6 +495,28 @@ CREATE TABLE "session_transcript_archives" (
   UNIQUE ("archive_name")
 );
 
+CREATE TABLE "session_transcript_cold_archive_chunks" (
+  "session_id" text COLLATE "C" NOT NULL,
+  "chunk_index" bigint NOT NULL,
+  "archive_name" text COLLATE "C" NOT NULL,
+  "archive_sha256" text COLLATE "C" NOT NULL,
+  "first_seq" bigint NOT NULL,
+  "last_seq" bigint NOT NULL,
+  "event_count" bigint NOT NULL,
+  "raw_bytes" bigint NOT NULL,
+  "archive_bytes" bigint NOT NULL,
+  "archive_blob" bytea,
+  PRIMARY KEY ("session_id", "chunk_index"),
+  CHECK (("chunk_index" >= 0)),
+  CHECK ((char_length("archive_sha256") = 64)),
+  CHECK (("last_seq" >= "first_seq")),
+  CHECK (("event_count" >= 1)),
+  CHECK (("raw_bytes" >= 0)),
+  CHECK (("archive_bytes" >= 0)),
+  CHECK ((char_length("archive_name") > 0) AND ("archive_name" NOT IN ('.', '..')) AND (strpos("archive_name", '/') = 0) AND (strpos("archive_name", '\') = 0)),
+  UNIQUE ("archive_name")
+);
+
 CREATE TABLE "session_transcript_cold_archives" (
   "session_id" text COLLATE "C" NOT NULL,
   "generation" text COLLATE "C" NOT NULL,
@@ -752,6 +774,12 @@ CREATE INDEX "idx_agent_transcript_event_sequence" ON "transcript_event_identiti
 
 CREATE UNIQUE INDEX "idx_agent_transcript_message_idempotency" ON "transcript_event_identities" (("session_id") ASC, ("message_idempotency_key") ASC) WHERE "message_idempotency_key" IS NOT NULL;
 
+CREATE INDEX "idx_memory_index_sources_exact_path" ON "memory_index_sources" ((pg_catalog.md5(pg_catalog.lower(pg_catalog.normalize(pg_catalog.regexp_replace(pg_catalog.replace(pg_catalog.btrim(path), E'\\', '/'), '^\./', ''), 'NFC')))));
+
+CREATE INDEX "idx_memory_index_sources_basename" ON "memory_index_sources" ((pg_catalog.md5(pg_catalog.regexp_replace(pg_catalog.lower(pg_catalog.normalize(pg_catalog.regexp_replace(pg_catalog.replace(pg_catalog.btrim(path), E'\\', '/'), '^\./', ''), 'NFC')), '^.*/', ''))));
+
+CREATE INDEX "idx_memory_index_sources_stem" ON "memory_index_sources" ((pg_catalog.md5(pg_catalog.regexp_replace(pg_catalog.regexp_replace(pg_catalog.lower(pg_catalog.normalize(pg_catalog.regexp_replace(pg_catalog.replace(pg_catalog.btrim(path), E'\\', '/'), '^\./', ''), 'NFC')), '^.*/', ''), '^(.+)\.[^.]*$', '\1'))));
+
 ALTER TABLE "acp_parent_stream_events" ADD FOREIGN KEY ("session_id") REFERENCES "session_windows" ("session_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 
 ALTER TABLE "board_tabs" ADD FOREIGN KEY ("session_key") REFERENCES "session_nodes" ("session_key") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
@@ -791,6 +819,8 @@ ALTER TABLE "session_reactions" ADD FOREIGN KEY ("session_key") REFERENCES "sess
 ALTER TABLE "session_suggestions" ADD FOREIGN KEY ("session_key") REFERENCES "session_nodes" ("session_key") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 
 ALTER TABLE "session_transcript_active_events" ADD FOREIGN KEY ("session_id", "event_seq") REFERENCES "transcript_events" ("session_id", "seq") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
+
+ALTER TABLE "session_transcript_cold_archive_chunks" ADD FOREIGN KEY ("session_id") REFERENCES "session_transcript_cold_archives" ("session_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 
 ALTER TABLE "session_transcript_cold_archives" ADD FOREIGN KEY ("session_id") REFERENCES "session_windows" ("session_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 

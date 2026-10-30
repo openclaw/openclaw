@@ -39,6 +39,8 @@ import {
   publishModelRuntimeSnapshot,
   resolveConfiguredOwner,
   readPublishedModelRuntimeSnapshot,
+  resolvePreparedModelRuntimeOwnerBySnapshot,
+  preparedModelRuntimeConfigsMatch,
   type PreparedModelRuntimeOwner,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimePublicationOptions,
@@ -243,6 +245,15 @@ export function getPreparedModelRuntimeSnapshot(
   return getBlockingReplacement(rawInput)
     ? undefined
     : readPublishedModelRuntimeSnapshot(owners, rawInput);
+}
+
+/** Cleanup borrows the workspace's published inbound registrations without rebuilding a run. */
+export function getPreparedInboundPluginRegistry(input: PreparedModelRuntimeInput) {
+  const snapshot = getPreparedModelRuntimeSnapshot(input);
+  const owner = snapshot && resolvePreparedModelRuntimeOwnerBySnapshot(snapshot);
+  return owner && preparedModelRuntimeConfigsMatch(owner.input.config, input.config)
+    ? owner.pluginGeneration?.inboundPluginRegistry
+    : undefined;
 }
 
 /** Reads the owner-held publication barrier without starting catalog acquisition. */

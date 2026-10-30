@@ -22,7 +22,10 @@ import {
   preserveSessionEntryCacheAcrossWrite,
   publishSessionEntryPlaceholderInsertion,
 } from "./session-accessor.sqlite-entry-cache.js";
-import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import {
+  getSessionKysely,
+  type ResolvedTranscriptScope,
+} from "./session-accessor.sqlite-scope-helpers.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import {
   selectTranscriptAppendState,
@@ -39,11 +42,11 @@ import {
 import {
   assertSessionTranscriptHot,
   readSessionColdTranscript,
-  SessionTranscriptColdError,
 } from "./session-cold-storage-state.js";
 import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 import { publishSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import type { SessionTranscriptAuthority } from "./session-transcript-authority.types.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import {
   readTranscriptContextFacts,
   retainTranscriptContextFacts,

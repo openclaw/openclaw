@@ -6,31 +6,18 @@ import {
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-import type {
-  OpenClawAgentDatabase,
-  OpenClawAgentDatabaseOptions,
-} from "../../state/openclaw-agent-db.js";
+import type { SessionColdBatchInput } from "./session-accessor.sqlite-archive-types.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
-import { MAX_COLD_ARCHIVE_BYTES } from "./session-cold-storage-codec.js";
 import { readSessionColdStorageProtection } from "./session-cold-storage-eligibility.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
-import type { SessionColdOversized } from "./session-cold-storage.types.js";
 import { collectSessionAdmissionReferences } from "./session-history-eviction-candidates.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
-export type SessionColdBatchInput = {
-  databaseOptions: OpenClawAgentDatabaseOptions & { path: string };
-  admissionIdentities: string[];
-  liveSessionKeys: string[];
-  cooledSessionIds: string[];
-  beforeMs: number;
-  maxTranscripts: number;
-  maxBytes: number;
-};
 export function selectSessionColdBatch(input: SessionColdBatchInput) {
   return withOpenClawAgentDatabaseReadOnly(
     (database) =>
@@ -97,44 +84,7 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
                     .limit(input.maxTranscripts - externalizations.length),
                 ).rows
               : [];
-          const oversizedTranscripts: SessionColdOversized[] = [];
-          // UTF-16 stores leave event_utf8_bytes null; half the stored bytes bounds UTF-8 below.
-          const utf16Storage =
-            candidates.length > 0 &&
-            !isPostgresSqlConnection(database.db) &&
-            executeSqliteQuerySync(
-              database.db,
-              getNodeSqliteKysely<{ pragma_encoding: { encoding: string } }>(database.db)
-                .selectFrom("pragma_encoding")
-                .select("encoding"),
-            ).rows[0]?.encoding !== "UTF-8";
           const plans = candidates.flatMap(({ session_id: sessionId }) => {
-            const sizes = executeSqliteQuerySync(
-              database.db,
-              db
-                .selectFrom("transcript_events")
-                .select((eb) => [
-                  eb.fn.sum<number>("event_utf8_bytes").as("known"),
-                  eb.fn
-                    .sum<number>(
-                      eb
-                        .case()
-                        .when("event_utf8_bytes", "is", null)
-                        .then(eb.fn<number>("octet_length", ["event_json"]))
-                        .end(),
-                    )
-                    .as("stored"),
-                ])
-                .where("session_id", "=", sessionId),
-            ).rows[0];
-            const stored = sizes?.stored ?? 0;
-            const lowerBoundBytes =
-              (sizes?.known ?? 0) + (utf16Storage ? Math.ceil(stored / 2) : stored);
-            // The uncompressed envelope contains every original event body plus restore metadata.
-            if (lowerBoundBytes > MAX_COLD_ARCHIVE_BYTES) {
-              oversizedTranscripts.push({ sessionId, lowerBoundBytes });
-              return [];
-            }
             const snapshot = readSessionStateDeleteSnapshot(database.db, sessionId);
             return snapshot.generation && snapshot.lastSeq !== null
               ? [
@@ -156,7 +106,7 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
               database.db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0,
             );
           }
-          return { plans, externalizations, oversizedTranscripts, freePages };
+          return { plans, externalizations, freePages };
         },
         { databaseLabel: database.path, operationLabel: "cold transcript selection" },
       ),
@@ -177,11 +127,27 @@ export function readSessionAdmissionProtectionKeys(
   const db = getNodeSqliteKysely<DB>(database.db);
   for (const row of iterateSqliteQuerySync(
     database.db,
-    db.selectFrom("session_nodes").select(["session_key", "current_session_id", "entry_json"]),
+    db
+      .selectFrom("session_nodes")
+      .select(["session_key", "current_session_id"])
+      .select((eb) =>
+        eb
+          .case()
+          .when(eb.and([eb("entry_valid", "=", 1), eb("has_optional_references", "=", 0)]))
+          .then(null)
+          .else(eb.ref("entry_json"))
+          .end()
+          .as("entry_json"),
+      ),
   )) {
-    const entry = parseSessionEntryJson(row);
+    // Admitted rows without optional references need only their canonical current ID.
+    const entry =
+      row.entry_json === null
+        ? null
+        : parseSessionEntryJson({ ...row, entry_json: row.entry_json });
     if (
       selected.has(row.current_session_id) ||
+      (row.entry_json === null && selected.has(row.current_session_id.trim())) ||
       (entry && collectSessionStateIdsForEntry(entry).some((id) => selected.has(id)))
     ) {
       keys.add(normalizeStoreSessionKey(row.session_key));

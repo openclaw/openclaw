@@ -25,6 +25,7 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { keyboardHintsVisible } from "../lib/reactive/keyboard-hints.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import { paneDomId } from "../pages/chat/components/chat-composer-dom.ts";
@@ -42,10 +43,12 @@ import "../styles/command-palette.css";
 import {
   commandPaletteCategoryLabel,
   filterCommandPaletteItems,
+  getStaticCommandPaletteCatalogItems,
   type CommandPaletteItem,
 } from "./command-palette-catalog-search.ts";
 import { COMMAND_PALETTE_DIALOG_STYLE } from "./command-palette-contract.ts";
 import { COMMAND_PALETTE_INPUT_ID, CommandPaletteInput } from "./command-palette-input.tsx";
+import { createCommandPaletteMatches } from "./command-palette-matches.ts";
 import { CommandPaletteResult } from "./command-palette-result.tsx";
 import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
 import type { CommandPaletteState, PaletteFilter } from "./command-palette-state.ts";
@@ -203,16 +206,26 @@ function matchesFilter(item: CommandPaletteItem, filter: PaletteFilter) {
   return filter === "all" || item.category === (filter === "sessions" ? "chats" : "messages");
 }
 
-function resolvePaletteResults(snapshot: CommandPaletteProps) {
+function resolvePaletteResults(snapshot: CommandPaletteProps, prepared?: CommandPaletteItem[]) {
   const hideSearch =
     snapshot.promptMode || snapshot.mentionMenu.open || snapshot.draft.mentions.length > 0;
-  const matches = hideSearch
-    ? []
-    : filterCommandPaletteItems({
-        ...snapshot,
-        query: snapshot.searchQuery,
-        includeSlashCommands: Boolean(snapshot.onSlashCommand),
-      });
+  const matches =
+    prepared ??
+    (hideSearch
+      ? []
+      : filterCommandPaletteItems({
+          ...snapshot,
+          catalogItems: [
+            ...getStaticCommandPaletteCatalogItems(
+              snapshot.canAdmin,
+              snapshot.nativeDeviceSettings,
+            ),
+            ...snapshot.catalogItems,
+            ...snapshot.modelItems,
+          ],
+          query: snapshot.searchQuery,
+          includeSlashCommands: Boolean(snapshot.onSlashCommand),
+        }));
   const grouped = groupItems(matches.filter((item) => matchesFilter(item, snapshot.filter)));
   const items = grouped.flatMap(([, entries]) => entries);
   // Preserve explicit selection through transient result changes, but only
@@ -226,9 +239,11 @@ function resolvePaletteResults(snapshot: CommandPaletteProps) {
 
 function PaletteHint(props: { shortcut: SolidJSX.Element; label: string }) {
   return (
-    <span class="cmd-palette__hint">
-      {props.shortcut} <span>{props.label}</span>
-    </span>
+    <Show when={keyboardHintsVisible()}>
+      <span class="cmd-palette__hint">
+        {props.shortcut} <span>{props.label}</span>
+      </span>
+    </Show>
   );
 }
 
@@ -458,7 +473,8 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
     current().promptMode || current().mentionMenu.open || current().draft.mentions.length > 0;
   // The collapsing search remains mounted with its last presented projection.
   const search = createParkedProjection(current, () => !hideSearch());
-  const results = createMemo(() => resolvePaletteResults(search()));
+  const matches = createCommandPaletteMatches(search);
+  const results = createMemo(() => resolvePaletteResults(search(), matches()));
   const sessionRequest = createMemo(() => search().sessionSearchRead);
   const sessionRead = createMemo(() => sessionRequest()?.promise);
   const catalogRequest = createMemo(() => search().catalogSearchRead);

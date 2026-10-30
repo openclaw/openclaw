@@ -167,36 +167,25 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       return;
     }
     if (!before.stopped) {
-      const verdict = before.serviceUpdateVerdict;
-      if (verdict?.kind === "owned" && verdict.requiresInstallRootRefresh) {
-        const { inspectGatewayServiceInstallationDrift } =
-          await import("../daemon/service-layout.js");
-        const drift = await inspectGatewayServiceInstallationDrift(
-          { packageRootReal: verdict.root },
-          root,
-        );
-        if (drift) {
-          const { formatGatewayServiceInstallationDrift } =
-            await import("../cli/daemon-cli/shared.js");
-          const message = formatGatewayServiceInstallationDrift(drift, before.serviceEnv, {
-            stopped: true,
-            port: before.servicePort,
-          });
-          warn(message);
-          return;
-        }
-      }
-      if (
+      const { resolveUnstoppedGatewayRestoration } =
+        await import("./doctor-maintenance-restoration.js");
+      const decision = await resolveUnstoppedGatewayRestoration({
+        before,
+        serviceEnv: before.serviceEnv,
+        root,
         // Custody consent restores our own stop; it does not authorize starting
         // a service the operator had already stopped. Explicit repair retains recovery.
-        (params.interactiveRepair &&
-          params.options.repair !== true &&
-          params.options.yes !== true) ||
-        resolveDoctorRepairMode(params.options, env).updateInProgress ||
-        before.offline !== true ||
-        verdict?.kind !== "owned" ||
-        verdict.requiresInstallRootRefresh
-      ) {
+        leaveStopped:
+          (params.interactiveRepair &&
+            params.options.repair !== true &&
+            params.options.yes !== true) ||
+          resolveDoctorRepairMode(params.options, env).updateInProgress,
+        reportStopped: params.reportStoppedService === true,
+      });
+      if (decision.warning) {
+        warn(decision.warning);
+      }
+      if (!decision.restore) {
         return;
       }
     }

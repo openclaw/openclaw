@@ -68,12 +68,11 @@ vi.mock("../../infra/update-triage.js", () => ({
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import type { LeaseScenario } from "./update-command-lease.test-support.js";
-import type { ProducedPluginUpdateResult } from "./update-command-plugins-internals.js";
+import type { PostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 
-export const pluginResult: ProducedPluginUpdateResult = {
-  assessment: { kind: "no-payload-repair" },
+export const pluginResult: PostCorePluginUpdateResult = {
   status: "ok",
   changed: true,
   sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
@@ -267,7 +266,8 @@ export function expectDoctorDiagnostics(): void {
 
 export function expectSuccess(lane: Lane, doctorExpected = true): void {
   expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-  expect(reportedResult(lane)).toMatchObject(
+  const result = reportedResult(lane);
+  expect(result, JSON.stringify(result, null, 2)).toMatchObject(
     lane === "resume"
       ? { status: "ok" }
       : { status: "ok", postUpdate: { plugins: { status: "ok" } } },

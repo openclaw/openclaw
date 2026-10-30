@@ -34,7 +34,7 @@ export function configSnapshot(hash: string, enabled = true, indent?: number) {
   };
 }
 
-export const focused = (locator: Locator) =>
+const focused = (locator: Locator) =>
   locator.evaluate((element) => element === document.activeElement);
 export async function expectFocus(locator: Locator, within = false) {
   await expect

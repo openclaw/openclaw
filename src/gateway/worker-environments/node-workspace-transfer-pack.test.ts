@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
@@ -15,21 +15,8 @@ import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
-const tempDirs = createTempDirTracker();
-let closeTransfer: (() => Promise<void>) | undefined;
-afterEach(async () => {
-  const close = closeTransfer;
-  closeTransfer = undefined;
-  try {
-    await close?.();
-  } finally {
-    try {
-      tempDirs.cleanup();
-    } finally {
-      vi.restoreAllMocks();
-    }
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 const readPack = async (response: Response) => Buffer.from(await response.arrayBuffer());
 async function expectResponse(pending: Promise<Response>, status = 200) {
@@ -54,16 +41,19 @@ async function createGitTransfer() {
   await commitWorkspace(localPath, "captured base");
   const prepared = await service.prepareSync(request);
   const server = await startNodeWorkspaceTransferTestServer(service);
-  closeTransfer = async () => {
-    await service.closeAll();
-    await server.close();
-  };
   const fetchPack = (token = prepared.token, manifestRef = prepared.snapshot.manifestRef) =>
     fetch(
       `${server.gatewayUrl.replace(/^ws/u, "http")}/__openclaw__/worker-transfer/v1/environments/environment/snapshots/${manifestRef.slice(7)}/pack`,
       { headers: { authorization: `Bearer ${token}` } },
     );
   return {
+    async [Symbol.asyncDispose]() {
+      try {
+        await service.closeAll();
+      } finally {
+        await server.close();
+      }
+    },
     root,
     localPath,
     temporaryRoot,
@@ -89,11 +79,9 @@ async function createGitTransfer() {
 
 describe("node workspace Git pack downloads", () => {
   it("imports and recaptures a Git workspace beyond the Windows path limit", async () => {
-    const fixture = await createGitTransfer();
-    const {
-      token,
-      snapshot: { manifestRef },
-    } = fixture.prepared;
+    await using fixture = await createGitTransfer();
+    const { token, snapshot } = fixture.prepared;
+    const { manifestRef } = snapshot;
     const workspaceDir = path.join(fixture.root, "a".repeat(120), "b".repeat(120), "workspace");
     expect(workspaceDir.length).toBeGreaterThan(260);
     await fs.mkdir(workspaceDir, { recursive: true, mode: 0o700 });
@@ -120,7 +108,7 @@ describe("node workspace Git pack downloads", () => {
   });
 
   it("defers packing until authorized download and shares the captured base across manifests", async () => {
-    const fixture = await createGitTransfer();
+    await using fixture = await createGitTransfer();
     const { localPath, prepared } = fixture;
     expect(await fixture.packs()).toEqual([]);
     await expectResponse(fixture.fetchPack("invalid"), 404);
@@ -149,14 +137,12 @@ describe("node workspace Git pack downloads", () => {
     expect(await expectResponse(fixture.publish(prepared.snapshot.manifest.baseCommit))).toEqual(
       packs[0],
     );
-    expect(await fixture.packs()).toHaveLength(1);
-
     await expectResponse(fixture.publish(nextCommit), 404);
     expect(await fixture.packs()).toHaveLength(1);
   });
 
   it("retries an authorized download after discarding a failed pack's scratch files", async () => {
-    const fixture = await createGitTransfer();
+    await using fixture = await createGitTransfer();
     let failOnce = true;
     interceptPackObjects(async (file) => {
       if (failOnce) {
@@ -176,7 +162,7 @@ describe("node workspace Git pack downloads", () => {
   it.each(["revoke", "close"] as const)(
     "fences an in-flight pack after transfer %s",
     async (retirement) => {
-      const fixture = await createGitTransfer();
+      await using fixture = await createGitTransfer();
       const started = createDeferred();
       const release = createDeferred();
       interceptPackObjects(async () => {

@@ -26,13 +26,13 @@ import {
   captureQueuedDiagnosticEvent,
   enrichDiagnosticEvent,
   cloneDiagnosticValueForListener,
-  createDiagnosticMetadataForListener,
-  createInternalDiagnosticMetadata,
   createDiagnosticValueForListeners,
 } from "./diagnostic-event-snapshot.js";
 import type {
-  DiagnosticModelCallTerminalFields,
-  DiagnosticModelCallUsage,
+  DiagnosticModelCallCompletedEvent,
+  DiagnosticModelCallErrorEvent,
+  DiagnosticModelCallStartedEvent,
+  DiagnosticModelResponseObservedEvent,
 } from "./diagnostic-model-call-types.js";
 import {
   consumeCoreModelRequestLifecycleDiagnosticEvent,
@@ -72,6 +72,7 @@ import {
   resetDiagnosticTracePropagationForTest,
   shouldPrepareDiagnosticTracePropagation,
 } from "./diagnostic-trace-propagation.js";
+import { recordDiagnosticModelUsageTimeline } from "./diagnostics-timeline.js";
 import {
   MAX_DIAGNOSTIC_WORKER_SLOTS,
   normalizeDiagnosticWorkerScript,
@@ -596,63 +597,6 @@ export type DiagnosticHarnessRunErrorEvent = DiagnosticHarnessRunBaseEvent & {
   cleanupFailed?: boolean;
 };
 
-type DiagnosticModelCallBaseEvent = DiagnosticSessionEvent & {
-  runId: string;
-  agentId?: string;
-  callId: string;
-  provider: string;
-  model: string;
-  api?: string;
-  transport?: string;
-  /** Defaults to request for emitters created before turn-level CLI diagnostics. */
-  observationUnit?: "request" | "turn";
-  contextTokenBudget?: number;
-  contextWindowSource?: "model" | "modelsConfig" | "agentContextTokens" | "default";
-  contextWindowReferenceTokens?: number;
-  upstreamRequestIdHash?: string;
-  promptStats?: DiagnosticModelCallPromptStats;
-};
-
-type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
-  type: "model.call.started";
-};
-
-type DiagnosticModelCallEndedEvent = DiagnosticModelCallBaseEvent &
-  DiagnosticModelCallTerminalFields;
-
-type DiagnosticModelCallCompletedEvent = DiagnosticModelCallEndedEvent & {
-  type: "model.call.completed";
-};
-
-type DiagnosticModelCallErrorEvent = DiagnosticModelCallEndedEvent & {
-  type: "model.call.error";
-  errorCategory: string;
-  failureKind?: "aborted" | "connection_closed" | "connection_reset" | "terminated" | "timeout";
-  memory?: DiagnosticMemoryUsage;
-};
-
-type DiagnosticModelResponseObservedEvent = Omit<
-  DiagnosticModelCallBaseEvent,
-  "observationUnit" | "promptStats" | "upstreamRequestIdHash"
-> & {
-  type: "model.response.observed";
-  upstreamRequestIdHash: string;
-  /** The event timestamp is receipt time, not a provider completion boundary. */
-  timestampSource: "receipt";
-  usageSource: "native-normalized";
-  usageScope: "response";
-  usage?: DiagnosticModelCallUsage;
-};
-
-type DiagnosticModelCallPromptStats = Readonly<{
-  inputMessagesCount?: number;
-  inputMessagesChars?: number;
-  systemPromptChars?: number;
-  toolDefinitionsCount?: number;
-  toolDefinitionsChars?: number;
-  totalChars?: number;
-}>;
-
 type DiagnosticContextAssembledEvent = DiagnosticSessionEvent & {
   type: "context.assembled";
   runId: string;
@@ -963,17 +907,13 @@ function dispatchDiagnosticEvent(
   try {
     const eventForListener = createDiagnosticValueForListeners(enriched, true);
     const privateValues = privateData && createDiagnosticValueForListeners(privateData);
-    let metadataForListener: DiagnosticEventMetadata | undefined;
     if (!options.trustedListenersOnly) {
       for (const [listener, interest] of state.listeners) {
         if (!isInternalDiagnosticEventInterested(interest, enriched.type, metadata.trusted)) {
           continue;
         }
         try {
-          listener(
-            eventForListener(),
-            (metadataForListener ??= createDiagnosticMetadataForListener(metadata)),
-          );
+          listener(eventForListener(), metadata);
         } catch (err) {
           const errorMessage =
             err instanceof Error ? formatErrorStackWithMessage(err) : String(err);
@@ -989,7 +929,6 @@ function dispatchDiagnosticEvent(
       }
       try {
         const event = eventForListener();
-        metadataForListener ??= createDiagnosticMetadataForListener(metadata);
         const otel = isTrustedOtelDiagnosticListener(listener);
         let privateValue = EMPTY_DIAGNOSTIC_PRIVATE_DATA;
         if (interest?.includePrivateData !== false) {
@@ -1003,7 +942,7 @@ function dispatchDiagnosticEvent(
             privateValue = Object.freeze(attributed);
           }
         }
-        listener(event, metadataForListener, privateValue);
+        listener(event, metadata, privateValue);
       } catch (err) {
         const errorMessage = err instanceof Error ? formatErrorStackWithMessage(err) : String(err);
         console.error(
@@ -1088,7 +1027,7 @@ function dispatchAsyncDiagnosticDropSummary(state: DiagnosticEventsGlobalState):
     maxQueueLength: MAX_ASYNC_DIAGNOSTIC_EVENTS,
     drainBatchSize: MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN,
   });
-  dispatchDiagnosticEvent(state, event, createInternalDiagnosticMetadata(false));
+  dispatchDiagnosticEvent(state, event, Object.freeze({ internal: true, trusted: false }));
 }
 
 /** Waits until async diagnostic events queued when called are no longer pending. */
@@ -1186,8 +1125,10 @@ function emitDiagnosticEventWithTrust(
   }
   const { hostPluginId, internal = false, privateData } = options;
   const trustedTraceContext = options.trustedTraceContext === true;
-  const metadata: InternalDiagnosticEventMetadata = {
-    ...(internal ? createInternalDiagnosticMetadata(trusted) : { trusted }),
+  // The dispatcher owns metadata; freeze it once before any consumer sees it.
+  const metadata: InternalDiagnosticEventMetadata = Object.freeze({
+    ...(internal ? { internal: true } : {}),
+    trusted,
     ...(options.toolExecutionLiveness
       ? { [TOOL_EXECUTION_LIVENESS_METADATA_KEY]: options.toolExecutionLiveness }
       : {}),
@@ -1198,7 +1139,7 @@ function emitDiagnosticEventWithTrust(
       ? { [CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY]: options.coreSemanticRunProgress }
       : {}),
     ...(trustedTraceContext ? { trustedTraceContext } : {}),
-  };
+  });
   const prepareTracePropagation =
     trusted && !options.queuedPhase && shouldPrepareDiagnosticTracePropagation(enriched);
 
@@ -1227,10 +1168,7 @@ function emitDiagnosticEventWithTrust(
     if (!queued) {
       enriched = cloneDiagnosticValueForListener(enriched, true);
     }
-    prepareDiagnosticTracePropagation(
-      cloneDiagnosticValueForListener(enriched),
-      createDiagnosticMetadataForListener(metadata),
-    );
+    prepareDiagnosticTracePropagation(cloneDiagnosticValueForListener(enriched), metadata);
   }
   if (queued) {
     scheduleAsyncDiagnosticDrain(state);
@@ -1313,6 +1251,9 @@ export function getInternalDiagnosticEventSequence(): number {
 
 /** Emits a trusted diagnostic event from core/runtime-owned instrumentation. */
 export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
+  if (event.type === "model.usage") {
+    recordDiagnosticModelUsageTimeline(event);
+  }
   const toolExecutionLiveness = consumeToolExecutionLivenessDiagnosticEvent(event);
   const hostPluginId = consumeHostPluginUsageDiagnosticEvent(event);
   const coreSemanticRunProgress = consumeCoreSemanticRunProgressDiagnosticEvent(event);
@@ -1371,7 +1312,7 @@ export function emitTrustedSkillUsedDiagnosticEvent(
   }
   const queued = {
     event: enrichDiagnosticEvent(state, event),
-    metadata: { trusted: true },
+    metadata: Object.freeze({ trusted: true }),
     privateData,
     trustedListenersOnly: true,
   } satisfies QueuedDiagnosticEvent;
@@ -1512,7 +1453,7 @@ export function hasPendingInternalDiagnosticEvent(
     } catch {
       continue;
     }
-    if (predicate(event, createDiagnosticMetadataForListener(entry.metadata))) {
+    if (predicate(event, entry.metadata)) {
       return true;
     }
   }

@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow, SessionsPatchResult } from "../../api/types.ts";
 import { withSessionMutationOperations } from "../../lib/sessions/session-mutation-operations.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";

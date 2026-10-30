@@ -7,12 +7,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProgressCardStore } from "../../session-cards/progress-card-store.types.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withRestoredMocks } from "../../test-utils/vitest-spies.js";
 import { progressCardStore } from "../progress-card-store.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { createPlacementTestHold } from "../server-worker-placement-hold.test-support.js";
 import { resolveSessionSharingTargetAsync } from "../session-sharing.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createLazyCoreHandlers } from "./lazy-core-handlers.js";
@@ -90,21 +90,8 @@ function requester(
   };
 }
 
-function barrier() {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  return {
-    entered,
-    release,
-    wait: () => {
-      entered.resolve();
-      return release.promise;
-    },
-  };
-}
-
 function pausedHandlers(method: string) {
-  const gate = barrier();
+  const gate = createPlacementTestHold();
   return {
     ...gate,
     handlers: createLazyCoreHandlers({
@@ -118,7 +105,7 @@ function pausedHandlers(method: string) {
 }
 
 function pausedStore(beforeCommit = false, pauseWrites = false) {
-  const gate = barrier();
+  const gate = createPlacementTestHold();
   const read = progressCardStore.get.bind(progressCardStore);
   const write = progressCardStore.put.bind(progressCardStore);
   const store: ProgressCardStore = {

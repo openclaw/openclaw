@@ -83,6 +83,28 @@ it("expires a queued deadline without invoking it or releasing its predecessor",
   }
 });
 
+it("keeps a queued deadline on the monotonic clock across wall-clock jumps", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+  vi.setSystemTime(0);
+  const { entered, release, commands, run } = blockedNative();
+  try {
+    await run(async () => {
+      const runner = nativeRunner();
+      const first = runner(["first"], {});
+      await entered.promise;
+      const queued = runner(["survives"], { timeoutMs: 20 });
+      await vi.advanceTimersByTimeAsync(5);
+      vi.setSystemTime(60_000);
+      release.resolve();
+      await expect(queued).resolves.toMatchObject({ code: 0 });
+      expect(commands).toEqual(["first", "survives"]);
+      await first;
+    });
+  } finally {
+    release.resolve();
+  }
+});
+
 it("closes unstarted submissions but joins the already running native call", async () => {
   const { entered, release, commands, run } = blockedNative();
   let done = false;

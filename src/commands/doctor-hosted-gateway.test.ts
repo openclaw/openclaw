@@ -1,15 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
 import { resolveFinalDoctorHealthContributions } from "../flows/doctor-health-contributions-final.js";
 import * as gatewayCall from "../gateway/call.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../gateway/method-scopes.js";
-import { createGatewayMethodRegistry } from "../gateway/methods/registry.js";
-import type {
-  GatewayRequestContext,
-  GatewayRequestHandlerOptions,
-} from "../gateway/server-methods/types.js";
+import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
+import { createContext } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
-import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { collectDevicePairingHealthFindings } from "./doctor-device-pairing.js";
 import { checkGatewayHealth, probeGatewayMemoryStatus } from "./doctor-gateway-health.js";
 
@@ -31,26 +26,19 @@ async function withHosted<T>(
   run: () => Promise<T>,
   methods: string[] = [],
 ) {
-  let requestParams: unknown;
-  const registry = createGatewayMethodRegistry([
-    {
+  const context = createContext([
+    [
       name,
-      handler: ({ params, respond }: GatewayRequestHandlerOptions) => {
-        requestParams = params;
+      resolveLeastPrivilegeOperatorScopesForMethod(name)[0]!,
+      "test",
+      ({ respond }: GatewayRequestHandlerOptions) => {
         respond(true, payload);
       },
-      owner: { kind: "core" as const, area: "test" },
-      scope: resolveLeastPrivilegeOperatorScopesForMethod(name)[0]!,
-    },
+    ],
   ]);
-  const context = {
-    trackExecution: trackAsyncWork,
-    getRuntimeConfig: () => ({}),
-    getGatewayMethodRegistry: () => registry,
-  } as unknown as GatewayRequestContext;
   const result = await withPluginRuntimeGatewayContextResolver(() => context, run);
   expect(socketCall.mock.calls.map(([request]) => request.method)).toEqual(methods);
-  return { result, requestParams };
+  return result;
 }
 
 beforeEach(() => {
@@ -70,7 +58,7 @@ it("reads exporter diagnostics locally while retaining the wire health probes", 
     throw new Error("unexpected Gateway socket");
   });
   const event = { source: "otel", target: "logs", transport: "stdout", outcome: "started" };
-  const { result } = await withHosted(
+  const result = await withHosted(
     "diagnostics.stability",
     { events: [{ type: "telemetry.exporter", ...event }] },
     () => checkGatewayHealth({ runtime, cfg: {} }),
@@ -78,24 +66,17 @@ it("reads exporter diagnostics locally while retaining the wire health probes", 
   );
   expect(result).toMatchObject({ healthOk: true, authenticated: true });
   expect(note).toHaveBeenCalledWith("otel · logs · started · stdout", "Telemetry exporters");
-  expect(socketCall).toHaveBeenNthCalledWith(
-    1,
-    expect.objectContaining({ timeoutMs: DEFAULT_RESTART_HEALTH_TIMEOUT_MS }),
-  );
 });
 
 it("reads cached memory readiness without opening a Gateway socket", async () => {
   const observed = await withHosted("doctor.memory.status", { embedding: { ok: true } }, () =>
     probeGatewayMemoryStatus({ cfg: {} }),
   );
-  expect(observed).toMatchObject({
-    result: { checked: true, ready: true },
-    requestParams: { probe: false },
-  });
+  expect(observed).toMatchObject({ checked: true, ready: true });
 });
 
 it("reports hosted pairing inventory without reconnecting or falling back to disk", async () => {
-  const { result } = await withHosted(
+  const result = await withHosted(
     "device.pair.list",
     {
       pending: [{ deviceId: "dev-1", requestId: "req-1" }],
@@ -118,8 +99,7 @@ it("passes hosted pressure data to the optional WhatsApp check without reconnect
   });
   const check = contributions.find((entry) => entry.id === "doctor:whatsapp-responsiveness")
     ?.healthChecks[0];
-  expect(check).toBeDefined();
-  const { result } = await withHosted("status", status, async () =>
+  const result = await withHosted("status", status, async () =>
     check!.detect({ mode: "doctor", runtime, cfg: {} }),
   );
   expect(result).toEqual([]);

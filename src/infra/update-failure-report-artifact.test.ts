@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as fileLocks from "./file-lock.js";
 import { writeUpdateRunReportArtifact } from "./update-failure-report-artifact.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import { createUpdateRunRecordFixture } from "./update-run-record.test-support.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
@@ -247,25 +248,13 @@ it.each(["history", "capture"] as const)(
       ],
       durationMs: 0,
     };
-    const run: UpdateRunRecord = {
-      runId: result.runId!,
-      createdAtMs: 1,
-      updatedAtMs: 2,
-      finishedAtMs: 2,
-      trigger: "cli",
-      phase: "finished",
-      status: "failed",
+    const run: UpdateRunRecord = createUpdateRunRecordFixture(result.runId!, {
       reason: result.reason!,
-      origin: {},
       target: { kind: "package", version: "2026.10.6", channel: "stable" },
       before: result.before!,
       after: result.after!,
       steps: result.steps.flatMap(updateRunStepsFromResultStep),
-      verification: {},
-      repair: [],
-      downtimeMs: null,
-      confirmedAtMs: null,
-    };
+    });
     const reportPath = await writeUpdateRunReportArtifact({
       result,
       env: { OPENCLAW_STATE_DIR: stateDir },

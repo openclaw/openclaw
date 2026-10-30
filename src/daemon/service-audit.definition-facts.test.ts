@@ -72,6 +72,11 @@ const staleServiceEnvironment = {
 const drift = (kind: string, key: string, fields = {}) =>
   expect.objectContaining({ kind, key, ...fields });
 const programArguments = ["/usr/bin/node", "/opt/openclaw/index.js", "gateway"];
+const plistValue = (xml: string, key: string, tag: string, value: string | number | undefined) =>
+  xml.replace(
+    new RegExp(`<key>${key}</key>\\s*<${tag}>[^<]*</${tag}>`, "u"),
+    value === undefined ? "" : `<key>${key}</key><${tag}>${value}</${tag}>`,
+  );
 function launchdFixture() {
   const home = dirs.make("definition-facts-launchd-");
   const env = { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "state") };
@@ -287,7 +292,7 @@ it.each([
       ],
       environment: { PATH: "/usr/bin:/bin", ...(stale ? staleServiceEnvironment : {}) },
     };
-    const original = buildLaunchAgentPlist({
+    let original = buildLaunchAgentPlist({
       ...plist,
       ...command,
       programArguments: wrapped
@@ -300,23 +305,18 @@ it.each([
         : command.programArguments,
       ...(customized === "WorkingDirectory" ? { workingDirectory: "/operator/workspace" } : {}),
       comment: customized === "Comment" ? "Operator service" : "OpenClaw Gateway",
-    })
-      .replace(
-        /<key>ExitTimeOut<\/key>\s*<integer>\d+<\/integer>/u,
-        seconds === undefined ? "" : `<key>ExitTimeOut</key><integer>${seconds}</integer>`,
-      )
-      .replace(
-        /<key>ThrottleInterval<\/key>\s*<integer>10<\/integer>/u,
-        `<key>ThrottleInterval</key><integer>${throttle ?? 10}</integer>`,
-      )
-      .replace(
-        "<string>Interactive</string>",
-        `<string>${customized === "ProcessType" ? "Background" : "Interactive"}</string>`,
-      )
-      .replace(
+    });
+    original = plistValue(original, "ExitTimeOut", "integer", seconds);
+    original = plistValue(original, "ThrottleInterval", "integer", throttle ?? 10);
+    if (customized === "ProcessType") {
+      original = plistValue(original, "ProcessType", "string", "Background");
+    }
+    if (customized === "UnknownKey") {
+      original = original.replace(
         "<key>Label</key>",
-        `${customized === "UnknownKey" ? "<key>LowPriorityIO</key><true/>" : ""}<key>Label</key>`,
+        "<key>LowPriorityIO</key><true/><key>Label</key>",
       );
+    }
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, original);
     const result = await auditGatewayServiceConfig({
@@ -488,6 +488,94 @@ it("accepts retained heap aliases, custom environment and owned environment rege
   });
   expect(result.definitionDrift).toBeUndefined();
 });
+
+it("allows the installer to replace a macOS Node runtime and retire the legacy CA bundle", async () => {
+  const { env, sourcePath, plist } = launchdFixture();
+  const environment = {
+    PATH: "/old/node/bin:/usr/bin:/bin",
+    OPERATOR_SETTING: "operator-secret",
+  };
+  const replacementEnvironment = { ...environment, PATH: "/new/node/bin:/usr/bin:/bin" };
+  const command = {
+    programArguments: ["/old/node/bin/node", "/opt/openclaw/index.js", "gateway"],
+    environment: { ...environment, NODE_EXTRA_CA_CERTS: "/etc/ssl/cert.pem" },
+    sourcePath,
+  };
+  const content = buildLaunchAgentPlist({ ...plist, ...command });
+  await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+  await fs.writeFile(sourcePath, content);
+  const result = await auditGatewayServiceConfig({
+    env,
+    command,
+    platform: "darwin",
+    expectedServicePath: replacementEnvironment.PATH,
+    expectedCommand: {
+      programArguments: ["/new/node/bin/node", "/opt/openclaw/index.js", "gateway"],
+      environment: { ...replacementEnvironment, NODE_USE_SYSTEM_CA: "1" },
+    },
+  });
+  expect(result.definitionDrift).toEqual([drift("outdated", "Environment.NODE_EXTRA_CA_CERTS")]);
+  expect(result.definitionDriftError).toBeUndefined();
+  expect(await fs.readFile(sourcePath, "utf8")).toBe(content);
+});
+
+it.each([
+  [
+    "discarded operator directory",
+    "/old/bin:/operator/bin:/usr/bin:/bin",
+    "/new/bin:/usr/bin:/bin",
+  ],
+  [
+    "reordered operator directories",
+    "/old/bin:/operator/bin:/usr/bin:/bin",
+    "/new/bin:/usr/bin:/operator/bin:/bin",
+  ],
+  ["unrelated leading directory", "/operator/bin:/old/bin:/usr/bin:/bin", "/new/bin:/usr/bin:/bin"],
+  [
+    "replacement missing the selected runtime directory",
+    "/old/bin:/usr/bin:/bin",
+    "/other/bin:/usr/bin:/bin",
+  ],
+  ["opaque launcher", "/old/bin:/usr/bin:/bin", "/new/bin:/usr/bin:/bin", "/old/bin/launcher"],
+])(
+  "refuses a macOS runtime refresh with %s",
+  (_name, currentPath, nextPath, executable?: string) => {
+    const findings: ServiceDefinitionDrift[] = [];
+    auditGatewayInstallPreservation(
+      {
+        programArguments: [executable ?? "/old/bin/node", "/opt/openclaw/index.js", "gateway"],
+        environment: { PATH: currentPath },
+      },
+      {
+        programArguments: ["/new/bin/node", "/opt/openclaw/index.js", "gateway"],
+        environment: { PATH: nextPath },
+      },
+      "darwin",
+      findings,
+    );
+    expect(findings).toContainEqual(drift("unknown-edit", "Environment.PATH"));
+  },
+);
+
+it.each([
+  { platform: "darwin", value: "/operator-private/ca.pem", replacement: undefined },
+  { platform: "darwin", value: "/etc/ssl/cert.pem", replacement: "/operator-private/ca.pem" },
+  { platform: "linux", value: "/etc/ssl/cert.pem", replacement: undefined },
+  { platform: "win32", value: "/etc/ssl/cert.pem", replacement: undefined },
+] as const)(
+  "refuses other CA changes ($platform, $value -> $replacement)",
+  ({ platform, value, replacement }) => {
+    const findings: ServiceDefinitionDrift[] = [];
+    auditGatewayInstallPreservation(
+      { programArguments, environment: { NODE_EXTRA_CA_CERTS: value } },
+      { programArguments, environment: { NODE_EXTRA_CA_CERTS: replacement } },
+      platform,
+      findings,
+    );
+    expect(findings).toEqual([drift("unknown-edit", "Environment.NODE_EXTRA_CA_CERTS")]);
+    expect(JSON.stringify(findings)).not.toContain("operator-private");
+  },
+);
 
 it("bounds environment diffs and redacts nonnumeric timeout values", () => {
   const command = {

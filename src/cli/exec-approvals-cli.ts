@@ -611,7 +611,7 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts) {
       "Host-native node approvals do not support allowlist mutations; use approvals set --node with host-native JSON.",
     );
   }
-  const file = snapshot.file;
+  const file = structuredClone(snapshot.file);
   file.version = 1;
 
   const agent: ExecApprovalsAgent = file.agents?.[agentKey] ?? {};

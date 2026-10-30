@@ -117,17 +117,11 @@ const runtimeContextProjections = [false, true].map((escape) =>
         return message;
       }
       const content = message.content;
-      const projected =
-        typeof content === "string"
-          ? escapeInternalRuntimeContextDelimiters(content)
-          : content.map((block) =>
-              block.type === "text"
-                ? Object.assign({}, block, {
-                    text: escapeInternalRuntimeContextDelimiters(block.text),
-                  })
-                : block,
-            );
-      return Object.assign({}, message, { content: projected });
+      const projected = transformUserTextContent(content, (text) => {
+        const escaped = escapeInternalRuntimeContextDelimiters(text);
+        return escaped === text ? undefined : escaped;
+      });
+      return projected === content ? message : Object.assign({}, message, { content: projected });
     }),
   ),
 );
@@ -180,7 +174,10 @@ export function normalizeMessagesForLlmBoundary(
   const retained =
     options?.appendOnlyRuntimeContext || options?.inHistorySystemUpdates
       ? withPersistedSenderContext
-      : stripHistoricalRuntimeContextCustomMessages(withPersistedSenderContext);
+      : stripHistoricalRuntimeContextCustomMessages(
+          withPersistedSenderContext,
+          options?.currentUserIdempotencyKey,
+        );
   if (retained.length < withPersistedSenderContext.length) {
     const retainedMessages = new Set(retained);
     options?.onRuntimeContextCarrierRemoved?.(
@@ -199,6 +196,7 @@ type CurrentPromptBoundaryInput = {
   includeTimestamp?: boolean;
   currentUserTimestamp?: number;
   currentUserTranscriptMessage?: AgentMessage;
+  currentUserIdempotencyKey?: string;
 };
 
 /** Normalizes existing transcript messages as if the current prompt were appended last. */
@@ -206,7 +204,10 @@ export function normalizeMessagesForCurrentPromptBoundary(
   params: CurrentPromptBoundaryInput & { messages: AgentMessage[] },
 ): AgentMessage[] {
   const { message, options } = buildCurrentPromptBoundaryInput(params);
-  return normalizeMessagesForLlmBoundary([...params.messages, message], options).slice(0, -1);
+  const normalized = normalizeMessagesForLlmBoundary([...params.messages, message], options);
+  // Boundary projection owns this array; discard the synthetic tail without copying history.
+  normalized.pop();
+  return normalized;
 }
 
 export function normalizeCurrentPromptTextForLlmBoundary(
@@ -231,6 +232,7 @@ function buildCurrentPromptBoundaryInput(params: CurrentPromptBoundaryInput): {
     sessionVersion: params.sessionVersion,
     appendOnlyRuntimeContext: params.appendOnlyRuntimeContext,
     inHistorySystemUpdates: params.inHistorySystemUpdates,
+    currentUserIdempotencyKey: params.currentUserIdempotencyKey,
     ...(params.timezone ? { timezone: params.timezone } : {}),
     ...(params.includeTimestamp === false ? { includeTimestamp: false } : {}),
     ...(params.currentUserTranscriptMessage

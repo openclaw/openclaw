@@ -319,5 +319,6 @@ export async function resolveSlackChannelHistory(params: {
       break;
     }
   }
-  return messages.slice(0, params.limit).toReversed();
+  // oxlint-disable-next-line unicorn/no-array-reverse -- slice creates a private array.
+  return messages.slice(0, params.limit).reverse();
 }

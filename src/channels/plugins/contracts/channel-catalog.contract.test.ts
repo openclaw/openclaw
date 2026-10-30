@@ -1,6 +1,7 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createOpenClawCodingToolsInternalAsync } from "../../../agents/agent-tools.js";
 import { resolveRuntimeChannelPromptContext } from "../../../agents/runtime-capabilities.js";
 import { buildAgentSystemPrompt } from "../../../agents/system-prompt.js";
@@ -18,6 +19,22 @@ import {
   describeChannelCatalogEntryContract,
   describeOfficialFallbackChannelCatalogContract,
 } from "./test-helpers/channel-catalog-contract.js";
+
+async function registerChannels(ids: string) {
+  const channels = await Promise.all(
+    ids.split(" ").map(async (pluginId) => {
+      const plugin = await getBundledChannelPluginAsync(pluginId);
+      assert(plugin, `Missing bundled channel plugin for ${pluginId}`);
+      return { pluginId, plugin, source: "test" };
+    }),
+  );
+  setActivePluginRegistry(createTestRegistry(channels));
+}
+
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+  clearRuntimeConfigSnapshot();
+});
 
 for (const [channelId, npmSpec, alias] of [
   ["msteams", "@openclaw/msteams", "teams"],
@@ -64,105 +81,70 @@ describeOfficialFallbackChannelCatalogContract({
   externalLabel: "WhatsApp Fork",
 });
 
-describe("ask_user channel catalogs", () => {
-  const config: OpenClawConfig = {
-    agents: { entries: { main: {} } },
-    plugins: { enabled: false },
-    tools: { allow: ["ask_user"] },
-  };
+const config: OpenClawConfig = {
+  agents: { entries: { main: {} } },
+  plugins: { enabled: false },
+  tools: { allow: ["ask_user"] },
+};
 
-  beforeEach(async () => {
+it.each([
+  { messageChannel: "webchat", available: true },
+  { messageChannel: "discord", available: true },
+  { messageChannel: "slack", available: true },
+  { messageChannel: "telegram", available: true },
+  { messageChannel: "whatsapp", available: false },
+  { messageChannel: "imessage", available: false },
+  { messageChannel: "signal", available: false },
+  { messageChannel: "mattermost", available: false },
+  { messageChannel: "unknown-channel", available: false },
+  { messageChannel: "webchat", available: false, deny: true },
+])(
+  "uses the inbound $messageChannel capability (available: $available, deny: $deny)",
+  async ({ messageChannel, available, deny }) => {
     setRuntimeConfigSnapshot(config);
-    const channels = await Promise.all(
-      ["discord", "imessage", "mattermost", "signal", "slack", "telegram", "whatsapp"].map(
-        async (pluginId) => {
-          const plugin = await getBundledChannelPluginAsync(pluginId);
-          if (!plugin) {
-            throw new Error(`Missing bundled channel plugin for ${pluginId}`);
-          }
-          return { pluginId, plugin, source: "test" };
-        },
-      ),
-    );
-    setActivePluginRegistry(createTestRegistry(channels));
-  });
-
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-    clearRuntimeConfigSnapshot();
-  });
-
-  it.each([
-    { messageChannel: "webchat", available: true },
-    { messageChannel: "discord", available: true },
-    { messageChannel: "slack", available: true },
-    { messageChannel: "telegram", available: true },
-    { messageChannel: "whatsapp", available: false },
-    { messageChannel: "imessage", available: false },
-    { messageChannel: "signal", available: false },
-    { messageChannel: "mattermost", available: false },
-    { messageChannel: "unknown-channel", available: false },
-    { messageChannel: "webchat", available: false, deny: true },
-  ])(
-    "uses the inbound $messageChannel capability (available: $available, deny: $deny)",
-    async ({ messageChannel, available, deny }) => {
-      const tools = await createOpenClawCodingToolsInternalAsync({
-        config: deny ? { ...config, tools: { allow: ["ask_user"], deny: ["ask_user"] } } : config,
-        sessionKey: "agent:main:run",
-        messageChannel,
-        messageProvider: "discord",
-        toolConstructionPlan: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: true,
-          includePluginTools: false,
-        },
-      });
-      expect(tools.some((tool) => tool.name === "ask_user")).toBe(available);
-    },
-  );
-});
-
-describe("Feishu system prompt button guidance", () => {
-  beforeEach(async () => {
-    const plugin = await getBundledChannelPluginAsync("feishu");
-    if (!plugin) {
-      throw new Error("Missing bundled Feishu channel plugin");
-    }
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "feishu", plugin, source: "test" }]));
-  });
-
-  afterEach(() => resetPluginRuntimeStateForTest());
-
-  it.each([{ capabilities: undefined }, { capabilities: ["inlineButtons"] }])(
-    "does not advertise unsupported callbacks with capabilities $capabilities",
-    ({ capabilities }) => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          feishu: {
-            enabled: true,
-            appId: "cli_test",
-            appSecret: "synthetic-secret",
-            ...(capabilities ? { capabilities } : {}),
-          },
-        },
-      };
-      const context = resolveRuntimeChannelPromptContext({ cfg, channel: "feishu" });
-      const prompt = buildAgentSystemPrompt({
-        workspaceDir: "/workspace",
-        toolNames: ["message"],
-        runtimeInfo: {
-          channel: context.runtimeChannel,
-          capabilities: context.runtimeCapabilities,
-          customInlineButtonHint: context.customInlineButtonHint,
-        },
-        messageToolHints: context.messageToolHints,
-      });
-
-      expect(prompt).not.toContain("feishu.capabilities.inlineButtons");
-      expect(prompt).not.toContain('"action":{"type":"callback"');
-      expect(prompt).toContain("ask questions in plain text");
-    },
-  );
-});
+    await registerChannels("discord imessage mattermost signal slack telegram whatsapp");
+    const tools = await createOpenClawCodingToolsInternalAsync({
+      config: deny ? { ...config, tools: { allow: ["ask_user"], deny: ["ask_user"] } } : config,
+      sessionKey: "agent:main:run",
+      messageChannel,
+      messageProvider: "discord",
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+    expect(tools.some((tool) => tool.name === "ask_user")).toBe(available);
+  },
+);
+it.each([{ capabilities: undefined }, { capabilities: ["inlineButtons"] }])(
+  "does not advertise unsupported callbacks with capabilities $capabilities",
+  async ({ capabilities }) => {
+    await registerChannels("feishu");
+    const feishu = {
+      enabled: true,
+      appId: "cli_test",
+      appSecret: "synthetic-secret",
+      capabilities,
+    };
+    const context = resolveRuntimeChannelPromptContext({
+      cfg: { channels: { feishu } },
+      channel: "feishu",
+    });
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/workspace",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: context.runtimeChannel,
+        capabilities: context.runtimeCapabilities,
+        customInlineButtonHint: context.customInlineButtonHint,
+      },
+      messageToolHints: context.messageToolHints,
+    });
+    expect(prompt).not.toContain("feishu.capabilities.inlineButtons");
+    expect(prompt).not.toContain('"action":{"type":"callback"');
+    expect(prompt).toContain("ask questions in plain text");
+  },
+);

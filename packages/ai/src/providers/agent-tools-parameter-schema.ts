@@ -24,7 +24,10 @@ import {
   wasToolSchemaTruncated,
 } from "./tool-schema-depth.js";
 import { getPublishedRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
-import { createToolSchemaNormalizationCache } from "./tool-schema-normalization-cache.js";
+import {
+  createToolSchemaNormalizationCache,
+  isPreparedToolSchemaNormalization,
+} from "./tool-schema-normalization-cache.js";
 import { normalizeToolSchema } from "./tool-schema-normalization.js";
 import {
   setOwnSchemaProperty,
@@ -253,9 +256,10 @@ export function normalizeToolParameterSchema(
   schema: unknown,
   options?: ToolParameterSchemaOptions,
 ): TSchema {
-  const published = getPublishedRuntimeToolInputSchema(schema);
-  const boundedSchema = published ? schema : truncateToolSchemaDepth(schema, options?.toolName);
-  if (published && wasToolSchemaTruncated(schema)) {
+  const prepared =
+    getPublishedRuntimeToolInputSchema(schema) || isPreparedToolSchemaNormalization(schema);
+  const boundedSchema = prepared ? schema : truncateToolSchemaDepth(schema, options?.toolName);
+  if (prepared && wasToolSchemaTruncated(schema)) {
     reportToolSchemaTruncation(schema, options?.toolName);
   }
   const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);

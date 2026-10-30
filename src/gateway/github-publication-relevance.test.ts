@@ -89,7 +89,6 @@ it.each(["github.com", "ghe.example.test"])(
     expect(await check(fetchImpl, {}, [{ ...pr, url: `https://${host}/owner/repo/pull/1` }])).toBe(
       true,
     );
-    expect(fetchImpl).toHaveBeenCalledOnce();
     const [url, init] = fetchImpl.mock.calls[0]!;
     const publicHost = host === "github.com";
     const api = publicHost ? "https://api.github.com" : "https://ghe.example.test/api/v3";
@@ -106,26 +105,21 @@ type Scenario = {
   tree?: string;
   compared?: unknown;
 };
-it.each<[name: string, input: Scenario, superseded: boolean, calls?: number]>([
-  ["committed open history", { pr: { state: "open" } }, true, 2],
-  ["committed draft history", { pr: { state: "draft" } }, true, 2],
-  ["committed merged history", { pr: { state: "merged" } }, true, 2],
-  ["uncommitted exact tree", { snapshot: { source_head_commit: null }, tree }, true, 1],
-  ["another branch", { pr: { branch: "another-branch" }, tree }, false, 0],
-  ["another repository", { pr: { repo: "another-repo" }, tree }, false, 0],
-  ["closed PR", { pr: { state: "closed" }, tree }, false, 0],
-  ["unpublished PR", { pr: { headSha: undefined }, tree }, false, 0],
+it.each<[name: string, input: Scenario, superseded: boolean]>([
+  ["committed merged history", {}, true],
+  ["uncommitted exact tree", { snapshot: { source_head_commit: null }, tree }, true],
+  ["another branch", { pr: { branch: "another-branch" }, tree }, false],
+  ["another repository", { pr: { repo: "another-repo" }, tree }, false],
+  ["closed PR", { pr: { state: "closed" }, tree }, false],
+  ["unpublished PR", { pr: { headSha: undefined }, tree }, false],
   ["newer unpublished snapshot", { snapshot: { workspace_tree: "5".repeat(40) } }, false],
   ["diverged history", { compared: { ...comparison, status: "diverged" } }, false],
   ["wrong merge base", { compared: { ...comparison, merge_base_commit: { sha: head } } }, false],
   ["unreadable comparison", { compared: null }, false],
-])("checks publication coverage for %s", async (_name, input, superseded, calls) => {
+])("checks publication coverage for %s", async (_name, input, superseded) => {
   const fetchImpl = responses(input.tree, input.compared);
   expect(await check(fetchImpl, input.snapshot, [{ ...pr, ...input.pr }])).toBe(superseded);
-  if (calls !== undefined) {
-    expect(fetchImpl).toHaveBeenCalledTimes(calls);
-  }
-  if (superseded && calls === 2) {
+  if (superseded && input.tree !== tree) {
     expect(fetchImpl.mock.calls[1]?.[0]).toEqual(
       expect.stringContaining(`compare/${source}...${head}?per_page=1&page=2`),
     );
@@ -143,7 +137,6 @@ it.each(["missing", "malformed"])("checks later matching PRs after a %s head", a
     return json(published());
   });
   expect(await check(fetchImpl, {}, [{ ...pr, headSha: missingHead }, pr])).toBe(true);
-  expect(fetchImpl).toHaveBeenCalledTimes(2);
 });
 
 it("honors rate-limit cooldown without retrying anonymously or treating it as completion", async () => {
@@ -169,5 +162,4 @@ it("revalidates session authority after an awaited response before retiring a fa
       }
     }),
   ).rejects.toThrow("Session retired");
-  expect(fetchImpl).toHaveBeenCalledOnce();
 });

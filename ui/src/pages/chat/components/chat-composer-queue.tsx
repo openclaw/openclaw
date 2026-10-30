@@ -1,7 +1,9 @@
 import { For, createMemo, createUniqueId, onSettled } from "solid-js";
+import "../../../styles/chat/composer-queue-content.css";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import {
   chatQueueMovableSegments,
   isMovableChatQueueItem,
@@ -135,33 +137,6 @@ function mountQueueEditInput(element: HTMLTextAreaElement, value: string): void 
   });
 }
 
-function sendStateLabel(
-  item: ChatQueueItem,
-  offline: boolean,
-  connected: boolean | undefined,
-): string | null {
-  if (offline && item.sendState !== "failed" && item.sendState !== "held") {
-    return t("chat.queue.states.waitingForReconnect");
-  }
-  switch (item.sendState) {
-    case "waiting-model":
-    case "waiting-idle":
-      return null;
-    case "executing-command":
-      return t("chat.queue.states.runningCommand");
-    case "waiting-reconnect":
-      return isChatSendReconnecting(item.sendState, connected)
-        ? t("chat.queue.states.waitingForReconnect")
-        : null;
-    case "held":
-      return t("chat.queue.states.needsReview");
-    case "failed":
-      return t("common.failed");
-    default:
-      return null;
-  }
-}
-
 export function renderChatQueueSolid(props: ChatQueueProps) {
   const visibleQueue = createMemo(() => {
     const items = (props.displayQueue ?? props.queue).filter(
@@ -293,12 +268,31 @@ function ChatQueueItem(rowProps: {
     !failed() &&
     (rowProps.controls.offline === true ||
       isChatSendReconnecting(item().sendState, rowProps.controls.connected));
-  const stateLabel = () =>
-    sendStateLabel(
-      item(),
-      !item().serverQueued && rowProps.controls.offline === true,
-      rowProps.controls.connected,
-    );
+  const stateLabel = (): string | null => {
+    const queueItem: ChatQueueItem = item();
+    const offline: boolean = !item().serverQueued && rowProps.controls.offline === true;
+    const connected: boolean | undefined = rowProps.controls.connected;
+    if (offline && queueItem.sendState !== "failed" && queueItem.sendState !== "held") {
+      return t("chat.queue.states.waitingForReconnect");
+    }
+    switch (queueItem.sendState) {
+      case "waiting-model":
+      case "waiting-idle":
+        return null;
+      case "executing-command":
+        return t("chat.queue.states.runningCommand");
+      case "waiting-reconnect":
+        return isChatSendReconnecting(queueItem.sendState, connected)
+          ? t("chat.queue.states.waitingForReconnect")
+          : null;
+      case "held":
+        return t("chat.queue.states.needsReview");
+      case "failed":
+        return t("common.failed");
+      default:
+        return null;
+    }
+  };
   const steered = () => item().queueMode === "steer" && stateLabel() === null;
   const busy = () => item().sendState === "executing-command";
   const editing = () => edit()?.editingId === item().id;
@@ -531,7 +525,7 @@ function ChatQueueItem(rowProps: {
         />
       ) : (
         <span class="chat-queue__copy">
-          <span class="chat-queue__text" title={text()}>
+          <span class="chat-queue__text" title={text()} ref={createTextOverflow(text)}>
             {text()}
           </span>
           {steered() && !canSteer() ? (

@@ -1,30 +1,37 @@
 import { createHash, randomUUID } from "node:crypto";
+import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { runExec, spawnCommand } from "../../process/exec.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   getSessionRepositoryWorkspaceStore,
   type SessionRepositoryWorkspaceStore,
 } from "../../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
+import { MAX_WORKSPACE_RESULT_GIT_PACK_BYTES } from "../../worker/node-workspace-transfer-protocol.js";
 import { readGitHubRepositoryPublicationMetadata } from "../github-repository-publication-snapshot.js";
-import {
-  stageRepositoryGitHistory,
-  withRepositoryGitHistory,
-  type RepositoryGitHistory,
-} from "./session-repository-history.js";
 import { boundedWorkerError } from "./worker-error.js";
 import { parseWorkspaceManifestPair } from "./workspace-manifest-worker.js";
 import {
   requireWorkspaceResultGit,
+  requireWorkspaceResultGit as git,
   updateWorkspaceResultRefs,
   withWorkspaceResultRefMutation,
   workspaceResultCheckpointInitArgs,
+  workspaceResultGitCommand,
+  WORKSPACE_RESULT_GIT_TIMEOUT_MS,
 } from "./workspace-result-git.js";
-import type { StagedWorkerArtifactInventory } from "./workspace-result-inventory.js";
+import { workerHistoryNotAdopted } from "./workspace-result-history.js";
+import {
+  WorkerWorkspaceGitHistorySchema,
+  type WorkerWorkspaceGitHistory,
+  type StagedWorkerArtifactInventory,
+} from "./workspace-result-inventory.js";
 import {
   deleteStagedWorkerWorkspaceResult,
   preparedWorkerWorkspaceResultRef,
@@ -33,6 +40,13 @@ import {
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
+
+const MARKER = "OpenClaw repository Git delta\n";
+type RepositoryGitHistory = {
+  gitHistory?: WorkerWorkspaceGitHistory;
+  gitPackPath?: string;
+  gitHistoryNote?: string;
+};
 
 type CheckpointOwner = { workspaceId: string; store?: SessionRepositoryWorkspaceStore };
 type CheckpointSource = CheckpointOwner & { checkpointRef?: string };
@@ -152,57 +166,121 @@ export async function withSessionRepositoryCheckpoint<T>(
 ): Promise<T> {
   const { workspace, root } = await owner(params);
   const ref = checkpointRef(workspace, params.checkpointRef);
-  return await withStagedWorkerWorkspaceResult({ root, stagedResultRef: ref }, async (files) =>
-    withRepositoryGitHistory(
-      { root, checkpointRef: ref, baseCommit: assertBase(workspace, files) },
-      async (history) => {
-        const snapshot = { ...files, ...history };
-        assertBase(workspace, snapshot);
-        if (
-          ref === workspace.checkpointRef &&
-          snapshot.currentManifestRef !== workspace.manifestHash
-        ) {
-          throw new Error("Repository checkpoint differs from its accepted manifest");
+  return await withStagedWorkerWorkspaceResult({ root, stagedResultRef: ref }, async (files) => {
+    const historyReadInput = { root, checkpointRef: ref, baseCommit: assertBase(workspace, files) };
+    let directory: string | undefined;
+    let retained: RepositoryGitHistory = {};
+    try {
+      try {
+        const parents = (
+          await git(historyReadInput.root, [
+            "rev-list",
+            "--parents",
+            "-n",
+            "1",
+            historyReadInput.checkpointRef,
+          ])
+        ).split(" ");
+        if (parents.length === 1) {
+          retained = {
+            gitHistoryNote: workerHistoryNotAdopted("checkpoint has no retained Git history"),
+          };
+        } else {
+          const parent = parents[1]!;
+          const message = await git(historyReadInput.root, ["show", "-s", "--format=%B", parent]);
+          if (!message.startsWith(MARKER)) {
+            throw new Error("repository Git history metadata is missing");
+          }
+          const record: unknown = JSON.parse(message.slice(MARKER.length));
+          if (!isRecord(record)) {
+            throw new Error("repository Git history metadata is invalid");
+          }
+          const retainedGitHistory =
+            record.gitHistory === undefined
+              ? undefined
+              : WorkerWorkspaceGitHistorySchema.parse(record.gitHistory);
+          if (retainedGitHistory && retainedGitHistory.baseCommit !== historyReadInput.baseCommit) {
+            throw new Error("repository Git history base changed");
+          }
+          if (typeof record.gitHistoryNote === "string") {
+            retained = { gitHistory: retainedGitHistory, gitHistoryNote: record.gitHistoryNote };
+          } else if (
+            retainedGitHistory &&
+            retainedGitHistory.headCommit !== retainedGitHistory.baseCommit
+          ) {
+            const object = `${parent}:history.pack`;
+            const size = Number(await git(historyReadInput.root, ["cat-file", "-s", object]));
+            if (!Number.isSafeInteger(size) || size > MAX_WORKSPACE_RESULT_GIT_PACK_BYTES) {
+              throw new Error("retained Git pack exceeds its byte limit");
+            }
+            directory = await fs.mkdtemp(
+              path.join(resolvePreferredOpenClawTmpDir(), "repository-history-"),
+            );
+            const gitPackPath = path.join(directory, "history.pack");
+            await spawnCommand(
+              workspaceResultGitCommand(historyReadInput.root, ["cat-file", "blob", object]),
+              {
+                stdout: { file: gitPackPath },
+                executionTimeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
+              },
+            );
+            retained = { gitHistory: retainedGitHistory, gitPackPath };
+          }
         }
-        let useStarted = false;
-        try {
-          const companion = publicationRef(ref);
-          if (!(await refObjects(root, [companion])).get(companion)) {
-            useStarted = true;
-            return await use(snapshot);
-          }
-          return await withStagedWorkerWorkspaceResult(
-            { root, stagedResultRef: companion },
-            async (publication) => {
-              const binding = await publicationBinding(
-                publication.stagingRoot,
-                snapshot.currentManifestRef,
-              );
-              if (binding.snapshot.baseCommit !== workspace.baseCommit) {
-                throw new Error("Repository publication checkpoint base changed");
-              }
-              useStarted = true;
-              return await use({
-                ...snapshot,
-                publicationStagingRoot: publication.stagingRoot,
-                publicationDigest: binding.publicationDigest,
-              });
-            },
-          );
-        } catch (error) {
-          // Optional publication corruption cannot discard verified recovery bytes.
-          // Once the consumer starts, its failures and effects must propagate unchanged.
-          if (useStarted) {
-            throw error;
-          }
-          workspaceLog.warn(
-            `Repository publication checkpoint unavailable: ${boundedWorkerError(error)}`,
-          );
+      } catch (error) {
+        retained = { gitHistoryNote: workerHistoryNotAdopted(boundedWorkerError(error)) };
+      }
+      const history = retained;
+      const snapshot = { ...files, ...history };
+      assertBase(workspace, snapshot);
+      if (
+        ref === workspace.checkpointRef &&
+        snapshot.currentManifestRef !== workspace.manifestHash
+      ) {
+        throw new Error("Repository checkpoint differs from its accepted manifest");
+      }
+      let useStarted = false;
+      try {
+        const companion = publicationRef(ref);
+        if (!(await refObjects(root, [companion])).get(companion)) {
+          useStarted = true;
           return await use(snapshot);
         }
-      },
-    ),
-  );
+        return await withStagedWorkerWorkspaceResult(
+          { root, stagedResultRef: companion },
+          async (publication) => {
+            const binding = await publicationBinding(
+              publication.stagingRoot,
+              snapshot.currentManifestRef,
+            );
+            if (binding.snapshot.baseCommit !== workspace.baseCommit) {
+              throw new Error("Repository publication checkpoint base changed");
+            }
+            useStarted = true;
+            return await use({
+              ...snapshot,
+              publicationStagingRoot: publication.stagingRoot,
+              publicationDigest: binding.publicationDigest,
+            });
+          },
+        );
+      } catch (error) {
+        // Optional publication corruption cannot discard verified recovery bytes.
+        // Once the consumer starts, its failures and effects must propagate unchanged.
+        if (useStarted) {
+          throw error;
+        }
+        workspaceLog.warn(
+          `Repository publication checkpoint unavailable: ${boundedWorkerError(error)}`,
+        );
+        return await use(snapshot);
+      }
+    } finally {
+      if (directory) {
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    }
+  });
 }
 
 export async function recoverSessionRepositoryCheckpoint(
@@ -283,12 +361,94 @@ export async function stageSessionRepositoryCheckpoint(
   assertRevision();
   await requireWorkspaceResultGit(root, workspaceResultCheckpointInitArgs());
   assertRevision();
-  const history = await stageRepositoryGitHistory({
+  /** The checkpoint owns this synthetic parent; the pack stays opaque until a base is fetched. */
+  const historyInput = {
     ...params,
     root,
     baseCommit,
     assertCurrent: assertRevision,
+  };
+  const workerGitHistory = historyInput.gitHistory;
+  let note = historyInput.gitHistoryNote;
+  let blob: string | undefined;
+  if (!note) {
+    if (!workerGitHistory) {
+      note = workerHistoryNotAdopted("worker did not provide Git history");
+    } else if (workerGitHistory.baseCommit !== historyInput.baseCommit) {
+      note = workerHistoryNotAdopted("worker history does not descend from the dispatch base");
+    } else if (workerGitHistory.unavailableReason) {
+      note = workerHistoryNotAdopted(workerGitHistory.unavailableReason);
+    } else if (!workerGitHistory.descendsFromBase) {
+      note = workerHistoryNotAdopted("worker history does not descend from the dispatch base");
+    } else if (workerGitHistory.headCommit !== workerGitHistory.baseCommit) {
+      try {
+        if (!historyInput.gitPackPath) {
+          throw new Error("worker Git history has no pack");
+        }
+        const pack = await fs.open(
+          historyInput.gitPackPath,
+          constants.O_RDONLY | constants.O_NOFOLLOW,
+        );
+        try {
+          const stat = await pack.stat();
+          if (!stat.isFile() || stat.size > MAX_WORKSPACE_RESULT_GIT_PACK_BYTES) {
+            throw new Error("worker Git pack exceeds its byte limit");
+          }
+          historyInput.assertCurrent();
+          blob = (
+            await runExec(
+              "git",
+              workspaceResultGitCommand(historyInput.root, ["hash-object", "-w", "--stdin"]).slice(
+                1,
+              ),
+              {
+                stdinFileDescriptor: pack.fd,
+                timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
+              },
+            )
+          ).stdout.trim();
+        } finally {
+          await pack.close();
+        }
+      } catch (error) {
+        historyInput.assertCurrent();
+        note = workerHistoryNotAdopted(boundedWorkerError(error));
+      }
+    }
+  }
+  historyInput.assertCurrent();
+  const tree = await git(historyInput.root, ["mktree"], {
+    input: Buffer.from(blob ? `100644 blob ${blob}\thistory.pack\n` : ""),
   });
+  historyInput.assertCurrent();
+  const parentCommit = await git(
+    historyInput.root,
+    [
+      "-c",
+      "user.name=OpenClaw",
+      "-c",
+      "user.email=openclaw@localhost",
+      "-c",
+      "commit.gpgSign=false",
+      "commit-tree",
+      tree,
+    ],
+    {
+      input: Buffer.from(
+        MARKER + JSON.stringify({ gitHistory: workerGitHistory, gitHistoryNote: note }) + "\n",
+      ),
+      baseEnv: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "OpenClaw",
+        GIT_COMMITTER_NAME: "OpenClaw",
+        GIT_AUTHOR_EMAIL: "openclaw@localhost",
+        GIT_COMMITTER_EMAIL: "openclaw@localhost",
+        GIT_AUTHOR_DATE: "@0 +0000",
+        GIT_COMMITTER_DATE: "@0 +0000",
+      },
+    },
+  );
+  const history = { parentCommit, ...(note ? { gitHistoryNote: note } : {}) };
   if (history.gitHistoryNote) {
     workspaceLog.info(history.gitHistoryNote);
   }

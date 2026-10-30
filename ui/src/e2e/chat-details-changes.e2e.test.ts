@@ -14,13 +14,17 @@ import {
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Details Environment changes" });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
   it.each(["published", "failed"] as const)(
     "shows local changes beside an existing PR after a %s publication",
     async (status) => {
       await suite.withPage(
-        { viewport: { width: 1180, height: 800 }, recordVideo: { dir: suite.artifactDir } },
+        {
+          viewport: { width: 1180, height: 800 },
+          ...(captureUiProof ? { recordVideo: { dir: suite.artifactDir } } : {}),
+        },
         async ({ page }) => {
           const branch = "feature/workspace-navigation";
           const publication = {
@@ -113,7 +117,9 @@ suite.define(() => {
             elements: [details],
             animations: "disabled",
           });
-          await writeFile(path.join(suite.artifactDir, status + ".png"), frame.png);
+          if (captureUiProof) {
+            await writeFile(path.join(suite.artifactDir, status + ".png"), frame.png);
+          }
           expect.soft(await environment.locator(".chat-pr__publication-actions").count()).toBe(0);
           const changes = environment.locator(".chat-pr__diff");
           await expect.poll(() => changes.textContent()).toContain("+18");

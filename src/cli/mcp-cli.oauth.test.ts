@@ -111,7 +111,7 @@ it("configures enablement, timeouts, and OAuth login", async () => {
 
   await setServer("docs", httpServer);
   await mcp("configure", "docs", "--disable", "--timeout", "9", "--auth", "oauth");
-  await mcp("login", "docs", "--code", "abc123");
+  await mcp("login", "docs", "--code", "abc123", "--issuer", "https://issuer.example/tenant/");
 
   expect(completeMcpOAuthAuthorization).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -119,7 +119,7 @@ it("configures enablement, timeouts, and OAuth login", async () => {
       serverUrl: "https://mcp.example.com",
     }),
     expect.objectContaining({ url: "https://mcp.example.com" }),
-    { code: "abc123" },
+    { code: "abc123", iss: "https://issuer.example/tenant/" },
   );
 
   mockLog.mockClear();

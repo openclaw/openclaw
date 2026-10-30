@@ -31,6 +31,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { asCodexToolArguments } from "./tool-progress-normalization.js";
 
 const optedOutNotificationMethods = new Set<string>(CODEX_APP_SERVER_OPT_OUT_NOTIFICATION_METHODS);
 
@@ -103,6 +104,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       turnId: this.turnId,
       upstreamUserText: this.options.upstreamUserText,
       completedItemIds: this.completedItemIds,
+      reasoningMessages: this.reasoningProjection.collectMessages(true),
       assistantProjection: this.assistantProjection,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,
     });
@@ -337,9 +339,15 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     namespace?: string | null;
     tool: string;
     arguments?: JsonValue;
+    hideFromChannelProgress?: boolean;
   }): void {
     this.toolSearchEvidenceProjection?.recordDynamicToolCall(params);
-    this.toolTranscriptProjection.recordDynamicToolCall(params);
+    this.toolTranscriptProjection.recordToolCall({
+      id: params.callId,
+      name: params.tool,
+      arguments: asCodexToolArguments(params.arguments),
+      hideFromChannelProgress: params.hideFromChannelProgress,
+    });
   }
 
   /** Projects a successful OpenClaw progress_card call through the native plan stream. */
@@ -427,6 +435,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       this.activeCompactionItemIds.add(itemId);
       this.usageProjection.beginCompaction();
     }
+    await this.reasoningProjection.recordItemStarted(item);
     await this.assistantProjection.recordItemStarted(item, itemId);
     if (
       this.projectionClosed ||
@@ -721,14 +730,15 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         data: { phase, itemId, type },
       });
     }
-    if (item.role === "assistant" && extractRawResponseItemText(item)) {
+    const text = item.role === "assistant" ? extractRawResponseItemText(item) : undefined;
+    if (text) {
       this.eventProjection.markSafetyBufferingAssistantStarted();
     }
     this.toolSearchEvidenceProjection?.recordRawResponseItem(item);
     this.toolTranscriptProjection.recordRawNativeToolItem(item);
     // Project protocol state before media persistence yields. Notifications may overlap,
     // so delayed image I/O must not consume assistant-echo state from a newer item.
-    this.assistantProjection.handleRawResponseItemCompleted(item, this.activeItemIds);
+    this.assistantProjection.handleRawResponseItemCompleted(item, this.activeItemIds, text);
     await this.settlement.project("media_projection", () =>
       this.generatedMediaProjection.recordRaw(item),
     );

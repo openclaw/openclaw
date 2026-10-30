@@ -13,14 +13,6 @@ import {
 
 let packageVersionMemo: string | undefined;
 
-function resolvePackageVersion(): string {
-  if (!packageVersionMemo) {
-    packageVersionMemo =
-      (typeof process !== "undefined" && process.env?.OPENCLAW_VERSION) || packageManifest.version;
-  }
-  return packageVersionMemo;
-}
-
 export function resolveGoogleApiClientHeaders(params: {
   baseUrl: string;
   model: Model;
@@ -36,7 +28,9 @@ export function resolveGoogleApiClientHeaders(params: {
   }
   return {
     ...hostHeaders,
-    "x-goog-api-client": `openclaw/${resolvePackageVersion()}`,
+    "x-goog-api-client": `openclaw/${(packageVersionMemo ||=
+      (typeof process !== "undefined" && process.env?.OPENCLAW_VERSION) ||
+      packageManifest.version)}`,
   };
 }
 

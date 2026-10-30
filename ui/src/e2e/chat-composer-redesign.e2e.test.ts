@@ -10,7 +10,6 @@ import {
   bottom,
   layoutBox,
   right,
-  twoFrames,
   exactButton,
   polledFocus,
   polledAttribute,
@@ -51,7 +50,7 @@ suite.define(() => {
             models: [modelFixture({ available: false, unavailableReason: reason })],
           });
           await page.goto(`${suite.server.baseUrl}chat`);
-          await gateway.waitForRequest("chat.startup");
+          await gateway.waitForRequest("sessions.messages.subscribe");
           const textarea = page.locator(".agent-chat__composer-combobox textarea");
           const sendButton = exactButton(page, "Send message");
           await expect.poll(() => textarea.isDisabled()).toBe(false);
@@ -101,12 +100,21 @@ suite.define(() => {
       const message =
         "Your refresh token has already been used to generate a new access token. Please try signing in again.";
       const gateway = await installMockGateway(page, {
+        sessions: [
+          {
+            key: "agent:main:main",
+            sessionId: "auth-failed-session",
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["auth-failed-run"],
+          },
+        ],
         inFlightRun: { runId: "auth-failed-run", text: "" },
         models: [modelFixture({ available: false, unavailableReason: "auth-failed" })],
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await exactButton(page, "Stop generating").waitFor();
       await gateway.emitGatewayEvent("chat", {
         errorDetail: {
           provider: "openai",
@@ -134,6 +142,7 @@ suite.define(() => {
   it("keeps the loading model picker beside the microphone", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         deferredMethods: ["chat.startup", "models.list"],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -158,7 +167,7 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 393, height: 852 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
 
       const composer = page.locator(".agent-chat__input");
       await composer.waitFor({ state: "visible" });
@@ -214,7 +223,7 @@ suite.define(() => {
       await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
       const gateway = await installMockGateway(page);
       await page.goto(suite.server.baseUrl + "chat");
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const textarea = page.locator(".agent-chat__input textarea");
       const voice = page.getByRole("button", { name: "Start voice input" });
       const microphonePicker = page.getByRole("button", { name: "Microphone input" });
@@ -226,9 +235,44 @@ suite.define(() => {
         microphonePicker.evaluate((node) => node.getBoundingClientRect().width);
       await expect.poll(pickerWidth).toBe(0);
       await page.emulateMedia({ reducedMotion: "no-preference" });
+      // Probe the actual hover transition inside its delay, independent of
+      // browser round trips that can outlast the dwell time on a loaded host.
+      const hoverDelay = await microphonePickerShell.evaluateHandle((node) => ({
+        proof: new Promise<{ delay: number; width: number }>((resolve, reject) => {
+          const onTransition = (event: Event) => {
+            if (
+              !(event instanceof TransitionEvent) ||
+              event.target !== node ||
+              event.propertyName !== "width"
+            ) {
+              return;
+            }
+            node.removeEventListener("transitionrun", onTransition);
+            const transition = node
+              .getAnimations()
+              .find(
+                (animation) =>
+                  animation instanceof CSSTransition && animation.transitionProperty === "width",
+              );
+            if (!transition?.effect) {
+              reject(new Error("Missing microphone width transition"));
+              return;
+            }
+            transition.pause();
+            const delay = transition.effect.getTiming().delay ?? 0;
+            transition.currentTime = delay / 2;
+            const width = node.getBoundingClientRect().width;
+            transition.play();
+            resolve({ delay, width });
+          };
+          node.addEventListener("transitionrun", onTransition);
+        }),
+      }));
       await voice.hover();
-      await twoFrames(page);
-      expect(await pickerWidth()).toBe(0);
+      const dwell = await hoverDelay.evaluate(({ proof }) => proof);
+      await hoverDelay.dispose();
+      expect(dwell.delay).toBeGreaterThan(0);
+      expect(dwell.width).toBe(0);
       await expect.poll(pickerWidth).toBeGreaterThanOrEqual(27.5);
       const [voiceBeforeHold, pickerBeforeHold] = await Promise.all([
         voice.boundingBox(),
@@ -275,6 +319,12 @@ suite.define(() => {
       await expect.poll(shellWidth).toBe(0);
 
       await voice.hover();
+      // Assert the settled hover reveal, including its delayed CSS transitions.
+      await microphonePickerShell.evaluate((node) => {
+        for (const animation of node.getAnimations({ subtree: true })) {
+          animation.finish();
+        }
+      });
       await expect.poll(shellWidth).toBe(0);
       await polledVisible(microphonePicker).toBe(false);
     });
