@@ -20,6 +20,7 @@ function isPreConnectLeaf(candidate: unknown): boolean {
   if (!code || !PRE_CONNECT_ERROR_CODES.has(code) || !candidate || typeof candidate !== "object") {
     return false;
   }
+  // SAFETY: The guard above establishes a non-null object; syscall stays unknown until checked.
   const syscall = (candidate as { syscall?: unknown }).syscall;
   return syscall === "connect" || syscall === "getaddrinfo";
 }
@@ -31,6 +32,7 @@ function provesPreConnect(candidate: unknown, depth: number): boolean {
   if (isPreConnectLeaf(candidate)) {
     return true;
   }
+  // SAFETY: The guard above establishes a non-null object; both optional fields remain unknown.
   const { errors, cause } = candidate as { errors?: unknown; cause?: unknown };
   // Node aggregates one connect attempt per resolved address; each must prove it.
   if (Array.isArray(errors)) {
