@@ -1,2 +1,2 @@
-# Native consumer completion and fixture persistence: 185 net lines, offset by six earlier stack deletions.
+# Native consumer completion and fixture persistence: 185 net lines.
 185
