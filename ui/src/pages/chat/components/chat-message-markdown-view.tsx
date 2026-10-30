@@ -113,10 +113,13 @@ export function resolveMessageActionDetails(
   },
 ): MessageActionDetails | null {
   const { messageId: renderMessageId, canFetchFullMessage, onReply, senderLabel } = params;
+  const normalizedRole = normalizeRoleForGrouping(normalizedMessage.role);
   const role =
-    asNullableRecord(message)?.role === "assistant" && assistantMessageCanOwnTurnActions(message)
+    normalizedRole === "tool" &&
+    asNullableRecord(message)?.role === "assistant" &&
+    assistantMessageCanOwnTurnActions(message)
       ? "assistant"
-      : normalizeRoleForGrouping(normalizedMessage.role);
+      : normalizedRole;
   const pendingInput =
     resolveSourceMessageId(message)?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX) === true;
   const cappedMessageId = canFetchFullMessage ? resolveCappedMessageId(message, role) : undefined;

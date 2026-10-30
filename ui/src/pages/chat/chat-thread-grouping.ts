@@ -329,15 +329,18 @@ function groupChatItemSegment(
       !identity.isImported &&
       visibleReasoning.has(JSON.stringify([identity.runId, identity.id])) &&
       Boolean(extractThinkingCached(item.message));
+    const normalizedRole = normalizeRoleForGrouping(normalized.role);
     const hasAssistantText =
+      normalizedRole === "tool" &&
       record?.role === "assistant" &&
-      (record.stopReason === "toolUse" || assistantMessageCanOwnTurnActions(item.message)) &&
+      (record.stopReason === "toolUse" ||
+        assistantMessageCanOwnTurnActions(item.message, Boolean(normalized.senderSession))) &&
       Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim());
     // Saved reasoning stays visible until its live owner retires the receipts.
-    // An answer retains assistant ownership even when its envelope also contains tools.
+    // Mixed answers retain assistant ownership; forwarded narration needs an
+    // explicit answer before gaining its own display-turn boundary.
     // Classify after content projection; prepared outcomes may outlive their blocks.
     const visibleContent = resolveMessageVisibleContent(item.message, normalized);
-    const normalizedRole = normalizeRoleForGrouping(normalized.role);
     const hasPreparedActivity =
       normalizedRole === "assistant" &&
       visibleContent === "none" &&
