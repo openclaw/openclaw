@@ -11,6 +11,7 @@ const { values } = parseArgs({
     root: { type: "string" },
     workspace: { type: "string" },
     "legacy-predicates": { type: "boolean" },
+    "canonical-payloads": { type: "boolean" },
     "complete-gib": { type: "string" },
     "pilot-pairs": { type: "string" },
   },
@@ -269,7 +270,8 @@ if (values.workspace) {
   }
   result.workspace = { files: 62000, bytes: 62000 * body.length };
 }
-if (values["legacy-predicates"]) {
+assert(!(values["legacy-predicates"] && values["canonical-payloads"]));
+if (values["legacy-predicates"] || values["canonical-payloads"]) {
   Object.assign(process.env, {
     OPENCLAW_STATE_DIR: root,
     OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
@@ -279,7 +281,12 @@ if (values["legacy-predicates"]) {
     runOpenClawAgentWriteTransaction,
     closeOpenClawAgentDatabasesAsync,
   } = await import("../../src/state/openclaw-agent-db.ts");
-  const { readTranscriptPayload } = await import("../../src/config/sessions/transcript-payload.ts");
+  const {
+    readTranscriptPayload,
+    prepareTranscriptPayload,
+    readTranscriptStorageEncoding,
+    TRANSCRIPT_PAYLOAD_COLUMNS,
+  } = await import("../../src/config/sessions/transcript-payload.ts");
   const database = openOpenClawAgentDatabase({ agentId: "main" });
   try {
     const selected =
@@ -299,6 +306,13 @@ if (values["legacy-predicates"]) {
     let bytes = 0;
     runOpenClawAgentWriteTransaction(
       (owner) => {
+        const columns = TRANSCRIPT_PAYLOAD_COLUMNS.filter(
+          (column) => !["session_id", "seq", "created_at"].includes(column),
+        );
+        const restore = owner.db.prepare(
+          `UPDATE transcript_events SET ${columns.map((column) => `${column}=?`).join(",")} WHERE session_id=? AND seq=?`,
+        );
+        const encoding = readTranscriptStorageEncoding(owner.db);
         const write = owner.db
           .prepare(`UPDATE transcript_events SET event_json=?,event_zstd=NULL,navigation_json=NULL,
     navigation_type=NULL,navigation_custom_type=NULL,navigation_display=0,message_role=NULL,
@@ -307,12 +321,17 @@ if (values["legacy-predicates"]) {
         for (const row of rows) {
           const payload = readTranscriptPayload(row);
           bytes += Buffer.byteLength(payload);
-          write.run(payload, selected.session_id, row.seq);
+          if (values["canonical-payloads"]) {
+            const stored = prepareTranscriptPayload(owner.db, payload, undefined, encoding);
+            restore.run(...columns.map((column) => stored[column]), selected.session_id, row.seq);
+          } else {
+            write.run(payload, selected.session_id, row.seq);
+          }
         }
       },
       { agentId: "main" },
     );
-    result.legacy = { ...selected, bytes };
+    result[values["canonical-payloads"] ? "canonical" : "legacy"] = { ...selected, bytes };
   } finally {
     await closeOpenClawAgentDatabasesAsync();
   }
