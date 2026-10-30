@@ -2,12 +2,11 @@
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  REPAIR_HEADING,
   SCRIBES,
-  scribeById,
   scribeDeclarationKey,
   scribeLabel,
   type ScribeDefinition,
-  type ScribeSetup,
 } from "./scribes-catalog.js";
 
 export type ScribeStatus =
@@ -17,7 +16,7 @@ export type ScribeStatus =
   | "paused"
   | "failing"
   | "done"
-  | "reauth";
+  | "missing";
 
 /** The session row fields the Scribes view reads. */
 type ScribeSession = {
@@ -40,6 +39,8 @@ export type ScribeJob = {
   sessionTarget?: string;
   schedule: { kind: string; expr?: string; tz?: string; everyMs?: number; at?: string };
   failureAlert?: false | { after?: number };
+  /** The run message is the prompt each scheduled run receives. */
+  payload?: { kind: string; message?: string };
   createdAtMs?: number;
   state: {
     nextRunAtMs?: number;
@@ -66,11 +67,9 @@ export type ScribeRun = {
   usage?: { total_tokens?: number };
 };
 
-/** The `SCRIBE_RESULT` line every scribe turn ends with. */
+/** The `Scribe status: <state> — <sentence>` line every scribe turn ends with. */
 type ScribeResult = {
-  scribe: string;
   state: "on" | "done" | "failed";
-  jobId: string | null;
   summary: string;
 };
 
@@ -81,14 +80,24 @@ export type ScribeSnapshot = {
   session?: ScribeSession;
   job?: ScribeJob;
   result?: ScribeResult;
-  /** Options from the latest setup or repair message in the conversation. */
-  setup?: ScribeSetup;
   /**
-   * The page owes this ongoing scribe its first run: the setup turn answered `on` with a job
-   * that has never run. Setup turns never run their own job, so the page forces it once.
+   * The page owes this ongoing scribe its first run: the latest turn answered `on` and its job
+   * has never run. Setup turns never run their own job, so the page forces it once.
    */
   firstRunDue?: boolean;
 };
+
+/**
+ * Whether a plugin a scribe needs can be used: not installed, turned off, installed but not
+ * signed in to its service, or ready.
+ */
+export type PluginReadiness = "missing" | "disabled" | "needs-sign-in" | "ready";
+
+/** Readiness of the plugin `scribe` needs; undefined when it needs none or it was not read. */
+export const neededPluginState = (
+  scribe: ScribeDefinition,
+  detection: ScribeDetection,
+): PluginReadiness | undefined => scribe.plugin && detection.plugins?.[scribe.plugin.id];
 
 /** Cheap facts for the Available rows. Absent fields could not be read. */
 export type ScribeDetection = {
@@ -96,6 +105,8 @@ export type ScribeDetection = {
   archivedConversations?: number;
   /** MEMORY.md in the agent workspace: null when it does not exist. */
   memoryFile?: { size?: number } | null;
+  /** Readiness of the plugins scribes need, by plugin id. */
+  plugins?: Record<string, PluginReadiness>;
 };
 
 /** The Gateway access scribe reads need: the page host's authenticated request. */
@@ -118,43 +129,37 @@ function messageText(message: unknown): string {
   return "";
 }
 
-/** The last valid `SCRIBE_RESULT` line in one reply or run summary. */
-export function resultFromText(text: string): ScribeResult | undefined {
+// One status line: optional Markdown emphasis, the state, then an optional dash and sentence.
+const STATUS_LINE = /^scribe status\s*:\s*(on|done|failed)\b\s*(?:[—–:-]+\s*)?(.*)$/i;
+
+/**
+ * The last `Scribe status:` line in one reply or run summary. Bold, code and quote marks are
+ * ignored; underscores only at the line's ends, so names like `America/Los_Angeles` survive.
+ */
+export function statusFromText(text: string): ScribeResult | undefined {
   for (const line of text.split("\n").toReversed()) {
-    const match = /^\s*SCRIBE_RESULT\s+(\{.*\})\s*$/.exec(line);
-    if (!match) {
-      continue;
-    }
-    try {
-      const value: unknown = JSON.parse(match[1]!);
-      if (
-        isRecord(value) &&
-        typeof value.scribe === "string" &&
-        (value.state === "on" || value.state === "done" || value.state === "failed") &&
-        (typeof value.jobId === "string" || value.jobId === null) &&
-        typeof value.summary === "string"
-      ) {
-        return {
-          scribe: value.scribe,
-          state: value.state,
-          jobId: value.jobId,
-          summary: value.summary,
-        };
-      }
-    } catch {
-      // Not JSON: keep looking at earlier lines.
+    const match = STATUS_LINE.exec(
+      line
+        .replace(/[*`>]/g, "")
+        .trim()
+        .replace(/^_+|_+$/g, ""),
+    );
+    if (match) {
+      // SAFETY: the pattern only matches the three states.
+      const state = match[1]!.toLowerCase() as ScribeResult["state"];
+      return { state, summary: match[2]!.trim() };
     }
   }
   return undefined;
 }
 
-// The newest assistant message that carries a valid result line, with its position.
+// The newest assistant message that carries a status line, with its position.
 function parseScribeResult(messages: readonly unknown[]) {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     const result =
       isRecord(message) && message.role === "assistant"
-        ? resultFromText(messageText(message))
+        ? statusFromText(messageText(message))
         : undefined;
     if (result) {
       return { result, index };
@@ -163,62 +168,27 @@ function parseScribeResult(messages: readonly unknown[]) {
   return { result: undefined, index: -1 };
 }
 
-/** Options from the newest setup or repair message the page sent, with its kind and position. */
-function parseSetup(messages: readonly unknown[]) {
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index];
-    if (!isRecord(message) || message.role !== "user") {
-      continue;
-    }
-    const match =
-      /^Knowledge scribe (setup|repair): ([a-z-]+)\n[^\n]*\n```json\n(\{.*\})\n```/.exec(
-        messageText(message).trim(),
-      );
-    if (!match || !scribeById(match[2]!)) {
-      continue;
-    }
-    try {
-      const value: unknown = JSON.parse(match[3]!);
-      if (
-        isRecord(value) &&
-        value.scribe === match[2] &&
-        (value.mode === "once" || value.mode === "ongoing") &&
-        isRecord(value.options) &&
-        typeof value.timezone === "string" &&
-        typeof value.agentId === "string"
-      ) {
-        // SAFETY: fields checked above; options are the page's own serialized choices.
-        return { setup: value as ScribeSetup, kind: match[1]!, index };
-      }
-    } catch {
-      // A hand-edited setup message: treat as unknown options.
-    }
-  }
-  return { setup: undefined, kind: undefined, index: -1 };
-}
+// Position of the newest message sent to the scribe: a start, a repair or a scheduled run.
+const lastSent = (messages: readonly unknown[]) =>
+  messages.findLastIndex((message) => isRecord(message) && message.role === "user");
 
 /**
- * Whether the page should force this scribe's first run: the latest page message was an ongoing
- * setup, the conversation answered it with `on` for this job, and the job has not run yet.
+ * Whether the page should force this scribe's first run: the latest message was a start, not a
+ * repair, its turn answered `on`, and the job is enabled and has never run or started.
  */
-function isFirstRunDue(job: ScribeJob, result: ScribeResult, setup: ScribeSetup, kind: string) {
-  return (
-    kind === "setup" &&
-    setup.mode === "ongoing" &&
-    result.state === "on" &&
-    (result.jobId === null || result.jobId === job.id) &&
-    job.enabled &&
-    !job.state.lastRunAtMs &&
-    !job.state.runningAtMs
-  );
-}
+const isFirstRunDue = (job: ScribeJob, result: ScribeResult, sent: unknown) =>
+  !messageText(sent).trimStart().startsWith(REPAIR_HEADING) &&
+  result.state === "on" &&
+  job.enabled &&
+  !job.state.lastRunAtMs &&
+  !job.state.runningAtMs;
 
 /** Session run states that mean its last turn stopped before it could answer. */
 const ENDED_WITHOUT_RESULT = new Set(["failed", "interrupted", "killed", "timeout"]);
 
 /**
  * Derive one scribe's state.
- * - No live conversation: Available, or Needs reauthorization when its automation still exists.
+ * - No live conversation: Available, or Missing when its automation still exists.
  * - With an automation: Paused, Failing or On from the scheduler state.
  * - Without one: Done / Failing from the last result line, Available when an ongoing scribe was
  *   turned off or the setup never reached the conversation, Starting until the conversation
@@ -229,12 +199,12 @@ function deriveStatus(input: {
   session?: ScribeSession;
   job?: ScribeJob;
   result?: ScribeResult;
-  /** The conversation holds a setup or repair message from the page. */
+  /** The conversation received a message: the page's start prompt at least. */
   setupSent: boolean;
 }): ScribeStatus {
   const { session, job, result, setupSent } = input;
   if (!session || session.archived) {
-    return job ? "reauth" : "available";
+    return job ? "missing" : "available";
   }
   if (job) {
     if (job.state.autoDisabled) {
@@ -252,8 +222,8 @@ function deriveStatus(input: {
       : "on";
   }
   if (!result) {
-    // No setup message: the start never reached the conversation (its send failed), so it can
-    // be started again there. A setup turn that ended without a result line needs Retry/Repair.
+    // No message: the start never reached the conversation (its send failed), so it can be
+    // started again there. A start turn that ended without a status line needs a new start.
     if (!setupSent) {
       return "available";
     }
@@ -277,19 +247,45 @@ async function findSessions(host: ScribeReader, agentId: string, scribe: ScribeD
   );
 }
 
+const SESSION_TARGET = "session:";
+
+/** The sessions the scribe's automations target, by exact key; deleted ones are left out. */
+async function describeTargets(host: ScribeReader, keyed: ScribeJob[]) {
+  const keys = new Set(
+    keyed.flatMap((job) =>
+      job.sessionTarget?.startsWith(SESSION_TARGET)
+        ? [job.sessionTarget.slice(SESSION_TARGET.length)]
+        : [],
+    ),
+  );
+  const rows = await Promise.all(
+    [...keys].map((key) =>
+      host.request<{ session?: unknown }>("sessions.describe", { key }).then((r) => r?.session),
+    ),
+  );
+  return rows.filter((row): row is ScribeSession => isRecord(row) && typeof row.key === "string");
+}
+
 /**
- * Pair a scribe with its conversation and automation. An ongoing scribe's conversation is the
- * one its job targets; otherwise the newest unarchived session with the scribe's title. The job
- * is the one targeting that conversation, or any job with the key (shown as needing repair).
+ * Pair a scribe with its conversation and automation.
+ * - With automations: the conversation is the one a job targets, read by its session key, so a
+ *   renamed conversation stays paired. None left means it was deleted; the job stays (Missing).
+ * - Without: no key is recorded, so the conversation is the newest unarchived session with the
+ *   scribe's title, or an archived one.
  */
-function pairScribe(sessions: ScribeSession[], keyed: ScribeJob[]) {
-  const targets = new Set(keyed.map((job) => job.sessionTarget));
-  const session =
-    sessions.find((row) => targets.has(`session:${row.key}`)) ??
-    sessions.find((row) => !row.archived) ??
-    sessions[0];
+async function pairScribe(
+  host: ScribeReader,
+  agentId: string,
+  scribe: ScribeDefinition,
+  keyed: ScribeJob[],
+) {
+  const sessions = keyed.length
+    ? await describeTargets(host, keyed)
+    : await findSessions(host, agentId, scribe);
+  const session = sessions.find((row) => !row.archived) ?? sessions[0];
   const job =
-    keyed.find((entry) => session && entry.sessionTarget === `session:${session.key}`) ?? keyed[0];
+    keyed.find((entry) => session && entry.sessionTarget === `${SESSION_TARGET}${session.key}`) ??
+    keyed[0];
   return { session, job };
 }
 
@@ -328,32 +324,31 @@ async function readMessages(host: ScribeReader, session: ScribeSession, agentId:
   return history?.messages ?? [];
 }
 
-/** Load every scribe's conversation, automation and last result for one agent. */
+/** Load every scribe's conversation, automation and last status line for one agent. */
 export async function loadScribes(host: ScribeReader, agentId: string): Promise<ScribeSnapshot[]> {
-  const [jobs, sessions] = await Promise.all([
-    findJobs(host, agentId),
-    Promise.all(SCRIBES.map((scribe) => findSessions(host, agentId, scribe))),
-  ]);
+  const jobs = await findJobs(host, agentId);
   return Promise.all(
-    SCRIBES.map(async (scribe, i) => {
-      const { session, job } = pairScribe(
-        sessions[i]!,
+    SCRIBES.map(async (scribe) => {
+      const { session, job } = await pairScribe(
+        host,
+        agentId,
+        scribe,
         jobs.get(scribeDeclarationKey(scribe.id)) ?? [],
       );
       const messages = session ? await readMessages(host, session, agentId) : [];
       const { result, index: resultIndex } = parseScribeResult(messages);
-      const { setup, kind, index: setupIndex } = parseSetup(messages);
-      // A result older than the latest setup or repair message answers an earlier start.
-      const current = resultIndex > setupIndex ? result : undefined;
+      const sentIndex = lastSent(messages);
+      // A status line older than the latest message sent answers an earlier turn.
+      const current = resultIndex > sentIndex ? result : undefined;
       const snapshot: ScribeSnapshot = {
         scribe,
-        status: deriveStatus({ scribe, session, job, result: current, setupSent: setupIndex >= 0 }),
+        status: deriveStatus({ scribe, session, job, result: current, setupSent: sentIndex >= 0 }),
       };
       Object.assign(snapshot, session && { session }, job && { job }, result && { result });
-      if (job && current && setup && kind && snapshot.status === "on") {
-        snapshot.firstRunDue = isFirstRunDue(job, current, setup, kind);
+      if (job && current && snapshot.status === "on") {
+        snapshot.firstRunDue = isFirstRunDue(job, current, messages[sentIndex]);
       }
-      return setup ? Object.assign(snapshot, { setup }) : snapshot;
+      return snapshot;
     }),
   );
 }
@@ -391,12 +386,58 @@ async function conversationCount(host: ScribeReader, agentId: string, archived: 
   return result?.count === 0 ? 0 : undefined;
 }
 
+/**
+ * Readiness of one plugin from plugins.inspect. A plugin the Gateway does not know is rejected
+ * as an invalid request; any other failure is left unknown (undefined).
+ */
+async function pluginReadiness(
+  host: ScribeReader,
+  pluginId: string,
+): Promise<PluginReadiness | undefined> {
+  const result = await host
+    .request<{
+      plugin?: { installed?: boolean; enabled?: boolean };
+      mcpAuth?: { state?: string }[];
+    }>("plugins.inspect", { pluginId })
+    .catch((error: unknown) =>
+      isRecord(error) && error.gatewayCode === "INVALID_REQUEST" ? null : undefined,
+    );
+  if (result === undefined) {
+    return undefined;
+  }
+  if (!result?.plugin?.installed) {
+    return "missing";
+  }
+  if (!result.plugin.enabled) {
+    return "disabled";
+  }
+  // Every MCP server the plugin declares must be signed in; one without sign-in has no entries.
+  return (result.mcpAuth ?? []).every((server) => server.state === "authorized")
+    ? "ready"
+    : "needs-sign-in";
+}
+
+// The plugins scribes need, once each.
+const scribePluginIds = () => [
+  ...new Set(SCRIBES.flatMap((scribe) => (scribe.plugin ? [scribe.plugin.id] : []))),
+];
+
+// Readiness by plugin id, leaving out plugins that could not be read.
+async function detectPlugins(host: ScribeReader) {
+  const ids = scribePluginIds();
+  const states = await Promise.all(ids.map((id) => pluginReadiness(host, id)));
+  return Object.fromEntries(
+    ids.flatMap((id, i) => (states[i] === undefined ? [] : [[id, states[i]] as const])),
+  );
+}
+
 /** Facts the Available rows can show honestly. Failed reads leave their fields out. */
 export async function detectSources(host: ScribeReader, agentId: string): Promise<ScribeDetection> {
-  const [active, archived, files] = await Promise.allSettled([
+  const [active, archived, files, plugins] = await Promise.allSettled([
     conversationCount(host, agentId, false),
     conversationCount(host, agentId, true),
     host.request<{ files?: unknown[] }>("agents.files.list", { agentId }),
+    detectPlugins(host),
   ]);
   const detection: ScribeDetection = {};
   if (active.status === "fulfilled" && active.value !== undefined) {
@@ -417,6 +458,9 @@ export async function detectSources(host: ScribeReader, agentId: string): Promis
             ? { size: memory.size }
             : {};
     }
+  }
+  if (plugins.status === "fulfilled" && Object.keys(plugins.value).length) {
+    detection.plugins = plugins.value;
   }
   return detection;
 }

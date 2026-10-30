@@ -174,10 +174,6 @@
 
     &:is([aria-current="page"], [aria-pressed="true"], .nav-item--active) {
       --sidebar-rail-control-surface: var(--sidebar-rail-selected-surface);
-
-      &:is(.sidebar-rail__button, .nav-item) > :is(svg, .nav-item__icon) {
-        color: var(--accent);
-      }
     }
 
     &:is([aria-current="page"], [aria-pressed="true"], .nav-item--active):hover {

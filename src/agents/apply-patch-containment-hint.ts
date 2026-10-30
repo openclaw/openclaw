@@ -17,7 +17,7 @@ const HINTS: Record<ApplyPatchContainmentSource, string> = {
     "within the required root.",
   config:
     "apply_patch is workspace-contained by configuration. Both tools.exec.applyPatch.workspaceOnly " +
-    "(default true) and tools.fs.workspaceOnly impose this independently, so clearing one can leave " +
+    "and tools.fs.workspaceOnly impose this independently, so clearing one can leave " +
     "the other in force. tools.exec.mode does not affect it.",
   session:
     "apply_patch is workspace-contained by this session's permission mode. Only a full permission " +

@@ -629,25 +629,30 @@ export function createSessionActivitySummaries(deps: {
     void work.finally(() => admissions.delete(work)).catch(() => {});
     return work;
   };
-  const requestInBackground = (target: ActivitySummaryTarget, runEnded = false) => {
-    if (!canTrack(target)) {
+  const logAdmissionFailure = (error: unknown) =>
+    log.debug("Activity recap admission failed", { error: formatErrorMessage(error) });
+  const requestInBackground = (target: ActivitySummaryTarget | undefined, runEnded = false) => {
+    if (!target || !canTrack(target)) {
       return;
     }
     const storePath = scope(target).storePath;
     const consume = (entry: SessionEntry | undefined) => {
-      const state = admit(target, entry, storePath);
-      if (state && (runEnded || !isActive(state))) {
-        schedule(state);
+      if (!runEnded) {
+        return trackAsyncWork(() => trackAdmission(ensure(target, entry))).catch(
+          logAdmissionFailure,
+        );
       }
+      const state = admit(target, entry, storePath);
+      return state ? schedule(state) : undefined;
     };
     const projection = deps.getSessionRowProjection?.();
     if (projection?.sharingRevision) {
-      consume(projection.sharingTarget(target)?.entry);
+      void consume(projection.sharingTarget(target)?.entry);
       return;
     }
     const retained = states.get(activitySummaryScope(target));
     if (retained?.storePath === storePath) {
-      consume(retained.entry);
+      void consume(retained.entry);
       return;
     }
     void runInDetachedAsyncContext(() =>
@@ -656,9 +661,7 @@ export function createSessionActivitySummaries(deps: {
           consume,
         ),
       ),
-    ).catch((error: unknown) => {
-      log.debug("Activity recap admission failed", { error: formatErrorMessage(error) });
-    });
+    ).catch(logAdmissionFailure);
   };
   return {
     beginCompletion(requested, entry) {
@@ -685,12 +688,8 @@ export function createSessionActivitySummaries(deps: {
       }
     },
     handleLifecycle(event) {
-      if (event.reason !== "archive" && event.reason !== "unarchive") {
-        return;
-      }
-      const target = eventTarget(event.sessionKey, event.agentId);
-      if (target) {
-        requestInBackground(target);
+      if (event.reason === "archive" || event.reason === "unarchive") {
+        requestInBackground(eventTarget(event.sessionKey, event.agentId));
       }
     },
     async dispose() {

@@ -130,22 +130,20 @@ export function WherePickerContent(
       .hostedEnvironments()
       .filter((entry) => matches(entry.label, entry.id, t("newSession.hosted")));
     const showHostedSetup = matches("OpenAI Agents API", t("newSession.hosted"));
-    const cloudProfiles = props.params.place.isAdmin()
-      ? props.state.cloudProfiles.filter((profile) =>
-          matches(
-            t("newSession.cloud"),
-            profile.id,
-            profile.providerId,
-            profile.providerDisplayId,
-            resolveCloudProfileIconData(profile).label,
-            profile.trust === "disposable"
-              ? t("newSession.environmentDisposable")
-              : profile.trust === "persistent"
-                ? t("newSession.environmentPersistent")
-                : undefined,
-          ),
-        )
-      : [];
+    const cloudProfiles = props.state.cloudProfiles.filter((profile) =>
+      matches(
+        t("newSession.cloud"),
+        profile.id,
+        profile.providerId,
+        profile.providerDisplayId,
+        resolveCloudProfileIconData(profile).label,
+        profile.trust === "disposable"
+          ? t("newSession.environmentDisposable")
+          : profile.trust === "persistent"
+            ? t("newSession.environmentPersistent")
+            : undefined,
+      ),
+    );
     const suggestion = props.params.gateway.suggestedProfile;
     const showSuggestion =
       props.params.place.isAdmin() &&
@@ -158,7 +156,7 @@ export function WherePickerContent(
         resolveCloudProfileIconData(suggestion).label,
       );
     const showMissingCloud =
-      props.params.place.isAdmin() &&
+      props.params.place.canWrite() &&
       Boolean(props.params.place.cloudProfileId) &&
       !props.state.cloudProfiles.some(
         (profile) => profile.id === props.params.place.cloudProfileId,

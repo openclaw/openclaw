@@ -726,6 +726,32 @@ it("permits fixed noncredential generic writer keys without granting a caller ex
   );
 });
 
+it("permits the audited telemetry count operation without admitting an unreviewed sibling", () => {
+  const file = "src/infra/telemetry-store.worker.ts";
+  const reject = allowedGraph({
+    "src/state/config-machine-state-write.ts": `export function writeConfigMachineStateInDatabase() {}`,
+    [file]: `
+      import { writeConfigMachineStateInDatabase } from '../state/config-machine-state-write.js';
+      function installationCountStateKey(endpoint: string): string {
+        return 'telemetry.installationCount.' + endpoint;
+      }
+      export const telemetryOperations = {
+        'telemetry.claimInstallationCount': (input: { endpoint: string; day: number }) =>
+          runOpenClawStateWriteTransaction(({ db }) => {
+            const key = installationCountStateKey(input.endpoint);
+            writeConfigMachineStateInDatabase(db, key, input.day);
+          }),
+      };
+    `,
+  });
+  reject(
+    file,
+    (original) =>
+      original.replace("telemetry.claimInstallationCount", "telemetry.unreviewedSibling"),
+    "from src/infra/telemetry-store.worker.ts:telemetry.unreviewedSibling",
+  );
+});
+
 it.each([
   [
     "src/agents/auth-profiles/store-update.ts",

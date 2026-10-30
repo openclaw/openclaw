@@ -83,13 +83,26 @@ export function resolveCatalogOwnedModelCompat(params: {
     return params.configuredCompat;
   }
   const configured = params.configuredCompat;
+  // Thinking-profile settings a config states explicitly win over the catalog's.
+  const thinkingOverrides = Object.fromEntries(
+    (
+      [
+        "defaultThinkingLevel",
+        "adaptiveThinking",
+        "thinkingRequired",
+        "thinkingLevelLabels",
+      ] as const
+    ).flatMap((key) => (configured?.[key] === undefined ? [] : [[key, configured[key]]])),
+  );
   const efforts = configured?.supportedReasoningEfforts;
   if (
     efforts === undefined &&
     configured?.supportsReasoningEffort === undefined &&
     configured?.reasoningEffortMap === undefined
   ) {
-    return params.catalogCompat;
+    return Object.keys(thinkingOverrides).length > 0
+      ? { ...params.catalogCompat, ...thinkingOverrides }
+      : params.catalogCompat;
   }
   return {
     ...params.catalogCompat,
@@ -107,5 +120,6 @@ export function resolveCatalogOwnedModelCompat(params: {
     ...(configured?.reasoningEffortMap !== undefined
       ? { reasoningEffortMap: configured.reasoningEffortMap }
       : {}),
+    ...thinkingOverrides,
   };
 }

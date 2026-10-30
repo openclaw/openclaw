@@ -188,6 +188,7 @@ export function createSessionRowAncestorReads(owner: {
   prepareExactRows: (
     queries: readonly records.Lookup[],
     fromSelection?: boolean,
+    selectedRows?: readonly (records.Row | undefined)[],
   ) => Promise<void> | undefined;
   prepareSelection: (options?: SessionRowSelectionPreparationOptions) => Promise<void> | undefined;
   retainExactPreparation: () => () => void;
@@ -266,9 +267,9 @@ export function createSessionRowAncestorReads(owner: {
               owner.isActive,
               owner.lookup,
               selected,
-              (targets) => {
+              (targets, selectedRows) => {
                 archivedRows.update(
-                  targets.flatMap((query) => {
+                  targets.flatMap((query, index) => {
                     if (
                       !options?.selection &&
                       isIncognitoSessionKey(
@@ -281,14 +282,14 @@ export function createSessionRowAncestorReads(owner: {
                     ) {
                       return [];
                     }
-                    const row = owner.lookup(query);
+                    const row = selectedRows[index];
                     return row?.entry?.archivedAt !== undefined ? [records.identity(row)] : [];
                   }),
                 );
                 if (owner.membership.needsPreparation(() => targets)) {
                   return owner.membership.prepare();
                 }
-                return owner.prepareExactRows(targets, Boolean(options?.selection));
+                return owner.prepareExactRows(targets, Boolean(options?.selection), selectedRows);
               },
               (read, targets) => {
                 if (owner.membership.needsPreparation(() => targets)) {

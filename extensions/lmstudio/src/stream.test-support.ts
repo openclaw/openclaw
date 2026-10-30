@@ -25,3 +25,18 @@ export function streamModel(baseUrl: string, overrides: Partial<StreamModel> = {
     ...overrides,
   };
 }
+
+export function messagesTextResponse(text: string): string {
+  const events = [
+    {
+      type: "message_start",
+      message: { id: "msg_test", usage: { input_tokens: 11, output_tokens: 0 } },
+    },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 17 } },
+    { type: "message_stop" },
+  ];
+  return events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+}

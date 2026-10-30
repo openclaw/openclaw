@@ -15,12 +15,7 @@ import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-co
 
 export type RenderMessageGroupOptions = Omit<
   GroupedMessageOptions,
-  | "isStreaming"
-  | "duplicateCount"
-  | "assistantMessageDisclosure"
-  | "messageActions"
-  | "entryId"
-  | "replyLine"
+  "isStreaming" | "assistantMessageDisclosure" | "messageActions" | "entryId" | "replyLine"
 > &
   ChatSendStatusActions &
   ForwardedAvatarOptions & {
@@ -55,7 +50,6 @@ export type RenderMessageGroupOptions = Omit<
     activityGroupKey?: string;
     bubbleActivityGroupKey?: string;
     turnRecap?: TurnRecap;
-    hideTurnRecapDuration?: boolean;
     /** Frame bodies are pre-rendered by the frame owner; ordinary groups omit them. */
     frameContent?: readonly unknown[];
     frameActionOwner?: MessageGroup["messages"][number] | null;

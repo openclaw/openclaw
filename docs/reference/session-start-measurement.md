@@ -75,3 +75,19 @@ Git origin to exercise base refresh; `--unchanged-origin` keeps it fixed. Use
 are descriptive; use matched A/A controls before attributing adverse changes to
 a candidate. Whole-Gateway CPU/allocation/GC stress remains owned by
 `scripts/perf/team-shape-stress.ts`.
+
+Sandbox detail spans split workspace selection into owner lookup, projection
+acquisition, reconciliation, and release. Nested quiesce/resume spans identify
+registry reads, engine checks, inspection, pause/unpause, and receipt writes.
+Backend spans separate lifecycle-lock wait, runtime discovery, mount preparation,
+container inspection/start, and publication. Prune spans distinguish orphan
+recovery, registry reads, and runtime removal; skill delivery distinguishes queue
+wait, manifest reads, discovery, and copying. These use the same request observer
+as the enclosing setup phases and remain inclusive, overlapping measurements.
+
+For local owner-level diagnosis without Docker, use
+`scripts/perf/sandbox-setup-waits-measure.ts` (usage in its header). It prepares
+synthetic agents and managed Git worktrees, stubs the Docker process with configurable
+latency, and records setup wall time, subprocess counts, worker requests, and
+sub-spans. Source-loaded worker startup and tiny fixture repositories differ from
+a built Gateway; use its results to locate waits, not to claim production latency.

@@ -18,18 +18,20 @@ import { registerBrowserEnglish } from "../../ui/src/i18n/locales/en-browser.ts"
 import { registerChatCameraEnglish } from "../../ui/src/i18n/locales/en-chat-camera.ts";
 import { registerChatCiEnglish } from "../../ui/src/i18n/locales/en-chat-ci.ts";
 import { registerChatCommandResultsEnglish } from "../../ui/src/i18n/locales/en-chat-command-results.ts";
+import { registerChatComposerMenuEnglish } from "../../ui/src/i18n/locales/en-chat-composer-menu.ts";
 import { registerChatComposerEnglish } from "../../ui/src/i18n/locales/en-chat-composer.ts";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
 import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
 import { registerChatMediaEnglish } from "../../ui/src/i18n/locales/en-chat-media.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
 import { registerChatOutputsEnglish } from "../../ui/src/i18n/locales/en-chat-outputs.ts";
+import { registerChatPermissionsEnglish } from "../../ui/src/i18n/locales/en-chat-permissions.ts";
 import { registerChatProviderReviewEnglish } from "../../ui/src/i18n/locales/en-chat-provider-review.ts";
 import { registerChatQuestionsEnglish } from "../../ui/src/i18n/locales/en-chat-questions.ts";
+import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
 import { registerChatToolContentEnglish } from "../../ui/src/i18n/locales/en-chat-tool-content.ts";
 import { registerChatToolLabelsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-labels.ts";
-import { registerClawsEnglish } from "../../ui/src/i18n/locales/en-claws.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerCommandPaletteEnglish } from "../../ui/src/i18n/locales/en-command-palette.ts";
 import { registerConnectionRecoveryEnglish } from "../../ui/src/i18n/locales/en-connection-recovery.ts";
@@ -63,6 +65,7 @@ import { registerPortalsEnglish } from "../../ui/src/i18n/locales/en-portals.ts"
 import { registerPreferencesEnglish } from "../../ui/src/i18n/locales/en-preferences.ts";
 import { registerProcessesEnglish } from "../../ui/src/i18n/locales/en-processes.ts";
 import { registerProfileEnglish } from "../../ui/src/i18n/locales/en-profile.ts";
+import { registerProviderUsageEnglish } from "../../ui/src/i18n/locales/en-provider-usage.ts";
 import { registerRouteSubtitlesEnglish } from "../../ui/src/i18n/locales/en-route-subtitles.ts";
 import { registerSecretsStoreEnglish } from "../../ui/src/i18n/locales/en-secrets-store.ts";
 import { registerSessionMachineEnglish } from "../../ui/src/i18n/locales/en-session-machine.ts";
@@ -77,6 +80,8 @@ import { registerSkillLibraryEnglish } from "../../ui/src/i18n/locales/en-skill-
 import { registerSkillWorkshopEnglish } from "../../ui/src/i18n/locales/en-skill-workshop.ts";
 import { registerSkillsBrowserEnglish } from "../../ui/src/i18n/locales/en-skills-browser.ts";
 import { registerSystemsEnglish } from "../../ui/src/i18n/locales/en-systems.ts";
+import { registerTemplateCreatorEnglish } from "../../ui/src/i18n/locales/en-template-creator.ts";
+import { registerTemplatesEnglish } from "../../ui/src/i18n/locales/en-templates.ts";
 import { registerTerminalEnglish } from "../../ui/src/i18n/locales/en-terminal.ts";
 import { registerToolDiagnosticsEnglish } from "../../ui/src/i18n/locales/en-tool-diagnostics.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
@@ -97,6 +102,9 @@ const localesDir = path.resolve(
   "../../ui/src/i18n/locales",
 );
 const sourceFiles = [
+  "en-chat-permissions.ts",
+  "en-chat-composer-menu.ts",
+  "en-chat-session-optional.ts",
   "en-session-progress.ts",
   "en-board-document.ts",
   "en-assistant-context.ts",
@@ -113,6 +121,7 @@ const sourceFiles = [
   "en-agent-creation.ts",
   "en-activity.ts",
   "en-agents-home.ts",
+  "en-template-creator.ts",
   "en-apps.ts",
   "en-logbook.ts",
   "en-logs.ts",
@@ -134,7 +143,7 @@ const sourceFiles = [
   "en-chat-session.ts",
   "en-chat-tool-content.ts",
   "en-chat-tool-labels.ts",
-  "en-claws.ts",
+  "en-templates.ts",
   "en-code-blocks.ts",
   "en-command-palette.ts",
   "en-connection-recovery.ts",
@@ -158,6 +167,7 @@ const sourceFiles = [
   "en-model-controls.ts",
   "en-model-setup.ts",
   "en-personal-instructions.ts",
+  "en-provider-usage.ts",
   "en-session-machine.ts",
   "en-session-navigation.ts",
   "en-session-organization-shared.ts",
@@ -229,7 +239,135 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   )) {
     sessionDetails[key] = value;
     if (key === "close") {
-      Object.assign(sessionDetails, registerChatDetailsEnglish.catalog.chat.sessionDetails);
+      // Rejoin cold inspector copy at its original positions to preserve translation-memory order.
+      const inspectorCopy = registerChatSessionOptionalEnglish.catalog.chat.sessionDetails;
+      for (const [name, copy] of Object.entries(
+        registerChatDetailsEnglish.catalog.chat.sessionDetails,
+      )) {
+        sessionDetails[name] = copy;
+        const inspectorKeys: Array<keyof typeof inspectorCopy> =
+          name === "contextTools"
+            ? [
+                "contextAgentWorkspace",
+                "contextProject",
+                "contextPersonal",
+                "contextOtherFiles",
+                "contextSystemTools",
+                "contextMcpTools",
+                "contextClientTools",
+                "contextAvailableOnDemand",
+                "contextDeferredEstimate",
+              ]
+            : name === "contextSystem"
+              ? ["contextFree"]
+              : name === "contextOffline"
+                ? [
+                    "contextUnavailable",
+                    "contextReserve",
+                    "contextCompactDescription",
+                    "contextCompact",
+                    "contextCompacting",
+                    "contextCompactShort",
+                  ]
+                : name === "contextExactCount"
+                  ? [
+                      "contextFreeShort",
+                      "contextReserveShort",
+                      "contextInputShort",
+                      "contextOutputShort",
+                      "contextSearch",
+                      "contextSearchCount",
+                      "contextSearchSkills",
+                      "contextSearchFiles",
+                      "contextSearchTools",
+                      "contextShowAll",
+                    ]
+                  : [];
+        for (const inspectorKey of inspectorKeys) {
+          sessionDetails[inspectorKey] = inspectorCopy[inspectorKey];
+        }
+      }
+    }
+  }
+  // Keep source translation order while the composer notice copy follows its lazy view.
+  const workspaceConflict: TranslationMap = {};
+  for (const [key, value] of Object.entries(
+    registerChatSessionOptionalEnglish.catalog.chat.workspaceConflict,
+  )) {
+    workspaceConflict[key] = value;
+    if (key === "showCommands") {
+      workspaceConflict.morePaths =
+        registerChatSessionEnglish.catalog.chat.workspaceConflict.morePaths;
+      workspaceConflict.stagedResult =
+        registerChatSessionEnglish.catalog.chat.workspaceConflict.stagedResult;
+    }
+  }
+  Object.assign(workspaceConflict, registerChatSessionEnglish.catalog.chat.workspaceConflict);
+  // Rejoin cold leaves at their original positions for translation-memory source order.
+  const sessionSharing: TranslationMap = {};
+  const sharingCopy = registerChatSessionOptionalEnglish.catalog.chat.sessionSharing;
+  for (const [key, value] of Object.entries(
+    registerChatSessionEnglish.catalog.chat.sessionSharing,
+  )) {
+    sessionSharing[key] = value;
+    const coldKeys: Array<keyof typeof sharingCopy> =
+      key === "closeSearch"
+        ? ["noPeopleFound", "tryAnotherName"]
+        : key === "current"
+          ? ["visibility"]
+          : key === "draft"
+            ? ["publishDraft"]
+            : key === "owner"
+              ? ["noPeople"]
+              : key === "guestWelcomeRetry"
+                ? ["publicAccess"]
+                : key === "worldReadable"
+                  ? [
+                      "notPublic",
+                      "enablePublicAccess",
+                      "disablePublicAccess",
+                      "copyPublicLink",
+                      "publicConfirmTitle",
+                      "publicConfirmMessage",
+                      "publicConfirmEnable",
+                      "publicEnabled",
+                      "publicDisabled",
+                    ]
+                  : [];
+    for (const name of coldKeys) {
+      sessionSharing[name] = sharingCopy[name];
+    }
+  }
+  const subagentsPanel: TranslationMap = {};
+  const panelCopy = registerChatSessionEnglish.catalog.chat.subagentsPanel;
+  for (const [key, value] of Object.entries(
+    registerChatSessionOptionalEnglish.catalog.chat.subagentsPanel,
+  )) {
+    subagentsPanel[key] = value;
+    const hotKeys: Array<keyof typeof panelCopy> =
+      key === "nativeStatus"
+        ? ["title"]
+        : key === "desktopCloseSearch"
+          ? ["desktopWorking"]
+          : key === "mobileFinished"
+            ? ["stopConfirmTitle", "stopConfirmMessage", "stopConfirmAction", "back"]
+            : key === "refresh"
+              ? ["stop", "stopping"]
+              : [];
+    for (const name of hotKeys) {
+      subagentsPanel[name] = panelCopy[name];
+    }
+  }
+  const continueInTerminal: TranslationMap = {};
+  for (const [key, value] of Object.entries(
+    registerChatSessionEnglish.catalog.chat.sessionHeader.continueInTerminal,
+  )) {
+    continueInTerminal[key] = value;
+    if (key === "action") {
+      Object.assign(
+        continueInTerminal,
+        registerChatSessionOptionalEnglish.catalog.chat.sessionHeader.continueInTerminal,
+      );
     }
   }
   const toolCards: TranslationMap = {};
@@ -253,7 +391,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
           ? ["viewMode", "diff", "raw"]
           : key === "openFile"
             ? ["openDetails"]
-            : key === "failureCount"
+            : key === "exitCode"
               ? ["noOutputFailed"]
               : [];
     for (const contentKey of contentKeys) {
@@ -358,8 +496,16 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         sidebar,
         clawhub: registerPluginManagementEnglish.catalog.chat.clawhub,
         ...registerChatSessionEnglish.catalog.chat,
+        ...registerChatSessionOptionalEnglish.catalog.chat,
         ...registerSessionNavigationEnglish.catalog.chat,
+        workspaceConflict,
         sessionDetails,
+        sessionSharing,
+        subagentsPanel,
+        sessionHeader: {
+          ...registerChatSessionEnglish.catalog.chat.sessionHeader,
+          continueInTerminal,
+        },
         sessionSuggestions: {
           ...registerSessionNavigationEnglish.catalog.chat.sessionSuggestions,
           ...registerChatSessionEnglish.catalog.chat.sessionSuggestions,
@@ -402,7 +548,8 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     },
     registerActivityEnglish.catalog,
     registerAgentsHomeEnglish.catalog,
-    registerClawsEnglish.catalog,
+    registerTemplateCreatorEnglish.catalog,
+    registerTemplatesEnglish.catalog,
     registerAppsEnglish.catalog,
     registerLogbookEnglish.catalog,
     registerLogsEnglish.catalog,
@@ -412,7 +559,16 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerChatCameraEnglish.catalog,
     { chat: { pullRequests: { ...ciPullRequests, automationNoChecks, automationRetry } } },
     registerChatCommandResultsEnglish.catalog,
-    registerChatComposerEnglish.catalog,
+    {
+      chat: {
+        ...registerChatComposerEnglish.catalog.chat,
+        composer: {
+          ...registerChatComposerEnglish.catalog.chat.composer,
+          menu: registerChatComposerMenuEnglish.catalog.chat.composer.menu,
+        },
+        permissions: registerChatPermissionsEnglish.catalog.chat.permissions,
+      },
+    },
     registerChatGoalsEnglish.catalog,
     registerChatProviderReviewEnglish.catalog,
     registerCodeBlocksEnglish.catalog,
@@ -449,6 +605,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerTerminalEnglish.catalog,
     registerUpdateActionsEnglish.catalog,
     registerTranscriptsEnglish.catalog,
+    registerProviderUsageEnglish.catalog,
     registerUsageEnglish.catalog,
     { publicReader: PUBLIC_SESSION_COPY },
     loadControlUiCoreHintCatalog(),

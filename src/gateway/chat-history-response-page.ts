@@ -7,6 +7,7 @@ import type {
   ChatHistoryPageParams,
   ChatHistoryResponsePage,
 } from "../config/sessions/session-history-types.js";
+import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
@@ -108,6 +109,7 @@ export function prepareChatHistoryResponsePage(
   >,
   messageSequences: MessageSequences | undefined = historyPage.pagination?.messageSequences ??
     historyPage.anchor?.messageSequences,
+  measureJsonBytes = jsonUtf8Bytes,
 ): ChatHistoryResponsePage {
   const normalized = enrichChatHistoryCompactionMarkers(
     historyPage.messages,
@@ -115,7 +117,7 @@ export function prepareChatHistoryResponsePage(
     compactionMetrics,
   );
   const activity = createChatHistoryActivityProjection(normalized, historyPage.activity);
-  const byteCounter = createChatHistoryByteCounter(activity);
+  const byteCounter = createChatHistoryByteCounter(activity, measureJsonBytes);
   const framingCost = 1 + byteCounter.framingBytes(normalized);
   const maxCost = responseHistoryBytes - framingCost;
   const messageCost = (message: unknown) => byteCounter.messageBytes(message) + 1;
@@ -265,8 +267,43 @@ export function encodeChatHistoryResponsePage(
   if (!params.encodeResponse) {
     return page;
   }
-  const response = prepareChatHistoryResponsePage(page, params);
-  const messages = new TextEncoder().encode(JSON.stringify(response.messages));
+  // Budgeting and transport consume the same synchronous plain-data projection.
+  // Keep its JSON only until this response is encoded, never across requests.
+  const serialized = new Map<unknown, string | undefined>();
+  const serialize = (value: unknown) => {
+    if (!serialized.has(value)) {
+      serialized.set(value, JSON.stringify(value));
+    }
+    return serialized.get(value);
+  };
+  const response = prepareChatHistoryResponsePage(page, params, undefined, (value) => {
+    try {
+      return Buffer.byteLength(serialize(value) ?? String(value), "utf8");
+    } catch {
+      return Buffer.byteLength(String(value), "utf8");
+    }
+  });
+  const encoder = new TextEncoder();
+  const encodeArray = (values: unknown[]) => {
+    const parts = values.map((value) => serialize(value) ?? "null");
+    const bytes = new Uint8Array(
+      2 +
+        Math.max(0, parts.length - 1) +
+        parts.reduce((size, part) => size + Buffer.byteLength(part), 0),
+    );
+    bytes[0] = 0x5b;
+    let offset = 1;
+    for (const [index, part] of parts.entries()) {
+      if (index > 0) {
+        bytes[offset++] = 0x2c;
+      }
+      offset += encoder.encodeInto(part, bytes.subarray(offset)).written;
+    }
+    bytes[offset] = 0x5d;
+    return bytes;
+  };
+  const messages = encodeArray(response.messages);
+  const activity = response.activity ? encodeArray(response.activity) : undefined;
   return {
     ...page,
     messages: [],
@@ -284,6 +321,7 @@ export function encodeChatHistoryResponsePage(
     encodedResponse: {
       ...response,
       messages,
+      activity,
     },
   };
 }

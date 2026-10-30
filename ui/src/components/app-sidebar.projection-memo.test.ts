@@ -29,6 +29,7 @@ import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-n
 import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import * as sessionLeadingIndicator from "./session-leading-indicator.ts";
+import { setSessionsGrouping } from "./session-organizer-menu.runtime.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { snapshotSessions } from "./sidebar-snapshot-model.ts";
 
@@ -194,44 +195,65 @@ describe("sidebar projection memo", () => {
     expect(owner.reconciledSidebarZone().sessionRows.get(target.key)).toBe(selected);
   });
 
-  it.each([10, 30])("keeps newer pagination at %s rows through cached handoff", async (limit) => {
-    const sessionsToShow = Array.from({ length: 40 }, (_, index) => session(`row-${index}`));
-    const { sidebar, sessions } = await mount(sessionsToShow);
-    const owner = getAppSidebarOwner(sidebar.hostElement)!;
-    const sectionId = "ungrouped";
-    expect(
-      sidebar.querySelector("[data-session-section]")?.getAttribute("data-session-section"),
-    ).toBe(sectionId);
-    vi.spyOn(owner, "sidebarSnapshotSettled").mockReturnValue(false);
-    const rows = snapshotSessions(
-      sessionsToShow.map((row) => sidebar.getSessionNavigationState().toSidebarSession(row)),
-    );
-    owner.restoreSidebarSnapshot({
-      ...sidebarBootSnapshot(captureBootRoster(sessions.sessions.state)),
-      mode: "chip",
-      entries: [],
-      sections: [
-        {
-          id: sectionId,
-          rows: rows.slice(0, 20),
-          totalRowCount: rows.length,
-          visibleRowCount: 20,
-          visibleLimit: 20,
-          collapsedVisibleRowCount: 10,
-          renderHeader: false,
-        },
-      ],
-    });
-    owner.invalidate();
-    await settleLitElement(sidebar);
-    owner.setVisibleSessionLimit(sectionId, limit);
-    owner.releaseSidebarSnapshot();
-    owner.invalidate();
-    await settleLitElement(sidebar);
-    expect(
-      sidebar.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
-    ).toHaveLength(limit);
-  });
+  it.each([
+    { savedGrouping: "none", grouping: "none", limit: undefined, expected: 45 },
+    { savedGrouping: "none", grouping: "category", limit: undefined, expected: 15 },
+    { savedGrouping: "category", grouping: "none", limit: undefined, expected: 30 },
+    { savedGrouping: "category", grouping: "category", limit: 15, expected: 15 },
+    { savedGrouping: "category", grouping: "category", limit: 60, expected: 60 },
+    { savedGrouping: undefined, grouping: "none", limit: undefined, expected: 30 },
+  ] as const)(
+    "keeps $savedGrouping pagination isolated in $grouping through cached handoff",
+    async ({ savedGrouping, grouping, limit, expected }) => {
+      const sessionsToShow = Array.from({ length: 61 }, (_, index) => session(`row-${index}`));
+      const { sidebar, sessions } = await mount(sessionsToShow);
+      const owner = getAppSidebarOwner(sidebar.hostElement)!;
+      const sectionId = "ungrouped";
+      expect(
+        sidebar.querySelector("[data-session-section]")?.getAttribute("data-session-section"),
+      ).toBe(sectionId);
+      setSessionsGrouping(owner.sessionOrganizer, savedGrouping ?? "category");
+      vi.spyOn(owner, "sidebarSnapshotSettled").mockReturnValue(false);
+      const rows = snapshotSessions(
+        sessionsToShow.map((row) => sidebar.getSessionNavigationState().toSidebarSession(row)),
+      );
+      owner.restoreSidebarSnapshot({
+        ...sidebarBootSnapshot(captureBootRoster(sessions.sessions.state)),
+        mode: "chip",
+        grouping: savedGrouping,
+        entries: [],
+        sections: [
+          {
+            id: sectionId,
+            rows: rows.slice(0, 45),
+            totalRowCount: rows.length,
+            visibleRowCount: 45,
+            visibleLimit: 45,
+            collapsedVisibleRowCount: savedGrouping === "none" ? 30 : 15,
+            renderHeader: false,
+          },
+        ],
+      });
+      owner.invalidate();
+      await settleLitElement(sidebar);
+      setSessionsGrouping(owner.sessionOrganizer, grouping);
+      if (grouping !== (savedGrouping ?? "category")) {
+        await settleLitElement(sidebar);
+        expect(
+          sidebar.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
+        ).toHaveLength(expected);
+      }
+      if (limit !== undefined) {
+        owner.setVisibleSessionLimit(sectionId, limit);
+      }
+      owner.releaseSidebarSnapshot();
+      owner.invalidate();
+      await settleLitElement(sidebar);
+      expect(
+        sidebar.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
+      ).toHaveLength(expected);
+    },
+  );
 
   it("prepares initially hidden session rows from shell inputs while keeping later owner updates parked", async () => {
     const target = session("question-proof");

@@ -122,13 +122,13 @@ it.each<{ grants: Grants | undefined }>([
     }),
 );
 
-it("retains explicit grants across restart but rejects a changed grant snapshot", () =>
+it("retains explicitly scheduled grants but rejects a changed grant snapshot", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
     const profile = ensureProfileForEmail("access-recovery@example.test");
     const fixture = await recoveryFixture(stateDir, profile.id, {
       config: config(["daybreak_blue"]),
     });
-    expect(fixture.entry.restartRecoveryOperatorSource?.snapshot.rolePolicy).toMatchObject({
+    expect(fixture.snapshot.rolePolicy).toMatchObject({
       accessPrograms: { cyber: ["daybreak_blue"] },
     });
     const restored = expectDefined(await fixture.restore(), "restored source");

@@ -13,12 +13,15 @@ import {
   agentIdPattern,
   canonicalJson,
   effectiveBinding,
+  grantsRevision,
   parseMembership,
   readStoresSection,
   storesRevision,
+  type ConversationGrants,
   type StoresSection,
 } from "./stores-config.js";
 import type {
+  GrantChangeInput,
   StoreEntry,
   StoresChangeInput,
   StoresChangeOutput,
@@ -149,8 +152,17 @@ export function createStoreOperations(stores: Stores) {
     }
     await countRecords(entries, registry, context);
     const canChange = canChangeAssignments(context) && writable() && !failure && !registry?.pending;
+    const grants = stores.grants(),
+      client = context.source === "session-action" ? context.action.client : undefined;
     return {
       revision: membership.revision,
+      // Only grants for agents this operator's role covers; keys name conversations.
+      grants: {
+        revision: grants.revision,
+        entries: Object.entries(grants.section)
+          .map(([sessionKey, access]) => ({ sessionKey, agent: grantAgent(sessionKey), access }))
+          .filter((entry) => client?.allowsAgent?.(entry.agent) ?? true),
+      },
       ...(stores.defaultAgent() ? { defaultAgent: stores.defaultAgent() } : {}),
       agents: agents.map((id) => {
         const supported = agentIdPattern.test(id),
@@ -206,7 +218,7 @@ export function createStoreOperations(stores: Stores) {
         try {
           // The same live policy as operator browsing: role agents, shared-Gateway admin.
           const pinned = pinPrincipal(
-            featurePrincipal(context, stores.policy.operatorRead, false, agentId),
+            featurePrincipal(context, stores.policy.operatorRead, false, agentId, stores.grantFor),
           );
           const access = {
             ...pinned.principal,
@@ -453,6 +465,96 @@ export function createStoreOperations(stores: Stores) {
     return { outcome, message, snapshot: await snapshot(context) };
   }
 
+  /** Owner direction: an operator admin grants, changes or revokes one
+   * conversation's access to its agent's private partition. Grants are
+   * Knowledge state in the registry, not configuration. No journal or cutover:
+   * a grant never moves a physical store, the registry write is one
+   * compare-and-set, and every in-flight principal re-resolves grants at its
+   * next live check, so a revocation fences work that has not yet published. */
+  async function grant(
+    input: GrantChangeInput,
+    context: FeatureInvocationContext,
+  ): Promise<StoresChangeOutput> {
+    requireOperator(context);
+    if (!canChangeAssignments(context)) {
+      return {
+        outcome: "forbidden",
+        message:
+          "Changing conversation access requires operator admin access. Nothing was changed.",
+      };
+    }
+    const agent = grantAgent(input.sessionKey);
+    const client = context.source === "session-action" ? context.action.client : undefined;
+    await stores.ensure();
+    const conflict = async (): Promise<StoresChangeOutput> => ({
+      outcome: "conflict",
+      message:
+        "Conversation access changed since you opened it. Review the current access and save again.",
+      snapshot: await snapshot(context),
+    });
+    const current = stores.grants();
+    if (current.revision !== input.expectedRevision) {
+      return conflict();
+    }
+    if (input.access !== "none" && !stores.agents().includes(agent)) {
+      return { outcome: "invalid", message: "Unknown agent. Nothing was changed." };
+    }
+    // The settings snapshot lists at most MAX_GRANTS; refuse more rather than hide them.
+    if (
+      input.access !== "none" &&
+      !Object.hasOwn(current.section, input.sessionKey) &&
+      Object.keys(current.section).length >= MAX_GRANTS
+    ) {
+      return {
+        outcome: "invalid",
+        message: `At most ${MAX_GRANTS} conversations can have access; remove one first. Nothing was changed.`,
+      };
+    }
+    const next: ConversationGrants = { ...current.section };
+    if (input.access === "none") {
+      delete next[input.sessionKey];
+    } else {
+      next[input.sessionKey] = input.access;
+    }
+    // Checked at the write: the operator may have disconnected, or lost this
+    // agent from their role, while this waited.
+    assertCallerCurrent(context);
+    if (client?.allowsAgent && !client.allowsAgent(agent)) {
+      return {
+        outcome: "forbidden",
+        message: `Your operator role does not include agent "${agent}". Nothing was changed.`,
+      };
+    }
+    await stores.registry.call("grant", input.sessionKey, input.access, input.expectedRevision);
+    if (stores.grants().revision !== grantsRevision(next)) {
+      return conflict();
+    }
+    // The registry worker can't consult caller authority, so recheck once the
+    // write has committed and undo it if the operator lost access meanwhile. A
+    // crash between the two leaves the grant (accepted: rare, visible, revocable).
+    const stillAllowed = () => {
+      try {
+        assertCallerCurrent(context);
+      } catch {
+        return false;
+      }
+      return !client?.allowsAgent || client.allowsAgent(agent);
+    };
+    if (!stillAllowed()) {
+      const previous = current.section[input.sessionKey] ?? "none";
+      await stores.registry.call("grant", input.sessionKey, previous, grantsRevision(next));
+      return {
+        outcome: "forbidden",
+        message: `Your operator access to agent "${agent}" ended while saving. Nothing was changed.`,
+      };
+    }
+    return {
+      outcome: "applied",
+      message: input.access === "none" ? "Access removed." : "Access saved.",
+      snapshot: await snapshot(context),
+    };
+  }
+
   async function status(
     input: { requestId: string },
     context: FeatureInvocationContext,
@@ -482,6 +584,7 @@ export function createStoreOperations(stores: Stores) {
       return snapshot(context);
     },
     stores_change: change,
+    stores_grant: grant,
     stores_change_status: status,
   };
 }
@@ -495,6 +598,10 @@ function writeStoresSection(draft: Record<string, unknown>, section: StoresSecti
   }
   node[STORES_CONFIG_PATH.at(-1)!] = section;
 }
+// Matches the snapshot schema's grant entry bound.
+const MAX_GRANTS = 500;
+// The agent a grant's session key belongs to (the key pattern guarantees the shape).
+const grantAgent = (sessionKey: string) => sessionKey.split(":", 2)[1]!;
 // Collision-safe key from a display name; keys never come from the browser.
 function storeKey(label: string, taken: Set<string>) {
   const base =

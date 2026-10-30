@@ -11,7 +11,8 @@ read_when:
 **Automatic update checks send a daily request by default.** It asks whether a
 newer version exists and includes the OpenClaw version, operating system, Node.js
 version, CPU architecture, and request surface.
-Settled update outcomes also send a bounded report by default, subject to the
+An identifier-free count-only request can follow a successful daily update check
+by default when its receiver explicitly supports counting. Settled update outcomes also send a bounded report by default, subject to the
 same automatic-request opt-outs. Anonymous feature statistics are opt-in.
 This page describes update-check telemetry, not requests made by configured
 providers, channels, or other services.
@@ -49,6 +50,12 @@ When only anonymous feature statistics are disabled, it shows the update-only re
 and its `User-Agent` header instead. When automation or update-check policy
 disables all requests, it shows `Request: none` with the reason (`request: null`
 in JSON).
+The output also shows whether installation counting is eligible under current
+policy (`installationCountEnabled` in JSON). Inspection sends no requests,
+claims no count, and does not initialize a missing database. It cannot know a
+receiver's authoritative day or capability without a fresh update response, so
+it does not invent or preview an exact count header. A later count request
+requires that fresh response and another policy check.
 The preview describes the client request only. It cannot show server-derived
 location information.
 
@@ -79,6 +86,74 @@ checks do not count as successful daily checks.
 For testing or self-hosting, set `OPENCLAW_TELEMETRY_ENDPOINT` to your complete
 replacement endpoint URL. The public server source is available at
 [openclaw/telemetry](https://github.com/openclaw/telemetry).
+
+## Identifier-free installation counting
+
+The daily GET and schema-1 feature POST carry **no installation-count metadata**.
+A configured receiver advertises support only on a successful update response:
+
+```http
+OpenClaw-Installation-Count: 1;20688
+Cache-Control: no-store
+```
+
+The two integers are the protocol version and the receiver's authoritative UTC
+ordinal day. A legacy or unconfigured receiver advertises nothing: the client
+neither claims a local count nor sends count metadata. No permanent capability
+state or extra capability probe is needed.
+
+After validating a fresh HTTP 200 version answer, an eligible client can send
+one separate request to the same endpoint:
+
+```http
+POST https://telemetry.openclaw.ai/api/latest-version
+User-Agent: openclaw-installation-count/1
+OpenClaw-Installation-Count: 1;20688;31
+```
+
+This POST has **no body**. It sends no OpenClaw version, platform, feature
+inventory, identifier, UUID, nonce, exact client timestamp, or IP fingerprint.
+Its header contains the protocol version, the advertised receiver day, and the
+days since this endpoint's previous locally claimed receiver day, capped at 31.
+The first attempt uses 31. The client does not derive its counting day from its
+own clock. The receiver accepts only its current or previous day, preserving the
+original advertised day as the bucket.
+
+This adds at most one count-only POST per successful uncached daily update check;
+it does not add an update check or change the existing 24-hour success cache.
+The count request never follows redirects and has an independent three-second
+timeout. Its failure cannot discard an accepted version answer. Redirected update
+answers remain valid, but never authorize a count upload to the original endpoint.
+
+Counting is allowed before feature consent has been requested; feature statistics
+remain opt-in. `telemetry.enabled: false`, a recorded decline, and
+`DO_NOT_TRACK=1` or `DO_NOT_TRACK=true` suppress the count request without disabling
+the update-only GET. Explicit `telemetry.enabled: true` enables both counting and
+optional feature statistics. The whole-update opt-outs below suppress all requests.
+CI's production-host suppression and test-receiver exception remain unchanged.
+
+The existing `config_machine_state` SQLite table holds only the last attempted
+receiver day per endpoint and physical installation-state root. An endpoint-only
+hash scopes that local key; it is identical for everyone using that endpoint and
+is never transmitted. After receiving support, the worker atomically claims the
+advertised day **before the count POST**, then the client rechecks policy.
+A lost response, HTTP failure, crash, revoked policy, or process exit can lose
+that count. It is never retried for the same receiver day, including after a
+restart. Unavailable storage omits counting while leaving updates available.
+Invalid or future stored days fail closed. No new database schema, local file,
+or config flag is introduced; old versions ignore the extra machine-state keys.
+
+The receiver routes count requests separately from raw update-check analytics
+and location processing. It retains only aggregate `(day, gap, reports)` totals,
+not per-install histories. Those totals support deduplicated estimates of
+**observed reporting installation-state roots** over bounded windows. They do
+not measure human daily activity, people, physical machines, or all active
+installations. Infrequent checks, cache reuse, opted-out installations, receiver
+outages or pre-activation periods, lost attempts, cloned/restored state, and
+deleted local state affect the estimate. Collection requires separately
+authorized storage configuration and deployment; without that binding it stays
+off. Neither this client change nor a capability response establishes that a
+subsequent count was stored.
 
 <a id="cloudflare-derived-request-geography" />
 
@@ -165,7 +240,8 @@ is not a guarantee of the exact next Gateway payload.
 
 Reports contain no user, account, install, or device identifier. Repeated reports
 are not unique installations or users. The service does not maintain a per-install
-history or retention measure.
+history; the separate count header supports only aggregate observed-installation
+estimates, not identifiable retention histories.
 
 <a id="what-is-never-collected" />
 
@@ -208,7 +284,8 @@ You can also configure the same preference directly:
 }
 ```
 
-Set `DO_NOT_TRACK=1` or `DO_NOT_TRACK=true` to force anonymous feature statistics off,
+Set `DO_NOT_TRACK=1` or `DO_NOT_TRACK=true` to force anonymous feature statistics and
+identifier-free installation counting off,
 even when `telemetry.enabled` is `true`. `DO_NOT_TRACK` does not disable the
 daily update check: OpenClaw sends the update-only `GET` request without a
 body containing anonymous feature statistics.
@@ -219,7 +296,7 @@ Update-outcome reporting is **on by default**, like the daily update check.
 It is controlled by the existing automatic update-request policy, not by
 `telemetry.enabled` or a separate outcome opt-in. Optional feature statistics
 remain off by default. `openclaw telemetry off` and `DO_NOT_TRACK` suppress
-feature statistics, not the daily check or update outcomes.
+feature statistics and installation counting, not the daily check or update outcomes.
 
 Set `update.checkOnStart: false` or `OPENCLAW_NO_AUTO_UPDATE=1` to stop both
 daily checks and outcome reports. CI and Nix mode also suppress outcomes. Unlike
@@ -304,9 +381,11 @@ magnitude and make version and platform counts meaningless, and your pipeline
 should not report to us on every job.
 
 This applies to both tiers, so a CI job sends no update check and no anonymous
-feature statistics. Setting `OPENCLAW_TELEMETRY_ENDPOINT` overrides the suppression,
-because a configured endpoint means the run is deliberately exercising this
-path. [Update outcomes](#update-outcomes) stay suppressed in CI even with a
+feature statistics. A custom `OPENCLAW_TELEMETRY_ENDPOINT` can exercise daily
+checks against a test receiver in CI, but explicitly pointing it at
+`telemetry.openclaw.ai` does not override suppression. CI requests to test
+receivers do not follow redirects, so a receiver cannot redirect them to
+production. [Update outcomes](#update-outcomes) stay suppressed in CI even with a
 custom endpoint.
 
 ## Disable every automatic update request

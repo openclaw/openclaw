@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
+import { readEngineAnchorIdentity } from "../infra/database-engine/physical-store.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -149,6 +150,9 @@ export async function enableDoctorSqliteReclamation(params: {
         () => {
           const database = openSqliteReadOnlyDatabase(sqlitePath);
           try {
+            if (readEngineAnchorIdentity(database, sqlitePath).engine === "postgres") {
+              return false;
+            }
             const required = pragmaNumber(database, "auto_vacuum") === 0;
             if (required) {
               validate(database);

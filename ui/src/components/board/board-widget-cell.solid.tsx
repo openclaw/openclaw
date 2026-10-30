@@ -25,6 +25,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { sharedPluginsProjection } from "../../lib/reactive/shared-application-projections.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -180,6 +181,21 @@ function BoardWidgetCellContent(
     props.widget?.contentKind === "plugin" && !props.widget.frameUrl
       ? getPluginWidgetKindContribution(props.widget.pluginKind, activeKinds())
       : null,
+  );
+  const fixedReport = () =>
+    props.widget?.heightMode === "fixed" && contribution()?.kind === "session:report";
+  const [reportEntered, setReportEntered] = createSignal(false);
+  // Fixed reports already reserve their full height. Build nearby bodies once,
+  // then let the existing core-widget latch retain them across tab switches.
+  // Observe the card because the display:contents host has no intersection box.
+  createIntersectionObserver(
+    () => (fixedReport() && !reportEntered() && widgetRoot() ? [widgetRoot()!] : []),
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setReportEntered(true);
+      }
+    },
+    { rootMargin: "300px" },
   );
 
   function runAction(run: () => Promise<void>, failureMessage?: string) {
@@ -401,7 +417,7 @@ function BoardWidgetCellContent(
               contribution={core}
               widget={props.widget}
               session={props.session}
-              active={active()}
+              active={active() && (!fixedReport() || reportEntered())}
             />
           )}
         </Match>
@@ -609,7 +625,7 @@ function BoardWidgetCellContent(
                     : t("board.widget.kindHtml")}
               </span>
               <BoardGrantedCapabilities widget={props.widget!} />
-              <Show when={canMutate()}>
+              <Show when={canMutate() && (!fixedReport() || reportEntered())}>
                 <BoardWidgetMenu
                   widget={props.widget!}
                   tabs={props.tabs ?? []}
@@ -629,8 +645,7 @@ function BoardWidgetCellContent(
             {
               "board-widget__body--scrollable": scrollable(),
               "board-widget__body--card": presentation() === "card",
-              "board-widget__body--fixed-report":
-                props.widget!.heightMode === "fixed" && contribution()?.kind === "session:report",
+              "board-widget__body--fixed-report": fixedReport(),
             },
           ]}
         >

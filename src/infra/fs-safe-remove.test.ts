@@ -9,6 +9,7 @@ import {
 } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { captureEnv } from "../test-utils/env.js";
 import { createRebindableDirectoryAlias } from "../test-utils/symlink-rebind-race.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { removePathWithinRoot } from "./fs-safe-remove.js";
@@ -60,7 +61,7 @@ describe("removePathWithinRoot", () => {
         alias: path.join("selected", name),
         home: "~/" + name,
       };
-      const previousHome = process.env.HOME;
+      const env = captureEnv(["HOME"]);
       process.env.HOME = root;
       try {
         await removePathWithinRoot({
@@ -84,11 +85,7 @@ describe("removePathWithinRoot", () => {
           expect((await fs.lstat(alias)).isSymbolicLink()).toBe(true);
         }
       } finally {
-        if (previousHome === undefined) {
-          delete process.env.HOME;
-        } else {
-          process.env.HOME = previousHome;
-        }
+        env.restore();
       }
     },
   );

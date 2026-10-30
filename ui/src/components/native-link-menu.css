@@ -3,7 +3,6 @@
   --oc-overlay-max-width: 264px;
 
   min-width: 224px;
-  background: var(--bg-elevated);
 }
 
 .native-link-menu .session-menu__item {

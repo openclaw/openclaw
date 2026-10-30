@@ -6,6 +6,9 @@
  * Use --large-frame to record a 1 MiB output-item snapshot instead of 3,000 deltas.
  * Use --mixed for alternating text/tool-argument deltas and mixed CR/LF framing.
  * The first run records <output>.sse. Reuse those exact bytes for both revisions.
+ * Team-shaped replay: --mixed --events 10000 --snapshot-every 2500 (64 KiB snapshots).
+ * --frames-only measures the public framing adapter, including one-read-per-event
+ * behavior with --chunk-size 128. Its --owner must name transport-stream-shared.ts.
  * Run timing/allocation separately in alternating order; hashes are outside measurement.
  */
 import assert from "node:assert/strict";
@@ -24,6 +27,10 @@ const { values } = parseArgs({
     mode: { type: "string", default: "timing" },
     turns: { type: "string", default: "20" },
     owner: { type: "string" },
+    events: { type: "string", default: "3000" },
+    "snapshot-every": { type: "string", default: "0" },
+    "chunk-size": { type: "string", default: "1024" },
+    "frames-only": { type: "boolean", default: false },
     fixture: { type: "string" },
     mixed: { type: "boolean", default: false },
     "large-frame": { type: "boolean", default: false },
@@ -34,11 +41,24 @@ assert(values.output, "--output is required");
 assert(values.mode === "timing" || values.mode === "allocation");
 const turns = Number(values.turns);
 assert(Number.isSafeInteger(turns) && turns > 0);
+const eventCount = Number(values.events);
+const snapshotEvery = Number(values["snapshot-every"]);
+const chunkSize = Number(values["chunk-size"]);
+assert(Number.isSafeInteger(eventCount) && eventCount > 0);
+assert(Number.isSafeInteger(snapshotEvery) && snapshotEvery >= 0);
+assert(Number.isSafeInteger(chunkSize) && chunkSize > 0);
+const {
+  iterateSseFrames,
+}: typeof import("../../packages/ai/src/transports/transport-stream-shared.js") = await import(
+  values["frames-only"] && values.owner
+    ? pathToFileURL(path.resolve(values.owner)).href
+    : "../../packages/ai/src/transports/transport-stream-shared.js"
+);
 const {
   createResponsesStreamWithRecovery,
 }: typeof import("../../packages/ai/src/transports/openai-responses-replay-internal.js") =
   await import(
-    values.owner
+    !values["frames-only"] && values.owner
       ? pathToFileURL(path.resolve(values.owner)).href
       : "../../packages/ai/src/transports/openai-responses-replay-internal.js"
   );
@@ -53,16 +73,27 @@ const fixtureEvents = values["large-frame"]
         },
       },
     ]
-  : Array.from({ length: 3000 }, (_, index) => ({
-      type:
-        values.mixed && index % 2
-          ? "response.function_call_arguments.delta"
-          : "response.output_text.delta",
-      item_id: "msg_fixture",
-      output_index: 0,
-      content_index: 0,
-      delta: `Synthetic café 🦞 delta ${index}. `,
-    }));
+  : Array.from({ length: eventCount }, (_, index) =>
+      snapshotEvery && (index + 1) % snapshotEvery === 0
+        ? {
+            type: "response.output_item.done",
+            item: {
+              id: `msg_${index}`,
+              type: "message",
+              content: [{ type: "output_text", text: "x".repeat(64 * 1024) }],
+            },
+          }
+        : {
+            type:
+              values.mixed && index % 2
+                ? "response.function_call_arguments.delta"
+                : "response.output_text.delta",
+            item_id: "msg_fixture",
+            output_index: 0,
+            content_index: 0,
+            delta: `Synthetic café 🦞 delta ${index}. `,
+          },
+    );
 const fixture = values.fixture
   ? await readFile(values.fixture)
   : Buffer.from(
@@ -74,8 +105,8 @@ const fixture = values.fixture
         .join("") + "data: [DONE]\n\n",
     );
 await writeFile(`${values.output}.sse`, fixture);
-const chunks = Array.from({ length: Math.ceil(fixture.length / 1024) }, (_, index) =>
-  fixture.subarray(index * 1024, (index + 1) * 1024),
+const chunks = Array.from({ length: Math.ceil(fixture.length / chunkSize) }, (_, index) =>
+  fixture.subarray(index * chunkSize, (index + 1) * chunkSize),
 );
 const client = new OpenAI({
   apiKey: "synthetic-fixture-key",
@@ -118,13 +149,21 @@ const request = {
   input: [{ role: "user", content: "fixture" }],
 } satisfies Parameters<typeof createResponsesStreamWithRecovery>[0]["request"];
 const run = async (hash?: ReturnType<typeof createHash>) => {
-  const { stream } = await createResponsesStreamWithRecovery({
-    client,
-    model,
-    request,
-    requestOptions: undefined,
-    buildFullHistoryRequest: () => request,
-  });
+  let offset = 0;
+  const { stream } = values["frames-only"]
+    ? {
+        stream: iterateSseFrames(async () => {
+          const value = chunks[offset++];
+          return value === undefined ? { done: true, value: undefined } : { done: false, value };
+        }),
+      }
+    : await createResponsesStreamWithRecovery({
+        client,
+        model,
+        request,
+        requestOptions: undefined,
+        buildFullHistoryRequest: () => request,
+      });
   let count = 0;
   for await (const event of stream) {
     count++;
@@ -165,6 +204,7 @@ try {
   }
   const result = {
     mode: values.mode,
+    framesOnly: values["frames-only"],
     turns,
     events,
     bytes: fixture.byteLength * turns,

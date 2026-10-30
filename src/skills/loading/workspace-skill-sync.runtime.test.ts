@@ -4,8 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createNestedGitEnv } from "../../../test/helpers/temp-repo.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { nodeFilePath } from "../../test-utils/node-file-path.js";
@@ -139,6 +141,53 @@ function buildSnapshot(workspaceDir: string, opts?: Parameters<typeof buildSkill
 }
 
 describe("syncWorkspaceSkills", () => {
+  it("attributes a queued sync to waiting rather than directory or copy work", async () => {
+    const { source, target } = await setupSkills(["alpha"]);
+    const skillsSnapshot = await buildSnapshot(source);
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const lstat = fs.lstat.bind(fs);
+    let held = false;
+    const read = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      if (!held && nodeFilePath(args[0]) === skillPath(target)) {
+        held = true;
+        entered.resolve();
+        await resume.promise;
+      }
+      return lstat(...args);
+    });
+    const phases: string[][] = [[], []];
+    const completed: string[][] = [[], []];
+    const observed = (index: number) =>
+      withDiagnosticsTimelineObserver(
+        (name) => {
+          phases[index]!.push(name);
+          return () => {
+            completed[index]!.push(name);
+          };
+        },
+        () => sync(source, target, { skillsSnapshot }),
+      );
+    const first = observed(0);
+    let second: Promise<unknown> | undefined;
+    try {
+      await awaitGateBeforeSettlement(entered.promise, first, "Skill sync skipped directory read");
+      second = observed(1);
+      expect(phases[1]).toEqual(["attempt.setup.sandbox.layout.skills_sync.queue_wait"]);
+      expect(completed[1]).toEqual([]);
+      expect(phases[0]).toContain("attempt.setup.sandbox.layout.skills_sync.directory");
+      resume.resolve();
+      await Promise.all([first, second]);
+      expect(completed[1]).toEqual(phases[1]);
+      expect(phases[0]).toContain("attempt.setup.sandbox.layout.skills_sync.copy_tree");
+      expect(phases[1]).not.toContain("attempt.setup.sandbox.layout.skills_sync.copy_tree");
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([first, ...(second ? [second] : [])]);
+      read.mockRestore();
+    }
+  });
+
   it("copies skills without repository internals or dependencies", async () => {
     const { source, target } = await setupSkills(["demo-skill"]);
     const workspaceSkillDir = skillPath(source, "demo-skill");

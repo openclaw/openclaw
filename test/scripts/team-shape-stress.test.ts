@@ -497,6 +497,7 @@ it("requires ten-minute evidence windows and marks explicit short runs as smoke"
     durationMs: 600_000,
     smoke: false,
     clients: 65,
+    agents: 4,
     pairs: 2,
     aaPairs: 0,
     pollMs: 25_000,
@@ -506,9 +507,12 @@ it("requires ten-minute evidence windows and marks explicit short runs as smoke"
     operatorModelPolicy: false,
     workerHeapSnapshot: false,
   });
-  expect(parseStressOptions(["--output", "/unused", "--smoke-seconds", "1"])).toMatchObject({
+  expect(
+    parseStressOptions(["--output", "/unused", "--smoke-seconds", "1", "--agents", "8"]),
+  ).toMatchObject({
     durationMs: 1_000,
     smoke: true,
+    agents: 8,
   });
   expect(parseStressOptions(["--output", "/unused", "--operator-model-policy"])).toMatchObject({
     operatorModelPolicy: true,
@@ -539,6 +543,7 @@ it("requires ten-minute evidence windows and marks explicit short runs as smoke"
     ["--output", "/unused", "--minutes", "10.5"],
     ["--output", "/unused", "--minutes", "Infinity"],
     ["--output", "/unused", "--clients", "1"],
+    ["--output", "/unused", "--agents", "0"],
     ["--output", "/unused", "--runs", "0"],
     ["--output", "/unused", "--plugins", "3"],
     ["--output", "/unused", "--plugins", "41"],

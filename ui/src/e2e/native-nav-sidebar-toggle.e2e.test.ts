@@ -605,7 +605,7 @@ suite.define(() => {
     await attr(navigation, "inert", "");
     await count(page.locator(".shell-nav-backdrop"), 1);
     await visible(dialog, false);
-    await page.locator(".shell-skip-link").focus();
+    await page.locator('.shell-skip-link[href="#control-ui-main"]').focus();
     await page.keyboard.press("Tab");
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.closest(".shell-nav") !== null))

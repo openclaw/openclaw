@@ -18,6 +18,7 @@ import {
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { pinDirectory, sha256File } from "./directory-durability.js";
+import { formatErrorMessage } from "./errors.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
 import { root as safeRoot } from "./fs-safe.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
@@ -534,7 +535,8 @@ type UpdateRecoveryBackupRead =
       manifest: UpdateRecoveryBackupManifest;
       outcome: Outcome;
     }
-  | { kind: "incomplete"; directory: string };
+  | { kind: "incomplete"; directory: string }
+  | { kind: "unreadable"; directory: string; error: string };
 
 export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupRead[]> {
   const result: UpdateRecoveryBackupRead[] = [];
@@ -545,77 +547,73 @@ export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupR
       continue;
     }
     for (const captureId of await fs.readdir(store)) {
-      if (captureId === UPDATE_CAPTURE_PRIVACY_MARKER) {
-        continue;
-      }
       const directory = path.join(store, captureId);
       const entry = await lstatIfExists(directory, "ENOENT");
-      // Doctor's schema archives share this root but are not recovery captures.
-      if (entry?.isFile() && /^agent-schema-.+\.tar\.gz$/u.test(captureId)) {
-        continue;
-      }
-      const manifestPath = path.join(directory, "manifest.json");
-      const manifestEntry = entry?.isDirectory()
-        ? await lstatIfExists(manifestPath, "ENOENT")
-        : undefined;
-      // Rehearsal scratch uses this prefix on every platform. A present manifest
-      // still belongs to recovery validation, even under a scratch-like name.
+      // Producers mark capture directories before staging payloads. Other entries
+      // (including OS metadata, schema archives, and rehearsal scratch) are unrelated.
       if (
-        entry?.isDirectory() &&
-        /^openclaw-update-canary-.+$/u.test(captureId) &&
-        !manifestEntry
+        !entry?.isDirectory() ||
+        !(
+          await lstatIfExists(path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER), "ENOENT")
+        )?.isFile()
       ) {
         continue;
       }
-      if (
-        entry?.isDirectory() &&
-        /^[a-zA-Z0-9_-]{1,128}$/u.test(captureId) &&
-        (!manifestEntry || (await hasPendingUpdateRecoverySeal(directory)))
-      ) {
-        result.push({ kind: "incomplete", directory });
-        continue;
-      }
-      if (!entry?.isDirectory() || !manifestEntry?.isFile()) {
-        throw new Error(
-          `Unresolved update capture ${directory} has incomplete publication. Inspection only: openclaw update status --json; npx openclaw@latest doctor --fix. Earlier captures are retained.`,
-        );
-      }
-      const source = await safeRoot(directory, { symlinks: "reject", hardlinks: "reject" });
-      const raw = await source.readText("manifest.json", {
-        maxBytes: MAX_MANIFEST_BYTES,
-      });
-      const manifest = parseUpdateRecoveryBackupManifest(raw);
-      const ref = { directory, manifestPath, manifestSha256: sha256Hex(raw) };
-      assertManifestLocation(ref, manifest);
-      assertManifestSelectedScope(manifest, scopes);
-      const capture = (await getUpdateRunAsync(manifest.runId))?.origin.updateRecoveryCapture;
-      if (capture && capture.manifestSha256 !== ref.manifestSha256) {
-        throw new Error(
-          `Update capture identity changed: ${manifestPath}. Inspect with openclaw update status --json; npx openclaw@latest doctor --fix.`,
-        );
-      }
-      const terminalPath = path.join(directory, "outcome.json");
-      let outcome: Outcome;
-      if (await lstatIfExists(terminalPath, "ENOENT")) {
-        const terminal = recordedOutcomeSchema.parse(
-          await source.readJson("outcome.json", {
-            maxBytes: MAX_UPDATE_RECOVERY_OUTCOME_BYTES,
-          }),
-        );
-        if (terminal.manifestSha256 !== ref.manifestSha256) {
-          throw new Error(`Update recovery outcome refers to another manifest: ${manifestPath}`);
+      try {
+        const manifestPath = path.join(directory, "manifest.json");
+        const manifestEntry = await lstatIfExists(manifestPath, "ENOENT");
+        if (
+          /^[a-zA-Z0-9_-]{1,128}$/u.test(captureId) &&
+          (!manifestEntry || (await hasPendingUpdateRecoverySeal(directory)))
+        ) {
+          result.push({ kind: "incomplete", directory });
+          continue;
         }
-        outcome = terminal;
-      } else {
-        outcome = { status: capture?.status ?? "pending", error: capture?.error };
+        if (!manifestEntry?.isFile()) {
+          throw new Error(
+            `Unresolved update capture ${directory} has incomplete publication. Inspection only: openclaw update status --json; npx openclaw@latest doctor --fix. Earlier captures are retained.`,
+          );
+        }
+        const source = await safeRoot(directory, { symlinks: "reject", hardlinks: "reject" });
+        const raw = await source.readText("manifest.json", {
+          maxBytes: MAX_MANIFEST_BYTES,
+        });
+        const manifest = parseUpdateRecoveryBackupManifest(raw);
+        const ref = { directory, manifestPath, manifestSha256: sha256Hex(raw) };
+        assertManifestLocation(ref, manifest);
+        assertManifestSelectedScope(manifest, scopes);
+        const capture = (await getUpdateRunAsync(manifest.runId))?.origin.updateRecoveryCapture;
+        if (capture && capture.manifestSha256 !== ref.manifestSha256) {
+          throw new Error(
+            `Update capture identity changed: ${manifestPath}. Inspect with openclaw update status --json; npx openclaw@latest doctor --fix.`,
+          );
+        }
+        const terminalPath = path.join(directory, "outcome.json");
+        let outcome: Outcome;
+        if (await lstatIfExists(terminalPath, "ENOENT")) {
+          const terminal = recordedOutcomeSchema.parse(
+            await source.readJson("outcome.json", {
+              maxBytes: MAX_UPDATE_RECOVERY_OUTCOME_BYTES,
+            }),
+          );
+          if (terminal.manifestSha256 !== ref.manifestSha256) {
+            throw new Error(`Update recovery outcome refers to another manifest: ${manifestPath}`);
+          }
+          outcome = terminal;
+        } else {
+          outcome = { status: capture?.status ?? "pending", error: capture?.error };
+        }
+        result.push({ kind: "sealed", ref, manifest, outcome });
+      } catch (error) {
+        // A damaged marked capture remains evidence; it cannot hide verified neighbors.
+        result.push({ kind: "unreadable", directory, error: formatErrorMessage(error) });
       }
-      result.push({ kind: "sealed", ref, manifest, outcome });
     }
   }
   return result.toSorted((a, b) => {
-    if (a.kind === "incomplete") {
-      return b.kind === "incomplete" ? a.directory.localeCompare(b.directory) : 1;
+    if (a.kind !== "sealed") {
+      return b.kind !== "sealed" ? a.directory.localeCompare(b.directory) : 1;
     }
-    return b.kind === "incomplete" ? -1 : b.manifest.createdAt.localeCompare(a.manifest.createdAt);
+    return b.kind !== "sealed" ? -1 : b.manifest.createdAt.localeCompare(a.manifest.createdAt);
   });
 }

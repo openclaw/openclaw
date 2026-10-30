@@ -195,10 +195,6 @@ export const validateSessionsTitlePrepareParams = createProtocolValidator(
   S.SessionsTitlePrepareParamsSchema,
   Checks.isSessionsTitlePrepareParams,
 );
-export const validateSessionsRecoverParams = createProtocolValidator(
-  S.SessionsRecoverParamsSchema,
-  Checks.isSessionsRecoverParams,
-);
 export const validateSessionsSendParams = createProtocolValidator(
   S.SessionsSendParamsSchema,
   Checks.isSessionsSendParams,
@@ -358,6 +354,14 @@ export const validateSessionGitHubPublishParams = createProtocolValidator(
 export const validateSessionGitHubActionParams = createProtocolValidator(
   S.SessionGitHubActionParamsSchema,
   Checks.isSessionGitHubActionParams,
+);
+export const validateSessionGitHubReadinessParams = createProtocolValidator(
+  S.SessionGitHubReadinessParamsSchema,
+  Checks.isSessionGitHubReadinessParams,
+);
+export const validateSessionGitHubReadinessResult = createProtocolValidator(
+  S.SessionGitHubReadinessResultSchema,
+  Checks.isSessionGitHubReadinessResult,
 );
 export const validateSessionGitHubOptionsParams = createProtocolValidator(
   S.SessionGitHubOptionsParamsSchema,

@@ -6,6 +6,7 @@ const enCommandPalette = {
   commandPalette: {
     newSessionSettings: "New session settings",
     rememberSettings: "Remember settings for {shortcut}",
+    rememberSettingsNoShortcut: "Remember these settings",
     rememberUnavailable: "Reconnect to remember settings.",
     settingsSaveFailed: "Could not save settings.",
   },

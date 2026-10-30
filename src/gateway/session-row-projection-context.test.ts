@@ -129,7 +129,7 @@ it("patches list facts after keyed publications without rebuilding for progress-
     "terminal",
   );
   expect(context.current.subagentRuns.countActiveDescendantRuns(parent)).toBe(0);
-  expect(context.materializedRevisions.subagentRevision).toBe(initialRevision + 1);
+  expect(context.materializedRevisions.subagentRevision).toBe(initialRevision);
   expect(builds).toHaveBeenCalledTimes(1);
 
   subagentRuns.delete(run.runId);

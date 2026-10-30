@@ -40,6 +40,7 @@ type WorkerCpuHandle = {
 type WorkerSource = {
   script: string;
   internalMessages?: true;
+  requestClass?: () => string | undefined;
   lifecycleMessages?: boolean;
   poolId?: number;
   taskMetrics?: NonNullable<DiagnosticMemoryUsage["workerTaskMetrics"]>[number];
@@ -91,13 +92,17 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
   };
 });
 
-export function createCpuTrackedWorker(...args: ConstructorParameters<typeof Worker>): Worker {
+export function createCpuTrackedWorker(
+  filename: ConstructorParameters<typeof Worker>[0],
+  options?: ConstructorParameters<typeof Worker>[1],
+  requestClass?: () => string | undefined,
+): Worker {
   const worker = runWithMainThreadTask(
-    `worker:${workerScriptName(args[0], args[1]?.eval)}`,
-    () => new Worker(...args),
+    `worker:${workerScriptName(filename, options?.eval)}`,
+    () => new Worker(filename, options),
   );
-  trackNativeWorkerForCpu(worker, args[0], args[1]?.eval);
-  trackedWorkers.workers.get(worker)!.internalMessages = true;
+  trackNativeWorkerForCpu(worker, filename, options?.eval);
+  Object.assign(trackedWorkers.workers.get(worker)!, { internalMessages: true, requestClass });
   return worker;
 }
 
@@ -355,7 +360,7 @@ function trackWorker(worker: WorkerCpuHandle): void {
       if (source.lifecycleMessages) {
         recordWorkerMessage("lifecycle", "to_worker", bytes);
       } else if (source.internalMessages) {
-        observeWorkerMessage(value, "to_worker", "other", bytes ?? null);
+        observeWorkerMessage(value, "to_worker", "other", bytes ?? null, source.requestClass?.());
       } else {
         // Dependency payloads can have getters/proxies. Only native cloning may inspect them.
         recordWorkerMessage("other", "to_worker");
@@ -374,7 +379,7 @@ function trackWorker(worker: WorkerCpuHandle): void {
         if (source.lifecycleMessages) {
           recordWorkerMessage("lifecycle", "from_worker", workerMessagePayloadBytes(args[0]));
         } else if (source.internalMessages) {
-          observeWorkerMessage(args[0], "from_worker");
+          observeWorkerMessage(args[0], "from_worker", "other", undefined, source.requestClass?.());
         } else {
           recordWorkerMessage("other", "from_worker");
         }
@@ -680,12 +685,7 @@ export function getTrackedWorkerLifecycleSnapshot() {
       script: entry.script,
       tasksCompleted: entry.tasksCompleted,
       heapUsedHighWaterBytes: entry.heapUsedHighWaterBytes,
-      gc: entry.gc.map(({ kind, count, durationMs, reclaimedBytes }) => ({
-        kind,
-        count,
-        durationMs,
-        reclaimedBytes,
-      })),
+      gc: entry.gc.map((totals) => Object.assign({}, totals)),
     })),
   };
 }

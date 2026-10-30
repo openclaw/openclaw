@@ -67,6 +67,54 @@ function readTableGeometry(element: Element) {
 }
 
 suite.define(() => {
+  it.each(["plain", "attributed"] as const)(
+    "keeps %s leading tables clear of the assistant avatar",
+    async (kind) => {
+      const context = await tableContext(1600, 1000);
+      const page = await context.newPage();
+      await installMockGateway(page, {
+        sessions: [{ key: "agent:main:main", kind: "group" }],
+        historyMessages:
+          kind === "plain"
+            ? [tableMessage("leading-table", wideTable)]
+            : [
+                ...["Bob", "Alice"].map((name) =>
+                  chatMessage("user", "Show the table.", {
+                    __openclaw: { id: name, senderName: name },
+                  }),
+                ),
+                chatMessage("assistant", wideTable, {
+                  __openclaw: {
+                    id: "leading-table",
+                    seq: 3,
+                    runId: "table-run",
+                    replyToId: "Alice",
+                  },
+                }),
+              ],
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      const table = page.locator('[data-entry-id="leading-table"] .markdown-table');
+      const avatar = page.locator(".chat-group.assistant > :is(.chat-avatar, .chat-avatar-slot)");
+      await table.waitFor();
+      await avatar.waitFor();
+      expect(await page.locator(".chat-group.assistant .chat-reply-attribution").isVisible()).toBe(
+        kind === "attributed",
+      );
+      await waitForLayoutSettled(page, ".chat-thread, .markdown-table, .chat-avatar");
+      const tableBounds = (await table.boundingBox())!;
+      const avatarBounds = (await avatar.boundingBox())!;
+      const overlaps =
+        tableBounds.x < avatarBounds.x + avatarBounds.width &&
+        tableBounds.x + tableBounds.width > avatarBounds.x &&
+        tableBounds.y < avatarBounds.y + avatarBounds.height &&
+        tableBounds.y + tableBounds.height > avatarBounds.y;
+      expect(overlaps).toBe(false);
+      const textBounds = (await table.locator("..").boundingBox())!;
+      expect(tableBounds.width).toBeGreaterThan(textBounds.width);
+    },
+  );
+
   it("sizes desktop tables to content while preserving mobile layout and expanded headers", async () => {
     const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 1000 } });
     await context.grantPermissions(["clipboard-read", "clipboard-write"], {
@@ -216,6 +264,23 @@ ${auditMarkdownTable}`,
     expect(sticky.scrolled).toBeGreaterThan(100);
     expect(sticky).toMatchObject({ pinned: true, painted: true });
     expect(sticky.background).not.toBe("rgba(0, 0, 0, 0)");
+    const close = dialog.getByRole("button", { name: "Close expanded table" });
+    await expect
+      .poll(() =>
+        close.evaluate((button) => {
+          const bounds = button.getBoundingClientRect();
+          return [4, 20, 36].every((x) =>
+            [4, 20, 36].every((y) =>
+              button.contains(document.elementFromPoint(bounds.x + x, bounds.y + y)),
+            ),
+          );
+        }),
+      )
+      .toBe(true);
+    await close.click({ position: { x: 4, y: 20 } });
+    await expectFocused(expand);
+    await expand.click();
+    await dialog.waitFor({ state: "visible" });
     await page.keyboard.press("Escape");
     await expectFocused(expand);
   });

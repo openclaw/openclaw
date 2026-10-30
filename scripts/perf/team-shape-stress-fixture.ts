@@ -53,6 +53,7 @@ export async function generateTeamShapeStressFixture(options: {
   seed: number;
   now: number;
   sessions?: number;
+  agents?: number;
   transcriptMiB?: number;
   longTranscriptEntries?: number;
   authAvailabilityStorm?: boolean;
@@ -76,6 +77,8 @@ export async function generateTeamShapeStressFixture(options: {
       String(options.now),
       "--sessions",
       String(sessions),
+      "--agents",
+      String(options.agents ?? 4),
       "--runs",
       String(Math.floor((sessions * 4_300) / 10_800)),
       "--settled-runs",

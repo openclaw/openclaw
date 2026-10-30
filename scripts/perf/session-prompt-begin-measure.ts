@@ -14,12 +14,10 @@
  */
 import assert from "node:assert/strict";
 import { Session, type HeapProfiler } from "node:inspector/promises";
-import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { CURRENT_SESSION_VERSION } from "../../src/config/sessions/version.js";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
@@ -40,24 +38,11 @@ const ownerUrl = new URL(
   "../../src/agents/embedded-agent-runner/session-prompt-state.ts",
   import.meta.url,
 ).href;
-let loadedBaseline = false;
-if (values["baseline-source"]) {
-  const baselineUrl = pathToFileURL(path.resolve(values["baseline-source"])).href;
-  registerHooks({
-    load(url, context, nextLoad) {
-      if (url !== ownerUrl) {
-        return nextLoad(url, context);
-      }
-      loadedBaseline = true;
-      const result = nextLoad(baselineUrl, context);
-      return { format: result.format, source: result.source, shortCircuit: true };
-    },
-  });
-}
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl, values["baseline-source"]);
 const { beginSessionSystemPrompt, prepareSessionSystemPrompt, retainEmbeddedSessionPromptState } =
   await import("../../src/agents/embedded-agent-runner/session-prompt-state.js");
 const { SessionManager } = await import("../../src/agents/sessions/session-manager.js");
-assert.equal(loadedBaseline, Boolean(values["baseline-source"]));
+assert.equal(wasOwnerReplaced(), Boolean(values["baseline-source"]));
 const manager = SessionManager.fromEntries([
   {
     type: "session",

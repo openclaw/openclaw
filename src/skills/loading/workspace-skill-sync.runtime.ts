@@ -8,6 +8,7 @@ import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { tryReadJson } from "../../infra/json-files.js";
@@ -252,7 +253,11 @@ export async function syncWorkspaceSkills(params: {
     return [];
   }
 
+  using phases = observeDiagnosticsTimelinePhases(
+    "attempt.setup.sandbox.layout.skills_sync.queue_wait",
+  );
   const synced = await skillsSyncQueue.enqueue(`syncSkills:${targetDir}`, async () => {
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.identity");
     assertCurrent?.();
     const targetSkillsDir = path.join(targetDir, "skills");
     const manifestPath = path.join(targetSkillsDir, SYNCED_SKILLS_MANIFEST_NAME);
@@ -276,14 +281,19 @@ export async function syncWorkspaceSkills(params: {
         skillsSnapshot?.librarySelections,
       ]),
     );
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.directory");
     await ensureSyncedSkillsDirectory(targetSkillsDir, assertCurrent);
     assertCurrent?.();
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.root");
     const target = await root(targetSkillsDir, { assertBeforeMutation: assertCurrent });
     assertCurrent?.();
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.gitignore");
     await target.write(".gitignore", "*\n", { mode: 0o644, durable: false });
     assertCurrent?.();
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.manifest_read");
     const manifest = parseSyncedSkillsManifest(await tryReadJson<unknown>(manifestPath));
     assertCurrent?.();
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.reuse");
     const sourceVersion = getSkillsResourceVersion(sourceWorkspace);
     const skillsVersion = getSkillsSnapshotVersion(sourceWorkspace);
     const expectedManifestKey =
@@ -318,6 +328,7 @@ export async function syncWorkspaceSkills(params: {
       ...(skillsSnapshot?.skillFilter ? { skillFilter: skillsSnapshot.skillFilter } : {}),
       ...(skillsSnapshot?.skillOverrides ? { skillOverrides: skillsSnapshot.skillOverrides } : {}),
     };
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.discovery");
     const entries = await prepareWorkspaceSkills(sourceWorkspace, {
       ...loadOptions,
       executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
@@ -326,6 +337,7 @@ export async function syncWorkspaceSkills(params: {
     assertCurrent?.();
     if (skillsSnapshot?.librarySelections?.length) {
       const selectedNames = new Set(skillsSnapshot.skills.map((skill) => skill.name));
+      phases.mark("attempt.setup.sandbox.layout.skills_sync.library_selection");
       const selectedEntries = await prepareSkillLibrarySelection(
         skillsSnapshot.librarySelections,
         {},
@@ -335,6 +347,7 @@ export async function syncWorkspaceSkills(params: {
       entries.push(...selectedEntries.filter((entry) => selectedNames.has(entry.skill.name)));
     }
 
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.plan");
     const usedDirNames = new Set<string>();
     const plans: Array<{
       destinationPath?: string;
@@ -376,6 +389,7 @@ export async function syncWorkspaceSkills(params: {
     }
 
     assertCurrent?.();
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.manifest_remove");
     await target.remove(SYNCED_SKILLS_MANIFEST_NAME, { force: true });
     assertCurrent?.();
     const previousUsage =
@@ -406,8 +420,10 @@ export async function syncWorkspaceSkills(params: {
           : [];
       }),
     );
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.target_scan");
     const children = await fsp.readdir(targetSkillsDir);
     assertCurrent?.();
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.remove_stale");
     for (const child of children) {
       if (
         child !== ".gitignore" &&
@@ -428,13 +444,16 @@ export async function syncWorkspaceSkills(params: {
       if (!preservedDestinations.has(path.basename(destinationPath))) {
         try {
           if (pin) {
+            phases.mark("attempt.setup.sandbox.layout.skills_sync.library_read");
             const libraryFiles = await readSelectedSkillLibraryFiles(pin);
             assertCurrent?.();
             for (const file of libraryFiles) {
               const filePath = path.join(destinationPath, file.path);
               assertCurrent?.();
+              phases.mark("attempt.setup.sandbox.layout.skills_sync.library_directory");
               await fsp.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
               assertCurrent?.();
+              phases.mark("attempt.setup.sandbox.layout.skills_sync.library_copy");
               await target.create(
                 `.${path.sep}${path.relative(targetSkillsDir, filePath)}`,
                 Buffer.from(file.content, file.encoding === "base64" ? "base64" : "utf8"),
@@ -443,6 +462,7 @@ export async function syncWorkspaceSkills(params: {
             }
           } else {
             const syncSourceDir = entry.syncSourceDir ?? entry.skill.baseDir;
+            phases.mark("attempt.setup.sandbox.layout.skills_sync.copy_tree");
             await copySkillTree(
               syncSourceDir,
               destinationPath,
@@ -480,6 +500,7 @@ export async function syncWorkspaceSkills(params: {
         skillsVersion,
       };
       assertCurrent?.();
+      phases.mark("attempt.setup.sandbox.layout.skills_sync.manifest_write");
       await target.writeJson(SYNCED_SKILLS_MANIFEST_NAME, nextManifest, {
         trailingNewline: true,
         durable: false,

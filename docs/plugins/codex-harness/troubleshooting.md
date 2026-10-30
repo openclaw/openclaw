@@ -217,3 +217,36 @@ provider refs stay on their normal provider path in `auto` mode.
 `/codex computer-use status` from a fresh session. If a tool reports
 `Native hook relay unavailable`, use the native hook relay recovery above.
 See [Codex Computer Use](/plugins/codex-computer-use#troubleshooting).
+
+### Image-heavy conversations exceed the request-size limit
+
+`request_too_large` with `Request exceeds the maximum size accepted by the Codex
+inference relay (33554432 bytes)` means the request exceeded the relay's **32 MiB
+body limit**. This includes the decompressed body, so a smaller compressed upload
+can still fail. It is not a disk-space limit or a universal OpenAI model limit.
+
+Inline images can consume many bytes while using comparatively few model tokens.
+Native Codex compaction uses token pressure, so image-heavy history can hit this
+transport limit first. Remote compaction also sends history to the model and can
+fail for the same reason. A completed compaction does not guarantee that the next
+request's retained images fit the relay limit.
+
+Retrying unchanged history, restarting the Gateway, or deleting downloaded image
+files does not shrink inline image data already in the native conversation. The
+OpenClaw `maxActiveTranscriptBytes` setting limits the size of the stored native
+transcript, which is checked when the thread is bound at startup; it is not a
+budget for a single inference request body. See
+[compaction ownership](/plugins/codex-harness-runtime/compaction#compaction-and-transcript-mirror).
+
+Before more image-heavy work, keep originals as files and use smaller previews or
+focused crops when the task permits. Save text findings and job checkpoints as you
+go. These practices reduce growth but do not enforce a native request-byte budget.
+
+If the conversation is already blocked, preserve the saved work and prepare a
+text handoff from existing checkpoints. Try native `/compact` only if it is
+available for the selected route. If compaction is unavailable or fails with the
+same size error, an operator can start a fresh conversation with `/new` and supply
+the handoff without replaying the old inline images. Before resetting, check
+active/background work and let it finish or deliberately stop it; a reset can
+cancel work. Reconcile completed tool actions and deliveries before resuming.
+This is recovery, not a permanent prevention fix.

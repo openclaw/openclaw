@@ -6,7 +6,7 @@ import { chromium } from "playwright";
 import type { Plugin } from "vite";
 import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
 import type { Vitest } from "vitest/node";
-import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
+import { peleClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import {
   filterFilesByPatterns,
   intersectIncludePatterns,
@@ -87,6 +87,7 @@ let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | nul
 
 // The accessibility-tree suite remains Chromium-only until its CDP probe is replaced.
 const webkitTestFiles = [
+  "src/pages/usage/view-details.browser.test.tsx",
   "src/components/settings-ui.browser.test.tsx",
   "src/components/select-picker.behavior.browser.test.ts",
   "src/components/select-picker.browser.test.tsx",
@@ -97,6 +98,7 @@ const webkitTestFiles = [
   "src/components/app-sidebar-agent-menu-scroll.browser.test.ts",
   "src/components/app-sidebar-rail-menus.browser.test.ts",
   "src/components/app-sidebar-session-visibility.browser.test.ts",
+  "src/components/app-sidebar-owner-avatar.browser.test.ts",
   "src/components/agent-emoji-picker.browser.test.ts",
   "src/components/appearance-picker.browser.test.ts",
   "src/components/confirm-dialog.browser.test.ts",
@@ -114,6 +116,7 @@ const webkitTestFiles = [
   "src/components/modal-dialog.test.ts",
   "src/components/tooltip.test.ts",
   "src/components/tooltip.browser.test.ts",
+  "src/components/tooltip.escape-hover.browser.test.ts",
   "src/components/panel-tab-strip.test.ts",
   "src/components/panel-tab-strip.browser.test.ts",
   "src/components/hub-tabs.browser.test.tsx",
@@ -181,7 +184,7 @@ export function createUiBrowserVitestConfig(
     root: here,
     plugins: [
       controlUiSolidPlugin(),
-      mermaidClassicBundlePlugin(),
+      peleClassicBundlePlugin(),
       controlUiLocaleModulesPlugin(),
       createVitestProjectCachePlugin(),
       createRedactingReporterPlugin(),

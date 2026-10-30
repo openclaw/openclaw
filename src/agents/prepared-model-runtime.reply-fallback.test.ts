@@ -235,8 +235,10 @@ describe("prepared reply fallback ownership", () => {
       const pluginGeneration = getPreparedModelRuntimePluginGeneration()!;
       const prepared = getPreparedModelRuntimeBorrowedSnapshot(pluginGeneration)!;
       snapshots.add(prepared);
+      // Embedded runs receive an equivalent config projection, not the published object.
+      const runConfig = structuredClone(config);
       const workspaces = resolvePreparedRuntimeWorkspaces({
-        config,
+        config: runConfig,
         agentId: dispatch.agentId,
         agentDir: dispatch.agentDir,
         workspaceDir: context.workspaceDir,
@@ -244,7 +246,7 @@ describe("prepared reply fallback ownership", () => {
       } as RunEmbeddedAgentParamsWithSessionFile);
       await using nested = await acquireAgentRunPreparedModelRuntime(
         {
-          config,
+          config: runConfig,
           agentId: dispatch.agentId,
           agentDir: dispatch.agentDir,
           workspaceDir: workspaces.runtimeWorkspaceResolution.workspaceDir,

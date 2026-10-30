@@ -85,6 +85,14 @@ export type ModelCatalogCompatConfig = {
   supportedReasoningEfforts?: string[];
   reasoningEffortMap?: Record<string, string>;
   visibleReasoningDetailTypes?: string[];
+  /** Thinking level a new session starts at. Its presence makes the row own the thinking profile. */
+  defaultThinkingLevel?: string;
+  /** Offers the `adaptive` level, which lets the model choose its own effort. */
+  adaptiveThinking?: boolean;
+  /** Thinking stays on even when the row says `reasoning: false` (the route cannot turn it off). */
+  thinkingRequired?: boolean;
+  /** Display labels per level, e.g. `{ low: "on" }` for a binary thinking switch. */
+  thinkingLevelLabels?: Record<string, string>;
 };
 
 /** OpenRouter routing preferences copied into request metadata. */
@@ -291,6 +299,11 @@ export type ModelCatalogProvider = {
   defaultModel?: string;
   /** Provider-recommended small model id for short internal utility tasks. */
   defaultUtilityModel?: string;
+  /**
+   * Multi-vendor routers: small model id per vendor, keyed by the vendor prefix of the
+   * primary model id (`<vendor>/<model>`). Used only when the router offers that model.
+   */
+  defaultUtilityModels?: Record<string, string>;
   /**
    * Hosted catalog v2 projection of the curated global list onto this provider's
    * model ids, best first; reserved for picker ordering and not yet used.

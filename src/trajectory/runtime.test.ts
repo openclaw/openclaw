@@ -401,6 +401,7 @@ describe("trajectory runtime", () => {
 
   it("keeps normal schema-v1 event payloads unchanged", async () => {
     const data = {
+      finalPromptText: "inspect",
       prompt: "inspect",
       systemPrompt: "system prompt",
       messages: [{ role: "user", content: "inspect" }],
@@ -408,11 +409,43 @@ describe("trajectory runtime", () => {
       imagesCount: 0,
     };
 
-    const parsed = await captureEvent("prompt.submitted", data);
+    const recorder = await createCapturedRuntimeRecorder();
+    const slices = vi.spyOn(Array.prototype, "slice");
+    let copiedKeyLists: number;
+    try {
+      recorder.recordEvent("prompt.submitted", data);
+      copiedKeyLists = slices.mock.contexts.filter(
+        (keys) => Array.isArray(keys) && keys.includes("imagesCount"),
+      ).length;
+    } finally {
+      slices.mockRestore();
+    }
+    const parsed = captured();
+    expect(copiedKeyLists).toBe(0);
     expect(parsed.schemaVersion).toBe(1);
     expect(parsed.data).toEqual(data);
     expect(JSON.stringify(parsed.data)).toBe(JSON.stringify(data));
     expect(parsed.data.truncated).toBeUndefined();
+  });
+
+  it("omits replay state before inspecting its contents", async () => {
+    const recorder = await createCapturedRuntimeRecorder();
+    const readReplay = vi.fn(() => ({ data: "opaque replay" }));
+    const message = {
+      role: "assistant",
+      content: "done",
+      get providerReplay() {
+        return readReplay();
+      },
+    };
+    recorder.recordEvent("context.compiled", { messages: [message] });
+    recorder.recordEvent("tool.result", { result: message, success: true });
+    expect(captured().data).toEqual({ messages: [{ role: "assistant", content: "done" }] });
+    expect(captured(1).data).toEqual({
+      result: { role: "assistant", content: "done" },
+      success: true,
+    });
+    expect(readReplay).not.toHaveBeenCalled();
   });
 
   it("preserves non-JSON leaves and custom JSON results in captured events", async () => {
@@ -634,7 +667,7 @@ describe("trajectory runtime", () => {
 
   it("caps large final prompts and records their original length", async () => {
     const finalPromptText = `prompt-${"🙂".repeat(4_096)}`;
-    const parsed = await captureEvent("model.completed", { finalPromptText });
+    const parsed = await captureEvent("model.completed", Object.freeze({ finalPromptText }));
     expect(Buffer.byteLength(parsed.data.finalPromptText, "utf8")).toBeLessThanOrEqual(4 * 1024);
     expect(Buffer.byteLength(parsed.data.finalPromptText, "utf8")).toBeGreaterThan(4 * 1024 - 4);
     expect(parsed.data.finalPromptTextOriginalLength).toBe(finalPromptText.length);

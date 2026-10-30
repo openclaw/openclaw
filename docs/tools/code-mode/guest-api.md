@@ -53,6 +53,11 @@ provide local byte conversion, not filesystem, module, or network access.
 Returned values still use the JSON-only bridge; emit decoded text or an array of
 byte values rather than a binary attachment.
 
+Module loading is unavailable. Direct `import()` and `require()` calls are
+rejected before execution. In the Node executor, dynamic imports constructed
+through `eval` or `Function` reject with the same module-access guidance and
+can be caught inside the cell. Uncaught rejections fail the owning cell.
+
 `console.log`, `console.info`, `console.warn`, `console.error`, and
 `console.debug` emit diagnostic text through the same ordered output channel as
 `text` and `json`, not through host logs. They return `undefined`;
@@ -246,6 +251,10 @@ retain the native MCP result (`content`, optional `structuredContent`, and
 optional `isError`). Exact catalog ids and raw `{ tool, result }` envelopes are
 not guest-visible.
 
+Native Gateway and sandbox exec workdir errors and foreground process failures
+include their concise diagnostic in `message`, with command output in `aggregated`. Returned failures
+remain values; thrown tool errors remain catchable.
+
 The `ls`, `find`, and `grep` tools include their bounded listing or search text
 in `content`, including empty-result messages and truncation notices. Directory
 pages retain `nextAfter`; search results retain their existing limit and
@@ -294,7 +303,7 @@ store entries do not enter model context. Loading network-derived data carries
 its provenance into the receiving cell's normal untrusted-content wrapper.
 
 Both executors support these helpers in interactive cells with a bound session.
-Headless and `restartSafe` cells reject store operations, as do cells without
+Headless cells reject store operations, as do cells without
 an available session manager. Read `API.read("results.d.ts")` for the contract.
 
 ## Reading paginated file data

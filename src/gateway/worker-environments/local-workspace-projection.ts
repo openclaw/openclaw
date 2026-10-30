@@ -21,7 +21,7 @@ import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-
 import { projectionOperations } from "./local-workspace-state.js";
 import { withLocalWorkspaceStore, type LocalWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
-import { OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX } from "./workspace-manifest-comparison.js";
+import { workspaceSizeRecoveryPaths } from "./workspace-manifest-comparison.js";
 import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
 
 type LocalWorkspaceCustody = {
@@ -154,6 +154,7 @@ async function settleLocalWorkspace<T>(
   return await withLocalWorkspaceStore(
     { ...params, env, worktreeId: params.worktree.id },
     async (store) => {
+      store.assertCurrent();
       const row = store.get();
       if (!row) {
         return await operation({
@@ -189,7 +190,9 @@ async function settleLocalWorkspace<T>(
         lifecycleRevision: row.lifecycle_revision,
         workerAuthority,
         assertCurrent: () => {
-          params.assertCurrent?.();
+          if (params.assertCurrent !== workerAuthority.assertCurrent) {
+            params.assertCurrent?.();
+          }
           assertWorktreeCurrent();
         },
       };
@@ -244,6 +247,17 @@ export async function checkpointLocalWorkspacePath(params: {
   const worktree = await readLiveRegistryWorktreeByPath(context, params.cwd);
   params.assertCurrent?.();
   if (worktree) {
+    const projection = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env },
+      { type: "localWorkspace.exists", input: { id: worktree.id } },
+      { context, current: true, live: true },
+    );
+    context.admission.assertCurrent();
+    params.assertCurrent?.();
+    // An absent projection has no checkpoint; custody callbacks still own absent rows.
+    if (projection?.exists === false) {
+      return;
+    }
     const checkpoint = { worktree, env, assertCurrent: params.assertCurrent };
     await joinLocalWorkspaceCheckpoint(checkpoint, undefined, (beginCapture) =>
       settleLocalWorkspace(checkpoint, async () => {}, beginCapture),
@@ -293,14 +307,10 @@ async function runLocalWorkspaceProjection<T>(
   options: { provision?: boolean } = {},
 ) {
   const assertCurrent = () => {
-    store.assertCurrent();
+    store.get();
     owner.assertCurrent();
   };
   assertCurrent();
-  const workerAuthority: WorktreeWorkerAuthority = {
-    ...store.workerAuthority,
-    predicates: owner.workerAuthority?.predicates ?? store.workerAuthority.predicates,
-  };
   let previous = store.get();
   // A reset may recover its prior result; another session incarnation cannot adopt it.
   if (
@@ -313,14 +323,10 @@ async function runLocalWorkspaceProjection<T>(
     previous = await store.update(
       previous,
       { lifecycle_revision: owner.lifecycleRevision },
-      workerAuthority,
+      owner.workerAuthority,
     );
   }
-  const operations = projectionOperations(
-    { ...owner, assertCurrent, workerAuthority },
-    store,
-    previous,
-  );
+  const operations = projectionOperations(owner, store, previous);
   const { quiesceLocalWorkspace, parseLocalWorkspacePausedRuntimes } =
     await import("../../agents/sandbox/local-workspace-quiescence.js");
   const quiescence =
@@ -339,7 +345,7 @@ async function runLocalWorkspaceProjection<T>(
   try {
     return await run(operations, quiescence);
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith(OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX)) {
+    if (error instanceof Error && workspaceSizeRecoveryPaths(error).length > 0) {
       const { describeLocalWorkspaceRecovery } = await import("./local-workspace-recovery.js");
       throw await describeLocalWorkspaceRecovery(error, owner, operations);
     }
@@ -347,6 +353,9 @@ async function runLocalWorkspaceProjection<T>(
   } finally {
     // Retirement finished cleanup before removal could invalidate the old binding.
     // Otherwise, only acknowledged journal changes allow the frozen guest to resume.
+    if (!quiescence?.retired) {
+      store.workerAuthority.assertCurrent?.();
+    }
     const retained = quiescence?.retired ? undefined : store.get();
     if (
       retained &&
@@ -373,6 +382,7 @@ export async function expireLocalWorkspaceProjection(params: {
   return await withLocalWorkspaceStore(
     { ...params, env, worktreeId: params.worktree.id },
     async (store) => {
+      store.assertCurrent();
       const row = store.get();
       if (!row) {
         await params.retireSnapshot?.(store.assertCurrent);
@@ -397,6 +407,9 @@ export async function expireLocalWorkspaceProjection(params: {
         lifecycleRevision: row.lifecycle_revision,
         workerAuthority: params.workerAuthority,
         assertCurrent: () => {
+          if (params.workerAuthority?.assertCurrent !== params.assertCurrent) {
+            params.workerAuthority?.assertCurrent?.();
+          }
           params.assertCurrent();
           assertWorktreeCurrent();
         },

@@ -5,6 +5,7 @@ import {
 import { Check } from "typebox/value";
 import type { VaultAccess } from "./access.js";
 import { SourceCheckInput, type SourceIdentity } from "./ingestion-contract.js";
+import { releaseSupersessionGuards } from "./lifecycle.js";
 import type { Receipt } from "./mutation-contract.js";
 import { publicationRole, PublicationFiles } from "./publication-files.js";
 import { observeWithdrawals } from "./retrieval.js";
@@ -99,6 +100,7 @@ export class StorageJournal extends StorageBase {
           "Published and available to exact reads; keyword indexing is pending until the next search reconciles this scope.";
         const records = plan.records ?? [plan.record];
         observeWithdrawals(db, records, this.retrievalBinding(access));
+        releaseSupersessionGuards(db, plan.restored ?? [], this.retrievalBinding(access));
         for (const record of records) {
           this.recordObservation(db, plan.scope, record, plan.actor, plan.agentId);
         }
@@ -141,10 +143,13 @@ export class StorageJournal extends StorageBase {
       this.flushGit(access);
     }
     access.assertCurrent();
-    return this.store.withDatabase(
+    return this.store.withDatabase((db) => {
+      const row = db
+        .prepare("SELECT receipt FROM mutations WHERE scope=? AND request=?")
+        .get(scopeKey(access.scope), requestId)!;
       // SAFETY: receipts are serialized Receipt values written by this storage layer.
-      (db) => JSON.parse(this.row(db, scopeKey(access.scope), requestId)!.receipt) as Receipt,
-    );
+      return JSON.parse(String(row.receipt)) as Receipt;
+    });
   }
   history(access: VaultAccess, input: { offset?: number; limit?: number; id?: string }) {
     access.assertCurrent();

@@ -208,6 +208,8 @@ keep the existing synchronous fallback.
 
     The Gateway keeps complete active namespace views in memory and updates them from committed write receipts before acknowledging a write. Ordinary reads reuse those views without SQL. Residency is bounded to 64 namespaces, 16 MiB of accounted data in total, and 8 MiB or 10,000 rows per namespace. Cold or evicted namespaces load on demand; oversized namespaces and transaction-local reads use SQL. Eviction never deletes durable rows. Synchronous compatibility writers publish to the same owner. A restart rebuilds the views from the database.
 
+    Duplicate `registerIfAbsent(...)` claims can also use a resident namespace without requesting a writer when no expiry cleanup is due. The existing value, creation time, and TTL stay unchanged; missing or expired keys still use the atomic worker operation.
+
     Expired values become unavailable immediately at their TTL deadline. Namespace mutations remove expired rows in bounded batches; the Gateway does not run a periodic keyed-state expiry sweep. An inactive namespace may retain expired rows on disk until a later mutation, without making those values readable or counting them toward live capacity.
 
     To retain records without count-based eviction, use the async opener with `retention: "retained"` instead of `maxEntries`:

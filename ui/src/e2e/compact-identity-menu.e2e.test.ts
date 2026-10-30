@@ -6,6 +6,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "compact identity menu" });
+const phone = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true };
 const snapshot: NativeGatewaysSnapshot = {
   currentId: "gateway-1",
   gateways: Array.from({ length: 9 }, (_, index) => ({
@@ -95,13 +96,19 @@ suite.define(() => {
       },
     ));
 
-  it("keeps Get the apps available in a browser", async () =>
-    suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+  it("keeps Get the apps and reveals keyboard hints on a touch-only phone", async () =>
+    suite.withPage(phone, async ({ page }) => {
       await installMockGateway(page, { sessions: [], historyMessages: [] });
       await page.goto(`${suite.server.baseUrl}new`);
-      await waitForControlUiGatewayReady(page);
-      const menu = await openMenu(page);
-      await menu.locator('[data-value="command:apps"]').click();
+      await page.locator(".new-session-page__message").pressSequentially("hi");
+      await page.locator(".topbar-nav-toggle").click();
+      const keycap = (await openMenu(page)).locator(
+        '[data-value="command:settings"] .shortcut-kbd',
+      );
+      expect(await keycap.isVisible()).toBe(false);
+      await page.keyboard.press("ArrowDown");
+      await keycap.waitFor({ state: "visible" });
+      await page.locator('[data-value="command:apps"]').click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/apps");
     }));
 });

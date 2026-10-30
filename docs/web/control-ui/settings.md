@@ -443,6 +443,11 @@ visible at your reading position while the schema refreshes. Form and Setup
 controls cannot be edited until that refresh finishes. The first load still
 shows **Loading schema…** until a schema is available.
 
+In an agent's **Tools** tab, expand a tool group to browse its tools and policy
+details. Browser Find searches group summaries and tools in expanded groups.
+Selecting a tool in **Tool preview** opens its group and focuses its details.
+Collapsing a group closes its tool details.
+
 In an agent's **Files** editor, **Add file** opens a missing optional workspace
 document. Saving creates it only if it is still missing. If another editor or
 process creates it first, the editor keeps your draft and reports a conflict.
@@ -585,17 +590,17 @@ including limited access to contacts or photos. Precise location is read-only
 on iOS; **Open Settings** opens the system setting. Talk shows the device's
 Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
 
-## Claws (Labs)
+## Templates (Labs)
 
-Enable **Settings → Labs → Claws** to browse official Claw packages from
+Enable **Settings → Labs → Templates** to browse official Template packages from
 ClawHub on the **Agents** page. Search the catalog, review the files and
-capabilities a Claw will install, then select **Add** to create its agent.
+capabilities a Template will install, then select **Add** to create its agent.
 Add creates an ordinary agent and opens its chat. It does not create a separate
-installed Claw to update or remove. Delete the agent through normal agent
+installed Template to update or remove. Delete the agent through normal agent
 controls; shared plugins and MCP servers remain installed. See
-[Claws](/cli/claws) for the package contract and local-source CLI commands.
+[Templates](/cli/templates) for the package contract and local-source CLI commands.
 
-Turning the Labs switch off hides Claw discovery and Add. Existing agents keep
+Turning the Labs switch off hides Template discovery and Add. Existing agents keep
 running.
 
 ## Speech bubbles
@@ -610,21 +615,23 @@ Control UI pages without restarting the Gateway.
 
 ## Custom plugin UI
 
-Find **Labs** in the **System** section of the Settings sidebar, after **Infrastructure**.
+Enabled plugins can add native pages, widgets, actions, and view replacements
+by default. Custom plugin UI is no longer a Labs setting. Installed plugin
+details and existing enable reviews disclose native UI from the inspected
+manifest; catalog install surfaces explain that plugin code may also include
+native UI when the catalog does not provide that information.
 
-**Settings → Labs → Custom plugin UI** enables native pages, widgets, actions,
-and view replacements from user-installed plugins. It defaults to off and
-writes `gateway.controlUi.experimental.customPlugins`. Changes apply without
-restarting the Gateway, and connected pages refresh their plugin views
-automatically. After disabling it, reload browser tabs to clear plugin
-JavaScript that already ran.
-
-Only enable it for plugin authors you trust: native UI runs in the Control UI
-origin with the signed-in operator's Gateway authority. Native UI from enabled
-bundled plugins, including Workboard, remains available with the lab off.
-Backend plugin APIs, ordinary plugin loading, sandboxed dashboard widgets, and
-MCP Apps are unaffected. All plugin APIs are experimental; see
+Only install plugins from authors you trust: native UI runs in the Control UI
+origin with each signed-in viewer's Gateway authority. It is not sandboxed.
+All plugin APIs remain experimental; see
 [Feature plugins](/plugins/feature-plugins) for authoring and the trust model.
+
+The existing `gateway.controlUi.experimental.customPlugins: false` remains an
+advanced opt-out for user-installed native UI. Existing explicit `false` values
+stay off on upgrade; omission and `true` allow native UI. Changes hot-apply and
+refresh connected pages without a Gateway restart. After disabling, reload
+browser tabs to clear JavaScript that already ran. Enabled bundled plugin views,
+backend operations, sandboxed dashboard widgets, and MCP Apps are unaffected.
 
 Authenticated native UI requires HTTPS or a browser-trusted loopback URL.
 On non-local plain HTTP, plugin pages explain how to open a supported URL;

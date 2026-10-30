@@ -4,6 +4,8 @@
  *   --output .local/canonical-candidate --sessions 10000 --iterations 5
  * --operation reclaim deletes one freshly seeded transcript-bearing target among
  * the 10k background rows, samples its retained worker, then closes its database.
+ * --entry-mib adds synthetic entry payload for reclamation retention; --snapshot
+ * captures the idle worker after forced GC, outside task timing.
  * Add --owner-dir <source-overlay> for baseline bytes at repository-relative paths.
  * Or use --entry <built-repo>/dist/config/sessions/session-accessor.sqlite-archive.worker.js
  * to measure its built worker with package aliases disabled, as in Gateway stress.
@@ -43,7 +45,7 @@ async function waitJson(file: string): Promise<Record<string, unknown>> {
 async function probe(
   prefix: string,
   id: string,
-  operation: "start" | "stop" | "collect",
+  operation: "start" | "stop" | "collect" | "snapshot",
 ): Promise<Record<string, unknown>> {
   await waitJson(`${prefix}.ready.json`);
   const command = `${prefix}.command.json`;
@@ -68,6 +70,8 @@ if (!isMainThread) {
       sessions: { type: "string", default: "10000" },
       iterations: { type: "string", default: "5" },
       operation: { type: "string", default: "canonical" },
+      "entry-mib": { type: "string", default: "0" },
+      snapshot: { type: "boolean", default: false },
     },
   });
   assert(values.output, "--output is required");
@@ -79,8 +83,11 @@ if (!isMainThread) {
   const workerOperation = operation === "canonical" ? "canonical-validation-pool" : "reclaim";
   const sessions = Number(values.sessions);
   const iterations = Number(values.iterations);
+  const entryMiB = Number(values["entry-mib"]);
   assert(Number.isSafeInteger(sessions) && sessions > 0);
   assert(Number.isSafeInteger(iterations) && iterations > 0);
+  assert(Number.isSafeInteger(entryMiB) && entryMiB >= 0);
+  assert(entryMiB === 0 || operation === "reclaim", "--entry-mib requires --operation reclaim");
   assert(!fs.existsSync(root), "Refusing to overwrite an existing output directory");
   fs.mkdirSync(root, { recursive: true });
   const output = path.join(root, "workers");
@@ -199,7 +206,21 @@ if (!isMainThread) {
         markCanonicalSessionValidationPending(database);
       } else {
         assert(creation);
-        creation.ensureSessionEntrySync({ ...options, sessionKey }, { sessionId, updatedAt: 1 });
+        creation.ensureSessionEntrySync(
+          { ...options, sessionKey },
+          {
+            sessionId,
+            updatedAt: 1,
+            ...(entryMiB
+              ? {
+                  skillsSnapshot: {
+                    prompt: "synthetic-retained-entry".padEnd(entryMiB * 1024 * 1024, "x"),
+                    skills: [],
+                  },
+                }
+              : {}),
+          },
+        );
         // Empty transcripts use the ordinary writer, so seed real reclamation work.
         agentDb.runOpenClawAgentWriteTransaction(({ db }) => {
           db.prepare(
@@ -221,7 +242,11 @@ if (!isMainThread) {
         assert.equal(observed.length, 1, "One store must use one measured archive worker");
         const observation = observed[0]!;
         observation.task = await probe(observation.prefix, "task-stop", "stop");
-        observation.idleHeap = await probe(observation.prefix, "idle-heap", "collect");
+        observation.idleHeap = await probe(
+          observation.prefix,
+          "idle-heap",
+          values.snapshot ? "snapshot" : "collect",
+        );
         assert.equal(
           database.db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()?.count,
           sessions,
@@ -294,6 +319,8 @@ if (!isMainThread) {
       node: process.version,
       sessions,
       iterations,
+      entryMiB,
+      snapshots: values.snapshot,
       operation,
       workerOperation,
       owner: values["owner-dir"] ?? null,

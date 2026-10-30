@@ -1,34 +1,22 @@
-import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
-import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { setVerbose } from "../../global-state.js";
 import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
-import {
-  applyLoggingConfig,
-  flushLogger,
-  resetLogger,
-  setLoggerOverride,
-} from "../../logging/logger.js";
-import { loggingState } from "../../logging/state.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { applyLoggingConfig, flushLogger, resetLogger } from "../../logging/logger.js";
 import {
   createReplyOperation,
   getSessionControllerOperation,
 } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { testing as controllerTesting } from "../../sessions/session-controller.test-support.js";
-import * as channels from "../../test-utils/channel-plugins.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
-import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
-  acpMocks,
   createDispatcher,
   diagnosticMocks,
   mocks,
@@ -529,175 +517,5 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     ).resolves.toMatchObject({ queuedFinal: false });
     expect(dispatchParams.dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(mocks.routeReply).not.toHaveBeenCalled();
-  });
-});
-
-describe("restart tombstone channel feedback", () => {
-  const notice =
-    "My session in this room ended during restart recovery. Use Resume in WebChat, or /reset or /new to start a replacement session.";
-  const warn = vi.fn();
-  const deliver = vi.fn(async () => {});
-  const replyResolver = vi.fn(async () => ({ text: "agent reply" }));
-  let recoverySessionKey: string;
-  let messageId: number;
-
-  const recoveryMarker = (cycleId = "failed-cycle") => ({
-    cycleId,
-    revision: 4,
-    chargedAttempts: 3,
-    tombstone: { reason: "automatic recovery exhausted" },
-  });
-
-  beforeEach(() => {
-    clearAgentHarnesses();
-    setActivePluginRegistry(
-      channels.createTestRegistry([
-        {
-          pluginId: "buzz",
-          source: "test",
-          plugin: channels.createChannelTestPluginBase({ id: "buzz" }),
-        },
-      ]),
-    );
-    acpMocks.readAcpSessionEntry.mockReset().mockReturnValue(null);
-    sessionStoreMocks.loadSessionEntry
-      .mockReset()
-      .mockImplementation(() => sessionStoreMocks.currentEntry);
-    warn.mockClear();
-    deliver.mockClear();
-    replyResolver.mockClear();
-    recoverySessionKey = `agent:main:buzz:group:buzz:${randomUUID()}`;
-    messageId = 0;
-    sessionStoreMocks.currentEntry = {
-      sessionId: "failed-session",
-      updatedAt: Date.now(),
-      status: "failed",
-      mainRestartRecovery: recoveryMarker(),
-    };
-    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "compact" });
-    loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
-  });
-
-  afterEach(() => {
-    loggingState.rawConsole = null;
-    setLoggerOverride(null);
-  });
-
-  async function rejectInbound(options?: {
-    context?: Partial<MsgContext>;
-    visibleReplies?: "automatic" | "message_tool";
-    sendPolicy?: "allow" | "deny";
-  }) {
-    const dispatcher = createReplyDispatcher({ deliver });
-    await expect(
-      dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          Provider: "buzz",
-          Surface: "buzz",
-          OriginatingChannel: "buzz",
-          OriginatingTo: "buzz:00000000-0000-4000-8000-000000000001",
-          ChatType: "group",
-          SessionKey: recoverySessionKey,
-          MessageSid: String(++messageId),
-          Body: "Can you answer?",
-          RawBody: "Can you answer?",
-          CommandBody: "Can you answer?",
-          InboundAccessAuthorized: true,
-          InboundEventKind: "user_request",
-          InputProvenance: { kind: "external_user", sourceChannel: "buzz" },
-          WasMentioned: true,
-          ...options?.context,
-        }),
-        cfg: {
-          messages: { groupChat: { visibleReplies: options?.visibleReplies ?? "automatic" } },
-          ...(options?.sendPolicy
-            ? { session: { sendPolicy: { default: options.sendPolicy } } }
-            : {}),
-        },
-        dispatcher,
-        replyResolver,
-      }),
-    ).rejects.toThrow(/ended during restart recovery/i);
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-  }
-
-  it("delivers one message-tool room notice and warns for every rejected inbound", async () => {
-    const rejectionWarnings = () =>
-      warn.mock.calls.filter(([line]) => line.includes("[auto-reply/reply-turn-admission]"));
-    await rejectInbound({ visibleReplies: "message_tool" });
-    expect(rejectionWarnings()).toHaveLength(1);
-    expect(deliver).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ isError: true, text: notice }),
-      expect.objectContaining({ kind: "final" }),
-    );
-    await rejectInbound({ visibleReplies: "message_tool" });
-    expect(deliver).toHaveBeenCalledOnce();
-    expect(replyResolver).not.toHaveBeenCalled();
-    expect(rejectionWarnings()).toHaveLength(2);
-    for (const [line] of rejectionWarnings()) {
-      expect(line).toContain(recoverySessionKey);
-      expect(line).toContain("automatic recovery exhausted");
-      expect(line).toContain("/reset");
-    }
-    expect(sessionStoreMocks.currentEntry).toMatchObject({
-      sessionId: "failed-session",
-      mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
-    });
-  });
-
-  it.each(["session", "cycle"] as const)("notifies again for a new recovery %s", async (change) => {
-    await rejectInbound();
-    if (change === "session") {
-      sessionStoreMocks.currentEntry!.sessionId = "replacement-session";
-    } else {
-      sessionStoreMocks.currentEntry!.mainRestartRecovery = recoveryMarker("replacement-cycle");
-    }
-    await rejectInbound();
-    expect(deliver).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps model-locked recovery guidance actionable", async () => {
-    sessionStoreMocks.currentEntry!.modelSelectionLocked = true;
-    await rejectInbound();
-    expect(deliver).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        text: expect.stringContaining("WebChat and use Resume."),
-      }),
-      expect.objectContaining({ kind: "final" }),
-    );
-  });
-
-  it("warns about ambiguous routed delivery without repeating the notice", async () => {
-    mocks.routeReply.mockResolvedValueOnce({ ok: true, delivered: true, ambiguous: true });
-    const context = { Provider: "slack", Surface: "slack" };
-    await rejectInbound({ context });
-    await rejectInbound({ context });
-    expect(mocks.routeReply).toHaveBeenCalledOnce();
-    expect(deliver).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("notice delivery was not confirmed"));
-  });
-
-  it.each([
-    { label: "unauthorized inbound", context: { InboundAccessAuthorized: false } },
-    { label: "explicit send-policy denial", sendPolicy: "deny" as const },
-    { label: "ACP privacy after waiting for admission", acp: true },
-    { label: "send policy after waiting for admission", latePolicy: true },
-  ])("does not notify for $label", async ({ context, sendPolicy, acp, latePolicy }) => {
-    if (acp || latePolicy) {
-      sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
-        if (acp) {
-          acpMocks.readAcpSessionEntry.mockReturnValue({
-            entry: { sessionId: "failed-session", spawnedBy: "agent:main:parent" },
-            acp: { backend: "acpx", mode: "persistent" },
-          });
-        } else {
-          sessionStoreMocks.currentEntry!.sendPolicy = "deny";
-        }
-        return sessionStoreMocks.currentEntry;
-      });
-    }
-    await rejectInbound({ context, sendPolicy });
-    expect(deliver).not.toHaveBeenCalled();
   });
 });

@@ -67,6 +67,14 @@ const messageAppend = (actor: SessionActor, sessionId: string, message: unknown)
   },
 });
 
+function expectReconciliationFailure(error: unknown) {
+  expect(hasSqliteWorkerOutcomeUnknown(error)).toBe(true);
+  const storageFailure = classifyGatewayStorageFailure(error);
+  expect(storageFailure).toBe("session_actor_reconciliation");
+  expect(renderAssistantRequestFailureCopy({ storageFailure })).toMatch(/check|reopen|retry/i);
+  return formatErrorMessageWithCode(error);
+}
+
 it("acquires existing incognito input from memory without opening a database", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = {
@@ -165,9 +173,7 @@ it.each([false, true])(
       };
       expectConversationCurrent(true);
       const identity = readOpenClawAgentDatabaseIdentity(fixture.database);
-      if (typeof identity.identity !== "string") {
-        throw new Error("Fixture requires durable storage");
-      }
+      assert(typeof identity.identity === "string", "Fixture requires durable storage");
       const factory = createSessionActorFactory({
         agentId: "main",
         path: fixture.database.path,
@@ -185,9 +191,7 @@ it.each([false, true])(
         },
         { assertCurrent() {}, assertReadable() {} },
       );
-      if ("kind" in actor) {
-        throw new Error("Durable session must be actor-owned");
-      }
+      assert(!("kind" in actor), "Durable session must be actor-owned");
       const ageChanges = vi.fn();
       const stopAgeChanges = observeSessionEntryMaintenanceAgeChanges(
         identity.identity,
@@ -270,7 +274,6 @@ it.each([false, true])(
             },
           },
         );
-        expect(result.kind).toBe("committed");
         assert(result.kind === "committed");
         expect(result.failure).toBeUndefined();
         expectConversationCurrent(false);
@@ -315,31 +318,23 @@ it("recovers a transferred native commit after ordinary reply loss without repla
   await withActor(async ({ actor, commands, fault, seedTransferEntry, readEntry }) => {
     seedTransferEntry();
     fault.reply = "lost";
-    const result = await actor.patch(
-      activity("lost-transfer-reply", 600, { phaseId: "activity" }),
-      authority,
-    );
-    expect(result).toMatchObject({
-      kind: "committed",
-      failure: { origin: "response", message: "Ordinary reply lost" },
-    });
-    assert(result.kind === "committed");
-    expect(result.receipt.postimage.entry?.skillsSnapshot?.prompt.length).toBeGreaterThan(
-      1024 * 1024,
-    );
-    expect(commands).toEqual(["session.actor.patch"]);
-    expect(readEntry()?.updatedAt).toBe(600);
-    fault.settlementLost = true;
-    const retained = await actor.patch(
-      activity("lost-transfer-settlement", 602, { phaseId: "activity" }),
-      authority,
-    );
-    expect(retained).toMatchObject({
-      kind: "committed",
-      failure: { origin: "response", message: "Ordinary reply lost" },
-    });
-    expect(commands).toEqual(["session.actor.patch", "session.actor.patch"]);
-    expect(readEntry()?.updatedAt).toBe(602);
+    for (const [index, updatedAt] of [600, 602].entries()) {
+      fault.settlementLost = index === 1;
+      const result = await actor.patch(
+        activity(`lost-transfer-${updatedAt}`, updatedAt, { phaseId: "activity" }),
+        authority,
+      );
+      expect(result).toMatchObject({
+        kind: "committed",
+        failure: { origin: "response", message: "Ordinary reply lost" },
+      });
+      assert(result.kind === "committed");
+      expect(result.receipt.postimage.entry?.skillsSnapshot?.prompt.length).toBeGreaterThan(
+        1024 * 1024,
+      );
+      expect(commands).toEqual(Array(index + 1).fill("session.actor.patch"));
+      expect(readEntry()?.updatedAt).toBe(updatedAt);
+    }
   });
 });
 
@@ -424,11 +419,7 @@ it.each(["updated", "caller revoked", "disclosure revoked", "keeps changing"] as
 
 it("installs a cold command and stale preimage without a separate read request", async () => {
   await withActor(async ({ actor, commands, fault, retireGeneration }) => {
-    const input = {
-      commandId: "same-command",
-      phaseId: "turn",
-      reducers: [{ kind: "activity" as const, updatedAt: 601 }],
-    };
+    const input = activity("same-command", 601);
     const first = await actor.patch(input, authority);
     assert(first.kind === "committed");
     expect(actor.snapshot(authority)).toEqual(first.receipt.postimage);
@@ -459,21 +450,12 @@ it("installs a cold command and stale preimage without a separate read request",
     expect(stale.postimage.entry?.updatedAt).toBe(601);
     expect(actor.snapshot(authority)).toEqual(stale.postimage);
     const next = await actor.patch(
-      {
-        ...input,
-        expected: stale.postimage.version,
-        reducers: [{ kind: "activity", updatedAt: 602 }],
-      },
+      activity("same-command", 602, { expected: stale.postimage.version }),
       authority,
     );
     expect(next.kind).toBe("committed");
     expect(actor.snapshot(authority)?.entry?.updatedAt).toBe(602);
-    expect(commands).toEqual([
-      "session.actor.patch",
-      "session.actor.patch",
-      "session.actor.patch",
-      "session.actor.patch",
-    ]);
+    expect(commands).toEqual(Array(4).fill("session.actor.patch"));
   });
 });
 
@@ -482,32 +464,23 @@ it("keeps concurrent commands in FIFO order across a rolled-back mutation", asyn
     const initial = await actor.read(authority);
     const preimages = new Map<number, number | undefined>();
     const patch = (updatedAt: number, reject = false) =>
-      actor.patch(
-        {
-          commandId: `concurrent-${updatedAt}`,
-          phaseId: "turn",
-          reducers: [{ kind: "activity", updatedAt }],
+      actor.patch(activity(`concurrent-${updatedAt}`, updatedAt), {
+        assertCurrent() {},
+        authorize(stage, snapshot) {
+          if (stage === "transaction" && !preimages.has(updatedAt)) {
+            preimages.set(updatedAt, snapshot.entry?.updatedAt);
+          }
+          if (stage === "commit" && reject) {
+            throw new Error("Concurrent command rejected");
+          }
         },
-        {
-          assertCurrent() {},
-          authorize(stage, snapshot) {
-            if (stage === "transaction" && !preimages.has(updatedAt)) {
-              preimages.set(updatedAt, snapshot.entry?.updatedAt);
-            }
-            if (stage === "commit" && reject) {
-              throw new Error("Concurrent command rejected");
-            }
-          },
-        },
-      );
+      });
     const [first, rejected, last] = await Promise.all([patch(601), patch(602, true), patch(603)]);
     expect(rejected).toMatchObject({
       kind: "rolled-back",
       error: { message: "Concurrent command rejected" },
     });
-    if (first.kind !== "committed" || last.kind !== "committed") {
-      throw new Error("Expected adjacent concurrent commands to commit");
-    }
+    assert(first.kind === "committed" && last.kind === "committed");
     expect(first.receipt.beforeVersion).toEqual(initial.version);
     expect(first.receipt.postimage.entry?.updatedAt).toBe(601);
     expect([...preimages]).toEqual([
@@ -547,7 +520,6 @@ it("installs the full append receipt without empty reducer work and releases FIF
       },
       authority,
     );
-    expect(result.kind).toBe("committed");
     assert(result.kind === "committed");
     expect(result.receipt.commandId).toBe("model-event");
     const installed = actor.snapshot(authority);
@@ -643,24 +615,17 @@ it("shares actor revisions and isolates explicit policy copies", async () => {
     expect(actor.snapshot(authority)).toBe(initial);
     expect(await actor.read(authority)).toBe(initial);
     const stages: string[] = [];
-    const result = await actor.patch(
-      {
-        commandId: "detached-policy",
-        phaseId: "turn",
-        reducers: [{ kind: "activity", updatedAt: 123 }],
+    const result = await actor.patch(activity("detached-policy", 123), {
+      assertCurrent() {},
+      authorize(stage, snapshot) {
+        stages.push(stage);
+        const copy = structuredClone(snapshot);
+        if (copy.entry) {
+          copy.entry.sessionId = "policy-mutated";
+        }
+        copy.target = { ...copy.target, sessionKey: "policy-mutated" };
       },
-      {
-        assertCurrent() {},
-        authorize(stage, snapshot) {
-          stages.push(stage);
-          const copy = structuredClone(snapshot);
-          if (copy.entry) {
-            copy.entry.sessionId = "policy-mutated";
-          }
-          copy.target = { ...copy.target, sessionKey: "policy-mutated" };
-        },
-      },
-    );
+    });
     expect(result).toMatchObject({
       kind: "committed",
       receipt: {
@@ -668,12 +633,9 @@ it("shares actor revisions and isolates explicit policy copies", async () => {
         postimage: { entry: { sessionId: initial.entry?.sessionId, updatedAt: 123 } },
       },
     });
-    expect(stages).toContain("transaction");
-    expect(stages).toContain("commit");
+    expect(stages).toEqual(expect.arrayContaining(["transaction", "commit"]));
     expect(actor.snapshot(authority)?.entry?.sessionId).toBe(initial.entry?.sessionId);
-    if (result.kind !== "committed") {
-      throw new Error("Expected committed actor revision");
-    }
+    assert(result.kind === "committed");
     expect(actor.snapshot(authority)).toBe(result.receipt.postimage);
     expect(actor.snapshot(authority)).not.toBe(initial);
     expect(initial.entry?.updatedAt).not.toBe(123);
@@ -750,6 +712,7 @@ it.each([false, true])(
       const result = await appendSessionManagerActor({
         actor,
         toolResult,
+        message: { role: toolResult ? "toolResult" : "user" },
         assertCurrent: () => authority.assertCurrent(),
         append: messageAppend(
           actor,
@@ -808,9 +771,7 @@ it.each([
 ] as const)("retains uncertainty with %s (%s)", async (cause, reply, rollback, settlementError) => {
   await withActor(async ({ actor, commands, fault, nativePatch, readEntry }) => {
     const initial = await actor.read(authority);
-    if (actor.target.database.kind !== "file") {
-      throw new Error("Fixture requires durable storage");
-    }
+    assert(actor.target.database.kind === "file", "Fixture requires durable storage");
     const retained = retainPreparedSessionEntryPredicate({
       databaseIdentity: `file:${actor.target.database.physicalIdentity}`,
       sessionKey: actor.target.sessionKey,
@@ -854,12 +815,7 @@ it.each([
     } catch (error) {
       failure = error;
     }
-    expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
-    expect(classifyGatewayStorageFailure(failure)).toBe("session_actor_reconciliation");
-    expect(
-      renderAssistantRequestFailureCopy({ storageFailure: classifyGatewayStorageFailure(failure) }),
-    ).toMatch(/check|reopen|retry/i);
-    const diagnostic = formatErrorMessageWithCode(failure);
+    const diagnostic = expectReconciliationFailure(failure);
     expect(diagnostic).toContain("Session actor requires reconciliation before another command");
     expect(diagnostic).toContain(cause.message);
     if (settlementError) {
@@ -869,6 +825,7 @@ it.each([
       appendSessionManagerActor({
         actor,
         toolResult: false,
+        message: { role: "user" },
         assertCurrent() {},
         append: messageAppend(actor, initial.entry!.sessionId, { role: "user", content: [] }),
       }),
@@ -905,14 +862,7 @@ it.each(["command", "flush"] as const)(
           }
         }),
       ).rejects.toSatisfy((error: unknown) => {
-        expect(hasSqliteWorkerOutcomeUnknown(error)).toBe(true);
-        expect(classifyGatewayStorageFailure(error)).toBe("session_actor_reconciliation");
-        expect(
-          renderAssistantRequestFailureCopy({
-            storageFailure: classifyGatewayStorageFailure(error),
-          }),
-        ).toMatch(/check|reopen|retry/i);
-        expect(formatErrorMessageWithCode(error)).toContain("database or disk is full");
+        expect(expectReconciliationFailure(error)).toContain("database or disk is full");
         return true;
       });
       expect(commands.filter((command) => command === "session.actor.patch")).toHaveLength(1);
@@ -983,7 +933,6 @@ it("refuses cancelled admission while an accepted phase settles its committed re
     ).toThrow("Admission cancelled");
     continuePhase.resolve();
     const result = await operation;
-    expect(result.kind).toBe("committed");
     assert(result.kind === "committed");
     expect(result.receipt.postimage.entry?.updatedAt).toBe(790);
     expect(commands).toEqual(["session.actor.read", "session.actor.patch"]);

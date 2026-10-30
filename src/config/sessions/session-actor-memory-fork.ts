@@ -113,7 +113,9 @@ function commitParentFork(
     lastRunId: undefined,
   };
   const target = context.edit(targetKey);
-  const sessionEntry = installSessionActorMemoryEntry(target, next);
+  const sessionEntry = installSessionActorMemoryEntry(target, next, {
+    preserveVisibility: input.patch?.preserveVisibility,
+  });
   const events = createSessionActorMemoryEvents({ ...context, state: target });
   const forkedEvents = buildForkedChildTranscriptEvents({
     parentSessionFile: formatSqliteSessionFileMarker({

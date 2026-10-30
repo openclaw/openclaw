@@ -199,6 +199,19 @@ describe("sessions.files for managed-worktree sessions", () => {
         source,
         file: { content: preview },
       });
+      fs.writeFileSync(path.join(entry.spawnedCwd, "oversized.log"), "x".repeat(300 * 1024));
+      const oversized = await dispatch("sessions.files.get", "oversized.log");
+      expect(oversized.mock.calls[0]?.[0]).toBe(false);
+      expect(oversized.mock.calls[0]?.[2]).toMatchObject({
+        code: "INVALID_REQUEST",
+        details: {
+          type: "session_file_too_large",
+          maxPreviewBytes: 256 * 1024,
+          size: 300 * 1024,
+          root: state.workspaceDir,
+          source,
+        },
+      });
       const replacement = path.join(state.workspaceDir, "replacement");
       fs.mkdirSync(replacement);
       fs.writeFileSync(file(replacement), preview);

@@ -96,7 +96,7 @@ type TableColumnInfo = {
   hidden: number;
 };
 
-type MemoryIndexSchemaAdmission = { ftsAvailable: boolean };
+type MemoryIndexSchemaAdmission = { ftsAvailable: boolean; repairWriteToken?: string };
 const memoryIndexSchemaAdmissionKeys = new WeakMap<
   DatabaseSync,
   SqliteDatabaseAdmissionKey<MemoryIndexSchemaAdmission>
@@ -132,7 +132,56 @@ function readMemoryIndexSchemaAdmission(value: unknown): MemoryIndexSchemaAdmiss
   ) {
     return undefined;
   }
-  return { ftsAvailable: value.ftsAvailable };
+  return {
+    ftsAvailable: value.ftsAvailable,
+    ...("repairWriteToken" in value && typeof value.repairWriteToken === "string"
+      ? { repairWriteToken: value.repairWriteToken }
+      : {}),
+  };
+}
+
+function memoryIndexSchemaAdmissionKey(
+  params: Omit<Parameters<typeof ensureMemoryIndexSchema>[0], "db" | "fresh">,
+): SqliteDatabaseAdmissionKey<MemoryIndexSchemaAdmission> {
+  return {
+    name: `memory.index-schema:${JSON.stringify([
+      params.embeddingCacheTable ?? MEMORY_EMBEDDING_CACHE_TABLE,
+      params.cacheEnabled,
+      params.ftsTable ?? MEMORY_INDEX_FTS_TABLE,
+      params.ftsEnabled,
+      params.ftsTokenizer ?? "unicode61",
+    ])}`,
+    schemaDependent: true,
+    read: readMemoryIndexSchemaAdmission,
+  };
+}
+
+/** Reuse completed worker repair only for the same schema, options, and data generation. */
+export function readRepairedMemoryIndexSchema(
+  params: Parameters<typeof ensureMemoryIndexSchema>[0],
+  writeToken: string | undefined,
+): { ftsAvailable: boolean } | undefined {
+  const key = memoryIndexSchemaAdmissionKey(params);
+  const admitted = getSqliteDatabaseAdmission(params.db, key);
+  if (writeToken === undefined || admitted?.repairWriteToken !== writeToken) {
+    return undefined;
+  }
+  // A fresh handle can inherit the shared receipt. Later derived-index replacement
+  // still needs its local key to preserve schema admission through commit.
+  memoryIndexSchemaAdmissionKeys.set(sqlPublicationAnchor(params.db), key);
+  return { ftsAvailable: admitted.ftsAvailable };
+}
+
+/** The worker supplies successful repair's committed receipt; explicit ensure still repairs imports. */
+export function publishRepairedMemoryIndexSchema(
+  params: Parameters<typeof ensureMemoryIndexSchema>[0],
+  writeToken: string | undefined,
+): void {
+  const key = memoryIndexSchemaAdmissionKey(params);
+  const admitted = getSqliteDatabaseAdmission(params.db, key);
+  if (writeToken !== undefined && admitted) {
+    publishSqliteDatabaseAdmission(params.db, key, { ...admitted, repairWriteToken: writeToken });
+  }
 }
 
 function tableColumnInfo(db: DatabaseSync, tableName: string): TableColumnInfo[] {
@@ -394,17 +443,7 @@ export function ensureMemoryIndexSchema(params: {
   const embeddingCacheTable = params.embeddingCacheTable ?? MEMORY_EMBEDDING_CACHE_TABLE;
   const ftsTable = params.ftsTable ?? MEMORY_INDEX_FTS_TABLE;
   const tokenizer = params.ftsTokenizer ?? "unicode61";
-  const admissionKey: SqliteDatabaseAdmissionKey<MemoryIndexSchemaAdmission> = {
-    name: `memory.index-schema:${JSON.stringify([
-      embeddingCacheTable,
-      params.cacheEnabled,
-      ftsTable,
-      params.ftsEnabled,
-      tokenizer,
-    ])}`,
-    schemaDependent: true,
-    read: readMemoryIndexSchemaAdmission,
-  };
+  const admissionKey = memoryIndexSchemaAdmissionKey(params);
   memoryIndexSchemaAdmissionKeys.set(sqlPublicationAnchor(params.db), admissionKey);
   const admitted = getSqliteDatabaseAdmission(params.db, admissionKey);
   if (admitted) {
@@ -430,7 +469,7 @@ export function ensureMemoryIndexSchema(params: {
         return { ftsAvailable: false, ftsError: formatErrorMessage(err) };
       }
     }
-    return admitted;
+    return { ftsAvailable: admitted.ftsAvailable };
   }
   if (
     !params.fresh &&

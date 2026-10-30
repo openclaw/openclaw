@@ -514,11 +514,6 @@ describe("subagent composer", () => {
       row: { classification: "subagent", spawnedBy: "agent:main:parent" },
     },
     { name: "archive", key: "agent:main:reply-owner", row: { archived: true } },
-    {
-      name: "restart recovery",
-      key: "agent:main:reply-owner",
-      row: { restartRecoveryStatus: "tombstoned" },
-    },
   ] satisfies { name: string; key: string; row?: Partial<GatewaySessionRow> }[])(
     "keeps copy but not Reply when $name replaces the composer",
     ({ key, ...scenario }) => {

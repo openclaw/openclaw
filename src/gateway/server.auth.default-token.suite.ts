@@ -226,6 +226,16 @@ export function registerDefaultAuthTokenSuite(): void {
       const wsInitial = await openWs(port);
       let pairedDeviceToken: string | undefined;
       let recoveryScope: string | undefined;
+      const expectedAuthKeys = [
+        "deviceToken",
+        "issuedAtMs",
+        "method",
+        "recoveryMigrationAllowed",
+        "recoveryScope",
+        "role",
+        "roleAllowsAdmin",
+        "scopes",
+      ];
       try {
         const initial = await connectReq(wsInitial, {
           token,
@@ -235,19 +245,12 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(initial.ok).toBe(true);
         const auth = readHelloOkAuth(initial.payload);
         expect(auth?.role).toBe("operator");
+        expect(auth?.roleAllowsAdmin).toBe(true);
         expect(auth?.scopes).toEqual(["operator.admin"]);
         expect(typeof auth?.deviceToken).toBe("string");
         expect(auth?.recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
         expect(auth?.recoveryMigrationAllowed).toBe(true);
-        expect(Object.keys(auth ?? {}).toSorted()).toEqual([
-          "deviceToken",
-          "issuedAtMs",
-          "method",
-          "recoveryMigrationAllowed",
-          "recoveryScope",
-          "role",
-          "scopes",
-        ]);
+        expect(Object.keys(auth ?? {}).toSorted()).toEqual(expectedAuthKeys);
         pairedDeviceToken = auth?.deviceToken as string | undefined;
         recoveryScope = auth?.recoveryScope;
       } finally {
@@ -264,19 +267,12 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(reconnect.ok).toBe(true);
         const auth = readHelloOkAuth(reconnect.payload);
         expect(auth?.role).toBe("operator");
+        expect(auth?.roleAllowsAdmin).toBe(true);
         expect(auth?.deviceToken).toBe(pairedDeviceToken);
         expect(auth?.recoveryScope).toBe(recoveryScope);
         expect(auth?.recoveryMigrationAllowed).toBe(true);
         expect(auth?.scopes).toEqual(["operator.read"]);
-        expect(Object.keys(auth ?? {}).toSorted()).toEqual([
-          "deviceToken",
-          "issuedAtMs",
-          "method",
-          "recoveryMigrationAllowed",
-          "recoveryScope",
-          "role",
-          "scopes",
-        ]);
+        expect(Object.keys(auth ?? {}).toSorted()).toEqual(expectedAuthKeys);
         const schema = await rpcReq(wsReconnect, "config.schema");
         expect(schema.ok).toBe(true);
         const admin = await rpcReq(wsReconnect, "config.patch");

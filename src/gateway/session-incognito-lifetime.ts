@@ -202,6 +202,7 @@ export function startIncognitoSessionLifetime(params: {
   const unsubscribe = sessionChanges.subscribeProjection(() => runInOwner(observe));
   observe();
   return {
+    name: "incognito-sessions",
     async stop() {
       unsubscribe();
       for (const [owner, sidecar] of retained) {

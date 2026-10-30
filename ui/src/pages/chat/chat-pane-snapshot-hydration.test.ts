@@ -127,47 +127,36 @@ describe("stored chat snapshot hydration", () => {
     await writer.flush();
   }
 
-  it("displays a prepared cached page while the socket cannot open", async () => {
-    const client = createGatewayBrowserClientFixture();
-    Object.defineProperty(client, "connectSent", { get: () => new Promise(() => {}) });
-    const pane = createMountedPane("agent:main:offline-boot", new Map(), client);
-    pane.context.gateway.snapshot.phase = "connecting";
-    const snapshot = {
-      messages: [nativeHistoryMessage(1, "Saved page before socket open")],
-      sessionId: "saved-session",
-      pagination: { hasMore: false as const },
-    };
-    const read = createDeferred<typeof snapshot>();
-    pane.sessionSnapshotStore = { readReady: () => undefined, read: () => read.promise } as never;
-    try {
-      const state = startPane(pane);
-      read.resolve(snapshot);
-      await read.promise;
-      await Promise.resolve();
-      expect(state.chatMessages).toEqual(snapshot.messages);
-      expect(state.connected).toBe(false);
-    } finally {
-      pane.disconnectedCallback();
-    }
-  });
-
-  it.each(["connecting", "connected"] as const)(
-    "adopts stored history without waiting for connection or paint (%s)",
-    async (phase) => {
-      const pane = createMountedPane("agent:main:first-paint", new Map());
+  it.each([
+    { phase: "connecting", socketBlocked: false },
+    { phase: "connected", socketBlocked: false },
+    { phase: "connecting", socketBlocked: true },
+  ] as const)(
+    "adopts stored history without waiting for connection or paint ($phase, blocked=$socketBlocked)",
+    async ({ phase, socketBlocked }) => {
+      const client = createGatewayBrowserClientFixture();
+      if (socketBlocked) {
+        Object.defineProperty(client, "connectSent", { get: () => new Promise(() => {}) });
+      }
+      const pane = createMountedPane("agent:main:first-paint", new Map(), client);
       pane.context.gateway.snapshot.phase = phase;
       const snapshot = {
         messages: [nativeHistoryMessage(1, "cached first paint")],
         sessionId: "saved-session",
         pagination: { hasMore: false as const },
       };
+      const read = createDeferred<typeof snapshot>();
       const store = new SessionSnapshotStore();
-      vi.spyOn(store, "read").mockResolvedValue(snapshot);
+      vi.spyOn(store, "read").mockReturnValue(read.promise);
       pane.sessionSnapshotStore = store;
       try {
         const state = startPane(pane);
+        read.resolve(snapshot);
         await chatHistoryRequests(state).initialSnapshotHydration?.promise;
         expect(state.chatMessages).toEqual(snapshot.messages);
+        if (socketBlocked) {
+          expect(state.connected).toBe(false);
+        }
       } finally {
         pane.disconnectedCallback();
         store.disconnect();

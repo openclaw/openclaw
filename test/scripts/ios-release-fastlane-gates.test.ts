@@ -998,11 +998,19 @@ module Open3
 end
 def run_screenshot_xcodebuild!(arguments, log_path:)
   raise "not building test products" unless arguments.last == "build-for-testing"
+  derived_data_path = arguments.fetch(arguments.index("-derivedDataPath") + 1)
+  package_source = File.join(derived_data_path, "SourcePackages", "checkouts", "fixture", "Package.swift")
+  if @scenario == "iphone"
+    raise "unexpected cached Swift package source on cold build" if File.exist?(package_source)
+  else
+    raise "cached Swift package source was removed" unless File.exist?(package_source) && File.read(package_source) == "downloaded package source"
+  end
+  raise "stale non-package state survived clean build" if File.exist?(File.join(derived_data_path, ".previous-state"))
   FileUtils.mkdir_p(File.dirname(log_path))
   File.write(log_path, "native build log")
   @builds << "snapshot"
   raise "snapshot build failed" if @scenario == "build-failure"
-  make_product(arguments.fetch(arguments.index("-derivedDataPath") + 1))
+  make_product(derived_data_path)
 end
 def capture_release_ios_screenshots!(**options)
   raise "capture before successful build" unless @builds == ["snapshot"]
@@ -1024,7 +1032,12 @@ end
 def sh(command, *arguments, **options)
   args = arguments.empty? ? Shellwords.split(command) : [command, *arguments]
   @commands << args
-  if args[0, 3] == ["xcrun", "simctl", "create"]
+  if args == ["node", File.join(repo_root, "scripts", "lib", "ios-simulator-headroom.ts")]
+    raise "headroom checked before simulator cleanup" unless @owned.empty?
+    @admissions << @captures
+    raise "host CPU headroom unavailable" if @scenario == "watch-headroom-timeout" && @captures == 2
+  elsif args[0, 3] == ["xcrun", "simctl", "create"]
+    raise "simulator created without CPU headroom" unless @admissions.length == @created + 1
     raise "new device before old cleanup" unless @owned.empty?
     if args[3].include?("Apple Watch")
       @watch_creates += 1
@@ -1092,10 +1105,11 @@ def sh(command, *arguments, **options)
   end
 end
 
-results = %w[combined diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-delete-recovered runtime-delete-repeated runtime-delete-unrelated runtime-scan-failure runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local unavailable-recovered unavailable-empty unavailable-download-failure unavailable-still-missing unavailable-create-failure unavailable-local inventory-failure inventory-invalid watch-boot-failure watch-cleanup-failure].map do |scenario|
+results = %w[combined diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended watch-headroom-timeout capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-delete-recovered runtime-delete-repeated runtime-delete-unrelated runtime-scan-failure runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local unavailable-recovered unavailable-empty unavailable-download-failure unavailable-still-missing unavailable-create-failure unavailable-local inventory-failure inventory-invalid watch-boot-failure watch-cleanup-failure].map do |scenario|
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
     @owned, @created = {}, 0
+    @admissions = []
     @observations, @captures = [], 0
     @watch_creates = 0
     @runtime_deletes, @runtime_scanned = 0, false
@@ -1112,9 +1126,17 @@ results = %w[combined diagnostics startup-probe startup-probe-ended iphone stand
       File.write(File.join(ios_root, "build", "screenshot-diagnostics.json"), JSON.generate({ stale: true }))
     end
     %w[SnapshotDerivedData WatchScreenshotDerivedData].each do |directory|
+      next if scenario == "iphone" && directory == "SnapshotDerivedData"
       app = File.join(ios_root, "build", directory, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
       FileUtils.mkdir_p(app)
       File.write(File.join(app, "stale"), "previous invocation")
+    end
+    unless scenario == "iphone"
+      snapshot_data = File.join(ios_root, "build", "SnapshotDerivedData")
+      package_checkout = File.join(snapshot_data, "SourcePackages", "checkouts", "fixture")
+      FileUtils.mkdir_p(package_checkout)
+      File.write(File.join(package_checkout, "Package.swift"), "downloaded package source")
+      File.write(File.join(snapshot_data, ".previous-state"), "previous invocation")
     end
     if scenario.start_with?("standalone")
       output = File.join(ios_root, "fastlane", "screenshots", "en-US")
@@ -1135,6 +1157,7 @@ results = %w[combined diagnostics startup-probe startup-probe-ended iphone stand
       scenario: scenario, builds: @builds, error: error, installed: @installed,
       owned: @owned.keys,
       observations: @observations,
+      admissions: @admissions,
       lifecycle: @commands.select { |args| args[0, 2] == ["xcrun", "simctl"] && %w[create bootstatus shutdown delete].include?(args[2]) }.map { |args| args.drop(2) },
       repairCommands: @commands.select { |args| args[0, 3] == ["xcrun", "simctl", "runtime"] || args[0, 2] == ["xcodebuild", "-downloadPlatform"] },
       watchCreates: @watch_creates,
@@ -1184,6 +1207,7 @@ puts JSON.generate(results)
       lifecycle: string[][];
       repairCommands: string[][];
       watchCreates: number;
+      admissions: number[];
     }[];
     const row = (scenario: string) => rows.find((entry) => entry.scenario === scenario)!;
     const versionArgs = ["--version", "2026.9.1", "--revision", "2", "--build-number", "123"];
@@ -1212,6 +1236,15 @@ puts JSON.generate(results)
     expect(row("combined").ledgerKeys).toEqual(["attempts", "schemaVersion"]);
     expect(row("combined").diagnostics).toBeNull();
     expect(row("combined").observations).toEqual([]);
+    expect(row("combined").admissions).toEqual([0, 1, 2]);
+    expect(row("standalone").admissions).toEqual([0]);
+    expect(row("watch-headroom-timeout")).toMatchObject({
+      error: "host CPU headroom unavailable",
+      pngs: 8,
+      watchCreates: 0,
+      installed: null,
+      owned: [],
+    });
     expect(row("startup-probe")).toMatchObject({
       error: null,
       pngs: 9,
@@ -1570,7 +1603,7 @@ end
       'test "$fastlane_version" = "$IOS_SCREENSHOT_FASTLANE_VERSION"',
     );
     expect(captureJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
-    expect(captureJob).not.toContain("SnapshotDerivedData");
+    expect(captureJob).not.toMatch(/SnapshotDerivedData\/(?!SourcePackages)/);
     expect(captureJob.match(/contents: read/g)).toHaveLength(1);
     expect(reducerJob).toContain("needs: [preflight, ios-screenshot-capture]");
     expect(reducerJob).not.toContain("merge-multiple:");

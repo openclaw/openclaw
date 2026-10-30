@@ -244,19 +244,19 @@ it.each(["connection", "listing"] as const)(
     expect(toolNames(failed.catalog)).toEqual(["healthy_tool"]);
     const diagnostics = structuredClone(failed.catalog.diagnostics);
     expect(diagnostics).toEqual([expect.objectContaining({ serverName: "remote" })]);
-    if (failure === "connection") {
-      expect(diagnostics?.[0]?.message).toContain("server unavailable");
-    }
+    vi.setSystemTime(Date.now() + (failure === "connection" ? 600_000 : -600_000));
     expect((await runtime.getCatalog()).diagnostics).toEqual(diagnostics);
 
     reachable = true;
     invalidListing = false;
     const listing = Promise.withResolvers<void>();
     listToolsGate = listing.promise;
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect((await discover(runtime)).waitedMs).toBe(0);
+    expect(initializes).toBe(2);
+    await vi.advanceTimersByTimeAsync(1);
     const turn = await discover(runtime);
     expect(turn).toMatchObject({ waitedMs: 0, catalog: { diagnostics } });
-    expect(toolNames(turn.catalog)).toEqual(["healthy_tool"]);
     listing.resolve();
     await vi.advanceTimersByTimeAsync(0);
     const recovered = await runtime.getCatalog();

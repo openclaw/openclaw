@@ -70,9 +70,10 @@ export async function fixture(
   const local = f.local!;
   const scope = { agentId: "main", sessionKey: f.session.sessionKey };
   const readSession = () => loadSessionEntryReadOnly(scope)!;
+  let priorPublication: Awaited<ReturnType<typeof f.coordinator.requestForSessionV2>> | undefined;
   if (options.priorPublication) {
-    const previous = await f.coordinator.requestForSessionV2(f.request("earlier-pr", f.guest));
-    expect(previous.status).toBe("published");
+    priorPublication = await f.coordinator.requestForSessionV2(f.request("earlier-pr", f.guest));
+    expect(priorPublication.status).toBe("published");
     f.externalWrites.length = 0;
   }
   await syncCanonicalGitHubIdentity({
@@ -295,6 +296,7 @@ export async function fixture(
   };
   return {
     ...f,
+    priorPublication,
     cwd,
     git,
     guestGit,

@@ -2,7 +2,7 @@ import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../../lib/browser-platform.ts";
 import {
   clearCompositionEnd,
@@ -40,7 +40,7 @@ import type { ChatModelControlsProps } from "./chat-model-controls.types.ts";
 import { ComposerDictationStatus } from "./chat-voice-activity.tsx";
 import { DirectDictationView } from "./direct-dictation-view.tsx";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 const SIDE_CHAT_QUESTION_MAX_LENGTH = 400;
 

@@ -18,6 +18,8 @@ export {
   markInvalidImportedMemoryEmbeddings,
   rebuildMemoryChunkFts,
   ensureMemoryIndexSchema,
+  readRepairedMemoryIndexSchema,
+  publishRepairedMemoryIndexSchema,
   stageMemoryIndexSchemaExtension,
   ensureMemoryPathFtsTriggers,
   ensureMemoryRecallMetadataSchema,

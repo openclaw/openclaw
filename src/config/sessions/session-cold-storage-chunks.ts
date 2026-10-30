@@ -87,6 +87,7 @@ export function* readVerifiedSessionColdChunks(
   database: EngineConnection,
   storePath: string,
   archive: Omit<SessionColdArchive, "archive_blob">,
+  newestFirst = false,
 ) {
   const db = getNodeSqliteKysely<DB>(database);
   const chunks = readSessionColdChunks(database, archive);
@@ -110,7 +111,8 @@ export function* readVerifiedSessionColdChunks(
     };
     return;
   }
-  for (const chunk of chunks) {
+  for (let offset = 0; offset < chunks.length; offset++) {
+    const chunk = chunks[newestFirst ? chunks.length - 1 - offset : offset]!;
     const embedded =
       archive.storage === "sqlite"
         ? executeSqliteQueryTakeFirstSync(

@@ -243,7 +243,7 @@ export async function preparePluginUninstall(
 /** Shared leased removal; callbacks preserve CLI output at its original mutation boundaries. */
 export async function uninstallPluginWithPolicy(
   params: UninstallPolicy & {
-    clawManaged?: boolean;
+    templateManaged?: boolean;
     invalidateRuntimeCache?: boolean;
     beforePersistentApply?: () => void;
     beforePersistentEffect?: () => void | Promise<void>;
@@ -260,7 +260,7 @@ export async function uninstallPluginWithPolicy(
   const applyRuntime = params.applyRuntime
     ? capturePluginRuntimeApplications(params.applyRuntime).applyRuntime
     : undefined;
-  // Nested CLI calls inherit a Claw owner's exact database lease.
+  // Nested CLI calls inherit a Template owner's exact database lease.
   return await withPluginLifecycleLeaseAsync(
     { ...(cli ? {} : { env }), signal: params.signal },
     async (lease) => {
@@ -506,7 +506,7 @@ export async function uninstallPluginWithPolicy(
         record?.source === "clawhub"
           ? (record.clawhubPackage ?? parseClawHubPluginSpec(record.spec ?? "")?.name)
           : undefined;
-      if (params.clawManaged || !packageName || (!cli && !params.applyRuntime)) {
+      if (params.templateManaged || !packageName || (!cli && !params.applyRuntime)) {
         return await uninstall();
       }
       return await withClawPackageLifecycleLease(

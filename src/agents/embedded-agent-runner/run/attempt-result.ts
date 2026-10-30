@@ -281,7 +281,10 @@ export function completeEmbeddedAttemptResult(
     assistant?.stopReason === "stop" &&
     !assistant.content.some(isRunnerToolCallBlock)
   ) {
-    const allowedToolNames = input.prepared.toolCatalog.toolSearchRunPlan.liveAllowedToolNames;
+    const { liveAllowedToolNames, capabilityToolNames } =
+      input.prepared.toolCatalog.toolSearchRunPlan;
+    // Deferred names need native correction too; detection never executes text.
+    const allowedToolNames = new Set([...liveAllowedToolNames, ...capabilityToolNames]);
     textToolCallAttempt =
       allowedToolNames.size > 0 &&
       isPlainTextToolCallAttempt(extractAssistantTranscriptSourceText(assistant) ?? "", (name) =>

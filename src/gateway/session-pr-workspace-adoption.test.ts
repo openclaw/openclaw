@@ -545,10 +545,12 @@ const pullRequest = {
 /** GitHub I/O and the container runtime stay synthetic; the handler, its session read,
  * allocation, binding, file-source checks and the PR association write are real. */
 function stubPullRequestPreparation(sessionKey: string) {
-  vi.spyOn(inspect, "inspectOwnGitHubPullRequest").mockResolvedValue({
-    result: pullRequest,
-    assertCurrent() {},
-  } as never);
+  vi.spyOn(inspect, "inspectOwnGitHubPullRequest").mockImplementation(
+    async ({ assertCurrent }) => ({
+      result: { ...pullRequest, author: { accountId: 9, login: "guest" }, state: "open" },
+      assertCurrent,
+    }),
+  );
   vi.spyOn(availability, "prepareCurrentGitHubPublicationIdentity").mockResolvedValue({
     account: { accountId: 9 },
   } as never);
@@ -809,7 +811,9 @@ it("refuses another guest and lost access before binding, PR import and earlier 
       try {
         // Another guest fails the publication requester; an admin passes it but is not the owner.
         await expect(prepare(otherClient)).rejects.toThrow("no longer authorized");
-        await expect(prepare(adminClient)).rejects.toThrow("Only this conversation's owner");
+        await expect(prepare(adminClient)).rejects.toThrow(
+          "Only the person who started this conversation",
+        );
         expect(allocate).not.toHaveBeenCalled();
         unbound();
 

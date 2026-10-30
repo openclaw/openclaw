@@ -142,15 +142,22 @@ it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap", "ra
   "batches restorable footprints without persisting local disclosures (%s)",
   (control) => {
     const frames: FrameRequestCallback[] = [];
-    const idle: IdleRequestCallback[] = [];
+    const idle = new Map<number, IdleRequestCallback>();
+    let nextIdle = 0;
     vi.stubGlobal(
       "requestAnimationFrame",
       vi.fn((callback: FrameRequestCallback) => frames.push(callback)),
     );
-    vi.stubGlobal(
-      "requestIdleCallback",
-      vi.fn((callback: IdleRequestCallback) => idle.push(callback)),
-    );
+    vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
+      idle.set(++nextIdle, callback);
+      return nextIdle;
+    });
+    vi.stubGlobal("cancelIdleCallback", (id: number) => idle.delete(id));
+    const takeIdle = () => {
+      const [id, callback] = idle.entries().next().value!;
+      idle.delete(id);
+      return () => callback({ didTimeout: false, timeRemaining: () => 50 });
+    };
     const container = transcriptContainer();
     const code = control.startsWith("code-block-");
     const content = code
@@ -220,7 +227,7 @@ it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap", "ra
       expect(frames).toHaveLength(1);
       frames.shift()!(0);
       expect(write).not.toHaveBeenCalled();
-      idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });
+      takeIdle()();
       expect(write).toHaveBeenCalledTimes(1);
       expect(Object.values(write.mock.calls[0]![1].widgetHeights)).toEqual([100]);
       const disclosure = requireElement(
@@ -244,7 +251,7 @@ it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap", "ra
       emitTranscriptResize(row, 768, 300);
       layout.persistRows(virtualizer, false);
       frames.shift()!(0);
-      idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });
+      takeIdle()();
       expect(write).toHaveBeenCalledTimes(1);
       if (control === "raw-output") {
         disclosure.click();
@@ -258,8 +265,9 @@ it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap", "ra
       expect(createChatWidgetLayout()(cache, host, target).read(savedKey)).toBe(100);
       layout.persistRows(virtualizer, false);
       frames.shift()!(0);
+      const obsolete = takeIdle();
       layout.disconnect();
-      idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });
+      obsolete();
       expect(write).toHaveBeenCalledTimes(1);
     } finally {
       if (control === "raw-output") {

@@ -30,6 +30,7 @@ export type MessageRenderOptions = {
   presented?: boolean;
   boardProvider?: BoardProvider;
   widgetLayout?: import("../session-message-cache.ts").ChatWidgetLayout;
+  displayFacts?: import("../../../lib/chat/row-display-facts.ts").ChatDisplayFacts;
   agentId?: string;
   runActive?: boolean;
   asyncQuestions?: AsyncQuestionPresentation;
@@ -58,11 +59,12 @@ export type MessageRenderOptions = {
 
 export type GroupedMessageOptions = MessageRenderOptions & {
   isStreaming: boolean;
+  /** Split envelopes publish their terminal tail once. */
+  ownsTerminalStatus?: boolean;
   isForwarded?: boolean;
   /** Search reveals matching transcript text inside disclosures. */
   searchResult?: boolean;
   transcriptVisible?: PresentationValue;
-  duplicateCount?: number;
   showReasoning: boolean;
   bubbleMode?: boolean;
   /** First visible message of the containing group/frame; null means none. */

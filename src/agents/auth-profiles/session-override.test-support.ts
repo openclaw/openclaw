@@ -26,7 +26,6 @@ const authStoreMocks = vi.hoisted(() => {
   const calls = {
     ensureAuthProfileStoreAsync: vi.fn(async () => state.store),
     hasAnyAuthProfileStoreSourceAsync: vi.fn(() => state.hasSource),
-    isProfileInCooldown: vi.fn((_store: AuthProfileStore, _profileId: string) => false),
     resolveProviderModelRoutes: vi.fn(
       ({ provider, modelId }: { provider: string; modelId?: string }) =>
         state.routeResolutions.get(`${provider}\0${modelId ?? ""}`) ?? null,
@@ -63,8 +62,11 @@ vi.mock("./store-runtime.js", () => ({
   loadAuthProfileStoreForRuntimeAsync: async () => authStoreMocks.state.store,
 }));
 
-// mock-isolation: Session selection uses controlled cooldown state without runtime usage writes.
-vi.mock("./usage.js", () => ({ isProfileInCooldown: authStoreMocks.isProfileInCooldown }));
+// mock-isolation: Keep the real cooldown predicate without loading runtime usage writers.
+vi.mock("./usage.js", async () => {
+  const { isProfileInCooldown } = await import("./usage-state.js");
+  return { isProfileInCooldown };
+});
 
 vi.mock("../../plugins/provider-model-routes.js", () => ({
   // Synthetic route IDs in this fixture are already canonical.
@@ -114,9 +116,12 @@ export async function prepareCooldownAuthState(
       profileIds.map((profileId) => [profileId, createApiKeyCredential("openai", "sk-test")]),
     ),
     order: { openai: profileIds },
-    ...(options.usageStats ? { usageStats: options.usageStats } : {}),
+    usageStats:
+      options.usageStats ??
+      Object.fromEntries(
+        profileIds.map((profileId) => [profileId, { cooldownUntil: Date.now() + 60_000 }]),
+      ),
   };
-  authStoreMocks.isProfileInCooldown.mockReturnValue(true);
   return agentDir;
 }
 

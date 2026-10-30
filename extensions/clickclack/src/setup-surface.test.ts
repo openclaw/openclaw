@@ -258,7 +258,7 @@ async function prepare(input: ClickClackSetupInput, cfg: OpenClawConfig = {}) {
 
 describe("ClickClack setup adapter", () => {
   it("claims a full setup URL and prepares the token, workspace, and defaults", async () => {
-    claimClickClackSetupCode.mockResolvedValue({ ...claimedAccount, defaults });
+    claimClickClackSetupCode.mockResolvedValueOnce({ ...claimedAccount, defaults });
     await expect(
       prepare({ code: `${baseInput.baseUrl}/#abcd-efgh-jkmn`, name: "Primary" }),
     ).resolves.toEqual({
@@ -268,6 +268,7 @@ describe("ClickClack setup adapter", () => {
       workspace: "wsp_1",
       ...defaults,
     });
+    expect(claimClickClackSetupCode).toHaveBeenCalledOnce();
     expect(claimClickClackSetupCode).toHaveBeenCalledWith({
       claimUrl: `${baseInput.baseUrl}/api/bot-setup-codes/claim`,
       code: "ABCDEFGHJKMN",
@@ -285,7 +286,7 @@ describe("ClickClack setup adapter", () => {
   ] as const)(
     "claims an exact endpoint over %s transport and keeps its public API base",
     async (_transport, code, cfg, claimUrl) => {
-      claimClickClackSetupCode.mockResolvedValue({
+      claimClickClackSetupCode.mockResolvedValueOnce({
         ...claimedAccount,
         contract_version: 1,
         api_base_url: publicApiBase,
@@ -295,6 +296,7 @@ describe("ClickClack setup adapter", () => {
         "baseUrl",
         publicApiBase,
       );
+      expect(claimClickClackSetupCode).toHaveBeenCalledOnce();
       expect(claimClickClackSetupCode).toHaveBeenCalledWith({
         claimUrl,
         expectedClaimUrl: exactClaimUrl,

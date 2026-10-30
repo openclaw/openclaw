@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -258,8 +259,8 @@ async function runUsageReportAfterRefresh<
   params: { config?: OpenClawConfig; agentId: string },
   run: () => Promise<T>,
 ): Promise<T> {
-  const deadline = Date.now() + USAGE_REPORT_REFRESH_WAIT_MS;
-  const remaining = () => Math.max(0, deadline - Date.now());
+  const deadline = monotonicNow() + USAGE_REPORT_REFRESH_WAIT_MS;
+  const remaining = () => Math.max(0, deadline - monotonicNow());
   const request = (result: T) =>
     requestCostUsageCacheRefresh({
       config: params.config,
@@ -475,7 +476,7 @@ export function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): v
     readingSessionFiles: new Map(),
     runningSessionFiles: new Set(),
     agentBusy: false,
-    idleAt: Date.now(),
+    idleAt: monotonicNow(),
   };
   mergeUsageCostRefreshRequest(state, params);
   usageCostRefreshes.set(scopeSignal, refreshes);
@@ -499,7 +500,7 @@ function mergeUsageCostRefreshRequest(
     state.fullRefreshRequested = true;
     return;
   }
-  const now = Date.now();
+  const now = monotonicNow();
   for (const sessionFile of params.sessionFiles) {
     if (params.coalesce) {
       state.dirtySessionFiles.add(sessionFile);
@@ -582,7 +583,7 @@ async function runQueuedUsageCostRefresh(
   const offActivity = observeAgentRunActivity(state.agentId, (busy) => {
     state.agentBusy = busy;
     if (!busy) {
-      state.idleAt = Date.now();
+      state.idleAt = monotonicNow();
     }
     state.resume?.();
   });
@@ -590,13 +591,13 @@ async function runQueuedUsageCostRefresh(
     do {
       await waitForUsageCostRefresh(
         signal,
-        Math.max(retryAt - Date.now(), usageCostRefreshDelay(state, Date.now())),
+        Math.max(retryAt - monotonicNow(), usageCostRefreshDelay(state, monotonicNow())),
         state,
       );
       if (signal?.aborted) {
         return;
       }
-      if (Date.now() < retryAt || usageCostRefreshDelay(state, Date.now()) > 0) {
+      if (monotonicNow() < retryAt || usageCostRefreshDelay(state, monotonicNow()) > 0) {
         continue;
       }
       let partialBatch = false;
@@ -627,7 +628,7 @@ async function runQueuedUsageCostRefresh(
             for (const file of priorityFiles.length
               ? priorityFiles
               : state.pendingSessionFiles.keys()) {
-              if (usageCostRefreshDelay(state, Date.now(), file) > 0) {
+              if (usageCostRefreshDelay(state, monotonicNow(), file) > 0) {
                 continue;
               }
               sessionFiles.push(file);
@@ -674,7 +675,7 @@ async function runQueuedUsageCostRefresh(
                 ...state.pendingSessionFiles,
               ]);
             }
-            retryAt = Date.now() + busyRetryDelayMs;
+            retryAt = monotonicNow() + busyRetryDelayMs;
             // Contention among many per-agent refreshes must degrade to polling, not a 20Hz spin.
             busyRetryDelayMs = Math.min(busyRetryDelayMs * 2, USAGE_COST_REFRESH_RETRY_MAX_MS);
             continue;

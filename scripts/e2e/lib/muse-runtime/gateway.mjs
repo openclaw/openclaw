@@ -49,6 +49,8 @@ export async function createHarness() {
   let activeDecision;
   let approvalFailure;
   let activeAfterApproval;
+  let activeBeforeApproval;
+  let activeResolutions = [];
   let activeRunId;
   async function stop() {
     client?.stop();
@@ -113,16 +115,19 @@ export async function createHarness() {
             return;
           }
           activeApprovals.push(event.payload);
-          connection
-            .request("approval.resolve", {
-              id: event.payload.id,
-              kind: "plugin",
-              decision: activeDecision ?? "deny",
-            })
+          const resolution = Promise.resolve(activeBeforeApproval?.(activeRunId))
+            .then(() =>
+              connection.request("approval.resolve", {
+                id: event.payload.id,
+                kind: "plugin",
+                decision: activeDecision ?? "deny",
+              }),
+            )
             .then(() => activeAfterApproval?.(activeRunId))
-            .catch((error) => {
+            .catch((/** @type {unknown} */ error) => {
               approvalFailure = error;
             });
+          activeResolutions.push(resolution);
         },
       });
       connection.start();
@@ -130,11 +135,21 @@ export async function createHarness() {
   }
   async function turn(
     message,
-    { decision, expectError = false, afterApproval, via = client, key = sessionKey } = {},
+    {
+      decision,
+      expectError = false,
+      afterApproval,
+      beforeApproval,
+      allowApprovalFailure = false,
+      via = client,
+      key = sessionKey,
+    } = {},
   ) {
+    activeResolutions = [];
     activeApprovals = [];
     activeDecision = decision;
     activeAfterApproval = afterApproval;
+    activeBeforeApproval = beforeApproval;
     approvalFailure = undefined;
     const started = await via.request("chat.send", {
       sessionKey: key,
@@ -149,8 +164,10 @@ export async function createHarness() {
       { runId: started.runId, timeoutMs: 300000 },
       { timeoutMs: 310000 },
     );
+    // A reviewer verdict can still be in flight after the run ends.
+    await Promise.all(activeResolutions);
     const history = await via.request("chat.history", { sessionKey: key, limit: 100 });
-    if (approvalFailure) {
+    if (approvalFailure && !allowApprovalFailure) {
       throw new Error("Approval resolution failed", { cause: approvalFailure });
     }
     const assistant = history.messages.findLast((item) => item.role === "assistant");
@@ -166,7 +183,7 @@ export async function createHarness() {
     }
     const approvals = activeApprovals;
     activeApprovals = undefined;
-    return { text, wait, approvals };
+    return { text, wait, approvals, approvalFailure };
   }
   return {
     start,

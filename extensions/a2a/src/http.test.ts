@@ -21,6 +21,7 @@ import { a2aChannelPlugin } from "./channel.js";
 import { createA2aGatewayFixture } from "./gateway.test-support.js";
 import type { dispatchA2aInbound } from "./inbound.js";
 import type { A2aTaskStore } from "./task-store.js";
+import { createTerminalStoreFixture } from "./task-store.test-support.js";
 import type { A2aChannelConfig } from "./types.js";
 
 type HttpReply = { status: number; json(): Promise<unknown>; text(): Promise<string> };
@@ -75,8 +76,8 @@ vi.mock("./task-store.js", async (importOriginal) => {
   return {
     ...actual,
     A2aTaskStore: class extends actual.A2aTaskStore {
-      constructor() {
-        super();
+      constructor(...args: ConstructorParameters<typeof actual.A2aTaskStore>) {
+        super(...args);
         createdStores.push(this);
       }
     },
@@ -99,6 +100,7 @@ afterEach(async () => {
 });
 
 async function startHttpHarness(options?: {
+  terminalStore?: ReturnType<typeof createTerminalStoreFixture>;
   config?: OpenClawConfig;
   a2aConfig?: Partial<A2aChannelConfig>;
   onDispatch?: (message: Parameters<typeof dispatchA2aInbound>[0]) => Promise<void>;
@@ -106,6 +108,7 @@ async function startHttpHarness(options?: {
   const { registry, controller, ctx } = createA2aGatewayFixture({
     cfg: options?.config ?? {},
     version: VERSION,
+    terminalStore: options?.terminalStore,
     config: {
       peers: { alpha: { token: "alpha-secret" }, beta: { token: "beta-secret" } },
       ...options?.a2aConfig,
@@ -113,18 +116,21 @@ async function startHttpHarness(options?: {
   });
   const lifecycle = Promise.resolve(a2aChannelPlugin.gateway!.startAccount!(ctx));
   activeAccounts.push({ controller, lifecycle });
+  await vi.waitFor(() =>
+    expect(registry.httpRoutes.some((route) => route.path === "/a2a/v1")).toBe(true),
+  );
   const taskStore = createdStores.pop();
   const handler = registry.httpRoutes.find((route) => route.path === "/a2a/v1")?.handler;
   if (!taskStore || !handler) {
     throw new Error("A2A account did not register its HTTP route");
   }
-  dispatchers.set(
-    taskStore,
+  const onDispatch = vi.fn<typeof dispatchA2aInbound>(
     options?.onDispatch ??
       (async (message) => {
-        taskStore.complete(message.taskId, `echo: ${message.text}`);
+        await taskStore.complete(message.taskId, `echo: ${message.text}`);
       }),
   );
+  dispatchers.set(taskStore, onDispatch);
   const baseUrl = "http://gateway.example.test";
 
   const dispatchRequest = async (dispatch: {
@@ -168,8 +174,13 @@ async function startHttpHarness(options?: {
 
   return {
     baseUrl,
+    stop: async () => {
+      controller.abort();
+      await lifecycle;
+    },
     taskStore,
     handler,
+    onDispatch,
     get: (endpoint: string) => dispatchRequest({ method: "GET", endpoint }),
     post: (body: unknown, token: string | null = "alpha-secret") =>
       dispatchRequest({
@@ -210,6 +221,22 @@ function sendRequest({
   );
 }
 
+it("serves the same retained terminal task only to its owner after an account restarts", async () => {
+  const terminalStore = createTerminalStoreFixture();
+  const first = await startHttpHarness({ terminalStore });
+  const sent = await first.post(
+    sendRequest({ messageId: "restart-message", text: "durable answer" }),
+  );
+  const {
+    result: { task },
+  } = (await sent.json()) as { result: { task: { id: string } } };
+  await first.stop();
+  const reopened = await startHttpHarness({ terminalStore });
+  await expectReply(reopened.post(taskRequest(task.id)), { result: task });
+  await expectReply(reopened.post(taskRequest(task.id), "beta-secret"), rpcError(-32001));
+  await expectReply(reopened.post(sendRequest({ messageId: "restart-message" })), taskResult(task));
+});
+
 describe("A2A message replay", () => {
   it("returns the existing task for a peer message ID before and after completion", async () => {
     const dispatch = vi.fn(async () => {});
@@ -222,7 +249,7 @@ describe("A2A message replay", () => {
     expect(replay).toEqual(first);
     expect(dispatch).toHaveBeenCalledTimes(1);
 
-    harness.taskStore.fail(first.result.task.id, "provider unavailable");
+    await harness.taskStore.fail(first.result.task.id, "provider unavailable");
     expect(await (await harness.post(request)).json()).toMatchObject({
       result: { task: { id: first.result.task.id, status: { state: "TASK_STATE_FAILED" } } },
     });
@@ -421,8 +448,8 @@ describe("A2A HTTP authentication and request limits", () => {
     const harness = await startHttpHarness();
     const taskA = harness.taskStore.create("ctx-large-a", "alpha", "large-a");
     const taskB = harness.taskStore.create("ctx-large-b", "alpha", "large-b");
-    harness.taskStore.complete(taskA.id, "a".repeat(600 * 1024));
-    harness.taskStore.complete(taskB.id, "b".repeat(600 * 1024));
+    await harness.taskStore.complete(taskA.id, "a".repeat(600 * 1024));
+    await harness.taskStore.complete(taskB.id, "b".repeat(600 * 1024));
     const stringifySpy = vi.spyOn(JSON, "stringify");
 
     const response = await harness.post([
@@ -505,7 +532,12 @@ describe("A2A JSON-RPC protocol boundary", () => {
 
   it("executes batch notifications without returning notification response entries", async () => {
     const harness = await startHttpHarness();
-    const notification = sendRequest({ text: "notify", returnImmediately: true });
+    const notification = sendRequest({
+      contextId: "notify-context",
+      messageId: "batch-notification",
+      text: "notify",
+      returnImmediately: true,
+    });
     const { id: _notificationId, ...withoutId } = notification;
     const response = await harness.post([
       withoutId,
@@ -521,15 +553,57 @@ describe("A2A JSON-RPC protocol boundary", () => {
       result: { task: { artifacts: [{ parts: [{ text: "echo: visible" }] }] } },
     });
     expect(results[1]).toMatchObject({ id: null, error: { code: -32600 } });
+
+    await vi.waitFor(() => expect(harness.onDispatch).toHaveBeenCalledTimes(2));
+    const notificationCalls = harness.onDispatch.mock.calls.filter(
+      ([message]) => message.messageId === "batch-notification",
+    );
+    expect(notificationCalls).toHaveLength(1);
+    const call = notificationCalls[0]!;
+    expect(call[0]).toMatchObject({
+      taskId: expect.any(String),
+      contextId: "notify-context",
+      messageId: "batch-notification",
+      peerName: "alpha",
+      text: "notify",
+    });
+    const result = harness.onDispatch.mock.results[harness.onDispatch.mock.calls.indexOf(call)]!;
+    expect(result.type).toBe("return");
+    await expect(result.value).resolves.toBeUndefined();
+    expect(harness.taskStore.get(call[0].taskId, "alpha")).toMatchObject({
+      status: { state: "TASK_STATE_COMPLETED" },
+      artifacts: [{ parts: [{ text: "echo: notify" }] }],
+    });
   });
 
   it("responds to notification-only requests with HTTP 200 and an empty body", async () => {
     const harness = await startHttpHarness();
-    const { id: _notificationId, ...notification } = sendRequest({ returnImmediately: true });
+    const { id: _notificationId, ...notification } = sendRequest({
+      contextId: "notification-context",
+      messageId: "notification-only",
+      returnImmediately: true,
+    });
     const response = await harness.post(notification);
 
     expect(response.status).toBe(200);
     await expect(response.text()).resolves.toBe("");
+
+    await vi.waitFor(() => expect(harness.onDispatch).toHaveBeenCalledTimes(1));
+    const [message] = harness.onDispatch.mock.calls[0]!;
+    expect(message).toMatchObject({
+      taskId: expect.any(String),
+      contextId: "notification-context",
+      messageId: "notification-only",
+      peerName: "alpha",
+      text: "hello",
+    });
+    const result = harness.onDispatch.mock.results[0]!;
+    expect(result.type).toBe("return");
+    await expect(result.value).resolves.toBeUndefined();
+    expect(harness.taskStore.get(message.taskId, "alpha")).toMatchObject({
+      status: { state: "TASK_STATE_COMPLETED" },
+      artifacts: [{ parts: [{ text: "echo: hello" }] }],
+    });
   });
 
   it("rejects task inspection from a different configured peer", async () => {
@@ -613,7 +687,7 @@ describe("A2A SendMessage task references", () => {
   it("accepts a context-only follow-up as a new task", async () => {
     const harness = await startHttpHarness();
     const original = harness.taskStore.create("shared-context", "alpha", "original-message");
-    harness.taskStore.complete(original.id, "original reply");
+    await harness.taskStore.complete(original.id, "original reply");
 
     await expectReply(
       harness.post(sendRequest({ contextId: original.contextId, text: "follow up" })),

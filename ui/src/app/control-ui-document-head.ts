@@ -8,7 +8,7 @@ type ControlUiDocumentHead = {
 let elements: ControlUiDocumentHead = { themeColors: [], favicons: [] };
 
 /** The document entrypoint binds its static head nodes before mounting the app. */
-export function bindControlUiDocumentHead(head: ControlUiDocumentHead): void {
+function bindControlUiDocumentHead(head: ControlUiDocumentHead): void {
   elements = head;
 }
 

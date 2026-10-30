@@ -138,16 +138,16 @@ it("offers agent sessions and settings without a create action, and confirms age
   });
 });
 
-it("offers Create Claw from the pinned agent menu", async () => {
+it("offers Create Template from the pinned agent menu", async () => {
   const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);
   context.runtimeConfig.state.configForm = {
-    gateway: { controlUi: { experimental: { claws: true } } },
+    gateway: { controlUi: { experimental: { templates: true } } },
   };
   context.navigation.update({ pinnedAgentIds: ["main"] });
   gatewayHarness.publish({
     hello: gatewayHelloForMethods([
       ...SESSION_MUTATION_TEST_METHODS,
-      "claws.drafts.create",
+      "templates.drafts.create",
       "chat.send",
     ]),
   });
@@ -157,16 +157,16 @@ it("offers Create Claw from the pinned agent menu", async () => {
 
   const previousRequest = request.getMockImplementation()!;
   request.mockImplementation((...args) =>
-    args[0] === "claws.drafts.create"
+    args[0] === "templates.drafts.create"
       ? Promise.reject(new Error("The agent workspace is unavailable."))
       : previousRequest(...args),
   );
   expect(pinned(sidebar)!.querySelector("button")).toBeNull();
   rightClick(pinned(sidebar)!);
-  await vi.waitFor(() => expect(menuItem(sidebar, "create-claw")).not.toBeNull());
-  menuItem(sidebar, "create-claw").click();
+  await vi.waitFor(() => expect(menuItem(sidebar, "create-template")).not.toBeNull());
+  menuItem(sidebar, "create-template").click();
   await vi.waitFor(() =>
-    expect(request).toHaveBeenCalledWith("claws.drafts.create", { agentId: "main" }),
+    expect(request).toHaveBeenCalledWith("templates.drafts.create", { agentId: "main" }),
   );
   expect(context.navigation.snapshot.pinnedAgentIds).toEqual(["main"]);
 });

@@ -531,6 +531,32 @@ describe("session event target custody", () => {
     },
   );
 
+  it("batches retained owner authority only for the same requester", async ({ state: { env } }) => {
+    setRuntimeConfigSnapshot({
+      agents: { entries: { main: {} } },
+      channels: { telegram: {} },
+      commands: { ownerAllowFrom: ["456", "457"] },
+    });
+    const capture = (senderId: string) =>
+      withGatewayToolCallerIdentity(
+        { ...eventScope, requesterOrigin: { sessionKey, messageProvider: "telegram", senderId } },
+        () => captureTarget("main", sessionKey, { env, retainRequesterOwner: true }),
+      );
+    const owner = await capture("456");
+    const [sameOwner, guest, otherOwner] = await Promise.all([
+      capture("456"),
+      capture("789"),
+      capture("457"),
+    ]);
+    expect(combineSessionEventTargetsForHost([owner, sameOwner])).toBeDefined();
+    // Owners share a source label, but each authority rechecks only its own requester.
+    for (const other of [guest, otherOwner]) {
+      expect(() => combineSessionEventTargetsForHost([owner, other])).toThrow(
+        "requester authority",
+      );
+    }
+  });
+
   it("retains store, route and producer limits across lookup", async ({
     state: { env, path: fixturePath, storePath },
   }) => {

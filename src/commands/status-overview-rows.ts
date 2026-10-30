@@ -37,7 +37,6 @@ type StatusDegradationSummary = Pick<
   | "degradedSecretOwners"
   | "degradedPlugins"
   | "startupMigrationWarning"
-  | "startupRecoveryWarning"
   | "modelReasoningWarning"
   | "installationReplacementWarning"
   | "utilityModelWarnings"
@@ -57,7 +56,6 @@ function buildStatusDegradationRows(
     }
   };
   addWarning("Startup migrations", summary.startupMigrationWarning);
-  addWarning("Session recovery", summary.startupRecoveryWarning);
   addWarning("Model reasoning", summary.modelReasoningWarning);
   addWarning(
     "Gateway runtime",

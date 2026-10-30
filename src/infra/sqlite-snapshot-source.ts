@@ -62,9 +62,23 @@ export function openSqliteReadOnlyDatabase(
   }
   // The published updater already prepared this image. Keep inspection read-only
   // and scoped, but do not copy the same database again for each canary check.
-  const snapshot = isUpdateRehearsalPrivateDatabase(pathname, process.env)
-    ? undefined
-    : prepareSqliteReadOnlyLocationSync(pathname);
+  const key = path.resolve(pathname);
+  let snapshot = scope.snapshots.get(key);
+  if (!snapshot && !isUpdateRehearsalPrivateDatabase(pathname, process.env)) {
+    const prepared = prepareSqliteReadOnlyLocationSync(pathname);
+    // Keep the image through gaps between readers; each native handle retains its own custody.
+    const releaseScope = retainSnapshotTempDirectory(
+      prepared.cleanupRoot ?? path.dirname(prepared.location),
+    );
+    snapshot = {
+      ...prepared,
+      cleanup: () => {
+        releaseScope();
+        return prepared.cleanup();
+      },
+    };
+    scope.snapshots.set(key, snapshot);
+  }
   const release = snapshot
     ? retainSnapshotTempDirectory(snapshot.cleanupRoot ?? path.dirname(snapshot.location))
     : undefined;
@@ -72,9 +86,6 @@ export function openSqliteReadOnlyDatabase(
   const close = () => {
     native.close?.();
     release?.();
-    if (snapshot && !snapshot.cleanup()) {
-      throw new SqliteSnapshotCleanupError("SQLite inspection snapshot cleanup failed.");
-    }
     scope.readers.delete(close);
   };
   scope.readers.add(close);

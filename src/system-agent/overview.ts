@@ -217,7 +217,7 @@ export function formatSystemAgentOverview(overview: SystemAgentOverview): string
       ? ["Config issues:", ...overview.config.issues.map((issue) => `  - ${issue}`)]
       : [];
   return [
-    "OpenClaw online. Little claws, typed tools.",
+    "OpenClaw online. Little templates, typed tools.",
     "",
     `Config: ${configStatus}`,
     `Path: ${overview.config.path}`,

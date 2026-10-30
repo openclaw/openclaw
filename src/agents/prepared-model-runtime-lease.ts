@@ -32,6 +32,8 @@ import {
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.owner.js";
 import {
+  bindPreparedPluginGenerationConfiguredBase,
+  getPreparedPluginGenerationConfiguredBase,
   preparedPluginGenerationReusesBase,
   preparedPluginGenerationSupportsSelections,
 } from "./prepared-model-runtime.plugin-generation.js";
@@ -40,7 +42,10 @@ import {
   retirePreparedModelRuntimeOwnerIfUnused,
   type PreparedModelRuntimeOwnerRetention,
 } from "./prepared-model-runtime.retention.js";
-import type { PreparedModelRuntimeLeaseOptions } from "./prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeLeaseOptions,
+  PreparedModelRuntimePluginGeneration,
+} from "./prepared-model-runtime.types.js";
 
 type PreparedModelRuntimeLeaseContext = {
   captureLifetime(): () => void;
@@ -89,6 +94,28 @@ function createPreparedModelRuntimeAdmissionClaim(context: PreparedModelRuntimeL
     },
     release,
   };
+}
+
+function preparedModelRuntimeBorrowMatchesInput(
+  borrowed: PreparedModelRuntimeSnapshot,
+  generation: PreparedModelRuntimePluginGeneration,
+  input: PreparedModelRuntimeInput,
+  allowWorkspaceChange = false,
+): boolean {
+  return (
+    borrowed.metadataSnapshot === generation.pluginMetadataSnapshot &&
+    preparedModelRuntimeConfigsMatch(borrowed.config, input.config) &&
+    borrowed.agentId === input.agentId &&
+    borrowed.agentDir === input.agentDir &&
+    borrowed.inheritedAuthDir === input.inheritedAuthDir &&
+    (allowWorkspaceChange || borrowed.workspaceDir === input.workspaceDir) &&
+    (!input.allowGatewaySubagentBinding || borrowed.allowGatewaySubagentBinding) &&
+    !input.readOnly &&
+    !input.loadRuntimePlugins &&
+    !input.skipCredentials &&
+    !input.env &&
+    preparedPluginGenerationSupportsSelections(generation, input)
+  );
 }
 
 export async function acquirePreparedModelRuntimeLeaseFromOwners(
@@ -172,20 +199,7 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
           }
         : {}),
     });
-    if (
-      borrowed.metadataSnapshot === generation.pluginMetadataSnapshot &&
-      preparedModelRuntimeConfigsMatch(borrowed.config, input.config) &&
-      borrowed.agentId === input.agentId &&
-      borrowed.agentDir === input.agentDir &&
-      borrowed.inheritedAuthDir === input.inheritedAuthDir &&
-      borrowed.workspaceDir === input.workspaceDir &&
-      (!input.allowGatewaySubagentBinding || borrowed.allowGatewaySubagentBinding) &&
-      !input.readOnly &&
-      !input.loadRuntimePlugins &&
-      !input.skipCredentials &&
-      !input.env &&
-      preparedPluginGenerationSupportsSelections(generation, input)
-    ) {
+    if (preparedModelRuntimeBorrowMatchesInput(borrowed, generation, input)) {
       // Admitted work must finish before replacement can drain its retained generation.
       assertAdmission();
       return {
@@ -282,13 +296,46 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
   try {
     let owner = context.owners.get(key);
     const configuredOwner = resolveConfiguredOwner(context.owners, input);
+    const requestedGeneration = options.pluginGeneration;
+    const activeBorrowedSnapshot =
+      requestedGeneration && getPreparedModelRuntimeBorrowedSnapshot(requestedGeneration);
+    const generationAuthorityOwner =
+      configuredOwner ??
+      (activeBorrowedSnapshot
+        ? resolveConfiguredOwner(context.owners, {
+            ...input,
+            agentId: activeBorrowedSnapshot.agentId,
+            agentDir: activeBorrowedSnapshot.agentDir,
+            config: activeBorrowedSnapshot.config,
+            inheritedAuthDir: activeBorrowedSnapshot.inheritedAuthDir,
+            workspaceDir: activeBorrowedSnapshot.workspaceDir,
+          })
+        : undefined);
+    const configuredGeneration = generationAuthorityOwner?.pluginGeneration;
+    const requiredConfiguredGeneration =
+      requestedGeneration && getPreparedPluginGenerationConfiguredBase(requestedGeneration);
+    // A selected run view may change execution workspaces only while its exact lease remains open
+    // and the configured generation it was derived from still owns publication authority.
+    const requestedGenerationIsCurrent =
+      configuredGeneration === requestedGeneration ||
+      (requestedGeneration !== undefined &&
+        configuredGeneration !== undefined &&
+        activeBorrowedSnapshot !== undefined &&
+        input.runtimePluginSelections !== undefined &&
+        requiredConfiguredGeneration === configuredGeneration &&
+        preparedModelRuntimeBorrowMatchesInput(
+          activeBorrowedSnapshot,
+          requestedGeneration,
+          input,
+          true,
+        ));
     if (
       provenance === "run" &&
       context.getGatewayLifecycleActive() &&
-      options.pluginGeneration &&
-      configuredOwner &&
-      (configuredOwner.needsRefresh ||
-        configuredOwner.pluginGeneration !== options.pluginGeneration)
+      requestedGeneration &&
+      ((requiredConfiguredGeneration !== undefined && !generationAuthorityOwner) ||
+        (generationAuthorityOwner &&
+          (generationAuthorityOwner.needsRefresh || !requestedGenerationIsCurrent)))
     ) {
       throw new PreparedModelRuntimePublicationSupersededError(
         `prepared model runtime plugin generation was superseded for ${input.agentDir}`,
@@ -397,6 +444,9 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
         : owner;
     snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);
     const pluginGeneration = owner.pluginGeneration!;
+    if (options.pluginGeneration) {
+      bindPreparedPluginGenerationConfiguredBase(pluginGeneration, options.pluginGeneration);
+    }
     if (owner.provenance !== provenance) {
       return {
         snapshot,

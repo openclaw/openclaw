@@ -587,6 +587,7 @@ export async function runRestartStress(argv: string[]) {
         return summarize().report.inputs.every(
           (input) =>
             !input.accepted ||
+            input.outcome === "lost-on-crash" ||
             (input.outcome !== "unresolved" &&
               input.pending.length === 0 &&
               (!isRecord(input.sessionInfo) || input.sessionInfo.hasActiveRun !== true)),

@@ -7,6 +7,7 @@ import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
 } from "../../../src/gateway/control-ui-contract.js";
+import { t } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -62,6 +63,9 @@ function renderCard(input: SessionHovercardInput, container = document.createEle
         const [current, setCurrent] = createSignal(input);
         updateCards.set(container, (next) => setCurrent(next));
         return createComponent(SessionHovercard, {
+          get connected() {
+            return current().connected;
+          },
           get row() {
             return current().row;
           },
@@ -659,7 +663,15 @@ describe("session hovercard", () => {
           ...(mode === "active" ? { lastMessagePreview: "This must not appear." } : {}),
           ...(mode === "completed" ? { status: "done" } : {}),
         }),
-        progressCard: { ...card, steps: mode === "markdown-only" ? undefined : card.steps },
+        progressCard: {
+          ...card,
+          steps:
+            mode === "markdown-only"
+              ? undefined
+              : mode === "completed"
+                ? [{ step: "Verify", status: "completed" }]
+                : card.steps,
+        },
       });
 
       const plan = container.querySelector(".session-hovercard__plan-row");
@@ -702,6 +714,41 @@ describe("session hovercard", () => {
     expect(plan?.getAttribute("aria-label")).toBe("Verify, paused");
     expect(plan?.querySelector(".session-run-spinner")).toBeNull();
     expect(plan?.querySelector("polyline")).not.toBeNull();
+  });
+
+  it("follows delegated activity, connection loss, and a matching run failure", () => {
+    const card = { ...progressCard(), updatedAt: 101 };
+    const session = row({
+      startedAt: 100,
+      endedAt: 110,
+      status: "done",
+      hasActiveRun: false,
+      hasActiveSubagentRun: true,
+    });
+    const container = renderCard({ row: session, progressCard: card, connected: true });
+    const runtime = () => container.querySelector(".session-progress-card__runtime")?.textContent;
+    expect(runtime()).toContain(t("sessionProgressCard.runtime.delegated"));
+    expect(
+      container.querySelector(".session-hovercard__plan-row")?.getAttribute("aria-label"),
+    ).toBe("Verify, in progress");
+    renderCard({ row: session, progressCard: card, connected: false }, container);
+    expect(runtime()).toContain(t("sessionProgressCard.runtime.offline"));
+    expect(container.querySelector(".session-run-spinner")).toBeNull();
+    const failed = {
+      ...session,
+      status: "failed" as const,
+      hasActiveSubagentRun: false,
+      lastRunError: "Validation service unavailable",
+    };
+    renderCard({ row: failed, progressCard: card, connected: true }, container);
+    expect(runtime()).toContain(t("sessionProgressCard.outcome.failed"));
+    expect(runtime()).toContain("Validation service unavailable");
+    renderCard(
+      { row: { ...failed, startedAt: 200, endedAt: 210 }, progressCard: card, connected: true },
+      container,
+    );
+    expect(runtime()).not.toContain("Validation service unavailable");
+    expect(runtime()).not.toContain(t("sessionProgressCard.outcome.failed"));
   });
 
   it("pins a labeled markdown progress bar above the Task progress copy", () => {
