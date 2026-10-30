@@ -36,6 +36,7 @@ const repositoryScriptEntries = [
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-android-release-history.mts!",
   "scripts/bench-duplicate-paragraphs.mts!",
+  "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",
   "scripts/perf/auth-file-watch-events-measure.ts!",
   "scripts/perf/board-read-admission-measure.ts!",
@@ -54,6 +55,7 @@ const repositoryScriptEntries = [
   "scripts/perf/github-publication-read-measure.ts!",
   "scripts/perf/history-model-projection-measure.ts!",
   "scripts/perf/inspection-read-admission.ts!",
+  "scripts/perf/keyed-user-replay-measure.ts!",
   "scripts/perf/local-workspace-refresh-measure.ts!",
   "scripts/perf/local-workspace-request-bytes-measure.ts!",
   "scripts/perf/node-worker-churn-measure.mjs!",
