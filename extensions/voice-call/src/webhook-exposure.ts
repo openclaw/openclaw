@@ -13,6 +13,7 @@ export function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
 /** Resolve a human-readable webhook exposure status for doctor/setup surfaces. */
 export function resolveWebhookExposureStatus(config: {
   provider?: string;
+  inboundPolicy?: string;
   publicUrl?: string;
   tunnel?: {
     provider?: string;
@@ -25,6 +26,14 @@ export function resolveWebhookExposureStatus(config: {
     return {
       ok: true,
       message: "Mock provider does not need a public webhook",
+    };
+  }
+
+  if (config.provider === "livekit" && config.inboundPolicy === "disabled") {
+    return {
+      ok: true,
+      message:
+        "Outbound-only LiveKit uses RTC and does not need a public webhook; inbound calls require signed LiveKit webhooks",
     };
   }
 

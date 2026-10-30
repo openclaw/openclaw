@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { mergeDeep } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
@@ -29,10 +30,58 @@ import { isTailscalePortAllowed, VoiceCallTailscaleConfigSchema } from "./tailsc
 const E164Schema = z
   .string()
   .regex(/^\+[1-9]\d{1,14}$/, "Expected E.164 format, e.g. +15550001234");
+const LiveKitExtensionNumberSchema = z
+  .string()
+  .regex(/^[0-9]{1,15}$/, "Expected a 1–15 digit LiveKit PBX extension");
 
 const InboundPolicySchema = z.enum(["disabled", "allowlist", "pairing", "open"]);
 
 const SecretInputSchema = buildSecretInputSchema();
+
+const LiveKitConfigSchema = z
+  .object({
+    url: z.string().url(),
+    /** Opt in only for trusted private networks; WS and SDK HTTP traffic are unencrypted. */
+    allowInsecureWs: z.boolean().default(false),
+    apiKey: SecretInputSchema.optional(),
+    apiSecret: SecretInputSchema.optional(),
+    outboundTrunkId: z.string().min(1),
+    inboundTrunkIds: z.array(z.string().min(1)).min(1),
+    roomPrefix: z
+      .string()
+      .regex(/^[a-zA-Z0-9_-]{1,40}$/)
+      .default("openclaw-call-"),
+  })
+  .strict()
+  .refine(
+    ({ url: value, allowInsecureWs }) => {
+      const url = URL.parse(value);
+      if (!url || url.username || url.password || url.search || url.hash) {
+        return false;
+      }
+      if (url.protocol === "wss:") {
+        return true;
+      }
+      if (url.protocol !== "ws:" || !allowInsecureWs) {
+        return false;
+      }
+      // Literal addresses only: never rely on DNS resolution for this opt-in boundary.
+      const host = url.hostname.replace(/^\[|\]$/g, "");
+      if (isIP(host) === 4) {
+        const [a, b] = host.split(".").map(Number);
+        return (
+          a === 127 || a === 10 || (a === 172 && b! >= 16 && b! <= 31) || (a === 192 && b === 168)
+        );
+      }
+      return isIP(host) === 6 && (host === "::1" || /^f[cd]/i.test(host));
+    },
+    {
+      path: ["url"],
+      message:
+        "LiveKit requires wss://, or allowInsecureWs with ws:// to a loopback/private literal IP; credentials, query strings, and fragments are forbidden",
+    },
+  );
+export type LiveKitConfig = z.infer<typeof LiveKitConfigSchema>;
 
 const TelnyxConfigSchema = z
   .object({
@@ -266,15 +315,16 @@ const VoiceCallConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
 
-    provider: z.enum(["telnyx", "twilio", "plivo", "mock"]).optional(),
+    provider: z.enum(["livekit", "telnyx", "twilio", "plivo", "mock"]).optional(),
 
+    livekit: LiveKitConfigSchema.optional(),
     telnyx: TelnyxConfigSchema.optional(),
 
     twilio: TwilioConfigSchema.optional(),
 
     plivo: PlivoConfigSchema.optional(),
 
-    fromNumber: E164Schema.optional(),
+    fromNumber: z.union([E164Schema, LiveKitExtensionNumberSchema]).optional(),
 
     /** Default outbound target. */
     toNumber: E164Schema.optional(),
@@ -352,6 +402,16 @@ const VoiceCallConfigSchema = z
     responseTimeoutMs: z.number().int().positive().default(30000),
   })
   .strict()
+  .refine(
+    ({ provider, fromNumber }) =>
+      provider === "livekit" ||
+      fromNumber === undefined ||
+      E164Schema.safeParse(fromNumber).success,
+    {
+      path: ["fromNumber"],
+      message: "Non-LiveKit providers require an E.164 fromNumber",
+    },
+  )
   .refine(isTailscalePortAllowed, {
     path: ["tailscale", "port"],
     message: "Tailscale Funnel HTTPS port must be one of 443, 8443, 10000",
@@ -499,6 +559,10 @@ export function normalizeVoiceCallConfig(value: unknown): VoiceCallConfig {
   const realtime = asOptionalRecord(config.realtime);
   const normalized = VoiceCallConfigSchema.parse({
     ...config,
+    livekit:
+      config.provider === "livekit"
+        ? config.livekit
+        : LiveKitConfigSchema.safeParse(config.livekit).data,
     numbers: definedConfigEntries(config.numbers),
     webhookSecurity: config.webhookSecurity === undefined ? {} : config.webhookSecurity,
     streaming:
@@ -647,6 +711,23 @@ export function validateProviderConfig(config: VoiceCallConfig) {
       );
     }
   };
+  if (config.provider === "livekit") {
+    if (!config.livekit) {
+      errors.push("LiveKit configuration is required");
+    }
+    if (!hasConfiguredSecretInput(config.livekit?.apiKey)) {
+      errors.push("livekit.apiKey is required");
+    }
+    if (!hasConfiguredSecretInput(config.livekit?.apiSecret)) {
+      errors.push("livekit.apiSecret is required");
+    }
+    if (!config.realtime.enabled) {
+      errors.push("LiveKit requires realtime.enabled");
+    }
+    if (config.skipSignatureVerification) {
+      errors.push("LiveKit requires signed webhooks");
+    }
+  }
   if (config.provider === "telnyx") {
     requireCredential("apiKey", config.telnyx?.apiKey, "TELNYX_API_KEY");
     requireCredential("connectionId", config.telnyx?.connectionId, "TELNYX_CONNECTION_ID");
@@ -667,7 +748,11 @@ export function validateProviderConfig(config: VoiceCallConfig) {
     requireCredential("authToken", config.plivo?.authToken, "PLIVO_AUTH_TOKEN");
   }
 
-  if (config.realtime.enabled && config.inboundPolicy === "disabled") {
+  if (
+    config.realtime.enabled &&
+    config.inboundPolicy === "disabled" &&
+    config.provider !== "livekit"
+  ) {
     errors.push(
       'plugins.entries.voice-call.config.inboundPolicy must not be "disabled" when realtime.enabled is true',
     );
@@ -690,10 +775,11 @@ export function validateProviderConfig(config: VoiceCallConfig) {
     config.provider &&
     config.provider !== "twilio" &&
     config.provider !== "telnyx" &&
+    config.provider !== "livekit" &&
     config.provider !== "mock"
   ) {
     errors.push(
-      'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "mock" when realtime.enabled is true',
+      'plugins.entries.voice-call.config.provider must be "livekit", "twilio", "telnyx", or "mock" when realtime.enabled is true',
     );
   }
 
