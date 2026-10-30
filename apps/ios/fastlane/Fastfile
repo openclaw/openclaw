@@ -2432,7 +2432,11 @@ platform :ios do
       attempts: capture_attempts,
       output_path: capture_attempts_path
     )
-    FileUtils.rm_rf(derived_data_path)
+    # Retain package downloads while every compilation starts from clean products.
+    Dir.glob(File.join(derived_data_path, "*"), File::FNM_DOTMATCH).each do |entry|
+      next if [".", "..", "SourcePackages"].include?(File.basename(entry))
+      FileUtils.rm_rf(entry)
+    end
     devices = snapshot_devices
     project = File.join(ios_root, "OpenClaw.xcodeproj")
     simulator_devices = available_simulator_devices
