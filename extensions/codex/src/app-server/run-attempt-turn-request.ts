@@ -333,10 +333,7 @@ export async function prepareCodexAttemptTurnRequest(
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
     recordCodexTrajectoryContext(resources.trajectoryRecorder, {
       attempt: params,
-      developerInstructions: joinPresentSections(
-        buildRenderedCodexDeveloperInstructions(),
-        attemptTools.configuredMcp?.diagnosticNotice,
-      ),
+      developerInstructions: buildRenderedCodexDeveloperInstructions(),
       prompt: turnState.codexTurnPromptText,
       tools: toolBridge.availableSpecs,
     });

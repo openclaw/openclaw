@@ -4,6 +4,8 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
 import {
   claimCodexAppServerLiveThread,
+  ensureCodexAppServerClientRuntime,
+  hasCodexAppServerLiveThread,
   isCodexAppServerLiveThreadClaimed,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
@@ -18,6 +20,20 @@ import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
 import type { createClientHarness } from "./test-support.js";
 import type { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import type { CodexAttemptThreadInput as StartParams } from "./thread-lifecycle.test-fixtures.js";
+import { CodexIncognitoPolicyChangeError } from "./thread-policy.js";
+
+export function createUnobservedThreadClient(
+  instanceId: string,
+  request: (method: string, params?: unknown) => Promise<unknown>,
+) {
+  return {
+    getInstanceId: () => instanceId,
+    request,
+    addNotificationHandler: () => () => undefined,
+    addRequestHandler: () => () => undefined,
+    addCloseHandler: () => () => undefined,
+  };
+}
 
 type PolicyRefreshFixtures = {
   createParams: (sessionFile: string, workspaceDir: string) => StartParams["params"];
@@ -27,7 +43,9 @@ type PolicyRefreshFixtures = {
     respond: (request: RpcRequest) => unknown,
     transport: "stdio" | "websocket" | "unix" | "proxy",
   ) => Promise<ReturnType<typeof createClientHarness>>;
-  startOrResumeThread: (params: StartParams) => ReturnType<typeof startOrResumeThreadImpl>;
+  startOrResumeThread: (
+    params: Pick<StartParams, "client"> & Partial<StartParams>,
+  ) => ReturnType<typeof startOrResumeThreadImpl>;
   writeCodexAppServerBinding: typeof writeRawCodexAppServerBinding;
 };
 
@@ -245,7 +263,7 @@ export function registerThreadPolicyRefreshTests({
           }
           expect(requests.find(({ method }) => method === "thread/resume")?.params).toMatchObject({
             threadId,
-            developerInstructions: "replacement policy",
+            developerInstructions: expect.stringContaining("replacement policy"),
           });
           expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(threadId);
         } else {
@@ -336,9 +354,7 @@ export function registerThreadPolicyRefreshTests({
           "thread/inject_items",
         ]);
         const policy = JSON.stringify(requests.at(-1)?.params);
-        expect(policy).toContain(
-          developerInstructions || "earlier OpenClaw generic policy is withdrawn",
-        );
+        expect(policy).toContain(developerInstructions || "<collaboration_mode>");
         expect(policy).toContain("It replaces earlier OpenClaw-supplied generic policy");
         expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(threadId);
       } finally {
@@ -433,6 +449,179 @@ export function registerThreadPolicyRefreshTests({
         removeNotificationHandler();
         close(wire);
       }
+    },
+  );
+  it.each([
+    { change: "policy", policy: "generic policy v2", skills: "## OpenClaw Skills\n\nweather" },
+    { change: "skills", policy: "generic policy", skills: undefined },
+    { change: "questions", policy: "generic policy", skills: "## OpenClaw Skills\n\nweather" },
+    { change: "compaction", policy: "generic policy", skills: "## OpenClaw Skills\n\nweather" },
+    {
+      change: "compaction-scope",
+      policy: "generic policy",
+      skills: "## OpenClaw Skills\n\nweather",
+    },
+  ] as const)(
+    "refreshes live incognito instructions but refuses generic policy drift ($change: $skills)",
+    async ({ change, policy, skills }) => {
+      const sessionFile = path.join(tempDir, "incognito-session.jsonl");
+      const workspaceDir = path.join(tempDir, "incognito-workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      params.sessionKey = "agent:main:dashboard:incognito-skill-refresh";
+      let nativeQuestions = false;
+      const request = vi.fn(async (method: string, _params?: unknown) => {
+        if (method === "config/read") {
+          return {
+            layers: [],
+            origins: {},
+            config: {
+              mcp_servers: {},
+              features: { default_mode_request_user_input: nativeQuestions },
+            },
+          };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
+        if (method === "thread/start") {
+          return threadStartResult("thread-incognito");
+        }
+        if (method === "thread/inject_items") {
+          return {};
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const client = createUnobservedThreadClient("client-incognito", request) as never;
+      ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+      const common = {
+        client,
+        params,
+        userMcpServersEnabled: false,
+      };
+      const firstSkills =
+        "## OpenClaw Skills\n\nweather\n\n<AGENT_SOUL>Original persona</AGENT_SOUL>";
+      const first = await startOrResumeThread({
+        ...common,
+        developerInstructions: "generic policy",
+        refreshableInstructions: firstSkills,
+        ...(change === "compaction-scope"
+          ? {
+              config: {
+                model_auto_compact_token_limit: 120_000,
+                model_auto_compact_token_limit_scope: "body_after_prefix",
+              },
+            }
+          : {}),
+      });
+      const genericPolicy = first.liveThreadEphemeralPolicy?.developerInstructions;
+      expect(genericPolicy).toContain("generic policy");
+      expect(genericPolicy).not.toContain(firstSkills);
+      expect(first.liveThreadEphemeralPolicy).toEqual({
+        autoCompactTokenLimitScope: "total",
+        ...(change === "compaction-scope"
+          ? { autoCompactTokenLimit: 120_000, autoCompactTokenLimitScope: "body_after_prefix" }
+          : {}),
+        developerInstructions: genericPolicy,
+        refreshableInstructions: firstSkills,
+        // Creation carries the catalog natively, so compaction restores this one.
+        nativeRefreshableInstructions: firstSkills,
+      });
+      expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toEqual(
+        expect.objectContaining({
+          ephemeral: true,
+          developerInstructions: `${genericPolicy}\n\n${firstSkills}`,
+        }),
+      );
+      await retainCodexAppServerLiveThread(
+        client,
+        first.threadId,
+        undefined,
+        first.liveThreadConfigFingerprint,
+        null,
+        first.liveThreadEphemeralPolicy,
+      );
+      const threadCalls = () =>
+        request.mock.calls
+          .filter(([method]) => method.startsWith("thread/"))
+          .map(([method, requestParams]) => [method, requestParams]);
+      const secondTurn: Parameters<typeof startOrResumeThread>[0] = {
+        ...common,
+        developerInstructions: policy,
+        refreshableInstructions: skills,
+        ...(change === "compaction"
+          ? { config: { model_auto_compact_token_limit: 260_000 } }
+          : change === "compaction-scope"
+            ? {
+                config: {
+                  model_auto_compact_token_limit: 120_000,
+                  model_auto_compact_token_limit_scope: "total",
+                },
+              }
+            : {}),
+      };
+
+      nativeQuestions = change === "questions";
+      if (change !== "skills") {
+        await expect(startOrResumeThread(secondTurn)).rejects.toBeInstanceOf(
+          CodexIncognitoPolicyChangeError,
+        );
+        expect(threadCalls().map(([method]) => method)).toEqual(["thread/start"]);
+        // The refusal keeps the ephemeral conversation retained for a corrected turn.
+        expect(hasCodexAppServerLiveThread(client, first.threadId)).toBe(true);
+        return;
+      }
+
+      const second = await startOrResumeThread(secondTurn);
+      expect(second).toMatchObject({
+        threadId: first.threadId,
+        lifecycle: { action: "resumed" },
+        liveThreadEphemeralPolicy: {
+          developerInstructions: genericPolicy,
+          refreshableInstructions: skills,
+          // A refresh never rewrites native instructions, so the creation-time
+          // catalog stays recorded as the one compaction will restore.
+          nativeRefreshableInstructions: firstSkills,
+        },
+      });
+      expect(threadCalls()).toEqual([
+        ["thread/start", expect.objectContaining({ ephemeral: true })],
+        [
+          "thread/inject_items",
+          {
+            threadId: first.threadId,
+            items: [
+              {
+                type: "message",
+                role: "developer",
+                content: [
+                  {
+                    type: "input_text",
+                    text: expect.stringContaining(
+                      skills ?? "The current OpenClaw refreshable thread instructions are empty",
+                    ),
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      ]);
+      // The delivered catalog travels with the binding so cleanup retains it and
+      // an unchanged catalog on the next turn is not re-delivered.
+      await retainCodexAppServerLiveThread(
+        client,
+        second.threadId,
+        second.liveThreadOwnership?.release,
+        second.liveThreadConfigFingerprint,
+        null,
+        second.liveThreadEphemeralPolicy,
+      );
+      const third = await startOrResumeThread(secondTurn);
+      expect(third.lifecycle).toEqual({ action: "resumed" });
+      expect(threadCalls().map(([method]) => method)).toEqual([
+        "thread/start",
+        "thread/inject_items",
+      ]);
     },
   );
 }

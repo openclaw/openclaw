@@ -6,12 +6,15 @@ import path from "node:path";
 import { registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
   createNativeRunParams,
+  createRuntimeDynamicTool,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
@@ -201,46 +204,96 @@ async function createNativeFixture(modelId: string, contextWindow = 200_000) {
 }
 
 describe("native Codex skill delivery", () => {
-  it("delivers the ordinary root catalog when model metadata owns collaboration instructions", async () => {
-    const { fixture, attemptOptions, createParams } =
-      await createNativeFixture("skill-carrier-model");
-    let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
-    try {
-      const params = createParams("session.jsonl");
-      params.prompt = "What is the weather in Wilmington today?";
-      const otherSkills = Array.from(
-        { length: 40 },
-        (_, index) =>
-          `<skill><name>synthetic-${index}</name><description>${"Unrelated task capability. ".repeat(8)}</description><location>/synthetic/${index}/SKILL.md</location></skill>`,
-      ).join("");
-      params.skillsSnapshot = {
-        prompt: `<available_skills>${otherSkills}<skill><name>weather</name><description>Current weather and forecasts.</description><location>/synthetic/weather/SKILL.md</location></skill></available_skills>`,
-        skills: [],
-      };
-      const result = await runCodexAppServerAttempt(params, {
-        ...attemptOptions,
-        clientFactory: async (options) => {
-          client = await createIsolatedCodexAppServerClient(options);
-          return client;
-        },
-      });
-      expect(result.terminal).toEqual({ kind: "ok" });
-      expect(fixture.requests).toHaveLength(1);
-      const input = fixture.requests[0]?.input;
-      expect(Array.isArray(input)).toBe(true);
-      const developerMessages = Array.isArray(input)
-        ? input.filter((item) => isJsonObject(item) && item.role === "developer")
-        : [];
-      const developerText = JSON.stringify(developerMessages);
-      expect(developerText).toContain("Synthetic model-owned Default policy.");
-      expect(developerText).toContain(params.skillsSnapshot.prompt);
-    } finally {
-      if (client) {
-        expect(await client.closeAndWait()).toMatchObject({ exited: true });
+  it.each([
+    {
+      label: "neither question tool",
+      restricted: true,
+      askUser: false,
+      defaultQuestions: false,
+      nativeTool: false,
+    },
+    {
+      label: "callable Ask User",
+      restricted: false,
+      askUser: true,
+      defaultQuestions: false,
+      nativeTool: false,
+    },
+    {
+      label: "registered but Default-ineligible native questions",
+      restricted: false,
+      askUser: false,
+      defaultQuestions: false,
+      nativeTool: true,
+    },
+    {
+      label: "Default-eligible native questions",
+      restricted: false,
+      askUser: true,
+      defaultQuestions: true,
+      nativeTool: true,
+    },
+  ])(
+    "delivers skills and capability-aware collaboration for $label",
+    async ({ restricted, askUser, defaultQuestions, nativeTool }) => {
+      const { native, fixture, attemptOptions, createParams } =
+        await createNativeFixture("skill-carrier-model");
+      let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
+      try {
+        const params = createParams("session.jsonl");
+        params.disableTools = restricted;
+        if (!restricted) {
+          setCodexTestModelSupportsTools(params, true);
+        }
+        setCodexTestToolFactory(params, () =>
+          askUser ? [createRuntimeDynamicTool("ask_user")] : [],
+        );
+        await fs.appendFile(
+          path.join(native.codexHome, "config.toml"),
+          `\n[features]\ndefault_mode_request_user_input=${defaultQuestions}\n` +
+            (restricted ? "[tools.experimental_request_user_input]\nenabled=false\n" : ""),
+        );
+        params.prompt = "What is the weather in Wilmington today?";
+        const otherSkills = Array.from(
+          { length: 40 },
+          (_, index) =>
+            `<skill><name>synthetic-${index}</name><description>${"Unrelated task capability. ".repeat(8)}</description><location>/synthetic/${index}/SKILL.md</location></skill>`,
+        ).join("");
+        params.skillsSnapshot = {
+          prompt: `<available_skills>${otherSkills}<skill><name>weather</name><description>Current weather and forecasts.</description><location>/synthetic/weather/SKILL.md</location></skill></available_skills>`,
+          skills: [],
+        };
+        const result = await runCodexAppServerAttempt(params, {
+          ...attemptOptions,
+          clientFactory: async (options) => {
+            client = await createIsolatedCodexAppServerClient(options);
+            return client;
+          },
+        });
+        expect(result.terminal).toEqual({ kind: "ok" });
+        expect(fixture.requests).toHaveLength(1);
+        const input = fixture.requests[0]?.input;
+        expect(Array.isArray(input)).toBe(true);
+        const developerMessages = Array.isArray(input)
+          ? input.filter((item) => isJsonObject(item) && item.role === "developer")
+          : [];
+        const developerText = JSON.stringify(developerMessages);
+        expect(developerText).not.toContain("Synthetic model-owned Default policy.");
+        expect(developerText).not.toContain("# Collaboration Mode: Default");
+        expect(developerText.includes("request_user_input")).toBe(defaultQuestions);
+        const tools = JSON.stringify(fixture.requests[0]?.tools);
+        expect(tools.includes('"name":"request_user_input"')).toBe(nativeTool);
+        expect(JSON.stringify(fixture.requests[0]).includes("ask_user")).toBe(askUser);
+        expect(developerText).toContain(params.skillsSnapshot.prompt);
+      } finally {
+        if (client) {
+          expect(await client.closeAndWait()).toMatchObject({ exited: true });
+        }
+        await fixture.close();
       }
-      await fixture.close();
-    }
-  }, 45_000);
+    },
+    45_000,
+  );
 
   it("delivers and refreshes persona through an external WebSocket Harness", async ({ signal }) => {
     const { native, fixture, createParams } = await createNativeFixture("persona-carrier-model");
@@ -339,7 +392,12 @@ describe("native Codex skill delivery", () => {
         );
         const text = developerMessageText(fixture.requests.at(-1));
         expect(text).toContain(sharedUser);
-        expect(text).toContain("Synthetic model-owned Default policy.");
+        expect(text).not.toContain("Synthetic model-owned Default policy.");
+        expect(text).not.toContain("# Collaboration Mode: Default");
+        expect(text).not.toContain("request_user_input");
+        if (index > 0) {
+          expect(text).toContain("All earlier collaboration-mode instructions are withdrawn");
+        }
         if (soul) {
           expect(text).toContain(soul);
           if (index === 1) {
@@ -440,6 +498,13 @@ describe("native Codex skill delivery", () => {
         // client-authored refresh, which is exactly the reversion under test.
         expect(developerMessageText(continuationRequest)).toContain(NATIVE_FIRST_CATALOG);
         expect(developerMessageText(continuationRequest)).not.toContain(current);
+        expect(developerMessageText(continuationRequest)).toContain(
+          "silence is not an answer or approval",
+        );
+        expect(developerMessageText(continuationRequest)).not.toContain(
+          "Synthetic model-owned Default policy.",
+        );
+        expect(developerMessageText(continuationRequest)).not.toContain("request_user_input");
 
         const [restoredRequest] = await runTurn("run-4", refreshed, "fourth");
         const restored = developerMessageText(restoredRequest);

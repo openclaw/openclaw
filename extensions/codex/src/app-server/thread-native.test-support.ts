@@ -5,14 +5,18 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { TestContext } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import type { createCodexNativeTestState } from "./native-app-server.test-support.js";
-import { isJsonObject } from "./protocol.js";
+import { isJsonObject, type CodexTurnStartParams } from "./protocol.js";
 import { createAppServerOptions } from "./thread-lifecycle.test-fixtures.js";
 
 export async function runNativeTurn(
   client: CodexAppServerClient,
   threadId: string,
   text: string,
-  options: { timeoutMs?: number; completionTimeoutMs?: number } = {},
+  options: {
+    timeoutMs?: number;
+    completionTimeoutMs?: number;
+    collaborationMode?: CodexTurnStartParams["collaborationMode"];
+  } = {},
 ) {
   const completed = createDeferred<unknown>();
   void completed.promise.catch(() => undefined);
@@ -39,6 +43,7 @@ export async function runNativeTurn(
       {
         threadId,
         input: [{ type: "text", text, text_elements: [] }],
+        ...(options.collaborationMode ? { collaborationMode: options.collaborationMode } : {}),
       },
       { timeoutMs: options.timeoutMs },
     );

@@ -456,15 +456,28 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     personaInstructions: workspaceBootstrapContext.personaInstructions,
     memoryInstructions: workspaceBootstrapContext.memoryInstructions,
   };
+  let threadDeveloperInstructions: string | undefined;
   // Observability view of the whole developer surface the model sees (reports,
   // trajectory, size estimates). The lifecycle receives the generic policy and the
   // refreshable instructions separately; joining them here must never feed thread requests.
   const buildRenderedCodexDeveloperInstructions = () =>
     joinPresentSections(
-      turnState.promptBuild.developerInstructions,
-      parentLocalEgress ? undefined : refreshableInstructions,
+      threadDeveloperInstructions ??
+        joinPresentSections(
+          turnState.promptBuild.developerInstructions,
+          attemptTools.configuredMcp?.diagnosticNotice,
+          parentLocalEgress ? undefined : refreshableInstructions,
+        ),
       (parentLocalEgress
-        ? buildCodexParentLocalInstructions(params, { ...parentLocalContext, skillsInstructions })
+        ? joinPresentSections(
+            buildCodexParentLocalInstructions(params, {
+              ...parentLocalContext,
+              skillsInstructions,
+            }) ?? undefined,
+            threadDeveloperInstructions === undefined
+              ? undefined
+              : turnState.promptBuild.turnDeveloperInstructions,
+          )
         : buildTurnCollaborationMode(params).settings.developer_instructions) ?? undefined,
     );
   const rebuildCodexPromptBuildFromCurrentProjection = async (preserveInstructions = false) => {
@@ -681,6 +694,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         Object.assign(systemPromptReport, buildSystemPromptReport(!include));
         workspaceReferencesIncluded = include;
       }
+    },
+    setThreadDeveloperInstructions: (instructions: string) => {
+      threadDeveloperInstructions = instructions;
+      Object.assign(systemPromptReport, buildSystemPromptReport(!workspaceReferencesIncluded));
     },
     setParentLocalEgress: () => {
       parentLocalEgress = true;

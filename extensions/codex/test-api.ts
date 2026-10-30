@@ -93,20 +93,21 @@ export async function buildCodexHarnessPromptSnapshot(params: {
     }),
     params.developerInstructionAdditions,
   );
-  return {
+  const threadStartParams = await buildThreadStartParams(params.attempt, {
+    cwd: params.cwd,
+    dynamicTools: params.dynamicTools,
+    appServer: params.appServer,
+    nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+    nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
     developerInstructions,
+    config: params.config,
+  });
+  return {
+    developerInstructions: threadStartParams.developerInstructions,
     parentLocalInstructions: buildCodexParentLocalInstructions(params.attempt, {
       personaInstructions: params.personaInstructions,
     }),
-    threadStartParams: await buildThreadStartParams(params.attempt, {
-      cwd: params.cwd,
-      dynamicTools: params.dynamicTools,
-      appServer: params.appServer,
-      nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-      nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
-      developerInstructions,
-      config: params.config,
-    }),
+    threadStartParams,
     threadResumeParams: await buildThreadResumeParams(params.attempt, {
       threadId: params.threadId,
       appServer: params.appServer,

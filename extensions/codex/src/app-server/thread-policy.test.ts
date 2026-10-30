@@ -3,15 +3,20 @@ import { createClientHarness } from "./test-support.js";
 import { refreshCodexThreadPolicy } from "./thread-policy.js";
 
 describe("generic native policy refresh", () => {
-  it.each(["shared runtime policy", ""])(
-    "limits replacement to the generic policy (%j)",
-    async (policy) => {
+  it.each([
+    { policy: "shared runtime policy", managedCollaboration: false },
+    { policy: "", managedCollaboration: false },
+    { policy: "current managed policy", managedCollaboration: true },
+  ])(
+    "limits replacement to the owned policy ($policy)",
+    async ({ policy, managedCollaboration }) => {
       const h = createClientHarness();
       try {
         const update = refreshCodexThreadPolicy({
           client: h.client,
           threadId: "root",
           developerInstructions: policy,
+          managedCollaboration,
           timeoutMs: 1_000,
           assertCurrent: () => {},
         });
@@ -25,7 +30,12 @@ describe("generic native policy refresh", () => {
           "Parent-local instructions supplied for the current inference request are outside this policy replacement",
         );
         expect(text).toContain(
-          "native managed, guardian, security, collaboration, and project instructions retain their authority",
+          managedCollaboration
+            ? "native managed, guardian, security, and project instructions retain their authority"
+            : "native managed, guardian, security, collaboration, and project instructions retain their authority",
+        );
+        expect(text.includes("All earlier collaboration-mode instructions are withdrawn")).toBe(
+          managedCollaboration,
         );
         expect(text).toContain(policy || "earlier OpenClaw generic policy is withdrawn");
       } finally {

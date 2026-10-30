@@ -287,6 +287,7 @@ export async function prepareCanonicalCodexFork(params: {
     cwd,
     appServer,
     dynamicTools,
+    preserveNativeCollaboration: true,
     developerInstructions,
     config: threadConfig,
     nativeCodeModeEnabled: true,

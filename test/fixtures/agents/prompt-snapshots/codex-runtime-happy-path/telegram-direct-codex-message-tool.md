@@ -71,6 +71,7 @@
     "features.shell_tool": true,
     "features.standalone_web_search": false,
     "features.tool_suggest": false,
+    "include_collaboration_mode_instructions": false,
     "project_doc_max_bytes": 131072,
     "suppress_unstable_features_warning": true,
     "tools.update_plan.enabled": false,
@@ -121,6 +122,7 @@
     "features.shell_tool": true,
     "features.standalone_web_search": false,
     "features.tool_suggest": false,
+    "include_collaboration_mode_instructions": false,
     "project_doc_max_bytes": 131072,
     "suppress_unstable_features_warning": true,
     "tools.update_plan.enabled": false,
@@ -193,7 +195,7 @@
 
 ## Reconstructed Model-Bound Prompt Layers
 
-This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, appends the current parent-local context to the model request instructions, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, native collaboration-mode instructions, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
+This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, appends the current parent-local context to the model request instructions, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions including managed collaboration policy, any supplied per-turn collaboration text, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions inside the Codex runtime.
 
 ### Layer Metadata
 
@@ -219,7 +221,7 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
   "limitations": [
     "This is a reconstructed prompt-layer snapshot, not a byte-for-byte raw OpenAI request captured from Codex core.",
     "Additional context shows this turn's supplied values; native truncation, deduplication and retained history are not simulated.",
-    "Codex-owned workspace AGENTS.md, environment context, memories, app/plugin instructions, built-in Default collaboration-mode instructions, and provider tool serialization are still runtime-owned gaps until Codex exposes a rendered-prompt inspection API."
+    "Codex-owned workspace AGENTS.md, environment context, memories, app/plugin instructions, and provider tool serialization are still runtime-owned gaps until Codex exposes a rendered-prompt inspection API. Ordinary managed sessions suppress the native Default collaboration block; their collaboration policy is included in OpenClaw developer instructions above."
   ],
   "openClawRuntime": {
     "additionalContextFrom": "extensions/codex app-server turn/start additionalContext",
@@ -263,20 +265,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 21253
   },
   "openClawDeveloperInstructions": {
-    "chars": 3490,
-    "roughTokens": 873
+    "chars": 3742,
+    "roughTokens": 936
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 27501,
-    "roughTokens": 6876
+    "chars": 27753,
+    "roughTokens": 6939
   },
   "totalWithDynamicToolsJson": {
-    "chars": 112515,
-    "roughTokens": 28129
+    "chars": 112767,
+    "roughTokens": 28192
   },
   "userInputText": {
     "chars": 879,
@@ -516,11 +518,15 @@ When explicitly_mentioned_bot is true, the incoming message mentions your channe
 
 
 You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.
+
+<collaboration_mode>
+Prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. Ask the user directly when required input prevents progress; silence is not an answer or approval.
+</collaboration_mode>
 ````
 
 ### Developer: Codex Collaboration Mode Instructions
 
-This turn asks Codex app-server to resolve its built-in Default collaboration-mode instructions at runtime.
+No per-turn collaboration text is supplied. Ordinary managed sessions suppress native Default-mode rendering and carry collaboration policy in the OpenClaw developer instructions above.
 
 ### Developer: OpenClaw Additional Context (openclaw_active_computer)
 

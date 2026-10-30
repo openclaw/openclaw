@@ -301,6 +301,8 @@ describe("happy path prompt snapshots", () => {
         "### Developer: OpenClaw Runtime Instructions",
         "### Developer: Codex Collaboration Mode Instructions",
       );
+      expect(shared).toContain("<collaboration_mode>");
+      expect(shared).toContain("silence is not an answer or approval");
       const collaboration = renderedPromptSection(
         snapshot,
         "### Developer: Codex Collaboration Mode Instructions",

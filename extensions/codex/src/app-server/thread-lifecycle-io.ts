@@ -13,7 +13,6 @@ import {
 } from "./auth-start-options.js";
 import { recordCodexThreadForkSettings } from "./client-fork-settings.js";
 import { hasCodexAppServerSiblingThreadWork } from "./client-runtime.js";
-import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
 import { CodexAppServerRpcError, isCodexAppServerOverloadError } from "./client.js";
 import { seedCodexHistory } from "./context-engine-history.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
@@ -61,7 +60,7 @@ import type {
 } from "./thread-lifecycle-types.js";
 import { resolveCodexAppServerModelProvider } from "./thread-model-selection.js";
 import { CodexThreadPolicyHandoffError, refreshCodexThreadPolicy } from "./thread-policy.js";
-import { buildThreadStartParams } from "./thread-requests.js";
+import { buildCodexThreadCreationPolicy, buildThreadStartParams } from "./thread-requests.js";
 import {
   buildRestrictedThreadConfigFingerprint,
   isRestrictedThreadConfigCompatible,
@@ -310,6 +309,8 @@ export async function resumeExistingCodexThread(
       client: params.client,
       threadId: resumeBinding.threadId,
       developerInstructions: resumeParams.developerInstructions,
+      managedCollaboration:
+        resumeBinding.connectionScope !== "supervision" && params.params.trigger !== "cron",
       timeoutMs: params.appServer.requestTimeoutMs,
       signal: params.signal,
       assertCurrent: assertHandoffCurrent,
@@ -713,7 +714,8 @@ export async function startFreshCodexThread(
       response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
     // Restricted ephemeral threads also need creation policy for fenced warm reuse.
     liveThreadEphemeralPolicy: startParams.ephemeral
-      ? createCodexEphemeralThreadPolicy(
+      ? buildCodexThreadCreationPolicy(
+          params.params,
           { ...params, config: startParams.config },
           context.effectiveConfig.config,
         )

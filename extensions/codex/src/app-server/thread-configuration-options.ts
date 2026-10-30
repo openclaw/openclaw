@@ -14,8 +14,12 @@ export type CodexThreadConfigurationOptions = {
   askUserAvailable?: boolean;
   /** Preflight snapshot whose origins distinguish authored settings from defaults. */
   nativeQuestionConfig?: CodexConfigReadResponse;
+  /** Supervision preserves native mode selection and catalogue-owned instructions. */
+  preserveNativeCollaboration?: boolean;
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
+  /** Observe assembled native instructions without rebuilding configuration decisions. */
+  onDeveloperInstructions?: (instructions: string) => void;
   /** Skills, persona, and memory carried with thread developer instructions, separate from generic policy. */
   refreshableInstructions?: string;
   config?: JsonObject;

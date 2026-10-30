@@ -610,6 +610,7 @@ describe("canonical descendant lifecycle through real owners", () => {
           "cold configuration",
         );
         expect(resume.params.developerInstructions).toBe(body);
+        expect(resume.params.config).not.toHaveProperty("include_collaboration_mode_instructions");
         expectPolicyHandoff(calls, binding.threadId, body);
         expect(calls.findIndex((call) => call.method === "thread/inject_items")).toBeLessThan(
           calls.findIndex((call) => call.method === "turn/start"),
@@ -1247,6 +1248,10 @@ describe("canonical descendant lifecycle through real owners", () => {
             firstForkCalls.find((call) => call.method === "thread/fork"),
             "canonical fork request",
           );
+          expect(forked.params.config).not.toHaveProperty(
+            "include_collaboration_mode_instructions",
+          );
+          expect(forked.params.developerInstructions).not.toContain("<collaboration_mode>");
           expectPolicyHandoff(
             firstForkCalls,
             firstBinding.threadId,

@@ -246,6 +246,7 @@ export async function materializePendingSupervisionBranch(
       ...params,
       model: nativeModel,
       modelProvider: nativeModelProvider,
+      preserveNativeCollaboration: true,
     });
     assertExactSupervisionModelSelection(startParams, {
       model: nativeModel,
