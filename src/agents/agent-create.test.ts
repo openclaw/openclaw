@@ -268,6 +268,9 @@ describe("createAgent", () => {
       expect(message).toContain(`could not verify retained PostgreSQL store "${anchor}"`);
       expect(message).toContain(cause.message);
       expect(message).toContain("database.postgres.connection");
+      expect(message).toContain(
+        "If the server is correct and this store's namespace is gone, see https://docs.openclaw.ai/gateway/postgresql#recover-a-retained-agent-store.",
+      );
       expect(message).not.toMatch(/backup restore|move this anchor|sidecars/);
       expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
       expect(mocks.mkdir).not.toHaveBeenCalled();

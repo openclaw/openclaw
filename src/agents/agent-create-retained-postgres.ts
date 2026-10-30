@@ -32,7 +32,7 @@ export async function assertRetainedPostgresAgentStores(params: {
       );
     const unverifiable = (reason: unknown, cause: unknown = reason) =>
       new DuplicateAgentError(
-        `Cannot create agent "${agentId}": could not verify retained PostgreSQL store "${target.path}": ${formatErrorMessage(reason)}. Check that database.postgres.connection reaches the intended server, then retry.`,
+        `Cannot create agent "${agentId}": could not verify retained PostgreSQL store "${target.path}": ${formatErrorMessage(reason)}. Check that database.postgres.connection reaches the intended server, then retry. If the server is correct and this store's namespace is gone, see https://docs.openclaw.ai/gateway/postgresql#recover-a-retained-agent-store.`,
         cause instanceof Error ? { cause } : undefined,
       );
     assertCurrent?.();
