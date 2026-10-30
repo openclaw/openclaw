@@ -13,7 +13,10 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  controlUiE2eWaitTimeoutMs as timeout,
+  waitForControlUiGatewayReady,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
@@ -159,7 +162,17 @@ suite.define(() => {
         await page.addInitScript(installWarmConnectSocketTrace);
         await page.addInitScript(installWarmConnectIdentityGate);
         await page.goto(url);
-        if (await page.getByRole("link", { name: "Log in", exact: true }).isVisible()) {
+        const login = page.getByRole("link", { name: "Log in", exact: true });
+        await expect
+          .poll(
+            async () =>
+              (await login.isVisible()) || (await page.locator("openclaw-app").isVisible()),
+            {
+              timeout,
+            },
+          )
+          .toBe(true);
+        if (await login.isVisible()) {
           await enterControlUiSession(page);
         }
         await waitForControlUiGatewayReady(page);
