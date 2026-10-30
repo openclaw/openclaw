@@ -12,6 +12,7 @@ import type { SessionDeliveryGeneration } from "../../config/sessions/session-de
 import type { SessionTranscriptDeliveryMirror } from "../../config/sessions/transcript-mirror.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
+import type { BackgroundSessionResultProvenance } from "../../sessions/background-session-result.js";
 import type {
   DeliveryQueueCompletionRetention,
   DeliveryQueueEntryState,
@@ -71,6 +72,7 @@ export type QueuedReplyPayloadSendingHook = {
 
 export type QueuedDeliveryPayload = {
   sessionGeneration?: SessionDeliveryGeneration;
+  transcriptProvenance?: BackgroundSessionResultProvenance;
   channel: string;
   to: string;
   accountId?: string;

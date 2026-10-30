@@ -10,6 +10,7 @@ import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { ConfigMutationRefusedError } from "../../lib/config/config-mutation-runner.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
@@ -471,6 +472,14 @@ export function createPluginsConsent(host: {
           preserveMessageWhilePending: request.acknowledgeInstallPolicyWarning === true,
         },
         async (error, scope, isCurrent) => {
+          // The updater interlock refused the write before any install request was sent.
+          if (error instanceof ConfigMutationRefusedError && error.reason === "suspended") {
+            host.setMessage(installIdentity, {
+              kind: "error",
+              text: t("pluginsPage.installBlockedByUpdate"),
+            });
+            return;
+          }
           const details =
             error instanceof GatewayRequestError ? asOptionalRecord(error.details) : undefined;
           const persistence = asOptionalRecord(details?.persistence);

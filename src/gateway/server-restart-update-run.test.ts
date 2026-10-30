@@ -34,6 +34,33 @@ function prepareRestartState(prefix: string) {
   setRuntimeConfigSnapshot({});
 }
 
+function prepareManagedRestore(
+  input: Parameters<typeof createUpdateRun>[0],
+  restored: { runningVersion: string; runningBuildId?: string },
+) {
+  const run = createUpdateRun(input);
+  recordUpdateRunPhase(run.runId, "restarting");
+  recordUpdateRunPhase(run.runId, "verifying", { after: {} });
+  recordUpdateRunVerification(run.runId, {
+    serviceRunning: true,
+    ...restored,
+    versionMatch: true,
+    settled: true,
+    channelsReady: true,
+    pluginErrors: [],
+  });
+  return buildUpdateRestartSentinelPayload({
+    result: {
+      status: "error",
+      mode: "npm",
+      reason: "managed-service-handoff-failed",
+      steps: [],
+      durationMs: 1,
+    },
+    meta: { runId: run.runId, handoffId: "managed-update-handoff" },
+  });
+}
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   clearRuntimeConfigSnapshot();
@@ -150,28 +177,10 @@ describe("update restart verification ownership", () => {
       // verification failed), so the helper's restore verification is the only
       // versionMatch fact. It compares the restored gateway against the
       // restored disk version, not against the update target.
-      const run = createUpdateRun({ trigger, target: { version: targetVersion } });
-      recordUpdateRunPhase(run.runId, "restarting");
-      recordUpdateRunPhase(run.runId, "verifying", { after: {} });
-      recordUpdateRunVerification(run.runId, {
-        serviceRunning: true,
-        runningVersion: restoredVersion,
-        runningBuildId: "build-restored",
-        versionMatch: true,
-        settled: true,
-        channelsReady: true,
-        pluginErrors: [],
-      });
-      const payload = buildUpdateRestartSentinelPayload({
-        result: {
-          status: "error",
-          mode: "npm",
-          reason: "managed-service-handoff-failed",
-          steps: [],
-          durationMs: 1,
-        },
-        meta: { runId: run.runId, handoffId: "managed-update-handoff" },
-      });
+      const payload = prepareManagedRestore(
+        { trigger, target: { version: targetVersion } },
+        { runningVersion: restoredVersion, runningBuildId: "build-restored" },
+      );
       const observed = await finalizeRestartUpdateRun(payload, true);
       // The restored gateway booted on the restored version. The helper already
       // verified that identity; the boot must not regrade it against the
@@ -190,28 +199,10 @@ describe("update restart verification ownership", () => {
     // The restore helper verified version 1.2.3/build-restored. A later boot
     // serving 1.2.3/build-other is a different binary; reusing the recorded
     // verification would publish a false verified result.
-    const run = createUpdateRun({ trigger: "api", target: { version: "2.0.0" } });
-    recordUpdateRunPhase(run.runId, "restarting");
-    recordUpdateRunPhase(run.runId, "verifying", { after: {} });
-    recordUpdateRunVerification(run.runId, {
-      serviceRunning: true,
-      runningVersion: restoredVersion,
-      runningBuildId: "build-restored",
-      versionMatch: true,
-      settled: true,
-      channelsReady: true,
-      pluginErrors: [],
-    });
-    const payload = buildUpdateRestartSentinelPayload({
-      result: {
-        status: "error",
-        mode: "npm",
-        reason: "managed-service-handoff-failed",
-        steps: [],
-        durationMs: 1,
-      },
-      meta: { runId: run.runId, handoffId: "managed-update-handoff" },
-    });
+    const payload = prepareManagedRestore(
+      { trigger: "api", target: { version: "2.0.0" } },
+      { runningVersion: restoredVersion, runningBuildId: "build-restored" },
+    );
     const observed = await finalizeRestartUpdateRun(payload, true);
     expect(observed?.verification.versionMatch).toBe(false);
     expect(observed?.verification.runningVersion).toBe(restoredVersion);
@@ -224,27 +215,10 @@ describe("update restart verification ownership", () => {
     runtimeBuildId = "build-other";
     // The recorder never learned the restored build, so no stronger identity
     // check is possible; version equality is all the verification recorded.
-    const run = createUpdateRun({ trigger: "api", target: { version: "2.0.0" } });
-    recordUpdateRunPhase(run.runId, "restarting");
-    recordUpdateRunPhase(run.runId, "verifying", { after: {} });
-    recordUpdateRunVerification(run.runId, {
-      serviceRunning: true,
-      runningVersion: restoredVersion,
-      versionMatch: true,
-      settled: true,
-      channelsReady: true,
-      pluginErrors: [],
-    });
-    const payload = buildUpdateRestartSentinelPayload({
-      result: {
-        status: "error",
-        mode: "npm",
-        reason: "managed-service-handoff-failed",
-        steps: [],
-        durationMs: 1,
-      },
-      meta: { runId: run.runId, handoffId: "managed-update-handoff" },
-    });
+    const payload = prepareManagedRestore(
+      { trigger: "api", target: { version: "2.0.0" } },
+      { runningVersion: restoredVersion },
+    );
     const observed = await finalizeRestartUpdateRun(payload, true);
     expect(observed?.verification.versionMatch).toBe(true);
   });

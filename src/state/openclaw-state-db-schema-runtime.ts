@@ -31,6 +31,7 @@ import {
   assertNoLegacyStateRuntimeRepair,
   isOpenClawStateSchemaFastPathEligible,
 } from "./openclaw-state-db-fast-path.js";
+import { migrateHistoricalStateImports } from "./openclaw-state-db-historical-imports.js";
 import type { StateDatabaseInitialization } from "./openclaw-state-db-initialization.js";
 import { assertStateDatabaseIntegrityOnce } from "./openclaw-state-db-integrity-admission.js";
 import {
@@ -69,9 +70,11 @@ import { migrateSessionWatchCursorProvenance } from "./openclaw-state-db-session
 import { isUninitializedNativeStartupDatabase } from "./openclaw-state-db-startup-checkpoint.js";
 import * as retirements from "./openclaw-state-db-table-retirements.js";
 import { describeAgentPathMigration, warnAgentPathMigration } from "./openclaw-state-db.paths.js";
+import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-maintenance-context.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { assertGatewayServiceSchemaMigrationAllowed } from "./openclaw-state-service-installation.js";
 import { resolveSchemaMigrationIntegrityCheck } from "./schema-migration-backup-scope.js";
 
 const stateDbLog = createSubsystemLogger("state/db");
@@ -122,6 +125,15 @@ export function ensureOpenClawStateRuntimeSchema(
           return [];
         }
         const previousVersion = readStateSchemaContentVersion(db);
+        // Candidate/finalize Doctor and update repair already own offline schema
+        // maintenance. Preserve the migration owner's existing access/refusal order.
+        if (!getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance) {
+          assertGatewayServiceSchemaMigrationAllowed(
+            pathname,
+            previousVersion,
+            OPENCLAW_STATE_SCHEMA_VERSION,
+          );
+        }
         if (previousVersion === 0 && !isUninitializedNativeStartupDatabase(db)) {
           throw new Error(
             "Unrecognized native bootstrap database; preserve it and run openclaw doctor --fix.",
@@ -196,6 +208,9 @@ export function ensureOpenClawStateRuntimeSchema(
           return boundedChanges;
         }
 
+        // Bounded selection can defer for unrelated additive columns; consume the
+        // historical shape before the full runner publishes its newer marker too.
+        const historicalChanges = migrateHistoricalStateImports(db, previousVersion);
         const includeAgentDeletionJournal =
           tableExists(db, "agent_deletion_journal") ||
           hasPreJournalStateSchema(db) ||
@@ -261,7 +276,7 @@ export function ensureOpenClawStateRuntimeSchema(
         assertMigratedStateTableIntegrity(db, pathname, previousVersion, true);
         runtimeReady = true;
         warnAgentPathMigration(stateDbLog, pathMigration, pathname);
-        return changes;
+        return [...historicalChanges, ...changes];
       },
       { busyTimeoutMs, databaseLabel: pathname, operationLabel: "state.schema.ensure" },
     );

@@ -432,6 +432,13 @@ two-party event loops that do not go through the shared inbound reply runner.
 
 ### Bounded waits
 
+Use `performance.now()` for process-local elapsed measurements and budgets.
+Remaining time may be fractional; retain the operation's expiration, timeout
+normalization, and integer rounding policy. Never persist monotonic readings or
+send them as epoch timestamps. Persisted times, user-facing dates, and
+cross-process deadlines stay wall-clock values; translate an incoming epoch
+deadline into a local budget once when admitting the work.
+
 `openclaw/plugin-sdk/time-runtime` exports
 `raceWithTimeout(operation, timeoutMs, onTimeout, { ref?, signal?, onAbort? })`. Pass an existing
 promise, or a function returning a promise when the timer must start before the

@@ -332,8 +332,9 @@ export function mintReplyMessageActionTurnCapability(
   turn: Pick<AgentTurnParams, "followupRun" | "sessionCtx" | "opts" | "runtimePolicySessionKey">,
   runId: string,
 ): string | undefined {
-  // An event's captured delivery route is not a new trusted channel turn.
-  if (turn.followupRun.run.internalEventExecution) {
+  // An event's captured delivery route is not a new trusted channel turn, including
+  // for successors detached from the event occurrence.
+  if (turn.followupRun.run.internalEventExecution || turn.followupRun.run.sessionEventOrigin) {
     return undefined;
   }
   const channelIngress = isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider);

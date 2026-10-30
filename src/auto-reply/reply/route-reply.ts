@@ -186,6 +186,9 @@ async function routeReplyOperation(
   }).responsePrefix;
   const transformReplyPayload = createChannelReplyTransform({ messaging, cfg, accountId });
   const normalization = normalizeReplyPayloadOutcome(payload, {
+    preserveLeadingSourceBoundary:
+      params.replyKind === "block" &&
+      getReplyPayloadMetadata(payload)?.streamedSourceBoundary === true,
     responsePrefix,
     responsePrefixContext: params.responsePrefixContext,
     transformReplyPayload,

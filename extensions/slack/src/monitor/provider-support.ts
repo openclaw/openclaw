@@ -211,11 +211,11 @@ function publishSlackBlockedStatus(
 export function publishSlackDisconnectedStatus(
   setStatus?: (next: Record<string, unknown>) => void,
   error?: unknown,
+  at = Date.now(),
 ) {
   if (!setStatus) {
     return;
   }
-  const at = Date.now();
   const message = error ? formatSlackError(error) : undefined;
   setStatus({
     connected: false,

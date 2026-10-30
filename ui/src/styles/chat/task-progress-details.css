@@ -560,3 +560,11 @@
     padding-inline: 0;
   }
 }
+
+.task-progress-details__summary > .session-progress-card__runtime {
+  flex-basis: 100%;
+}
+
+.task-progress-details__plan > .session-progress-card__runtime {
+  margin-bottom: var(--space-2);
+}

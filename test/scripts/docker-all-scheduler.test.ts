@@ -50,6 +50,7 @@ import {
 import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { copyDockerSchedulerHarness } from "./docker-all-harness.test-support.js";
+import { isProcessPresent } from "./run-process.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
@@ -415,19 +416,10 @@ function addRegistry(
   };
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // The scheduler joins live group members, but an orphan zombie can still await
 // its system reaper. No ChildProcess handle remains after the leader exits.
 async function waitForReaped(pid: number, signal: AbortSignal): Promise<void> {
-  while (isProcessAlive(pid)) {
+  while (isProcessPresent(pid)) {
     if (signal.aborted) {
       throw new Error(`process still alive: ${pid}`, { cause: signal.reason });
     }
@@ -1367,14 +1359,14 @@ setInterval(() => {}, 1000);
           signal,
           () => {
             grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
-            expect(isProcessAlive(grandchildPid)).toBe(true);
+            expect(isProcessPresent(grandchildPid)).toBe(true);
           },
         );
 
         expect(result).toMatchObject({ timedOut: true });
         await waitForReaped(grandchildPid, signal);
       } finally {
-        if (grandchildPid && isProcessAlive(grandchildPid)) {
+        if (grandchildPid && isProcessPresent(grandchildPid)) {
           process.kill(grandchildPid, "SIGKILL");
         }
       }
@@ -1549,7 +1541,7 @@ await runShellCommand({
         signal,
       );
       grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
-      expect(isProcessAlive(grandchildPid)).toBe(true);
+      expect(isProcessPresent(grandchildPid)).toBe(true);
 
       runner.kill("SIGTERM");
 
@@ -1571,10 +1563,10 @@ await runShellCommand({
       if (!grandchildPid && existsSync(grandchildPidPath)) {
         grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
       }
-      if (grandchildPid && isProcessAlive(grandchildPid)) {
+      if (grandchildPid && isProcessPresent(grandchildPid)) {
         process.kill(grandchildPid, "SIGKILL");
       }
-      if (secondGrandchildPid && isProcessAlive(secondGrandchildPid)) {
+      if (secondGrandchildPid && isProcessPresent(secondGrandchildPid)) {
         process.kill(secondGrandchildPid, "SIGKILL");
       }
     }

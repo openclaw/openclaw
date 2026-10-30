@@ -214,15 +214,26 @@ export async function proveHotReloadChannels({
             senderId: "qa-operator",
             text: `Reply exactly \`${marker}\``,
           });
-          const cursor = state.getSnapshot().cursor;
+          const event = state
+            .getSnapshot()
+            .events.find(
+              (candidate) =>
+                candidate.kind === "inbound-message" &&
+                candidate.accountId === inbound.accountId &&
+                candidate.message.id === inbound.id &&
+                candidate.message.conversation.kind === inbound.conversation.kind &&
+                candidate.message.conversation.id === inbound.conversation.id,
+            );
+          assert(event);
           const reply = await transport.waitForOutbound({
             conversation: inbound.conversation,
             textIncludes: marker,
             timeoutMs: 40_000,
           });
           assert.equal(reply.isError, undefined);
-          await waitForHotReloadFact("channel turn acknowledged", () =>
-            state.getAcknowledgedPollCursor("default") >= cursor ? true : undefined,
+          await waitForHotReloadFact(
+            "channel turn completed",
+            () => state.hasCompletedInboundEvent(inbound.accountId, event.cursor) || undefined,
           );
           const requests = (await providerRequests()).filter(
             (request) => request.cursor > requestCursor && request.prompt.includes(marker),

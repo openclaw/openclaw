@@ -10,7 +10,8 @@ import {
   assertConfigFileWritePathSnapshot,
   captureConfigFileWritePathProof,
 } from "../../config/io.write-safety.js";
-import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
+import { resolveConfigPath, resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
+import { withDoctorProgress } from "../../flows/doctor-health-startup.js";
 import { runDoctorHealthFlow } from "../../flows/doctor-health.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import {
@@ -29,10 +30,17 @@ import {
   UpdateDatabaseBackupSchema,
 } from "../../infra/update-database-backup.js";
 import { restoreUpdateDatabaseBackup } from "../../infra/update-database-restore.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import {
+  captureUpdateDoctorConfigWrites,
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+  UpdateDoctorDeferredInspectionCheckIdsSchema,
+} from "../../infra/update-doctor-result.js";
+import { createUpdateRun, recordUpdateRunDiagnostic } from "../../infra/update-run-ledger.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { withArtifactPreservingStateReads } from "../../state/artifact-preserving-state-reads.js";
 import { VERSION } from "../../version.js";
+import { measureGatewayBootstrapStep } from "../startup-trace.js";
 import {
   captureTargetDatabaseSchemaContext,
   formatSchemaRefusalLines,
@@ -78,6 +86,7 @@ const ReceiptSchema = z.object({
   ),
   displacedConfigFiles: z.array(z.string()).optional(),
   configDisplacementHashes: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/u)).optional(),
+  deferredInspectionCheckIds: UpdateDoctorDeferredInspectionCheckIdsSchema.optional(),
   error: z.string().optional(),
 });
 type Receipt = z.infer<typeof ReceiptSchema>;
@@ -147,6 +156,12 @@ export async function updateMigrateCommand(
   options: { fullIntegrityCheck?: boolean } = {},
 ): Promise<void> {
   const startedAtMs = Date.now();
+  const measure = <T>(phase: string, run: () => T | Promise<T>) =>
+    withDoctorProgress(
+      `Update migration ${phase.replaceAll("-", " ")}`,
+      () => measureGatewayBootstrapStep(`update.migrate.${phase}`, run),
+      true,
+    );
   const file = receiptPath(backupRoot);
   if ((await readJsonIfExists(file)) !== null) {
     throw new Error(
@@ -155,13 +170,15 @@ export async function updateMigrateCommand(
   }
   const env = process.env;
   // Validate Doctor's projection without retiring config before its state is backed up.
-  const source = await withArtifactPreservingStateReads(() =>
-    captureTargetDatabaseSchemaContext(env, {
-      validateConfigForAdmission: (snapshot) =>
-        projectHeartbeatConfigForUpdateAdmission(snapshot, env, false),
-    }),
+  const source = await measure("config-admission", () =>
+    withArtifactPreservingStateReads(() =>
+      captureTargetDatabaseSchemaContext(env, {
+        validateConfigForAdmission: (snapshot) =>
+          projectHeartbeatConfigForUpdateAdmission(snapshot, env, false),
+      }),
+    ),
   );
-  const preflight = await prepareDoctorDatabasePreflight();
+  const preflight = await measure("schema-preflight", () => prepareDoctorDatabasePreflight());
   if (hasSchemaRefusal(preflight)) {
     throw new Error(formatSchemaRefusalLines(preflight).join("\n"));
   }
@@ -192,13 +209,15 @@ export async function updateMigrateCommand(
         path.basename(normalized),
       );
       lock.assertCurrent();
-      const backup = await createUpdateDatabaseBackup({
-        backupRoot: canonicalRoot,
-        stateDir: resolveStateDir(env),
-        config: source.config,
-        env,
-        stopped: true,
-      });
+      const backup = await measure("database-backup", () =>
+        createUpdateDatabaseBackup({
+          backupRoot: canonicalRoot,
+          stateDir: resolveStateDir(env),
+          config: source.config,
+          env,
+          stopped: true,
+        }),
+      );
       lock.assertCurrent();
       const databases = [
         ...new Set([...backup.databases.map((entry) => entry.path), ...backup.missingPaths]),
@@ -251,29 +270,35 @@ export async function updateMigrateCommand(
     OPENCLAW_UPDATE_IN_PROGRESS: "1",
     OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
     OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+    OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS: "reported-checks",
+    // Native migration owns the in-process receipt, not an inherited parent IPC file.
+    [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: "",
   };
   const previous = Object.fromEntries(Object.keys(doctorEnv).map((key) => [key, env[key]]));
   Object.assign(env, doctorEnv);
   try {
     preflight.verifiedSnapshots = verifiedSnapshots;
-    try {
-      await runDoctorHealthFlow(
-        defaultRuntime,
-        {
-          repair: true,
-          nonInteractive: true,
-          workspaceSuggestions: false,
-          fullIntegrityCheck: options.fullIntegrityCheck,
-        },
-        undefined,
-        preflight,
-      );
-    } catch (error) {
-      if (!(error instanceof ExitError) || error.code !== 0) {
-        throw error;
+    await captureUpdateDoctorConfigWrites(receipt.configPath, async (capture) => {
+      try {
+        await runDoctorHealthFlow(
+          defaultRuntime,
+          {
+            repair: true,
+            nonInteractive: true,
+            workspaceSuggestions: false,
+            fullIntegrityCheck: options.fullIntegrityCheck,
+          },
+          undefined,
+          preflight,
+        );
+      } catch (error) {
+        if (!(error instanceof ExitError) || error.code !== 0) {
+          throw error;
+        }
       }
-    }
-    const migrated = await prepareDoctorDatabasePreflight();
+      receipt.deferredInspectionCheckIds = capture.deferredInspectionCheckIds;
+    });
+    const migrated = await measure("schema-verification", () => prepareDoctorDatabasePreflight());
     if (hasSchemaRefusal(migrated) || migrated.pendingMigrations?.length) {
       throw new Error(
         "Doctor did not complete the candidate database migrations; the recovery backup was retained.",
@@ -448,7 +473,7 @@ export async function updateFinishCommand(backupRoot: string): Promise<void> {
   // receipt without its start time cannot prove that ordering and is not recorded.
   if (receipt.startedAtMs !== undefined) {
     try {
-      createUpdateRun(
+      const recorded = createUpdateRun(
         {
           runId: receipt.runId,
           trigger: "cli",
@@ -457,9 +482,97 @@ export async function updateFinishCommand(backupRoot: string): Promise<void> {
         },
         { env: process.env },
       );
+      if (receipt.deferredInspectionCheckIds?.length) {
+        const pendingStep = "warning:post-activation doctor inspections";
+        recordUpdateRunDiagnostic(
+          receipt.runId,
+          "Deferred Doctor inspections are pending; retry update finish if interrupted.",
+          { env: process.env },
+          pendingStep,
+        );
+        const [
+          { readConfigFileSnapshot },
+          { updateRunStepsFromResultStep },
+          { waitForGatewayHttpReadiness },
+          { resolveUpdateRoot },
+          { runPostActivationInspections },
+        ] = await Promise.all([
+          import("../../config/config.js"),
+          import("../../infra/update-run-step.js"),
+          import("../daemon-cli/restart-health-probe.js"),
+          import("./shared.js"),
+          import("./update-command-post-activation-inspections.js"),
+        ]);
+        const root = await resolveUpdateRoot();
+        const { config } = await readConfigFileSnapshot();
+        const readiness = await waitForGatewayHttpReadiness({
+          config,
+          port: resolveGatewayPort(config),
+          attempts: 1,
+          deadlineAt: performance.now() + 3_000,
+          delayMs: 0,
+          requireChannelHealth: false,
+        });
+        const result = await runPostActivationInspections({
+          root,
+          gatewayReady: readiness.coreReady === true,
+          result: {
+            status: "ok",
+            mode: "unknown",
+            durationMs: 0,
+            steps: [
+              {
+                name: "openclaw doctor",
+                command: "doctor --repair",
+                cwd: root,
+                durationMs: 0,
+                exitCode: 0,
+                deferredInspectionCheckIds: receipt.deferredInspectionCheckIds,
+              },
+            ],
+          },
+        });
+        const inspection = result.steps.at(-1)!;
+        const complete = inspection.deferredInspectionCheckIds?.length === 0;
+        // Replace earlier retry warnings while preserving bounded lint findings in status.
+        const diagnostics = new Map(
+          recorded.steps
+            .filter((step) => step.step.startsWith(`warning:${inspection.name}`))
+            .map((step) => [step.step, ""]),
+        );
+        diagnostics.set(pendingStep, "");
+        diagnostics.set(inspection.name, "");
+        for (const step of updateRunStepsFromResultStep(inspection)) {
+          if (step.detail !== undefined) {
+            diagnostics.set(step.step, step.detail);
+          }
+        }
+        // Retire the pending warning last, after the findings are durable.
+        const settledWarning = diagnostics.get(pendingStep)!;
+        diagnostics.delete(pendingStep);
+        diagnostics.set(pendingStep, settledWarning);
+        for (const [step, detail] of diagnostics) {
+          recordUpdateRunDiagnostic(receipt.runId, detail, { env: process.env }, step);
+        }
+        warnings.push(
+          ...(inspection.warnings ??
+            [inspection.advisory?.message].filter((message): message is string =>
+              Boolean(message),
+            )),
+        );
+        if (complete) {
+          receipt.deferredInspectionCheckIds = [];
+          await saveReceipt(file, receipt);
+        } else {
+          warnings.push("Deferred Doctor inspections remain pending; retry update finish.");
+        }
+      }
     } catch (error) {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
       warnings.push(
-        `Update history did not record this accepted update (${formatErrorMessage(error)}); retry update finish.`,
+        `Update history or deferred inspections did not complete for this accepted update (${formatErrorMessage(error)}); retry update finish.`,
       );
     }
   }

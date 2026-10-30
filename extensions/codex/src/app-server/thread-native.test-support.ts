@@ -50,7 +50,7 @@ export async function runNativeTurn(
 }
 
 export async function listenForNativeResponses(
-  context: TestContext,
+  context: Pick<TestContext, "onTestFinished">,
   listener: http.RequestListener,
 ) {
   const server = http.createServer(listener);

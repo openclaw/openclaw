@@ -10,10 +10,10 @@ import type { SessionCatalogTranscriptItem } from "../../packages/gateway-protoc
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { readSessionTranscriptHistoryEventPage } from "../config/sessions/session-accessor.sqlite-history-events.js";
-import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
+import { SessionTranscriptColdError } from "../config/sessions/session-transcript-cold-error.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { readPluginInlineViewBlock } from "../shared/plugin-inline-view.js";
 import { isAssistantTextContentType } from "./chat-display-projection.helpers.js";

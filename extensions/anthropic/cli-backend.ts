@@ -210,6 +210,7 @@ export function buildAnthropicCliBackend(
       appendClaudeCliToolNamingGuidance(systemPrompt, openClawMcpToolNames),
     projectNativeToolAuthority: projectClaudeNativeToolAuthority,
     resolveManagedNativeTools: resolveClaudeManagedNativeTools,
+    nativeToolSearch: "ToolSearch",
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
     manualCompaction: {
@@ -306,6 +307,15 @@ export function buildAnthropicCliBackend(
           // the conversation prefix after workspace edits or commits. OpenClaw
           // supplies workspace instructions; Git state can be read with tools.
           CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
+          ...(context.toolAvailability
+            ? {
+                ENABLE_TOOL_SEARCH:
+                  context.toolAvailability.discovery?.includes("ToolSearch") ||
+                  context.toolAvailability.native.includes("ToolSearch")
+                    ? "true"
+                    : "false",
+              }
+            : {}),
           ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
           ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
           ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),

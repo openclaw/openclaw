@@ -76,16 +76,18 @@
   white-space: normal;
 }
 
-.session-menu__item:hover:not(:disabled):not([aria-disabled="true"]),
-.session-menu__item[aria-expanded="true"],
-.session-menu__item:focus-visible,
-.sidebar-session-sort-menu__item:hover,
-.sidebar-session-sort-menu__item:focus-visible {
+/* Canonical Menu rows own their states; keep these rules for plain session rows
+   without changing their specificity or depending on stylesheet load order. */
+.session-menu__item:where(:not(.oc-menu-item)):hover:not(:disabled):not([aria-disabled="true"]),
+.session-menu__item:where(:not(.oc-menu-item))[aria-expanded="true"],
+.session-menu__item:where(:not(.oc-menu-item)):focus-visible,
+.sidebar-session-sort-menu__item:where(:not(.oc-menu-item)):hover,
+.sidebar-session-sort-menu__item:where(:not(.oc-menu-item)):focus-visible {
   background: var(--bg-hover);
 }
 
-.session-menu__item:disabled,
-.session-menu__item[aria-disabled="true"] {
+.session-menu__item:where(:not(.oc-menu-item)):disabled,
+.session-menu__item:where(:not(.oc-menu-item))[aria-disabled="true"] {
   opacity: 0.42;
   cursor: not-allowed;
 }

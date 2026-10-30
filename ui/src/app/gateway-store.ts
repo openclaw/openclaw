@@ -649,6 +649,7 @@ export function createApplicationGateway(
     get snapshot() {
       return snapshot;
     },
+    readPresence: presenceObserver.read,
     get connection() {
       return connection;
     },

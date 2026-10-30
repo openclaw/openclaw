@@ -46,6 +46,10 @@ export const validateMentionsChangedEvent = createProtocolValidator(
   S.MentionsChangedEventSchema,
   Checks.isMentionsChangedEvent,
 );
+export const validateMentionsFailedEvent = createProtocolValidator(
+  S.MentionsFailedEventSchema,
+  Checks.isMentionsFailedEvent,
+);
 export const validateUsersBackgroundGetParams = createProtocolValidator(
   S.UsersBackgroundGetParamsSchema,
   Checks.isUsersBackgroundGetParams,

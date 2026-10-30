@@ -62,7 +62,7 @@ The [Control UI](/web/control-ui) already highlights inline tool diffs and sessi
 
 ## Disable built-in system guidance
 
-To keep the tool but drop the prepended system-prompt guidance, set `plugins.entries.diffs.hooks.allowPromptInjection` to `false`:
+To keep the tool but drop its system-prompt guidance, set `plugins.entries.diffs.hooks.allowPromptInjection` to `false`:
 
 ```json5
 {
@@ -196,7 +196,7 @@ All successful results include `changed`: identical before/after input returns `
     - `fileBytes`
     - `fileFormat`
     - `fileQuality`
-    - `fileScale`
+    - `fileScale` (actual device scale used for PNG, including pixel-budget downscaling; configured scale for PDF)
     - `fileMaxWidth`
 
   </Accordion>

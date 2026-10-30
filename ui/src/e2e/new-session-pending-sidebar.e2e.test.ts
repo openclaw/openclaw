@@ -165,8 +165,8 @@ suite.define(() => {
         await page.goto(
           new URL(controlUiSessionPath("agent:main:other"), suite.server.baseUrl).href,
         );
-        const claws = page.locator('[data-session-section="category:Claws"]');
-        const existing = claws.locator('[data-session-key="agent:main:gateway"]');
+        const templates = page.locator('[data-session-section="category:Claws"]');
+        const existing = templates.locator('[data-session-key="agent:main:gateway"]');
         await existing.waitFor();
         await navigateInApp(page, "new-session", "?agent=main&group=Claws");
         await page.locator(".new-session-page__message").fill("Draft the next release notes");
@@ -178,7 +178,7 @@ suite.define(() => {
 
         const provisional = page.locator(".sidebar-recent-session--creating");
         await expect.poll(() => provisional.count()).toBe(1);
-        expect(await claws.locator(".sidebar-recent-session--creating").count()).toBe(1);
+        expect(await templates.locator(".sidebar-recent-session--creating").count()).toBe(1);
         const top = (locator: typeof provisional) =>
           locator.evaluate((element) => Math.round(element.getBoundingClientRect().top));
         const provisionalTop = await top(provisional);
@@ -211,7 +211,7 @@ suite.define(() => {
         await title.waitFor({ state: "visible" });
         expect(await provisional.locator('[aria-busy="true"]').count()).toBe(0);
         expect(await top(provisional)).toBe(provisionalTop);
-        expect(await claws.locator(`[data-session-key="${params.key}"]`).count()).toBe(0);
+        expect(await templates.locator(`[data-session-key="${params.key}"]`).count()).toBe(0);
         await gateway.setSessionsListResponse({ sessions: [accepted, ...sessions] });
         await page.evaluate(
           (listedSessions) => {
@@ -235,7 +235,7 @@ suite.define(() => {
           },
           [accepted, ...sessions],
         );
-        const admitted = claws.locator(`[data-session-key="${params.key}"]`);
+        const admitted = templates.locator(`[data-session-key="${params.key}"]`);
         await admitted.waitFor();
         await expect.poll(() => provisional.count()).toBe(0);
         expect(await top(admitted)).toBe(provisionalTop);

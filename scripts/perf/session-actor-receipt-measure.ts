@@ -7,7 +7,7 @@
  * its base arm matches full changed-entry receipts, candidate uses field deltas.
  * --phase append-changed measures the same activity change during a transcript
  * append; its base arm matches the full changed-entry append receipt protocol.
- * --phase adoptRun|completeTurn|deliveryPending|deliverySettled measures changed
+ * --phase adoptRun|completeTurn|deliverySettled measures changed
  * lifecycle receipts; base matches their full-entry protocol, candidate uses the
  * existing field-delta protocol. Report bytes/reply by phase; multiply by an
  * explicitly stated synthetic calls/minute, not an inferred production rate.
@@ -28,7 +28,7 @@
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
@@ -48,6 +48,7 @@ import {
 } from "../../src/config/sessions/session-actor-receipt.js";
 import { captureSqliteWorkerCommitReceipt } from "../../src/infra/sqlite-worker-operation-settlement.js";
 import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -67,7 +68,6 @@ assert(
     phase === "patch-changed" ||
     phase === "adoptRun" ||
     phase === "completeTurn" ||
-    phase === "deliveryPending" ||
     phase === "deliverySettled",
 );
 assert(arm === "base" || arm === "candidate", "Choose --arm base or candidate");
@@ -125,11 +125,7 @@ const appended: SessionActorHotState = {
   },
 };
 const isAppend = phase === "append" || phase === "append-changed";
-const lifecycle =
-  phase === "adoptRun" ||
-  phase === "completeTurn" ||
-  phase === "deliveryPending" ||
-  phase === "deliverySettled";
+const lifecycle = phase === "adoptRun" || phase === "completeTurn" || phase === "deliverySettled";
 const changed = phase === "patch-changed" || phase === "append-changed" || lifecycle;
 const after = isAppend ? appended : { ...appended, transcript: before.transcript };
 if (changed) {
@@ -193,9 +189,6 @@ if (!isMainThread) {
   await measure();
 }
 
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 async function measure() {
   freezeTrustedJsonSnapshot(before.entry);
   const sender = new Worker(new URL(import.meta.url), {
@@ -281,7 +274,7 @@ async function measure() {
       values.mode === "allocation" ? await inspector.post("HeapProfiler.stopSampling") : undefined;
     const pauses = collections.filter(({ start: at }) => at >= start && at < end);
     const wire = arm === "base" ? outcome : projectSessionActorCommittedOutcome(outcome, before);
-    const allocatedBytes = sampled ? allocated(sampled.profile.head) : undefined;
+    const allocatedBytes = sampled ? sumSampledHeapBytes(sampled.profile.head) : undefined;
     console.log(
       JSON.stringify({
         arm,

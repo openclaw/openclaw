@@ -58,6 +58,7 @@ it("keeps managed workspace custody through awaited sandbox skill synchronizatio
       workspaceDir,
       workspaceCwd: workspaceDir,
       assertCurrent,
+      protectRuntimeScope: async () => {},
       retain: unexpected,
       provision: unexpected,
       checkpoint: unexpected,

@@ -386,7 +386,7 @@ describe("llama.cpp managed setup", () => {
     const result = await runLlamaCppSetup(ctx);
     const managed = result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
     expect(managed?.timeoutSeconds).toBe(321);
-    expect(managed?.models[0]).toEqual(provider.models[0]);
+    expect(managed?.models?.[0]).toEqual(provider.models[0]);
     expectPrepared({
       chatModel: expect.objectContaining({
         mode: "configure",
@@ -420,7 +420,7 @@ describe("llama.cpp managed setup", () => {
     expect(managed).not.toHaveProperty("auth");
     expect(managed).not.toHaveProperty("headers");
     expect(managed).not.toHaveProperty("params");
-    expect(managed?.models.some((model) => model.id === "external-model")).toBe(false);
+    expect(managed?.models?.some((model) => model.id === "external-model")).toBe(false);
     expect(result.configPatch?.auth).toEqual({
       profiles: { "llama-cpp:default": undefined },
       order: { "llama-cpp": undefined },

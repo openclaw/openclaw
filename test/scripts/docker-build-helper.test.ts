@@ -3561,9 +3561,15 @@ exit ${exitCode}
     },
   );
 
-  it.each([false, true])(
-    "publishes only on the host and preserves Docker outcomes (published baseline: %s)",
-    (publishedBaseline) => {
+  it.each([
+    { publishedBaseline: false, scenario: "base", timeout: "" },
+    { publishedBaseline: true, scenario: "base", timeout: "" },
+    { publishedBaseline: false, scenario: "package-installed-recovery", timeout: "" },
+    { publishedBaseline: false, scenario: "package-installed-recovery", timeout: "1.5s" },
+    { publishedBaseline: false, scenario: "package-installed-recovery", timeout: "0" },
+  ])(
+    "publishes on the host and preserves Docker outcomes/budget: $scenario, published=$publishedBaseline, timeout=$timeout",
+    ({ publishedBaseline, scenario, timeout }) => {
       for (const [exitCode, capturePresent, summaryStatus] of [
         [42, true, null],
         [42, false, null],
@@ -3680,13 +3686,31 @@ exit 0
               OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registry,
               OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR: artifacts,
               OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE: publishedBaseline ? "1" : "0",
-              OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.7.1-2",
+              OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+              OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT: timeout,
+              OPENCLAW_E2E_COMMAND_TIMEOUT: "23s",
+              OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:
+                scenario === "package-installed-recovery" ? "" : "openclaw@2026.7.1-2",
+              OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "manual",
+              OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS: "0",
+              OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS: "",
+              OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI: "0",
+              OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT: "",
               OPENCLAW_DOCKER_ALL_LOG_DIR: "public",
             },
           });
         const result = runWrapper();
         expect(result.status, result.stdout + result.stderr).toBe(exitCode);
         const dockerArgs = readFileSync(join(workDir, "docker-args"), "utf8");
+        const budgetEnv =
+          scenario === "package-installed-recovery"
+            ? "OPENCLAW_E2E_COMMAND_TIMEOUT"
+            : "OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT";
+        // Docker keeps the last value when package arguments repeat an environment key.
+        const effectiveBudget = dockerArgs
+          .split("\n")
+          .findLast((arg) => arg.startsWith(`${budgetEnv}=`));
+        expect(effectiveBudget).toBe(`${budgetEnv}=${timeout || "900s"}`);
         expect(dockerArgs).toContain(`${artifacts}:/tmp/openclaw-upgrade-survivor-artifacts`);
         expect(dockerArgs).not.toContain(publicRoot);
         expect(dockerArgs).not.toContain(":/tmp/openclaw-upgrade-survivor-artifacts/diagnostics");

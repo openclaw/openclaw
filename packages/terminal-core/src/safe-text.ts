@@ -6,11 +6,11 @@ export function hasTerminalControl(input: string): boolean {
 }
 
 /**
- * Normalize untrusted text for single-line terminal/log rendering.
+ * Normalize untrusted text for single-line rendering, including bidirectional controls.
  */
 export function sanitizeTerminalText(input: string): string {
   // Strip escapes first so removed bytes cannot become a new ANSI sequence.
-  return stripAnsi(input).replace(/\p{Cc}/gu, (control) =>
+  return stripAnsi(input).replace(/[\p{Cc}\p{Bidi_Control}]/gu, (control) =>
     control === "\r" ? "\\r" : control === "\n" ? "\\n" : control === "\t" ? "\\t" : "",
   );
 }

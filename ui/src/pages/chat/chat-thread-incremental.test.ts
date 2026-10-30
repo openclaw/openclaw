@@ -330,3 +330,75 @@ it("retires superseded grouping snapshots when prepends extend a forwarded segme
     preparation.mockRestore();
   }
 });
+
+it("keeps one owned canvas while its answer shortcode streams", () => {
+  resetChatThreadState();
+  const runId = "widget-run";
+  const props = createProps({
+    runId,
+    streamStartedAt: 3,
+    stream: "Ready",
+    messages: [
+      message("request", "user", 1, "Show a widget"),
+      message(
+        "widget",
+        "assistant",
+        2,
+        [
+          { type: "toolCall", id: "yield", name: "sessions_yield", arguments: {} },
+          {
+            type: "canvas",
+            preview: {
+              kind: "canvas",
+              surface: "assistant_message",
+              render: "url",
+              viewId: "cv_owned",
+              url: "/__openclaw__/canvas/documents/cv_owned/index.html",
+            },
+          },
+        ],
+        { __openclaw: { id: "widget", seq: 2, runId } },
+      ),
+    ],
+  });
+  buildCachedChatItems(props);
+  for (const stream of [
+    'Ready [embed ref="cv_owned" /]',
+    'Ready [embed ref="cv_owned" /] and [embed ref="cv_other" /].',
+  ]) {
+    const cached = buildCachedChatItems({ ...props, stream });
+    const cold = buildChatItems({ ...props, stream });
+    for (const items of [cached, cold]) {
+      const text = items
+        .filter((item) => item.kind === "stream")
+        .map((item) => item.text)
+        .join("");
+      expect(text).not.toContain('ref="cv_owned"');
+      expect(text).toContain("Ready");
+      expect(text.includes('ref="cv_other"')).toBe(stream.includes('ref="cv_other"'));
+      expect(
+        items
+          .flatMap((item) => (item.kind === "group" ? item.messages : []))
+          .flatMap((item) => normalizeMessage(item.message).content)
+          .filter((block) => block.type === "canvas"),
+      ).toHaveLength(1);
+    }
+  }
+  const segment = buildChatItems({
+    ...props,
+    stream: null,
+    streamSegments: [{ text: 'Ready [embed ref="cv_owned" /]', runId, ts: 3 }],
+  });
+  expect(segment.filter((item) => item.kind === "stream").map((item) => item.text)).toEqual([
+    "Ready ",
+  ]);
+  const otherRun = buildCachedChatItems({
+    ...props,
+    runId: "other-run",
+    stream: '[embed ref="cv_owned" /]',
+  });
+  expect(
+    otherRun.some((item) => item.kind === "stream" && item.text.includes('ref="cv_owned"')),
+  ).toBe(true);
+  resetChatThreadState();
+});

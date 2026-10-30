@@ -191,11 +191,11 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
     const context = captureOpenClawStateWorkerContext({ path: databasePath, env: state.env });
     const first = createBackend(context, true);
     const second = createBackend(context, true);
-    await first[SQLITE_WORKER_PREPARE_COMMAND]?.("claws.install-schema-versions");
+    await first[SQLITE_WORKER_PREPARE_COMMAND]?.("templates.install-schema-versions");
     await second[SQLITE_WORKER_PREPARE_COMMAND]?.(operation);
     expect(
       first.execute({
-        type: "claws.install-schema-versions",
+        type: "templates.install-schema-versions",
         input: { artifactPreservingReadOnly: false },
       }),
     ).toEqual([]);
@@ -230,7 +230,7 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
     expect(database.db.isOpen).toBe(false);
 
     const reopened = createBackend(captureOpenClawStateWorkerContext());
-    await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("claws.install-schema-versions");
+    await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("templates.install-schema-versions");
     const reopenedDatabase = openOpenClawStateDatabase();
     if (operation === "config.health.patch") {
       expect(readConfigHealthStateInDatabase(reopenedDatabase.db)).toMatchObject({

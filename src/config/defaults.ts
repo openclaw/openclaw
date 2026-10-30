@@ -110,13 +110,23 @@ export function resolveNormalizedProviderModelMaxTokens(params: {
 
 export function applyMessageDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const messages = cfg.messages;
-  if (messages?.ackReactionScope !== undefined) {
+  if (
+    messages?.ackReactionScope !== undefined &&
+    messages.queue?.allowCollaborativeSteering !== undefined
+  ) {
     return cfg;
   }
 
   return {
     ...cfg,
-    messages: { ...messages, ackReactionScope: "group-mentions" },
+    messages: {
+      ...messages,
+      ackReactionScope: messages?.ackReactionScope ?? "group-mentions",
+      queue: {
+        ...messages?.queue,
+        allowCollaborativeSteering: messages?.queue?.allowCollaborativeSteering ?? true,
+      },
+    },
   };
 }
 

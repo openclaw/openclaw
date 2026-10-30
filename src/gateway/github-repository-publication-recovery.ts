@@ -34,12 +34,12 @@ import type {
 } from "./worker-environments/placement-store.js";
 import { SessionWorkspaceReservationBusyError } from "./worker-environments/placement-workspace-reservation.kernel.js";
 
-export async function settleDeniedRepositoryGitHubPublication(params: {
+export async function observeRepositoryGitHubPublication(params: {
   execution: RepositoryGitHubPublicationExecutionAsync;
   assertCustody: () => void;
-  error: GitHubPublicationRequesterUnavailableError;
-}): Promise<SessionGitHubPublicationResult> {
-  const { execution, assertCustody, error } = params;
+  beforeRetry?: boolean;
+}): Promise<SessionGitHubPublicationResult | undefined> {
+  const { execution, assertCustody } = params;
   assertCustody();
   if (!execution.ownsExecution()) {
     throw new GitHubPublicationRecoveryPendingError(
@@ -106,6 +106,7 @@ export async function settleDeniedRepositoryGitHubPublication(params: {
         parentCommit: row.previous_head_commit ?? row.source_head_commit,
         marker: `<!-- openclaw-publication:${row.request_id} -->`,
         knownPullRequestUrls,
+        beforeRetry: params.beforeRetry,
         refreshIdentity,
         assertCurrent,
         // Older writers could overwrite a prior PR phase with a ref observation.
@@ -126,25 +127,34 @@ export async function settleDeniedRepositoryGitHubPublication(params: {
       );
     }
     if (url) {
-      return projectGitHubPublicationResult(
-        await execution.complete({
-          requestId: row.request_id,
-          status: "published",
-          url,
-          repository: row.repository,
-          branch: row.branch,
-          headCommit: row.head_commit,
-        }),
-      );
+      return {
+        requestId: row.request_id,
+        status: "published",
+        url,
+        repository: row.repository,
+        branch: row.branch,
+        headCommit: row.head_commit,
+      };
     }
   }
+  return undefined;
+}
+
+export async function settleDeniedRepositoryGitHubPublication(params: {
+  execution: RepositoryGitHubPublicationExecutionAsync;
+  assertCustody: () => void;
+  error: GitHubPublicationRequesterUnavailableError;
+}): Promise<SessionGitHubPublicationResult> {
+  const observed = await observeRepositoryGitHubPublication(params);
   return projectGitHubPublicationResult(
-    await execution.complete({
-      requestId: row.request_id,
-      status: "failed",
-      ...error.failure,
-      message: error.message,
-    }),
+    await params.execution.complete(
+      observed ?? {
+        requestId: params.execution.row.request_id,
+        status: "failed",
+        ...params.error.failure,
+        message: params.error.message,
+      },
+    ),
   );
 }
 

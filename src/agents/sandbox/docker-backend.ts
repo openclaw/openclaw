@@ -33,7 +33,6 @@ import {
   execContainer,
   execContainerRaw,
   PODMAN_SANDBOX_ENGINE,
-  resolvePodmanSandboxRuntimeInfo,
   type SandboxContainerEngine,
   type SandboxContainerEngineTarget,
   validateSandboxContainerEngineTarget,
@@ -66,20 +65,13 @@ async function createContainerSandboxBackend(
       "Podman sandboxing does not support browser sandboxes. Install Docker and select the docker backend, or disable sandbox.browser.enabled.",
     );
   }
-  const podmanTarget =
-    engine.id === "podman" ? (await resolvePodmanSandboxRuntimeInfo()).target : undefined;
   const dockerTarget = engine.id === "docker" ? await captureDockerPersistentTarget() : undefined;
   assertCurrent();
-  const boundEngine = podmanTarget
-    ? bindPodmanSandboxEngine(podmanTarget)
-    : dockerTarget
-      ? bindDockerPersistentTarget(dockerTarget)
-      : engine;
+  const configuredEngine = dockerTarget ? bindDockerPersistentTarget(dockerTarget) : engine;
   phases.mark("attempt.setup.sandbox.backend.container");
-  const { containerName, containerId, configHash, mountPlan, currentConfig } =
+  const { containerName, containerId, configHash, mountPlan, currentConfig, podmanTarget } =
     await ensureSandboxContainer({
-      engine: boundEngine,
-      ...(podmanTarget ? { podmanTarget } : {}),
+      engine: configuredEngine,
       ...(dockerTarget ? { dockerTarget } : {}),
       scopeKey: params.scopeKey,
       workspaceDir: params.workspaceDir,
@@ -95,6 +87,7 @@ async function createContainerSandboxBackend(
         : {}),
     });
   assertCurrent();
+  const boundEngine = podmanTarget ? bindPodmanSandboxEngine(podmanTarget) : configuredEngine;
   // Allocation pins the generation under its lifecycle lock; never rediscover it
   // by reusable name after another admission or recreation can acquire the lock.
   phases.mark("attempt.setup.sandbox.backend.mount_snapshot");

@@ -181,7 +181,7 @@ export async function assessInitialUpdateSnapshotCapacity(
     let warnings: string[] = [];
     if (params.backupDirectory) {
       try {
-        const backup = await checkUpdateDatabaseBackupSpace(params.backupDirectory, size);
+        const backup = await checkUpdateDatabaseBackupSpace(params.backupDirectory, size, params);
         diagnostics.push(...backup.diagnostics);
         warnings = backup.warnings;
       } catch (error) {

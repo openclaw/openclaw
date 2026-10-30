@@ -136,6 +136,25 @@ afterEach(() => {
 });
 
 describe("candidate update admission", () => {
+  it("admits the legacy Claws preference for candidate Doctor without rewriting config", async () => {
+    writeConfig({
+      gateway: {
+        controlUi: { experimental: { customPlugins: true, chatBubbles: true, claws: true } },
+      },
+    });
+    const before = snapshotFiles();
+    await updateAdmitCommand(contextPath);
+    expect(process.exitCode).toBe(0);
+    expect(readVerdict()).toMatchObject({
+      verdict: "admit",
+      reasons: [],
+      warnings: [{ code: "config-warning", message: expect.stringContaining("legacy fields") }],
+      facts: { checks: expect.arrayContaining([{ name: "config", status: "warn" }]) },
+    });
+    expect(snapshotFiles()).toEqual(before);
+    expect((await readConfigFileSnapshot({ observe: false })).valid).toBe(false);
+  });
+
   it("attests family config through existing admission without mutation", async () => {
     writeConfig({ database: { families: { workboard: { engine: "sqlite" } } } });
     const before = snapshotFiles();

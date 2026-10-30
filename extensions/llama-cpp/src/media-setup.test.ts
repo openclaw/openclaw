@@ -225,6 +225,7 @@ it.each(["chat", "embedding-only"])(
     expect(result.defaultModel).toBe(chatDefault);
     expect(updated.baseUrl).not.toBe(provider.baseUrl);
     expect(updated.params).toEqual(provider.params);
+    assert(updated.models, "Missing replacement router models");
     expect(updated.models.map((model) => model.id)).toEqual(
       provider.models.map((model) => model.id),
     );
@@ -359,7 +360,7 @@ it("preserves chat defaults, inventory, embeddings, provider settings and audio/
   const { configPatch: patch } = await unchangedSetup(ctx);
   expect(describeImage.mock.calls.map(([request]) => request.timeoutMs)).toEqual([30_000, 30_000]);
   expect(patch?.agents?.defaults?.model).toEqual(before.agents?.defaults?.model);
-  expect(patch?.models?.providers?.["llama-cpp"]?.models[0]).toEqual(provider.models[0]);
+  expect(patch?.models?.providers?.["llama-cpp"]?.models?.[0]).toEqual(provider.models[0]);
   expect(patch?.models?.providers?.["llama-cpp"]).toMatchObject({
     headers: provider.headers,
     params: { custom: "retained", modelCacheDir: root },

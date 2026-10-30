@@ -8,7 +8,6 @@ import {
   projectMemoryFlushTools,
 } from "../../agents/agent-tools.memory-flush.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
-import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback.types.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
@@ -28,6 +27,8 @@ import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import {
   createMemoryRunEntryMockImplementation,
+  modelRoutingProvenance,
+  runSelectedMemoryModel,
   type EmbeddedAgentParams,
   type ModelFallbackParams,
 } from "./agent-runner-memory.test-support.js";
@@ -52,14 +53,6 @@ vi.mock("../../infra/agent-run-registry.js", async (importOriginal) => ({
   registerAgentRunContext: vi.fn(),
   clearAgentRunContext: vi.fn(),
 }));
-
-function modelRoutingProvenance(
-  requestedProvider: string,
-  requestedModel: string,
-  stage: ModelFallbackAttemptProvenance["stage"] = "initial",
-): ModelFallbackAttemptProvenance {
-  return { requestedProvider, requestedModel, stage };
-}
 
 function requireEmbeddedAgentCall(index = 0) {
   const call = runEmbeddedAgentMock.mock.calls[index]?.[0] as EmbeddedAgentParams | undefined;
@@ -98,14 +91,7 @@ describe("provider-owned memory flush", () => {
 
   beforeEach(() => {
     rootDir = tempDirs.make("openclaw-memory-tools-");
-    runWithModelFallbackMock.mockReset().mockImplementation(async ({ provider, model, run }) => ({
-      result: await run(provider, model, {
-        modelRoutingProvenance: modelRoutingProvenance(provider, model),
-      }),
-      provider,
-      model,
-      attempts: [],
-    }));
+    runWithModelFallbackMock.mockReset().mockImplementation(runSelectedMemoryModel);
     runEmbeddedAgentEntryMock.mockReset().mockImplementation(
       createMemoryRunEntryMockImplementation({
         runWithModelFallback: runWithModelFallbackMock,

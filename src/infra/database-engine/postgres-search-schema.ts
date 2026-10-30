@@ -9,6 +9,50 @@ import type { SearchSchema } from "./contract.js";
 
 export const pgSearchName = (name: string) => `"${name.replaceAll('"', '""')}"`;
 export const searchConfig = "openclaw_simple_unaccent";
+/**
+ * PostgreSQL's parser keeps dates, paths, file names and `a/b` as single lexemes
+ * (`-08`, `server.py`, `/v1/models`); SQLite FTS5 unicode61 splits on every
+ * non-alphanumeric character. Replacing punctuation runs before parsing gives
+ * both engines the same words; the ASCII class keeps the expression locale-stable.
+ */
+export const postgresSearchTokenSeparators = "[[:punct:]]+";
+/** The stored vector expression; `config` and `field` are already-rendered SQL. */
+export function postgresSearchVectorSql(
+  config: string,
+  field: string,
+  textSearchVersion: 1 | 2 = 1,
+): string {
+  const text = `coalesce(${field}, '')`;
+  const words =
+    textSearchVersion === 2
+      ? `regexp_replace(${text}, '${postgresSearchTokenSeparators}', ' ', 'g')`
+      : text;
+  return `to_tsvector(${config}::regconfig, ${words})`;
+}
+/**
+ * Version 2 maintains the vector from a trigger instead of a generated column:
+ * PostgreSQL 16 cannot change a generated expression in place, and dropping the
+ * column would move its position out of the sealed catalog. The body resolves
+ * the configuration from the trigger's own schema so it carries no namespace.
+ */
+export function postgresSearchTextTriggerSql(params: {
+  table: string;
+  field: string;
+  sync: string;
+}): string {
+  const { table, field, sync } = params;
+  const vector = postgresSearchVectorSql(
+    `format('%I.%I', TG_TABLE_SCHEMA, '${searchConfig}')`,
+    `NEW.${field}`,
+    2,
+  );
+  return `CREATE FUNCTION ${sync}() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.openclaw_search := ${vector};
+  RETURN NEW;
+END $$;
+CREATE TRIGGER ${sync} BEFORE INSERT OR UPDATE OF ${field} ON ${table} FOR EACH ROW EXECUTE FUNCTION ${sync}();`;
+}
 const key: SqliteDatabaseFactKey<{ signature: string; vectorSearchVersion: 1 | 2 }[]> = {
   name: "database.postgres.search",
   schemaDependent: true,
@@ -199,6 +243,7 @@ export function postgresSearchSql(
   shared: { text?: boolean; vector?: boolean } = {},
   decoderVersion: 1 | 2 = 1,
   vectorSearchVersion: 1 | 2 = 1,
+  textSearchVersion: 1 | 2 = 1,
 ): string {
   const ext = pgSearchName(schema.extensionSchema ?? "public");
   const config = `${pgSearchName(namespace)}.${pgSearchName(searchConfig)}`;
@@ -214,8 +259,17 @@ ALTER TEXT SEARCH CONFIGURATION ${config} ALTER MAPPING FOR hword, hword_part, w
     }
     const table = pgSearchName(index.table),
       field = pgSearchName(index.fields[0]!);
-    statements.push(`ALTER TABLE ${table} ADD COLUMN openclaw_search tsvector GENERATED ALWAYS AS (to_tsvector(${configLiteral}::regconfig, coalesce(${field}, ''))) STORED;
-CREATE INDEX ${pgSearchName(`${index.table}_search_gin`)} ON ${table} USING gin(openclaw_search);`);
+    statements.push(
+      textSearchVersion === 2
+        ? // The backfill is a no-op on fresh tables and indexes rows a port copied before this DDL.
+          `ALTER TABLE ${table} ADD COLUMN openclaw_search tsvector;
+${postgresSearchTextTriggerSql({ table, field, sync: pgSearchName(`${index.table}_search_sync`) })}
+UPDATE ${table} SET openclaw_search = ${postgresSearchVectorSql(configLiteral, field, 2)};`
+        : `ALTER TABLE ${table} ADD COLUMN openclaw_search tsvector GENERATED ALWAYS AS (${postgresSearchVectorSql(configLiteral, field)}) STORED;`,
+    );
+    statements.push(
+      `CREATE INDEX ${pgSearchName(`${index.table}_search_gin`)} ON ${table} USING gin(openclaw_search);`,
+    );
     if (index.postgres.mode === "trigram") {
       statements.push(
         `CREATE INDEX ${pgSearchName(`${index.table}_trgm_gin`)} ON ${table} USING gin(${field} ${ext}.gin_trgm_ops);`,

@@ -95,6 +95,7 @@ export function createDispatchFixture(
     runDiscoveryMisses?: number;
     targetAlreadyRemote?: boolean;
     includeTargetRef?: boolean;
+    releaseRef?: string;
     workflowSource?: string;
     targetSource?: Record<string, string>;
     omitPurpose?: boolean;
@@ -103,6 +104,11 @@ export function createDispatchFixture(
     activeConcurrencyRun?: boolean;
     completedConcurrencyHistory?: number;
     releaseNotes?: string;
+    candidateOpenPrHead?: boolean;
+    candidateWebFlowMerge?: boolean;
+    candidateSignature?: "valid" | "missing" | "invalid";
+    candidateAuthorityActor?: string;
+    candidateAuthorityRevoked?: boolean;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-release-dispatch-"));
@@ -131,7 +137,7 @@ export function createDispatchFixture(
   const payloadCapturePath = join(root, "payload-capture.json");
   const preloadPath = join(root, "immediate-poll.mjs");
   const waitCallsPath = join(root, "wait-calls.txt");
-  const releaseRef = "release/2026.8.1";
+  const releaseRef = options.releaseRef ?? "release/2026.8.1";
   mkdirSync(binDir);
   writeFileSync(npmCallsPath, "");
   writeFileSync(
@@ -406,9 +412,42 @@ if (args[0] === "api" && method === "GET" && !hasNoCache) {
 const admissionEndpoint = endpoint.includes("/actions/workflows/openclaw-release-prepare.yml") ||
   endpoint.endsWith("/actions/workflows/18/runs") || endpoint.includes("/actions/runs/321/") ||
   endpoint.includes("/actions/artifacts/9002") || endpoint.includes("/contents/") ||
-  endpoint.includes("/compare/") || endpoint.includes("/git/ref/") ||
-  endpoint === "repos/openclaw/openclaw/collaborators/release-operator/permission";
-if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && admissionEndpoint) {
+  endpoint.includes("/compare/") || endpoint.includes("/branches-where-head") ||
+  endpoint.includes("/git/ref/") ||
+  (endpoint.startsWith("repos/openclaw/openclaw/collaborators/") &&
+    endpoint.endsWith("/permission"));
+if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
+  const signature = ${JSON.stringify(options.candidateSignature ?? "valid")};
+  console.log(JSON.stringify({ data: { repository: { object: {
+    oid: fields.get("oid"),
+    signature: signature === "missing" ? null : {
+      isValid: signature === "valid",
+      state: signature === "valid" ? "VALID" : "INVALID",
+      signer: { login: ${JSON.stringify(options.candidateAuthorityActor ?? "release-operator")} },
+    },
+    associatedPullRequests: { nodes: ${JSON.stringify([
+      ...(options.candidateOpenPrHead
+        ? [
+            {
+              state: "OPEN",
+              headRefOid: targetSha,
+              headRepository: { nameWithOwner: "openclaw/openclaw" },
+            },
+          ]
+        : []),
+      ...(options.candidateWebFlowMerge
+        ? [
+            {
+              state: "MERGED",
+              baseRefName: "release/2026.8.1",
+              baseRepository: { nameWithOwner: "openclaw/openclaw" },
+              mergeCommit: { oid: targetSha },
+            },
+          ]
+        : []),
+    ])} },
+  } } } }));
+} else if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && admissionEndpoint) {
   import(${JSON.stringify(admissionFixturePath)}).then(({ respond }) => respond(args,
     ${JSON.stringify({ origin, checkout, publisherSha: workflowSha, targetSha, admissionCapturePath, admissionReceiptPath, options })})).catch((error) => {
       console.error(error.stack); process.exitCode = 1;
@@ -635,14 +674,8 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
     const args: string[] = [];
     if (!recoveryOnly) {
       if (options.candidateOwned) {
-        args.push(
-          "--admission-workflow-sha",
-          workflowSha,
-          "-f",
-          "provider=openai",
-          "-f",
-          "release_profile=stable",
-        );
+        args.push("--admission-workflow-sha", workflowSha);
+        args.push("-f", "provider=openai", "-f", "release_profile=stable");
       } else if (!extraArgs.includes("--trusted-workflow-ref")) {
         args.push("--trusted-workflow-ref", "main", "--workflow-sha", workflowSha);
       }

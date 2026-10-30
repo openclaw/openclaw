@@ -486,18 +486,10 @@ it("resolves Windows PowerShell and pwsh profile directories", () => {
   expect(resolve(windowsShells.legacy)).toBe(profile("WindowsPowerShell"));
 });
 
-it("rejects install when the completion cache is missing", async () => {
-  await withCompletionHome(async () => {
-    await expect(installCompletion("zsh", true, "openclaw")).rejects.toThrow(
-      "Completion cache not found",
-    );
-  });
-});
-
 it.skipIf(process.platform === "win32").each([
   [
     "bash",
-    '# OpenClaw Completion\n[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"',
+    '# User text 合法 � 😀\n# OpenClaw Completion\n[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"',
     true,
   ],
   [

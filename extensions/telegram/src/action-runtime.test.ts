@@ -198,6 +198,19 @@ describe("Telegram registered action authority and input contracts", () => {
     });
   });
 
+  it.each([
+    ["after a lost delete response", [{ resetConnection: true } as const]],
+    ["when it is already gone", []],
+  ])("reports a delete as done %s", async (_case, before) => {
+    rejections.push(...before, "Bad Request: message to delete not found");
+    const params = { chatId: "telegram:-1001:topic:77", messageId: 456 };
+    const result = await invoke("delete", params, trusted);
+    expect(result.details).toEqual({ ok: true, deleted: true });
+    expect(requests.map(({ method }) => method)).toEqual(
+      Array.from({ length: before.length + 1 }, () => "deleteMessage"),
+    );
+  });
+
   it.each(["77"])(
     "binds a topicless reaction to trusted topic %s without borrowing another chat",
     async (thread) => {

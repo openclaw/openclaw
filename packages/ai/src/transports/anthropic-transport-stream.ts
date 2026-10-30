@@ -265,7 +265,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           serverSideFallback: !isOAuthToken && supportsAnthropicServerSideFallback(model),
           claudeCodeVersion,
           directApiKeyBetaHeader,
-          request: async (body, requestHeaders) => {
+          request: async (_body, requestHeaders, encodeBody) => {
             const headers = new Headers(
               omitNullRequestHeaders(
                 mergeTransportHeaders(
@@ -286,7 +286,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             const response = await fetch(url, {
               method: "POST",
               headers,
-              body: JSON.stringify(body),
+              body: encodeBody(),
               signal: transportOptions.signal,
             });
             return {

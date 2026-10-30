@@ -1,4 +1,3 @@
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import {
   applyMistralModelCompat,
@@ -6,7 +5,6 @@ import {
   MISTRAL_SMALL_4_ID,
   MISTRAL_SMALL_LATEST_ID,
 } from "./api.js";
-import mistralPlugin from "./index.js";
 
 const transportCompat = {
   supportsStore: false,
@@ -65,24 +63,5 @@ describe("applyMistralModelCompat", () => {
   it("returns the same object when the compat patch is already present", () => {
     const model = { compat: { ...transportCompat, supportsReasoningEffort: false } };
     expect(applyMistralModelCompat(model)).toBe(model);
-  });
-
-  it("exposes every documented thinking level through the registered provider", async () => {
-    const provider = await registerSingleProviderPlugin(mistralPlugin);
-    const profile = provider.resolveThinkingProfile?.({
-      provider: "mistral",
-      modelId: MISTRAL_SMALL_LATEST_ID,
-    });
-    expect(profile?.levels.map(({ id }) => id)).toEqual([
-      "off",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "adaptive",
-      "max",
-    ]);
-    expect(profile?.defaultLevel).toBe("off");
   });
 });

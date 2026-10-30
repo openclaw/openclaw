@@ -124,11 +124,7 @@ export function captureSidebarSnapshotModel(
     snapshotSubtitle: row.snapshot
       ? row.snapshotSubtitle
       : resolveSidebarSessionRowSubtitle(host, row),
-    state: sidebarSessionBadgeFacts(
-      host.sessionPullRequests,
-      row,
-      host.sidebarAgentsMode === "roster",
-    ),
+    state: sidebarSessionBadgeFacts(host.sessionPullRequests, row),
   });
   return parseSidebarSnapshot({
     routingDefaults: {
@@ -137,6 +133,7 @@ export function captureSidebarSnapshotModel(
     },
     roster: bootRoster,
     mode: host.sidebarAgentsMode,
+    grouping: host.effectiveSessionsGrouping(),
     navigationView: host.navigationView,
     pages: snapshotSessions(
       (host.navigationCatalog.dashboards?.result?.sessions ?? []).map((row) =>

@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createGatewayHarness } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
@@ -14,6 +15,7 @@ export function createChatPageStateContext() {
       ensureList: vi.fn(async () => null),
     },
     agentSelection: { state: { selectedId: "main" } },
+    agentIdentity: createAgentIdentityCapability(gateway),
     basePath: "",
     config: {
       current: {

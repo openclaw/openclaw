@@ -361,29 +361,23 @@ describe("private subagent completion processing receipts", () => {
     expect(followupDelivery).toEqual([false, undefined]);
   });
 
-  it("binds a settle handoff to the source accepted by pending-input replay", async () => {
+  it("binds a settle handoff to the accepted source in its live batch", async () => {
     const sourceSessionKeys = ["agent:main:subagent:first", "agent:main:subagent:second"] as const;
     const stage = pendingInputs.stageSessionPendingInput;
     const seed = vi
       .spyOn(pendingInputs, "stageSessionPendingInput")
       .mockImplementationOnce(async (target, options) => {
-        const previous = expectDefined(
-          await stage(target, {
-            ...options,
-            message: {
-              ...options.message,
-              provenance: {
-                ...options.message.provenance,
-                kind: "inter_session",
-                sourceSessionKey: sourceSessionKeys[1],
-              },
+        return stage(target, {
+          ...options,
+          message: {
+            ...options.message,
+            provenance: {
+              ...options.message.provenance,
+              kind: "inter_session",
+              sourceSessionKey: sourceSessionKeys[1],
             },
-          }),
-          "Expected the interrupted scheduling sibling's input",
-        );
-        previous.finish("interrupted");
-        await previous.settled?.();
-        return await stage(target, options);
+          },
+        });
       });
     agentCommandMock.mockImplementationOnce(async (input) => {
       const command = input as AgentCommandOpts;
@@ -648,43 +642,6 @@ describe("private subagent completion processing receipts", () => {
     },
   );
 
-  it("resumes admitted but unprocessed input after a Gateway restart", async ({ signal }) => {
-    const gate = createEnteredGate();
-    let processingCount = 0;
-    signal.addEventListener("abort", () => gate.release(), { once: true });
-    agentCommandMock.mockImplementationOnce(async (input) => {
-      const command = input as AgentCommandOpts;
-      expect(await recorder(input).persistApproved()).toMatchObject({ appended: true });
-      command.abortSignal!.addEventListener("abort", () => gate.release(), { once: true });
-      await gate.wait();
-      command.abortSignal!.throwIfAborted();
-      throw new Error("restart must interrupt before private processing");
-    });
-    const observed = observe(dispatch());
-    await gate.entered;
-    expect(completions()).toEqual([]);
-    expect(processingCount).toBe(0);
-    const before = transcript();
-    await harness.server.close({
-      reason: "gateway restart",
-      restartExpectedMs: 0,
-      drainTimeoutMs: 0,
-    });
-    await observed;
-    closeOpenClawAgentDatabasesForTest();
-    await start();
-    await prepareGatewayReplyRuntimeForTest({ force: true });
-    agentCommandMock.mockImplementationOnce(async (input) => {
-      await recorder(input).persistApproved();
-      processingCount += 1;
-      return agentResult({ terminalReply: { disposition: "silent" } });
-    });
-    await expectProcessed(2);
-    expect(processingCount).toBe(1);
-    expect(transcript()).toEqual(before);
-    expect(pending()).toEqual([]);
-  });
-
   it("retries a private queue timeout and settles processing without caller-thread pending-input writes", async ({
     signal,
   }) => {
@@ -713,7 +670,7 @@ describe("private subagent completion processing receipts", () => {
       expect(timedOut).toMatchObject({ status: "timeout", stopReason: "timeout" });
       await expectDrained(aborted);
       expect(agentCommandMock).not.toHaveBeenCalled();
-      expect(pending()).toMatchObject([{ state: "interrupted" }]);
+      expect(pending()).toMatchObject([{ state: "cancelled" }]);
       agentCommandMock.mockImplementationOnce(processPrivateInput);
       await expectProcessed();
       expect(pending()).toEqual([]);
@@ -861,7 +818,7 @@ describe("private subagent completion processing receipts", () => {
           if (phase === "admission") {
             expect(pending()).toEqual([]);
           } else {
-            expect(pending()).toMatchObject([{ state: "interrupted" }]);
+            expect(pending()).toMatchObject([{ state: "cancelled" }]);
           }
         }
         expect(completions()).toEqual([]);

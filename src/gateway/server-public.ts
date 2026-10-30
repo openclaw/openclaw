@@ -68,6 +68,8 @@ export type GatewayServerOptions = {
   hostLifecycle?: GatewayHostLifecycle;
   /** Internal startup ownership; direct callers own their awaited startup work. */
   startupOperation?: GatewayStartupOperation;
+  /** Host decision after startup fails; only process-exiting rollback may retain cleanup. */
+  exitAfterStartupFailure?: (error: unknown) => boolean;
   /** Exact lifecycle generation projected to connected clients. */
   bootId?: string;
   /**

@@ -32,7 +32,8 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withGatewayMaintenanceDrain } from "../update-cli/update-command-service-drain.js";
 import { waitForGatewayHealthyRestart } from "./restart-health.js";
 
-vi.mock("../../daemon/systemd-maintenance.js", () => ({
+vi.mock("../../daemon/systemd-stop-policy.js", async (actual) => ({
+  ...(await actual<typeof import("../../daemon/systemd-stop-policy.js")>()),
   readSystemdGatewayStopTimeout: async () => 330_000,
 }));
 

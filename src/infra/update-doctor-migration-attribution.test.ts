@@ -231,8 +231,10 @@ it.each(["unchanged", "changed data", "same-content commit", "replaced file"])(
     if (change === "replaced file") {
       fs.renameSync(pathname, `${pathname}.old`);
       fs.copyFileSync(`${pathname}.old`, pathname);
-    } else if (change !== "unchanged") {
-      using writer = new DatabaseSync(pathname);
+    }
+    // Retain committed WAL evidence; closing the last writer can erase its commit history.
+    using writer = new DatabaseSync(pathname);
+    if (change === "changed data" || change === "same-content commit") {
       writer.exec("UPDATE retained SET value = 8;");
       if (change === "same-content commit") {
         writer.exec("UPDATE retained SET value = 7;");

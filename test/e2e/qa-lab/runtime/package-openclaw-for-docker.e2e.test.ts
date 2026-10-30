@@ -1387,7 +1387,12 @@ describe("package-openclaw-for-docker", () => {
     const packageJsonPath = path.join(sourceDir, "package.json");
     const originalPackageJson = `${JSON.stringify(
       {
-        dependencies: { "@openclaw/ai": "workspace:*", "dep-a": "workspace:1.2.3" },
+        dependencies: {
+          "@openclaw/ai": "workspace:*",
+          "dep-a": "workspace:1.2.3",
+          "root-required": "2.0.0",
+          "root-optional-peer": "3.0.0",
+        },
         devDependencies: { "@openclaw/session-url-contract": "workspace:*" },
         files: ["dist"],
         name: "openclaw",
@@ -1441,9 +1446,15 @@ describe("package-openclaw-for-docker", () => {
                 },
                 name: "@openclaw/ai",
                 version: "2026.6.17",
-                peerDependencies: { "@opentelemetry/api": "^1.9.0", retained: "1.0.0" },
+                peerDependencies: {
+                  "@opentelemetry/api": "^1.9.0",
+                  "root-required": "^2.0.0",
+                  "root-optional-peer": "^3.0.0",
+                  retained: "1.0.0",
+                },
                 peerDependenciesMeta: {
                   "@opentelemetry/api": { optional: true },
+                  "root-optional-peer": { optional: true },
                   retained: { optional: true },
                 },
               })}\n`,
@@ -1464,6 +1475,8 @@ describe("package-openclaw-for-docker", () => {
       expect(packageJson.dependencies["@openclaw/ai"]).toBe("2026.6.17");
       expect(packageJson.dependencies["@openclaw/private-runtime"]).toBeUndefined();
       expect(packageJson.dependencies["dep-a"]).toBe("1.2.3");
+      expect(packageJson.dependencies["root-required"]).toBe("2.0.0");
+      expect(packageJson.dependencies["root-optional-peer"]).toBe("3.0.0");
       expect(packageJson.devDependencies?.["@openclaw/session-url-contract"]).toBe("workspace:*");
       expect(packageJson.bundleDependencies).toContain("@openclaw/ai");
       expect(fs.existsSync(path.join(installedAiPath, "original-marker"))).toBe(false);

@@ -90,6 +90,7 @@ afterEach(async () => {
 
 describe("createMcpStdioClient", () => {
   it("keeps the connection when one stdout chunk contains multiple bounded messages", async () => {
+    vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(0.25);
     const { client, child, stdout, requested } = createFixture();
     const pending = client.request("tools/call", {}, { timeoutMs: 1000 });
     const id = await requested;
@@ -99,7 +100,6 @@ describe("createMcpStdioClient", () => {
       { jsonrpc: "2.0", method: "notifications/message", params: { data: "n".repeat(700) } },
       { jsonrpc: "2.0", id, result },
     );
-
     await expect(pending).resolves.toEqual(result);
     expect(client.isAvailable()).toBe(true);
     expect(child.kill).not.toHaveBeenCalled();

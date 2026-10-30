@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
 import type { ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "./chat-assistant-reply.ts";
@@ -11,6 +11,7 @@ import {
   pending,
   queued,
   signedText as signed,
+  text as textBlock,
   toolResult,
 } from "./chat-thread-fixtures.test-support.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
@@ -302,6 +303,15 @@ it.each<[string, boolean, number[], number[]]>([
   expectHistory([first, answer, ...evidence, later], shown, folded);
 });
 
+it("keeps the earlier answer visible when a late exec completion starts the follow-up turn", () => {
+  const messages = [
+    message("user", "Review the change", 1),
+    message("assistant", "long final answer", 3),
+    message("assistant", "should I fix points 1-4?", 4, { __openclaw: { turnBoundary: true } }),
+  ];
+  expectHistory(messages, [0, 1, 2], []);
+});
+
 it("keeps independent-run trailing activity with its owner", () => {
   const messages = [
     message("user", "Watch the queue", 1),
@@ -369,3 +379,127 @@ it("retains prepared tool outcomes without content blocks as activity", () => {
     { kind: "group", role: "tool", messages: [{ message: outcome }] },
   ]);
 });
+
+// One completed turn folds its preamble, narration and tool work into a single
+// rollup above the answer; the transcript itself keeps every envelope intact.
+describe("completed-turn rollup", () => {
+  const run = { runId: "rollup-run" };
+  const ask = message("user", "Inspect the layout", 1, run);
+  const answer = message("assistant", "The layout is fixed.", 9, {
+    ...run,
+    phase: "final_answer",
+    stopReason: "stop",
+  });
+  const call = (id: string, timestamp: number, narration?: string, name = "read") =>
+    message(
+      "assistant",
+      [
+        ...(narration ? [{ type: "text", text: narration }] : []),
+        { type: "toolCall", id, name, arguments: { path: `${id}.ts` } },
+      ],
+      timestamp,
+      run,
+    );
+  function expectOneRollup(messages: unknown[], ordered: string[] = []) {
+    for (const history of [messages, structuredClone(messages)]) {
+      const items = projected(history);
+      expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
+      expect(visible(items)).toEqual([ask, answer]);
+      const folded = JSON.stringify(work(items));
+      const positions = ordered.map((text) => folded.indexOf(text));
+      expect(positions.every((position) => position >= 0)).toBe(true);
+      expect(positions).toEqual(positions.toSorted((a, b) => a - b));
+    }
+  }
+
+  it("keeps Markdown and plain narration in one ordered rollup", () => {
+    const markdown = message(
+      "assistant",
+      [
+        { type: "text", text: "Checking `layout.ts`:" },
+        { type: "toolCall", id: "first", name: "read", arguments: {} },
+        { type: "text", text: "Found **two** issues:\n- spacing\n- radius" },
+        { type: "toolCall", id: "second", name: "read", arguments: {} },
+      ],
+      2,
+      run,
+    );
+    expectOneRollup(
+      [
+        ask,
+        markdown,
+        tool("first", 3, run),
+        tool("second", 4, run),
+        call("third", 5, "Now the stylesheet."),
+        tool("third", 6, run),
+        answer,
+      ],
+      ["Checking", "first", "Found **two**", "second", "Now the stylesheet.", "third"],
+    );
+  });
+
+  it("keeps tool-result images inside their tool group", () => {
+    const frame = { type: "image", mimeType: "image/png", artifactId: "frame", omitted: true };
+    const result = toolResult("frame", "view_image", [textBlock("Loaded"), frame, frame], 3, run);
+    const messages = [ask, call("frame", 2, undefined, "view_image"), result, answer];
+    for (const history of [messages, structuredClone(messages)]) {
+      const items = projected(history);
+      expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+        "user",
+        "tool",
+        "assistant",
+      ]);
+      const images = groupsOf(items).map(
+        (group) => JSON.stringify(group.messages).match(/"artifactId":"frame"/g)?.length ?? 0,
+      );
+      expect(images).toEqual([0, 2, 0]);
+    }
+  });
+
+  it("moves work recorded after the answer above it", () => {
+    expectOneRollup(
+      [
+        ask,
+        call("before", 2),
+        tool("before", 3, run),
+        answer,
+        call("after", 10),
+        tool("after", 11, run),
+      ],
+      ["before.ts", "after.ts"],
+    );
+  });
+
+  it("leaves bubble-mode turns to the activity disclosure", () => {
+    const groups = cachedGroups([
+      ask,
+      call("bubble", 2, "Checking spacing."),
+      tool("bubble", 3, run),
+      answer,
+    ]);
+    expect(
+      collapseCompletedTurnWork(groups, { sessionKey, runWorking: false, bubbleMode: true }),
+    ).toEqual(groups);
+  });
+});
+
+it.each(["error", "aborted"])(
+  "keeps a terminal %s after the answer outside completed work",
+  (stopReason) => {
+    expectHistory(
+      [
+        message("user", "Check the files", 1),
+        tool("read-first", 2),
+        message("assistant", "The first file is correct.", 3),
+        message(
+          "assistant",
+          [{ type: "toolCall", id: "read-last", name: "read", arguments: {} }],
+          4,
+          { stopReason },
+        ),
+      ],
+      [0, 2, 3],
+      [1],
+    );
+  },
+);

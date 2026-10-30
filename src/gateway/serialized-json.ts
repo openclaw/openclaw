@@ -58,14 +58,12 @@ export class SerializedJsonPayload {
 export function registerSerializedJsonArray<T>(
   values: readonly T[],
   encodedRows: readonly string[],
+  utf8Bytes = encodedRows.reduce((bytes, row) => bytes + Buffer.byteLength(row), 0),
 ): readonly T[] {
   serializedArrays.set(values, {
     rows: encodedRows,
     // Reserve eventual UTF-8 bytes plus string references, without building an unused buffer.
-    retainedBytes: encodedRows.reduce(
-      (bytes, row) => bytes + Buffer.byteLength(row) + 8,
-      2 + Math.max(0, encodedRows.length - 1),
-    ),
+    retainedBytes: utf8Bytes + encodedRows.length * 8 + 2 + Math.max(0, encodedRows.length - 1),
   });
   return values;
 }

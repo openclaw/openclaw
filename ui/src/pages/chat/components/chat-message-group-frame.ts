@@ -180,7 +180,8 @@ export function prepareMessageGroupFrame(
   // no identity, footer or actions of their own, only the run-block gap.
   const isTurnBlock =
     normalizedRole === "tool" ||
-    group.messages.every(({ message }) => isProviderVoiceTranscript(message)) ||
+    (group.messages.length > 0 &&
+      group.messages.every(({ message }) => isProviderVoiceTranscript(message))) ||
     (normalizedRole === "assistant" &&
       !opts.searchResult &&
       !ownsRunFrame &&

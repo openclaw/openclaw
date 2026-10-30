@@ -16,14 +16,14 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import { readFileSync } from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
-import { registerHooks } from "node:module";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -53,20 +53,7 @@ const owner = new URL(
   "../../src/config/sessions/session-accessor.sqlite-branches.ts",
   import.meta.url,
 ).href;
-let replaced = false;
-if (values["base-file"]) {
-  const replacement = pathToFileURL(path.resolve(values["base-file"])).href;
-  registerHooks({
-    load(url, context, next) {
-      if (url !== owner) {
-        return next(url, context);
-      }
-      replaced = true;
-      const result = next(replacement, context);
-      return { format: result.format, source: result.source, shortCircuit: true };
-    },
-  });
-}
+const wasOwnerReplaced = registerPerfOwnerReplacement(owner, values["base-file"]);
 let branchRequests = 0;
 const workers = new Set<Worker>();
 const workerChannel = channel("worker_threads");
@@ -94,16 +81,13 @@ const agentDb = await import("../../src/state/openclaw-agent-db.js");
 const stateDb = await import("../../src/state/openclaw-state-db.js");
 const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snapshot.js");
 setRuntimeConfigSnapshot(JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8")));
-assert(!values["base-file"] || replaced, "Baseline owner was not substituted");
+assert(!values["base-file"] || wasOwnerReplaced(), "Baseline owner was not substituted");
 const scopes = Array.from({ length: 32 }, (_, index) => ({
   agentId: "main",
   sessionKey: `agent:main:team-shape-session-${index + 1}`,
 }));
 const expected: string[] = [];
 const inspector = new Session();
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
-}
 try {
   for (const scope of scopes) {
     const result = await listSessionBranches(scope);
@@ -146,7 +130,7 @@ try {
   const wallMs = performance.now() - start;
   const memoryAfter = process.memoryUsage();
   const allocatedBytes = values.allocations
-    ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+    ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
     : undefined;
   samples.sort((a, b) => a - b);
   console.log(

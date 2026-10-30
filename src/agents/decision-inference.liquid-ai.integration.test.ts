@@ -30,7 +30,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it.each(["profile", "environment", "missing-native", "exchange"] as const)(
+it.each(["profile", "environment", "missing-native", "exchange", "foreign-profile"] as const)(
   "keeps Liquid AI %s auth isolated while dispatch authority changes",
   async (authSource) => {
     const state = await createOpenClawTestState({ applyEnv: false });
@@ -101,7 +101,7 @@ it.each(["profile", "environment", "missing-native", "exchange"] as const)(
             fs.copyFileSync(path.join(sourceRoot, file.name), path.join(pluginRoot, file.name));
           }
         }
-        if (authSource === "exchange") {
+        if (authSource === "exchange" || authSource === "foreign-profile") {
           // Capture the synthetic hook in every prepared registry generation;
           // the real native plugin, auth owner and guarded transport remain intact.
           fs.renameSync(
@@ -143,9 +143,11 @@ export default {
             defaults: {
               model: "liquid/liquid.auto",
               decisionModel:
-                authSource === "profile" || authSource === "exchange"
-                  ? "liquid-ai/d1-ultra@liquid-ai:fixture"
-                  : "liquid-ai/d1-ultra",
+                authSource === "foreign-profile"
+                  ? "liquid-ai/d1-ultra@liquid:default"
+                  : authSource === "profile" || authSource === "exchange"
+                    ? "liquid-ai/d1-ultra@liquid-ai:fixture"
+                    : "liquid-ai/d1-ultra",
               workspace: path.join(state.root, "workspace"),
             },
           },
@@ -198,7 +200,10 @@ export default {
             ...state.envVars,
             OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             LIQUID_API_KEY: "synthetic-exchange-env-key",
-            LIQUIDAI_API_KEY: authSource === "environment" ? "synthetic-native-env-key" : undefined,
+            LIQUIDAI_API_KEY:
+              authSource === "environment" || authSource === "foreign-profile"
+                ? "synthetic-native-env-key"
+                : undefined,
           },
           async () => {
             await state.writeAuthProfiles({
@@ -209,7 +214,9 @@ export default {
                   provider: "liquid",
                   key: "synthetic-exchange-profile-key",
                 },
-                ...(authSource === "profile" || authSource === "exchange"
+                ...(authSource === "profile" ||
+                authSource === "exchange" ||
+                authSource === "foreign-profile"
                   ? {
                       "liquid-ai:fixture": {
                         type: "api_key",
@@ -247,7 +254,9 @@ export default {
               signal: new AbortController().signal,
             });
             // The exchange key and profile must never authenticate a native Decision call.
-            if (authSource === "missing-native") {
+            // A resolvable foreign pin must not reach exchange or HTTP, even with
+            // compatible profile and environment fallbacks available.
+            if (authSource === "missing-native" || authSource === "foreign-profile") {
               expect(await runtime.evaluateV2(batch, options())).toMatchObject({
                 status: "unavailable",
                 reason: "credentials-unavailable",

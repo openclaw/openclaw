@@ -65,7 +65,7 @@ export type Job = {
   detach(): void;
 };
 export type Slot = {
-  sharedState?: true;
+  carrierClass?: "agent" | "shared-state";
   postgresPoolSent?: boolean;
   custody: SqliteWorkerSlotCustody;
   databaseAdmissionCursor: SqliteDatabaseAdmissionCursor;
@@ -154,8 +154,8 @@ export type SqliteWorkerStoreOptions = {
 };
 
 export type PreparedSqliteWorkerOpen = {
-  /** Shared-state intake must not share a carrier with synchronous agent preparation. */
-  sharedState?: true;
+  /** Agent preparation must not block shared-state intake or unrelated plugin actors. */
+  carrierClass?: Slot["carrierClass"];
   /** The caching owner synchronously seals an idle client, or declines reclamation. */
   retireIdle?: () => Promise<void> | undefined;
   onNativeLost?: (reason: Error) => void;
@@ -201,7 +201,7 @@ export type SqliteWorkerOpenCustody = Pick<
   | "onNativeLost"
   | "signal"
   | "retireIdle"
-  | "sharedState"
+  | "carrierClass"
 > & { preparation?: unknown };
 export type SqliteWorkerInputRetention = "snapshot" | "stream";
 export type SqliteWorkerInputPreparation = {

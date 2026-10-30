@@ -41,6 +41,7 @@ import { retainSandboxContainerUsage } from "./container-usage.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { toSandboxProvisioningError } from "./provisioning-error.js";
+import { acquireSandboxRuntimeUse } from "./registry-lifecycle.js";
 import {
   resolveSandboxRuntimeStatus,
   resolveSandboxRuntimeStatusAsync,
@@ -65,6 +66,7 @@ async function ensureSandboxWorkspaceLayout(
   params: ResolveSandboxContextParams,
   selected: Awaited<ReturnType<typeof prepareSandboxWorkspaceSelection>>,
   guard?: WorkspaceStateGuard,
+  lifetime?: DisposableStack,
 ): Promise<{
   agentWorkspaceDir: string;
   scopeKey: string;
@@ -90,6 +92,14 @@ async function ensureSandboxWorkspaceLayout(
     });
 
   assertCurrent?.();
+  if (lifetime) {
+    if (localWorkspace) {
+      await localWorkspace.protectRuntimeScope(scopeKey);
+    } else {
+      lifetime.use(await acquireSandboxRuntimeUse({ scopeKey }));
+    }
+    assertCurrent?.();
+  }
   if (cfg.workspaceAccess !== "rw") {
     await ensureSandboxWorkspace(
       sandboxWorkspaceDir,
@@ -347,7 +357,8 @@ async function resolveSandboxContextWithAuthority(
           operatorAuthority,
           persistentExecution,
         );
-        let releaseContainerUsage: (() => void) | undefined;
+        const lifetime = new DisposableStack();
+        lifetime.use(selected.localWorkspace);
         try {
           phases.mark("attempt.setup.sandbox.github_identity");
           ownedParams.assertCurrent?.();
@@ -382,13 +393,6 @@ async function resolveSandboxContextWithAuthority(
                 };
               })()
             : undefined;
-          if (cfg.prune.idleHours !== 0 || cfg.prune.maxAgeDays !== 0) {
-            phases.mark("attempt.setup.sandbox.prune");
-            await (
-              await import("./prune.js")
-            ).maybePruneSandboxes(undefined, ownedParams.assertCurrent, guard?.assertHost);
-          }
-
           phases.mark("attempt.setup.sandbox.layout");
           const {
             agentWorkspaceDir,
@@ -398,11 +402,11 @@ async function resolveSandboxContextWithAuthority(
             skillsWorkspaceDir,
             workspaceDir,
           } = await timeWorktreePreparationPhase("workspaceLayout", () =>
-            ensureSandboxWorkspaceLayout(ownedParams, selected, guard),
+            ensureSandboxWorkspaceLayout(ownedParams, selected, guard, lifetime),
           );
           localWorkspace?.assertCurrent();
           if (cfg.backend === "docker" || cfg.backend === "podman") {
-            releaseContainerUsage = retainSandboxContainerUsage(scopeKey);
+            lifetime.defer(retainSandboxContainerUsage(scopeKey));
           }
 
           phases.mark("attempt.setup.sandbox.mounts");
@@ -538,10 +542,7 @@ async function resolveSandboxContextWithAuthority(
 
           phases.mark("attempt.setup.sandbox.finalize");
           const sandboxContext: SandboxContext & { backend: typeof backend } = {
-            [Symbol.dispose]: () => {
-              releaseContainerUsage?.();
-              localWorkspace?.[Symbol.dispose]();
-            },
+            [Symbol.dispose]: () => lifetime.dispose(),
             enabled: true,
             ...(runtime.sandboxRequired ? { required: true } : {}),
             ...(localWorkspace
@@ -591,10 +592,12 @@ async function resolveSandboxContextWithAuthority(
               localWorkspace?.assertCurrent();
             },
           });
+          if (cfg.prune.idleHours !== 0 || cfg.prune.maxAgeDays !== 0) {
+            (await import("./prune.js")).scheduleSandboxPrune(assertStateOwner);
+          }
           return sandboxContext;
         } catch (error) {
-          releaseContainerUsage?.();
-          selected.localWorkspace?.[Symbol.dispose]();
+          lifetime.dispose();
           throw error;
         }
       },

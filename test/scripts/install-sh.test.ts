@@ -406,6 +406,7 @@ NODE
       OS=macos
       check_git() { return 0; }
       ensure_pnpm() { :; }
+      ensure_node() { :; }
       resolve_git_openclaw_ref() { printf 'main\\n'; }
       checkout_git_openclaw_ref() {
         [[ "$1" == "$repo" && "$2" == "main" ]] || return 1
@@ -2146,59 +2147,117 @@ EOF
     );
   });
 
-  it("mirrors the canonical support policy for Node release labels", () => {
-    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
-      engines?: { node?: string };
-    };
-    expect(pkg.engines?.node).toBe(">=24.22.1 <25 || >=26.12.1");
+  it.each([
+    ["24.21.0", ">=24.22.1 <25 || >=26.12.1", true],
+    ["24.22.1", ">=24.22.1 <25 || >=26.12.1", false],
+    ["24.21.0", ">=24.16.0 <25 || >=26.1.0", false],
+    ["24.21.0", "", true],
+    ["26.12.0", "", true],
+    ["26.12.1", "", false],
+  ])(
+    "selects a package-compatible runtime for Node %s and engines %s",
+    (version, engine, upgrade) => {
+      const result = runInstallShell(`
+      source "${SCRIPT_PATH}"
+      bootstrap_gum_temp() { :; }; print_installer_banner() { :; }; print_gum_status() { :; }
+      detect_os_or_die() { OS=linux; }; detect_openclaw_checkout() { return 1; }
+      show_install_plan() { :; }; check_existing_openclaw() { return 1; }
+      load_nvm_for_node_detection() { :; }; use_supported_nvm_node() { return 1; }
+      promote_supported_node_binary() { return 1; }; install_homebrew() { :; }
+      node_binary_has_safe_sqlite() { return 0; }
+      node() { printf 'v%s\\n' "$fixture_version"; }
+      npm() {
+        [[ "$*" == 'view openclaw@extended-stable engines.node --fetch-timeout=5000 --fetch-retries=0' ]] || exit 91
+        [[ -n "$fixture_engine" ]] || return 1
+        printf '%s\\n' "$fixture_engine"
+      }
+      install_node() { echo 'runtime upgraded'; fixture_version=26.12.1; }
+      check_git() { return 0; }; fix_npm_permissions() { :; }
+      prepare_git_wrapper_backup_for_npm() { :; }
+      install_openclaw() { check_node; echo 'package install reached'; exit 0; }
+      fixture_version='${version}' fixture_engine='${engine}'
+      INSTALL_METHOD=npm OPENCLAW_VERSION=extended-stable
+      main
+    `);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toContain("package install reached");
+      expect(result.stdout.includes("runtime upgraded")).toBe(upgrade);
+    },
+  );
 
-    const tmp = tempDirs.make("openclaw-install-node-floor-");
-    const bin = join(tmp, "bin");
-    mkdirSync(bin, { recursive: true });
-
-    const nodePath = join(bin, "node");
-    writeFileSync(
-      nodePath,
-      ["#!/bin/sh", 'printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"', ""].join("\n"),
-    );
-    chmodSync(nodePath, 0o755);
-
-    const result = runInstallShell(
-      [
-        `cd ${JSON.stringify(process.cwd())}`,
-        `source ${JSON.stringify(SCRIPT_PATH)}`,
-        "set +e",
-        `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
-        "export PATH",
-        "unset -f node 2>/dev/null || true",
-        "unalias node 2>/dev/null || true",
-        'node() { printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"; }',
-        ...NODE_RELEASE_VERSION_CASES.flatMap((version, index) => [
-          `FAKE_NODE_VERSION=${JSON.stringify(version)}`,
-          "export FAKE_NODE_VERSION",
-          "node_version_is_supported",
-          `printf '${index}=%s\\n' "$?"`,
-        ]),
-        "exit 0",
-      ].join("\n"),
-      {
-        PATH: `${bin}:/usr/bin:/bin`,
-        TERM: "dumb",
-      },
-    );
-
-    expect(result.status).toBe(0);
-    for (const [index, version] of NODE_RELEASE_VERSION_CASES.entries()) {
-      const expectedStatus = isSupportedOpenClawNodeVersion(version) ? 0 : 1;
-      expect(result.stdout, version).toContain(`${index}=${expectedStatus}`);
-    }
+  it.each([
+    ["main", ">=24.16.0 <25 || >=26.1.0", false],
+    ["v2026.10.8", ">=24.22.1 <25 || >=26.12.1", true],
+  ])("uses git %s engines before provisioning Node", (ref, engine, upgrade) => {
+    const result = runInstallShell(`
+      source "${SCRIPT_PATH}"
+      bootstrap_gum_temp() { :; }; print_installer_banner() { :; }; print_gum_status() { :; }
+      detect_os_or_die() { OS=linux; }; detect_openclaw_checkout() { return 1; }
+      show_install_plan() { :; }; check_existing_openclaw() { return 1; }
+      load_nvm_for_node_detection() { :; }; use_supported_nvm_node() { return 1; }
+      promote_supported_node_binary() { return 1; }; install_homebrew() { :; }
+      node_binary_has_safe_sqlite() { return 0; }
+      node() { printf 'v%s\\n' "$fixture_version"; }
+      npm() { return 1; }
+      install_node() { echo 'runtime upgraded'; fixture_version=26.12.1; }
+      check_git() { return 0; }; validate_git_checkout() { :; }
+      clone_git_checkout_transactionally() { mkdir -p "$2/.git"; }
+      git() { return 0; }
+      resolve_git_openclaw_ref() { echo '${ref}'; }
+      checkout_git_openclaw_ref() {
+        printf '%s\\n' '{"engines":{"node":"${engine}"}}' > "$1/package.json"
+      }
+      ensure_pnpm() { check_node; echo 'git build reached'; exit 0; }
+      fixture_version=24.21.0
+      INSTALL_METHOD=git OPENCLAW_VERSION='${ref}' GIT_DIR="$HOME/checkout"
+      main
+    `);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("git build reached");
+    expect(result.stdout.includes("runtime upgraded")).toBe(upgrade);
   });
+
+  it.each(["install.sh", "install-cli.sh"])(
+    "checks canonical Node release labels in %s",
+    (installer) => {
+      const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
+        engines?: { node?: string };
+      };
+      expect(pkg.engines?.node).toBe(">=24.16.0 <25 || >=26.1.0");
+      const result = runInstallShell(
+        [
+          `source "scripts/${installer}"`,
+          "set +e",
+          'node() { printf "%s\\n" "$FAKE_NODE_VERSION"; }',
+          ...NODE_RELEASE_VERSION_CASES.flatMap((version, index) => [
+            `FAKE_NODE_VERSION=${JSON.stringify(version)}`,
+            installer === "install.sh"
+              ? "node_version_is_supported"
+              : 'node_release_version_is_supported "$FAKE_NODE_VERSION"',
+            `printf '${index}=%s\\n' "$?"`,
+          ]),
+          "exit 0",
+        ].join("\n"),
+        { TERM: "dumb", OPENCLAW_INSTALL_CLI_SH_NO_RUN: "1" },
+      );
+      expect(result.status).toBe(0);
+      for (const [index, version] of NODE_RELEASE_VERSION_CASES.entries()) {
+        expect(result.stdout, version).toContain(
+          `${index}=${isSupportedOpenClawNodeVersion(version) ? 0 : 1}`,
+        );
+      }
+    },
+  );
 
   it.each(
     [
       { version: "24.22.1", defect: "none", expected: 0 },
       { version: "24.22.1", defect: "text", expected: 1 },
+      { version: "24.16.0+vendor.1", defect: "none", expected: 0 },
+      { version: "26.1.0", defect: "none", expected: 0 },
+      { version: "24.16.0", defect: "text", expected: 1 },
       { version: "24.15.0+vendor.1", defect: "none", expected: 1 },
+      { version: "26.0.0+vendor.1", defect: "none", expected: 1 },
       { version: "24.22.1", defect: "blob", expected: 1 },
       { version: "24.22.1", defect: "json", expected: 1 },
     ].flatMap(({ version, defect, expected }) =>
@@ -2247,6 +2306,7 @@ EOF
         `
         source "scripts/${installer}"
         PATH="$FIXTURE_ROOT:$PATH"
+        NODE_PACKAGE_ENGINE=">=24.16.0 <25 || >=26.1.0"
         node_bin() { printf '%s/node' "$FIXTURE_ROOT"; }
         npm_bin() { printf '%s/npm' "$FIXTURE_ROOT"; }
         set +e

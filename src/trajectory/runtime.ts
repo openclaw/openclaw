@@ -47,7 +47,6 @@ const TRAJECTORY_PAYLOAD_PROJECTION = {
   maxNodes: TRAJECTORY_RUNTIME_EVENT_MAX_BYTES / 2,
   maxKeys: TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS + 2,
   redactCredentials: false,
-  omitField: (key) => key === "providerReplay",
   propertyScope: "enumerable",
   projectBinary: (binary) => ({
     redacted: "<redacted>",
@@ -238,12 +237,13 @@ function limitTrajectoryPayloadValue(
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
   const limited: Record<string, unknown> = {};
-  for (
-    let index = 0;
-    index < Math.min(keys.length, TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS);
-    index++
-  ) {
+  const count = Math.min(keys.length, TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS);
+  for (let index = 0; index < count; index++) {
     const key = keys[index]!;
+    // Replay is transcript-owned and omitted from capture; never copy its contents.
+    if (key === "providerReplay") {
+      continue;
+    }
     limited[key] = limitTrajectoryPayloadValue(record[key], depth + 1, seen, serialization);
     if (serialization?.jsonCacheable && key === "__proto__") {
       serialization.jsonCacheable = false;

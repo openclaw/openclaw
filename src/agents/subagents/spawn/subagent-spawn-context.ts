@@ -72,6 +72,8 @@ export async function prepareSubagentSessionContext(params: {
       sessionKey: childTarget.canonicalKey,
       sessionStoreKeys: childTarget.storeKeys,
       agentId: params.requesterAgentId,
+      // This child already owns its audience; the fork only installs its initial context.
+      entryPatch: { preserveVisibility: true },
     });
     if (forkedResult.status === "missing-parent") {
       throw new Error(

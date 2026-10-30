@@ -280,8 +280,8 @@ describe("resumed handoff list", () => {
     pane.render();
     const container = createApplicationContextProvider(context);
     // Each draw passes the same transcript, so only the roster can refresh the row.
-    const draw = (row: GatewaySessionRow) => {
-      const props = { selectedSession: parent, messages, subagentSessions: [row] };
+    const draw = (row: GatewaySessionRow, session = parent) => {
+      const props = { selectedSession: session, messages, subagentSessions: [row] };
       const chatProps = expectDefined(pane.chatProps, "chat props");
       renderChatPropsInto(
         container,
@@ -298,6 +298,9 @@ describe("resumed handoff list", () => {
     expect(draw(child)).toEqual(["Docs Done"]);
     const renamed = { ...child, label: "Docs and changelog" };
     expect(draw(renamed)).toEqual(["Docs and changelog Done"]);
+    const working = { ...parent, startedAt: 4_200 };
+    const pausedRows = draw({ ...renamed, subagentRunState: "paused" }, working);
+    expect(pausedRows).toEqual(["Docs and changelog Paused"]);
     const agentStatus = {
       note: "Pick a release note",
       attention: "hand" as const,

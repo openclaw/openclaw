@@ -3,12 +3,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../conf
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import {
-  readSessionSendDelivery,
-  readSessionSendDeliveryAdmission,
-  type SessionSendDelivery,
-} from "../../gateway/session-send-delivery.js";
-import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
+import { readSessionSendDeliveryAdmission } from "../../gateway/session-send-delivery.js";
 import { runAgentStep } from "./agent-step.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
@@ -308,7 +303,8 @@ it.each(["direct", "cron-fallback", "receive-only", "ask-send", "send-only"] as 
       terminalReply: { disposition: "visible" as const, text: "completed peer result" },
     };
     const replyAdmission = await fixture.accept("peer-run");
-    const admitted: SessionSendDelivery[] = [];
+    const admitted: NonNullable<ReturnType<typeof readSessionSendDeliveryAdmission>>["delivery"][] =
+      [];
     const callGateway: AgentToolGatewayRequestCaller = async <T>(
       request: Parameters<AgentToolGatewayRequestCaller>[0],
     ) => {
@@ -324,22 +320,7 @@ it.each(["direct", "cron-fallback", "receive-only", "ask-send", "send-only"] as 
         runId: params.idempotencyKey,
       });
       expect(admission).toBeDefined();
-      const persisted = buildPersistedUserTurnMessage({
-        text: params.message,
-        idempotencyKey: `${params.idempotencyKey}:user`,
-        provenance: {
-          kind: "inter_session",
-          sourceTool: "sessions_send",
-          sourceSessionKey: sourceKey,
-        },
-      });
-      const persistedJson = JSON.stringify({
-        ...persisted,
-        __openclaw: { sessionSendDelivery: admission!.delivery },
-      });
-      const retained = readSessionSendDelivery(JSON.parse(persistedJson));
-      expect(retained).toBeDefined();
-      admitted.push(retained!);
+      admitted.push(admission!.delivery);
       return { runId: params.idempotencyKey } as T;
     };
     const context = prepareSessionsSendReplyContext({

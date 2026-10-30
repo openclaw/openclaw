@@ -151,7 +151,7 @@ suite.define(() => {
             rowHeight: element.parentElement!.getBoundingClientRect().height,
           }));
           if (textScale === 100) {
-            expect(loadingGeometry.rowHeight).toBe(width === 390 ? 44 : 30);
+            expect(loadingGeometry.rowHeight).toBe(width === 390 ? 44 : 32);
           } else {
             expect(loadingGeometry.rowHeight).toBeGreaterThan(30);
           }

@@ -88,14 +88,10 @@ it("preserves paused startup when a new hidden custody refresh consumes its inte
 it("retires an older read on hide and permits the same cursor again on reveal", async () => {
   const first = createDeferred<{
     messages: ReturnType<typeof nativeHistoryMessage>[];
-    hasMore: boolean;
-    totalMessages: number;
   }>();
   let signal: AbortSignal | undefined;
   const older = {
     messages: [1, 2].map((seq) => nativeHistoryMessage(seq)),
-    hasMore: false,
-    totalMessages: 4,
   };
   let attempts = 0;
   const request = vi.fn((method: string, _params: unknown, options?: { signal?: AbortSignal }) => {
@@ -122,8 +118,13 @@ it("retires an older read on hide and permits the same cursor again on reveal", 
   expect(state.chatError).toBeNull();
   pane.presented = true;
   await expect(pane.loadOlderMessages()).resolves.toBe(true);
-  expect(
-    request.mock.calls.filter(([method]) => method === "chat.history").map(([, params]) => params),
-  ).toEqual([expect.objectContaining({ offset: 2 }), expect.objectContaining({ offset: 2 })]);
+  const selectors = request.mock.calls
+    .filter(([method]) => method === "chat.history")
+    .map(([, params]) => params);
+  expect(selectors).toEqual([
+    expect.objectContaining({ cursor: "older-2" }),
+    expect.objectContaining({ cursor: "older-2" }),
+  ]);
+  selectors.forEach((params) => expect(params).not.toHaveProperty("offset"));
   expect(state.chatMessages).toEqual([...older.messages, ...messages]);
 });

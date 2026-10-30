@@ -1,5 +1,4 @@
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
-import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -14,6 +13,7 @@ import type {
   ChatDetailPanelContent,
   FileReaderInteraction,
   FileReaderDraftState,
+  WorkspaceFileLinkTarget,
 } from "./chat-sidebar-content-types.ts";
 
 type SessionWorkspaceView = ReturnType<typeof createSessionWorkspaceProps>;
@@ -77,7 +77,8 @@ export type ChatDetailPanelProps = {
   embedSandboxMode: EmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
   embedded: boolean;
-  onOpenWorkspaceFile: ((target: MarkdownFileLinkTarget) => void) | null;
+  onOpenWorkspaceFile: ((target: WorkspaceFileLinkTarget) => void) | null;
+  onBrowseFiles?: (() => void) | null;
   onOpenSessionLink: ((target: SessionLinkTarget) => void) | null;
   onRevealInWorkspace: ((path: string) => void) | null;
   onOpenImage: ((item: ImageLightboxItem) => void) | null;

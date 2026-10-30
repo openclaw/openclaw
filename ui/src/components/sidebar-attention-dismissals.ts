@@ -111,7 +111,12 @@ export function resolveScopeUpgradeDismissal(params: {
   return (params.state.phase === "guidance" || params.state.phase === "available") && params.scopes
     ? {
         kind: "scopeUpgrade",
-        signature: JSON.stringify([params.state.phase, ...params.scopes.toSorted()]),
+        signature: JSON.stringify([
+          params.state.phase === "guidance" && params.state.reason === "role"
+            ? "role-guidance"
+            : params.state.phase,
+          ...params.scopes.toSorted(),
+        ]),
       }
     : null;
 }

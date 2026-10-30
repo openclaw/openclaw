@@ -40,13 +40,11 @@ import { rpcSourceTesting } from "./session-lifecycle-admission.test-support.js"
 const storeScope = "/synthetic/rpc-source-contracts/sessions.db";
 const sessionKey = "agent:main:rpc-sources";
 const sessionId = "rpc-source-session";
-function registration(
+const registration = (
   runId: string,
   target: ReturnType<typeof captureSessionTarget>,
   scope = { sessionKey, sessionId },
-) {
-  return { runId, ...scope, timeoutMs: 1, target };
-}
+) => ({ runId, ...scope, timeoutMs: 1, target });
 afterEach(() => {
   controllerTesting.resetSessionControllerForTest();
   vi.useRealTimers();
@@ -86,15 +84,13 @@ function runSource(ref: RpcSourceRef, run: Parameters<typeof withSessionTurn>[1]
   );
 }
 
-function state(ref: RpcSourceRef) {
-  return {
-    active: isRpcSourceActive(ref),
-    projected: projectedActive(ref),
-    queued: isRpcSourceQueued(ref),
-    aborted: ref.input.abortSignal.aborted,
-    startedAt: startedAt(ref),
-  };
-}
+const state = (ref: RpcSourceRef) => ({
+  active: isRpcSourceActive(ref),
+  projected: projectedActive(ref),
+  queued: isRpcSourceQueued(ref),
+  aborted: ref.input.abortSignal.aborted,
+  startedAt: startedAt(ref),
+});
 const settle = (...sources: ReturnType<typeof reserve>[]) =>
   Promise.all(sources.map(({ entry }) => sourceSettlement(entry.input)));
 
