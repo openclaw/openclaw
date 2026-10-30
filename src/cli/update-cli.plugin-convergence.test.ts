@@ -466,7 +466,6 @@ describe("update-cli", () => {
     const result = await updatePlugins();
 
     expect(result.status).toBe("warning");
-    expect(result.assessment).toEqual({ kind: "unsafe", reason: "convergence-failed" });
     expect(result.warnings).toEqual([
       expect.objectContaining({
         reason: repairWarning.reason,

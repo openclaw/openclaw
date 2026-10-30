@@ -39,9 +39,11 @@ describe("Solid presentation primitives", () => {
     ));
     expect(view.getAllByRole("status")).toHaveLength(2);
     expect(view.getByRole("status", { name: "Loading…" })).toBeTruthy();
-    expect(view.container.querySelector(".loading-skeleton")?.getAttribute("aria-hidden")).toBe(
-      "true",
-    );
+    const skeletons = [...view.container.querySelectorAll(".skeleton")];
+    expect(skeletons.length).toBeGreaterThan(0);
+    for (const skeleton of skeletons) {
+      expect(skeleton.closest("[aria-hidden='true']")).not.toBeNull();
+    }
     expect(view.container.querySelector(".agent-startup-state")?.textContent).not.toBe("");
   });
 

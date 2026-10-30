@@ -62,11 +62,15 @@ export function createGatewayCronTargetResolver(
     requestedSessionKey?: string | null;
   }) => {
     const requested = paramsValue.requestedSessionKey?.trim();
-    const candidate = toAgentStoreSessionKey({
-      agentId: paramsValue.agentId,
-      requestKey: requested,
-      mainKey: paramsValue.runtimeConfig.session?.mainKey,
-    });
+    // Global scope stores this conversation under the literal key, not its queue identity.
+    const candidate =
+      paramsValue.runtimeConfig.session?.scope === "global" && requested === "global"
+        ? requested
+        : toAgentStoreSessionKey({
+            agentId: paramsValue.agentId,
+            requestKey: requested,
+            mainKey: paramsValue.runtimeConfig.session?.mainKey,
+          });
     const canonical = canonicalizeMainSessionAlias({
       cfg: paramsValue.runtimeConfig,
       agentId: paramsValue.agentId,

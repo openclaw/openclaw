@@ -406,6 +406,11 @@
   outline: none;
 }
 
+/* Enter before the session is ready keeps the draft, dimmed, until it sends. */
+.agent-chat__input--submit-queued .agent-chat__composer-combobox > textarea {
+  color: var(--muted);
+}
+
 .agent-chat__composer-combobox > textarea {
   --scrollbar-thumb: color-mix(in srgb, var(--muted) 20%, transparent);
   --scrollbar-thumb-hover: color-mix(in srgb, var(--muted) 28%, transparent);

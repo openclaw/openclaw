@@ -16,6 +16,7 @@ import {
   resolvePairingGatewayUrl,
   resolvePairingSetupFromConfig,
 } from "../../pairing/setup-code.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import type { WorkerNodeEnrollment, WorkerNodeRuntimePreparation } from "../../plugins/types.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../../shared/device-bootstrap-profile.js";
@@ -258,6 +259,14 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     const { binding, enrollmentSignal, current: requireCurrent } = reserve(record, operationSignal);
     try {
       const prepared = await prepare(record, enrollmentSignal);
+      let workerCodex: WorkerNodeEnrollment["workerCodex"];
+      // Only the prepared runtime's plugin inventory may opt into private Codex inputs.
+      if (prepared.artifact.enabledPluginIds.includes("codex")) {
+        const { readCodexWorkerProvisioningBundle } = loadBundledPluginPublicArtifactModuleSync<{
+          readCodexWorkerProvisioningBundle: () => WorkerNodeEnrollment["workerCodex"];
+        }>({ dirName: "codex", artifactBasename: "worker-provisioning-api.js" });
+        workerCodex = readCodexWorkerProvisioningBundle();
+      }
       requireCurrent();
       await options.store.ensureNodeEnrollment(record.environmentId);
       let current = requireCurrent();
@@ -332,6 +341,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
       };
       const enrollment: WorkerNodeEnrollment = {
         ...mode,
+        ...(workerCodex ? { workerCodex } : {}),
         ...grantRuntime(
           { ...prepared, url: gatewayUrl, tlsFingerprint },
           enrollmentSignal,
