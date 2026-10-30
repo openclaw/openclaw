@@ -40,7 +40,7 @@ type GeneratedImageResult = {
 
 export class CodexGeneratedMediaProjection {
   private readonly itemIds = new Set<string>();
-  private readonly generatedItemIds = new Set<string>();
+  private generatedMediaObserved = false;
   private readonly mediaByItemId = new Map<string, { mediaUrl?: string; savedPath?: string }>();
   private readonly gatewayMaterializedItemIds = new Set<string>();
   private readonly pendingMaterializationsByItemId = new Map<string, Promise<void>>();
@@ -66,7 +66,7 @@ export class CodexGeneratedMediaProjection {
   ) {}
 
   hasGeneratedMedia(): boolean {
-    return this.generatedItemIds.size > 0;
+    return this.generatedMediaObserved;
   }
 
   async recordItemIdentity(item: CodexThreadItem | undefined): Promise<void> {
@@ -109,7 +109,7 @@ export class CodexGeneratedMediaProjection {
     }
     // Image generation is already a billable side effect even if its remote
     // artifact cannot be transferred into this gateway's media store.
-    this.generatedItemIds.add(item.id);
+    this.generatedMediaObserved = true;
     this.itemIds.add(item.id);
     const savedPath = readString(item, "savedPath")?.trim();
     if (savedPath) {
@@ -218,7 +218,7 @@ export class CodexGeneratedMediaProjection {
       return;
     }
     const itemId = readString(item, "id") ?? `raw-image-${this.itemIds.size}`;
-    this.generatedItemIds.add(itemId);
+    this.generatedMediaObserved = true;
     await this.recordImage({
       itemId,
       result,
