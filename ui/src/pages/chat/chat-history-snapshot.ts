@@ -221,38 +221,6 @@ export function reconcileHistoryTail(options: {
   };
 }
 
-/**
- * Older cursor for the rows between a transcript this pane holds from its start
- * and a bounded tail that no longer reaches it. The older page and the tail are
- * both server rows, so filling the gap never trusts held live rows. Larger gaps
- * keep the lazy boundary.
- */
-export function heldHistoryGapCursor(options: {
-  result: ChatHistoryResult;
-  previousMessages: unknown[];
-  previousPagination: ChatHistoryPagination;
-  previousSessionId: string | null;
-  maxRows: number;
-}): string | null {
-  const nextPagination = resolveChatHistoryPagination(options.result);
-  if (
-    !nextPagination.hasMore ||
-    !nextPagination.olderCursor ||
-    options.result.windowReset === true ||
-    options.previousPagination.hasMore ||
-    options.previousMessages.length === 0 ||
-    !options.previousSessionId ||
-    options.previousSessionId !== historySessionId(options.result)
-  ) {
-    return null;
-  }
-  const readEnd = options.previousPagination.totalMessages ?? 0;
-  const tailStart = retainedRawHistoryStart(nextPagination);
-  return tailStart !== null && tailStart > readEnd + 1 && tailStart - 1 <= options.maxRows
-    ? nextPagination.olderCursor
-    : null;
-}
-
 export function reopenChatHistoryBoundary(
   state: ChatState,
   boundary: string,

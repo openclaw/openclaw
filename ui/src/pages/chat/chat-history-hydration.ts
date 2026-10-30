@@ -1,6 +1,5 @@
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
-import { prependUniqueNativeMessages } from "../../lib/chat/history-message-identity.ts";
 import {
   isHiddenAssistantStreamText,
   isVisibleChatHistoryMessage,
@@ -13,16 +12,13 @@ import {
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.ts";
 import {
-  CHAT_HISTORY_OLDER_PAGE_LIMIT,
   captureChatHistoryRun,
   chatHistoryRequestParams,
-  requestOlderChatHistoryPage,
   requestSharedHistory,
 } from "./chat-history-request.ts";
 import { formatChatHistoryLoadError, isRetryableChatReadError } from "./chat-history-retry.ts";
 import {
   type ObservedChatHistoryResult,
-  heldHistoryGapCursor,
   isHistoryCursor,
   resolveChatHistoryPagination,
   historySessionId,
@@ -194,41 +190,21 @@ export async function hydrateChatHistory(
         return undefined;
       }
     }
-    // Stop persists an interrupted reply, so its delta cursor resets to a
-    // bounded tail. Only that reset can cut a transcript this pane already
-    // shows from the start; a window reset asks for a fresh window instead.
+    // Only a Stop-style cursor reset can cut a transcript this pane shows from
+    // its start; a window reset asks for a fresh window instead.
     if (cursorReset && !isHistoryCursor(response) && !requests.windowReset?.isCurrent()) {
-      const tail = response;
-      const gapCursor = heldHistoryGapCursor({
-        result: tail,
-        previousMessages: state.chatMessages,
-        previousPagination: state.chatHistoryPagination,
-        previousSessionId: state.currentSessionId ?? null,
-        maxRows: CHAT_HISTORY_OLDER_PAGE_LIMIT,
-      });
-      // Read the gap before publishing so held rows never become earlier
-      // history. A failed read keeps the tail and its retryable boundary.
-      const older = gapCursor
-        ? await requestOlderChatHistoryPage(
-            client,
-            sessionKey,
-            requestAgentId,
-            { cursor: gapCursor },
-            isCurrent,
-            read.signal,
-          ).catch(() => undefined)
-        : undefined;
+      const { fillHeldHistoryGap } = await import("./chat-history-held-gap.ts");
+      response = await fillHeldHistoryGap(
+        state,
+        client,
+        sessionKey,
+        requestAgentId,
+        response,
+        isCurrent,
+        read.signal,
+      );
       if (!isCurrent()) {
         return undefined;
-      }
-      if (older && !older.windowReset && historySessionId(older) === historySessionId(tail)) {
-        response = {
-          ...tail,
-          messages: prependUniqueNativeMessages(older.messages ?? [], tail.messages ?? []),
-          hasMore: older.hasMore,
-          olderCursor: older.olderCursor,
-          nextOffset: older.nextOffset,
-        };
       }
     }
     const inFlightEvents =
