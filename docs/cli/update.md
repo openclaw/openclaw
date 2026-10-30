@@ -151,6 +151,7 @@ Compatible Node 24.16.0+ on 24.x and 26.1.0+ remain accepted. If the updater or 
 ```bash
 openclaw update
 openclaw update status
+openclaw update history
 openclaw update repair
 openclaw update cleanup --dry-run
 openclaw update wizard
@@ -940,6 +941,19 @@ mutation restores it before exit, while retaining checks on the original update
 owner and task identity. This protection belongs to the installed updater;
 installing a release with the fix enables it for the next update that release
 performs.
+
+## Recorded update runs
+
+The updater records every attempt in the local state ledger. `openclaw update status` shows the active or most recent run; `openclaw update history` lists the attempts before it, which is what repeated failures, rollbacks, and channel switches leave behind.
+
+```bash
+openclaw update history                 # ten most recent runs
+openclaw update history --limit 50      # widen the window (max 100)
+openclaw update history --run <runId>   # one recorded attempt in full
+openclaw update history --json          # { runs: [...] } for scripts
+```
+
+The command reads the local ledger directly, so it works without a running Gateway. `--run <runId>` prints the same report the run showed while it executed, and exits non-zero when the id is not recorded. JSON output uses the public run projection: operational captures and Windows SIDs stay out of it.
 
 ## Options
 
