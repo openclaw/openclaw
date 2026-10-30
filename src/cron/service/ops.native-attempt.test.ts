@@ -52,7 +52,7 @@ describe("native attempt queued automation admission", () => {
     "revoke",
     "stop",
   ] as const)(
-    "retains its real tool generation until activation, not payload completion: %s",
+    "keeps accepted automation independent of its requesting tool generation: %s",
     async (outcome) => {
       await withCronGatewayState(async (fixture) => {
         const { cfg, context, cron, finished } = fixture;
@@ -210,7 +210,7 @@ describe("native attempt queued automation admission", () => {
             expect(replacement.signal?.aborted).toBe(true);
             expect(replacement.cleanup).toHaveBeenCalledExactlyOnceWith("completion");
           }
-          expect(terminal.status).toBe(outcome === "execute" ? "ok" : "skipped");
+          expect(terminal.status).toBe(outcome === "stop" ? "skipped" : "ok");
           const closedBeforeCompletion =
             outcome === "abort before completion" || outcome === "permission change";
           expect(abortedAtCompletion).toBe(closedBeforeCompletion);
@@ -221,9 +221,7 @@ describe("native attempt queued automation admission", () => {
               ? "cancel"
               : "completion",
           );
-          if (outcome !== "execute") {
-            expect(targetCalls()).toHaveLength(0);
-          }
+          expect(targetCalls()).toHaveLength(outcome === "stop" ? 0 : 1);
           expect((await readJob(fixture, job.id))?.state.queuedAtMs).toBeUndefined();
         } finally {
           releaseBlocker.resolve();
