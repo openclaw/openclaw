@@ -37,6 +37,8 @@ function createProps(overrides: Partial<LogsProps> = {}): LogsProps {
 beforeEach(installLogsViewport);
 
 afterEach(async () => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   i18n.registerTranslation("pt-BR", pt_BR);
   await i18n.setLocale("en");
@@ -135,4 +137,129 @@ it("keeps the visible export filename suffix stable when labels are localized", 
   view.getByRole("button", { name: "Exportar visivel" }).click();
 
   expect(onExport).toHaveBeenCalledWith([raw], "visible");
+});
+
+it("keeps following appended logs when a row resizes before compensation is read back", () => {
+  vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+  const observers: Array<{
+    callback: ResizeObserverCallback;
+    targets: Set<Element>;
+    observer: ResizeObserver;
+  }> = [];
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      targets = new Set<Element>();
+      constructor(callback: ResizeObserverCallback) {
+        observers.push({ callback, targets: this.targets, observer: this });
+      }
+      observe(target: Element) {
+        this.targets.add(target);
+      }
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
+    },
+  );
+  const heights = new WeakMap<Element, number>();
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function () {
+    return this.classList.contains("log-stream") ? 380 : (heights.get(this) ?? 44);
+  });
+  const lines = (count: number) =>
+    Array.from({ length: count }, (_, id) => ({ id, raw: `line ${id}` }));
+  const [entries, setEntries] = createSignal(lines(500));
+  let stream!: HTMLDivElement;
+  let jump!: () => void;
+  let top = 0;
+  const view = mountSolid(() => (
+    <LogsView
+      {...createProps({
+        status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+        onStreamRef: (element, scroll) => {
+          stream = element;
+          jump = scroll;
+          const height = () =>
+            Number.parseFloat(
+              element.querySelector<HTMLElement>('[role="list"]')?.style.height ?? "0",
+            );
+          Object.defineProperties(element, {
+            clientHeight: { get: () => 378 },
+            scrollHeight: { get: height },
+            scrollTop: {
+              get: () => (top = Math.min(top, Math.max(0, height() - 378))),
+              set: (value: number) => {
+                top = Math.max(0, Math.min(value, height() - 378));
+              },
+            },
+          });
+          element.scrollTo = (options: ScrollToOptions | number, y?: number) => {
+            element.scrollTop = typeof options === "number" ? (y ?? 0) : (options.top ?? 0);
+          };
+        },
+      })}
+      entries={entries()}
+    />
+  ));
+  const frame = () => {
+    vi.advanceTimersByTime(16);
+    flush();
+  };
+  const readBack = () => stream.dispatchEvent(new Event("scroll"));
+  const resize = (row: Element) => {
+    heights.set(row, 91);
+    for (const observer of observers) {
+      if (!observer.targets.has(row)) {
+        continue;
+      }
+      const size = [{ inlineSize: 900, blockSize: 91 }];
+      observer.callback(
+        [
+          {
+            target: row,
+            borderBoxSize: size,
+            contentBoxSize: size,
+            devicePixelContentBoxSize: size,
+            contentRect: new DOMRect(0, 0, 900, 91),
+          },
+        ],
+        observer.observer,
+      );
+    }
+  };
+  try {
+    flush();
+    jump();
+    frame();
+    readBack();
+    for (let index = 0; index < 4; index++) {
+      frame();
+    }
+    const rows = Array.from(stream.querySelectorAll(".log-row"));
+    resize(rows[0]!);
+    resize(rows[1]!);
+    vi.advanceTimersByTime(16);
+    // The spacer commits before the clamped scroll event, then compensation retries next frame.
+    flush();
+    readBack();
+    frame();
+    const afterCompensation = stream.scrollTop;
+    expect(rows[2]!.isConnected).toBe(true);
+    resize(rows[2]!);
+    frame();
+    expect(stream.scrollTop).toBeGreaterThanOrEqual(afterCompensation);
+    readBack();
+    setEntries(lines(1000));
+    flush();
+    for (let index = 0; index < 5; index++) {
+      frame();
+      readBack();
+    }
+    expect(stream.querySelector('[aria-posinset="1000"]')).not.toBeNull();
+    expect(stream.scrollHeight - stream.scrollTop - stream.clientHeight).toBeLessThan(2);
+  } finally {
+    view.unmount();
+  }
 });
