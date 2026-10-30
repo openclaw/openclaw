@@ -1,2 +1,2 @@
-# Board viewport admission: keyboard focus, identity retention, and auto-height promotion.
-55
+# Board viewport admission, identity retention, and unbound report initialization.
+65

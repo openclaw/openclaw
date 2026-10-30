@@ -22,6 +22,16 @@ async function mount(props: Record<string, unknown>) {
 
 afterEach(() => document.body.replaceChildren());
 
+it("waits for a widget binding before validating and rendering report content", async () => {
+  const element = document.createElement("openclaw-report-widget");
+  document.body.append(element);
+  await element.updateComplete;
+  expect(element.querySelector('[role="alert"]')).toBeNull();
+  element.widget = widget({ blocks: [{ type: "text", text: "Bound report" }] });
+  await element.updateComplete;
+  expect(element.textContent).toContain("Bound report");
+});
+
 function chart(style: "bar" | "line", values: readonly number[]) {
   return {
     type: "chart" as const,
