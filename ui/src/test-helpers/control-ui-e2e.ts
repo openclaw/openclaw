@@ -991,10 +991,8 @@ function installControlUiMockGateway(
   const terminalSessions = new Map<string, MockTerminalSession>();
   let terminalSessionSequence = 0;
   const sockets: Array<{
-    readonly readyState: number;
     readonly url: string;
-    close: (code?: number, reason?: string) => void;
-    openConnection: () => void;
+    socket?: MockWebSocket;
   }> = [];
   let sessionMessageEventIndex = 0;
   let sessionMessageEventTimer: number | null = null;
@@ -2219,6 +2217,7 @@ function installControlUiMockGateway(
     readonly protocol = "";
     readyState = MockWebSocket.CONNECTING;
     readonly url: string;
+    private readonly record: { readonly url: string; socket?: MockWebSocket };
     private tickTimer: number | null = null;
     readonly sessionMessageSubscriptions = subscriptionRouting.createClient({
       isOpen: () => this.readyState === MockWebSocket.OPEN,
@@ -2229,8 +2228,9 @@ function installControlUiMockGateway(
     constructor(url: string | URL) {
       super();
       this.url = String(url);
+      this.record = { url: this.url, socket: this };
       MockWebSocket.latest = this;
-      sockets.push(this);
+      sockets.push(this.record);
       window.setTimeout(() => {
         this.openConnection();
       }, 0);
@@ -2278,6 +2278,8 @@ function installControlUiMockGateway(
       }
       this.sessionMessageSubscriptions.clear();
       stopRepeatingSessionEvents();
+      // Keep connection history without retaining the closed transport's listeners.
+      delete this.record.socket;
       this.dispatchEvent(new CloseEvent("close", { code, reason }));
     }
 
@@ -2454,16 +2456,15 @@ function installControlUiMockGateway(
       } catch {
         // The current document can still toggle the in-memory mock.
       }
+      // Close handlers can synchronously construct replacements. Snapshot the
+      // transition members so an offline replacement stays ready for recovery.
+      const transitionSockets = sockets.flatMap(({ socket }) => (socket ? [socket] : []));
       if (!online) {
-        // Close handlers can synchronously construct replacements. Snapshot the
-        // transition members so an offline replacement stays ready for recovery.
-        const transitionSockets = sockets.slice();
         for (const socket of transitionSockets) {
           socket.close(1006, "mock offline");
         }
         return;
       }
-      const transitionSockets = sockets.slice();
       for (const socket of transitionSockets) {
         socket.openConnection();
       }
@@ -2542,17 +2543,17 @@ function installControlUiMockGateway(
       return sockets.length;
     },
     socketStates() {
-      return sockets.map((socket) => ({
-        readyState: socket.readyState,
+      return sockets.map(({ socket, url }) => ({
+        readyState: socket?.readyState ?? MockWebSocket.CLOSED,
         state:
-          socket.readyState === MockWebSocket.CONNECTING
+          socket?.readyState === MockWebSocket.CONNECTING
             ? "connecting"
-            : socket.readyState === MockWebSocket.OPEN
+            : socket?.readyState === MockWebSocket.OPEN
               ? "open"
-              : socket.readyState === MockWebSocket.CLOSING
+              : socket?.readyState === MockWebSocket.CLOSING
                 ? "closing"
                 : "closed",
-        url: socket.url,
+        url,
       }));
     },
     socketUrls() {
