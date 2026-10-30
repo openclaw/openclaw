@@ -145,6 +145,15 @@ async function startGatewayServerWithRuntime(
   opts: GatewayServerOptions,
 ): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
   const startupStartedAt = opts.startupStartedAt ?? Date.now();
+  if (process.platform === "linux") {
+    const [{ initializeGatewayExecCgroup }, { resolveStateDir }, { createSubsystemLogger }] =
+      await Promise.all([
+        import("../process/linux-exec-cgroup.js"),
+        import("../config/paths.js"),
+        import("../logging/subsystem.js"),
+      ]);
+    createSubsystemLogger("gateway").info(initializeGatewayExecCgroup(resolveStateDir()));
+  }
   let stopDatabaseAdmission: (() => Promise<void>) | undefined;
   const start = async () => {
     const { createSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");

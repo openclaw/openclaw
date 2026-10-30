@@ -13,7 +13,7 @@ import type { TerminalPtyHandle, TerminalPtySpawnParams } from "./terminal-pty.j
 const STARTUP_TIMEOUT_MS = 10_000;
 const CLEANUP_TIMEOUT_MS = 2_000;
 
-/** Keeps native PTY I/O on Node while the Gateway or node host runs on Bun. */
+/** Owns native PTY I/O and inherited exec resource policy outside the Gateway. */
 export async function spawnNodeTerminalPty(
   params: TerminalPtySpawnParams,
   beforeSpawn?: () => void,
@@ -21,7 +21,7 @@ export async function spawnNodeTerminalPty(
 ): Promise<TerminalPtyHandle> {
   const node = resolveNodeRuntimeExecutable();
   if (!node) {
-    throw new Error("A Node executable is required for terminals on Bun; add node to PATH.");
+    throw new Error("A Node executable is required for this terminal helper; add node to PATH.");
   }
   const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.terminalPty);
   const child = spawn(node, resolveRuntimeWorkerArgv(worker, node), {

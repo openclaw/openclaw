@@ -22,6 +22,34 @@ node --import ./scripts/tsx.mjs scripts/perf/team-shape-stress.ts \
   --minutes 10 --pairs 2
 ```
 
+On an isolated Linux box, add `--exec-io-storm` to exercise agent-exec IO isolation.
+The mock model starts one persistent background writer per foreground runner through
+the real Code Mode exec tool. Each writer repeatedly writes buffered random data and
+calls `fdatasync`, retaining at most 128 MiB under the fresh arm's state directory.
+Writers record cgroup membership, `io.max`, `io.stat`, and bytes written every ten
+seconds in `agent-exec-io-<runner>.jsonl`; the harness requires progress during the
+measurement. Teardown requests graceful termination; writers then remove their data.
+An expiry bounds orphaned runs if teardown fails. Do not use this against Team or
+other production state.
+
+This mode also imports identical instrumentation into both Gateway revisions.
+`agent-exec-io-commits.json` records counts, failures, p50/p95/p99/max duration of
+main-thread `DatabaseSync.exec` explicit `COMMIT` attempts during the canonical
+measurement window, plus Gateway/agent-exec cgroup IO snapshots. It excludes worker
+transactions, implicit commits, and commits embedded in multi-statement SQL. No SQL
+or message content is retained. A separate `autocommitMutations` histogram measures
+successful native `exec`/`run`/`get`/`all` single-statement
+`INSERT`/`UPDATE`/`DELETE`/`REPLACE` calls outside explicit transactions. SQL comments
+are ignored; `WITH`/CTEs and statement batches are excluded.
+Those durations include statement execution and automatic commit; they are not
+isolated COMMIT timings and may include temporary-table mutations. Streaming
+iteration is excluded and counted. Coverage counters and prototype-wrapper checks
+distinguish absent main-thread writes from missing instrumentation. `result.json` includes these results and writer
+artifact paths. Use the existing telemetry's event-loop tails and `hostLoadAverage`
+for stalls and host context; zero commit samples cannot establish commit latency.
+Writer byte receipts have ten-second granularity, whereas commit timing follows the
+measurement start/stop messages. Allocation passes retain their usual traced scope.
+
 Defaults are 10,800 deterministic sessions, 65 permanent operator WebSocket
 clients (plus brief reconnect probes), four concurrent mock-provider turns per
 round, and 40 enabled bundled plugins, including `acpx`, `codex`,

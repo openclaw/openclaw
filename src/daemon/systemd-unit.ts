@@ -65,12 +65,18 @@ export const SYSTEMD_FIXED_POLICY: Readonly<Record<string, string>> = {
   "Service.OOMPolicy": "continue",
   // Signal only the Gateway during drain; clean up children after it exits.
   "Service.KillMode": "mixed",
+  // systemd 254+ places the launcher in a leaf before it can spawn descendants.
+  "Service.Delegate": "yes",
+  "Service.DelegateSubgroup": "gateway",
   "Install.WantedBy": "default.target",
 };
 
-function renderFixedPolicy(section: string): string[] {
+function renderFixedPolicy(section: string, nodeService = false): string[] {
   return Object.entries(SYSTEMD_FIXED_POLICY)
-    .filter(([key]) => key.startsWith(`${section}.`))
+    .filter(
+      ([key]) =>
+        key.startsWith(`${section}.`) && !(nodeService && key.startsWith("Service.Delegate")),
+    )
     .map(([key, value]) => `${key.slice(section.length + 1)}=${value}`);
 }
 
@@ -185,7 +191,7 @@ export function buildSystemdUnit({
     "",
     "[Service]",
     `ExecStart=${execStart}`,
-    ...renderFixedPolicy("Service"),
+    ...renderFixedPolicy("Service", environment?.OPENCLAW_SERVICE_KIND === "node"),
     workingDirLine,
     ...normalizeStringEntries(environmentFiles).map(
       (entry) => `EnvironmentFile=${renderSystemdEnvironmentFile(entry)}`,

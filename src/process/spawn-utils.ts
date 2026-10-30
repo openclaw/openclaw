@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { assertAppContainerSpawnSupported } from "../infra/windows-appcontainer-spawn.js";
+import { getAgentExecCgroup } from "./linux-exec-cgroup.js";
 import { prepareOomScoreAdjustedSpawn } from "./linux-oom-score.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
 import { brokerSpawnOptions } from "./spawn-broker/pipe.js";
@@ -15,13 +16,20 @@ export function spawnProcess(
   args: string[],
   options: SpawnOptions,
   initiateSpawn?: SpawnInitiation,
+  gatewayWorker?: true,
 ): ChildProcess {
   assertAppContainerSpawnSupported(options.stdio);
   const broker = getSpawnBroker();
   // Anonymous secret pipes and inherited numeric descriptors belong to this process.
   const child =
     broker && brokerSpawnOptions(options)
-      ? broker.spawn(command, args, options, initiateSpawn)
+      ? broker.spawn(
+          command,
+          args,
+          options,
+          initiateSpawn,
+          gatewayWorker ? undefined : getAgentExecCgroup(),
+        )
       : initiateSpawn
         ? initiateSpawn(() => spawn(command, args, options))
         : spawn(command, args, options);
@@ -36,6 +44,7 @@ export function spawnProcess(
 export async function spawnAndWait(params: {
   assertCurrent?: () => void;
   initiateSpawn?: SpawnInitiation;
+  gatewayWorker?: true;
   argv: string[];
   options: SpawnOptions;
   spawnImpl?: typeof spawnProcess;
@@ -49,6 +58,7 @@ export async function spawnAndWait(params: {
     params.argv.slice(1),
     params.options,
     params.initiateSpawn,
+    params.gatewayWorker,
   );
   await once(child, "spawn");
   return child;

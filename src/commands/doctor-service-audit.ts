@@ -160,6 +160,7 @@ export function isServiceDefinitionOnlyRepair(audit: ServiceConfigAudit): boolea
     SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
     SERVICE_AUDIT_CODES.systemdKillModeControlGroup,
     SERVICE_AUDIT_CODES.systemdStopTimeout,
+    SERVICE_AUDIT_CODES.systemdExecDelegation,
     "launchd-run-at-load",
     "launchd-keep-alive",
     "launchd-stop-timeout",

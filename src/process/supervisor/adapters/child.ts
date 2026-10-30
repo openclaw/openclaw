@@ -277,6 +277,7 @@ export async function createChildAdapter(
       },
       initiateSpawn: params.initiateSpawn,
       argv: [preparedSpawn.command, ...preparedSpawn.args],
+      gatewayWorker: params.ownedWorker,
       options,
     });
 
