@@ -423,7 +423,8 @@ const toolsTestState = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../agents/tools-effective-inventory.js", () => ({
+vi.mock("../../agents/tools-effective-inventory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/tools-effective-inventory.js")>()),
   resolveEffectiveToolInventory: toolsTestState.resolveToolsMock,
   acquireEffectiveToolInventoryRuntimeModelContext: async (params: unknown) => {
     const context = await toolsTestState.resolveRuntimeModelContextMock(params);

@@ -2282,7 +2282,6 @@
 ["src/auto-reply/reply/commands-gating.test.ts","./channel-context.js","549f031ba189555a3be8bc4f06db823d08be92feb1f8ebe2406991f5fa9a1a59",1]
 ["src/auto-reply/reply/commands-gating.test.ts","./config-write-authorization.js","b5763ae898429b1e5cce4ef3850d95dabae4af13e7b7c0b3126a7d03f883924c",1]
 ["src/auto-reply/reply/commands-gating.test.ts","./mentions.js","a5a6cc3f3689f3f168decbdafb0f03262b8ac63cc8ec0173dc60ea7fe20d4bfb",1]
-["src/auto-reply/reply/commands-info.test.ts","../../agents/tools-effective-inventory.js","a458502d78174346275c2240c151b88569a6f8dbd0b9814bd813031db64fbcff",1]
 ["src/auto-reply/reply/commands-info.test.ts","./agent-runner-utils.js","7dd827458ad66079c58205a2e61329c6ff012e040ba8b3f8ac0b5cea0f00a242",1]
 ["src/auto-reply/reply/commands-info.test.ts","./commands-export-session.js","086ee5980f18ac1eeaa8ead04b592f7ec91d8d3a802e84a6c22585a7c67b5100",1]
 ["src/auto-reply/reply/commands-info.test.ts","./commands-export-trajectory.js","5fc0a56ca548b9b5f8acca2fe1d4189a3aaae3b7735d3383031eec622fb8f703",1]
