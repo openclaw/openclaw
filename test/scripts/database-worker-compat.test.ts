@@ -705,11 +705,11 @@ export function ${first}() { return ${entry}(); }`,
 it("reuses raw compiler symbols across graph phases without freezing forwarded bindings", () => {
   const counts = new Map<ts.Node, number>();
   const unresolved = new Set<ts.Node>();
-  const getter = Object.getOwnPropertyDescriptor(Checker.prototype, "getSymbolAtLocation")!.get!;
+  const descriptor = Object.getOwnPropertyDescriptor(Checker.prototype, "getSymbolAtLocation")!;
   const spy = vi
     .spyOn(Checker.prototype, "getSymbolAtLocation", "get")
     .mockImplementation(function (this: Checker) {
-      const query: Checker["getSymbolAtLocation"] = getter.call(this);
+      const query: Checker["getSymbolAtLocation"] = descriptor.get!.call(this);
       const observed = Object.assign(
         ((input: ts.Node | readonly ts.Node[]) => {
           const nodes = Array.isArray(input) ? input : [input as ts.Node];
@@ -723,7 +723,7 @@ it("reuses raw compiler symbols across graph phases without freezing forwarded b
           }
           return result;
         }) as Checker["getSymbolAtLocation"],
-        { gen: query.gen },
+        { gen: query.gen.bind(query) },
       );
       // The real getter installs its method on the instance; retain that contract.
       Object.defineProperty(this, "getSymbolAtLocation", { configurable: true, value: observed });
