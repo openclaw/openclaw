@@ -69,27 +69,25 @@ export async function acquireCompactHooksPreparedModelRuntime(
   input: PreparedModelRuntimeInput,
   _options?: PreparedModelRuntimeLeaseOptions,
 ) {
-  return {
-    snapshot: withEmptyRuntimeStores({
-      isCurrent: () => true,
-      agentId: input.agentId,
-      agentDir: input.agentDir,
-      config: input.config,
-      workspaceDir: input.workspaceDir,
-      metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
-    }),
-    [Symbol.asyncDispose]: vi.fn(async () => {}),
-  };
+  return createCompactHooksPreparedModelRuntimeLease({
+    agentId: input.agentId,
+    agentDir: input.agentDir,
+    config: input.config,
+    workspaceDir: input.workspaceDir,
+    metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
+  });
 }
 
-export function createCompactHooksPreparedModelRuntime(
-  input: Required<
-    Pick<PreparedModelRuntimeInput, "agentId" | "agentDir" | "config" | "workspaceDir">
-  > & {
+export function createCompactHooksPreparedModelRuntimeLease(
+  input: Pick<PreparedModelRuntimeInput, "agentId" | "agentDir" | "config" | "workspaceDir"> & {
     metadataSnapshot: PluginMetadataSnapshot;
   },
 ) {
-  return withEmptyRuntimeStores(input);
+  return {
+    snapshot: withEmptyRuntimeStores({ isCurrent: () => true, ...input }),
+    run: <T>(run: () => T): T => run(),
+    [Symbol.asyncDispose]: vi.fn(async () => {}),
+  };
 }
 
 export function createCompactHooksResolvedModel(

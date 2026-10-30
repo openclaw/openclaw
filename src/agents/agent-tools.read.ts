@@ -122,7 +122,7 @@ function eraseSessionFileTool<TParameters extends TSchema, TDetails>(
 type ReadTruncationDetails = {
   truncated: boolean;
   outputLines: number;
-  totalLines: number;
+  totalLines?: number;
   continuation?: ReadToolContinuation;
 };
 
@@ -270,7 +270,9 @@ async function executeReadWithAdaptivePaging(params: {
     const truncation = extractReadTruncationDetails(pageResult);
     const pageEndLine = next.offset - 1 + (truncation?.outputLines ?? 0);
     const reachedEof =
-      Boolean(truncation?.truncated) && pageEndLine >= (truncation?.totalLines ?? 0);
+      truncation !== null &&
+      truncation.totalLines !== undefined &&
+      pageEndLine >= truncation.totalLines;
     const pageContinuation = truncation?.continuation;
     const pageText =
       pageContinuation || reachedEof ? stripReadContinuationNotice(rawText) : rawText;
@@ -311,7 +313,7 @@ async function executeReadWithAdaptivePaging(params: {
         content: pageContent,
         startLine: next.offset,
         endLine: next.offset + lineCount - 1,
-        totalLines: truncation?.totalLines ?? next.offset + lineCount - 1,
+        totalLines: truncation ? truncation.totalLines : next.offset + lineCount - 1,
         continuation: pageContinuation,
         ...(next.kind === "cursor" ? { cursor: next.cursor } : {}),
         limit: next.limit,
