@@ -73,12 +73,25 @@ export function buildSlackListBlock(ir: MarkdownIR): RichTextBlock | undefined {
     type: "rich_text_section",
     elements: renderInline(ir, start, end),
   });
+  const trimSeparators = (start: number, end: number) => {
+    let contentStart = start;
+    let contentEnd = end;
+    // Inline code owns its whitespace; only remove surrounding separators.
+    const isSeparator = (offset: number) =>
+      /\s/u.test(ir.text.charAt(offset)) &&
+      !ir.styles.some((span) => span.style === "code" && span.start <= offset && offset < span.end);
+    while (contentStart < contentEnd && isSeparator(contentStart)) {
+      contentStart++;
+    }
+    while (contentEnd > contentStart && isSeparator(contentEnd - 1)) {
+      contentEnd--;
+    }
+    return [contentStart, contentEnd] as const;
+  };
   const appendProse = (start: number, end: number) => {
-    const text = ir.text.slice(start, end);
-    const trimmed = text.trim();
-    if (trimmed) {
-      const offset = start + text.indexOf(trimmed);
-      elements.push(section(offset, offset + trimmed.length));
+    const [contentStart, contentEnd] = trimSeparators(start, end);
+    if (contentStart < contentEnd) {
+      elements.push(section(contentStart, contentEnd));
     }
   };
   let cursor = 0;
@@ -95,14 +108,13 @@ export function buildSlackListBlock(ir: MarkdownIR): RichTextBlock | undefined {
     ) {
       return undefined;
     }
-    const text = ir.text.slice(listMarker.end, end);
-    const trimmed = text.trim();
-    if (!trimmed || trimmed.includes("\n") || /^\[[ xX]\]\s/u.test(trimmed)) {
+    const [contentStart, contentEnd] = trimSeparators(listMarker.end, end);
+    const text = ir.text.slice(contentStart, contentEnd);
+    if (!text || text.includes("\n") || /^\[[ xX]\]\s/u.test(text)) {
       return undefined;
     }
     appendProse(cursor, start);
-    const contentStart = listMarker.end + text.indexOf(trimmed);
-    const entry = section(contentStart, contentStart + trimmed.length);
+    const entry = section(contentStart, contentEnd);
     const previous = elements.at(-1);
     if (previous?.type === "rich_text_list" && listId === item.listId) {
       previous.elements.push(entry);

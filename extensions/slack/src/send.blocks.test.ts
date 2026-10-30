@@ -33,6 +33,27 @@ function postedMessage(callIndex = 0) {
 const posts = () => client.chat.postMessage.mock.calls.map(([post]) => post);
 
 describe("Markdown native lists", () => {
+  it("preserves code-owned spaces in list items and surrounding prose", async () => {
+    await send("`  before  `\n\n- `  item  `\n\n`  after  `");
+    const code = (text: string) => ({
+      type: "rich_text_section",
+      elements: [{ type: "text", text, style: { code: true } }],
+    });
+    expect(postedMessage()).toMatchObject({
+      text: "` before `\n\n• ` item `\n\n` after `",
+      blocks: [
+        {
+          type: "rich_text",
+          elements: [
+            code(" before "),
+            { type: "rich_text_list", style: "bullet", elements: [code(" item ")] },
+            code(" after "),
+          ],
+        },
+      ],
+    });
+  });
+
   it("posts one native list with styles, links, and a complete notification fallback", async () => {
     await send("**P1**\n\n- **Login** _(pro user)_ [Ticket](https://example.com/1)\n- Next", {
       threadTs: "171234.1",
