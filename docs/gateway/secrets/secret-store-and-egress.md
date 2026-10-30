@@ -147,6 +147,19 @@ The 100 MiB envelope is a per-request staging limit, not a destination upload-si
 
 `bypassHosts` contains exact hostnames that must remain end-to-end TLS for certificate-pinned clients. Those hosts use an authenticated blind CONNECT tunnel. No substitution is possible inside the tunnel; a sentinel sent there is safe by construction because it is authenticated ciphertext rather than a credential, so the vendor sees an invalid credential and rejects it.
 
+### Native client trust and proxy authentication
+
+The injected CA variables configure file-based trust for clients that support them. They do not register the process CA with macOS Keychain or guarantee that a native TLS client uses the PEM bundle. On macOS, Go clients can use platform certificate verification; whether `SSL_CERT_FILE` or `SSL_CERT_DIR` overrides that behavior depends on the Go version and the binary's compatibility settings. Check the client's documented custom-CA support and build information rather than assuming that every client honors the injected variables. Setting `GODEBUG=x509usefallbackroots=1` alone does not load the bundle: Go requires the application to register fallback roots.
+
+A certificate verification error and `407 Proxy Authentication Required` describe different failures:
+
+- A certificate verification error can mean the client does not trust the intercepted connection's issuer, even when another client in the same command accepts the bundle.
+- A `407` means the proxy did not accept the command's process grant. A grant belongs to its managed command and is revoked when that command ends. Copying its proxy environment into a separate terminal is not a supported way to authorize another command.
+
+The read-only Gateway health check above validates proxy certificate preparation and validity, not an arbitrary native client's trust configuration or access to a macOS user trust domain. A healthy result does not rule out client-side TLS failures. Do not disable certificate verification, export proxy credentials for reuse, or install the generated CA into a system trust store as a troubleshooting shortcut.
+
+For an exact destination that does not require secret substitution, an operator can consider the authenticated end-to-end TLS tunnel provided by `bypassHosts`. The client then verifies the destination's own certificate. This does not make sentinels usable in the tunnel and is not a replacement for substitution on hosts that need it.
+
 ### Traffic allowlist
 
 Destination binding protects secrets, not traffic: a request that carries no sentinel can reach any host once a command holds proxy credentials. Set `secrets.egressProxy.allowedHosts` to also restrict where non-sentinel traffic may go:
