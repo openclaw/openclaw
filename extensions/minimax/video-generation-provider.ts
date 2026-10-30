@@ -22,6 +22,7 @@ import {
 import {
   assertMinimaxBaseResp,
   fetchMinimaxResponse,
+  fetchMinimaxResultDownload,
   resolveMinimaxMediaRequestConfig,
   type MinimaxBaseResp,
   type MinimaxRequestPolicy,
@@ -268,10 +269,9 @@ export function buildMinimaxVideoGenerationProvider(
           validateBinaryResponse: true,
           chunkTimeoutMs: 0,
           fetchResponse: async ({ timeoutMs }) =>
-            await fetchMinimaxResponse({
+            await fetchMinimaxResultDownload({
               stage: "download",
               url,
-              init: { method: "GET" },
               timeoutMs,
               requestFailedMessage: "MiniMax generated video download failed",
               policy: requestPolicy,

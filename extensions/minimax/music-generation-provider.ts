@@ -18,7 +18,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import {
   assertMinimaxBaseResp,
   normalizeMinimaxHexAudio,
-  fetchMinimaxResponse,
+  fetchMinimaxResultDownload,
   resolveMinimaxMediaRequestConfig,
   type MinimaxBaseResp,
   type MinimaxRequestPolicy,
@@ -281,10 +281,9 @@ export function buildMinimaxMusicGenerationProvider(
               validateBinaryResponse: true,
               includeSourceUrl: false,
               fetchResponse: async ({ timeoutMs }) => {
-                const result = await fetchMinimaxResponse({
+                const result = await fetchMinimaxResultDownload({
                   stage: "download",
                   url: audioUrl,
-                  init: { method: "GET" },
                   timeoutMs,
                   requestFailedMessage: "MiniMax generated music download failed",
                   policy: requestPolicy,

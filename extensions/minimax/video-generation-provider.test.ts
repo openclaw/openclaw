@@ -59,6 +59,10 @@ function expectPolicyFetch(index: number, url: string) {
   expectAllowPrivateNetworkPolicy(call.options);
 }
 
+function expectResultDownloadPolicy(options: Record<string, unknown> | undefined) {
+  expect(options).toEqual({ mode: "strict", dispatcherPolicy: { mode: "env-proxy" } });
+}
+
 function generateVideo(overrides: Partial<VideoGenerationRequest> = {}) {
   const request: VideoGenerationRequest = {
     provider: "minimax",
@@ -152,7 +156,7 @@ describe("minimax video generation provider", () => {
 
     expectPolicyFetch(0, "https://api.minimax.io/v1/query/video_generation?task_id=task-456");
     expectPolicyFetch(1, "https://api.minimax.io/v1/files/retrieve?file_id=file-9");
-    expectAllowPrivateNetworkPolicy(
+    expectResultDownloadPolicy(
       expectMinimaxGuardedFetchCall(2, "https://example.com/download.mp4").options,
     );
     expect(result.videos).toHaveLength(1);
@@ -233,7 +237,7 @@ describe("minimax video generation provider", () => {
     expect((postParams.headers as Headers).get("x-minimax-video-policy")).toBe("enabled");
     expect(postParams.url).toBe("https://api.minimaxi.com/v1/video_generation");
     expectPolicyFetch(0, "https://api.minimaxi.com/v1/query/video_generation?task_id=task-portal");
-    expectAllowPrivateNetworkPolicy(
+    expectResultDownloadPolicy(
       expectMinimaxGuardedFetchCall(1, "https://example.com/portal.mp4").options,
     );
   });
@@ -425,7 +429,7 @@ describe("minimax music generation provider", () => {
     ).rejects.toThrow("cannot use lyrics when instrumental=true");
   });
 
-  it("retries guarded music URL downloads while preserving request policy", async () => {
+  it("retries guarded music URL downloads without task private-network trust", async () => {
     const musicPolicy = {
       allowPrivateNetwork: true,
       headers: { "X-MiniMax-Music-Policy": "enabled" },
@@ -440,7 +444,7 @@ describe("minimax music generation provider", () => {
     });
 
     for (const attempt of [0, 1]) {
-      expectAllowPrivateNetworkPolicy(
+      expectResultDownloadPolicy(
         expectMinimaxGuardedFetchCall(attempt, "https://example.com/retry.mp3").options,
       );
     }

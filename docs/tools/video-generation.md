@@ -237,7 +237,9 @@ limits remain separate.
 Default generated-video downloads block private-network URLs, including redirects.
 This covers BytePlus, Runway, Together, Novita, Z.AI, and Kie AI. BytePlus and
 Runway also use the configured proxy without forwarding task credentials or
-granting task-specific private-network access to result URLs.
+granting task-specific private-network access to result URLs. MiniMax video and
+music result downloads follow the same rule: `request.allowPrivateNetwork` trusts
+the configured MiniMax endpoint, not the URLs its responses return.
 
 <ParamField path="providerOptions" type="object">
   Provider-specific options as a JSON object (e.g. `{"seed": 42, "draft": true}`).
