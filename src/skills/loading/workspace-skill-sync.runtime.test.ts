@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createNestedGitEnv } from "../../../test/helpers/temp-repo.js";
@@ -20,10 +21,15 @@ import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapsh
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { useLoadingFixture, writeSkillFixture as writeSkill } from "./loading.test-support.js";
+import { ensureWritableSkillDirectories } from "./skill-directory-modes.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
 
-const isolatedConfig = { plugins: { enabled: false } } satisfies OpenClawConfig;
+// These tests publish resource revisions explicitly; passive scans would race reuse assertions.
+const isolatedConfig = {
+  plugins: { enabled: false },
+  skills: { load: { watch: false } },
+} satisfies OpenClawConfig;
 
 function sourceOptions(workspace: string) {
   return {
@@ -141,6 +147,24 @@ function buildSnapshot(workspaceDir: string, opts?: Parameters<typeof buildSkill
 }
 
 describe("syncWorkspaceSkills", () => {
+  it.runIf(process.platform !== "win32")(
+    "avoids Node openSync calls for writable skill directories",
+    async () => {
+      const directory = await newDir("writable");
+      await fs.mkdir(path.join(directory, "skill", "references"), { recursive: true });
+      await fs.chmod(path.join(directory, "skill", "references"), 0o755);
+      const boundary = await fsSafeRoot(directory);
+      const open = vi.spyOn(fsSync, "openSync");
+      try {
+        await ensureWritableSkillDirectories(boundary, "skill");
+        expect(open).not.toHaveBeenCalled();
+      } finally {
+        open.mockRestore();
+      }
+      expect(await modeOf(path.join(directory, "skill", "references"))).toBe(0o755);
+    },
+  );
+
   it("attributes a queued sync to waiting rather than directory or copy work", async () => {
     const { source, target } = await setupSkills(["alpha"]);
     const skillsSnapshot = await buildSnapshot(source);
@@ -233,12 +257,21 @@ describe("syncWorkspaceSkills", () => {
     };
 
     const first = await syncWorkspaceSkills(params);
+    const ignorePath = skillPath(target, ".gitignore");
+    await fs.utimes(ignorePath, 1, 1);
     await fs.rm(path.join(source, "skills"), { recursive: true, force: true });
     const second = await syncWorkspaceSkills(params);
 
+    expect((await fs.stat(ignorePath)).mtimeMs).toBe(1000);
     expect(second).toEqual(first);
     expect(await exists(skillPath(target, "alpha", "SKILL.md"))).toBe(true);
     expect(await exists(skillPath(target, "hidden", "SKILL.md"))).toBe(true);
+    await fs.writeFile(ignorePath, "edited\n");
+    await syncWorkspaceSkills(params);
+    expect(await readText(ignorePath)).toBe("*\n");
+    await fs.chmod(ignorePath, 0o444);
+    await syncWorkspaceSkills(params);
+    expect((await fs.stat(ignorePath)).mode & 0o200).toBe(0o200);
   });
 
   it("keeps generated skills out of Git discovery across sync, cached reuse and refresh", async () => {

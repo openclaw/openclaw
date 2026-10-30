@@ -117,9 +117,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             apps/linux/src-tauri/target
-          key: linux-app-${{ runner.os }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}
+          key: linux-app-v2-${{ runner.os }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}
           restore-keys: |
-            linux-app-${{ runner.os }}-
+            linux-app-v2-${{ runner.os }}-
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -399,6 +399,12 @@ jobs:
             apps/linux/src-tauri/target/release/bundle/deb/*.deb
             apps/linux/src-tauri/target/release/bundle/appimage/*.AppImage
 
+      - name: Remove uploaded Linux bundles before caching
+        working-directory: apps/linux/src-tauri
+        # Bundles are outputs; keep staged manifests and resources that Cargo watches.
+        run: >-
+          node -e "require('node:fs').rmSync('target/release/bundle', { recursive: true, force: true });"
+
   test-macos:
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'workflow_dispatch' || !inputs.windows_only) }}
     name: Test macOS companion
@@ -423,13 +429,13 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
+      - name: Setup Node.js
+        shell: /bin/bash -e {0}
+        run: |
+          set -euo pipefail
           # Rust tests run inline Node scripts without workspace packages.
-          cache-mode: off
-          install-bun: "false"
-          install-deps: "false"
+          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "24.22.1"
 
       - name: Cache Cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

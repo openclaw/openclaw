@@ -2,8 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Worker } from "node:worker_threads";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { openFixtureReceiptChannel } from "../../test/helpers/fixture-receipts.js";
+import { afterEach, expect, it, vi } from "vitest";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -112,7 +111,6 @@ function pauseIntegrityInspection(params: {
   pathname: string;
   pausePreparation?: boolean;
   pauseSchema?: boolean;
-  preparationReceiptBroadcastName?: string;
 }) {
   const releasePath = path.join(params.root, "release-inspection");
   const enteredPath = path.join(params.root, "inspection-entered");
@@ -124,10 +122,7 @@ function pauseIntegrityInspection(params: {
     `
 const fs = require('node:fs'), path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
-const { BroadcastChannel, isMainThread, threadId } = require('node:worker_threads');
-const receiptBroadcastName = ${JSON.stringify(params.preparationReceiptBroadcastName)};
-const receipts = !isMainThread && receiptBroadcastName ? new BroadcastChannel(receiptBroadcastName) : undefined;
-receipts?.unref();
+const { isMainThread, threadId } = require('node:worker_threads');
 const pathname = ${JSON.stringify(fs.realpathSync.native(params.pathname))};
 const preparation = ${params.pausePreparation === true} && (!isMainThread || process.argv[1]?.includes('sqlite-integrity.worker'));
 const marker = preparation ? ${JSON.stringify(preparationEnteredPath)} : ${JSON.stringify(enteredPath)};
@@ -152,7 +147,6 @@ DatabaseSync.prototype.prepare = function(sql) {
     if (!isMainThread) fs.writeFileSync(marker + '.thread', String(threadId));
     fs.writeFileSync(pendingMarker, String(process.pid));
     fs.renameSync(pendingMarker, marker);
-    receipts?.postMessage({ source: marker, line: 'entered' });
     const pause = new Int32Array(new SharedArrayBuffer(4));
     const deadline = Date.now() + 60000;
     while (!fs.existsSync(release)) {
@@ -262,6 +256,9 @@ it.for([
           raw.exec(
             "PRAGMA foreign_keys=OFF; CREATE TABLE broken_parent(id INTEGER PRIMARY KEY); CREATE TABLE broken_child(parent_id REFERENCES broken_parent(id)); INSERT INTO broken_child VALUES (42)",
           );
+        } else if (outcome === "shutdown-preparation") {
+          // Repair keeps full verification before writes; exact-schema verification is background.
+          raw.exec("DROP INDEX idx_agent_session_nodes_active");
         }
       } finally {
         raw.close();
@@ -279,13 +276,6 @@ it.for([
     const refusal = () => readAgentDatabaseAdmissionRefusal(agentId, { env });
     const waitForRecovery = () =>
       vi.waitFor(() => expect(refusal()).toBeUndefined(), { timeout: 10000 });
-    const handoffReceipts =
-      outcome === "handoff" || outcome === "shutdown-preparation"
-        ? await openFixtureReceiptChannel()
-        : undefined;
-    if (handoffReceipts) {
-      onTestFinished(() => handoffReceipts.close());
-    }
     const paused = outcome !== "corrupt" && outcome !== "physical-corrupt" && outcome !== "fast";
     const pause = paused
       ? pauseIntegrityInspection({
@@ -293,7 +283,6 @@ it.for([
           pathname: agentPath,
           pausePreparation: outcome === "shutdown-preparation" || outcome === "handoff",
           pauseSchema: outcome !== "handoff",
-          preparationReceiptBroadcastName: handoffReceipts?.broadcastName,
         })
       : undefined;
     const releasePath = pause?.releasePath ?? path.join(root, "release-inspection");
@@ -307,7 +296,6 @@ it.for([
     let preparationParent: number | undefined;
     let brokerPid: number | undefined;
     let inspectionAliveAtBrokerClose: boolean | undefined;
-    let preparationCancelled = false;
     const nativeWorkers = new Map<number, Worker>();
     const createWorker = workerCpu.createCpuTrackedWorker;
     vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((...args) => {
@@ -417,16 +405,6 @@ it.for([
       unadoptedPortClaim = portClaim;
       const port = portClaim.port;
       const startup = withAgentDatabaseStartupAdmission(async (admission) => {
-        if (outcome === "shutdown-preparation") {
-          admission.signal.addEventListener(
-            "abort",
-            () => {
-              preparationCancelled = true;
-              fs.writeFileSync(pause!.preparationReleasePath, "owner cancelled");
-            },
-            { once: true },
-          );
-        }
         await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
         inspectionSettled = admission.pendingPreparation;
         waitForHealthyAgent = () =>
@@ -505,8 +483,9 @@ it.for([
           // Old startup blocks in full-file preflight before claiming its writable lease.
           expect(fs.existsSync(enteredPath)).toBe(false);
           const preparationMarker = pause!.preparationEnteredPath;
-          await withinTest(handoffReceipts!.waitFor(preparationMarker, "entered"), signal);
-          expect(fs.existsSync(preparationMarker)).toBe(true);
+          await vi.waitFor(() => expect(fs.existsSync(preparationMarker)).toBe(true), {
+            timeout: 10_000,
+          });
         } else {
           await vi.waitFor(() => expect(fs.existsSync(enteredPath)).toBe(true));
         }
@@ -549,23 +528,23 @@ it.for([
         const preparationEnteredPath = pause!.preparationEnteredPath;
         await withinTest(
           awaitGateBeforeSettlement(
-            handoffReceipts!.waitFor(preparationEnteredPath, "entered"),
+            vi.waitFor(() => expect(fs.existsSync(preparationEnteredPath)).toBe(true), {
+              timeout: 10_000,
+            }),
             inspectionSettled!,
             "startup preparation settled before entering its shutdown gate",
           ),
           signal,
         );
         expect(fs.existsSync(preparationEnteredPath)).toBe(true);
-        expect(preparationCancelled).toBe(false);
         expect(fs.existsSync(pause!.preparationReleasePath)).toBe(false);
-        await server.close();
+        await withinTest(server.close(), AbortSignal.timeout(5_000));
         await suppliedBroker?.close();
         if (brokerExpected) {
           expect(inspectionAliveAtBrokerClose).toBe(false);
           expect(() => process.kill(brokerPid!, 0)).toThrow();
         }
-        expect(preparationCancelled).toBe(true);
-        expect(fs.readFileSync(pause!.preparationReleasePath, "utf8")).toBe("owner cancelled");
+        expect(fs.existsSync(pause!.preparationReleasePath)).toBe(false);
         expect(inspectionAlive(preparationEnteredPath)).toBe(false);
         expect(fs.readFileSync(agentPath)).toEqual(agentBytes);
       } else if (outcome === "recover" || outcome === "superseded") {

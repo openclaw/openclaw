@@ -28,7 +28,6 @@ const childrenState = {
   runningChildCount: json.optional(json.number),
   queuedChildCount: json.optional(json.number),
   unreadChildCount: json.optional(json.number),
-  failedChildCount: json.optional(json.number),
 };
 const state = json.object({
   unread: json.optional(json.boolean),

@@ -16,6 +16,9 @@
 // --boundary revision measures the fresh checkout-revision owner, including Git status
 // and filesystem census work; --revision-owner <baseline.ts> selects its saved source.
 // Run both arms on the same fixture and require identical responseSha256 values.
+// --prepared-status (owner only) carries the production revision owner's status
+// into collection. Preparation is outside the measured collector interval in both
+// arms; use --diff-owner for the baseline collector that discards this inventory.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -45,6 +48,7 @@ const { values } = parseArgs({
     "changed-tracked": { type: "string", default: "0" },
     "changed-lines": { type: "string", default: "1" },
     "diff-owner": { type: "string" },
+    "prepared-status": { type: "boolean" },
     "revisions-owner": { type: "string" },
     "revision-owner": { type: "string" },
     detached: { type: "boolean" },
@@ -220,6 +224,7 @@ let diffOwnerLoads = 0;
 let revisionsOwnerLoads = 0;
 let revisionOwnerLoads = 0;
 assert(!values["revisions-owner"] || values.boundary === "owner");
+assert(!values["prepared-status"] || (values.boundary === "owner" && !values.mutate));
 assert(!values["revision-owner"] || values.boundary === "revision");
 if (values.boundary === "owner" || values.boundary === "revision") {
   const revisionBoundary = values.boundary === "revision";
@@ -231,6 +236,10 @@ if (values.boundary === "owner" || values.boundary === "revision") {
   ).href;
   const revisionsUrl = new URL("../../src/sessions/session-diff-revisions.ts", import.meta.url)
     .href;
+  const statusOwnerUrl = new URL(
+    "../../src/gateway/control-ui-session-diff-revision.ts",
+    import.meta.url,
+  ).href;
   const gitUrl = new URL("../../src/agents/worktrees/git.ts", import.meta.url).href;
   const originalGitUrl = `${gitUrl}?benchmark-original`;
   const wrapperUrl = "openclaw-benchmark:git-observer";
@@ -252,9 +261,9 @@ if (values.boundary === "owner" || values.boundary === "revision") {
         if (specifier === (revisionBoundary ? "node:fs" : "node:fs/promises")) {
           return { url: fsWrapperUrl, shortCircuit: true };
         }
-        if (revisionBoundary && specifier.endsWith("/git-worker-context.js")) {
-          return { url: contextWrapperUrl, shortCircuit: true };
-        }
+      }
+      if (context.parentURL === statusOwnerUrl && specifier.endsWith("/git-worker-context.js")) {
+        return { url: contextWrapperUrl, shortCircuit: true };
       }
       const result = nextResolve(specifier, context);
       return result.url === gitUrl ? { ...result, url: wrapperUrl } : result;
@@ -589,10 +598,18 @@ async function measure() {
     scope,
     summaryOnly: values.summary === true,
   };
+  const prepared = values["prepared-status"]
+    ? await (
+        await import("../../src/gateway/control-ui-session-diff-revision.js")
+      ).readCheckoutDiffRevision(repo, [], input.summaryOnly)
+    : undefined;
+  if (values["prepared-status"]) {
+    assert(prepared?.worktreeStatus, "Expected the production status inventory");
+  }
   const request = readCheckoutDiffRevision
     ? () => readCheckoutDiffRevision(repo, [], input.summaryOnly)
     : collectCheckoutDiff
-      ? () => collectCheckoutDiff(input)
+      ? () => collectCheckoutDiff({ ...input, worktreeStatus: prepared?.worktreeStatus })
       : values.boundary === "read"
         ? (() => {
             const loaded = import("../../src/sessions/session-diff.js");
@@ -714,6 +731,7 @@ async function measure() {
       scope,
       summaryOnly: values.summary === true,
       mutate: values.mutate === true,
+      preparedStatus: values["prepared-status"] === true,
       pollMs,
       fixture,
       node: process.version,

@@ -8,7 +8,6 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
-import { extractEmbeddedAssistantText } from "../agents/embedded-agent-utils.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import { requireApiKey, resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
@@ -22,7 +21,6 @@ import {
   unwrapSecretSentinelsForProviderEgress,
 } from "../agents/provider-secret-egress.js";
 import { registerProviderStreamForModel } from "../agents/provider-stream.js";
-import { createMediaAssistantTextCoercer } from "../agents/tools/media-tool-text.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { complete } from "../llm/stream.js";
@@ -30,6 +28,7 @@ import type { AssistantMessage, Context, Model, ProviderStreamOptions } from "..
 import { runPluginStreamConsumer } from "../plugins/plugin-instance-scope.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { createMediaAssistantTextCoercer, MediaAssistantNoTextError } from "./assistant-text.js";
 import { resolveImageRuntime } from "./image-model-runtime.js";
 import type {
   ImageDescriptionRequest,
@@ -82,7 +81,7 @@ function isImageReasoningFallbackSignature(value: unknown): boolean {
 }
 
 function hasImageReasoningOnlyResponse(message: AssistantMessage): boolean {
-  if (extractEmbeddedAssistantText(message).trim() || !Array.isArray(message.content)) {
+  if (!Array.isArray(message.content)) {
     return false;
   }
   return message.content.slice(0, MAX_IMAGE_REASONING_FALLBACK_BLOCKS).some((block) => {
@@ -520,10 +519,7 @@ export async function describeImagesWithModelPayloadTransformCore(
       });
       return { text, model: model.id };
     } catch (err) {
-      if (
-        !(err instanceof Error && /^Image model returned no text\b/.test(err.message)) ||
-        !hasImageReasoningOnlyResponse(message)
-      ) {
+      if (!(err instanceof MediaAssistantNoTextError) || !hasImageReasoningOnlyResponse(message)) {
         throw err;
       }
     }

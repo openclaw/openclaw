@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import { countRunningBackgroundProcesses } from "../agents/bash-process-observation.js";
 import { getSubagentChildControllerSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
@@ -18,10 +19,29 @@ import {
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
 import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
 import {
   createSessionRowModelCacheKey,
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
+
+export function resolveGatewaySessionBackgroundProcessCount(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  agentId: string;
+  sessionId?: string;
+}): number | undefined {
+  const canonicalKey = resolveSessionStoreKey({
+    cfg: params.cfg,
+    sessionKey: params.key,
+    storeAgentId: params.agentId,
+  });
+  const count = countRunningBackgroundProcesses({
+    scopeKeys: [canonicalKey, params.key, ...(params.sessionId ? [params.sessionId] : [])],
+    agentId: params.agentId,
+  });
+  return count > 0 ? count : undefined;
+}
 
 export function matchesSessionArchiveFilter(
   entry: Pick<SessionEntry, "archivedAt">,

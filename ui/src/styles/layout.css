@@ -4030,11 +4030,6 @@ html.openclaw-native-web-chrome
   color: var(--danger);
 }
 
-/* A failure inherited from a subagent stays neutral: red marks this session's own block. */
-.sidebar-session-attention__icon--error.sidebar-session-attention__icon--inherited {
-  color: var(--muted);
-}
-
 .sidebar-session-tree__children .sidebar-session-error.callout.danger {
   border-radius: 0;
 }

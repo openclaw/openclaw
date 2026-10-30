@@ -156,12 +156,13 @@ export async function prepareSessionsPatchEntry(
     : undefined;
   const pinnedProfile =
     "model" in params.patch && params.existingEntry?.authProfileOverride?.trim();
-  const recordedProvider = pinnedProfile
-    ? await prepareAuthProfileProvider({
-        agentDir: resolveAgentDir(params.cfg, sessionAgentId),
-        profileId: pinnedProfile,
-      })
-    : undefined;
+  const recordedProvider =
+    pinnedProfile && !splitTrailingAuthProfile(params.patch.model ?? "").profile
+      ? await prepareAuthProfileProvider({
+          agentDir: resolveAgentDir(params.cfg, sessionAgentId),
+          profileId: pinnedProfile,
+        })
+      : undefined;
   const projection = projectSessionPatchSteps(params, acpMeta, recordedProvider);
   const first = projection.next();
   if (first.done) {
@@ -202,9 +203,8 @@ function* projectSessionPatchSteps(
 ): Generator<void, SessionPatchProjectionResult, ModelCatalogSnapshot | undefined> {
   const { cfg, storeKey, patch, creation } = params;
   const now = Date.now();
-  const parsedAgent = parseAgentSessionKey(storeKey);
   const sessionAgentId = normalizeAgentId(
-    params.agentId ?? parsedAgent?.agentId ?? resolveDefaultAgentId(cfg),
+    params.agentId ?? parseAgentSessionKey(storeKey)?.agentId ?? resolveDefaultAgentId(cfg),
   );
   let resolvedDefault: ModelRef | undefined;
   const getResolvedDefault = () =>

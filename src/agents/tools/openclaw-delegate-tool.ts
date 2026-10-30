@@ -141,18 +141,24 @@ export function createOpenClawDelegateToolsForRun(
       const result = await withGatewayToolCallerIdentity(caller, () =>
         runOutsidePreparedModelRuntimePluginGenerationScope(() =>
           runOutsidePluginRuntimeGenerationScope(() =>
-            callInProcessGatewayTool<OpenClawDelegateResult>("openclaw.chat", {
-              sessionId,
-              message,
-              delegation: {
-                agentId: options.sessionAgentId,
-                ...(sessionKey ? { sessionKey } : {}),
-                ...(options.agentChannel ? { turnSourceChannel: options.agentChannel } : {}),
-                ...(turnSourceTo ? { turnSourceTo } : {}),
-                ...(options.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
-                ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+            callInProcessGatewayTool<OpenClawDelegateResult>(
+              "openclaw.chat",
+              {
+                sessionId,
+                message,
+                delegation: {
+                  agentId: options.sessionAgentId,
+                  ...(sessionKey ? { sessionKey } : {}),
+                  ...(options.agentChannel ? { turnSourceChannel: options.agentChannel } : {}),
+                  ...(turnSourceTo ? { turnSourceTo } : {}),
+                  ...(options.agentAccountId
+                    ? { turnSourceAccountId: options.agentAccountId }
+                    : {}),
+                  ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+                },
               },
-            }),
+              { signal },
+            ),
           ),
         ),
       );

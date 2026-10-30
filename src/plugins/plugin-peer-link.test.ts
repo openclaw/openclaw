@@ -2,8 +2,9 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import { setImmediate as nextImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   auditDeclaredOpenClawHostDependency,
   auditOpenClawPeerDependenciesInManagedNpmRoot,
@@ -11,6 +12,7 @@ import {
   linkOpenClawPeerDependencies,
   reconcileRegisteredOpenClawHostLinks,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
+  repairInstalledOpenClawHostLinks,
 } from "./plugin-peer-link.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -155,13 +157,20 @@ describe("plugin peer links", () => {
     expect(fs.realpathSync(peer)).toBe(fs.realpathSync(current));
   });
 
-  describe.each(["direct", "managed", "registered"] as const)("%s repair authority", (entry) => {
+  describe.each([
+    "direct",
+    "managed",
+    "registered",
+    "composed-managed",
+    "composed-registered",
+  ] as const)("%s repair authority", (entry) => {
     it.each(["missing-modules", "missing-link", "stale-link", "package-copy"] as const)(
       "preserves %s on a one-shot authority refusal during preparation",
       async (layout) => {
-        const { root, packageDir, nodeModulesDir, linkPath, oldHost } = peerFixture(
+        const registered = entry.endsWith("registered");
+        const { root, extensionsDir, packageDir, nodeModulesDir, linkPath, oldHost } = peerFixture(
           layout,
-          entry === "registered",
+          registered,
         );
         const siblingDir = path.join(path.dirname(packageDir), "z-peer-plugin");
         peerPackage(siblingDir);
@@ -171,8 +180,16 @@ describe("plugin peer links", () => {
           logger: { warn: (message: string) => warnings.push(message) },
           beforePersistentApply: guard.beforePersistentApply,
         };
-        const operation =
-          entry === "managed"
+        const operation = entry.startsWith("composed-")
+          ? repairInstalledOpenClawHostLinks({
+              managedNpmRoots: registered ? [] : [root],
+              extensionsDir,
+              installRecords: registered
+                ? registeredRepair(packageDir, siblingDir).installRecords
+                : {},
+              ...guarded,
+            })
+          : entry === "managed"
             ? relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot: root, ...guarded })
             : entry === "registered"
               ? reconcileRegisteredOpenClawHostLinks({
@@ -180,7 +197,7 @@ describe("plugin peer links", () => {
                   ...guarded,
                 })
               : linkOpenClawPeerDependencies({ ...peerInstall(packageDir), ...guarded });
-        // Each entry has started asynchronous filesystem preparation but has not mutated yet.
+        // Revoke after the entry starts and before its first filesystem mutation.
         guard.current = false;
         await expect(operation).rejects.toBe(failure);
         expect(warnings).toEqual([]);
@@ -200,39 +217,160 @@ describe("plugin peer links", () => {
     );
   });
 
-  it("awaits registered peer preparation before checking synchronous apply authority", async () => {
-    const { packageDir, linkPath, oldHost } = peerFixture("stale-link", true);
-    const prepared = createDeferred();
-    const release = createDeferred();
-    let preparationEntered = false;
-    const refusal = new Error("registered peer apply authority revoked");
-    const beforePersistentApply = vi.fn(() => {
-      throw refusal;
-    });
-    const operation = reconcileRegisteredOpenClawHostLinks({
-      ...registeredRepair(packageDir),
-      beforePersistentEffect: async () => {
-        preparationEntered = true;
-        prepared.resolve();
-        await release.promise;
-      },
-      beforePersistentApply,
-    }).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    try {
-      await Promise.race([prepared.promise, operation]);
-      expect(preparationEntered).toBe(true);
-      expect(beforePersistentApply).not.toHaveBeenCalled();
+  it.for(["registered", "composed"] as const)(
+    "awaits %s peer preparation before checking synchronous apply authority",
+    async (entry, { signal }) => {
+      const { packageDir, linkPath, oldHost } = peerFixture("stale-link", true);
+      const prepared = createDeferred();
+      const release = createDeferred();
+      let preparationEntered = false;
+      const refusal = new Error("registered peer apply authority revoked");
+      const beforePersistentApply = vi.fn(() => {
+        throw refusal;
+      });
+      const options = {
+        ...registeredRepair(packageDir),
+        beforePersistentEffect: async () => {
+          preparationEntered = true;
+          prepared.resolve();
+          await release.promise;
+        },
+        beforePersistentApply,
+      };
+      const operation = (
+        entry === "registered"
+          ? reconcileRegisteredOpenClawHostLinks(options)
+          : repairInstalledOpenClawHostLinks({ ...options, managedNpmRoots: [], logger: {} })
+      ).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await withinTest(Promise.race([prepared.promise, operation]), signal);
+        expect(preparationEntered).toBe(true);
+        expect(beforePersistentApply).not.toHaveBeenCalled();
+        expect(fs.readlinkSync(linkPath)).toBe(oldHost);
+      } finally {
+        release.resolve();
+        await operation;
+      }
+      expect(await operation).toBe(refusal);
+      expect(beforePersistentApply).toHaveBeenCalledOnce();
       expect(fs.readlinkSync(linkPath)).toBe(oldHost);
-    } finally {
-      release.resolve();
-      await operation;
+    },
+  );
+
+  it.for([false, true])(
+    "joins managed repairs before registered repair or failure (reject=%s)",
+    async (reject, { signal }) => {
+      const first = peerFixture();
+      const sibling = peerFixture();
+      const registered = peerFixture("missing-modules", true);
+      const firstFinished = createDeferred();
+      const siblingStarted = createDeferred();
+      const release = createDeferred();
+      const failure = new Error("managed root could not be read");
+      const readdir = fsPromises.readdir.bind(fsPromises);
+      const symlink = fs.symlinkSync.bind(fs);
+      let reachedFirst = false;
+      let completed = false;
+      const finishFirst = () => {
+        reachedFirst = true;
+        firstFinished.resolve();
+      };
+      vi.spyOn(fsPromises, "readdir").mockImplementation(async (...args) => {
+        const directory = String(args[0]);
+        if (directory === path.join(sibling.root, "node_modules")) {
+          siblingStarted.resolve();
+          await release.promise;
+        } else if (directory === path.join(first.root, "node_modules")) {
+          await siblingStarted.promise;
+          if (reject) {
+            finishFirst();
+            throw failure;
+          }
+        }
+        return await readdir(...args);
+      });
+      vi.spyOn(fs, "symlinkSync").mockImplementation((...args) => {
+        symlink(...args);
+        if (String(args[1]) === first.linkPath) {
+          finishFirst();
+        }
+      });
+      syncBuiltinESMExports();
+      const operation = repairInstalledOpenClawHostLinks({
+        managedNpmRoots: [first.root, sibling.root],
+        installRecords: registeredRepair(registered.packageDir).installRecords,
+        extensionsDir: registered.extensionsDir,
+        logger: {},
+      })
+        .then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        )
+        .finally(() => {
+          completed = true;
+        });
+      try {
+        await withinTest(Promise.race([firstFinished.promise, operation]), signal);
+        expect(reachedFirst).toBe(true);
+        // Drain the first branch's promise chain while its sibling remains gated.
+        await nextImmediate();
+        expect(completed).toBe(false);
+        expect(fs.existsSync(registered.linkPath)).toBe(false);
+      } finally {
+        siblingStarted.resolve();
+        release.resolve();
+        await operation;
+      }
+      expectHostLink(sibling.linkPath);
+      if (reject) {
+        expect(await operation).toEqual({ error: failure });
+        expect(fs.existsSync(registered.linkPath)).toBe(false);
+      } else {
+        expect(await operation).toEqual({ value: { managedRepaired: 2, registeredRepaired: 1 } });
+        expectHostLink(registered.linkPath);
+      }
+    },
+  );
+
+  it.each([
+    ["managed", false],
+    ["managed", true],
+    ["registered", false],
+    ["registered", true],
+  ] as const)("preserves %s manifest read failure policy (callback=%s)", async (kind, callback) => {
+    const fixture = peerFixture("missing-modules", kind === "registered");
+    const broken = path.join(path.dirname(fixture.packageDir), "a-broken");
+    peerPackage(broken);
+    fs.writeFileSync(path.join(broken, "package.json"), "{");
+    const onPackageReadError = callback ? vi.fn() : undefined;
+    const operation = repairInstalledOpenClawHostLinks({
+      managedNpmRoots: kind === "managed" ? [fixture.root] : [],
+      installRecords:
+        kind === "registered" ? registeredRepair(fixture.packageDir, broken).installRecords : {},
+      extensionsDir: fixture.extensionsDir,
+      logger: {},
+      onPackageReadError,
+    });
+    if (onPackageReadError) {
+      await expect(operation).resolves.toEqual({
+        managedRepaired: kind === "managed" ? 1 : 0,
+        registeredRepaired: kind === "registered" ? 1 : 0,
+      });
+      expect(onPackageReadError).toHaveBeenCalledOnce();
+      expect(onPackageReadError).toHaveBeenCalledWith(
+        expect.any(SyntaxError),
+        broken,
+        kind === "managed" ? "managed npm" : "registered",
+      );
+      expectHostLink(fixture.linkPath);
+    } else {
+      await expect(operation).rejects.toBeInstanceOf(SyntaxError);
+      expect(fs.existsSync(fixture.linkPath)).toBe(false);
     }
-    expect(await operation).toBe(refusal);
-    expect(beforePersistentApply).toHaveBeenCalledOnce();
-    expect(fs.readlinkSync(linkPath)).toBe(oldHost);
+    expect(fs.existsSync(path.join(broken, "node_modules"))).toBe(false);
   });
 
   it.each(["symlink", "directory"] as const)(

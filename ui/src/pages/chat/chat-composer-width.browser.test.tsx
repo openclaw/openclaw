@@ -6,7 +6,7 @@ import {
   renderComposerInto,
   disposeComposer,
 } from "./chat-composer.test-support.ts";
-import { loadComposerWidthEdge } from "./components/chat-composer-width-ref.tsx";
+import { prepareComposerWidthEdge } from "./components/chat-composer-width-ref.tsx";
 import { resetChatComposerState } from "./components/chat-composer.tsx";
 import baseStyles from "../../styles/base.css?inline";
 import surfaceStyles from "../../styles/chat/composer-surface.css?inline";
@@ -24,7 +24,7 @@ describe("composer border width control", () => {
   let styles: HTMLStyleElement;
   beforeEach(async () => {
     // Production warms the lazy edge owner at idle; the new-session suite covers intent loading.
-    await loadComposerWidthEdge();
+    await prepareComposerWidthEdge();
     styles = document.createElement("style");
     styles.textContent = [
       baseStyles,

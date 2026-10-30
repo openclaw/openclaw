@@ -44,6 +44,7 @@ export type StartupSmokeFailure = {
 
 export type StartupConvergenceResult = {
   changes: string[];
+  configChanges: string[];
   notices?: StartupConvergenceWarning[];
   warnings: StartupConvergenceWarning[];
   errored: boolean;
@@ -56,6 +57,7 @@ export function makeStartupConvergenceResult(
 ): StartupConvergenceResult {
   return {
     changes: [],
+    configChanges: [],
     notices: [],
     warnings: [],
     errored: false,

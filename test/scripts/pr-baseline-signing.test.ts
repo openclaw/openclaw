@@ -8,7 +8,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   createBaselineFixture,
@@ -18,6 +19,8 @@ import {
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
+const pristine = dirs.make("openclaw-pr-signing-pristine-");
+let context: ReturnType<typeof createSigningContext>;
 
 function createSigningContext() {
   const f = createBaselineFixture(dirs.make("openclaw-pr-signing-"), 1);
@@ -43,7 +46,6 @@ function createSigningContext() {
 }
 
 function createSignedContext() {
-  const context = createSigningContext();
   const { f, credit, requestArgs } = context;
   const signed = signBaselineRequest(f, requestArgs);
   expect(signed.message).toBe(
@@ -53,8 +55,18 @@ function createSignedContext() {
 }
 
 describePosix("native baseline signing handoff", () => {
+  beforeAll(() => {
+    context = createSigningContext();
+    copyTreeCloseOnExec(context.f.root, pristine);
+  });
+  beforeEach(() => {
+    // Bindings and registered worktrees contain absolute paths. Restore the entire
+    // private fixture at those same paths; each case creates its own signing request.
+    rmSync(context.f.root, { recursive: true, force: true });
+    copyTreeCloseOnExec(pristine, context.f.root);
+  });
   it("seals a published successor request and rejects changed inputs", () => {
-    const { f, source, before, requestArgs } = createSigningContext();
+    const { f, source, before, requestArgs } = context;
     const refuseRequest = (message: string, extra: NodeJS.ProcessEnv = {}) => {
       const result = f.run("prepare-baseline-signing-request", requestArgs, extra);
       expect(result.status, result.stdout + result.stderr).not.toBe(0);

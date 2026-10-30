@@ -13,6 +13,7 @@ import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
+import type { decodeDataUrl } from "../../media/image-data-url.js";
 import { getDefaultLocalRootsCore } from "../../media/local-media-access.js";
 import {
   classifyMediaReferenceSource,
@@ -45,7 +46,6 @@ import {
   readStringArrayParam,
   readToolStringParam,
 } from "./common.js";
-import type { decodeDataUrl } from "./image-tool.helpers.js";
 import {
   capabilityAuthOperation,
   getCurrentCapabilityMetadataSnapshot,
@@ -566,7 +566,7 @@ export async function loadMediaToolReferences<T>(params: {
     let media: LoadedToolReferenceMedia;
     try {
       if (reference.isDataUrl) {
-        const { decodeDataUrl } = await import("./image-tool.helpers.js");
+        const { decodeDataUrl } = await import("../../media/image-data-url.js");
         params.signal?.throwIfAborted();
         media = decodeDataUrl(resolvedInput, { maxBytes: params.maxBytes });
       } else {

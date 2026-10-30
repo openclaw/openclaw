@@ -399,6 +399,7 @@ async function createBackupArchiveInScope(
       plan.stateDir,
       () => createBackupArchiveInScope({ ...opts, nowMs }, plan),
       { config: plan.databaseConfig, selection },
+      { online: true },
     );
   }
   const outputPath = await resolveOutputPath({

@@ -228,8 +228,17 @@ export function prepareChatHistoryResponsePage(
         ? pagination.offset + pagination.rawPageMessages
         : Math.max(pagination.offset + 1, pagination.totalMessages - oldestSeq + 1);
   }
-  const hasMore =
-    pagination !== undefined && candidateNextOffset !== undefined
+  const cursors = resolveChatHistoryPageCursors(historyPage.anchor, capped, normalized);
+  // Numeric pages can begin without an explicit offset or a native message ID, and
+  // ID-less transcripts still page by offset. Both continuations respect the
+  // reader's exhausted hidden prefix unless response budgeting trimmed rows.
+  const hasMore = historyPage.anchor
+    ? Boolean(cursors.olderCursor) ||
+      (pagination !== undefined &&
+        candidateNextOffset !== undefined &&
+        candidateNextOffset < pagination.totalMessages &&
+        (historyPage.anchor.hasOlder || capped.length < replaced.messages.length))
+    : pagination !== undefined && candidateNextOffset !== undefined
       ? candidateNextOffset < pagination.totalMessages
       : undefined;
   const survivors = new Set(capped);
@@ -253,7 +262,7 @@ export function prepareChatHistoryResponsePage(
         }
       : {}),
     responseHistoryBytes,
-    ...resolveChatHistoryPageCursors(historyPage.anchor, capped, normalized),
+    ...cursors,
     ...(hasMore ? { nextOffset: candidateNextOffset } : {}),
     ...(hasMore !== undefined ? { hasMore } : {}),
     ...(pagination !== undefined ? { totalMessages: pagination.totalMessages } : {}),

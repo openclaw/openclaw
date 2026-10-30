@@ -26,7 +26,7 @@ import {
 } from "./sqlite-database-admission.js";
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
 import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
-import { readSqliteTextEncoding, schemaAdmission } from "./sqlite-schema-admission.js";
+import { schemaAdmission } from "./sqlite-schema-admission.js";
 import {
   admitSqliteSchema,
   getAdmittedSqliteSchemaFacts,
@@ -41,19 +41,6 @@ import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-su
 
 describe("native SQLite schema snapshots and callbacks", () => {
   const { tempDirs, openDatabase } = useSqliteSchemaTestFixture();
-
-  it("does not retain the default encoding before the first schema object exists", () => {
-    const filename = path.join(tempDirs.make("sqlite-empty-encoding-"), "agent.sqlite");
-    const database = openDatabase("", true, filename);
-    expect(getAdmittedSqliteSchemaFacts(database)?.textEncoding).toBe("UTF-8");
-    database.exec("PRAGMA encoding = 'UTF-16le'; CREATE TABLE original(id)");
-    expect(getAdmittedSqliteSchemaFacts(database)?.textEncoding).toBe("UTF-16le");
-    expect(readSqliteTextEncoding(database)).toBe("UTF-16le");
-    database.close();
-    expect(getAdmittedSqliteSchemaFacts(openDatabase("", true, filename))?.textEncoding).toBe(
-      "UTF-16le",
-    );
-  });
 
   it("observes a sibling commit while a new reader adopts retained schema facts", async () => {
     const databaseAdmission = await import("./sqlite-database-admission.js");

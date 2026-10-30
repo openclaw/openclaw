@@ -61,7 +61,7 @@ export type GitReadOperations = {
     output: {
       key: string;
       /** A successful status inventory, tied to its physical checkout and HEAD. */
-      cleanWorktree?: { root: string; head: string };
+      worktreeStatus?: { root: string; head: string; clean: boolean; untrackedPaths: string[] };
     } | null;
   };
   "checkout.context": {
