@@ -497,11 +497,25 @@
         display: none;
       }
 
+      /* The chat composer's surface; fallbacks match the default theme's tokens
+         until the app stylesheet defines --chat-composer-surface. */
       html[data-openclaw-boot-chat]
         :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
         .loading-skeleton__composer:has(> #openclaw-boot-composer) {
         height: auto;
-        background: var(--bg-content, var(--boot-content-bg));
+        background: var(
+          --chat-composer-surface,
+          color-mix(in srgb, var(--boot-ink) 14%, var(--bg-content, var(--boot-content-bg)))
+        );
+      }
+
+      html[data-openclaw-boot-chat][data-theme-mode="light"]
+        :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+        .loading-skeleton__composer:has(> #openclaw-boot-composer) {
+        background: var(
+          --chat-composer-surface,
+          color-mix(in srgb, var(--bg-content, var(--boot-content-bg)) 50%, white)
+        );
       }
 
       #openclaw-boot-composer {
