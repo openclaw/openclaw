@@ -31,6 +31,7 @@ import {
   WORKER_BUNDLE_SQLITE_STORE_PATH,
 } from "../src/shared/worker-bundle-hash.js";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { bundledModuleRegions } from "./lib/bundled-module-regions.mjs";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { formatErrorMessage } from "./lib/error-format.mts";
 import { verifyNpmRegistrySignatures } from "./lib/npm-registry-signatures.mjs";
@@ -741,7 +742,7 @@ function extractJavaScriptImportSpecifiers(
 ): ParsedImportSpecifiersResult {
   try {
     const regions: Array<{ start: number; end: number; extensionId?: string }> = [];
-    const stack: Array<{ start: number; extensionId?: string }> = [];
+    const stack: Array<{ start: number; extensionId?: string; flat: boolean }> = [];
     // Published modules need stricter validation than the CommonJS-aware dependency scanner.
     acorn.parse(source, {
       allowHashBang: true,
@@ -752,9 +753,16 @@ function extractJavaScriptImportSpecifiers(
             if (block) {
               return;
             }
-            if (text.startsWith("#region ")) {
-              const extensionId = /^#region extensions\/([a-z0-9][a-z0-9-]*)\//u.exec(text)?.[1];
-              stack.push({ start: end, extensionId });
+            const marker = bundledModuleRegions(source.slice(start, end)).next().value;
+            if (marker) {
+              // Simple labels close at the next module; historical regions can nest.
+              const previous = stack.at(-1);
+              if (previous?.flat) {
+                stack.pop();
+                regions.push({ ...previous, end: start });
+              }
+              const extensionId = /^extensions\/([a-z0-9][a-z0-9-]*)\//u.exec(marker[1] ?? "")?.[1];
+              stack.push({ start: end, extensionId, flat: marker[0].startsWith("// ") });
             } else if (text.trim() === "#endregion") {
               const region = stack.pop();
               if (region) {
@@ -764,6 +772,11 @@ function extractJavaScriptImportSpecifiers(
           }
         : undefined,
     });
+    for (const region of stack) {
+      if (region.flat) {
+        regions.push({ ...region, end: source.length });
+      }
+    }
     const imports: RuntimeImport[] = [];
     collectPackageRootImports(source, (specifier, start, kind) => {
       // Inner regions close first. Inspect real comments and full-source bindings;
