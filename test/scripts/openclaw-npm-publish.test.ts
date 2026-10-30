@@ -15,6 +15,13 @@ function runPublishWrapper(args: string[], env: NodeJS.ProcessEnv = {}) {
   });
 }
 
+function runPublishWrapperWithClosedStderr(env: NodeJS.ProcessEnv = {}) {
+  return spawnSync("bash", ["-c", 'bash "$1" --publish 2>&-', "bash", scriptPath], {
+    encoding: "utf8",
+    env: { ...process.env, GITHUB_ACTIONS: "false", WORKFLOW_SHA: "", ...env },
+  });
+}
+
 function makePackageTarball(root: string, packageJson?: string): string {
   const packageDir = path.join(root, "package");
   const tarball = path.join(root, "openclaw.tgz");
@@ -190,6 +197,21 @@ describe("openclaw npm publish wrapper", () => {
         "--prefer-online",
       ],
     ]);
+  });
+
+  it("preserves the npm publish status when recovery diagnostics cannot be written", () => {
+    const tempRoot = tempDirs.make("openclaw-npm-publish-");
+    const callsPath = makeStagedNpm(tempRoot);
+    const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version as string;
+    const result = runPublishWrapperWithClosedStderr({
+      NPM_CALLS: callsPath,
+      NPM_PUBLISH_EXIT: "42",
+      OPENCLAW_NPM_PUBLISH_TAG: "beta",
+      PACKAGE_VERSION: packageVersion,
+      PATH: `${tempRoot}:${process.env.PATH}`,
+    });
+
+    expect(result.status).toBe(42);
   });
 
   it("observes a staged companion tarball by its exact package identity", () => {

@@ -101,6 +101,9 @@ printf 'Publish command:'
 printf ' %q' "${publish_cmd[@]}"
 printf '\n'
 
+publish_stderr="$(mktemp)"
+trap 'rm -f "${publish_stderr}"' EXIT
+
 # GitHub publication uses the pinned publisher's guard, never candidate code.
 # Keep it after tarball inspection and planning, and repeat it for every write.
 if [[ "${GITHUB_ACTIONS:-}" == "true" || -n "${WORKFLOW_SHA:-}" ]]; then
@@ -108,13 +111,12 @@ if [[ "${GITHUB_ACTIONS:-}" == "true" || -n "${WORKFLOW_SHA:-}" ]]; then
     node "${tooling_root}/scripts/npm-preflight-tooling-identity.mjs" --verify-publication-authority
 fi
 
-publish_stderr="$(mktemp)"
-trap 'rm -f "${publish_stderr}"' EXIT
 if "${publish_cmd[@]}" 2>"${publish_stderr}"; then
   publish_status=0
 else
   publish_status=$?
 fi
+set +e
 cat "${publish_stderr}" >&2
 
 if [[ "${publish_status}" -eq 0 ]]; then

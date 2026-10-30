@@ -6408,7 +6408,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     );
     const coreWrapper = readFileSync("scripts/openclaw-npm-publish.sh", "utf8");
     expect(coreWrapper).toMatch(
-      /--verify-publication-authority\s*\nfi\s*\n"\$\{publish_cmd\[@\]\}"/u,
+      /--verify-publication-authority\s*\nfi\s*\nif "\$\{publish_cmd\[@\]\}" 2>"\$\{publish_stderr\}"; then/u,
     );
     const authority = readFileSync("scripts/npm-preflight-tooling-identity.mjs", "utf8");
     expect(authority).toContain("releasePublishRunAttempt: env.RELEASE_PUBLISH_RUN_ATTEMPT");
