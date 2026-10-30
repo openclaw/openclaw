@@ -487,7 +487,7 @@ describe("mutable file operand binding", () => {
             "command-that-does-not-exist",
             "SYSTEM_RUN_DENIED: approval requires a resolved executable",
           ],
-          ["sh < missing.sh", cannotBind + "this command"],
+          ["sh < missing.sh", cannotBind + "this command (redirect)"],
           ["node --require loader.js --eval 'console.log(1)'", null],
           [["bash", "-c", "./payload.sh"], null],
         ];
@@ -510,6 +510,41 @@ describe("mutable file operand binding", () => {
         }
       }
     });
+  });
+
+  it.each([
+    {
+      name: "names a curated CommandRisk kind (command substitution)",
+      command: 'gog sheets create --name "Random Spreadsheet $(date +%Y%m%d)" --json',
+      message: "SYSTEM_RUN_DENIED: approval cannot safely bind this command (command-substitution)",
+    },
+    {
+      name: "names a curated unsupported shell topology shape (if)",
+      command: "if true; then echo hi; fi",
+      message: "SYSTEM_RUN_DENIED: approval cannot safely bind this command (if)",
+    },
+    {
+      name: "keeps the generic message for a non-curated reason (comment-only command)",
+      command: "# just a comment",
+      message: "SYSTEM_RUN_DENIED: approval cannot safely bind this command",
+    },
+    {
+      name: "keeps the generic message on the Windows shell-command path",
+      command: "type file.txt & del file.txt",
+      platform: "win32" as const,
+      message: "SYSTEM_RUN_DENIED: approval cannot safely bind this command",
+    },
+  ])("$name", async ({ command, platform, message }) => {
+    await expect(
+      prepareSystemRunMutableFileBinding({ command: { kind: "shell", text: command }, platform }),
+    ).resolves.toEqual({ ok: false, message });
+  });
+
+  it("clears the binder for a literal-value retry of the command-substitution case", async () => {
+    const result = await prepareSystemRunMutableFileBinding({
+      command: { kind: "shell", text: 'echo "Test Sheet"' },
+    });
+    expect(result.ok).toBe(true);
   });
 
   it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
