@@ -1,0 +1,2 @@
+4
+# Await native footer settlement in the existing clipboard visibility regression.

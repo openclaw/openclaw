@@ -367,6 +367,10 @@ suite.define(() => {
           await page.mouse.move(0, 0);
           const feedback = message.getByRole("status").filter({ hasText: "Copy failed" });
           await feedback.waitFor({ state: "visible" });
+          // An in-flight opacity fade can appear visible before ending at zero.
+          await message.locator(".chat-group-footer").evaluate(async (footer) => {
+            await Promise.all(footer.getAnimations().map((animation) => animation.finished));
+          });
           expect(
             await feedback.evaluate((element) =>
               element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
