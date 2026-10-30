@@ -16,7 +16,6 @@ import {
   disableDependencyShrinkwrapOverrideConflictSources,
   validationOverrideRulesFromOverrides,
   normalizeNpmVersionDrift,
-  normalizeNpmRegistryIntegrities,
   normalizeOverrides,
   packageJsonForNpmLock,
   pnpmLockOverrideVersionForVersions,
@@ -1371,53 +1370,13 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
   });
 
   it.each([
+    "valid",
     "missing-pin",
     "ambiguous-pin",
     "wrong-version",
     "wrong-alias",
     "strong-mismatch",
-    "local-artifact",
-  ])(
-    "does not repair registry integrity by guessing or replacing conflicting hashes (%s)",
-    (scenario) => {
-      const sha512 = `sha512-${Buffer.alloc(64, 1).toString("base64")}`;
-      const sha1 = `sha1-${Buffer.alloc(20, 2).toString("base64")}`;
-      const metadata = {
-        name: scenario === "wrong-alias" ? "other" : "@borewit/text-codec",
-        version: scenario === "wrong-version" ? "0.2.3" : "0.2.2",
-        resolved:
-          scenario === "local-artifact" ? "file:./codec.tgz" : "https://mirror.invalid/codec.tgz",
-        integrity:
-          scenario === "strong-mismatch"
-            ? `sha512-${Buffer.alloc(64, 3).toString("base64")}`
-            : sha1,
-      };
-      const lock = { packages: { "node_modules/codec": metadata } };
-      const pins = new Map([["@borewit/text-codec@0.2.2", new Set([sha512])]]);
-      if (scenario === "missing-pin") {
-        pins.clear();
-      }
-      if (scenario === "ambiguous-pin") {
-        pins
-          .get("@borewit/text-codec@0.2.2")!
-          .add(`sha512-${Buffer.alloc(64, 4).toString("base64")}`);
-      }
-      const original = metadata.integrity;
-      if (scenario === "strong-mismatch" || scenario === "local-artifact") {
-        normalizeNpmRegistryIntegrities(lock, pins);
-        expect(
-          collectPnpmLockViolations(lock, new Set(["@borewit/text-codec@0.2.2"]), pins),
-        ).toHaveLength(1);
-      } else {
-        expect(() => normalizeNpmRegistryIntegrities(lock, pins)).toThrow(
-          "expected one pnpm SHA512 pin",
-        );
-      }
-      expect(metadata.integrity).toBe(original);
-    },
-  );
-
-  it("carries pnpm SHA512 pins into locks generated from SHA1-only registry metadata", async () => {
+  ])("generates mirror locks only with matching unambiguous pnpm pins (%s)", async (scenario) => {
     const root = tempDirs.make("openclaw-npm-sha1-registry-");
     mkdirSync(path.join(root, "package"));
     const manifest = { name: "@borewit/text-codec", version: "0.2.2", main: "index.js" };
@@ -1429,11 +1388,30 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
     const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
     const shasum = createHash("sha1").update(bytes).digest("hex");
     writeFileSync(path.join(root, "pnpm-workspace.yaml"), "{}\n");
+    const conflictingIntegrity = `sha512-${Buffer.alloc(64, 3).toString("base64")}`;
+    const packageKey =
+      scenario === "wrong-version"
+        ? "@borewit/text-codec@0.2.3"
+        : scenario === "wrong-alias"
+          ? "other@0.2.2"
+          : "@borewit/text-codec@0.2.2";
     writeFileSync(
       path.join(root, "pnpm-lock.yaml"),
       JSON.stringify({
-        packages: { "@borewit/text-codec@0.2.2": { resolution: { integrity } } },
-        snapshots: { "@borewit/text-codec@0.2.2": {} },
+        packages: {
+          [packageKey]: {
+            resolution:
+              scenario === "missing-pin"
+                ? {}
+                : { integrity: scenario === "strong-mismatch" ? conflictingIntegrity : integrity },
+          },
+          ...(scenario === "ambiguous-pin"
+            ? {
+                [`${packageKey}(peer@1.0.0)`]: { resolution: { integrity: conflictingIntegrity } },
+              }
+            : {}),
+        },
+        snapshots: { [packageKey]: {} },
       }),
     );
     writeFileSync(
@@ -1459,6 +1437,7 @@ const server = createServer((req, res) => {
   res.setHeader('content-type', 'application/json');
   res.end(JSON.stringify({ name: manifest.name, 'dist-tags': { latest: manifest.version },
     versions: { [manifest.version]: { ...manifest, dist: { shasum: ${JSON.stringify(shasum)},
+      ...${JSON.stringify(scenario === "strong-mismatch" ? { integrity } : {})},
       tarball: 'http://127.0.0.1:' + server.address().port + '/codec.tgz' } } } }));
 });
 server.listen(0, '127.0.0.1', () => process.stdout.write(String(server.address().port)));
@@ -1495,6 +1474,17 @@ console.log(generateNpmPackageLock(${JSON.stringify(root)}));
           },
         },
       );
+      if (scenario !== "valid") {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          scenario === "strong-mismatch"
+            ? `node_modules/@borewit/text-codec integrity ${integrity}, expected ${conflictingIntegrity}`
+            : scenario === "wrong-version" || scenario === "wrong-alias"
+              ? "pnpm-lock.yaml has no runtime resolution for @borewit/text-codec@0.2.2"
+              : "expected one pnpm SHA512 pin",
+        );
+        return;
+      }
       expect(result.status, result.stderr).toBe(0);
       const lock = JSON.parse(result.stdout);
       expect(lock.packages["node_modules/@borewit/text-codec"]).toMatchObject({

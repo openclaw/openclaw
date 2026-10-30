@@ -1617,10 +1617,8 @@ function normalizeNpmVersionDrift<T>(lockfile: T): T {
   return lockfile;
 }
 
-function normalizeNpmRegistryIntegrities(
-  lockfile: unknown,
-  pnpmIntegrities = readPnpmLockPackageIntegrities(),
-) {
+function normalizeNpmRegistryIntegrities(lockfile: unknown) {
+  const pnpmIntegrities = readPnpmLockPackageIntegrities();
   for (const [lockPath, metadata] of Object.entries(recordAt(lockfile, "packages") ?? {})) {
     if (
       !isRecord(metadata) ||
@@ -2237,7 +2235,6 @@ export {
   normalizeOverrides,
   applyPackageExtensionPeerMetadata,
   normalizeNpmVersionDrift,
-  normalizeNpmRegistryIntegrities,
   packageJsonForNpmLock,
   pnpmLockOverrideVersionForVersions,
   resolvePnpmLockOverridePlan,
