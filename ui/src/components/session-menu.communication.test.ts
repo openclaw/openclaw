@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import {
   mountMenu,
   menuPanel,
@@ -68,7 +69,12 @@ describe("session communication menu", () => {
     "separates Advanced sections once in $compact menus with list context $involvingMeContext",
     async (options) => {
       const owner = settingsHarness(() => descriptor());
-      owner.publish({ hello: { policy: { hasMultipleSessionSharingIdentities: true } } });
+      owner.publish({
+        hello: {
+          ...gatewayHelloForMethods(["sessions.setInvolvement"]),
+          policy: { hasMultipleSessionSharingIdentities: true },
+        },
+      });
       const menu = await mountMenu({
         context: owner.context,
         session: { hiddenFromInvolvingMe: false },
