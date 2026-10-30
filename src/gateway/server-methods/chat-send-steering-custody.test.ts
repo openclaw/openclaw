@@ -174,13 +174,10 @@ describe("steering input custody", () => {
         ? ensureProfileForEmail("other-steering@example.test")
         : profile;
       const fixture = await createBrowserFollowupFixture({
-        // This matrix compares task collaborators; main requester changes have separate coverage.
         sessionKey:
           scenario === "owner into cron"
             ? "agent:main:cron:steering-automation"
-            : subagent
-              ? "agent:main:subagent:steering-child"
-              : "agent:main:dashboard:steering-collaboration",
+            : `agent:main:${subagent ? "subagent" : "dashboard"}:steering-collaboration`,
         preserveContent: true,
         active: !startOwnerTurn,
         // Both callers may write here; their caps still differ for other sessions.
@@ -188,7 +185,6 @@ describe("steering input custody", () => {
           ? { createdActor: { type: "human", source: "profile", id: incomingProfile.id } as const }
           : {}),
       });
-      // Naming has separate coverage; this fixture owns only steering and its backing turn.
       await patchSessionEntryCore(fixture.scope, () => ({ displayName: "Steering custody" }));
       const initialConfig = fixture.context.getRuntimeConfig();
       const initialQueue = { ...initialConfig.messages?.queue };
