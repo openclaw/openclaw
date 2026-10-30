@@ -1548,15 +1548,11 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .sidebar-recent-sessions__group[data-session-section^="catalog:"] > .sidebar-recent-sessions__list {
-  gap: 8px;
+  gap: 0;
 }
 
 /* Catalogs sit on the session list grid: provider heading, quiet host subtitle,
    28px project rows, then sessions indented like child sessions. */
-[data-session-section^="catalog:"] > .sidebar-recent-sessions__list {
-  gap: 0;
-}
-
 [data-session-section^="catalog:"] > .sidebar-recent-sessions__head {
   position: relative;
 }
