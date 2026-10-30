@@ -288,8 +288,8 @@ function expectDownloadFetchTimeout(url: string, totalTimeoutMs: number): void {
 
 describe("minimax music generation provider", () => {
   it("streams generated music chunks from MiniMax", async () => {
-    using clock = vi.spyOn(Date, "now");
-    clock.mockReturnValue(1_700_000_000_000);
+    using clock = vi.spyOn(performance, "now");
+    clock.mockReturnValue(0);
     const chunkA = Buffer.from("ID3\x04\x00mp3-a");
     const chunkB = Buffer.from("mp3-b");
     mockResponse(
