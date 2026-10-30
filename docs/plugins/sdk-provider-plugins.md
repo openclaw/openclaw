@@ -52,6 +52,10 @@ Do not write a separate permission store or infer consent from successful login.
   `compat.thinkingRequired` and `compat.thinkingLevelLabels` shape the ladder. Do
   not add a `resolveThinkingProfile` hook for a model its row can describe. Add
   the row to `src/plugins/contracts/catalog-thinking-profiles.contract.test.ts`.
+- **Live listing needs both halves.** The entry sets `catalog.liveModelDiscovery`
+  and the manifest declares `modelCatalog.discovery: { "<provider>": "refreshable" }`.
+  Without the manifest half, the Gateway never refreshes the provider and only
+  catalog rows appear.
 - **Row IDs match the listing.** Use the ID the vendor's model list returns.
   `modelIdNormalization` aliases only fold what users type.
 - **Connection-only setup.** Onboarding saves the endpoint and credential through
