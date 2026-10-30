@@ -30,7 +30,13 @@ export function createNodeBootstrapArtifactProvider(options: NodeBootstrapArtifa
             options,
             temporaryRoot,
           });
-          return { ...artifact, installLock: await prepareNodeBootstrapInstallLock(artifact) };
+          return {
+            ...artifact,
+            installLock:
+              artifact.install === "npm"
+                ? await prepareNodeBootstrapInstallLock(artifact)
+                : undefined,
+          };
         } catch (error) {
           if (temporaryRoot) {
             await fs.rm(temporaryRoot, { recursive: true, force: true });

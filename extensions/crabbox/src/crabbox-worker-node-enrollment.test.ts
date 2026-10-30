@@ -29,6 +29,7 @@ import {
   createNodePackageFixture,
   expectSetupPhases,
   readLaunch,
+  runtimeManifestSha256,
   type DesktopFixture,
 } from "./crabbox-worker-node-enrollment.test-support.js";
 import { resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
@@ -326,6 +327,48 @@ childProcess.spawn = (command, args, options) => {
 }
 
 describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
+  it("installs and reuses a bundle without npm or lifecycle scripts", async () => {
+    const bytes = await createNodePackageFixture(
+      (prefix) => tempDirs.make(prefix),
+      "offline",
+      receipts,
+      "process.exit(98)",
+      "bundle",
+    );
+    const served = await serveArtifact(bytes);
+    const worker = await serveArtifact(Buffer.from("verified-worker-archive"));
+    const bootstrap = {
+      ...served.nodeBootstrap,
+      install: "bundle" as const,
+      buildId: "fixture-runtime-build",
+      manifestSha256: await runtimeManifestSha256(bytes),
+    };
+    const { home, stateDir } = testHome();
+    const prepare = () =>
+      enroll(home, bootstrap, undefined, true, workerBundleFor(worker.nodeBootstrap));
+    await expectSetupPhases(prepare());
+    expectAbsent(
+      path.join(home, "npm-calls"),
+      path.join(runtimePackage(home, bootstrap.sha256), "installed.json"),
+      stateDir,
+    );
+    expect(
+      readText(runtimePackage(home, bootstrap.sha256), "node_modules/runtime-fixture/index.js"),
+    ).toContain("2026.8.1");
+    await expectSetupPhases(prepare());
+    expect(served.authorizations).toHaveLength(1);
+    expect(worker.authorizations).toHaveLength(1);
+    const failed = await enroll(
+      home,
+      { ...bootstrap, manifestSha256: "0".repeat(64) },
+      undefined,
+      true,
+      workerBundleFor(worker.nodeBootstrap),
+    );
+    expectFailure(failed, "inventory does not match");
+    expectAbsent(path.join(home, "npm-calls"), stateDir);
+  });
+
   it.each(["present", "absent", "rejected", "download failure"])(
     "installs a prepared runtime with a %s project lock and keeps fallback available",
     async (mode) => {

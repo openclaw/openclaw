@@ -7,7 +7,11 @@ import { runInNewContext } from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { snapshotNodeWorkerEnv } from "../../node-host/node-worker-environment.js";
-import { DEFAULT_NODE_TOOLCHAIN_SETUP_SH, NODE_TOOLCHAIN_INSTALL_SH } from "./node-toolchain.js";
+import {
+  DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
+  NPM_NODE_TOOLCHAIN_SETUP_SH,
+  NODE_TOOLCHAIN_INSTALL_SH,
+} from "./node-toolchain.js";
 import { REPOSITORY_NODE_REQUIREMENT_SOURCE } from "./repository-node-requirement.generated.js";
 import { resolveRepositoryNodeRequirement } from "./repository-node-requirement.js";
 import { PREPARE_REPOSITORY_NODE_JS } from "./repository-node-toolchain.js";
@@ -136,6 +140,28 @@ it("installs verified bytes, reuses them offline, and repairs a damaged installa
   expect(() => install()).toThrow(/allow HTTPS access to nodejs.org and retry preparation/);
   write(path.join(f.bin, "curl"), downloadScript);
   expect(install()).toBe(bin);
+});
+
+it("keeps a supported Node-only image offline while npm mode prepares package managers", () => {
+  const f = fixture();
+  fs.symlinkSync(process.execPath, path.join(f.bin, "node"));
+  for (const name of ["wc", "tr", "mkdir", "mktemp", "rm", "tar", "sha256sum"]) {
+    fs.symlinkSync(
+      execFileSync("which", [name], { encoding: "utf8" }).trim(),
+      path.join(f.bin, name),
+    );
+  }
+  write(
+    path.join(f.bin, "curl"),
+    '#!/bin/sh\nprintf attempted > "$HOME/download-attempt"\nexit 17\n',
+  );
+  const env = { ...f.env, PATH: f.bin };
+  expect(run("/bin/sh", ["-s"], env, DEFAULT_NODE_TOOLCHAIN_SETUP_SH)).toBe("");
+  expect(fs.existsSync(path.join(f.root, "download-attempt"))).toBe(false);
+  expect(() => run("/bin/sh", ["-s"], env, NPM_NODE_TOOLCHAIN_SETUP_SH)).toThrow(
+    /allow HTTPS access/,
+  );
+  expect(fs.readFileSync(path.join(f.root, "download-attempt"), "utf8")).toBe("attempted");
 });
 
 it("rejects a default-release archive whose digest differs from the source pin", () => {
