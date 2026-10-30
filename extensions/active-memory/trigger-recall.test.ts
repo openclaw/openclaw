@@ -549,3 +549,8 @@ describe("active-memory legacy trigger recall", () => {
     expect(hoisted.managerSearch).not.toHaveBeenCalled();
   });
 });
+
+// Claimed for #188550 by scripts/claim-window.sh; replaced by the real regression.
+it.todo(
+  'active-memory recall-intent patterns missing Italian (IT) \u2014 default `mode: "escalate"` never fires for Italian',
+);
