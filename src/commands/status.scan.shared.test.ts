@@ -383,7 +383,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     );
     expect(result).toMatchObject({ provider: "local", files: 1, dirty: true });
   });
-
   it.each(["healthy", "store", "semantic"])("reports custom legacy %s probes", async (probe) => {
     const vector = {
       enabled: true,
