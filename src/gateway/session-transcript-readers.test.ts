@@ -4,6 +4,8 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
+import { readChatHistoryMessageId } from "./session-history-tail.js";
 import {
   transcriptMessage as event,
   useTranscriptFixture,
@@ -19,6 +21,7 @@ import {
   readSessionMessagesPageWithStatsAsync as readPage,
   readSessionMessagesWithSourceAsync as readSource,
 } from "./session-transcript-readers.js";
+import * as readers from "./session-transcript-readers.js";
 import { readLatestSessionUsageFromTranscriptAsync as readUsage } from "./session-transcript-usage.js";
 
 describe("session transcript reader facade", () => {
@@ -257,9 +260,9 @@ describe("session transcript reader facade", () => {
       { __openclaw: { id: "large-1" } },
       { __openclaw: { id: "large-2" } },
     ]);
-    await expect(readAround(scope, { messageId: "large-1", maxMessages: 3 })).rejects.toThrow(
-      "Transcript history page exceeds the 8388608-byte limit; request a smaller limit",
-    );
+    expect(
+      (await readAround(scope, { messageId: "large-1", maxMessages: 3 })).messages,
+    ).toMatchObject([{ __openclaw: { id: "large-0" } }, { __openclaw: { id: "large-1" } }]);
     const db = database();
     // Preserve recorded sizes while poisoning excluded payloads: a late cap would parse this.
     db.db
@@ -272,9 +275,79 @@ describe("session transcript reader facade", () => {
       maxMessages: 3,
       maxBytes: 4 * 1024 * 1024,
     });
-    expect(page.messages).toMatchObject([{ __openclaw: { id: "large-2" } }]);
+    expect(page.messages).toMatchObject([{ __openclaw: { id: "large-1" } }]);
     expect(page.hasOverreadContext).toBe(false);
   });
+
+  test.each([false, true])(
+    "pages adjacent 5 MiB messages in both directions (historical=%s)",
+    async (historical) => {
+      const ids = ["large-0", "large-1", "large-2"];
+      const events: unknown[] = chain(3, "large", () => "a".repeat(5 * 1024 * 1024));
+      if (historical) {
+        events.push({
+          type: "reset",
+          id: "reset",
+          parentId: "large-2",
+          timestamp: "2026-10-01T00:00:00.000Z",
+        });
+        ids.push("reset");
+      }
+      const scope = await writeTranscript("anchor-walk", events);
+      const params = {
+        entry: undefined,
+        provider: undefined,
+        sessionId: scope.sessionId,
+        storePath: scope.storePath,
+        sessionAgentId: scope.agentId,
+        canonicalKey: scope.sessionKey,
+        max: 3,
+        maxHistoryBytes: 8 * 1024 * 1024,
+        effectiveMaxChars: 100,
+        offset: undefined,
+        messageId: "large-1",
+      };
+      const jump = await readChatHistoryPageKernel(params, { readers });
+      expect(jump.messages.map(readChatHistoryMessageId)).toContain("large-1");
+      for (const direction of ["older", "newer"] as const) {
+        const expected = direction === "older" ? ids.toReversed() : ids;
+        // A closing reset uses the current interval; start older traversal at its preceding message.
+        const traversal = historical && direction === "older" ? expected.slice(1) : expected;
+        let messageId = traversal[0]!;
+        const seen = [messageId];
+        for (let index = 1; index < traversal.length; index++) {
+          const page = await readChatHistoryPageKernel(
+            {
+              ...params,
+              messageId,
+              pageCursor: {
+                sessionId: scope.sessionId,
+                source: jump.anchor!.source,
+                messageId,
+                direction,
+              },
+            },
+            { readers },
+          );
+          expect(page.windowReset).not.toBe(true);
+          const actual = page.messages.map(readChatHistoryMessageId);
+          if (direction === "older") {
+            actual.reverse();
+          }
+          expect(actual.length).toBeGreaterThan(0);
+          seen.push(...actual.filter((id): id is string => id !== undefined));
+          messageId =
+            direction === "older" ? page.anchor!.oldestMessageId! : page.anchor!.newestMessageId!;
+          const hasMore = direction === "older" ? page.anchor!.hasOlder : page.anchor!.hasNewer;
+          expect(hasMore).toBe(seen.length < traversal.length);
+          if (!hasMore) {
+            break;
+          }
+        }
+        expect(seen).toEqual(traversal);
+      }
+    },
+  );
 
   test("acquires messages incrementally and releases the cursor after visitor failure", async () => {
     const sessionId = "reader-stream-visitor";
