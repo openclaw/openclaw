@@ -1,0 +1,2 @@
+# Checked catalog result schemas replace unchecked source assertions.
+4

@@ -30,6 +30,11 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - `source`: `core` or `plugin`
   - `pluginId`: plugin owner when `source="plugin"`
   - `optional`: whether a plugin tool is optional
+
+  Plugin discovery yields between registrations so other Gateway requests can
+  progress while the catalog loads. An individual synchronous plugin callback
+  still blocks for its own duration.
+
 - `tools.effective` (`operator.read`) fetches a prospective tool preview for a
   session.
   - `sessionKey` is required.
