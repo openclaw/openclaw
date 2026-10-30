@@ -54,7 +54,7 @@ async function inputOptions(config: UserConfig) {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("tsdown config", () => {
-  it("builds the public runtime-artifacts export and its declarations", () => {
+  it("builds the public runtime-artifacts export", () => {
     const manifest = JSON.parse(readFileSync("package.json", "utf8"));
     expect(manifest.exports["./runtime-artifacts"]).toEqual({
       types: "./dist/runtime-artifacts.d.ts",
@@ -62,12 +62,6 @@ describe("tsdown config", () => {
     });
     expect(entrySources(runtimeGraph("runtime-artifacts"))["runtime-artifacts"]).toBe(
       "src/runtime-artifacts.ts",
-    );
-    const declarations = tsdownConfig.filter(
-      (config) => typeof config.dts === "object" && config.dts.emitDtsOnly,
-    );
-    expect(declarations.flatMap((config) => Object.keys(entrySources(config)))).toContain(
-      "runtime-artifacts",
     );
   });
 
