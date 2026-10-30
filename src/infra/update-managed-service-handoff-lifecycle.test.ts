@@ -833,7 +833,9 @@ describe("managed service update handoff", () => {
             expect.stringMatching(/handoff\.json$/u),
           ]);
           expect(await fs.readFile(environmentPath, "utf8")).toContain("KEEP_ME=1");
-          expect((await fs.stat(environmentPath)).mode & 0o777).toBe(0o600);
+          if (process.platform !== "win32") {
+            expect((await fs.stat(environmentPath)).mode & 0o777).toBe(0o600);
+          }
           expect(helperParams.serviceRecovery).toEqual({
             kind: "systemd",
             unit: "openclaw-gateway.service",
