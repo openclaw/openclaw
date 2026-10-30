@@ -292,7 +292,7 @@ async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<str
         }
         const outputs: Record<string, string> = {};
         if (step.id) {
-          steps[step.id] = { outputs };
+          steps[step.id] = { ...steps[step.id], outputs };
         }
         if (step.uses === "./.github/actions/detect-scheduled-changes") {
           // Admission ordering uses changed inputs; the cost suite owns proof-reuse decisions.
@@ -410,6 +410,9 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
     expect(other.cancel).toBe(true);
     expect(other.group).not.toBe(prGroup);
     expectUseful(ready, newer, other);
+    if (file === workflowPath("website-installer-sync")) {
+      expect(ready.eligibility.diffCalls).toBe(2);
+    }
     for (const [id, eligible] of nonScopeJobs(ready)) {
       expect(eligible, id).toBe(id !== policy.manualAdmission);
     }
