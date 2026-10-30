@@ -66,6 +66,7 @@ export function migrateAgentColdNavigationInTransaction(database: DatabaseSync):
       `CREATE TABLE ${temporary}`,
     )
     .replace(oldCheck, nextCheck);
+  // sqlite-allow-raw: Structural migration preserves native rowids and the admitted table definition.
   database.exec(`${target};
     INSERT INTO ${temporary} (rowid, ${columns}) SELECT rowid, ${columns} FROM transcript_events;
     DROP TABLE transcript_events;

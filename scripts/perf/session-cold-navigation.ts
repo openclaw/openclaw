@@ -383,6 +383,8 @@ async function measure() {
     await import("../../src/config/sessions/session-cold-storage-navigation.js");
   const { readCurrentProjectionSnapshot } =
     await import("../../src/config/sessions/session-accessor.sqlite-projection-read.js");
+  const { createSessionColdPayloadReader } =
+    await import("../../src/config/sessions/session-cold-storage-payload-read.js");
   const { readSessionTranscriptHistoryEventPageFromProjection } =
     await import("../../src/config/sessions/session-accessor.sqlite-history-query.js");
   const { resolveWorkerVisibleHistoryProjection } =
@@ -417,7 +419,10 @@ async function measure() {
         sessionId: sessionId(index),
         sessionKey: `agent:synthetic:${sessionId(index)}`,
       },
-      (projection) => {
+      (projection, cold) => {
+        if (cold) {
+          projection.readColdPayload = createSessionColdPayloadReader(database, sessionId(index));
+        }
         projection.resolveVisibleHistory = resolveWorkerVisibleHistoryProjection;
         return readSessionTranscriptHistoryEventPageFromProjection(projection, {
           maxMessages: 40,
@@ -465,8 +470,10 @@ async function measure() {
   };
   const expected = await run(0);
   assert.equal(expected.events.length, 40);
-  assert.equal(expected.events[0]?.event.id, `event-${fixture.events - 40}`);
-  assert.equal(expected.events.at(-1)?.event.id, `event-${fixture.events - 1}`);
+  assert.partialDeepStrictEqual(expected.events[0]?.event, { id: `event-${fixture.events - 40}` });
+  assert.partialDeepStrictEqual(expected.events.at(-1)?.event, {
+    id: `event-${fixture.events - 1}`,
+  });
   const digest = createHash("sha256").update(JSON.stringify(expected)).digest("hex");
   for (let index = 0; index < 5; index++) {
     await run(index);

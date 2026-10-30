@@ -25,7 +25,6 @@ import type { VisibleHistoryProjection } from "./session-accessor.sqlite-history
 import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import { projectSessionActorContextMetadata } from "./session-actor-context-metadata.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
-import { createSessionColdPayloadReader } from "./session-cold-storage-payload-read.js";
 import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { retainTranscriptContextFacts } from "./session-transcript-context-facts.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
@@ -204,11 +203,10 @@ export function parseActiveTranscriptMessageRow(
   if (row.message_position === null) {
     throw new Error("Active transcript message row is missing its message position");
   }
+  const eventJson = readProjectionTranscriptPayload(projection, row, row.event_seq);
   return {
     // SAFETY: The active projection indexes serialized TranscriptEvent rows.
-    event: JSON.parse(
-      readProjectionTranscriptPayload(projection, row, row.event_seq),
-    ) as TranscriptEvent,
+    event: JSON.parse(eventJson) as TranscriptEvent,
     eventSeq: row.event_seq,
     // Gateway cursors use the visible-message ordinal, matching the JSONL index.
     // Raw event seq includes headers/control rows and would make pages overlap.
@@ -474,7 +472,7 @@ function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: str
 export function readCurrentProjectionSnapshot<T>(
   database: TranscriptReadDatabase,
   resolved: CurrentTranscriptProjection["resolved"],
-  read: (projection: CurrentTranscriptProjection) => T,
+  read: (projection: CurrentTranscriptProjection, cold: boolean) => T,
   prepared?: SessionTranscriptProjectionFacts & { contextStats?: SessionTranscriptContextStats },
   options: { allowCold?: boolean } = {},
 ) {
@@ -524,20 +522,20 @@ export function readCurrentProjectionSnapshot<T>(
     }
     return {
       kind: "value" as const,
-      value: read({
-        database,
-        generation: snapshot.generation,
-        version,
-        hasUnindexedPrefix: !empty && snapshot.hasUnindexedPrefix,
-        latestIndexedReset: empty ? null : snapshot.latestIndexedReset,
-        resolved,
-        state,
-        contextMetadata: snapshot.contextMetadata,
-        contextStats: snapshot.contextStats,
-        readColdPayload: snapshot.cold
-          ? createSessionColdPayloadReader(database, resolved.sessionId)
-          : undefined,
-      }),
+      value: read(
+        {
+          database,
+          generation: snapshot.generation,
+          version,
+          hasUnindexedPrefix: !empty && snapshot.hasUnindexedPrefix,
+          latestIndexedReset: empty ? null : snapshot.latestIndexedReset,
+          resolved,
+          state,
+          contextMetadata: snapshot.contextMetadata,
+          contextStats: snapshot.contextStats,
+        },
+        snapshot.cold,
+      ),
     };
   };
   return database.db.isTransaction

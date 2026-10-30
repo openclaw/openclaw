@@ -160,17 +160,19 @@ it("pages retained cold branches and resets without changing cursor identity or 
     await waitForSessionTranscriptProjection(transcript);
     const options = { offset: 0, maxMessages: 20, maxBytes: 65_536, captureReadWindow: true };
     const page = reader.readHistoryEventPage(options);
-    expect(page.events.map(({ event }) => event.id)).toEqual([
-      "kept-user",
-      "kept-answer",
-      "reset",
-      "new-user",
-      "new-answer",
-      "worker-input",
-      "worker-answer",
-      "human-steer",
-      "human-answer",
-    ]);
+    expect(page.events.map(({ event }) => event)).toEqual(
+      [
+        "kept-user",
+        "kept-answer",
+        "reset",
+        "new-user",
+        "new-answer",
+        "worker-input",
+        "worker-answer",
+        "human-steer",
+        "human-answer",
+      ].map((id) => expect.objectContaining({ id })),
+    );
     const around = {
       messageId: "old-answer",
       direction: "older" as const,

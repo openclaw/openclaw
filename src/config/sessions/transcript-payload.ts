@@ -479,11 +479,6 @@ const navigationReader = createSqliteQueryCache((database: EngineConnection) =>
               )
             : eb.ref("input.event_json").as("event_projection"),
         );
-      const admitted = /* kysely-allow-raw: reject oversized metadata natively before returning its text to JavaScript. */ sql<
-        string | null
-      >`CASE WHEN ${jsonValid(database, sql.ref("metadata.navigation_json"))}
-          AND octet_length(metadata.navigation_json) <= ${MAX_NAVIGATION_BYTES}
-          THEN metadata.navigation_json ELSE NULL END`;
       return (
         db
           // Full JSON and JSONB intermediates can spill to disk when materialized.
@@ -507,7 +502,13 @@ const navigationReader = createSqliteQueryCache((database: EngineConnection) =>
                 ),
           )
           .selectFrom("metadata")
-          .select(admitted.as("navigation_json"))
+          .select((eb) =>
+            /* kysely-allow-raw: reject oversized metadata natively before returning its text to JavaScript. */ sql<
+              string | null
+            >`CASE WHEN ${jsonValid(database, eb.ref("metadata.navigation_json"))}
+                AND octet_length(metadata.navigation_json) <= ${MAX_NAVIGATION_BYTES}
+                THEN metadata.navigation_json ELSE NULL END`.as("navigation_json"),
+          )
       );
     },
   ),
@@ -546,11 +547,8 @@ export function prepareTranscriptPayload(
     return identity;
   }
   const codec = resolveZstdCodec();
-  if (rawBytes < MIN_COMPRESS_BYTES) {
-    return identity;
-  }
   // A literal unpaired surrogate cannot round-trip through a UTF-8 frame.
-  if (!eventJson.isWellFormed()) {
+  if (rawBytes < MIN_COMPRESS_BYTES || !eventJson.isWellFormed()) {
     return identity;
   }
   const bytes = Buffer.from(eventJson, "utf8");
