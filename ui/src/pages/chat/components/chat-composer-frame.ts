@@ -126,7 +126,11 @@ export function createChatComposerContext(
     }
     state.composerTextarea = nextTextarea;
     if (nextTextarea) {
-      observeTextareaOverflow(nextTextarea, () => props.getTranscriptElement?.() ?? null);
+      observeTextareaOverflow(
+        nextTextarea,
+        () => props.getTranscriptElement?.() ?? null,
+        () => state.composerContext,
+      );
       scheduleTextareaHeightAdjustment(nextTextarea);
       if (state.restoreComposerFocus) {
         state.restoreComposerFocus = false;

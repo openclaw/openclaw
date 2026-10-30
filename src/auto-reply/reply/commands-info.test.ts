@@ -411,7 +411,9 @@ const toolsTestState = vi.hoisted(() => {
 
   return {
     releaseRuntimeModel: vi.fn(async () => {}),
-    resolveToolsMock: vi.fn((..._args: unknown[]) => defaultResolveTools()),
+    resolveToolsMock: vi.fn<
+      typeof import("../../agents/tools-effective-inventory.js").resolveEffectiveToolInventory
+    >(async () => defaultResolveTools()),
     resolveRuntimeModelContextMock: vi.fn(async (_params: unknown) => ({})),
     threadingContext: {
       currentChannelId: "channel-123",
@@ -421,8 +423,9 @@ const toolsTestState = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../agents/tools-effective-inventory.js", () => ({
-  resolveEffectiveToolInventory: (...args: unknown[]) => toolsTestState.resolveToolsMock(...args),
+vi.mock("../../agents/tools-effective-inventory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/tools-effective-inventory.js")>()),
+  resolveEffectiveToolInventory: toolsTestState.resolveToolsMock,
   acquireEffectiveToolInventoryRuntimeModelContext: async (params: unknown) => {
     const context = await toolsTestState.resolveRuntimeModelContextMock(params);
     return {
@@ -467,10 +470,44 @@ describe("handleToolsCommand", () => {
 
   beforeEach(() => {
     toolsTestState.releaseRuntimeModel.mockClear();
-    toolsTestState.resolveToolsMock.mockReset().mockImplementation(() => makeDefaultInventory());
+    toolsTestState.resolveToolsMock
+      .mockReset()
+      .mockImplementation(async () => makeDefaultInventory());
     toolsTestState.resolveRuntimeModelContextMock.mockReset();
     toolsTestState.resolveRuntimeModelContextMock.mockResolvedValue({});
     setActivePluginRegistry(createTestRegistry([]));
+  });
+
+  it("uses the target session sandbox policy in the direct tool list", async () => {
+    const { resolveEffectiveToolInventory } = await vi.importActual<
+      typeof import("../../agents/tools-effective-inventory.js")
+    >("../../agents/tools-effective-inventory.js");
+    toolsTestState.resolveToolsMock.mockImplementation(resolveEffectiveToolInventory);
+    for (const required of [false, true]) {
+      const params = buildCommandTestParamsImpl(
+        "/tools",
+        {
+          ...buildConfig(),
+          agents: { defaults: { sandbox: { mode: "off" } } },
+          tools: { web: { search: { enabled: true, provider: "brave" } } },
+        },
+        undefined,
+        { workspaceDir: "/tmp" },
+      );
+      params.sessionEntry = { sessionId: "wrapper", updatedAt: 1, sandboxMode: "off" };
+      params.sessionStore = {
+        [params.sessionKey]: {
+          sessionId: "target",
+          updatedAt: 1,
+          sandboxMode: "off",
+          sandbox: required ? "required" : undefined,
+        },
+      };
+      const result = await handleToolsCommandImpl(params, true);
+      expect(result?.reply?.text).toContain("Available tools");
+      expect(result?.reply?.text?.includes("web_search")).toBe(!required);
+      expect(result?.reply?.text).toContain("read");
+    }
   });
 
   it("renders a product-facing tool list", async () => {

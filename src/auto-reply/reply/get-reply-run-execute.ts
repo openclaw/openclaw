@@ -13,6 +13,7 @@ import {
 } from "../../agents/cron-creator-authority-context.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { bindReplyInputChannel } from "../../agents/harness/host-private-capabilities.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
 import { captureRequesterOrigin } from "../../agents/requester-origin.js";
 import { revokeRequesterCronAuthority } from "../../agents/subagents/requester-cron-authority.js";
@@ -43,7 +44,7 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { isConfiguredCommandOwner } from "../command-auth.js";
 import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
-import { getRequesterProfile } from "../requester-profile.js";
+import { getRequesterProfile, transferRequesterProfile } from "../requester-profile.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { resolveReplyScheduledToolPolicy } from "./agent-runner-run-params.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
@@ -651,6 +652,13 @@ export async function executePreparedReplyRun(
     },
   };
   const sourceReplyDeliveryRuntimeOptions = opts as SourceReplyDeliveryRuntimeOptions | undefined;
+  if (!inputProvenance || inputProvenance.kind === "external_user") {
+    transferRequesterProfile(ctx, followupRun);
+    bindReplyInputChannel(
+      followupRun.run,
+      ctx.SenderIsBot ? undefined : (ctx.Provider ?? ctx.Surface),
+    );
+  }
   copyChildSessionPublication(sessionCtx, followupRun.run);
   if (command.senderIsOwner && channelOwnerAuthority) {
     bindCommandOwnerAuthority(followupRun.run, channelOwnerAuthority);

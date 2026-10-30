@@ -957,6 +957,7 @@
   "ui/src/pages/chat/components/chat-composer-selected-mentions.tsx",
   "ui/src/pages/chat/components/chat-composer-skill-menu-state.ts",
   "ui/src/pages/chat/components/chat-composer-slash-menu-state.ts",
+  "ui/src/pages/chat/components/chat-composer-width-ref.tsx",
   "ui/src/pages/chat/components/chat-effort-picker.tsx",
   "ui/src/pages/chat/components/chat-lazy-boundary.tsx",
   "ui/src/pages/chat/components/chat-model-account-control.ts",

@@ -66,7 +66,12 @@ export async function activateStagedNpmPackageRoot(
   source: string,
   destination: string,
   assertCurrent?: () => void,
-  unjournaled?: { assertCaller?: () => void; warnings: string[]; platform?: NodeJS.Platform },
+  unjournaled?: {
+    assertCaller?: () => void;
+    onPublished?: () => void;
+    warnings: string[];
+    platform?: NodeJS.Platform;
+  },
 ): Promise<void> {
   if (assertCurrent) {
     // A durable descriptor binds the staged inode. A copied replacement would
@@ -76,24 +81,32 @@ export async function activateStagedNpmPackageRoot(
     await fs.rename(source, destination);
     return;
   }
+  const assertCaller = retainMutationAuthority(unjournaled?.assertCaller ?? (() => {}));
+  const onPublished = () => {
+    // Publication is a fact even if the subsequent ownership check refuses cleanup.
+    unjournaled?.onPublished?.();
+    assertCaller();
+  };
   const stat = await fs.lstat(source);
   if (!stat.isSymbolicLink()) {
     if (unjournaled && (unjournaled.platform ?? process.platform) === "win32") {
       // The stage is a sibling of the live root, so this rename cannot cross
       // devices. fs-safe's Windows EPERM copy fallback would instead copy the
       // tree and then fail deleting the still-held stage after publication.
-      await renamePackageRootWithWindowsRetries(
-        source,
-        destination,
-        retainMutationAuthority(unjournaled.assertCaller ?? (() => {})),
-        { operation: "activation", warn: (message) => unjournaled.warnings.push(message) },
-      );
+      await renamePackageRootWithWindowsRetries(source, destination, assertCaller, {
+        operation: "activation",
+        warn: (message) => unjournaled.warnings.push(message),
+      });
+      onPublished();
       return;
     }
     await movePathWithCopyFallback({
       from: source,
       sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
       to: destination,
+      assertBeforeRename: assertCaller,
+      assertBeforeMutation: assertCaller,
+      onDestinationPublished: onPublished,
     });
     return;
   }
@@ -101,11 +114,13 @@ export async function activateStagedNpmPackageRoot(
   // npm represents global local-directory installs as relative symlinks. Moving
   // one changes its meaning, so activate the same canonical source explicitly.
   const canonicalSource = await fs.realpath(source);
+  assertCaller();
   await fs.symlink(
     canonicalSource,
     destination,
     process.platform === "win32" ? "junction" : undefined,
   );
+  onPublished();
 }
 
 export async function backupNpmPackageRoot(
@@ -116,6 +131,7 @@ export async function backupNpmPackageRoot(
   platform: NodeJS.Platform = process.platform,
 ): Promise<void> {
   if (platform !== "win32") {
+    assertCaller?.();
     await fs.rename(source, destination);
     return;
   }
@@ -656,6 +672,25 @@ export async function discardPackageUpdateBackup(
       }
       return `preserved ${label} at ${backupPath}; removal failed: ${formatErrorMessageWithCode(error)}; retirement rename failed: ${formatErrorMessageWithCode(retirementError)}; remove it manually after verifying the installation`;
     }
+  }
+}
+
+export async function restorePackageLauncher(
+  shim: PackageLauncherBackup["entries"][number],
+  assertCurrent: () => void,
+  beforePublish?: (staged: string) => void,
+): Promise<void> {
+  try {
+    if (shim.backup) {
+      await copyPackagePathEntry(shim.backup, shim.destination, assertCurrent, beforePublish);
+    } else {
+      await removePackagePath(shim.destination, assertCurrent);
+    }
+  } catch (error) {
+    throw new Error(
+      `launcher ${shim.destination}${shim.backup ? ` from retained backup ${shim.backup}` : ""}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
   }
 }
 

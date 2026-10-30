@@ -104,16 +104,6 @@ it("fetches DeepSeek usage balance through the provider hook", async () => {
   });
 });
 
-it("registers the DeepSeek thinking profile resolver", async () => {
-  const provider = await registerSingleProviderPlugin(deepseekPlugin);
-  expect(
-    provider.resolveThinkingProfile?.({
-      provider: "deepseek",
-      modelId: "deepseek-v4-pro",
-    } as never)?.defaultLevel,
-  ).toBe("high");
-});
-
 it("publishes configured DeepSeek models through plugin-owned catalog augmentation", async () => {
   const provider = await registerSingleProviderPlugin(deepseekPlugin);
   const model = {

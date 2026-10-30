@@ -496,7 +496,8 @@
     "!dist/plugin-sdk/node-crypto-runtime.d.ts",
     "!dist/plugin-sdk/path-existence-runtime.d.ts",
     "!dist/plugin-sdk/provider-auth-markers.d.ts",
-    "!dist/plugin-sdk/terminal-safe-text.d.ts"
+    "!dist/plugin-sdk/terminal-safe-text.d.ts",
+    "!dist/plugin-sdk/memory-core-host-transcript-stats.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1478,6 +1479,9 @@
     },
     "./plugin-sdk/memory-core-host-status": {
       "default": "./dist/plugin-sdk/memory-core-host-status.js"
+    },
+    "./plugin-sdk/memory-core-host-transcript-stats": {
+      "default": "./dist/plugin-sdk/memory-core-host-transcript-stats.js"
     },
     "./plugin-sdk/memory-core-host-runtime-cli": {
       "default": "./dist/plugin-sdk/memory-core-host-runtime-cli.js"
