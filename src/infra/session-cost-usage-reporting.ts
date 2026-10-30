@@ -91,13 +91,10 @@ export async function discoverAllSessions(params: {
   agentId: string;
   startMs?: number;
   endMs?: number;
-  /** False skips transcript statistics; overview reads take freshness from the cache worker. */
-  statistics?: false;
 }): Promise<DiscoveredSession[]> {
   const result = await runUsageCostWorker(prepareUsageCostWorker(params), {
     kind: "inventory",
     minMtimeMs: params.startMs,
-    statistics: params.statistics,
   });
   if (result.kind !== "inventory") {
     throw new Error("Usage worker returned an invalid session inventory");
@@ -128,7 +125,6 @@ export async function discoverAllSessions(params: {
         sessionId,
         sessionFile,
         mtime: file.mtimeMs,
-        ...(file.transcriptFile ? { transcriptFile: file.transcriptFile } : {}),
       });
     }
   }

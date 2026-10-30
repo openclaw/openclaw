@@ -118,6 +118,7 @@ async function fixture(
     version: string,
     dependencies = {},
     optionalDependencies = {},
+    packageExports: string | Record<string, string> = "./index.js",
   ) => {
     await write(
       where,
@@ -126,7 +127,7 @@ async function fixture(
         name,
         version,
         type: "module",
-        exports: "./index.js",
+        exports: packageExports,
         dependencies,
         optionalDependencies,
       }),
@@ -155,9 +156,24 @@ async function fixture(
   await addPackage(path.join(deps, "node_modules/private"), "private", "9.0.0");
   await addPackage(path.join(deps, "extensions/demo/node_modules/external"), "external", "5.0.0");
   await write(deps, "node_modules/bundled/preserved.txt", "WRONG source workspace\n");
-  await addPackage(path.join(deps, "node_modules/external"), "external", "1.0.0", {
-    nested: "2.0.0",
-  });
+  await addPackage(
+    path.join(deps, "node_modules/external"),
+    "external",
+    "1.0.0",
+    { nested: "2.0.0" },
+    {},
+    { ".": "./index.js", "./implementation": "./src/entry.js" },
+  );
+  await write(
+    deps,
+    "node_modules/external/src/entry.js",
+    'export { default } from "implementation-helper";\n',
+  );
+  await addPackage(
+    path.join(deps, "node_modules/external/src/node_modules/implementation-helper"),
+    "implementation-helper",
+    "4.0.0",
+  );
   await addPackage(path.join(deps, "node_modules/external/node_modules/nested"), "nested", "2.0.0");
   if (foreignLinkMode) {
     await fs.mkdir(path.join(deps, ".store/node_modules"), { recursive: true });
@@ -397,7 +413,7 @@ describe("offline installed runtime composition", () => {
     expect(
       await fs.readFile(path.join(reuse.outputDir, "app/node_modules/external/index.js"), "utf8"),
     ).toBe('export default "1.0.0";\n');
-    const selected = ".store/node_modules/external/index.js";
+    const selected = ".store/node_modules/external/src/node_modules/implementation-helper/index.js";
     for (const failure of ["content", "mode", "missing", "manifest", "link", "escape"] as const) {
       const donor = path.join(root, failure);
       await fs.cp(relocated, donor, { recursive: true, verbatimSymlinks: true });
@@ -502,11 +518,11 @@ describe("offline installed runtime composition", () => {
       [
         "--input-type=module",
         "-e",
-        `import {createRequire} from 'node:module'; const r=createRequire(${JSON.stringify(path.join(app, "package.json"))}); const e=r.resolve('external'); const l=r.resolve('left'); console.log(r(r.resolve('nested',{paths:[e]})).default); const b=r.resolve('bundled'); for (const name of ['bundled-transitive','bundled-native']) console.log(r(r.resolve(name,{paths:[b]})).default); const p=createRequire(${JSON.stringify(path.join(app, "extensions/demo/package.json"))}); console.log(p('hoisted-only').default)`,
+        `import {createRequire} from 'node:module'; const r=createRequire(${JSON.stringify(path.join(app, "package.json"))}); const e=r.resolve('external'); const l=r.resolve('left'); console.log(r(r.resolve('nested',{paths:[e]})).default); const b=r.resolve('bundled'); for (const name of ['bundled-transitive','bundled-native']) console.log(r(r.resolve(name,{paths:[b]})).default); const p=createRequire(${JSON.stringify(path.join(app, "extensions/demo/package.json"))}); console.log(p('hoisted-only').default); console.log(r('external/implementation').default)`,
       ],
       { encoding: "utf8" },
     );
-    expect(answer.trim().split("\n")).toEqual(["2.0.0", "1.0.0", "1.0.0", "1.0.0"]);
+    expect(answer.trim().split("\n")).toEqual(["2.0.0", "1.0.0", "1.0.0", "1.0.0", "4.0.0"]);
     const moduleVersion = async (file: string) =>
       JSON.parse(await fs.readFile(file, "utf8")).version;
     expect(

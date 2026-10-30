@@ -34,6 +34,7 @@ import {
   captureAgentDatabasePreparationJournal,
   recordAgentDatabaseStartupFtsRepair,
 } from "./agent-database-admission.js";
+import { captureAgentDatabaseStartupIntegrity } from "./agent-database-startup-integrity.js";
 import { captureAgentDeletionCleanupAdmission } from "./agent-deletion-cleanup-admission.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import {
@@ -272,6 +273,7 @@ export function createAgentDatabaseNativeGeneration(
               path: pathname,
             });
             const preparation = {
+              startupIntegrity: captureAgentDatabaseStartupIntegrity(pathname, agentId),
               integrityRevoked: hasRevokedOpenClawAgentDatabaseValidation(pathname),
               validation: getOpenClawAgentDatabaseValidationForTransfer({
                 agentId,
