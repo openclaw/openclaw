@@ -4550,7 +4550,6 @@
 ["src/gateway/mcp-app-extension-runtime.test.ts","../plugins/current-plugin-metadata-state.js","257ac96fee5dedc4ead190dfaf17d28693c7fcbcb2f74090032775ae0d496d43",1]
 ["src/gateway/mcp-app-extension-runtime.test.ts","./mcp-app-host-files.js","dda5998a0c4ca7dfd72ebcaa492af060509d955c412d63a6fae64fc3e0889f00",1]
 ["src/gateway/mcp-app-extension-runtime.test.ts","./operator-run-authority.js","bf0361df1c05c9a3461c331973c6265c514d68a71be57e2a74c02e16c6b948b9",1]
-["src/gateway/mcp-app-extension-runtime.test.ts","./session-resource-tool-policy.js","ef36fa9d4ac276d0fddf8d4c5d4cbe500fd09f753017bbd9c63b0f3f247b76e9",1]
 ["src/gateway/mcp-app-extension-runtime.test.ts","./session-row-projection-access.js","74d17d6546ef59227bf12560c712764a5ee3e52db7f0372fa713ffd3c44f552b",1]
 ["src/gateway/mcp-app-form-resources.test.ts","../agents/agent-bundle-mcp-manager-api.js","1b23e278df09fed338fdf07da8d6346d160d9a644f144cccc9589b5ffbe8e819",1]
 ["src/gateway/mcp-app-form-resources.test.ts","../agents/agent-bundle-mcp-manager-cleanup.js","b7fa6ccd435c860460240f0bf16699ae101118ffb798191ce46370a886446ae9",1]
