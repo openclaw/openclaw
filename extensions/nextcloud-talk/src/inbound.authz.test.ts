@@ -171,7 +171,7 @@ describe("nextcloud-talk inbound authz", () => {
     expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
   });
 
-  it("admits a room access group when the outer group allowlist is set", async () => {
+  async function runRoomAccessGroupCase(groups: { outer: string[]; room: string[] }) {
     const core = createPluginRuntimeMock();
     core.channel.pairing.readAllowFromStore = vi.fn(async () => []);
     setNextcloudTalkRuntime(core);
@@ -179,11 +179,17 @@ describe("nextcloud-talk inbound authz", () => {
       ...createAccount({
         groupPolicy: "allowlist",
         groupAllowFrom: ["accessGroup:staff"],
-        rooms: { "room-1": { requireMention: false, allowFrom: ["accessGroup:staff"] } },
+        rooms: { "room-1": { requireMention: false, allowFrom: ["accessGroup:roommates"] } },
       }),
       baseUrl: "https://cloud.example.com",
     };
-
+    const config = {
+      channels: { "nextcloud-talk": account.config },
+      accessGroups: {
+        staff: { type: "message.senders", members: { "nextcloud-talk": groups.outer } },
+        roommates: { type: "message.senders", members: { "nextcloud-talk": groups.room } },
+      },
+    } as never;
     await handleNextcloudTalkInbound({
       message: baseMessage({
         messageId: "m-access-group",
@@ -194,15 +200,71 @@ describe("nextcloud-talk inbound authz", () => {
         text: "hello",
       }),
       account,
-      config: {
-        channels: { "nextcloud-talk": account.config },
-        accessGroups: {
-          staff: { type: "message.senders", members: { "nextcloud-talk": ["users/alice"] } },
-        },
-      },
+      config,
       runtime: createTestRuntimeEnv(),
     });
+    return {
+      core,
+      config: config as { accessGroups: { staff: { members: Record<string, string[]> } } },
+    };
+  }
 
+  it.each<[string, { outer: string[]; room: string[] }, boolean]>([
+    [
+      "a sender in both access groups reaches dispatch",
+      { outer: ["users/alice"], room: ["users/alice"] },
+      true,
+    ],
+    [
+      "a sender matching only the outer group is rejected",
+      { outer: ["users/alice"], room: ["users/bob"] },
+      false,
+    ],
+    [
+      "a sender matching only the room group is rejected",
+      { outer: ["users/bob"], room: ["users/alice"] },
+      false,
+    ],
+    ["a guest sender is rejected", { outer: ["users/bob"], room: ["users/carol"] }, false],
+  ])("%s", async (_name, groups, dispatched) => {
+    const { core } = await runRoomAccessGroupCase(groups);
+    if (dispatched) {
+      expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
+      return;
+    }
+    expect(core.channel.inbound.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a membership revoked after the room policy was prepared", async () => {
+    const { core, config } = await runRoomAccessGroupCase({
+      outer: ["users/alice"],
+      room: ["users/alice"],
+    });
+    expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
+
+    // Revoking the membership must take effect for the next message, not the prepared one.
+    config.accessGroups.staff.members["nextcloud-talk"] = [];
+    config.accessGroups.roommates.members["nextcloud-talk"] = [];
+    await handleNextcloudTalkInbound({
+      message: baseMessage({
+        messageId: "m-access-group-revoked",
+        roomToken: "room-1",
+        senderId: "users/alice",
+        senderName: "Alice",
+        isGroupChat: true,
+        text: "hello again",
+      }),
+      account: {
+        ...createAccount({
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["accessGroup:staff"],
+          rooms: { "room-1": { requireMention: false, allowFrom: ["accessGroup:roommates"] } },
+        }),
+        baseUrl: "https://cloud.example.com",
+      },
+      config,
+      runtime: createTestRuntimeEnv(),
+    });
     expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
   });
 
@@ -261,8 +323,3 @@ describe("nextcloud-talk inbound authz", () => {
     expect(saveRemoteMedia).not.toHaveBeenCalled();
   });
 });
-
-// Claimed for #188204 by scripts/claim-window.sh; replaced by the real regression.
-it.todo(
-  "nextcloud-talk: accessGroup entries in rooms.<token>.allowFrom never match when groupAllowFrom is set (all roo",
-);
