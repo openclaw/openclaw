@@ -52,7 +52,8 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
   let countedRecords = 0;
   let parsedRecords = 0;
   // Catalog prices are inputs only for turns without a recorded cost.
-  let priced = previous !== undefined && previous.pricingFingerprint !== USAGE_COST_UNPRICED_FINGERPRINT;
+  let priced =
+    previous !== undefined && previous.pricingFingerprint !== USAGE_COST_UNPRICED_FINGERPRINT;
   return {
     async addEntries(entries: Iterable<ParsedTranscriptEntry>): Promise<void> {
       let batch: ParsedTranscriptEntry[] = [];
