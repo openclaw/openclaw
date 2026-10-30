@@ -128,7 +128,7 @@ describe("Cron mutation outcomes through the in-process router", () => {
   });
 
   it.each(["execute", "revoke", "abort", "stop"] as const)(
-    "keeps accepted manual runs independent of later caller closure: %s",
+    "releases caller cleanup without waiting for an accepted manual payload: %s",
     async (outcome) => {
       await withCronGateway(async (fixture) => {
         const now = Date.now();
@@ -171,7 +171,7 @@ describe("Cron mutation outcomes through the in-process router", () => {
           }
           releaseBlocker.resolve();
           await blocker;
-          if (outcome === "execute") {
+          if (outcome !== "stop") {
             await payloadStarted.promise;
             // Admission is finished: cleanup must not wait for the separately
             // owned automation payload, which can itself wait on caller work.
