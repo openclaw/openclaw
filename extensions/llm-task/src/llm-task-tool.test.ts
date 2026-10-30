@@ -122,17 +122,7 @@ it("accepts model overrides that already include the selected provider prefix", 
 
 it.each([
   ["per-agent models", { agents: { entries: { chat: { model: "anthropic/claude-sonnet-4-6" } } } }],
-  [
-    "an alias primary",
-    {
-      agents: {
-        defaults: {
-          model: { primary: "Sonnet" },
-          models: { "anthropic/claude-sonnet-4-6": { alias: "Sonnet" } },
-        },
-      },
-    },
-  ],
+  ["an alias primary", { agents: { defaults: { model: { primary: "Sonnet" } } } }],
 ] as const)("leaves default model selection to the runtime with %s", async (_name, config) => {
   await createTool(config).execute("id", { prompt: "x" });
   expect(isolatedCompletionCall().model).toBeUndefined();
