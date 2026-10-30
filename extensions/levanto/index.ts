@@ -1,12 +1,4 @@
-import {
-  validateDecisionBatchV2,
-  validateDecisionResultV2,
-  type DecisionAnswerV2,
-  type DecisionBatchV2,
-  type DecisionProviderV2,
-  type DecisionQuestionV2,
-  type JsonValue,
-} from "openclaw/plugin-sdk/decisions";
+import type { DecisionProviderV2 } from "openclaw/plugin-sdk/decisions";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
   shouldUseEnvHttpProxyForUrl,
@@ -27,134 +19,16 @@ import {
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
+  decodeSageDecisionResult,
+  encodeSageDecisionInput,
+  encodeSageDecisionRequest,
+} from "./decision-codec.js";
+import {
   parseSageBatchResponse,
   parseSageResponse,
   validateSageImage,
   type SageImageProbe,
 } from "./sage-validation.js";
-import type {
-  SageBatchRequest,
-  SageContent,
-  SageQuestion,
-  SageRequest,
-  SageResponse,
-} from "./sage-wire.js";
-
-function render(value: JsonValue): string {
-  return typeof value === "string" ? value : JSON.stringify(value);
-}
-function content(state: DecisionBatchV2["state"]): SageContent {
-  switch (state.type) {
-    case "text":
-      return state.text;
-    case "json":
-      return render(state.value);
-    case "image":
-      return {
-        kind: "image",
-        media: state.dataUri,
-        ...(state.text === undefined ? {} : { text: state.text }),
-      };
-    case "list":
-      return {
-        kind: "list",
-        value: state.items.map((item) => ({ id: item.id, content: render(item.content) })),
-      };
-  }
-  throw new Error("Unsupported Sage content");
-}
-function question(id: string, q: DecisionQuestionV2): SageQuestion {
-  const instructions = q.instructions == null ? id : render(q.instructions);
-  switch (q.type) {
-    case "boolean":
-      return {
-        id,
-        kind: "yesno",
-        instructions:
-          q.criteria == null
-            ? instructions
-            : instructions +
-              "\nCriteria (true means yes; false means no):\n" +
-              JSON.stringify(q.criteria),
-      };
-    case "choice":
-      return {
-        id,
-        kind: "choice",
-        instructions,
-        options: Object.entries(q.criteria).map(([option, description]) => ({
-          option,
-          description: description === null ? null : render(description),
-        })),
-      };
-    case "score":
-      return {
-        id,
-        kind: "scale",
-        instructions,
-        levels: q.criteria.map((description, level) => ({
-          level,
-          description: description === null ? null : render(description),
-        })),
-      };
-    case "sort":
-      return { id, kind: "sort", instructions };
-    case "tags":
-      return {
-        id,
-        kind: "tags",
-        ...(q.instructions == null ? {} : { instructions }),
-        tags: Object.entries(q.criteria).map(([tagId, description]) =>
-          description === null ? { id: tagId } : { id: tagId, name: render(description) },
-        ),
-      };
-    case "box":
-      break;
-  }
-  throw new Error("Unsupported Sage question");
-}
-function answer(response: SageResponse): DecisionAnswerV2 {
-  const metadata = { native: response };
-  switch (response.kind) {
-    case "yesno":
-      return {
-        type: "boolean",
-        answer: response.result.answer === null ? null : response.result.answer === "yes",
-        probabilityTrue: response.result.probability,
-        metadata,
-      };
-    case "choice":
-      return {
-        type: "choice",
-        choice: response.result.chosen,
-        probability: response.result.probability,
-        probabilities: Object.fromEntries(
-          response.result.probabilities.map((p) => [p.option, p.probability]),
-        ),
-        metadata,
-      };
-    case "scale":
-      return {
-        type: "score",
-        score: response.result.expectation,
-        confidence: response.result.confidence,
-        probabilities: response.result.probabilities.map((entry) => entry.probability),
-        metadata,
-      };
-    case "sort":
-      return {
-        type: "sort",
-        order: response.result.sorted,
-        ...(response.result.confidence === undefined
-          ? {}
-          : { confidence: response.result.confidence }),
-        metadata,
-      };
-    case "tags":
-      return { type: "tags", tags: response.result.tags, metadata };
-  }
-  throw new Error("Unsupported Sage response");
-}
 
 class SageRequestError extends Error {
   constructor() {
@@ -189,44 +63,24 @@ export default definePluginEntry({
           // Effective headers never provide a second credential-discovery route.
           return { status: "unavailable", reason: "credentials-unavailable" };
         }
-        let nativeContent: SageContent;
-        let questions: SageQuestion[];
+        let encoded: ReturnType<typeof encodeSageDecisionInput>;
         try {
-          if (!validateDecisionBatchV2(batch)) {
-            return { status: "unavailable", reason: "unsupported-input" };
-          }
-          if (batch.state.type === "list" && batch.state.items.length < 2) {
-            return { status: "unavailable", reason: "unsupported-input" };
-          }
-          nativeContent = content(batch.state);
-          questions = Object.entries(batch.questions).map(([id, q]) => question(id, q));
-          // Enforce vendor limits absent from the admitted Decision contract.
-          for (const q of questions) {
-            if (
-              (q.kind === "scale" && q.levels.length > 26) ||
-              (q.kind === "choice" &&
-                q.options.length > (batch.state.type === "image" ? 20 : 120)) ||
-              (q.kind === "tags" && q.tags.length > 120)
-            ) {
-              return { status: "unavailable", reason: "unsupported-input" };
-            }
-          }
+          encoded = encodeSageDecisionInput(batch);
         } catch {
           return { status: "unavailable", reason: "unsupported-input" };
         }
+        if (!encoded) {
+          return { status: "unavailable", reason: "unsupported-input" };
+        }
+        const { nativeContent, questions } = encoded;
         const remainingBudgetMs = context.deadlineMonotonicMs - performance.now();
         if (remainingBudgetMs <= 0) {
           return { status: "unavailable", reason: "transport" };
         }
-        const reasoning = context.reasoning === undefined ? {} : { reasoning: context.reasoning };
-        const first = questions[0];
-        if (!first) {
+        const request = encodeSageDecisionRequest(nativeContent, questions, context.reasoning);
+        if (!request) {
           return { status: "unavailable", reason: "unsupported-input" };
         }
-        const request: SageRequest | SageBatchRequest =
-          questions.length === 1
-            ? { content: nativeContent, question: first, ...reasoning }
-            : { requests: [{ content: nativeContent, questions }], ...reasoning };
         let admissionError: { error: unknown } | undefined;
         try {
           const configuredRequest = resolveMergedModelProviderConfig(
@@ -380,43 +234,13 @@ export default definePluginEntry({
           if (performance.now() >= context.deadlineMonotonicMs) {
             return { status: "unavailable", reason: "transport" };
           }
-          const answers: Record<string, DecisionAnswerV2> = Object.create(null);
-          if ("results" in response) {
-            const group = response.results[0];
-            if (!group) {
-              return { status: "unavailable", reason: "invalid-response" };
-            }
-            questions.forEach((q, index) => {
-              const item = group.answers[index];
-              if (!item) {
-                throw new Error("Missing Sage answer");
-              }
-              answers[q.id] = item.ok
-                ? answer(item.result)
-                : { type: "error", code: "provider-error" };
-            });
-          } else {
-            answers[response.id] = answer(response);
-          }
-          const usage = response.meta.usage;
-          const result = {
-            model: response.meta.model ?? context.model.id,
-            answers,
-            ...(usage
-              ? {
-                  usage: {
-                    inputTokens: usage.input_tokens,
-                    outputTokens: usage.output_tokens,
-                    raw: usage,
-                  },
-                }
-              : {}),
-            // Call-level accounting and partial error text stay on an object, never array.meta.
-            metadata: { native: response },
-          };
-          return validateDecisionResultV2(batch, result, context.model.inference?.decision)
-            ? { status: "ok", result }
-            : { status: "unavailable", reason: "invalid-response" };
+          return decodeSageDecisionResult(
+            batch,
+            questions,
+            response,
+            context.model.id,
+            context.model.inference?.decision,
+          );
         } catch (error) {
           if (admissionError) {
             throw admissionError.error;
