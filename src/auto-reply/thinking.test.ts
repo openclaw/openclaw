@@ -144,6 +144,27 @@ describe("provider profiles", () => {
     },
   );
 
+  it("uses a catalog-owned default thinking level without consulting provider hooks", () => {
+    mocks.profile.mockReturnValue({ levels: [{ id: "off" }], defaultLevel: "off" });
+    const params = {
+      provider: "particle",
+      model: "particle-ai/particle-1",
+      catalog: [
+        {
+          provider: "particle",
+          id: "particle-ai/particle-1",
+          reasoning: true,
+          compat: {
+            defaultThinkingLevel: "high",
+            supportedReasoningEfforts: ["none", "low", "high", "max"],
+          },
+        },
+      ],
+    };
+    expect(resolveThinkingDefaultForModel(params)).toBe("high");
+    expect(mocks.profile).not.toHaveBeenCalled();
+  });
+
   it("keeps a configured catalog opt-out authoritative over runtime reasoning", () => {
     mocks.profile.mockReturnValue({ levels: [{ id: "off" }, { id: "low" }] });
     const params = thinkingModel({ reasoning: false, configuredReasoning: false });
