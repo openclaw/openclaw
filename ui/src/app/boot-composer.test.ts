@@ -8,6 +8,7 @@ import {
   settleBootComposer,
   takeBootComposer,
 } from "./boot-composer.ts";
+import { canReloadControlUiDocument } from "./document-reload-guard.ts";
 
 function bootDocument(chat = true) {
   document.documentElement.toggleAttribute("data-openclaw-boot-chat", chat);
@@ -30,6 +31,7 @@ describe("boot composer", () => {
     textarea.setAttribute("data-focused", "");
     textarea.focus();
     adoptBootComposer(true);
+    expect(canReloadControlUiDocument()).toBe(false);
 
     document.getElementById("frame")!.remove();
     expect(document.activeElement).not.toBe(textarea);
@@ -46,6 +48,27 @@ describe("boot composer", () => {
     });
     expect(textarea.isConnected).toBe(false);
     expect(takeBootComposer()).toBeNull();
+    expect(canReloadControlUiDocument()).toBe(true);
+  });
+
+  it("protects current text until cleared and releases browser protection when retired", () => {
+    const textarea = bootDocument();
+    adoptBootComposer(true);
+    expect(canReloadControlUiDocument()).toBe(true);
+    textarea.value = "Keep this early input";
+    expect(canReloadControlUiDocument(true)).toBe(false);
+    expect(document.activeElement).toBe(textarea);
+    const blocked = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(blocked);
+    expect(blocked.defaultPrevented).toBe(true);
+    textarea.value = "";
+    expect(canReloadControlUiDocument()).toBe(true);
+    textarea.value = "Retired with its linked session";
+    retireBootComposer();
+    expect(canReloadControlUiDocument()).toBe(true);
+    const retired = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(retired);
+    expect(retired.defaultPrevented).toBe(false);
   });
 
   it("does not steal focus the operator moved elsewhere", () => {
@@ -60,9 +83,11 @@ describe("boot composer", () => {
     const textarea = bootDocument();
     adoptBootComposer(true);
     textarea.value = "Not for the next page";
+    expect(canReloadControlUiDocument()).toBe(false);
     window.dispatchEvent(new PopStateEvent("popstate"));
     expect(textarea.isConnected).toBe(false);
     expect(takeBootComposer()).toBeNull();
+    expect(canReloadControlUiDocument()).toBe(true);
   });
 
   it.each([

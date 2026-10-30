@@ -99,6 +99,7 @@ import path from "node:path";
 import { createHistogram } from "node:perf_hooks";
 import { finished } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import { McpServer } from "@modelcontextprotocol/server";
@@ -186,6 +187,7 @@ const { values } = parseArgs({
     "baseline-owners": { type: "boolean", default: false },
     "stress-shell-words": { type: "string", default: "0" },
     "stress-tools": { type: "boolean", default: false },
+    "exec-io-storm": { type: "boolean", default: false },
     "worktree-tool-churn": { type: "boolean", default: false },
     "stress-tool-search": { type: "boolean", default: false },
     "stress-network-tool": { type: "boolean", default: false },
@@ -730,6 +732,18 @@ if (values["stress-tools"] && !toolScenario) {
   );
 }
 const stressShellWords = integer(values["stress-shell-words"], "--stress-shell-words", 0);
+if (
+  values["exec-io-storm"] &&
+  (process.platform !== "linux" ||
+    !values["team-stress"] ||
+    !values["stress-tools"] ||
+    !soakScenario ||
+    values["sandbox-image"])
+) {
+  throw new Error(
+    "--exec-io-storm requires Linux memory-soak --team-stress --stress-tools host exec",
+  );
+}
 // At most 50,007 source characters and about 10,000 syntax nodes, below both parser limits.
 if (stressShellWords > 10_000 || (stressShellWords > 0 && !values["stress-tools"])) {
   throw new Error("--stress-shell-words must be 0–10000 and requires --stress-tools when positive");
@@ -2315,6 +2329,26 @@ let reasoningResponseSequence = 0;
 let reasoningReplayRequests = 0;
 let historicalReplayRequests = 0;
 const sessionStoreValues = new Map<string, string>();
+const execIoStarted = new Set<number>();
+function readExecIoProgress() {
+  return [...execIoStarted].map((index) => {
+    const lines = readFileSync(path.join(output, `agent-exec-io-${index}.jsonl`), "utf8")
+      .trim()
+      .split("\n");
+    const last: unknown = JSON.parse(lines.at(-1)!);
+    if (
+      !isRecord(last) ||
+      typeof last.bytesWritten !== "number" ||
+      typeof last.atEpochMs !== "number" ||
+      typeof last.pid !== "number" ||
+      last.phase === "stopped"
+    ) {
+      throw new Error(`Synthetic IO writer ${index} stopped or has invalid evidence`);
+    }
+    process.kill(last.pid, 0);
+    return { index, bytesWritten: last.bytesWritten, atEpochMs: last.atEpochMs };
+  });
+}
 let activeWorkCounts: { running: number; queued: number } | undefined;
 async function readActiveWorkCounts() {
   let lastCounts: { running: number; queued: number } | undefined;
@@ -2830,6 +2864,22 @@ const mock = createServer((req, res) => {
           if (values["stress-session-store"]) {
             sessionStoreValues.set(storeKey, currentCohort.id);
           }
+          let execIoCode = "";
+          if (values["exec-io-storm"] && toolIndex === 0 && !execIoStarted.has(index)) {
+            execIoStarted.add(index);
+            const command = [
+              process.execPath,
+              fileURLToPath(new URL("./agent-exec-io-load.mjs", import.meta.url)),
+              output,
+              String(index),
+              String(durationMs + warmupMs + 900_000),
+            ]
+              .map((argument) => `'${argument.replaceAll("'", "'\\''")}'`)
+              .join(" ");
+            execIoCode =
+              `const io = await exec({ command: ${JSON.stringify(command)}, workdir: ${JSON.stringify(toolWorktree)}, background: true, timeoutSeconds: 0 });\n` +
+              'if (io.status !== "running" || typeof io.sessionId !== "string") throw new Error("Synthetic IO writer did not remain in background");\n';
+          }
           return {
             type: "function_call",
             id: `fc_${currentCohort.id}_${index}_${toolIndex}`,
@@ -2842,6 +2892,7 @@ const mock = createServer((req, res) => {
                     awaitResults: true,
                     code:
                       storeCode +
+                      execIoCode +
                       (values["stress-tool-search"]
                         ? 'if (!(await catalog.search("read file content", { limit: 5 })).some(tool => tool.name === "read")) throw new Error("Synthetic tool search omitted read");\n'
                         : "") +
@@ -3842,6 +3893,10 @@ async function controlAuthorityCounters(child: ChildProcess, action: "start" | "
 }
 async function controlTeamStressTelemetry(child: ChildProcess, action: "start" | "stop") {
   await new Promise<void>((resolve, reject) => {
+    const pending = new Set([
+      "team-shape-stress",
+      ...(action === "stop" && values["exec-io-storm"] ? ["agent-exec-io"] : []),
+    ]);
     const finish = (error?: Error) => {
       clearTimeout(timeout);
       child.off("message", onMessage);
@@ -3856,16 +3911,20 @@ async function controlTeamStressTelemetry(child: ChildProcess, action: "start" |
     const onMessage = (message: unknown) => {
       if (
         !isRecord(message) ||
-        message.channel !== "team-shape-stress" ||
+        typeof message.channel !== "string" ||
+        !pending.has(message.channel) ||
         message.action !== action
       ) {
         return;
       }
-      finish(
-        message.ok === true
-          ? undefined
-          : new Error(`Team stress telemetry ${action}: ${String(message.error)}`),
-      );
+      if (message.ok !== true) {
+        finish(new Error(`Team stress telemetry ${action}: ${String(message.error)}`));
+      } else {
+        pending.delete(message.channel);
+        if (pending.size === 0) {
+          finish();
+        }
+      }
     };
     const onExit = () => finish(new Error(`Gateway exited during Team stress telemetry ${action}`));
     const timeout = setTimeout(
@@ -5312,6 +5371,9 @@ let cleanupPromise: Promise<void> | undefined;
 function cleanup() {
   return (cleanupPromise ??= (async () => {
     closing = true;
+    if (values["exec-io-storm"]) {
+      writeFileSync(path.join(output, "agent-exec-io.stop"), "stop\n");
+    }
     flushTeamStressRpcMinute();
     cohort?.release();
     for (const id of [
@@ -5375,6 +5437,9 @@ try {
         ? new URL("./team-shape-stress-loader.mjs", import.meta.url).href
         : "./scripts/tsx.mjs",
       ...(gatewayPreload ? ["--import", gatewayPreload.path] : []),
+      ...(values["exec-io-storm"]
+        ? ["--import", fileURLToPath(new URL("./agent-exec-io-preload.mjs", import.meta.url))]
+        : []),
       ...(configCaptureSource ? ["--import", configCaptureSourcePreload] : []),
       ...(authoritySourcePreload ? ["--import", authoritySourcePreload.path] : []),
       ...(startupSourcePreload ? ["--import", startupSourcePreload.path] : []),
@@ -6337,6 +6402,10 @@ try {
     }
   }
   const warmReadyAtEpochMs = Date.now();
+  const execIoBefore = values["exec-io-storm"] ? readExecIoProgress() : [];
+  if (values["exec-io-storm"] && execIoBefore.length !== runCount) {
+    throw new Error(`Expected ${runCount} synthetic IO writers before measurement`);
+  }
   if (values["team-stress"]) {
     const shape: Record<string, number> = {};
     for (const archived of ["all", false, true] as const) {
@@ -7645,6 +7714,13 @@ try {
     flushTeamStressRpcMinute();
     await controlTeamStressTelemetry(gateway, "stop");
   }
+  const execIoAfter = values["exec-io-storm"] ? readExecIoProgress() : [];
+  if (
+    values["exec-io-storm"] &&
+    execIoAfter.some((writer, index) => writer.bytesWritten <= execIoBefore[index]!.bytesWritten)
+  ) {
+    throw new Error("Synthetic IO writers did not make progress during measurement");
+  }
   if (workerHeapDoneFile && workerHeapPeerDoneFile) {
     writeFileSync(workerHeapDoneFile, String(Date.now()));
     // Long captures need room for a slower peer before either side forces GC.
@@ -8041,6 +8117,21 @@ try {
     pollBetweenRounds,
     mixedRpc: values["mixed-rpc"],
     usageRpc: values["usage-rpc"],
+    ...(values["exec-io-storm"]
+      ? {
+          execIoStorm: {
+            writers: execIoStarted.size,
+            before: execIoBefore,
+            after: execIoAfter,
+            writerArtifacts: [...execIoStarted].map((index) =>
+              path.join(output, `agent-exec-io-${index}.jsonl`),
+            ),
+            commits: JSON.parse(
+              readFileSync(path.join(output, "agent-exec-io-commits.json"), "utf8"),
+            ),
+          },
+        }
+      : {}),
     ...(values["team-stress"]
       ? {
           teamStress: {

@@ -14,6 +14,7 @@ import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import type { PluginUpdateWarning } from "./update-command-plugins-internals.js";
 import type { WindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
 /** One native rewrite per finalization; subsequent activation preserves its publication. */
@@ -150,3 +151,30 @@ export type ManagedServiceStopParams = {
   | { updateRun?: undefined }
   | { phase: "inspect" | "refresh" }
 );
+
+export type UpdateServiceRestartParams = {
+  originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
+  shouldRestart: boolean;
+  observePackageReplacement?: boolean;
+  result: UpdateRunResult;
+  opts: UpdateCommandOptions;
+  refreshServiceEnv: boolean;
+  serviceRuntimeRefreshRequired?: boolean;
+  serviceEnv?: NodeJS.ProcessEnv;
+  serviceInstallEnv?: NodeJS.ProcessEnv | null;
+  serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
+  serviceManagerUid?: number;
+  gatewayPort: number;
+  invocationCwd?: string;
+  nodeRunner?: string;
+  skipLegacyServiceRestart?: boolean;
+  requireRunningServiceAfterRestart?: boolean;
+  serviceMutationSkipMessage?: string;
+  timeoutMs: number;
+  onVerificationFailure?: (reason: string) => void;
+  onPluginWarnings?: (warnings: readonly PluginUpdateWarning[]) => void;
+  onVerified?: (verifiedAtMs: number) => void;
+  onGatewayStartAttempted?: () => void;
+  definitionRecovery?: UpdateServiceDefinitionRecovery;
+  expectedGatewayIdentity?: { version: string; buildId?: string };
+};

@@ -710,7 +710,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
 
       if (health.healthy) {
-        return undefined;
+        return { outcome: "completed", readiness: health };
       }
 
       const diagnostics = renderRestartDiagnostics(health);

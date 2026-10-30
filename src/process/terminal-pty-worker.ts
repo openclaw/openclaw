@@ -1,5 +1,6 @@
+import { enterAgentExecCgroup } from "./linux-exec-cgroup.js";
 import type { TerminalPtyControl, TerminalPtyEvent } from "./terminal-pty-protocol.js";
-import { prepareTerminalPty, spawnTerminalPty, type TerminalPtyHandle } from "./terminal-pty.js";
+import { prepareTerminalPty, type TerminalPtyHandle } from "./terminal-pty.js";
 
 let pty: TerminalPtyHandle | undefined;
 let starting = false;
@@ -54,25 +55,28 @@ process.on("message", (message: TerminalPtyControl) => {
       });
       return;
     }
-    const startup =
-      message.type === "prepare"
-        ? prepareTerminalPty(message.params).then(
-            (launch) =>
-              new Promise<TerminalPtyHandle>((resolve, reject) => {
-                authorizeLaunch = () => {
-                  try {
-                    if (parentLost || finished) {
-                      throw new Error("Terminal host retired before launch");
-                    }
-                    resolve(launch());
-                  } catch (error) {
-                    reject(error instanceof Error ? error : new Error(String(error)));
-                  }
-                };
-                report({ type: "prepared" });
-              }),
-          )
-        : spawnTerminalPty(message.params);
+    enterAgentExecCgroup();
+    const startup = prepareTerminalPty(message.params).then((launch) => {
+      if (message.type === "start") {
+        if (parentLost || finished) {
+          throw new Error("Terminal host retired before launch");
+        }
+        return launch();
+      }
+      return new Promise<TerminalPtyHandle>((resolve, reject) => {
+        authorizeLaunch = () => {
+          try {
+            if (parentLost || finished) {
+              throw new Error("Terminal host retired before launch");
+            }
+            resolve(launch());
+          } catch (error) {
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        };
+        report({ type: "prepared" });
+      });
+    });
     void startup.then(
       (handle) => {
         pty = handle;

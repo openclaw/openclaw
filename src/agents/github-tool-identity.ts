@@ -577,7 +577,7 @@ export function prepareGitHubReadIdentity(
 export function prepareGitHubReadIdentity(
   params: GitHubReadIdentityPreparation,
 ): Promise<PreparedGitHubReadIdentity>;
-/** Read authority tracks current selection and token rotation, without exporting a child environment. */
+/** Read authority keeps selection and credential policy live through later consuming effects. */
 export async function prepareGitHubReadIdentity(
   params: GitHubReadIdentityPreparation & { allowAnonymous?: boolean },
 ): Promise<PreparedGitHubSourceReadIdentity> {
@@ -586,6 +586,7 @@ export async function prepareGitHubReadIdentity(
   const assertSelected = composeSessionSourceAssertion([
     captureExternalSessionCommitGuard(params.assertActive),
     () => {
+      params.readNativeCredential?.assertCurrent?.();
       const current = resolveGitHubToolIdentity({
         config: params.getCurrentConfig(),
         agentId: params.agentId,

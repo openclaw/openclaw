@@ -135,7 +135,7 @@ it("refuses unvalidated legacy session keys before assigning usage ownership", a
   });
 });
 
-it("reuses discovered inputs and rollups across append, rewrite, and rollup replacement", async () => {
+it("reads recorded usage across append, rewrite, and rollup replacement without transcript scans", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const probe = await observeUsageWorkerReads(state.stateDir, []);
     await probe.run(async () => {
@@ -152,8 +152,13 @@ it("reuses discovered inputs and rollups across append, rewrite, and rollup repl
         storePath: database.path,
       });
       const refresh = () => refreshUsage({ agentId: "main", sessionFiles: [sessionFile] });
-      const cached = () =>
-        loadCached({ agentId: "main", sessions: [{ sessionFile }], requestRefresh: false });
+      const cached = (reportBudgetBytes?: number) =>
+        loadCached({
+          agentId: "main",
+          sessions: [{ sessionFile }],
+          requestRefresh: false,
+          reportBudgetBytes,
+        });
       expect(await cached()).toMatchObject({
         summaries: [null],
         cacheStatus: { status: "stale", cachedFiles: 0, pendingFiles: 1, staleFiles: 1 },
@@ -186,20 +191,16 @@ it("reuses discovered inputs and rollups across append, rewrite, and rollup repl
         ]);
       });
       await refresh();
+      await probe.clear();
+      expect(await discoverAllSessions({ agentId: "main" })).toEqual([
+        { sessionId: scope.sessionId, sessionFile, mtime: expect.any(Number) },
+      ]);
       expect(await cached()).toMatchObject({ summaries: [{ totalTokens: 3 }] });
-      let discovered = await discoverAllSessions({ agentId: "main" });
-      const expectDiscovered = async (
-        sessions: Awaited<ReturnType<typeof discoverAllSessions>>,
-        summaries: Array<{ totalTokens: number } | null>,
-        status: "fresh" | "partial" | "stale",
-      ) => {
-        await probe.clear();
-        expect(
-          await loadCached({ agentId: "main", sessions, requestRefresh: false }),
-        ).toMatchObject({ summaries, cacheStatus: { status } });
-        await expectNoRead(probe, "transcript-stats");
-      };
-      await expectDiscovered(discovered, [{ totalTokens: 3 }], "fresh");
+      expect(await cached(0)).toMatchObject({
+        summaries: [null],
+        cacheStatus: { status: "partial", staleFiles: 0 },
+      });
+      await expectNoRead(probe, "transcript-stats");
       await probe.clear();
       await refresh();
       await expectNoRead(probe, "cache");
@@ -215,8 +216,16 @@ it("reuses discovered inputs and rollups across append, rewrite, and rollup repl
         return rewritten;
       });
       expect(generation).toEqual(expect.any(String));
-      const rewrittenDiscovery = await discoverAllSessions({ agentId: "main" });
-      await expectDiscovered(rewrittenDiscovery, [null], "stale");
+      await probe.clear();
+      expect(await cached()).toMatchObject({
+        summaries: [null],
+        cacheStatus: { status: "stale" },
+      });
+      expect(await cached(0)).toMatchObject({
+        summaries: [null],
+        cacheStatus: { status: "stale", staleFiles: 1 },
+      });
+      await expectNoRead(probe, "transcript-stats");
       await probe.clear();
       await refresh();
       expect(await cached()).toMatchObject({
@@ -230,15 +239,18 @@ it("reuses discovered inputs and rollups across append, rewrite, and rollup repl
       const reads = await probe.read();
       expect(reads.some((entry) => entry.kind === "transcript-stats")).toBe(true);
       expect(reads.filter((entry) => entry.kind === "hot-watermark")).toEqual([]);
-      await expectDiscovered(discovered, [null], "partial");
-      discovered = rewrittenDiscovery;
       transact((owner) => append(owner, [message("fourth", "third", 5)]));
+      await probe.clear();
+      expect(await cached()).toMatchObject({
+        summaries: [{ totalTokens: 14, staleSince: expect.any(Number) }],
+        cacheStatus: { status: "partial" },
+      });
+      await expectNoRead(probe, "transcript-stats");
       await probe.clear();
       await refresh();
       const appendReads = await probe.read();
       expect(appendReads.filter((entry) => entry.kind === "cache")).toEqual([]);
       expect(await cached()).toMatchObject({ summaries: [{ totalTokens: 19 }] });
-      await expectDiscovered(discovered, [{ totalTokens: 19 }], "fresh");
 
       // Another in-process writer replaces the derived row. Its receipt must
       // invalidate the retained rollup before refresh rebuilds it from canonical stats.

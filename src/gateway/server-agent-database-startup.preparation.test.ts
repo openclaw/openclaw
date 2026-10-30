@@ -29,6 +29,24 @@ const mocks = vi.hoisted(() => ({
   revision: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
+  integrityCheck: vi.fn(),
+  corruption: vi.fn(),
+}));
+
+// mock-isolation: Keep the real background verdict owner while controlling its native I/O.
+vi.mock("../infra/sqlite-integrity-worker.js", () => ({
+  assertSqliteIntegrityInWorker: mocks.integrityCheck,
+}));
+// mock-isolation: Native execution transport must not open the synthetic identity files.
+vi.mock("../state/openclaw-agent-execution.js", () => ({
+  captureOpenClawAgentDatabaseExecution: () => ({
+    onTerminal: () => () => {},
+    release: async () => {},
+  }),
+}));
+// mock-isolation: Observe corruption revocation without retiring unrelated database handles.
+vi.mock("../state/openclaw-agent-db-lifecycle.js", () => ({
+  recordOpenClawAgentDatabaseOpenFailure: mocks.corruption,
 }));
 
 // mock-isolation: This suite owns startup timers; filesystem observation has separate coverage.
@@ -80,7 +98,7 @@ vi.mock("../secrets/runtime.js", () => ({
 }));
 // mock-isolation: Capture startup diagnostics without process logging state.
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ info: mocks.info, warn: mocks.warn }),
+  createSubsystemLogger: () => ({ info: mocks.info, warn: mocks.warn, error: mocks.warn }),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -153,10 +171,14 @@ function createFleet(
     return gate;
   };
   const inspections = agentIds.map(() =>
-    createDeferredCore<{ incompatible: []; indeterminate: [] }>(),
+    createDeferredCore<{ incompatible: []; indeterminate: []; readReadyAgentPaths?: string[] }>(),
   );
-  const inspect = (index: number) =>
-    inspections[index]!.resolve({ incompatible: [], indeterminate: [] });
+  const inspect = (index: number, readReady = false) =>
+    inspections[index]!.resolve({
+      incompatible: [],
+      indeterminate: [],
+      ...(readReady ? { readReadyAgentPaths: [paths[index]!] } : {}),
+    });
   return {
     env,
     opened: opened.promise,
@@ -657,6 +679,36 @@ it.for(["initial", "successor"] as const)(
       });
       expect(mocks.refreshModels).toHaveBeenCalledTimes(1);
       expect(mocks.info).not.toHaveBeenCalledWith(recoveredMessage, expect.anything());
+    });
+  },
+);
+
+it.for(["agent removal", "database move"] as const)(
+  "does not quarantine a replacement after %s during background integrity verification",
+  async (change, { signal }) => {
+    const fleet = createFleet(["large"]);
+    const entered = createDeferredCore();
+    const release = fleet.hold();
+    mocks.integrityCheck.mockImplementation(async () => {
+      entered.resolve();
+      await release.promise;
+      throw Object.assign(new Error("synthetic full-check corruption"), {
+        name: "SqliteIntegrityError",
+      });
+    });
+    await fleet.run(async (admission) => {
+      fleet.inspect(0, true);
+      await withinTest(entered.promise, signal);
+      expectAdmission(fleet, "large");
+      fleet.changeAgentDatabase("large", change);
+      release.resolve();
+      await withinTest(admission.pendingPreparation!, signal);
+      expectAdmission(fleet, "large");
+      expect(mocks.corruption).not.toHaveBeenCalled();
+      expectLog(mocks.warn, "agent database background integrity verification incomplete", {
+        agentId: "large",
+        reason: expect.stringContaining("database configuration changed"),
+      });
     });
   },
 );
