@@ -1,5 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { readConfiguredLogTail } from "../logging/log-tail.js";
+import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { testApi } from "../logging/logger.test-support.js";
 import { resolveProviderAuths } from "./provider-usage.auth.js";
 
 const {
@@ -101,6 +106,15 @@ function seed(profiles: AuthProfileStore["profiles"], orders: Record<string, str
 }
 
 describe("provider usage auth boundary", () => {
+  const logPaths = createSuiteLogPathTracker("openclaw-usage-auth-");
+  beforeAll(() => logPaths.setup());
+  afterAll(() => logPaths.cleanup());
+  afterEach(async () => {
+    await testApi.flushFileLogQueueForTests();
+    setLoggerOverride(null);
+    resetLogger();
+  });
+
   beforeEach(() => {
     hasSource.mockReset().mockReturnValue(false);
     loadStore.mockReset().mockImplementation(createEmptyStore);
@@ -277,4 +291,61 @@ describe("provider usage auth boundary", () => {
     ).toEqual([]);
     expect(resolvePlugin.mock.calls.map(([params]) => params.provider)).toEqual(["anthropic"]);
   });
+
+  it.each(["debug", "info", "cancel"] as const)(
+    "diagnoses skipped OAuth profiles without changing selection or cancellation (%s)",
+    async (mode) => {
+      setLoggerOverride({
+        level: mode === "info" ? "info" : "debug",
+        consoleLevel: "silent",
+        file: logPaths.nextPath(),
+      });
+      const store = seed(
+        {
+          "anthropic:broken": { type: "token", provider: "anthropic", token: "broken-token" },
+          "anthropic:working": { type: "token", provider: "anthropic", token: "working-token" },
+        },
+        { anthropic: ["anthropic:broken", "anthropic:working"] },
+      );
+      const controller = new AbortController();
+      const cancelled = new Error("usage cancelled");
+      const secret = "synthetic-usage-secret-1234";
+      resolveKey.mockImplementation(async ({ profileId }) => {
+        if (profileId === "anthropic:broken") {
+          if (mode === "cancel") {
+            controller.abort(cancelled);
+          }
+          throw new Error(`missing fixture credential; Authorization: Bearer ${secret}`);
+        }
+        return { apiKey: "working-token", provider: "anthropic" };
+      });
+      resolvePlugin.mockImplementationOnce(
+        async ({ context }) => (await context.resolveOAuthToken()) ?? undefined,
+      );
+      const result = resolveProviderAuths({
+        providers: ["anthropic"],
+        store,
+        env: {},
+        config: {},
+        signal: controller.signal,
+      });
+      if (mode === "cancel") {
+        await expect(result).rejects.toBe(cancelled);
+      } else {
+        await expect(result).resolves.toEqual([{ provider: "anthropic", token: "working-token" }]);
+      }
+      await testApi.flushFileLogQueueForTests();
+      const { file, lines } = await readConfiguredLogTail();
+      const diagnostics = lines.filter((line) => line.includes("usage auth: skipped auth profile"));
+      if (mode === "debug") {
+        expect(await fs.readFile(file, "utf8")).toContain(secret);
+        expect(diagnostics).toHaveLength(1);
+        expect(diagnostics[0]).toContain("anthropic:broken");
+        expect(diagnostics[0]).toContain("missing fixture credential");
+        expect(diagnostics[0]).not.toContain(secret);
+      } else {
+        expect(diagnostics).toEqual([]);
+      }
+    },
+  );
 });

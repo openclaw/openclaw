@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   dedupeProfileIds,
@@ -9,6 +10,7 @@ import {
   resolveAuthProfileOrder,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
+import { authProfilesLog } from "../agents/auth-profiles/constants.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
@@ -276,8 +278,13 @@ async function resolveOAuthToken(params: {
         // identity for static bearer profiles whose tokens expose no claims.
         ...(cred.email ? { email: cred.email } : {}),
       };
-    } catch {
+    } catch (error) {
       params.state.signal?.throwIfAborted();
+      authProfilesLog.debug("usage auth: skipped auth profile that failed to resolve", {
+        profileId,
+        provider: params.provider,
+        error: formatErrorMessage(error),
+      });
     }
   }
 
