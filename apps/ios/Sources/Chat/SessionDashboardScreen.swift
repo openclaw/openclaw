@@ -37,7 +37,8 @@ struct SessionDashboardScreen: View {
                         appModel: self.appModel))
                     .id(AuthenticatedControlUI.webContentIdentity(
                         config: config,
-                        storedOperatorToken: storedOperatorToken))
+                        storedOperatorToken: storedOperatorToken,
+                        authorityGeneration: self.appModel.operatorAuthorityGeneration))
                     .ignoresSafeArea(.container, edges: .bottom)
             } else {
                 self.unavailableCard

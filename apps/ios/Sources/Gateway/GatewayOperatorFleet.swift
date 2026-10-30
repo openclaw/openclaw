@@ -112,7 +112,7 @@ final class GatewayOperatorFleet {
 
     private func run(runtime: Runtime, key: GatewayStableIdentifier.Key) async {
         let config = runtime.config
-        let options = Self.operatorOptions(from: config.nodeOptions)
+        let options = config.operatorOptions(from: Self.operatorOptions(from: config.nodeOptions))
         // The session box is part of GatewayNodeSession's route identity. Keep it for
         // this runtime so a retry cannot replace an unchanged TLS transport.
         let sessionBox = config.webSocketSessionBox()
@@ -122,15 +122,16 @@ final class GatewayOperatorFleet {
             (sessionBox?.session as? GatewayTLSPinningSession)?.finishTasksAndInvalidate()
         }
         let runtimeID = runtime.id
+        let session = runtime.session
         var attempt = 0
         while !Task.isCancelled, self.runtimes[key]?.id == runtime.id {
             do {
                 try await runtime.session.connect(
                     url: config.url,
-                    credentials: GatewayNodeSessionCredentials(
+                    credentials: config.operatorCredentials(fallback: GatewayNodeSessionCredentials(
                         token: config.token,
                         bootstrapToken: config.bootstrapToken,
-                        password: config.password),
+                        password: config.password)),
                     connectOptions: options,
                     sessionBox: sessionBox,
                     extraHeadersProvider: {
@@ -141,6 +142,22 @@ final class GatewayOperatorFleet {
                             gatewayStableID: config.effectiveStableID)
                     },
                     onConnected: { [weak self] in
+                        let admittedRoute = await session.currentRoute(ifGatewayID: config.effectiveStableID)
+                        if config.personalTailscaleAuthentication {
+                            do {
+                                _ = try await config.verifiedPersonalRecoveryScope(session: session)
+                            } catch {
+                                if await session
+                                    .currentRoute(ifGatewayID: config.effectiveStableID) == admittedRoute
+                                {
+                                    await session.disconnect()
+                                }
+                                return
+                            }
+                        }
+                        guard let admittedRoute,
+                              await session.currentRoute(ifGatewayID: config.effectiveStableID) == admittedRoute
+                        else { return }
                         await MainActor.run {
                             guard self?.runtimes[key]?.id == runtimeID else { return }
                             _ = GatewaySettingsStore.markGatewayConnected(
@@ -323,7 +340,8 @@ extension GatewayConnectionController {
                   registry.connectedStableIDs.contains(where: { GatewayStableIdentifier.matches($0, stableID) }),
                   let current = registry.entries.first(where: { $0.id == entry.id }),
                   current.kind == entry.kind, current.host == entry.host, current.port == entry.port,
-                  current.useTLS == entry.useTLS, current.contextPath == entry.contextPath
+                  current.useTLS == entry.useTLS, current.contextPath == entry.contextPath,
+                  current.personalTailscaleAuthentication == entry.personalTailscaleAuthentication
             else { return false }
             let currentCredentials = GatewaySettingsStore.loadGatewayCredentials(
                 instanceId: instanceID, gatewayStableID: stableID)
@@ -356,6 +374,7 @@ extension GatewayConnectionController {
             bootstrapToken: credentials.bootstrapToken,
             password: credentials.password,
             nodeOptions: nodeOptions,
+            personalTailscaleAuthentication: entry.personalTailscaleAuthentication == true,
             ingressAuthorization: ingressAuthorization)
     }
 }

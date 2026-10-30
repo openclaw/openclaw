@@ -1,0 +1,6 @@
+# Native hello admission checks method and recovery scope before requests or events.
+# Credentialless Android, WebKit and Tauri bridges preserve the app-approved identity.
+# Parser-loading stop, deadline and document retirement remain distinct lifecycle contracts.
+# Includes the iPhone/iPad legacy handoff; one subsumed device-id assertion was removed.
+# Net regression growth is 135 gateway-connect lines and 274 native-gateway-auth lines.
+409

@@ -8,8 +8,12 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import * as nodes from "../lib/nodes/index.ts";
 import { startConnect, useHandshakeHarness } from "./gateway-handshake.test-support.ts";
-import { getLatestWebSocket, wsInstances } from "./gateway-socket.test-support.ts";
-import type { GatewayBrowserClient } from "./gateway.ts";
+import { getLatestWebSocket, MockWebSocket, wsInstances } from "./gateway-socket.test-support.ts";
+import type {
+  GatewayBrowserClient,
+  GatewayBrowserClientOptions,
+  GatewayHelloOk,
+} from "./gateway.ts";
 
 const createClient = useHandshakeHarness();
 
@@ -22,6 +26,31 @@ const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.pairing",
 ] as const;
 
+const nativeConnectAuth: NonNullable<GatewayBrowserClientOptions["nativeConnectAuth"]> = async ({
+  nonce,
+  signedAt,
+}) => ({
+  client: {
+    id: "openclaw-ios",
+    version: "test",
+    mode: "ui",
+    platform: "iOS",
+  },
+  scopes: ["operator.read", "operator.write"],
+  auth: {},
+  expectedHelloAuth: {
+    method: "tailscale",
+    recoveryScope: "tailscale-account-a",
+  },
+  device: {
+    id: "native-device",
+    publicKey: "synthetic-public-key",
+    signature: "synthetic-signature",
+    nonce,
+    signedAt,
+  },
+});
+
 async function acceptConnect(
   { ws, connectFrame }: Awaited<ReturnType<typeof startConnect>>,
   auth: { role: string; scopes: string[] },
@@ -33,6 +62,23 @@ async function acceptConnect(
     payload: { type: "hello-ok", protocol: PROTOCOL_VERSION, auth },
   });
   await vi.advanceTimersByTimeAsync(0);
+}
+
+function emitNativeHello(
+  ws: MockWebSocket,
+  id: string,
+  auth: Partial<NonNullable<GatewayHelloOk["auth"]>>,
+) {
+  ws.emitMessage({
+    type: "res",
+    id,
+    ok: true,
+    payload: {
+      type: "hello-ok",
+      protocol: PROTOCOL_VERSION,
+      auth: { role: "operator", scopes: [], ...auth },
+    },
+  });
 }
 
 describe("GatewayBrowserClient shared-auth handshake", () => {
@@ -284,5 +330,94 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     expect(wsInstances).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(wsInstances).toHaveLength(2);
+  });
+
+  describe("native personal-auth admission", () => {
+    it.each([
+      { method: "token", recoveryScope: "tailscale-account-a" },
+      { method: "tailscale", recoveryScope: "tailscale-account-b" },
+    ] as const)(
+      "rejects a native hello with $method auth and $recoveryScope before publishing events or requests",
+      async ({ method, recoveryScope }) => {
+        const onHello = vi.fn();
+        const onEvent = vi.fn();
+        const onListenerEvent = vi.fn();
+        const onRecoveryScopeChange = vi.fn();
+        const onClose = vi.fn();
+        client = createClient({
+          url: "ws://127.0.0.1:18789",
+          nativeConnectAuth,
+          onHello,
+          onEvent,
+          onRecoveryScopeChange,
+          onClose,
+        });
+        const { ws, connectFrame } = await startConnect(client);
+        const removeListener = client.addEventListener(onListenerEvent);
+        const earlyRequest = client.request("gateway.info").catch(() => undefined);
+        const earlyCatalog = client.request("talk.catalog", {}).catch(() => undefined);
+        ws.emitMessage({ type: "event", event: "chat", payload: { state: "delta" }, seq: 1 });
+        expect(ws.sent.map((frame) => JSON.parse(frame).method)).toEqual(["connect"]);
+        expect(onEvent).not.toHaveBeenCalled();
+        expect(onListenerEvent).not.toHaveBeenCalled();
+
+        emitNativeHello(ws, connectFrame.id, { method, recoveryScope });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(onHello).not.toHaveBeenCalled();
+        expect(onRecoveryScopeChange).not.toHaveBeenCalled();
+        expect(onEvent).not.toHaveBeenCalled();
+        expect(onListenerEvent).not.toHaveBeenCalled();
+        expect(client.recoveryScope).toBe("");
+        expect(client.recoveryScopeReady).toBe(false);
+        expect(client.connected).toBe(false);
+        expect(ws.lastClose).toEqual({ code: 4008, reason: "connect failed" });
+        ws.emitClose(4008, "connect failed");
+        await Promise.all([earlyRequest, earlyCatalog]);
+        removeListener();
+        expect(onClose).toHaveBeenCalledWith(expect.objectContaining({ willRetry: false }));
+      },
+    );
+
+    it("admits a native Tailscale hello only for its expected personal recovery scope", async () => {
+      const onHello = vi.fn();
+      const onEvent = vi.fn();
+      const onListenerEvent = vi.fn();
+      client = createClient({
+        url: "ws://127.0.0.1:18789",
+        nativeConnectAuth,
+        onHello,
+        onEvent,
+      });
+      const { ws, connectFrame } = await startConnect(client);
+      const removeListener = client.addEventListener(onListenerEvent);
+      const earlyRequest = client.request("gateway.info").catch(() => undefined);
+      ws.emitMessage({ type: "event", event: "chat", payload: { state: "delta" }, seq: 1 });
+      expect(ws.sent.map((frame) => JSON.parse(frame).method)).toEqual(["connect"]);
+      expect(onEvent).not.toHaveBeenCalled();
+      expect(onListenerEvent).not.toHaveBeenCalled();
+
+      emitNativeHello(ws, connectFrame.id, {
+        method: "tailscale",
+        recoveryScope: "tailscale-account-a",
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(onHello).toHaveBeenCalledOnce();
+      expect(client.recoveryScope).toBe("tailscale-account-a");
+      ws.emitMessage({ type: "event", event: "chat", payload: { state: "delta" }, seq: 2 });
+      expect(onEvent).toHaveBeenCalledOnce();
+      expect(onListenerEvent).toHaveBeenCalledOnce();
+
+      const request = client.request("gateway.info");
+      const requestFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
+      expect(requestFrame.method).toBe("gateway.info");
+      ws.emitMessage({ type: "res", id: requestFrame.id, ok: true, payload: { ready: true } });
+      await expect(request).resolves.toEqual({ ready: true });
+      removeListener();
+      await earlyRequest;
+    });
   });
 });

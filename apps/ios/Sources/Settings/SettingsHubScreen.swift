@@ -83,10 +83,12 @@ struct SettingsHubScreen: View {
                     }
                 }
         } else {
-            SettingsProTab(
-                registersNavigationDestinations: false,
-                headerSidebarAction: self.headerSidebarAction,
-                onApprovalNotificationsRoute: self.onApprovalNotificationsRoute)
+            VStack(spacing: 0) {
+                SettingsProTab(
+                    registersNavigationDestinations: false,
+                    headerSidebarAction: self.headerSidebarAction,
+                    onApprovalNotificationsRoute: self.onApprovalNotificationsRoute)
+            }
         }
     }
 
@@ -185,7 +187,8 @@ struct EmbeddedDashboardContent: View {
                 embedCompatibility: self.embedCompatibility)
                 .id(AuthenticatedControlUI.webContentIdentity(
                     config: self.config,
-                    storedOperatorToken: storedOperatorToken))
+                    storedOperatorToken: storedOperatorToken,
+                    authorityGeneration: self.appModel.operatorAuthorityGeneration))
                 .accessibilityIdentifier("SettingsHub.Dashboard")
         }
     }
