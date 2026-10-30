@@ -29,6 +29,7 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry) {
     lastInteractionAt: entry?.lastInteractionAt,
     label: entry?.label,
     color: entry?.color,
+    category: entry?.category,
     status: entry?.status,
     visibility: entry?.visibility ?? "shared",
     createdActor: resolveSessionCreatorActor(entry?.createdActor),
