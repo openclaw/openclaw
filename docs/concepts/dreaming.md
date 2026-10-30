@@ -144,6 +144,7 @@ Preserve the original and convert a copy to UTF-8 before retrying. A malformed
 diary is omitted from optional context so other dreaming work can continue.
 
 Diary and consolidation completions use fresh contexts without retaining conversation sessions or delivering chat replies. Failed or empty diary generation writes a local fallback entry and reports a degraded outcome, so missing model output leaves a visible trace.
+Fallback placeholders remain in the diary but are excluded from recent continuity context, leaving those slots available for useful entries.
 
 Diary generation uses the existing agent run budget, `agents.defaults.timeoutSeconds`,
 instead of a separate one-minute deadline. It inherits the same 48-hour default and

@@ -477,6 +477,7 @@ export function createGatewayReloadHandlers(
           sourceConfig: publication ? publication.sourceConfig : nextConfig,
           changedPaths: plan.changedPaths,
           reloadPluginIds: plan.reloadPluginIds,
+          restartServiceIds: plan.restartServices,
           pluginLifecycle: plan.pluginLifecycle,
           prepareConfigEffects,
           commitRuntime,
