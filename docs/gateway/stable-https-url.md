@@ -159,6 +159,20 @@ Confirm that MagicDNS and HTTPS certificates are enabled in the Tailscale admin 
 
 Update Tailscale and confirm that your installed client build exposes the current `tailscale serve` command. The Serve CLI changed in Tailscale 1.52. See the [Tailscale Serve command reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
 
+### OpenClaw says Tailscale needs elevated access
+
+OpenClaw uses non-interactive `sudo` when Tailscale requires operator access. If startup reports that non-interactive sudo failed, give the Gateway user Tailscale operator access once, then restart the Gateway:
+
+```bash
+sudo tailscale set --operator=$USER
+```
+
+This lets the unprivileged Gateway process manage the Tailscale Serve claim without waiting for an interactive password prompt. If your host requires an administrator to approve this change, ask that administrator to run the command for the account that runs the Gateway.
+
+### Android says “Connected (operator offline)”
+
+This status means the Android node connection is present, but the phone's operator session is not authenticated. It is separate from node pairing. Open **Settings → Gateway** and tap **Reconnect**. If authentication or pairing still fails, generate a fresh mobile setup code with `openclaw qr` and reconnect using the `wss://` Tailscale Serve URL; then approve the pending device request on the Gateway if prompted. See [Android connection setup](/platforms/android#connection-runbook) for the full pairing flow.
+
 ### Tailscale identity headers are not accepted
 
 Confirm that `gateway.auth.allowTailscale` is `true` and that the request arrives through the Serve URL. Direct loopback, LAN, raw tailnet-IP, and custom reverse-proxy requests do not qualify for Tailscale identity-header auth.
