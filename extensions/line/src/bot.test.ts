@@ -99,6 +99,9 @@ it("follows a reload for a monitor the Gateway started from the process config",
   expect(handled.historyLimit).toBe(75);
   expect(handled.cfg).toBe(reloaded);
 });
+it("passes the webhook destination on as the receiving bot's user id", async () => {
+  expect((await createDelivery(configWith({}))()).botUserId).toBe("destination");
+});
 
 it.each(["with source", "without source", "absent"])(
   "keeps its own config when the startup process snapshot is %s",

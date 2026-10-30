@@ -174,7 +174,7 @@ describe("LINE admission facts on the dispatched turn", () => {
                     },
             };
       if (testCase.quote) {
-        recordLineSentMessages(account.accountId, ["sent-message"]);
+        await recordLineSentMessages(account.accountId, ["sent-message"]);
       }
       const processMessage = vi.fn<Parameters<typeof handleLineWebhookEvents>[1]["processMessage"]>(
         async () => {},

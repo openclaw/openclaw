@@ -2,6 +2,7 @@ import { clearAccountFieldsFromConfigSection } from "openclaw/plugin-sdk/channel
 import type { ChannelPlugin, PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveLineAccount } from "./accounts.js";
+import { rememberLineBotUserId } from "./outbound-message-log.js";
 import { getLineRuntime } from "./runtime.js";
 import { describeLineWebhookDelivery } from "./status.js";
 import type { ResolvedLineAccount } from "./types.js";
@@ -30,6 +31,8 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
     let lineBotLabel = "";
     try {
       const probe = await (await import("./probe.js")).probeLineBot(token, 2500);
+      // Sent ids persist under this bot's user id; a failed probe keeps them memory-only.
+      rememberLineBotUserId(account.accountId, probe.ok ? probe.bot?.userId : undefined);
       const displayName = probe.ok ? probe.bot?.displayName?.trim() : null;
       if (displayName) {
         lineBotLabel = ` (${displayName})`;
@@ -44,6 +47,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
         ctx.log?.warn(`[${account.accountId}] ${delivery.message} Fix: ${delivery.fix}.`);
       }
     } catch (err) {
+      rememberLineBotUserId(account.accountId, undefined);
       if (getLineRuntime().logging.shouldLogVerbose()) {
         ctx.log?.debug?.(`[${account.accountId}] bot check failed: ${String(err)}`);
       }
