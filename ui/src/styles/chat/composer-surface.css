@@ -1481,7 +1481,9 @@
 }
 
 /* Short panes spend height on a complete editor line and the action row first.
-   Context keeps its existing scrollport; neither region overflows the chat clip. */
+   Context keeps its existing scrollport; neither region overflows the chat clip.
+   The editor keeps its inset: a portrait phone keyboard moves the pane across
+   this height, and the draft must not jump against the frame when it does. */
 @container chat-conversation (max-height: 320px) {
   .chat-footer {
     --chat-footer-max-height: 100cqh;
@@ -1489,6 +1491,7 @@
 
   .agent-chat__input {
     --chat-composer-min-height: 0px;
+    --chat-composer-editor-max-lines: 1;
   }
 
   .agent-chat__composer-shell {
@@ -1498,6 +1501,16 @@
     gap: 0;
   }
 
+  .agent-chat__composer-footer {
+    margin-bottom: 0;
+    padding-block: 0;
+  }
+}
+
+/* Only a nearly closed pane (a landscape phone keyboard, a collapsed desktop
+   split) needs the editor's inset for the line and action row to fit. Portrait
+   phone keyboards leave far more, so they never cross this step. */
+@container chat-conversation (max-height: 160px) {
   .agent-chat__composer-input-row {
     padding-top: 0;
   }
@@ -1508,10 +1521,5 @@
     min-height: calc(var(--chat-composer-editor-line) + 4px);
     max-height: calc(var(--chat-composer-editor-line) + 4px);
     padding-block: 2px;
-  }
-
-  .agent-chat__composer-footer {
-    margin-bottom: 0;
-    padding-block: 0;
   }
 }

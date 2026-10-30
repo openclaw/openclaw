@@ -369,6 +369,7 @@
     "!dist/extensions/onnx/**",
     "!dist/extensions/opencode/**",
     "!dist/extensions/parallel/**",
+    "!dist/extensions/particle/**",
     "!dist/extensions/perplexity/**",
     "!dist/extensions/qianfan/**",
     "!dist/extensions/raft/**",

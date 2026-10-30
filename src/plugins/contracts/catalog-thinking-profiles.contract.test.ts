@@ -21,6 +21,7 @@ const EXPECTED: Record<string, { levels: string[]; defaultLevel: string }> = {
   "mistral/mistral-medium-3-5": mistralReasoning(),
   "mistral/mistral-small-2603": mistralReasoning(),
   "mistral/mistral-small-latest": mistralReasoning(),
+  "particle/particle-ai/particle-1": deepSeekV4(),
   "moonshot/kimi-k2.7-code": { levels: ["low:on"], defaultLevel: "low" },
   "moonshot/kimi-k2.7-code-highspeed": { levels: ["low:on"], defaultLevel: "low" },
   "moonshot/kimi-k3": { levels: ["max"], defaultLevel: "max" },
