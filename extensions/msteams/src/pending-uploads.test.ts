@@ -39,6 +39,7 @@ describe("pending-uploads", () => {
       removePendingUpload(id);
     }
     createdUploadIds.clear();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -83,9 +84,19 @@ describe("pending-uploads", () => {
     it("returns undefined when entry is past TTL but timer has not yet fired", () => {
       const id = storePendingUploadForTest();
 
-      // Manually advance time without firing timers to simulate stale entry
-      vi.setSystemTime(Date.now() + 5 * 60 * 1000 + 1);
+      // Advance the monotonic clock past the deadline without firing timers.
+      const base = performance.now();
+      vi.spyOn(performance, "now").mockReturnValue(base + 5 * 60 * 1000 + 1);
       expect(getPendingUpload(id)).toBeUndefined();
+    });
+
+    it("keeps fresh entries across wall-clock steps", () => {
+      const id = storePendingUploadForTest();
+
+      vi.setSystemTime(Date.now() - 60 * 60 * 1000);
+      expect(requirePendingUpload(id).filename).toBe("file.txt");
+      vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1000);
+      expect(requirePendingUpload(id).filename).toBe("file.txt");
     });
   });
 });
