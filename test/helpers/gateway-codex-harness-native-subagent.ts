@@ -43,7 +43,11 @@ type NativeSubagentProbeHarness = {
     sessionKey: string;
   }) => void;
   requestCodexCommandText: (
-    params: GatewaySession & { command: string; events: EventFrame[]; expectedText: string },
+    params: GatewaySession & {
+      command: string;
+      events: EventFrame[];
+      expectedText: string | string[];
+    },
   ) => Promise<string>;
   requestAgentText: (
     params: GatewaySession & { expectedReply: string; message: string },
@@ -344,7 +348,10 @@ export async function verifyCodexNativeSubagentBridgeProbe(
   await requestCodexCommandText({
     ...params,
     command: `/codex resume ${childThreadId}`,
-    expectedText: "controlled by its parent",
+    expectedText: [
+      "controlled by its parent",
+      "cannot resume an unloaded multi-agent v2 sub-agent through its parent",
+    ],
   });
   await requestAgentText({
     client: params.client,
