@@ -1,4 +1,6 @@
-import { expect, it } from "vitest";
+import type * as ts from "typescript/ast";
+import { Checker } from "typescript/sync";
+import { expect, it, vi } from "vitest";
 import { inspectDatabaseWorkerBoundaries } from "../../scripts/lib/database-worker-compat.mts";
 
 const legacyFile = "src/plugin-sdk/sqlite-runtime-legacy.ts";
@@ -699,6 +701,68 @@ export function ${first}() { return ${entry}(); }`,
     expect(inspectCallback("() => () => readKernel()").operations.has(kernelFile)).toBe(false);
   },
 );
+
+it("reuses raw compiler symbols across graph phases without freezing forwarded bindings", () => {
+  const counts = new Map<ts.Node, number>();
+  const unresolved = new Set<ts.Node>();
+  const getter = Object.getOwnPropertyDescriptor(Checker.prototype, "getSymbolAtLocation")!.get!;
+  const spy = vi
+    .spyOn(Checker.prototype, "getSymbolAtLocation", "get")
+    .mockImplementation(function (this: Checker) {
+      const query: Checker["getSymbolAtLocation"] = getter.call(this);
+      const observed = Object.assign(
+        ((input: ts.Node | readonly ts.Node[]) => {
+          const nodes = Array.isArray(input) ? input : [input as ts.Node];
+          const result = Array.isArray(input) ? query(input) : query(input as ts.Node);
+          const symbols = Array.isArray(result) ? result : [result];
+          for (const [index, node] of nodes.entries()) {
+            counts.set(node, (counts.get(node) ?? 0) + 1);
+            if (!symbols[index]) {
+              unresolved.add(node);
+            }
+          }
+          return result;
+        }) as Checker["getSymbolAtLocation"],
+        { gen: query.gen },
+      );
+      // The real getter installs its method on the instance; retain that contract.
+      Object.defineProperty(this, "getSymbolAtLocation", { configurable: true, value: observed });
+      return observed;
+    });
+  try {
+    const scan = (body: string) =>
+      inspectDatabaseWorkerBoundaries(
+        process.cwd(),
+        new Map(
+          Object.entries({
+            [kernelFile]: kernel,
+            "src/infra/sqlite-transaction.ts":
+              "export function runSqliteReadSnapshotSync(db, callback) { return callback(); }",
+            "src/transaction-reader.ts": `const { runSqliteReadSnapshotSync: enterScope } = await import('./infra/sqlite-transaction.js');
+import { readKernel } from './session-kernel.js';
+export function read() { return enterScope(db, () => { ${body} }); }`,
+            [legacyFile]: `import { read } from '../transaction-reader.js';
+/** @deprecated Use workers. */
+export function ${first}() { return read(); }`,
+          }),
+        ),
+        undefined,
+        undefined,
+        false,
+      );
+    expectClosed(scan("readKernel(); return readKernel();"));
+    expect(scan("readKernel(); missing(() => readKernel());").operations.has(kernelFile)).toBe(
+      false,
+    );
+    expect(
+      [...counts.keys()].filter((node) => node.getText() === "readKernel").length,
+    ).toBeGreaterThan(1);
+    expect([...unresolved].some((node) => node.getText() === "missing")).toBe(true);
+    expect([...counts.values()]).toEqual([...counts.values()].map(() => 1));
+  } finally {
+    spy.mockRestore();
+  }
+});
 
 it("does not confuse a nested function path with a live top-level namesake", () => {
   const result = inspect({
