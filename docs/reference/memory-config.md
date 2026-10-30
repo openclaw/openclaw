@@ -654,8 +654,11 @@ unknown property, including `evergreen: false`; removing it restores the older d
 `excludePaths` is opt-in; when omitted, all otherwise eligible files keep their current indexing
 behavior. Patterns use `/` separators and match paths relative to the workspace, including
 default memory files and overlapping `extraPaths`. Outside-workspace extra roots are unaffected.
-Changing this list changes the index scope and removes excluded rows on the next full sync; it
-does not delete source files or change which files are eligible for short-term recall/promotion.
+Changing this list changes the index scope, so `openclaw memory status` reports a scope change and
+vector search pauses until you rebuild with `openclaw memory index --agent <id>`; the rebuild drops
+rows for excluded files. Exclusions apply to search indexing and file watching only: they do not
+delete source files, block `memory_get` reads, or change which files are eligible for short-term
+recall/promotion.
 
 For shared notes, keep each workspace's `memory/` directory local and add the shared directory's
 resolved filesystem path to `extraPaths`. This setting indexes notes; it does not authorize legacy host-event
