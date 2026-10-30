@@ -338,30 +338,30 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             evaluate: (batch, options) =>
               evaluateDecision(
                 options,
-                (runtime, registry, config, isAdmissible) =>
-                  runtime.evaluateDecisionOperation(
+                (decisions, selectedRegistry, config, isAdmissible) =>
+                  decisions.evaluateDecisionOperation(
                     batch,
                     options,
-                    registry,
+                    selectedRegistry,
                     config,
                     record.id,
                     isAdmissible,
                   ),
-                (runtime, result) => runtime.completeDecisionEvaluation(result),
+                (decisions, evaluation) => decisions.completeDecisionEvaluation(evaluation),
               ),
             evaluateV2: (batch, options) =>
               evaluateDecision(
                 options,
-                (runtime, registry, config, isAdmissible) =>
-                  runtime.evaluateDecisionV2Operation(
+                (decisions, selectedRegistry, config, isAdmissible) =>
+                  decisions.evaluateDecisionV2Operation(
                     batch,
                     options,
-                    registry,
+                    selectedRegistry,
                     config,
                     record.id,
                     isAdmissible,
                   ),
-                (runtime, result) => runtime.completeDecisionEvaluation(result),
+                (decisions, evaluation) => decisions.completeDecisionEvaluation(evaluation),
               ),
           } satisfies PluginRuntime["decisions"];
         }
