@@ -373,6 +373,11 @@ export function createWorkerPlacementDispatchStartup(options: {
           };
         }
       }
+      // Prepared source authority must survive checkpoint loading and every later worker command.
+      const assertWorkspaceCurrent = () => {
+        assertSyncOwner();
+        assertPreparedBindingCurrent?.();
+      };
       params.markPhase?.("repositoryStartup");
       const synced =
         params.workspace.kind === "device-folder"
@@ -381,7 +386,7 @@ export function createWorkerPlacementDispatchStartup(options: {
               sessionId: request.sessionId,
               sessionKey: request.sessionKey,
               generation: placement.generation,
-              authorize: assertSyncOwner,
+              authorize: assertWorkspaceCurrent,
             })
           : params.workspace.kind === "repository"
             ? await syncSessionRepositoryWorkspace({
@@ -397,7 +402,7 @@ export function createWorkerPlacementDispatchStartup(options: {
                 generation: placement.generation,
                 gitAuthor,
                 runSetupScript: request.runSetupScript,
-                assertCurrent: assertSyncOwner,
+                assertCurrent: assertWorkspaceCurrent,
               })
             : await tunnel.syncWorkspace({
                 source: {
@@ -409,7 +414,7 @@ export function createWorkerPlacementDispatchStartup(options: {
                 sessionKey: request.sessionKey,
                 generation: placement.generation,
                 ...(gitAuthor ? { gitAuthor } : {}),
-                authorize: assertSyncOwner,
+                authorize: assertWorkspaceCurrent,
               });
       if (
         (params.workspace.kind === "device-folder") !==
@@ -419,7 +424,7 @@ export function createWorkerPlacementDispatchStartup(options: {
           "Workspace preparation returned a mismatched device-folder manifest marker",
         );
       }
-      assertSyncOwner();
+      assertWorkspaceCurrent();
       const runProjectLifecycleCommand = environments.runProjectLifecycleCommand;
       if (preparation?.recipe && preparation.runSetupScript !== false) {
         params.markPhase?.("lifecycleCommands");
@@ -435,10 +440,7 @@ export function createWorkerPlacementDispatchStartup(options: {
           // A completed activation is the existing durable witness. An interrupted
           // first binding retries declared setup; commands should be idempotent.
           postCreate: params.environment.lastActivatedAtMs === null,
-          assertCurrent: () => {
-            assertSyncOwner();
-            assertPreparedBindingCurrent?.();
-          },
+          assertCurrent: assertWorkspaceCurrent,
           signal: params.signal,
         });
       }

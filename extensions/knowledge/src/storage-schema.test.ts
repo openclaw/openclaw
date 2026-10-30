@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { copyFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { SqliteIdentityStore } from "./identity-store.js";
 import { RegistryRecoveryRequired, StoreRegistry } from "./store-registry.js";
 import { useTestTempDirs } from "./test-support.js";
@@ -160,9 +160,11 @@ it("a database that is not a current Knowledge state store is refused", async ()
 });
 
 it("schema and tables are admitted once per physical database; a replaced file is admitted again", async () => {
-  const dir = tempDirs.make("knowledge-schema-"),
-    file = path.join(dir, "state.sqlite");
-  const store = new SqliteIdentityStore(file);
+  // Prior fixtures may have freed inodes still remembered by their module's admission set.
+  vi.resetModules();
+  const { SqliteIdentityStore: IsolatedIdentityStore } = await import("./identity-store.js");
+  const file = path.join(tempDirs.make("knowledge-schema-"), "state.sqlite");
+  const store = new IsolatedIdentityStore(file);
   await store.lookup("store:x");
   const indexes = () => {
     const db = new DatabaseSync(file);
@@ -176,12 +178,10 @@ it("schema and tables are admitted once per physical database; a replaced file i
   const db = new DatabaseSync(file);
   db.exec("DROP INDEX history_scope_sequence");
   db.close();
-  // A warm connection to the same file repeats no admission work.
   await store.lookup("store:x");
   expect(indexes()).toBe(admittedIndexes - 1);
-  // A restored copy is a different physical database and is admitted on first use.
-  await copyFile(file, path.join(dir, "restored.sqlite"));
-  await rename(path.join(dir, "restored.sqlite"), file);
+  await copyFile(file, `${file}.restored`);
+  await rename(`${file}.restored`, file);
   await store.lookup("store:x");
   expect(indexes()).toBe(admittedIndexes);
 });

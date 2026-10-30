@@ -83,12 +83,10 @@ export function Config(props: ConfigProps) {
     return props.viewState;
   };
   const schema = createMemo(() => asConfigSchema(props.schema));
-  const includedSections = createMemo(() =>
-    props.includeSections?.length ? new Set(props.includeSections) : null,
-  );
-  const excludedSections = createMemo(() =>
-    props.excludeSections?.length ? new Set(props.excludeSections) : null,
-  );
+  const include = createMemo(() => props.includeSections);
+  const exclude = createMemo(() => props.excludeSections);
+  const includedSections = createMemo(() => (include()?.length ? new Set(include()) : null));
+  const excludedSections = createMemo(() => (exclude()?.length ? new Set(exclude()) : null));
   const schemaAnalysis = createMemo(() =>
     getConfigSchemaAnalysis(schema(), includedSections(), excludedSections()),
   );

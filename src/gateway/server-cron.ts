@@ -547,7 +547,7 @@ export function buildGatewayCronService(params: {
       getResolvedLoggerSettings().level,
     ),
     onDefinitionChange: publishCronInventoryChange,
-    onEvent: (evt) => {
+    onEvent: (evt, eventContext) => {
       const jobSnapshot = evt.job ?? cron.getJob(evt.jobId);
       if (legacyMonitorJobs.has(evt.jobId)) {
         legacyProjectionRevision += 1;
@@ -626,8 +626,7 @@ export function buildGatewayCronService(params: {
         // Runs can flip enabled without an "updated" event (one-shot success,
         // trigger.once, schedule-error auto-disable); refresh badges then too.
         // Fully deleted jobs emit their own "removed" event instead.
-        const finishedJob = evt.job ?? cron.getJob(evt.jobId);
-        if (finishedJob?.enabled === false) {
+        if (jobSnapshot?.enabled === false) {
           void routeStreamWatcherMutation(evt.jobId, "finished").catch((err: unknown) => {
             cronLogger.warn(
               { err: formatErrorMessage(err), jobId: evt.jobId },
@@ -637,10 +636,11 @@ export function buildGatewayCronService(params: {
         }
       }
       if (evt.action === "finished") {
-        const job = evt.job ?? cron.getJob(evt.jobId);
         dispatchGatewayCronFinishedNotifications({
           evt,
-          job,
+          job: jobSnapshot,
+          runNotStarted: eventContext?.runNotStarted,
+          resolveCronAgent,
           logger: cronServiceLogger,
           webhookToken: params.cfg.cron?.webhookToken,
           ssrfPolicy: webhookSsrfPolicy,

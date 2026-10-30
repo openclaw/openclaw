@@ -171,8 +171,9 @@ suite.define(() => {
               }),
             )
             .toBe(true);
-          const box = await layoutBox(trigger);
-          await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+          await layoutBox(trigger);
+          // Mobile editing animates the footer after focus; resolve its current hit target.
+          await trigger.click();
           await expect.poll(() => composer.locator(menuSelector).isVisible()).toBe(true);
           expect(await composer.locator(otherMenuSelector).isVisible()).toBe(false);
           await page.keyboard.press("Escape");

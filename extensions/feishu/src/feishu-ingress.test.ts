@@ -223,6 +223,128 @@ describe("Feishu durable ingress", () => {
     });
   });
 
+  it("admits later same-chat input while retaining a deferred input's claim", async () => {
+    await withQueue(async (queue, startIngress) => {
+      const deferred = createDeferred<FeishuIngressLifecycle>();
+      const dispatched: string[] = [];
+      const ingress = startIngress({
+        queue,
+        dispatch: async (data) => {
+          const lifecycle = ingress.resolveLifecycle({ event_id: data.header.event_id });
+          if (!lifecycle) {
+            throw new Error("Missing ingress lifecycle");
+          }
+          dispatched.push(data.header.event_id);
+          if (data.header.event_id === "evt-first") {
+            lifecycle.onDeferred();
+            deferred.resolve(lifecycle);
+            return { kind: "deferred" };
+          }
+          await lifecycle.onAdopted();
+          return undefined;
+        },
+      });
+      ingress.start();
+      await ingress.invoke(messageEnvelope("evt-first"), { needCheck: false });
+      await ingress.waitForIdle();
+      const first = await deferred.promise;
+      try {
+        await ingress.invoke(messageEnvelope("evt-first"), { needCheck: false });
+        await ingress.invoke(messageEnvelope("evt-second"), { needCheck: false });
+        await ingress.waitForIdle();
+        expect(dispatched).toEqual(["evt-first", "evt-second"]);
+        expect(await queue.listPending()).toEqual([]);
+        expect((await queue.listClaims()).map((claim) => claim.id)).toEqual(["evt-first"]);
+      } finally {
+        await first.onAdopted();
+        await ingress.waitForIdle();
+      }
+      expect(await queue.listClaims()).toEqual([]);
+    });
+  });
+
+  it("keeps buffered input in its chat lane until a lifecycle handoff", async () => {
+    await withQueue(async (queue, startIngress) => {
+      const buffered = createDeferred<FeishuIngressLifecycle>();
+      const otherChat = createDeferred<void>();
+      const dispatched: string[] = [];
+      const ingress = startIngress({
+        queue,
+        dispatch: async (data) => {
+          const lifecycle = ingress.resolveLifecycle({ event_id: data.header.event_id });
+          if (!lifecycle) {
+            throw new Error("Missing ingress lifecycle");
+          }
+          dispatched.push(data.header.event_id);
+          if (data.header.event_id === "evt-buffered") {
+            buffered.resolve(lifecycle);
+            return { kind: "deferred" };
+          }
+          await lifecycle.onAdopted();
+          if (data.header.event_id === "evt-other") {
+            otherChat.resolve();
+          }
+          return undefined;
+        },
+      });
+      ingress.start();
+      await ingress.invoke(messageEnvelope("evt-buffered"), { needCheck: false });
+      const first = await buffered.promise;
+      try {
+        await ingress.invoke(messageEnvelope("evt-later"), { needCheck: false });
+        const sentinel = messageEnvelope("evt-other");
+        sentinel.event.message.chat_id = "oc-other-chat";
+        await ingress.invoke(sentinel, { needCheck: false });
+        await otherChat.promise;
+        expect((await queue.listPending()).map((row) => row.id)).toEqual(["evt-later"]);
+        expect(dispatched).toEqual(["evt-buffered", "evt-other"]);
+      } finally {
+        await first.onAdopted();
+        await ingress.waitForIdle();
+      }
+      expect(dispatched).toEqual(["evt-buffered", "evt-other", "evt-later"]);
+    });
+  });
+
+  it("stops without stranding a buffered delivery or its durable claim", async () => {
+    await withQueue(async (queue, startIngress) => {
+      const buffered = createDeferred<void>();
+      const ingress = startIngress({
+        queue,
+        dispatch: async () => {
+          const claim = await claimUnprocessedFeishuMessage({
+            messageId: "buffered-stop",
+            namespace: "default",
+          });
+          if (claim.kind !== "claimed") {
+            throw new Error("Missing logical claim");
+          }
+          const lifecycle = ingress.resolveLifecycle({ event_id: "evt-buffered-stop" });
+          if (!lifecycle) {
+            throw new Error("Missing ingress lifecycle");
+          }
+          lifecycle.onBeforeAbandon = () => claim.handle.release({ error: new Error("stopped") });
+          buffered.resolve();
+          return { kind: "deferred" };
+        },
+      });
+      ingress.start();
+      await ingress.invoke(messageEnvelope("evt-buffered-stop"), { needCheck: false });
+      await buffered.promise;
+      await ingress.stop();
+      expect(await queue.listClaims()).toEqual([]);
+      expect((await queue.listPending()).map((row) => row.id)).toEqual(["evt-buffered-stop"]);
+      const replay = await claimUnprocessedFeishuMessage({
+        messageId: "buffered-stop",
+        namespace: "default",
+      });
+      expect(replay.kind).toBe("claimed");
+      if (replay.kind === "claimed") {
+        replay.handle.release({ error: new Error("test complete") });
+      }
+    });
+  });
+
   it.each([
     {
       name: "authentication failure",

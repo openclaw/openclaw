@@ -6,6 +6,7 @@ import { Type } from "typebox";
 import { omitNullRequestHeaders } from "../../../packages/llm-core/src/utils/request-headers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
+import { createMediaAssistantTextCoercer } from "../../media-understanding/assistant-text.js";
 import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
 import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
 import {
@@ -52,7 +53,6 @@ import {
   resolveMediaAnalysisParams,
   type MediaToolSandbox,
 } from "./media-tool-shared.js";
-import { createMediaAssistantTextCoercer } from "./media-tool-text.js";
 import {
   applyAgentDefaultModelConfig,
   hasToolModelConfig,
