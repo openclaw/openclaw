@@ -9,12 +9,16 @@ export async function copySqliteFile(
   sourcePath: string,
   targetPath: string,
   expectedIdentity: BigIntStats,
-  beforeByteCopy?: (sizeBytes: number) => void | Promise<void>,
+  copyOptions: {
+    beforeByteCopy?: (sizeBytes: number) => void | Promise<void>;
+    clone?: "auto" | "never";
+  } = {},
 ): Promise<RootCopyPublicationReceipt> {
+  const { beforeByteCopy, clone = "auto" } = copyOptions;
   const sourceRoot = await root(path.dirname(sourcePath));
   const targetRoot = await root(path.dirname(targetPath));
   let published: RootCopyPublicationReceipt | undefined;
-  const copy = (clone: "auto" | "always" | "never") =>
+  const copy = (transferClone: "auto" | "always" | "never") =>
     targetRoot.copyIn(
       path.basename(targetPath),
       {
@@ -36,7 +40,7 @@ export async function copySqliteFile(
         },
       },
       {
-        clone,
+        clone: transferClone,
         ...(beforeByteCopy ? { maxBytes: Number(expectedIdentity.size) } : {}),
         // Reading an admitted alias is safe: this creates an independent inode.
         // Recovery inventories keep their stricter one-link admission policy.
@@ -49,7 +53,7 @@ export async function copySqliteFile(
         },
       },
     );
-  if (beforeByteCopy) {
+  if (beforeByteCopy && clone === "auto") {
     try {
       // Automatic fallback cannot pause for the owner's byte-copy space admission.
       await copy("always");
@@ -69,7 +73,8 @@ export async function copySqliteFile(
       await copy("never");
     }
   } else {
-    await copy("auto");
+    await beforeByteCopy?.(Number(expectedIdentity.size));
+    await copy(clone);
   }
   if (!published) {
     throw new Error(`SQLite copy was not published: ${targetPath}`);
