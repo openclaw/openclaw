@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
@@ -13,12 +14,14 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { stateLeaseProcessExitRuntimeEntrypoint } from "./openclaw-state-lease-runtime.test-support.js";
+import { prepareOpenClawStateLeaseVerification } from "./openclaw-state-lease-storage.js";
 import {
   acquireOpenClawStateLeaseInTransaction,
   readOpenClawStateLease,
   releaseOpenClawStateLeaseInTransaction,
 } from "./openclaw-state-lease-store.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 type LeaseDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
 
@@ -284,6 +287,52 @@ it("retains verified Gateway lease facts until their writer epoch changes", () =
       ).rejects.toThrow("state process owner is no longer current");
     } finally {
       owner.release();
+    }
+  }));
+
+it("keeps a verified lease handle through idle expiry until its owner releases it", () =>
+  withOpenClawTestState({ label: "lease-idle-retention" }, async (state) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let owner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
+    let verification: Awaited<ReturnType<typeof prepareOpenClawStateLeaseVerification>>;
+    try {
+      const database = openOpenClawStateDatabase({ env: state.env });
+      owner = acquireGatewayStateOwner({
+        databasePath: database.path,
+        payload: {
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath: state.configPath,
+          role: "gateway",
+        },
+      });
+      const identity = { scope: "synthetic", key: "idle", owner: "held", leaseLabel: "idle lease" };
+      runOpenClawStateWriteTransaction(
+        ({ db }) => acquireOpenClawStateLeaseInTransaction(db, identity, 60_000),
+        { database },
+      );
+      const context = captureOpenClawStateWorkerContext({ env: state.env });
+      verification = await prepareOpenClawStateLeaseVerification(
+        { context, identity: context.admission.identity, database },
+        identity,
+      );
+      expect(verification).toBeDefined();
+      verification!.verify();
+      await database.walMaintenance.stop();
+      // Only timeout scheduling advances; the persisted lease's real clock stays live.
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS + 1);
+      expect(database.db.isOpen).toBe(true);
+      verification!.verify();
+      verification!.release();
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+      expect(database.db.isOpen).toBe(false);
+    } finally {
+      try {
+        verification?.release();
+        owner?.release();
+      } finally {
+        vi.useRealTimers();
+      }
     }
   }));
 

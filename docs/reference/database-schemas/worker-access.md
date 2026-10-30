@@ -3392,8 +3392,10 @@ its prepared selection after another internal rewrite; it changes no bytes.
 
 Native state leases under a live Gateway retain a verified expiry and scoped
 write epoch with the acquisition connection. Unchanged, settled reads check the
-captured owner liveness, source lifetime, epoch, and expiry in memory. Lease writes
-publish their scope; raw writes invalidate conservatively. Pending writes, changed
+captured owner liveness, source lifetime, epoch, and expiry in memory. The lease
+holds the verification connection against idle retirement until cleanup; explicit
+retirement still revokes access. Lease mutations publish their scope; raw writes
+invalidate conservatively. Pending writes, changed
 epochs, and expired facts require a durable check on the retained connection and
 cannot publish a fact until the epoch is settled. Write admission, active native
 transactions, and offline leases keep their durable ownership checks.

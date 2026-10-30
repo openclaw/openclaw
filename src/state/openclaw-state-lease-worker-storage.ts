@@ -84,7 +84,7 @@ export async function acquireLease(
   }
   if (result.kind === "acquired") {
     assertAdmission();
-    captureSource?.({ context, identity: sourceIdentity, database: opened?.db });
+    captureSource?.({ context, identity: sourceIdentity, database: opened });
   }
   return result;
 }
