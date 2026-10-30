@@ -157,7 +157,7 @@ it("binds provisional startup admission to its original lifetime and physical fi
   using cleanup = new DisposableStack();
   cleanup.defer(prepareStartupVerification(input, activation, createPermitPool(1))!.revoke);
   owner.revoke();
-  expect(() => captureAgentDatabaseStartupIntegrity(file, agentId)).not.toThrow();
+  expect(captureAgentDatabaseStartupIntegrity(file, agentId)).toBeDefined();
   closeOpenClawAgentDatabasesForTest();
   fs.renameSync(file, `${file}.old`);
   using replacement = openDatabase(file);
