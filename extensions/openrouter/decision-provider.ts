@@ -1,12 +1,8 @@
-import {
-  decodeSystemOneResponse,
-  encodeSystemOneQuestions,
-  validateDecisionBatchV2,
-  validateDecisionResultV2,
-  type DecisionBatchV2,
-  type DecisionProviderV2,
-  type DecisionProviderContextV2,
-  type ProviderDecisionOutcomeV2,
+import type {
+  DecisionBatchV2,
+  DecisionProviderV2,
+  DecisionProviderContextV2,
+  ProviderDecisionOutcomeV2,
 } from "openclaw/plugin-sdk/decisions";
 import {
   readProviderJsonResponse,
@@ -14,6 +10,12 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  decodeOpenRouterDecisionResult,
+  encodeOpenRouterDecisionRequest,
+  isOpenRouterDecisionModel,
+  supportsOpenRouterDecisionBatch,
+} from "./decision-codec.js";
 import {
   OPENROUTER_BASE_URL,
   resolveOpenRouterApiBaseUrl,
@@ -24,57 +26,8 @@ import {
   resolveOpenRouterExtraParamsForTransport,
 } from "./provider-routing.js";
 
-export function isOpenRouterDecisionModel(modelId: string): boolean {
-  return (
-    modelId === "typesafe/jev-1.13" ||
-    modelId === "typesafe/jev-1.14" ||
-    modelId === "~typesafe/jev-latest"
-  );
-}
-
 function unsupported(): ProviderDecisionOutcomeV2 {
   return { status: "unavailable", reason: "unsupported-input" };
-}
-
-function supportsBatch(batch: DecisionBatchV2, modelId: string): boolean {
-  if (!validateDecisionBatchV2(batch)) {
-    return false;
-  }
-  // Jev accepts PNG/JPEG only. The shared validator bounds and checks inline data;
-  // neither this adapter nor the host fetches image URLs or resizes caller evidence.
-  if (
-    batch.state.type !== "image" &&
-    batch.state.type !== "text" &&
-    (batch.state.type !== "json" ||
-      batch.state.value === null ||
-      (typeof batch.state.value !== "object" && typeof batch.state.value !== "string"))
-  ) {
-    return false;
-  }
-  if (
-    batch.state.type === "image" &&
-    !/^data:image\/(?:png|jpeg);base64,/.test(batch.state.dataUri)
-  ) {
-    return false;
-  }
-  return Object.values(batch.questions).every((q) => {
-    if (q.type === "sort" || q.type === "tags" || q.instructions == null) {
-      return false;
-    }
-    if (q.type === "box") {
-      return modelId !== "typesafe/jev-1.13";
-    }
-    if (q.type === "choice") {
-      return Object.keys(q.criteria).length <= 255;
-    }
-    if (q.type === "score") {
-      return q.criteria.length <= 10 && q.criteria.every((entry) => entry !== null);
-    }
-    return (
-      q.criteria === undefined ||
-      (q.criteria !== null && q.criteria.true != null && q.criteria.false != null)
-    );
-  });
 }
 
 function buildRequest(batch: DecisionBatchV2, context: DecisionProviderContextV2) {
@@ -96,22 +49,7 @@ function buildRequest(batch: DecisionBatchV2, context: DecisionProviderContextV2
   if (routed && Object.keys(routed).some((key) => key !== "provider")) {
     return undefined;
   }
-  return {
-    model: context.model.id,
-    state:
-      batch.state.type === "text"
-        ? batch.state.text
-        : batch.state.type === "json"
-          ? batch.state.value
-          : batch.state.type === "image"
-            ? [
-                ...(batch.state.text === undefined ? [] : [batch.state.text]),
-                { type: "image_url", image_url: { url: batch.state.dataUri } },
-              ]
-            : undefined,
-    questions: encodeSystemOneQuestions(batch),
-    ...(routed?.provider !== undefined ? { provider: routed.provider } : {}),
-  };
+  return encodeOpenRouterDecisionRequest(batch, context.model.id, routed?.provider);
 }
 
 export function buildOpenRouterDecisionProvider(): DecisionProviderV2 {
@@ -123,7 +61,7 @@ export function buildOpenRouterDecisionProvider(): DecisionProviderV2 {
       if (
         !isOpenRouterDecisionModel(context.model.id) ||
         (context.reasoning !== undefined && context.reasoning !== "auto") ||
-        !supportsBatch(batch, context.model.id)
+        !supportsOpenRouterDecisionBatch(batch, context.model.id)
       ) {
         return unsupported();
       }
@@ -225,10 +163,7 @@ export function buildOpenRouterDecisionProvider(): DecisionProviderV2 {
           return { status: "unavailable", reason: "invalid-response" };
         }
         context.signal.throwIfAborted();
-        const result = decodeSystemOneResponse(batch, value);
-        return validateDecisionResultV2(batch, result, context.model.inference?.decision)
-          ? { status: "ok", result }
-          : { status: "unavailable", reason: "invalid-response" };
+        return decodeOpenRouterDecisionResult(batch, value, context.model.inference?.decision);
       } catch {
         context.signal.throwIfAborted();
         if (admissionError) {
