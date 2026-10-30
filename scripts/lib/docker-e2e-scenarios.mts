@@ -70,12 +70,13 @@ const updateRestartAuthCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
   'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-3420s}"',
 );
-// Hosted 4-vCPU legacy-operator-state passed in 1516s (run 41096083900, 10.9); its
-// update-candidate phase alone was 883s, and the 2026-10-30 matrix died at the old
-// 1200s default in 4/4 cells. 10.5/10.7/10.8 cells add a second published update for
-// the native plugin UI opt-out specimen (~880s): ~2400s => 2700s inner + 300s margin.
+// Hosted 4-vCPU legacy-operator-state passed in 1195-1841s (run 41105259079; 10.8 runs a
+// second published update for the native plugin UI opt-out specimen), and the
+// 2026-10-30 matrix died at the old 1200s default in 4/4 cells => 2700s inner + 300s
+// margin. The shipped 9.36 updater finished its recorded steps in 718s but its command
+// outlived the 900s default (canary-copy cleanup runs outside them), so use 1500s.
 const updateMigrationCommand = upgradeSurvivorScriptCommand(
-  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
+  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
   'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2700s}"',
 );
 const dreamingCronDoctorCommand = upgradeSurvivorScriptCommand(
