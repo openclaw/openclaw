@@ -170,16 +170,7 @@ it("starts expensive standalone UI work early without crossing serial phase barr
   const sequencer = uiSequencer();
   // eslint-disable-next-line unicorn/no-array-sort -- TestSequencer.sort is Vitest's ordering API.
   const ordered = await sequencer.sort(specs);
-  expect(ordered).toEqual([
-    specs[2],
-    specs[0],
-    specs[1],
-    specs[4],
-    specs[3],
-    specs[7],
-    specs[5],
-    specs[6],
-  ]);
+  expect(ordered).toEqual([2, 0, 1, 4, 3, 7, 5, 6].map((index) => specs[index]));
   // eslint-disable-next-line unicorn/no-array-sort -- TestSequencer.sort is Vitest's ordering API.
   expect(await sequencer.sort(specs.toReversed())).toEqual(ordered);
 });
