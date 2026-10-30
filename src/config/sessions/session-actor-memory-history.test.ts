@@ -293,7 +293,7 @@ describe("memory actor history", () => {
     expect(messageIds(media.messages)).toEqual(["large"]);
   });
 
-  it("bounds recent history and refuses unbounded pages whose combined raw payload exceeds the cap", async () => {
+  it("bounds recent and anchor history and refuses unbounded offset pages over the cap", async () => {
     const content = "x".repeat(3 * 1024 * 1024);
     const { storage, read } = await fixture([
       message("first", null, "user", content),
@@ -304,18 +304,16 @@ describe("memory actor history", () => {
       options: { maxMessages: 3, maxBytes: 16 * 1024 * 1024 },
     });
     expect(messageIds(recent.messages)).toEqual(["second", "third"]);
-    const reads: SessionActorMemoryHistoryQuery[] = [
-      { type: "session.history.page", input: { options: { offset: 0, maxMessages: 3 } } },
-      {
-        type: "session.history.around-id",
-        input: { options: { messageId: "second", maxMessages: 3 } },
-      },
-    ];
-    for (const query of reads) {
-      expect(() => storage.readCurrent(query, authority)).toThrow(
-        "Transcript history page exceeds the 8388608-byte limit; request a smaller limit",
-      );
-    }
+    const offsetPage: SessionActorMemoryHistoryQuery = {
+      type: "session.history.page",
+      input: { options: { offset: 0, maxMessages: 3 } },
+    };
+    expect(() => storage.readCurrent(offsetPage, authority)).toThrow(
+      "Transcript history page exceeds the 8388608-byte limit; request a smaller limit",
+    );
+    // Earlier-history paging anchors on these windows; an oversized window must still page.
+    const around = await read("around-id", { options: { messageId: "second", maxMessages: 3 } });
+    expect(around.found && messageIds(around.messages)).toEqual(["second", "third"]);
   });
 
   it("keeps full hydration exact while model context excludes obsolete payloads and private fields", async () => {

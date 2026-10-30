@@ -678,11 +678,7 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
     range.endExclusive - range.readStart,
     options.maxBytes === undefined,
   );
-  if (options.maxBytes === undefined && start !== range.readStart) {
-    throw new Error(
-      `Transcript history page exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte limit; request a smaller limit`,
-    );
-  }
+  // Anchor pages may come back shorter than requested; callers continue from the oldest returned event.
   const events = readVisibleHistoryRange(projection, start, range.endExclusive, history);
   return {
     events,

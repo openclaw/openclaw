@@ -291,29 +291,22 @@ function readHistoricalDisplayEventRange(
     assertTranscriptNavigationValid(row.navigation_valid);
     return Object.assign(row, { displaySeq: start + index + 1 });
   });
-  let selected = ranged;
-  if (
-    maxBytes === undefined &&
-    ranged.reduce((bytes, row) => bytes + row.serialized_bytes, 2) > SOURCE_PAGE_MAX_BYTES
-  ) {
-    throw new Error(
-      `Transcript history page exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte limit; request a smaller limit`,
-    );
-  }
-  if (maxBytes !== undefined) {
-    const limit = Math.min(SOURCE_PAGE_MAX_BYTES, Math.max(1_024, Math.floor(maxBytes)));
-    let bytes = 2;
-    let selectedStart = ranged.length;
-    while (selectedStart > 0) {
-      const nextBytes = ranged[selectedStart - 1]!.serialized_bytes;
-      if (bytes + nextBytes > limit) {
-        break;
-      }
-      bytes += nextBytes;
-      selectedStart--;
+  // Oversized ranges return their newest byte-bounded slice; callers page from the oldest returned event.
+  const limit = Math.min(
+    SOURCE_PAGE_MAX_BYTES,
+    Math.max(1_024, Math.floor(maxBytes ?? SOURCE_PAGE_MAX_BYTES)),
+  );
+  let bytes = 2;
+  let selectedStart = ranged.length;
+  while (selectedStart > 0) {
+    const nextBytes = ranged[selectedStart - 1]!.serialized_bytes;
+    if (bytes + nextBytes > limit) {
+      break;
     }
-    selected = ranged.slice(selectedStart);
+    bytes += nextBytes;
+    selectedStart--;
   }
+  const selected = ranged.slice(selectedStart);
   if (selected.length === 0) {
     return [];
   }

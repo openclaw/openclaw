@@ -451,7 +451,6 @@ export function readSessionActorMemoryProjection(
         Infinity,
         options.maxBytes === undefined,
         2,
-        options.maxBytes === undefined,
       );
       let selected = rows.slice(start, range.endExclusive);
       let selectedStart = start;
