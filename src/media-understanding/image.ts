@@ -525,7 +525,10 @@ export async function describeImagesWithModelPayloadTransformCore(
         });
         return { text, model: model.id };
       } catch (err) {
-        if (!(err instanceof MediaAssistantNoTextError) || !hasImageReasoningOnlyResponse(message)) {
+        if (
+          !(err instanceof MediaAssistantNoTextError) ||
+          !hasImageReasoningOnlyResponse(message)
+        ) {
           throw err;
         }
       }
