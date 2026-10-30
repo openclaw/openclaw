@@ -1,6 +1,5 @@
 import type { Page } from "playwright";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
-import { createControlUiStreamingReply } from "../../ui/src/test-helpers/control-ui-streaming-fixture.ts";
 import {
   createEngineTranscript,
   engineProbeInitScript,
@@ -8,6 +7,7 @@ import {
   type EngineScenario,
 } from "./control-ui-engine-boot-scenarios.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
+import { createControlUiStreamingReply } from "./control-ui-streaming-fixture.ts";
 
 const sessionKey = "agent:main:interaction-a";
 const secondSessionKey = "agent:main:interaction-b";

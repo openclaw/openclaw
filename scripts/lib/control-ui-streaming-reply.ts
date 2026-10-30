@@ -1,4 +1,4 @@
-import type { ToolStreamHost } from "../pages/chat/tool-stream-contract.ts";
+import type { ToolStreamHost } from "../../ui/src/pages/chat/tool-stream-contract.ts";
 import { summarizeStreamingDistribution } from "./control-ui-streaming-statistics.ts";
 
 export function createStreamingReplyProbeInitScript(): string {
@@ -271,8 +271,8 @@ function installStreamingReplyProbe() {
   const parserPrototype: {
     parseFromString: (this: DOMParser, source: string, type: DOMParserSupportedType) => Document;
   } = DOMParser.prototype;
-  // oxlint-disable-next-line typescript/unbound-method -- The wrapper forwards the original receiver.
-  const cloneNode = Node.prototype.cloneNode;
+  const nodePrototype: { cloneNode: (this: Node, deep?: boolean) => Node } = Node.prototype;
+  const cloneNode = nodePrototype.cloneNode;
   Node.prototype.cloneNode = function (this: Node, deep?: boolean) {
     if (active && current && deep && this instanceof DocumentFragment) {
       current.fragmentClones++;
