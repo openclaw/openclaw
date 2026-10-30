@@ -1,2 +1,0 @@
-# Link understanding decodes declared charsets with the web_fetch decoder and falls back to UTF-8 (#188766).
-13
