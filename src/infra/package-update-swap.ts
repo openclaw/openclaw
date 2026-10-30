@@ -1,8 +1,8 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { formatErrorMessage } from "./errors.js";
+import { retainMutationAuthority } from "./mutation-authority.js";
 import {
   collectPackageDistInventory,
   readPackageDistInventoryIfPresent,
@@ -17,9 +17,10 @@ import {
   discardPackageLauncherBackup,
   discardPackageUpdateBackup,
   copyPackagePathEntry as copyPathEntry,
-  PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
+  movePackageRoot,
   packagePathEntryExists as pathEntryExists,
   removePackagePath as removePath,
+  restorePackageLauncher,
   restoreNpmPackageRoot,
 } from "./package-update-filesystem.js";
 import {
@@ -556,35 +557,23 @@ export async function swapStagedPackageInstall(
       activePackageRoot = null;
       await removePath(targetSwapRoot, assertCurrent);
       if (hadPackage) {
-        await movePathWithCopyFallback({
-          from: backupRoot,
-          sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
-          to: targetSwapRoot,
-          assertBeforeRename: assertCurrent,
-          assertBeforeMutation: assertCurrent,
-          onDestinationPublished: assertCurrent,
+        await movePackageRoot(backupRoot, targetSwapRoot, {
+          operation: "restore",
+          assertCaller: assertCurrent,
+          onPublished: () => {
+            activePackageRoot = params.installTarget.packageRoot;
+            assertCurrent();
+          },
+          warnings,
         });
-        activePackageRoot = params.installTarget.packageRoot;
       }
     };
     const restoreShim = (shim: (typeof shims)[number]) => async (assertCurrent: () => void) => {
-      try {
-        if (shim.backup) {
-          await copyPathEntry(
-            shim.backup,
-            shim.destination,
-            assertCurrent,
-            activation?.recordRestoredLauncher.bind(activation, path.basename(shim.destination)),
-          );
-        } else {
-          await removePath(shim.destination, assertCurrent);
-        }
-      } catch (error) {
-        throw new Error(
-          `launcher ${shim.destination}${shim.backup ? ` from retained backup ${shim.backup}` : ""}: ${formatErrorMessage(error)}`,
-          { cause: error },
-        );
-      }
+      await restorePackageLauncher(
+        shim,
+        assertCurrent,
+        activation?.recordRestoredLauncher.bind(activation, path.basename(shim.destination)),
+      );
     };
     if (activation) {
       rollback.push(restorePackage, ...shims.map(restoreShim));
@@ -608,55 +597,70 @@ export async function swapStagedPackageInstall(
       activePackageRoot = targetPackageRoot;
       projectActivated = true;
     } else {
+      const assertForwardCurrent = retainMutationAuthority(params.assertCurrent ?? (() => {}));
       await rootLink?.assertLiveUnchanged();
-      if (process.platform === "freebsd") {
-        // Keep executor authority after the last asynchronous link observation.
-        params.assertCurrent?.();
-      }
+      // Link inspection and local override replay may outlive forward admission.
+      assertForwardCurrent();
       // A native refusal must still allow the unchanged Gateway to restart.
       // Mark mutation only now: a copy-fallback move can fail after partial publication,
       // and only a completed backup permits restoration.
       params.onLiveMutation?.();
       liveMutationStarted = true;
       packageRollbackVerified = false;
-      if (native || !hadPackage) {
+      if (!hadPackage) {
         activePackageRoot = null;
       }
-      if (hadPackage) {
-        if (native) {
-          await movePathWithCopyFallback({
-            from: targetSwapRoot,
-            sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
-            to: backupRoot,
-          });
-        } else if (rootLink) {
-          const acquisition = await rootLink.acquire();
-          if (!acquisition.acquired) {
-            activePackageRoot = null;
-            throw new Error(acquisition.error);
-          }
-        } else {
-          await backupNpmPackageRoot(targetSwapRoot, backupRoot, params.assertCurrent, warnings);
-        }
+      const recordPackageBackup = () => {
         activePackageRoot = null;
         packageBackedUp = true;
         packageRollbackVerified =
           native !== undefined ||
           previousRoot?.kind === "directory" ||
           previousIdentity !== undefined;
+      };
+      if (hadPackage) {
+        if (native) {
+          await movePackageRoot(targetSwapRoot, backupRoot, {
+            operation: "backup",
+            assertCaller: assertForwardCurrent,
+            warnings,
+            onPublished: () => {
+              // A published copy owns compensation even if source cleanup is refused.
+              recordPackageBackup();
+              rollback.push(restorePackage);
+              assertForwardCurrent();
+            },
+          });
+        } else if (rootLink) {
+          assertForwardCurrent();
+          const acquisition = await rootLink.acquire();
+          if (!acquisition.acquired) {
+            activePackageRoot = null;
+            throw new Error(acquisition.error);
+          }
+        } else {
+          await backupNpmPackageRoot(targetSwapRoot, backupRoot, assertForwardCurrent, warnings);
+        }
+        if (!native) {
+          recordPackageBackup();
+        }
       }
-      rollback.push(restorePackage);
+      if (!native || !hadPackage) {
+        rollback.push(restorePackage);
+      }
       await replayLocalOverrides?.();
       await activateStagedNpmPackageRoot(stagedSwapRoot, targetSwapRoot, undefined, {
-        assertCaller: params.assertCurrent,
+        assertCaller: assertForwardCurrent,
+        onPublished: () => {
+          activePackageRoot = targetPackageRoot;
+          projectActivated = true;
+        },
         warnings,
       });
-      activePackageRoot = targetPackageRoot;
-      projectActivated = true;
       for (const shim of shims) {
         // Register before copying: replacing an entry can fail after removing it.
         rollback.push(restoreShim(shim));
-        await copyPathEntry(shim.source, shim.destination);
+        await copyPathEntry(shim.source, shim.destination, assertForwardCurrent);
       }
     }
     activationCompleted = true;

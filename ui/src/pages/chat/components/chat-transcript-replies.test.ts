@@ -169,7 +169,7 @@ it("hydrates an unloaded reply preview without inserting its source row", async 
 });
 
 it.each([false, true])(
-  "reveals visible assistant text when reply navigation loads its source (run frame: %s)",
+  "opens folded work when a reply navigation loads its source (run frame: %s)",
   async (framed) => {
     const [sourceMessage, followUp] = replyMessages();
     const props = replyProps([followUp], { sessionKey: "agent:main:dashboard:reply" });
@@ -209,7 +209,9 @@ it.each([false, true])(
     expect(transcript.revealMessage("source")).toBe(true);
     rerender();
     await flushDeferredRowPrune();
-    expect(container.querySelector(".chat-work-group")).toBeNull();
+    expect(requireElement(container, ".chat-work-group button").getAttribute("aria-expanded")).toBe(
+      "true",
+    );
     expect(requireElement(container, "[data-entry-id='source']").textContent).toContain(
       "The original answer",
     );
@@ -236,43 +238,33 @@ it.each([true, false])(
     const { container, rerender, start } = threadView(props);
     await start();
     expectEntryText(container, "answer", "An operator approved it.");
-    expectEntryText(container, "commentary", "Checking the saved approval.");
-    for (const index of [1, 2]) {
-      props.messages = [
-        ...props.messages,
-        {
-          role: "assistant",
-          api: "openclaw-transcript",
-          provider: "openclaw",
-          model: "automation-result",
-          stopReason: "stop",
-          content: `New application error ${index}.`,
-          timestamp: (3 + index) * 1_000,
-          openclawAutomation: { kind: "cron", jobId: "saved-watcher", runId: `cron-${index}` },
-          __openclaw: { id: `alert-${index}` },
-        },
-      ];
-      rerender();
-      await flushDeferredRowPrune();
-      expectEntryText(container, "answer", "An operator approved it.");
-      for (let alert = 1; alert <= index; alert++) {
-        expectEntryText(container, `alert-${alert}`, `New application error ${alert}.`);
-      }
-      expectEntryText(container, "commentary", "Checking the saved approval.");
-    }
-    props.messages = structuredClone(props.messages);
+    expect(container.querySelector('[data-entry-id="commentary"]')).toBeNull();
+    props.messages = [
+      ...props.messages,
+      {
+        role: "assistant",
+        api: "openclaw-transcript",
+        provider: "openclaw",
+        model: "automation-result",
+        stopReason: "stop",
+        content: "New application error.",
+        timestamp: 4_000,
+        openclawAutomation: { kind: "cron", jobId: "saved-watcher", runId: "cron-1" },
+        __openclaw: { id: "alert" },
+      },
+    ];
     rerender();
     await flushDeferredRowPrune();
     expectEntryText(container, "answer", "An operator approved it.");
-    expectEntryText(container, "alert-2", "New application error 2.");
-    expectEntryText(container, "commentary", "Checking the saved approval.");
+    expectEntryText(container, "alert", "New application error.");
+    expect(container.querySelector('[data-entry-id="commentary"]')).toBeNull();
     props.runId = "next-foreground-run";
     props.runActive = true;
     props.runWorking = true;
     props.streamStartedAt = 6_000;
     rerender();
     await flushDeferredRowPrune();
-    const alert = requireElement(container, '[data-entry-id="alert-2"]');
+    const alert = requireElement(container, '[data-entry-id="alert"]');
     const progress = requireElement(container, ".chat-working-indicator");
     expect(alert.closest(".chat-group")?.contains(progress)).toBe(false);
     expect(alert.closest(".chat-agent-run-frame")?.contains(progress) ?? false).toBe(false);

@@ -444,6 +444,7 @@ function createDiffReadCache(
     root: input.cwd,
     scope: "diff",
     summaryOnly: input.summaryOnly === true,
+    refreshIndex: input.refreshIndex === true,
     paths: previous?.files
       .flatMap((file) => (file.oldPath ? [file.path, file.oldPath] : [file.path]))
       .toSorted(),
@@ -458,9 +459,7 @@ function createDiffReadCache(
           type: "checkout.diff",
           input: {
             ...input,
-            ...(preparedRevision?.cleanWorktree
-              ? { cleanWorktree: preparedRevision.cleanWorktree }
-              : {}),
+            worktreeStatus: preparedRevision?.worktreeStatus,
           },
         },
         { signal, diffTiming },

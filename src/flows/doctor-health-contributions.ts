@@ -511,6 +511,7 @@ async function runDoctorHealthContributionList(
   contributions: readonly DoctorHealthContribution[],
 ): Promise<void> {
   const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
+  const retirementOnly = ctx.retirementOnly === true;
   signal?.throwIfAborted();
   const runWithPluginMetadataSnapshot = ctx.runWithPluginMetadataSnapshot;
   throwIfDoctorStateMigrationRefused(ctx.configResult.stateMigrationStepReceipts);
@@ -619,9 +620,15 @@ async function runDoctorHealthContributionList(
           ctx.options.json !== true,
         );
         signal?.throwIfAborted();
+        if (retirementOnly && (ctx.healthFindings?.length || ctx.updateWarnings?.length)) {
+          ctx.retirementOnly = false;
+        }
         if (ctx.configWriteRefusal) {
           // Later repairs consume the candidate. Stop before they persist state
           // derived from config that the writer deliberately left non-durable.
+          return;
+        }
+        if (retirementOnly && !ctx.retirementOnly) {
           return;
         }
       } catch (error) {
@@ -646,6 +653,10 @@ async function runDoctorHealthContributionList(
           },
         ]);
         recordDoctorHealthWarnings(ctx, [], [message]);
+        if (retirementOnly) {
+          ctx.retirementOnly = false;
+          return;
+        }
       }
     }
   } finally {
@@ -675,7 +686,32 @@ async function runDoctorHealthContributionList(
 }
 
 export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {
-  await runDoctorHealthContributionList(ctx, resolveDoctorHealthContributions());
+  const contributions = resolveDoctorHealthContributions();
+  ctx.retirementOnly =
+    ctx.retirementOnly === true &&
+    ctx.configResult.retirementOnly === true &&
+    !ctx.agentDatabaseRefusals?.length &&
+    !ctx.healthFindings?.length &&
+    !ctx.updateWarnings?.length;
+  if (ctx.retirementOnly) {
+    const retained = new Set([
+      "doctor:write-config-migrations",
+      "doctor:auth-profile-migration",
+      "doctor:session-transcripts",
+      "doctor:codex-session-routes",
+      "doctor:write-config",
+      "doctor:final-config-validation",
+    ]);
+    await runDoctorHealthContributionList(
+      ctx,
+      contributions.filter((entry) => retained.has(entry.id)),
+    );
+    if (ctx.retirementOnly || ctx.configWriteRefusal) {
+      return;
+    }
+    // Late discovery reuses the same admitted context and committed-write receipts.
+  }
+  await runDoctorHealthContributionList(ctx, contributions);
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

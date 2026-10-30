@@ -30,12 +30,12 @@ status before any new session row is materialized. Use the channel status and
 health commands above for live connectivity checks.
 
 Per-agent session counts and recent activity include only that agent's sessions,
-even when agents share a SQLite session store. Status counts each physical store
+even when agents share a session store. Status counts each physical store
 once in its aggregate. The top-level health session summary represents the
 default agent, or the first configured agent when there is no default; it is not
 a fleet total. A running Gateway serves clean health and status session summaries
 from its resident session-row projection. Store hydration and exact dirty-row
-refreshes retain the existing read-only SQLite fallback.
+refreshes retain the existing read-only store fallback.
 These summaries wait for current selection metadata. Display preparation and
 background model catalog discovery can continue independently, so a large fleet's
 catalog warmup does not hold session counts and recent-activity summaries open.
@@ -160,6 +160,12 @@ waits for that publication once, then retries preparation against current config
 and secrets. Recovery uses the existing four-attempt startup publication budget without
 reopening or migrating the database again. A failed publication or exhausted budget
 keeps the agent unavailable and records its reason and repair hint in readiness.
+
+Temporary SQLite worker-capacity refusals during an agent's database open share
+the existing four-attempt startup lock-retry budget. Releasing capacity can let
+that agent recover without restarting the Gateway. Persistent pressure or a
+non-retryable database failure still leaves it unavailable; opening retries do
+not replay migration or publication.
 
 If Node.js is upgraded or removed while the Gateway is running, its retained
 runtime may stop launching child workers even though the Gateway process is

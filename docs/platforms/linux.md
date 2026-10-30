@@ -598,6 +598,8 @@ TimeoutStartSec=30
 SuccessExitStatus=0 143
 OOMPolicy=continue
 KillMode=mixed
+Delegate=yes
+DelegateSubgroup=gateway
 
 [Install]
 WantedBy=default.target
@@ -632,6 +634,51 @@ systemctl --user enable --now openclaw-gateway[-<profile>].service
 ```
 
 ## Memory pressure and OOM kills
+
+### Agent exec resource isolation
+
+On systemd 254+ with cgroup v2, managed Gateway units use `Delegate=yes` and
+`DelegateSubgroup=gateway`. systemd places the launcher and Gateway in the
+`gateway` leaf before they spawn children. This leaves the service cgroup empty,
+as required before enabling controllers for sibling cgroups.
+
+Runtime detection reads the process's own `/proc/self/cgroup` membership and
+checks the delegated subtree's writable controls and available controllers.
+Exec helpers discover the same kernel-owned policy; no environment setting
+enables isolation. Without writable delegation, OpenClaw leaves the cgroup
+layout unchanged and reports the missing prerequisite once at startup.
+
+OpenClaw places host agent-exec process trees in the sibling `agent-exec` cgroup.
+Its CPU weight is `10`, compared with the Gateway leaf's default `100`; these are
+relative shares during contention, not a fixed CPU cap. Aggregate `memory.high`
+reuses the host exec memory allowance: the smaller of one quarter of available
+host/container memory and half that memory remaining after Gateway RSS.
+Existing per-exec memory limits and child-first OOM policy still apply.
+`memory.high` applies reclaim pressure; it is not a hard memory limit.
+
+An aggregate `io.max` ceiling budgets a memory-sized IO backlog over five
+minutes, split equally between reads and writes and across devices backing the
+Gateway state directory. Each direction receives `memory.high / 600 / deviceCount`
+bytes per second and that rate divided by `4096` operations per second. Half of
+any finite ancestor IO limit further caps the corresponding rate. This is a
+deliberate pressure budget, not measured disk bandwidth: a 4 GiB memory allowance
+on one device gives about 6.8 MiB/s in each direction. Gateway IO remains outside
+the exec ceiling.
+
+Enable this policy for an older managed unit with an explicit
+`openclaw doctor --fix` or `openclaw gateway install --force`. Normal updates
+preserve the existing delegation policy, including units without delegation;
+shutdown-policy refreshes do not opt the unit in. For a custom unit,
+add the two directives above and reload/restart it through its service owner.
+Doctor and Gateway status report missing delegation or leaf placement. If
+systemd is older than 254, cgroup v2 controllers are unavailable, or delegation
+is not writable, the Gateway continues without this isolation and logs the
+reason. Upgrade the host or adjust its delegation policy to enable it.
+On Bun, isolating PTY commands also requires Node for the terminal helper. If
+Node is unavailable, native PTY commands continue in the Gateway cgroup with a
+partial-isolation warning; add `node` to `PATH` to isolate them.
+
+### Child-first OOM policy
 
 On Linux, the kernel picks an OOM victim when a host, VM, or container cgroup
 runs out of memory. The Gateway is a poor victim because it owns long-lived

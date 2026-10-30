@@ -515,10 +515,10 @@ export class Client {
         }
         const listenerName = listener.constructor.name || "AnonymousListener";
         const release = await queue.permits.acquire();
-        const startedAt = Date.now();
+        const startedAt = performance.now();
         try {
           await listener.handle(data, this);
-          const durationMs = Date.now() - startedAt;
+          const durationMs = performance.now() - startedAt;
           if (durationMs < 30_000) {
             return;
           }

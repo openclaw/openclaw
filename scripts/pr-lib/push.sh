@@ -337,9 +337,12 @@ push_prep_head_once() {
   else
     push_status=$?
     printf '%s\n' "$push_output" >&2
-    # Only an actual Git permission failure may change transports. GraphQL
-    # failures and uncertain Git outcomes never authorize another publication.
-    if [ "${PREP_PUBLICATION_PURPOSE:-qualified}" != proof ] && [ -z "$merge_commit" ] && printf '%s' "$push_output" | grep -qiE '(permission|denied|403|forbidden)' &&
+    # Match refusal diagnostics, not permission words or 403 in progress paths/OIDs.
+    # GraphQL failures and uncertain Git outcomes never authorize another publication.
+    if [ "${PREP_PUBLICATION_PURPOSE:-qualified}" != proof ] && [ -z "$merge_commit" ] && printf '%s\n' "$push_output" | grep -qiE \
+      -e '^(remote: )?(403 (permission denied|forbidden)|permission denied( 403)?|forbidden)[[:space:].]*$' \
+      -e '^remote: Permission to [^[:space:]]+ denied to [^[:space:]]+[[:space:]]*$' \
+      -e '^fatal: unable to access .+: The requested URL returned error: 403[[:space:]]*$' &&
       [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
       echo "Permission denied on git push; trying GraphQL with the same lease." >&2
       graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$pr_head" "$lease_sha" "$pr" "$observation" "$prep_head_sha"

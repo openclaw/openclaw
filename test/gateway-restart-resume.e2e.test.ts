@@ -1,14 +1,18 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-// Process replacement, real model streams/tools and durable input custody need the real Gateway.
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { setTimeout as delay } from "node:timers/promises";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
+import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import { restartResumeConfig } from "./gateway-restart-resume.test-support.js";
 import {
@@ -29,8 +33,9 @@ const RESUME =
   "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
 const CASES = ["stream", "tool", "parent", "background", "idle", "compact"] as const;
 type Case = (typeof CASES)[number];
-const agent = (name: Case) => (name === "tool" ? "other" : "main");
-const key = (cycle: number, name: Case) => `agent:${agent(name)}:restart-resume-${cycle}-${name}`;
+const agent = (name: Case) => (name === "stream" || name === "tool" ? "other" : "main");
+const key = (cycle: number, name: Case) =>
+  `agent:${agent(name)}:main:thread:restart-resume-${cycle}-${name}`;
 const marker = (cycle: number, name: Case) => `RESTART_CASE_${cycle}_${name}`;
 const childMarker = (cycle: number) => `RESTART_CHILD_${cycle}`;
 const queued = (cycle: number, ordinal: number) => `QUEUED_BEFORE_RESTART_${cycle}_${ordinal}`;
@@ -39,6 +44,17 @@ const fresh = (cycle: number) => `FRESH_AFTER_RESTART_${cycle}`;
 const CRASH_QUEUED = "QUEUED_BEFORE_SIGKILL_MUST_REMAIN_INERT";
 const AFTER_CRASH = "FRESH_AFTER_CRASH_WORKS";
 const WARMUP = "COMPACTION_HISTORY_TO_SUMMARIZE";
+
+function expectCleanHistory(messages: unknown[]) {
+  expect(
+    messages
+      .filter(isRecord)
+      .some((message) => message.stopReason === "error" || message.openclawRunError !== undefined),
+  ).toBe(false);
+  expect(JSON.stringify(messages)).not.toMatch(
+    /interrupted before the agent started|subagent failed|restart recovery blocked|use \/new or \/reset/i,
+  );
+}
 
 function currentInput(body: Record<string, unknown>): string {
   const input = Array.isArray(body.input) ? body.input : [body.input];
@@ -76,7 +92,6 @@ async function providerFixture(signal: AbortSignal) {
   }> = [];
   const summaries: Array<{ cycle: number; ordinal: number }> = [];
   const issued = new Set<string>();
-  const resumed = new Set<string>();
   const heldResumes = new Map<number, { response: ServerResponse; ordinal: number }>();
   let ordinal = 0;
   let restarting = false;
@@ -137,27 +152,12 @@ async function providerFixture(signal: AbortSignal) {
           const match = /RESTART_CASE_(\d+)_(stream|tool|parent|background|idle|compact)/.exec(
             input,
           );
-          if (child && input.includes("You are running as a subagent")) {
-            const cycle = Number(child[1]);
-            calls.push({
-              cycle,
-              name: "child",
-              current,
-              resumeInput: hasNewResumeInput(body),
-              ordinal: requestOrdinal,
-            });
-            gate(`child:${cycle}`).resolve();
-            // The parent must resume once; its child must settle quietly instead of being adopted.
-            return;
-          }
-          if (!match) {
-            throw new Error(`Unexpected synthetic model input: ${current}`);
-          }
-          const cycle = Number(match[1]);
-          const name = CASES.find((candidate) => candidate === match[2]);
-          if (!name) {
-            throw new Error("Unknown restart case");
-          }
+          const name =
+            child && input.includes("You are running as a subagent")
+              ? "child"
+              : CASES.find((candidate) => candidate === match?.[2]);
+          assert(name, `Unexpected synthetic model input: ${current}`);
+          const cycle = Number(name === "child" ? child?.[1] : match?.[1]);
           calls.push({
             cycle,
             name,
@@ -165,6 +165,18 @@ async function providerFixture(signal: AbortSignal) {
             resumeInput: hasNewResumeInput(body),
             ordinal: requestOrdinal,
           });
+          if (name === "child") {
+            gate(`child:${cycle}`).resolve();
+            // The parent resumes; its child settles quietly instead of being adopted.
+            return;
+          }
+          const toolOutput = asRecord(
+            Array.isArray(body.input)
+              ? body.input.findLast(
+                  (item) => isRecord(item) && item.type === "function_call_output",
+                )
+              : undefined,
+          );
           const tool = (id: string, args: object) => {
             const wireName = tools.includes(id) ? id : "dispatch_action";
             expect(tools).toContain(wireName);
@@ -177,16 +189,7 @@ async function providerFixture(signal: AbortSignal) {
             );
           };
           if (restarting) {
-            // Accept the predecessor's first post-restart request too, so the same
-            // fixture can prove that its input lacks the required resume message.
-            const resume =
-              hasNewResumeInput(body) ||
-              (!resumed.has(`${cycle}:${name}`) &&
-                !current.includes("QUEUED_BEFORE_RESTART") &&
-                !current.includes(fresh(cycle)) &&
-                !current.includes(AFTER_CRASH));
-            if (resume) {
-              resumed.add(`${cycle}:${name}`);
+            if (hasNewResumeInput(body)) {
               gate(`resume:${cycle}:${name}`).resolve();
               if (name === "stream") {
                 heldResumes.set(cycle, { response, ordinal: requestOrdinal });
@@ -199,12 +202,7 @@ async function providerFixture(signal: AbortSignal) {
               }
               text(`RESUMED_${cycle}_${name}`);
             } else if (issued.delete(`gateway:${cycle}:${name}`)) {
-              const output = Array.isArray(body.input)
-                ? body.input.findLast(
-                    (item) => isRecord(item) && item.type === "function_call_output",
-                  )
-                : undefined;
-              const result = asRecord(JSON.parse(String(asRecord(output).output)));
+              const result = asRecord(JSON.parse(String(toolOutput.output)));
               expect(result.error).toBeUndefined();
               expect(result.status).not.toBe("error");
               expect(current).toContain(key(cycle, name));
@@ -242,13 +240,8 @@ async function providerFixture(signal: AbortSignal) {
               tool("process", { action: "list" });
               return;
             }
-            const output = Array.isArray(body.input)
-              ? body.input.findLast(
-                  (item) => isRecord(item) && item.type === "function_call_output",
-                )
-              : undefined;
             // A launch callback alone does not prove the process still runs at shutdown.
-            expect(String(asRecord(output).output)).toMatch(/\brunning\s+\S+.* :: /);
+            expect(String(toolOutput.output)).toMatch(/\brunning\s+\S+.* :: /);
           }
           if (name === "parent" && !issued.has(id)) {
             issued.add(id);
@@ -305,9 +298,7 @@ async function providerFixture(signal: AbortSignal) {
     },
     release: (cycle: number) => {
       const held = heldResumes.get(cycle);
-      if (!held) {
-        throw new Error("The resumed stream was never admitted");
-      }
+      assert(held, "The resumed stream was never admitted");
       writeOpenAiResponsesText(held.response, {
         text: `RESUMED_${cycle}_stream`,
         messageId: `msg_${held.ordinal}`,
@@ -324,10 +315,10 @@ async function providerFixture(signal: AbortSignal) {
   };
 }
 
-it.skipIf(process.platform === "win32")(
-  "resumes only running roots after graceful replacement, preserves FIFO inputs, and treats SIGKILL as lossy",
+it.skipIf(process.platform === "win32").for([true, false])(
+  "restart markers survive graceful shutdown (suspend/reopen and blocked store: %s)",
   { timeout: 180_000 },
-  async ({ signal }) => {
+  async (suspended, { signal }) => {
     const provider = await providerFixture(signal);
     const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
     model.config.models[0].params = { responsesCompactEndpoint: false };
@@ -346,14 +337,12 @@ it.skipIf(process.platform === "win32")(
       },
     });
     // Two logical agents share one physical store; resume must retain the session's agent.
-    const sharedStore = path.join(instance.stateDir, "shared.sqlite");
+    const sharedStore = suspended ? undefined : path.join(instance.stateDir, "shared.sqlite");
     const config = asRecord(JSON.parse(await readFile(instance.configPath, "utf8")));
-    await instance.state.writeConfig({
-      ...config,
-      session: { ...asRecord(config.session), store: sharedStore },
-    });
+    const logPath = instance.state.path("gateway.log");
+    config.logging = { level: "info", file: logPath };
+    await instance.state.writeConfig({ ...config, ...restartResumeConfig(model, sharedStore) });
     let client: GatewayClient | undefined;
-    const connectClient = () => connectRestartClient(instance, {}, signal);
     const race = <T>(promise: Promise<T>) =>
       withinTest(Promise.race([promise, provider.failed]), signal);
     const history = (sessionKey: string) =>
@@ -381,17 +370,26 @@ it.skipIf(process.platform === "win32")(
     ) =>
       client!.request<{ runId: string }>(
         "chat.send",
-        { sessionKey, message, idempotencyKey: randomUUID(), ...(queueMode ? { queueMode } : {}) },
+        {
+          sessionKey,
+          message,
+          idempotencyKey: randomUUID(),
+          ...(queueMode ? { queueMode } : {}),
+        },
         { expectFinal: false, ...(timeoutMs ? { timeoutMs } : {}) },
       );
     await runQaGatewayFixture(
       async () => {
         await instance.startGateway();
-        client = await connectClient();
+        client = await connectRestartClient(instance, {}, signal);
         const { profile } = await client.request<{ profile: { id: string } }>("users.self", {});
-        expect(profile.id).toBeTruthy();
-        for (const [cycle, mode] of ["SIGTERM", "managed"].entries()) {
-          const cases = CASES.filter((name) => name !== "compact" || cycle === 1);
+        for (const [cycle, mode] of (suspended
+          ? ["suspend-reopened"]
+          : ["SIGTERM", "managed"]
+        ).entries()) {
+          const cases: readonly Case[] = suspended
+            ? ["stream"]
+            : CASES.filter((name) => name !== "compact" || cycle === 1);
           provider.prepare();
           await Promise.all(
             cases.map(async (name) => {
@@ -418,16 +416,21 @@ it.skipIf(process.platform === "win32")(
             }),
           );
           await race(
-            Promise.all([
-              provider.wait(`ready:${cycle}:stream`),
-              provider.wait(`/tool/${cycle}/tool`),
-              provider.wait(`/tool/${cycle}/background`),
-              provider.wait(`child:${cycle}`),
-              waitFinal(key(cycle, "background"), `FINISHED_${cycle}_background`),
-              waitFinal(key(cycle, "parent"), `FINISHED_${cycle}_parent`),
-              waitFinal(key(cycle, "idle"), `FINISHED_${cycle}_idle`),
-              ...(cycle === 1 ? [provider.wait(`ready:${cycle}:compact`)] : []),
-            ]),
+            Promise.all(
+              cases.map(async (name) => {
+                if (name === "tool" || name === "background") {
+                  await provider.wait(`/tool/${cycle}/${name}`);
+                }
+                if (name === "stream" || name === "compact") {
+                  await provider.wait(`ready:${cycle}:${name}`);
+                } else if (name !== "tool") {
+                  if (name === "parent") {
+                    await provider.wait(`child:${cycle}`);
+                  }
+                  await waitFinal(key(cycle, name), `FINISHED_${cycle}_${name}`);
+                }
+              }),
+            ),
           );
           await client.request(
             "chat.send",
@@ -458,10 +461,9 @@ it.skipIf(process.platform === "win32")(
             ),
           );
           const child = instance.child;
-          if (!child?.pid) {
-            throw new Error("Owned Gateway process unavailable");
-          }
+          assert(child?.pid, "Owned Gateway process unavailable");
           const closed = once(child, "close");
+          const shutdownLogStart = (await readFile(logPath, "utf8")).length;
           provider.restart();
           const started = Date.now();
           if (mode === "managed") {
@@ -470,8 +472,7 @@ it.skipIf(process.platform === "win32")(
               {},
             );
             expect(target.pid).toBe(child.pid);
-            let suspensionId: string | undefined;
-            await race(
+            const { suspensionId } = await race(
               vi.waitFor(
                 async () => {
                   const prepared = await client!.request<{
@@ -483,7 +484,7 @@ it.skipIf(process.platform === "win32")(
                     terminalPolicy: "terminate",
                   });
                   expect(prepared.status).toBe("ready");
-                  suspensionId = prepared.suspensionId;
+                  return prepared;
                 },
                 { timeout: 2_000 },
               ),
@@ -503,12 +504,52 @@ it.skipIf(process.platform === "win32")(
               }),
             ).toMatchObject({ status: "committed", suspensionId });
           }
-          expect(child.kill("SIGTERM")).toBe(true);
+          if (mode === "suspend-reopened") {
+            const held = await client.request<{ suspensionId: string }>("gateway.suspend.prepare", {
+              requestId: "restart-resume-reopened",
+              drain: true,
+              terminalPolicy: "terminate",
+            });
+            expect(
+              await client.request("gateway.suspend.resume", {
+                suspensionId: held.suspensionId,
+              }),
+            ).toMatchObject({ ok: true, resumed: true });
+          }
+          await closeOpenClawStateDatabaseAsync();
+          const blockedStore =
+            mode === "managed"
+              ? undefined
+              : new DatabaseSync(
+                  mode === "suspend-reopened"
+                    ? resolveOpenClawStateSqlitePath(instance.env)
+                    : sharedStore!,
+                );
+          try {
+            blockedStore?.exec("PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE");
+            expect(child.kill("SIGTERM")).toBe(true);
+            if (mode === "SIGTERM") {
+              await delay(1_400);
+            } else if (blockedStore) {
+              await vi.waitFor(
+                () =>
+                  expect(instance.logs()).toContain("restart signal settlement exceeded 1000ms"),
+                { timeout: 2_500 },
+              );
+            }
+          } finally {
+            blockedStore?.close();
+          }
           const exit = await race(closed);
           const shutdownMs = Date.now() - started;
-          const markerAndAbortMs = [
-            ...instance.logs().matchAll(/restart trace: restart.close.session-abort ([\d.]+)ms/g),
-          ].at(-1)?.[1];
+          const shutdownLogs = (await readFile(logPath, "utf8")).slice(shutdownLogStart);
+          const markerSummary = shutdownLogs.indexOf("shutdown restart resume:");
+          const cleanClose = shutdownLogs.indexOf("agent database clean-close receipt:");
+          expect(markerSummary, shutdownLogs).toBeGreaterThan(-1);
+          expect(cleanClose, shutdownLogs).toBeGreaterThan(markerSummary);
+          const markerAndAbortMs = shutdownLogs.match(
+            /restart trace: restart.close.session-abort ([\d.]+)ms/,
+          )?.[1];
           process.stdout.write(
             `[restart-resume-proof] ${mode} markerAndAbortMs=${markerAndAbortMs ?? "unavailable"} shutdownMs=${shutdownMs}\n`,
           );
@@ -516,34 +557,24 @@ it.skipIf(process.platform === "win32")(
           expect
             .soft(shutdownMs, `busy shutdown must finish within ten seconds\n${instance.logs()}`)
             .toBeLessThan(10_000);
+          expect(
+            readRestartSession(instance.state.agentDir("other"), key(cycle, "stream"), sharedStore)
+              ?.resumeAfterRestart,
+          ).toBeDefined();
           await client.stopAndWait();
           client = undefined;
+          if (suspended) {
+            return;
+          }
           if (cycle === 1) {
-            const restartConfig = asRecord(JSON.parse(await readFile(instance.configPath, "utf8")));
-            const models = asRecord(restartConfig.models);
-            const providers = asRecord(models.providers);
-            const configured = asRecord(providers[model.providerId]);
-            const entries = Array.isArray(configured.models) ? configured.models : [];
+            model.config.models[0].contextWindow = 16_000;
             await instance.state.writeConfig({
-              ...restartConfig,
-              models: {
-                ...models,
-                providers: {
-                  ...providers,
-                  [model.providerId]: {
-                    ...configured,
-                    models: entries.map((entry) =>
-                      isRecord(entry) && entry.id === model.modelId
-                        ? Object.assign({}, entry, { contextWindow: 16_000 })
-                        : entry,
-                    ),
-                  },
-                },
-              },
+              ...config,
+              ...restartResumeConfig(model, sharedStore),
             });
           }
           await instance.startGateway();
-          client = await connectClient();
+          client = await connectRestartClient(instance, {}, signal);
           await provider.wait(`resume:${cycle}:stream`);
           const resumeRequest = provider.calls.findLast(
             (call) => call.cycle === cycle && call.name === "stream",
@@ -577,11 +608,8 @@ it.skipIf(process.platform === "win32")(
           );
           for (const [index, completion] of completedReplies.entries()) {
             expect
-              .soft(
-                completion.status,
-                `${expectedReplies[index]?.text}${completion.status === "rejected" ? `\n${String(completion.reason)}` : ""}`,
-              )
-              .toBe("fulfilled");
+              .soft(completion, expectedReplies[index]?.text)
+              .toMatchObject({ status: "fulfilled" });
           }
           const streamInputs = provider.calls
             .filter((call) => call.cycle === cycle && call.name === "stream")
@@ -597,31 +625,21 @@ it.skipIf(process.platform === "win32")(
             .soft(secondQueued, "the second pre-restart queued input must follow the first")
             .toBeGreaterThan(firstQueued);
           for (const name of cases) {
+            const calls = provider.calls.filter(
+              (call) => call.cycle === cycle && call.name === name,
+            );
+            const resumes = calls.filter((call) => call.resumeInput);
             if (name === "background") {
-              expect(
-                provider.calls.find(
-                  (call) => call.cycle === cycle && call.name === name && call.resumeInput,
-                )?.current,
-              ).toContain("Background exec processes were stopped; rerun them if still needed.");
+              expect(resumes[0]?.current).toContain(
+                "Background exec processes were stopped; rerun them if still needed.",
+              );
             }
             expect(
-              provider.calls.filter(
-                (call) => call.cycle === cycle && call.name === name && call.resumeInput,
-              ),
-              `${name}: ${JSON.stringify(provider.calls.filter((call) => call.cycle === cycle && call.name === name).map((call) => call.current.slice(-4_000)))}`,
+              resumes,
+              `${name}: ${JSON.stringify(calls.map((call) => call.current.slice(-4_000)))}`,
             ).toHaveLength(name === "idle" ? 0 : 1);
             const result = await history(key(cycle, name));
-            expect(
-              result.messages
-                .filter(isRecord)
-                .some(
-                  (message) =>
-                    message.stopReason === "error" || message.openclawRunError !== undefined,
-                ),
-            ).toBe(false);
-            expect(JSON.stringify(result.messages)).not.toMatch(
-              /interrupted before the agent started|subagent failed|restart recovery blocked/i,
-            );
+            expectCleanHistory(result.messages);
             expect(
               result.pendingInputs?.items.some((item) => item.state === "interrupted"),
             ).not.toBe(true);
@@ -646,7 +664,7 @@ it.skipIf(process.platform === "win32")(
         }
         provider.prepare();
         const crashKey = key(2, "stream");
-        await client.request("sessions.create", { key: crashKey, agentId: "main" });
+        await client.request("sessions.create", { key: crashKey, agentId: "other" });
         await send(crashKey, marker(2, "stream"));
         await provider.wait("ready:2:stream");
         await send(crashKey, CRASH_QUEUED, "followup");
@@ -668,32 +686,21 @@ it.skipIf(process.platform === "win32")(
         client = undefined;
         provider.restart();
         await instance.startGateway();
-        client = await connectClient();
+        client = await connectRestartClient(instance, {}, signal);
         await send(crashKey, AFTER_CRASH);
         await waitFinal(crashKey, `HANDLED_${AFTER_CRASH}`);
         expect(
           provider.calls.filter((call) => call.cycle === 2 && call.current.includes(RESUME)),
         ).toEqual([]);
         const crashHistory = await history(crashKey);
-        expect(
-          crashHistory.messages
-            .filter(isRecord)
-            .some(
-              (message) => message.stopReason === "error" || message.openclawRunError !== undefined,
-            ),
-        ).toBe(false);
-        expect(JSON.stringify(crashHistory.messages)).not.toMatch(
-          /interrupted before the agent started|restart recovery blocked|use \/new or \/reset/i,
-        );
+        expectCleanHistory(crashHistory.messages);
         provider.prepare();
         await send(crashKey, `${marker(2, "stream")} GRACEFUL_AFTER_CRASH`);
         await provider.wait("ready:graceful-after-crash");
         await send(crashKey, queued(2, 1), "followup");
         provider.restart();
         const child = instance.child;
-        if (!child?.pid) {
-          throw new Error("Owned Gateway process unavailable after crash");
-        }
+        assert(child?.pid, "Owned Gateway process unavailable after crash");
         const closed = once(child, "close");
         const started = Date.now();
         expect(child.kill("SIGTERM")).toBe(true);
@@ -706,7 +713,7 @@ it.skipIf(process.platform === "win32")(
         await client.stopAndWait();
         client = undefined;
         await instance.startGateway();
-        client = await connectClient();
+        client = await connectRestartClient(instance, {}, signal);
         await provider.wait("resume:2:stream");
         provider.release(2);
         await waitFinal(crashKey, `HANDLED_${queued(2, 1)}`);

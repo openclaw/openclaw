@@ -14,10 +14,13 @@ import {
   CODEX_NATIVE_TOOL_REQUIREMENTS,
   CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
 } from "./native-tool-policy.js";
+import { readCodexPluginConfig as readWorkerPluginConfig } from "./src/app-server/config-parsing.js";
+import { hasManagedCodexAppServerBinary } from "./src/app-server/managed-binary.js";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 import { codexBuildSymbol } from "./src/build-state.js";
+import { resolveCodexWorkerAppServerCommand } from "./src/node-app-server-command.js";
 import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-types.js";
 
 const loadUpstreamSessionFork = createLazyRuntimeModule(
@@ -181,7 +184,11 @@ export function createCodexAppServerAgentHarness(
     cloudPlacement: {
       mode: "remote-exec",
       devicePlacement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        requiredNodeCommands: [
+          readWorkerPluginConfig(options.pluginConfig).appServer?.workerHostedCloud === true
+            ? resolveCodexWorkerAppServerCommand(process.env, true)
+            : "codex.exec-server.stdio.v1",
+        ],
         consumesWorkerSlot: false,
       },
     },
@@ -321,7 +328,17 @@ export function createCodexAppServerAgentHarness(
     supports: (ctx) => {
       const unsupported = (reason: string) => ({ supported: false as const, reason });
       const provider = ctx.provider.trim().toLowerCase();
-      if (!providerIds.has(provider)) {
+      const preparedAuth = ctx.modelProvider?.preparedAuth;
+      const customNativeCommandRoute =
+        options.providerIds === undefined &&
+        ctx.requestedRuntime === normalizedHarnessRuntimeId &&
+        ctx.modelProvider?.nativeCommandAuth?.runtimeId === normalizedHarnessRuntimeId &&
+        ctx.modelProvider.requestTransportOverrides === "none" &&
+        (preparedAuth === undefined ||
+          (preparedAuth.source === "harness" &&
+            (preparedAuth.mode === undefined || preparedAuth.mode === "native-command") &&
+            preparedAuth.requirement === undefined));
+      if (!providerIds.has(provider) && !customNativeCommandRoute) {
         return unsupported(`provider is not one of: ${[...providerIds].toSorted().join(", ")}`);
       }
       if (ctx.modelProvider?.requestTransportOverrides === "present") {
@@ -331,7 +348,6 @@ export function createCodexAppServerAgentHarness(
           fallbackRuntime: "openclaw",
         };
       }
-      const preparedAuth = ctx.modelProvider?.preparedAuth;
       const runtimePolicy = ctx.modelProvider?.runtimePolicy;
       // Codex owns discovery and auth for new first-party models. Only trust that
       // native account when no authored transport or host credential is involved.
@@ -353,7 +369,12 @@ export function createCodexAppServerAgentHarness(
         if (!compatible) {
           return unsupported("Codex cannot reproduce the prepared provider route");
         }
-      } else if (ctx.modelProvider && provider !== "codex" && !nativeAccountOwnsUnobservedModel) {
+      } else if (
+        ctx.modelProvider &&
+        provider !== "codex" &&
+        !nativeAccountOwnsUnobservedModel &&
+        !customNativeCommandRoute
+      ) {
         return unsupported("provider route compatibility with Codex is not declared");
       }
       if (preparedAuth?.requirement === "subscription") {
@@ -371,6 +392,22 @@ export function createCodexAppServerAgentHarness(
         if (!reproducibleApiKey) {
           return unsupported("Codex Platform auth requires a prepared API key");
         }
+      }
+      const appServer = readWorkerPluginConfig(
+        options.resolvePluginConfig?.() ?? options.pluginConfig,
+      ).appServer;
+      if (
+        (appServer?.transport ?? "stdio") === "stdio" &&
+        // Worker placement owns its binary; selection has no admitted placement yet.
+        appServer?.workerHostedCloud !== true &&
+        !appServer?.command?.trim() &&
+        !process.env.OPENCLAW_CODEX_APP_SERVER_BIN?.trim() &&
+        !hasManagedCodexAppServerBinary()
+      ) {
+        // Missing binaries cannot preserve an explicit native session's ownership.
+        return unsupported(
+          "no native Codex app-server binary is available; install Codex or configure appServer.command for a native build",
+        );
       }
       return { supported: true, priority: 100 };
     },
@@ -490,6 +527,15 @@ export function createCodexAppServerAgentHarness(
       return escalated;
     },
     runIsolatedCompletionV2: async (params) => {
+      const { resolveMergedModelProviderConfig } =
+        await import("openclaw/plugin-sdk/provider-catalog-shared");
+      if (
+        resolveMergedModelProviderConfig(params.config, params.provider)?.auth === "native-command"
+      ) {
+        throw new Error(
+          "Native command auth currently requires an ordinary Codex session, not isolated completion.",
+        );
+      }
       if (
         resolveIsolatedCompletionRuntime({ authorizationOwner: params.authorization.owner }) ===
         "openclaw"
@@ -506,6 +552,15 @@ export function createCodexAppServerAgentHarness(
       });
     },
     runIsolatedCompletion: async (params) => {
+      const { resolveMergedModelProviderConfig } =
+        await import("openclaw/plugin-sdk/provider-catalog-shared");
+      if (
+        resolveMergedModelProviderConfig(params.config, params.provider)?.auth === "native-command"
+      ) {
+        throw new Error(
+          "Native command auth currently requires an ordinary Codex session, not isolated completion.",
+        );
+      }
       const { runHostPreparedIsolatedCompletion } = await loadSimpleCompletionRuntime();
       // Keep the deprecated V1 contract on its exact host-prepared transport.
       // V2 owns native Codex auth and zero-tool attestation above.

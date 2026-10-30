@@ -567,14 +567,13 @@ export const cronHandlers: GatewayRequestHandlers = {
         throw error;
       }
       const ack = { ...result, processInstanceId: getGatewayProcessInstanceId() };
-      const callerSessionKey = client?.internal?.agentRuntimeIdentity?.sessionKey;
       const runQueuesBehindCaller =
         p.waitTimeoutMs !== undefined &&
         "enqueued" in result &&
         (await cronRunQueuesBehindCaller({
           job,
           cfg: context.getRuntimeConfig(),
-          callerSessionKey,
+          caller: client?.internal?.agentRuntimeIdentity,
           resolveDefaultAgentId: () => context.cron.getDefaultAgentId(),
         }));
       let run: unknown;

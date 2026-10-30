@@ -5,12 +5,16 @@ import { createRequire } from "node:module";
 import { Socket } from "node:net";
 import { pipeline, type Readable } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type * as lineageWriter from "../../node-host/node-worker-lineage-completion.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { monotonicNow, remainingMonotonicMs as left } from "../../shared/monotonic-time.js";
+import { enterAgentExecCgroup } from "../linux-exec-cgroup.js";
 import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
+import { releaseProcessStdin } from "../release-stdin.js";
 import { serializeBrokerError } from "../spawn-broker/protocol.js";
 import type { SpawnStdioEntry } from "../spawn-secret-input.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
+import type { acquireLinuxChildSubreaper } from "./linux-child-subreaper.js";
 import {
   hasLiveOwnedProcessGroupMembers,
   killOwnedProcessGroupMembers,
@@ -59,17 +63,13 @@ function delay(ms: number, retainOwner = false): Promise<void> {
 export function runServiceChildGroupAnchor(): void {
   const launchGrant = createDeferredCore();
   let start: ServiceChildStart | undefined;
-  let subreaper:
-    | ReturnType<typeof import("./linux-child-subreaper.js").acquireLinuxChildSubreaper>
-    | undefined;
+  let subreaper: ReturnType<typeof acquireLinuxChildSubreaper> | undefined;
   let descendantsReaped = false;
   let state: AnchorState = "starting";
   let sequence = 0;
   let lastHostSequence = 0;
   let command: ChildProcess | undefined;
-  let lineageCompletion:
-    | typeof import("../../node-host/node-worker-lineage-completion.js")
-    | undefined;
+  let lineageCompletion: typeof lineageWriter | undefined;
   let inheritedLineageClosed = false;
   let workerStarted = false;
   let workerLineageFds: number[] = [];
@@ -108,7 +108,7 @@ export function runServiceChildGroupAnchor(): void {
 
   const finish = (code: number) => {
     process.exitCode = code;
-    process.stdin.destroy();
+    releaseProcessStdin();
     const disconnect = () => {
       // end() flushes the receipt; destroy() also releases the readable socket.
       control?.off("close", disconnect);
@@ -300,11 +300,9 @@ export function runServiceChildGroupAnchor(): void {
       return;
     }
     if (start.ownedWorker) {
-      if (!forceCleanup) {
-        process.kill(0, "SIGTERM");
-      }
       const settled = Promise.all([rootExited.promise, lineageDone.promise]);
       if (!forceCleanup) {
+        process.kill(0, "SIGTERM");
         await Promise.race([settled, termGraceDone, forceCleanupRequested.promise]);
       }
       if (!rootExit) {
@@ -510,6 +508,9 @@ export function runServiceChildGroupAnchor(): void {
       (socket as Socket & { connect(options: { fd: number }): Socket }).connect({ fd: controlFd });
     }
 
+    if (!next.ownedWorker) {
+      enterAgentExecCgroup();
+    }
     // Prepare before launch: loading this writer during TERM consumes cleanup grace
     // and can race a source loader's compiler receiving the same group signal.
     lineageCompletion =
@@ -679,7 +680,7 @@ export function runServiceChildGroupAnchor(): void {
       const stopInput = () => {
         input.unpipe(destination);
         input.off("end", endInput);
-        input.destroy();
+        releaseProcessStdin();
         if (!inputClosed) {
           inputClosed = true;
           void send({ type: "stdin-closed" });

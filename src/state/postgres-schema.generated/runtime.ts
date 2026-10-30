@@ -359,6 +359,14 @@ export const statePostgresRuntime = {
       sql: '-- Generated runtime DDL; the owner supplies search_path and the transaction.\n\nCREATE TABLE "worker_environment_session_attachments" (\n  "session_id" text COLLATE "C" NOT NULL,\n  "session_key" text COLLATE "C" NOT NULL,\n  "agent_id" text COLLATE "C" NOT NULL,\n  "session_lifecycle_revision" text COLLATE "C",\n  "environment_id" text COLLATE "C" NOT NULL,\n  "generation" bigint NOT NULL,\n  "created_at_ms" bigint NOT NULL,\n  "last_used_at_ms" bigint NOT NULL,\n  "closed_at_ms" bigint,\n  PRIMARY KEY ("session_id"),\n  CHECK (("generation" >= 1)),\n  UNIQUE ("environment_id")\n);\n\nCREATE INDEX "worker_environment_session_attachments_session_key" ON "worker_environment_session_attachments" (("agent_id") ASC, ("session_key") ASC);\n\nALTER TABLE "worker_environment_session_attachments" ADD FOREIGN KEY ("environment_id") REFERENCES "worker_environments" ("environment_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;\n',
     },
     {
+      id: "durable_background_processes",
+      tables: ["durable_background_processes"],
+      indexes: [],
+      dependencies: [],
+      activation: "first-use",
+      sql: '-- Generated runtime DDL; the owner supplies search_path and the transaction.\n\nCREATE TABLE "durable_background_processes" (\n  "id" text COLLATE "C" NOT NULL,\n  "record_json" text COLLATE "C" NOT NULL,\n  PRIMARY KEY ("id")\n);\n',
+    },
+    {
       id: "sandbox_persistent_execs",
       tables: ["sandbox_persistent_execs"],
       indexes: [
@@ -5508,6 +5516,50 @@ export const statePostgresRuntime = {
     },
     {
       table: "diagnostic_events",
+      kind: "checks",
+      value: 0,
+    },
+    {
+      table: "durable_background_processes",
+      kind: "table",
+      value: null,
+    },
+    {
+      table: "durable_background_processes",
+      kind: "column",
+      value: {
+        name: "id",
+        type: "text",
+        nullable: false,
+        identity: false,
+        default: null,
+        position: 1,
+      },
+    },
+    {
+      table: "durable_background_processes",
+      kind: "column",
+      value: {
+        name: "record_json",
+        type: "text",
+        nullable: false,
+        identity: false,
+        default: null,
+        position: 2,
+      },
+    },
+    {
+      table: "durable_background_processes",
+      kind: "primaryKey",
+      value: ["id"],
+    },
+    {
+      table: "durable_background_processes",
+      kind: "indexes",
+      value: 1,
+    },
+    {
+      table: "durable_background_processes",
       kind: "checks",
       value: 0,
     },

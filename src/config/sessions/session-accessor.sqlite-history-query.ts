@@ -11,6 +11,7 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPostgresSqlConnection, sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import {
+  boundHistoryAnchorPageRange,
   resolveHistoryAnchorPageRange,
   resolveTranscriptPageEnd,
   type TranscriptAnchorPageOptions,
@@ -628,7 +629,10 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
       true,
     );
     if (closedPage) {
-      return closedPage;
+      return {
+        ...closedPage,
+        ...(options.captureReadWindow ? { readWindow: captureHistoryReadWindow(history, []) } : {}),
+      };
     }
   }
   const windowChange = resolveHistoryReadWindowChange(
@@ -655,43 +659,58 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
     // Explicit anchors reopen the closed reset interval that still contains the
     // active-path row. Unanchored history and current-display lookup stay
     // latest-reset-relative; missing or off-path IDs stay not-found.
-    return (
-      (anchor &&
-        readHistoricalHistoryAnchorPage(projection, history.displaySource, anchor, options)) ?? {
-        events: [],
-        found: false,
-        hasOverreadContext: false,
-        offset: 0,
-        displaySource: history.displaySource,
-        totalMessages: history.total,
-      }
-    );
+    const historical =
+      anchor && readHistoricalHistoryAnchorPage(projection, history.displaySource, anchor, options);
+    if (historical) {
+      return {
+        ...historical,
+        ...(windowChange ? { windowReset: true } : {}),
+        ...(options.captureReadWindow ? { readWindow: captureHistoryReadWindow(history, []) } : {}),
+      };
+    }
+    return {
+      events: [],
+      found: false,
+      hasOverreadContext: false,
+      offset: 0,
+      displaySource: history.displaySource,
+      totalMessages: history.total,
+    };
   }
+
   const range = resolveHistoryAnchorPageRange(history.total, anchorSeq - 1, options);
   const limit = Math.min(options.maxBytes ?? SOURCE_PAGE_MAX_BYTES, SOURCE_PAGE_MAX_BYTES);
-  const { start } = resolveRecentHistoryStart(
+  const visible = resolveVisibleHistoryRange(history, range.readStart, range.endExclusive);
+  const sizes = new Map<number, number>();
+  let displayPosition = visible.boundedStart;
+  for (const row of iterateVisibleMessageMetadata(
     projection,
-    range.readStart,
-    range.endExclusive,
-    history,
+    visible.messageStart,
+    visible.messageEnd,
+    "asc",
+  )) {
+    while (visible.boundaries.has(displayPosition)) {
+      displayPosition++;
+    }
+    sizes.set(displayPosition++, row.serialized_bytes);
+  }
+  const { start, endExclusive } = boundHistoryAnchorPageRange(
+    range,
+    anchorSeq - 1,
     Math.max(1024, limit),
-    range.endExclusive - range.readStart,
+    (position) => visible.boundaries.get(position)?.serializedBytes ?? sizes.get(position) ?? 0,
     options.maxBytes === undefined,
   );
-  if (options.maxBytes === undefined && start !== range.readStart) {
-    throw new Error(
-      `Transcript history page exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte limit; request a smaller limit`,
-    );
-  }
-  const events = readVisibleHistoryRange(projection, start, range.endExclusive, history);
+  const events = readVisibleHistoryRange(projection, start, endExclusive, history);
   return {
     events,
-    ...(windowChange
-      ? { windowReset: true, readWindow: captureHistoryReadWindow(history, events) }
+    ...(windowChange ? { windowReset: true } : {}),
+    ...(windowChange || options.captureReadWindow
+      ? { readWindow: captureHistoryReadWindow(history, events) }
       : {}),
     found: true,
     hasOverreadContext: range.hasOverreadContext && start === range.readStart,
-    offset: range.offset,
+    offset: history.total - endExclusive,
     displaySource: history.displaySource,
     totalMessages: history.total,
   };

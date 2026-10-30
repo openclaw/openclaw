@@ -67,6 +67,7 @@ const { values } = parseArgs({
     pairs: { type: "string", default: "1" },
     trace: { type: "boolean", default: false },
     "cpu-only": { type: "boolean", default: false },
+    "cpu-throttle": { type: "string", default: "1" },
   },
 });
 const pairs = Number(values.pairs);
@@ -76,6 +77,15 @@ const engines: ControlUiEngine[] = values.engines.split(",").map((name) => {
   }
   return name;
 });
+const cpuThrottle = Number(values["cpu-throttle"]);
+if (!Number.isFinite(cpuThrottle) || cpuThrottle < 1) {
+  throw new Error("cpu-throttle must be at least 1");
+}
+if (cpuThrottle !== 1 && engines.includes("webkit")) {
+  throw new Error(
+    "WebKit does not expose CPU throttling; use --engines chromium for throttled runs",
+  );
+}
 const networkProfiles = values["network-profiles"].split(",").map((name) => {
   if (name !== "localhost" && name !== "rtt-100ms") {
     throw new Error(`Unsupported network profile: ${name}`);
@@ -92,6 +102,11 @@ if (!Number.isInteger(pairs) || pairs < 1 || new Set(engines).size !== engines.l
 }
 if (!["desktop", "mobile", "both"].includes(values.viewport)) {
   throw new Error("Invalid viewport");
+}
+if (values.steps?.split(",").includes("streaming-mixed-fast") && values.viewport !== "desktop") {
+  throw new Error(
+    "streaming-mixed-fast requires --viewport desktop: concurrent composer and sidebar input needs non-modal navigation",
+  );
 }
 if (values["control-bundle-dir"]?.length && !values["compare-bundle-dir"]) {
   throw new Error("--control-bundle-dir requires --compare-bundle-dir");
@@ -283,6 +298,10 @@ try {
           "./bench-control-ui-engines.ts",
           "./lib/control-ui-engine-metrics.ts",
           "./lib/control-ui-engine-boot-scenarios.ts",
+          "./lib/control-ui-engine-streaming-scenarios.ts",
+          "./lib/control-ui-streaming-reply.ts",
+          "./lib/control-ui-streaming-fixture.ts",
+          "./lib/control-ui-streaming-statistics.ts",
           "./lib/control-ui-engine-memory.ts",
           "./lib/control-ui-engine-memory-scenarios.ts",
           "./lib/control-ui-engine-plugin-memory-scenarios.ts",
@@ -310,6 +329,7 @@ try {
     networkProfiles,
     trace: values.trace,
     cpuOnly: values["cpu-only"],
+    cpuThrottle,
     collection: values.trace
       ? "Playwright tracing and engine Inspector/Profiler; overhead included"
       : values["cpu-only"]
@@ -381,7 +401,12 @@ try {
             let tracingStarted = false;
             let measurement: Awaited<ReturnType<typeof startEngineMeasurement>> | undefined;
             let memory: Awaited<ReturnType<typeof createEngineMemoryCollector>> | undefined;
+            let throttle: Awaited<ReturnType<typeof context.newCDPSession>> | undefined;
             try {
+              if (cpuThrottle !== 1) {
+                throttle = await context.newCDPSession(page);
+                await throttle.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
+              }
               await page.addInitScript("globalThis.__name = (fn) => fn");
               await page.addInitScript(installInteractionNavigationPreloadObserver);
               if (scenario.memory) {
@@ -599,6 +624,14 @@ try {
                     await measurement.stop(),
                   );
                 }
+                if (scenario.id.startsWith("streaming-")) {
+                  const streaming = await page.evaluate(() =>
+                    Reflect.get(window, "__engineStreamingResult"),
+                  );
+                  if (streaming) {
+                    await writeJson(`${artifactPrefix}.streaming.json`, streaming);
+                  }
+                }
                 if (pair === 0 || observation.status === "failed") {
                   await page.screenshot({ path: path.join(artifactDir, `${artifactPrefix}.png`) });
                 }
@@ -612,6 +645,7 @@ try {
                 observation.status = "failed";
               }
               try {
+                await throttle?.detach();
                 await context.close();
                 if (scenario.memory) {
                   observation.retiredProcess = processMemory(observationBrowser);

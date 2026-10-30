@@ -214,11 +214,24 @@ export function captureGatewayToolReceiptAssertion(
     }
   };
   const prepare = receipt.prepareSessionSource?.bind(receipt);
+  const prepareEffect = receipt.prepareSessionSourceEffect?.bind(receipt);
   return Object.assign(() => assertAllowed(receipt()), {
     nativeSource: receipt.nativeSource,
     opaqueCommitGuard: receipt.opaqueCommitGuard,
     assertScopeCurrent: receipt.assertScopeCurrent?.bind(receipt),
     prepareSessionSourceScope: receipt.prepareSessionSourceScope?.bind(receipt),
+    ...(prepareEffect
+      ? {
+          async prepareSessionSourceEffect() {
+            const prepared = await prepareEffect();
+            return {
+              ...prepared,
+              assertCurrent: () => assertAllowed(prepared.assertCurrent()),
+              release: prepared.release?.bind(prepared),
+            };
+          },
+        }
+      : {}),
     ...(prepare
       ? {
           async prepareSessionSource() {

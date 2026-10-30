@@ -600,7 +600,7 @@ it.for([
             expect.objectContaining({
               type: "custom_message",
               customType: "run-failed-before-reply",
-              content: "Your request couldn't be completed: Preparation failed",
+              content: "Your request couldn't be completed.",
               display: true,
               details: { runId, error: "Preparation failed" },
             }),

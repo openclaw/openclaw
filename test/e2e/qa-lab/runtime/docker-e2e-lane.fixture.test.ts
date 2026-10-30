@@ -36,6 +36,8 @@ describe("QA Docker E2E lane fixture", () => {
     expect(updateMigration.env.OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE).toBe("1");
     expect(updateMigration.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC).toBe("openclaw@custom");
     expect(updateMigration.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO).toBe("custom-scenario");
+    expect(updateMigration.env.OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT).toBe("1500s");
+    expect(updateMigration.env.OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT).toBe("2700s");
 
     const updateRestartAuth = resolveQaDockerE2eLane("update-restart-auth", {});
     expect(updateRestartAuth.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC).toBe("openclaw@latest");

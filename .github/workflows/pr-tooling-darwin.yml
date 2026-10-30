@@ -36,6 +36,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Skipped draft events must not evict useful pending or running PR proof.
+  group: >-
+    ${{ github.event.pull_request.draft
+      && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) }}
+  cancel-in-progress: true
+
 jobs:
   darwin:
     if: ${{ github.event.pull_request.draft == false }}

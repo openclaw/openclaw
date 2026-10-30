@@ -114,7 +114,8 @@ pnpm test:live:thinking-probe -- --provider kimi --model k3
 - Keys come only from the env vars in the owning manifest's
   `setup.providers[].envVars`. The probe does not read the auth-profile store,
   and it refuses to run in CI.
-- Output: `extensions/<plugin>/probes/<model>.<provider>.<YYYY-MM-DD>.json`. Each turn has
+- Output: `extensions/<plugin>/probes/<model>.<provider>.<YYYY-MM-DD>.json` (git-ignored: keep
+  the record locally and summarize each result in the PR). Each turn has
   the request URL (no query), the request params without conversation content
   (so the thinking or effort value actually sent), the HTTP status, redacted
   error text, the model id and usage. The file stores the env var name, never

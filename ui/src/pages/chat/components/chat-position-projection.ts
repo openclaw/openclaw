@@ -1,6 +1,5 @@
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibility.ts";
-import { assistantMessageCanCompleteTurn } from "../chat-assistant-reply.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
@@ -47,12 +46,7 @@ export function projectChatPositions(
   ) => {
     const marker = markers.get(id);
     if (marker) {
-      if (
-        !assistantMessageCanCompleteTurn(marker.message, true) ||
-        assistantMessageCanCompleteTurn(message, true)
-      ) {
-        marker.message = message;
-      }
+      marker.message = message;
     } else {
       markers.set(id, { id, role, anchorId: messageId, message });
     }

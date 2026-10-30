@@ -6,6 +6,10 @@ import { withPluginInstallRoots } from "./install-root-context.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { capturePluginGenerationArtifactInScope } from "./plugin-generation-capture.js";
 import {
+  inspectPluginGenerationSources,
+  inspectPluginSourceDependencies,
+} from "./plugin-generation-source-inspection.js";
+import {
   markPluginSourceCaptureOperation,
   type PluginRecoverySource,
 } from "./plugin-generation-source-lookup.js";
@@ -247,26 +251,47 @@ function createPreparationSession(context: CaptureCommand) {
           for (const [key, receipt] of state.receipts) {
             sentReceipts.set(key, receipt);
           }
-          const artifact = own(
-            capturePluginGenerationArtifactInScope(
-              command.rootDir,
-              command.entryFile,
-              (run) => run(),
-              (filename) => mapSource(command.captureId, filename),
-            ),
-          );
-          const captureRecovery = artifact.captureRecoverySource.bind(artifact);
-          artifact.captureRecoverySource = markPluginSourceCaptureOperation(() =>
-            ownRecovery(captureRecovery()),
-          );
-          const retainCustody = artifact.retainSourceCustody.bind(artifact);
-          artifact.retainSourceCustody = markPluginSourceCaptureOperation(() => {
-            const custody = retainCustody();
-            ownRecovery(custody.source);
-            return custody;
-          });
-          failedCapture = artifact;
-          result = artifact;
+          if (command.inspection) {
+            const inspection = command.inspection;
+            const unresolvedAncestors: Array<{ name: string; importer: string }> = [];
+            result = {
+              inspection:
+                inspection.kind === "sources"
+                  ? inspectPluginGenerationSources(inspection.entries)
+                  : inspectPluginSourceDependencies(
+                      inspection.entries,
+                      inspection.dependencyRoot !== undefined
+                        ? {
+                            root: inspection.dependencyRoot,
+                            onUnresolvable: (name, importer) =>
+                              unresolvedAncestors.push({ name, importer }),
+                          }
+                        : undefined,
+                    ),
+              unresolvedAncestors,
+            };
+          } else {
+            const artifact = own(
+              capturePluginGenerationArtifactInScope(
+                command.rootDir,
+                command.entryFile,
+                (run) => run(),
+                (filename) => mapSource(command.captureId, filename),
+              ),
+            );
+            const captureRecovery = artifact.captureRecoverySource.bind(artifact);
+            artifact.captureRecoverySource = markPluginSourceCaptureOperation(() =>
+              ownRecovery(captureRecovery()),
+            );
+            const retainCustody = artifact.retainSourceCustody.bind(artifact);
+            artifact.retainSourceCustody = markPluginSourceCaptureOperation(() => {
+              const custody = retainCustody();
+              ownRecovery(custody.source);
+              return custody;
+            });
+            failedCapture = artifact;
+            result = artifact;
+          }
         } else {
           if (command.asynchronous) {
             await settlePluginNativeAdmissions();

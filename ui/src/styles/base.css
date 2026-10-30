@@ -37,7 +37,19 @@
   --popover-foreground: #f0f0f2;
   --chat-send-foreground: var(--primary-foreground);
   --chat-composer-surface: var(--popover);
-  --chat-user-surface: var(--accent-subtle);
+  /* Composer controls take their ink from the composer's own surface rather
+     than the canvas. Built-in dark themes lift that surface well above the
+     canvas, which pulled canvas-calibrated inks down to (or below) the
+     composer's disabled step. Rest labels, rest glyphs and disabled ink are
+     ordered steps of one mix, in Oklab so the same steps read evenly in light
+     and dark modes, and none of them reaches body text. */
+  --chat-composer-control-text: color-mix(in oklab, var(--text) 75%, var(--chat-composer-surface));
+  --chat-composer-control-icon: color-mix(in oklab, var(--text) 62%, var(--chat-composer-surface));
+  --chat-composer-control-disabled: color-mix(
+    in oklab,
+    var(--text) 50%,
+    var(--chat-composer-surface)
+  );
   --session-hovercard-surface: color-mix(in srgb, var(--card) 94%, black 6%);
   --session-hovercard-attribution-surface: color-mix(in srgb, var(--text) 6%, transparent);
 
@@ -143,6 +155,9 @@
      feedback that never costs readability. */
   --link: color-mix(in srgb, var(--accent-hover) 85%, var(--text));
   --link-hover: color-mix(in srgb, var(--link) 82%, var(--text));
+  --link-on-tint: var(--link);
+  --person-reference-bg: color-mix(in srgb, var(--accent) 10%, transparent);
+  --person-reference-hover-bg: color-mix(in srgb, var(--accent) 18%, transparent);
   --selection-bg: #5a7593;
   --selection-fg: #ffffff;
   --primary: #d13c3c;
@@ -366,6 +381,26 @@
   --duration-fast: 100ms;
   --duration-normal: 180ms;
   --duration-slow: 300ms;
+  /* Sheet spring from ui/src/lib/motion/spring.ts (SwiftUI duration/bounce model:
+     0.3 s, no bounce, fitted to the iOS sheet curve). spring.test.ts keeps it in sync. */
+  --motion-sheet-duration: 441ms;
+  --motion-sheet: 441ms
+    linear(
+      0,
+      0.013 1.8%,
+      0.05 3.9%,
+      0.131 6.8%,
+      0.452 16.6%,
+      0.58 21.1%,
+      0.684 25.6%,
+      0.77 30.4%,
+      0.84 35.6%,
+      0.897 41.7%,
+      0.941 49.2%,
+      0.973 59.4%,
+      0.993 75.5%,
+      1
+    );
   --cursor-action: default;
   --safe-area-top: env(safe-area-inset-top, 0px);
   --safe-area-right: env(safe-area-inset-right, 0px);
@@ -527,6 +562,8 @@
   --primary-hover: #c22e2e;
   --destructive: #d32f2f;
   --destructive-hover: #bc2a2a;
+  --link: var(--accent);
+  --link-on-tint: #ff7b76;
 }
 
 :root[data-theme="light"] {
@@ -541,6 +578,8 @@
   --popover-foreground: #202020;
   --secondary-foreground: #353535;
   --primary-hover: var(--accent-hover);
+  --link: #ad3623;
+  --link-on-tint: #a32b18;
 }
 
 /* Light theme tokens apply to every light-mode family. */
@@ -555,7 +594,6 @@
   --bg-hover: #efebe4;
   --bg-muted: #efebe4;
   --bg-content: #f4f1ec;
-  --chat-user-surface: color-mix(in srgb, var(--accent) 15%, var(--bg));
 
   --surface-hover-amount: 4%;
   --surface-selected-amount: 6%;
@@ -741,7 +779,6 @@
   --bg-accent: color-mix(in srgb, var(--text) 4%, var(--bg-content));
   --bg-hover: color-mix(in srgb, var(--text) 10%, var(--bg-content));
   --chat-composer-surface: color-mix(in srgb, var(--text) 14%, var(--bg-content));
-  --chat-user-surface: color-mix(in srgb, var(--accent) 14%, var(--bg-content));
   --panel: var(--bg-content);
   --panel-hover: color-mix(in srgb, var(--text) 14%, var(--bg-content));
   /* A translucent chip stays distinct on both the canvas and elevated cards. */
@@ -762,10 +799,9 @@
   --bg-elevated: color-mix(in srgb, var(--bg-content) 50%, white);
   --bg-hover: color-mix(in srgb, var(--text) 5%, var(--bg-content));
   --chat-composer-surface: var(--popover);
-  --chat-user-surface: color-mix(in srgb, var(--accent) 12%, var(--bg-content));
   --panel: var(--bg);
   --panel-hover: color-mix(in srgb, var(--text) 8%, var(--bg-content));
-  --inline-code-bg: color-mix(in srgb, var(--text) 5%, var(--bg-content));
+  --inline-code-bg: color-mix(in srgb, var(--text) 5%, transparent);
 }
 
 :root[data-theme="dark"],

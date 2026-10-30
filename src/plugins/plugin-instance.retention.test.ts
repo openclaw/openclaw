@@ -1,4 +1,5 @@
 import { AsyncResource } from "node:async_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
@@ -23,6 +24,86 @@ import { getPluginRuntimeGatewayRequestScope as getScope } from "./runtime/gatew
 class RetainedRegistry {
   readonly fixtureLabel = "RetainedRegistry";
 }
+
+it("keeps owner work independent of its caller and follows adopted registry custody", async () => {
+  const { record, instance } = createOwnedInstance("owner-work");
+  selectRegistry(record, "initial", new RetainedRegistry());
+  const caller = instance.retainConsumer();
+  const authority = caller.run(() => instance.retainOwnerWork());
+  caller.release();
+  selectRegistry(record, "successor");
+  try {
+    await expectLiveObjects(RetainedRegistry, 0);
+    instance.quiesce();
+    await instance.waitForIdle(new AbortController().signal);
+    expect(authority.run(readRegistryLabel)).toBe("successor");
+    authority.release();
+    expect(() => authority.run(readRegistryLabel)).toThrow(PluginInstanceUnavailableError);
+  } finally {
+    authority.release();
+    await instance.dispose();
+  }
+});
+
+it("joins physical owner callbacks after their retained admission closes", async () => {
+  const { instance } = createOwnedInstance("owner-work-settlement");
+  const authority = instance.retainOwnerWork();
+  const finish = createDeferredCore();
+  const pending = authority.run(() => finish.promise);
+  authority.release();
+  let disposed = false;
+  const disposal = instance.dispose().then((result) => {
+    disposed = true;
+    return result;
+  });
+  try {
+    await nextTurn();
+    expect(disposed).toBe(false);
+    finish.resolve();
+    await pending;
+    await expect(disposal).resolves.toEqual({ errors: [] });
+  } finally {
+    finish.resolve();
+    await Promise.allSettled([pending, disposal]);
+  }
+});
+
+it("drains physical owner work before disposal without awaiting its lifetime authority", async ({
+  signal,
+}) => {
+  const { instance } = createOwnedInstance("owner-pre-disposal-drain");
+  const authority = instance.retainOwnerWork();
+  const finish = createDeferredCore();
+  const pending = authority.run(() => finish.promise);
+  const settled: string[] = [];
+  const drain = instance.drain({ signal }).then((result) => {
+    settled.push("drain");
+    return result;
+  });
+  const retained = instance.waitForRetainedWork(signal, { includeCalls: true }).then(() => {
+    settled.push("retained");
+  });
+  const idle = instance.waitForIdle(signal).then(() => {
+    settled.push("idle");
+  });
+  try {
+    await instance.waitForAdmittedWork(signal);
+    await nextTurn();
+    expect(settled).toEqual([]);
+    finish.resolve();
+    await pending;
+    await expect(Promise.all([drain, retained, idle])).resolves.toEqual([
+      { errors: [] },
+      undefined,
+      undefined,
+    ]);
+    expect(authority.run(() => "owner still active")).toBe("owner still active");
+  } finally {
+    finish.resolve();
+    authority.release();
+    await Promise.allSettled([pending, drain, retained, idle, instance.dispose()]);
+  }
+});
 
 it("retains an adopted selection until a pending call rejects", async () => {
   const { record, instance } = createOwnedInstance("retention");

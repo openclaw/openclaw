@@ -355,6 +355,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "agent-id"),
     sourcePackageAlias("normalization-core", "code-points"),
     sourcePackageAlias("normalization-core", "error-coercion"),
+    sourcePackageAlias("normalization-core", "expect"),
     sourcePackageAlias("normalization-core", "grapheme"),
     sourcePackageAlias("normalization-core", "json-coercion"),
     sourcePackageAlias("normalization-core", "json-schema"),
@@ -829,7 +830,9 @@ export default function controlUiViteConfig(
       ],
     },
     build: {
-      target: ["chrome147", "firefox150", "safari26.2"],
+      // iOS Safari is listed separately: desktop Safari alone lets the CSS minifier drop
+      // WebKit prefixes that only iOS reads, such as -webkit-text-size-adjust.
+      target: ["chrome147", "firefox150", "safari26.2", "ios26.2"],
       outDir: options.outDir ?? outDir,
       emptyOutDir: true,
       // The canonical sidecar performance report already measures shipped compressed bytes.
@@ -858,8 +861,13 @@ export default function controlUiViteConfig(
       host: devGateway ? "127.0.0.1" : true,
       port: 5173,
       strictPort: true,
-      // Chokidar selects FSEvents before reading its environment override on macOS.
-      ...(usePolling ? { watch: { usePolling: true } } : {}),
+      // FSEvents can delay or drop SSD edits under load. Native fs.watch keeps HMR
+      // prompt without polling the source tree; retain the explicit polling opt-in.
+      ...(process.platform === "darwin"
+        ? { watch: { useFsEvents: false, usePolling } }
+        : usePolling
+          ? { watch: { usePolling: true } }
+          : {}),
       ...(devGateway ? { proxy: devGateway.proxy } : {}),
     },
     plugins: [

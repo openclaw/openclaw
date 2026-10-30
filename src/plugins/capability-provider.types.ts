@@ -143,6 +143,10 @@ type WorkerNodeBootstrapAccess = {
     sha256: string;
     bytes: number;
     openclawVersion: string;
+    /** Explicit npm profiles resolve dependencies on the destination; bundles carry them. */
+    install?: "bundle" | "npm";
+    buildId?: string;
+    manifestSha256?: string;
     enabledPluginIds: readonly string[];
     tlsFingerprint?: string;
     /** Core-owned POSIX prerequisite script, applied only to Linux before invoking Node. */
@@ -178,6 +182,14 @@ export type WorkerNodeEnrollment = WorkerNodeBootstrapAccess & {
   openclawVersion: string;
   displayName: string;
   waitForDeviceId: () => Promise<string>;
+  /** Private per-lease inference inputs. Never captured in a prepared image. */
+  workerCodex?: {
+    configToml: string;
+    helperScript: string;
+    /** Original executable path referenced by configToml; provider rewrites it when staging. */
+    helperPath: string;
+    configVersion: string;
+  };
 } & (
     | { mode: "connect"; setupCode: string; setupId: string }
     | { mode: "resume"; deviceId: string }

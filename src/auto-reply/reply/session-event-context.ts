@@ -1,6 +1,7 @@
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createCronExecutionId } from "../../cron/run-id.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
@@ -32,6 +33,7 @@ import {
   readSessionEventTargetEnvironment,
   readSessionEventTargetOperatorAuthority,
   readSessionEventTargetOwnerContinuation,
+  readSessionEventTargetRequesterOwner,
   resolveSessionEventKey,
 } from "./session-event-target.js";
 import { setChannelSourceTurnId } from "./source-turn-id.js";
@@ -162,7 +164,7 @@ export function buildSessionEventContext(params: {
   occurrenceId: string;
   deliveryContext?: DeliveryContext;
   target: SessionEventTarget;
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
 }): MsgContext {
   const { agentId, sessionKey, text, options, occurrenceId, deliveryContext, target } = params;
   const automation = options.scheduledAutomation;
@@ -219,9 +221,12 @@ export function buildSessionEventContext(params: {
     ? automation.operatorAuthority
     : options.source === "plugin" ||
         options.source === "tool_handoff" ||
-        options.source === "restart"
+        options.source === "restart" ||
+        // A scheduler turn about a job (not its run) acts for the job's restored operator source.
+        (!automation && (options.source === "cron" || options.source === "cron_failure_repair"))
       ? readSessionEventTargetOperatorAuthority(target)
       : undefined;
+  const requesterOwnerCheck = readSessionEventTargetRequesterOwner(target)?.assertCurrent;
   if (
     operatorAuthority &&
     (automation?.controlUiAdmin ||
@@ -234,6 +239,7 @@ export function buildSessionEventContext(params: {
     // text's existing command authorization. Non-owner and system turns never gain it.
     bindCommandOwnerAuthority(ctx, {
       operatorAuthority,
+      sourceAssertion: params.assertCurrent,
       isCurrent: () => {
         params.assertCurrent();
         return true;
@@ -241,8 +247,26 @@ export function buildSessionEventContext(params: {
       // Work that outlives this occurrence keeps only the live operator source.
       successor: {
         operatorAuthority,
+        sourceAssertion: operatorAuthority.assertCurrent,
         isCurrent: () => {
           operatorAuthority.assertCurrent();
+          return true;
+        },
+      },
+    });
+  } else if (requesterOwnerCheck) {
+    // Work the scheduler started for a job keeps its requester's owner tools only while
+    // the requester is still an owner, rechecked before each owner-only effect.
+    bindCommandOwnerAuthority(ctx, {
+      sourceAssertion: params.assertCurrent,
+      isCurrent: () => {
+        params.assertCurrent();
+        requesterOwnerCheck();
+        return true;
+      },
+      successor: {
+        isCurrent: () => {
+          requesterOwnerCheck();
           return true;
         },
       },
@@ -255,6 +279,7 @@ export function buildSessionEventContext(params: {
       // they are still an owner under the current config.
       bindCommandOwnerAuthority(ctx, {
         recoveryReference: authority.recoveryReference,
+        sourceAssertion: params.assertCurrent,
         isCurrent: () => {
           params.assertCurrent();
           return authority.isCurrent(getSessionEventRuntimeConfig());

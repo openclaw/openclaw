@@ -21,8 +21,10 @@ that should not re-upload whole databases on every backup.
 
 PostgreSQL stores in the state, agent, Workboard, Logbook and Team Reports
 families use local SQLite anchors plus PostgreSQL rows. Use `openclaw backup create`
-to capture their matched exports and anchors. Stop the Gateway through its service owner first;
-PostgreSQL backups refuse while it is running and never stop it automatically.
+to capture their matched exports and anchors; it runs while the Gateway serves
+requests and exports each PostgreSQL store from its own repeatable-read snapshot.
+Restore, Git backups, and generic local snapshots that select PostgreSQL still
+require the Gateway stopped through its service owner and never stop it automatically.
 See [Database engines](/reference/database-engines#anchors-and-backups).
 
 When [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)
@@ -89,6 +91,12 @@ workspaces remain ordinary workspace files. [Backup CLI](/cli/backup)
 documents every flag, owner-declared regenerable resources, volatile files,
 and verification details.
 
+Archive verification normally decompresses the archive once and keeps database
+artifacts in private temporary storage while checking them. Allow space for the
+uncompressed database snapshots as well as the archive. Under temporary-storage
+pressure, verification may reread the archive for required artifacts; integrity
+checks still run in full.
+
 If the configuration is malformed, state archive creation fails because agent
 and plugin ownership cannot be resolved. `--no-include-workspace` only excludes
 workspace files; it does not bypass ownership discovery. Before repairing the
@@ -109,8 +117,8 @@ prefer snapshots or continuous replication below.
 
 On ephemeral container hosts, keep the archive outside the container and use
 `openclaw backup restore` as the disaster-recovery primitive for rebuilding a
-fresh persistent state tree. Restore stages files only; activation remains an
-explicit offline deployment step.
+fresh persistent state tree. Restore stages files and imports PostgreSQL stores
+into fresh namespaces; activation remains an explicit offline deployment step.
 
 ## Per-database snapshots
 
@@ -361,7 +369,7 @@ For SQLite, Git-backed backups dump each selected database into consistently ord
 `manifest.json`, and per-table JSONL files, then create one commit for the
 whole run. Unchanged database content produces no commit, so Git stores and
 pushes only content changes by construction. OpenClaw stages only the
-backup-owned `global` and `agents` paths, not unrelated files elsewhere in the
+backup-owned `global`, `agents`, and `stores` paths, not unrelated files elsewhere in the
 repository.
 
 ```bash

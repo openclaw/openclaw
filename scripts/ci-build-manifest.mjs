@@ -1367,6 +1367,11 @@ const nodeTestShards = targetNodeTestShards
             plan.shard_name ?? plan.shardName,
           ),
       ),
+      requires_native_secret_service: shardRequiresTests(
+        shard,
+        ["test/e2e/qa-lab/runtime/codex-native-command-auth.e2e.test.ts"],
+        (plan) => plan.configs?.includes("test/vitest/vitest.e2e.config.ts") ?? false,
+      ),
       requires_sandbox_image: shardRequiresTests(
         shard,
         [
@@ -1384,6 +1389,7 @@ const nodeTestShards = targetNodeTestShards
         "requires_dist",
         "requires_go",
         "requires_ripgrep",
+        "requires_native_secret_service",
         "requires_sandbox_image",
       ]) {
         if (row[key] === false) {

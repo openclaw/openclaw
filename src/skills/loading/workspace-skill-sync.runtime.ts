@@ -42,6 +42,8 @@ const skillsLogger = createSubsystemLogger("skills");
 const skillsSyncQueue = new KeyedAsyncQueue();
 
 const SYNCED_SKILLS_MANIFEST_NAME = ".openclaw-sync.json";
+// Windows chmod controls only the read-only attribute.
+const GENERATED_IGNORE_MODE_MASK = process.platform === "win32" ? 0o200 : 0o7777;
 
 type SyncedSkillsManifest = {
   entryKeys: string[];
@@ -288,7 +290,15 @@ export async function syncWorkspaceSkills(params: {
     const target = await root(targetSkillsDir, { assertBeforeMutation: assertCurrent });
     assertCurrent?.();
     phases.mark("attempt.setup.sandbox.layout.skills_sync.gitignore");
-    await target.write(".gitignore", "*\n", { mode: 0o644, durable: false });
+    const ignore = await target
+      .read(".gitignore", { maxBytes: 2, symlinks: "reject" })
+      .catch(() => undefined);
+    if (
+      ignore?.buffer.toString() !== "*\n" ||
+      (ignore.stat.mode & GENERATED_IGNORE_MODE_MASK) !== (0o644 & GENERATED_IGNORE_MODE_MASK)
+    ) {
+      await target.write(".gitignore", "*\n", { mode: 0o644, durable: false });
+    }
     assertCurrent?.();
     phases.mark("attempt.setup.sandbox.layout.skills_sync.manifest_read");
     const manifest = parseSyncedSkillsManifest(await tryReadJson<unknown>(manifestPath));

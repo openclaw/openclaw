@@ -213,6 +213,25 @@ function observePayloadAcquisition(
   };
 }
 
+it("does not acquire unrelated excluded history while selecting background dependencies", async ({
+  scope,
+}) => {
+  const marker = "unrelated-excluded-history";
+  const excluded = Array.from({ length: 16 }, (_, index) =>
+    transcriptMessage(`${marker}-${index}`, index === 0 ? null : `${marker}-${index - 1}`, {
+      ...makeAgentAssistantMessage({ content: [] }),
+      excludeFromContext: true,
+    }),
+  );
+  await persist(scope, [...excluded, user("anchor", `${marker}-15`), user("tail", "anchor")]);
+  await waitProjection(scope);
+  const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+  const acquisition = observePayloadAcquisition(db, marker, () => {
+    expect(eventIds(readContext(scope, 16384, 1).events)).toEqual([scope.sessionId, "tail"]);
+  });
+  expect(acquisition.acquiredBytes).toBe(0);
+});
+
 it("enforces context count and byte budgets and releases rejected reads for later appends", async ({
   scope,
 }) => {

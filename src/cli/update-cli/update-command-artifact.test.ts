@@ -59,7 +59,8 @@ it.each([
     const canonicalConfig = path.join(canonicalState, "openclaw.json");
     const canonicalTmp = path.join(base, "inherited-tmp");
     const control = path.join(base, "control");
-    await fs.mkdir(canonicalState, { recursive: true });
+    await fs.mkdir(home, { mode: 0o700 });
+    await fs.mkdir(canonicalState, { mode: 0o700 });
     await fs.mkdir(canonicalTmp);
     await fs.mkdir(control, { mode: 0o700 });
     const resolveTempRoot = tempRoot.resolvePreferredOpenClawTmpDir;

@@ -45,6 +45,23 @@ backup.
 
 ## Update implementation contract
 
+Managed systemd Gateway activation also covers packages replaced outside
+`openclaw update`. Before ordinary startup admission, the native service reader
+must identify this process as the running unit's MainPID. Only older database
+schemas trigger Doctor's exclusive maintenance, verified pre-migration backups,
+and forward migration owners. The activation adapter does not control services
+or run the full Doctor health-repair flow on normal restarts. Unverifiable,
+foreign-owned, and newer state retains its refusal and recovery guidance.
+
+Durable background exec adds an optional, first-use `durable_background_processes`
+table through the existing shared-state worker and schema owner. The candidate
+contains this addition; the installed updater needs no new protocol. Existing
+databases keep their schema version and records, and startup reads do not create
+the table. Candidate startup re-adopts retained user units without restarting
+their commands. Rollback binaries leave the additive table and systemd units
+alone; inspect and stop those units with the systemd user manager before returning
+to a binary without durable-process support.
+
 Linux managed updates run in a separate user service and slice, so an agent exec's
 descendant cleanup, Gateway restarts, and the Gateway unit's memory limit do not
 own the handoff. If its recorded helper and updater die, update status or startup
@@ -85,6 +102,16 @@ compatible process helper, wait for the recorded driver to exit, then run
 `openclaw update repair`. Doctor reports the native load failure and runtime
 glibc version when available.
 
+SQLite update backup admission measures database and journal families, reserves the
+retained backup and writable rollback images, and sizes history scratch from shared
+state rather than a large agent database. Actual rollback output space is checked
+again before current databases move. A disk-space refusal retains the required and
+available capacity and the backup or rollback volume role in the package-swap failure
+fact without exposing private paths. The candidate worker and installed updater
+must contain the diagnostic repair; an older updater cannot gain it from a newer
+candidate alone. If capture refuses before the package changes, final recovery
+restarts and verifies the previous owned Gateway unless recorded data is at risk.
+
 When artifact-preserving SQLite inspection exhausts its stabilization attempts,
 update failures retain the final consistency reason code and attempt count in
 `openclaw update status` and the prepared failure report. The candidate worker
@@ -112,6 +139,20 @@ Gateway shutdown cancellation stays quiet; unexpected scheduled task failures
 are reported by the scheduler without restarting the Gateway.
 
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
+
+Candidate Doctor imports historical image-project snapshots as non-repository
+runtime preparation while retaining the original serialized snapshot as evidence.
+Historical shared-schema-21 placements retain their existing preparation evidence
+and cleanup custody under current constraints; unsettled worker claims refuse
+the atomic cutover without advancing either marker. Missing predicate columns
+are derived from their original JSON before publication.
+Historical agent-schema-24 recovery envelopes remain archival columns; queued
+inputs become interrupted before the schema markers advance, never restart replay
+authority. Both repairs use the existing maintenance transaction and verified
+backup. Malformed or conflicting image preparation refuses the cutover without
+discarding its record. The candidate must contain these repairs; the installed
+updater needs no new protocol. Restore the verified pre-migration database with
+its matching binary for rollback rather than lowering version markers.
 
 PostgreSQL original-state captures acquire offline custody before using the exact
 database backup provider. The installed updater must contain this repair.
@@ -150,6 +191,13 @@ findings in update history. If readiness, inspection, or history recording fails
 the update stays accepted and the pending checks remain retryable with
 `openclaw update finish`; the result reports the next action. Migration admission,
 repairs, backup verification, and recovery fences still complete before startup.
+
+During a native update, when plugins are unchanged and only deferred model retirement
+remains, a supporting candidate completes the second Doctor pass with the required
+config, auth, session, and cron repairs and final validation. Startup, database admission, and config
+preparation still run in full. Other pending work or incomplete discovery selects
+the full Doctor flow; older candidates and standalone `openclaw update repair`
+continue using the full pass.
 
 Stopped update and Doctor database snapshots tolerate concurrent read-only SQLite
 probes. The transient `-shm` WAL index is rebuilt privately, never copied or used
@@ -378,6 +426,12 @@ next update's admission can record the failed outcome without waiting for the
 inactivity grace period. Live or unverifiable drivers and retained recovery
 continue to preserve their ownership.
 
+If an explicit update timeout expires during preparation, the original updater
+records a failed outcome after its child work settles, while it still owns
+bookkeeping. Expiration during activation, unresolved child work, or lost
+ownership retains recovery custody instead. A timeout does not authorize a new
+process to take over an unresolved update.
+
 A successful foreground update hands completion to the replacement Gateway.
 Automatic history reconciliation preserves that handoff while startup verifies
 the running build. If the replacement never starts, `openclaw update repair`
@@ -421,6 +475,12 @@ Before post-core plugin work, the updater releases its temporary Doctor database
 ownership before rechecking profile-backed requester authority. Service custody
 remains with the updater; the next Doctor acquires its own database ownership.
 This avoids refusing the updater's own policy reads during its maintenance window.
+
+Plugin lifecycle work in update finalization and repair renews its lease from a
+worker, so a blocked main thread cannot expire the lease. Native Doctor and plugin
+install/update operations share this renewal behavior. Ownership checks,
+cancellation, and release still apply. The runtime holding the lease must contain
+this fix; a newer candidate cannot change an already-running lease owner.
 
 After a Doctor child settles, the updater drains its retained handles for the
 affected shared-state database and revokes their schema admission, even when
@@ -1129,6 +1189,11 @@ Post-activation schema inspection preserves captured SQLite database, WAL, and s
 artifacts so the final Doctor can verify the same migration source.
 
 Database rehearsal also avoids a second full backup of each private snapshot.
+Candidate inventory reads database registrations and the installed plugin index
+in one read-only transaction instead of copying the whole shared database just
+for metadata. Sources requiring private recovery keep the snapshot path. The
+candidate worker must contain this improvement; snapshot publication, integrity
+checks, and rollback verification are unchanged.
 Update schema inspection and rehearsal use SQLite online backup with a pinned
 read transaction, so a busy Gateway can keep writing while the copy includes
 committed WAL data. Each acquisition makes one copy instead of retrying until

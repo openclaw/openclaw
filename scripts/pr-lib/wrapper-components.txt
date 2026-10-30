@@ -20,6 +20,7 @@ packages/acp-core/src/structured-auth-redaction.ts
 packages/agent-core/package.json
 packages/agent-core/src/harness/env/kill-tree.ts
 packages/agent-core/src/harness/messages.ts
+packages/agent-core/src/harness/session/background-result-placement.ts
 packages/agent-core/src/harness/session/tool-result-pairing.ts
 packages/agent-core/src/harness/session/transcript-model.ts
 packages/agent-core/src/operator-messages.ts
@@ -362,6 +363,7 @@ src/agents/worktrees/checkout-git-config.ts
 src/agents/worktrees/checkout-inputs.ts
 src/agents/worktrees/checkout-materialize.ts
 src/agents/worktrees/checkout-policy-key.ts
+src/agents/worktrees/checkout-pool.ts
 src/agents/worktrees/checkout.ts
 src/agents/worktrees/errors.ts
 src/agents/worktrees/eviction.runtime.ts
@@ -687,6 +689,7 @@ src/config/redact-sentinel.ts
 src/config/redact-snapshot.raw.ts
 src/config/redact-snapshot.secret-ref.ts
 src/config/redact-snapshot.ts
+src/config/repository-branch-prefix.ts
 src/config/resolution-facts.ts
 src/config/runtime-config-capture-state.ts
 src/config/runtime-config-publication.ts
@@ -877,6 +880,7 @@ src/gateway/model-account-connect-errors.ts
 src/gateway/operator-scopes.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
+src/gateway/worker-environments/environment-recipe.ts
 src/gateway/worker-environments/local-workspace-fingerprints.ts
 src/gateway/worker-environments/placement-authority-owner.ts
 src/gateway/worker-environments/placement-inventory-changed-error.ts
@@ -891,6 +895,7 @@ src/gateway/worker-environments/placement-workspace-journal.types.ts
 src/gateway/worker-environments/placement-workspace-result-owner.ts
 src/gateway/worker-environments/placement-workspace-result-store.ts
 src/gateway/worker-environments/placement-workspace-result.ts
+src/gateway/worker-environments/preparation-identity.schema.ts
 src/gateway/worker-environments/session-attachment.ts
 src/gateway/worker-environments/state.ts
 src/gateway/worker-environments/store-commit-authority.ts
@@ -1310,6 +1315,7 @@ src/infra/temp-artifact-cleanup.ts
 src/infra/test-runtime-env.ts
 src/infra/tls-certificate-errors.ts
 src/infra/tmp-openclaw-dir.ts
+src/infra/update-capture-space.ts
 src/infra/update-channels.ts
 src/infra/update-database-generations.ts
 src/infra/update-doctor-config-schema.ts
@@ -1730,6 +1736,7 @@ src/plugins/slots.ts
 src/plugins/status-dependencies-core.ts
 src/plugins/toggle-config.ts
 src/plugins/web-search-install-catalog.ts
+src/process/child-memory.ts
 src/process/child-process-tree.ts
 src/process/child-process.ts
 src/process/command-error.ts
@@ -1743,6 +1750,8 @@ src/process/exec.ts
 src/process/gateway-work-admission-state.ts
 src/process/gateway-work-admission.ts
 src/process/kill-tree.ts
+src/process/linux-exec-cgroup-device.ts
+src/process/linux-exec-cgroup.ts
 src/process/linux-oom-score.ts
 src/process/output-drain.ts
 src/process/process-deadline.ts
@@ -1888,6 +1897,8 @@ src/state/agent-creation-claim.ts
 src/state/agent-database-admission-error.ts
 src/state/agent-database-admission.ts
 src/state/agent-database-preparation-context.ts
+src/state/agent-database-startup-integrity.ts
+src/state/agent-database-startup-observation.ts
 src/state/agent-database-startup.ts
 src/state/agent-deletion-cleanup-admission.ts
 src/state/agent-deletion-cleanup.ts
@@ -2032,6 +2043,8 @@ src/state/openclaw-state-db-existing-write.ts
 src/state/openclaw-state-db-failure.ts
 src/state/openclaw-state-db-fast-path.ts
 src/state/openclaw-state-db-handle.ts
+src/state/openclaw-state-db-historical-imports.ts
+src/state/openclaw-state-db-image-snapshot-migration.ts
 src/state/openclaw-state-db-index-ordering-migrations.ts
 src/state/openclaw-state-db-initialization.ts
 src/state/openclaw-state-db-integrity-admission.ts
@@ -2563,6 +2576,7 @@ src/config/sessions/session-actor-read-error.ts
 src/config/sessions/session-actor-reducers.ts
 src/config/sessions/session-actor-storage-acquisition.ts
 src/config/sessions/session-actor-storage-binding.ts
+src/config/sessions/session-background-result-dependencies.ts
 src/config/sessions/session-bounded-context-selection.ts
 src/config/sessions/session-cache-ttl-prefix-values.ts
 src/config/sessions/session-entry-lineage.ts

@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { getIMessageRuntime } from "../runtime.js";
-import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
+import {
+  importIMessageLegacyPluginStateForTest,
+  installIMessageStateRuntimeForTest,
+} from "../test-support/runtime.js";
 import {
   advanceIMessageRecoveryCursor as advanceCursor,
   loadIMessageRecoveryCursor as loadCursor,
@@ -22,13 +25,22 @@ function writeLegacyCatchupCursor(accountId: string, lastSeenRowid: number): voi
   store.register(key, { lastSeenMs: Date.now(), lastSeenRowid });
 }
 
+function recoveryCursorStore() {
+  return getIMessageRuntime().state.openSyncKeyedStore<{ lastRowid: number }>({
+    namespace: "imessage.recovery-cursor",
+    maxEntries: 64,
+  });
+}
+
 function writeLegacyRecoveryCursor(accountId: string, lastRowid: number): void {
-  getIMessageRuntime()
-    .state.openSyncKeyedStore<{ lastRowid: number }>({
-      namespace: "imessage.recovery-cursor",
-      maxEntries: 64,
-    })
-    .register(accountId, { lastRowid });
+  recoveryCursorStore().register(accountId, { lastRowid });
+}
+
+function writeNulKeyedRecoveryCursor(accountId: string, dbIdentity: string, lastRowid: number) {
+  importIMessageLegacyPluginStateForTest(
+    { namespace: "imessage.recovery-cursor", maxEntries: 64 },
+    [{ key: `${accountId}\u0000${dbIdentity}`, value: { lastRowid }, createdAt: Date.now() }],
+  );
 }
 
 describe("iMessage recovery cursor", () => {
@@ -54,6 +66,14 @@ describe("iMessage recovery cursor", () => {
     writeLegacyRecoveryCursor("default", 12396);
     expect(await loadCursor("default", DB)).toBe(12396);
     expect(await loadCursor("default", DB_B)).toBeNull();
+    expect(await loadCursor("default", DB)).toBe(12396);
+  });
+
+  it("adopts a NUL-separated composite cursor once on SQLite (#184862)", async () => {
+    writeNulKeyedRecoveryCursor("default", DB, 12396);
+    expect(await loadCursor("default", DB_B)).toBeNull();
+    expect(await loadCursor("default", DB)).toBe(12396);
+    expect(recoveryCursorStore().lookup(`default\u0000${DB}`)).toBeUndefined();
     expect(await loadCursor("default", DB)).toBe(12396);
   });
 

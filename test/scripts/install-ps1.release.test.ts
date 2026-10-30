@@ -499,6 +499,19 @@ foreach ($case in $cases) {
   }
   if ($script:upgraded -ne $case[2]) { throw "Incorrect upgrade decision for $case" }
 }
+$Tag = 'beta'
+$script:fixtureVersion = ''; $script:fixtureEngine = '>=26.13.0'
+function Invoke-NpmCommand {
+  param([string[]]$Arguments)
+  if (-not $script:fixtureVersion) { throw 'npm is not provisioned yet' }
+  if ($Arguments[1] -ne 'openclaw@beta') { throw 'beta target lost' }
+  $global:LASTEXITCODE = 0
+  return $script:fixtureEngine
+}
+function Fail-Install { throw 'incompatible beta runtime refused' }
+try { Main; throw 'admission missing' } catch {
+  if ($_.Exception.Message -ne 'incompatible beta runtime refused') { throw }
+}
 `,
     ),
     "git-target-node-engine": installerFixture(

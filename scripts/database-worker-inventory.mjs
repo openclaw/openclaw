@@ -434,6 +434,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/agents/bash-durable-process-store.ts",
+    [
+      {
+        tier: "W",
+        operations: ["writeDurableProcess", "listDurableProcesses"],
+        evidence:
+          "Only openclaw-state-worker-registry.ts loads durableProcessOperations for durableProcess.write (writeDurableProcess), and openclaw-state-read-operation-registry.ts loads durableProcessReadOperations for durableProcess.list (listDurableProcesses). The main-thread createDurableProcessStore facade only awaits those worker operations; the native store fixture forbids host SQL during its warm read/write flow.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-read.ts",
     [
       {

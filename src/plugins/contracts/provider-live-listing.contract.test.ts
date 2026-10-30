@@ -28,7 +28,12 @@ const STATIC_LISTING_REASONS: Record<string, string> = {
     "Static manifest by design (#182248): each row carries its own reasoning-effort ladder; live listing needs the vendor /models shape checked with a real key.",
 };
 
-type HostedProvider = { pluginDir: string; providerId: string; baseUrl: string };
+type HostedProvider = {
+  pluginDir: string;
+  providerId: string;
+  baseUrl: string;
+  discovery: unknown;
+};
 
 function collectHostedOpenAICompatibleProviders(): HostedProvider[] {
   const files = listGitTrackedFiles({ repoRoot, pathspecs: "extensions" });
@@ -42,12 +47,14 @@ function collectHostedOpenAICompatibleProviders(): HostedProvider[] {
       unknown
     >;
     const pluginDir = path.dirname(file);
-    const providers = readRecord(readRecord(manifest.modelCatalog)?.providers) ?? {};
+    const modelCatalog = readRecord(manifest.modelCatalog);
+    const providers = readRecord(modelCatalog?.providers) ?? {};
     for (const [providerId, raw] of Object.entries(providers)) {
       const provider = readRecord(raw);
       const baseUrl = typeof provider?.baseUrl === "string" ? provider.baseUrl : "";
       if (provider?.api === "openai-completions" && baseUrl.startsWith("https://")) {
-        hosted.push({ pluginDir, providerId, baseUrl });
+        const discovery = readRecord(modelCatalog?.discovery)?.[providerId];
+        hosted.push({ pluginDir, providerId, baseUrl, discovery });
       }
     }
   }
@@ -134,6 +141,14 @@ describe("bundled hosted OpenAI-compatible providers list models live", () => {
       expect(lists, reason ? `${providerId} lists live now: remove its reason` : undefined).toBe(
         !reason,
       );
+      // Without the manifest half the Gateway never refreshes the provider, so only
+      // catalog rows appear even though the plugin can list the account's models.
+      if (!reason) {
+        expect(
+          ["refreshable", "runtime"],
+          `${providerId}: set modelCatalog.discovery.${providerId} to "refreshable"`,
+        ).toContain(hosted.discovery);
+      }
     });
   }
 });

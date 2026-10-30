@@ -82,7 +82,7 @@ runtime; the compiled entry map is not a compatibility certificate.
 - [Background work](/plugins/sdk-runtime/background-work) — hook agent turns, subagent runs, and native harness completion delivery.
 - [Gateway and nodes](/plugins/sdk-runtime/gateway-and-nodes) — in-process Gateway requests, bounded session facts through `gateway.readSessionFacts`, plugin-written agent messages through `gateway.appendAgentMessage`, paired node invocation, and Gateway service events.
 - [Media helpers](/plugins/sdk-runtime/media) — speech, media understanding, image/video/music generation, web search, and media utilities.
-- [State and system](/plugins/sdk-runtime/state-and-system) — config snapshot, SQLite-backed plugin state, system utilities, events, and logging.
+- [State and system](/plugins/sdk-runtime/state-and-system) — config snapshot, shared plugin state, system utilities, events, and logging.
 - [Channel helpers](/plugins/sdk-runtime/channel) — channel-specific runtime helper groups for chunking, routing, pairing, media, and mentions.
 
 ## Runtime namespaces
@@ -382,12 +382,12 @@ load-time facts belong to the instance until the plugin owner replaces it throug
 restart or an explicit reload or installation operation.
 
 Context engines selected by an admitted turn remain owned through that turn's
-commit and engine disposal. Replacing an enabled plugin waits for those consumers
+commit and engine disposal. Serialized replacement waits for those consumers
 to close before registering its successor. Disabling or removing a plugin can
 report their cleanup as deferred; starting engine disposal closes normal engine
 callbacks while cleanup finishes.
 
-Replacement validates metadata and configuration first, then closes admission to
+By default, replacement validates metadata and configuration first, then closes admission to
 the old instance and waits for in-flight work while its services and channels
 keep running. If that work does not finish in time, the reload fails once and
 resumes admission. Otherwise, replacement stops services and channels, drains
@@ -403,6 +403,23 @@ replace itself from its own active call: the operation rejects before shutdown
 and can be retried after that call finishes. Cleanup that cannot finish within
 its budget can prevent safe replacement or recovery. Unaffected instances remain
 active, and the Gateway process stays running.
+
+Native plugins can declare
+[`generationOverlap: true`](/plugins/manifest#generation-overlap) when each
+generation owns its registration, services, runtime state, and cleanup
+independently. Both generations must opt in, and the Gateway keeps channel and
+exclusive-resource replacements serialized. A declaration does not make shared
+module globals, exclusive ports, or predecessor-affecting service startup safe.
+
+For eligible overlap, successor preparation leaves the predecessor active. Once
+preparation succeeds, publication selects the successor for new admissions.
+Admitted old turns keep their original tools, hooks, end hooks, and services
+until their last holder releases; only then does predecessor cleanup run. A
+failed unpublished successor is cleaned up without switching the active
+generation. Authors must ensure that this cleanup cannot affect the predecessor.
+Rapid replacements may retain multiple predecessors while their admitted work
+finishes. Process shutdown still closes every retained generation. Current
+credential, approval, and external-effect checks remain in force throughout.
 
 Managed instances expose `api.lifecycle.signal` and
 `api.lifecycle.onDispose(cleanup)`. The signal aborts when disposal reaches
@@ -469,8 +486,12 @@ manager must not look up a replacement plugin instance. Return asynchronous work
 from the callback so the instance retains it until it settles. Disposal does not
 wait for this work before running `onDispose`, so cleanup can stop the work and
 safely await it; module teardown still waits for it to settle, and work that
-outlives the cleanup budget is force-retired like other calls. New calls reject after admission
-closes; already admitted host cleanup retains its teardown authority. The runner
+outlives the cleanup budget is force-retired like other calls. By default, new calls
+reject after admission closes. With `generationOverlap: true`, the instance's
+background owner remains callable during supersession, including callbacks needed
+by an admitted turn that opens a resource for the first time. Terminal revocation
+still rejects new background work; already admitted host cleanup retains its
+teardown authority. The runner
 does not schedule work or cancel native resources: release those in the existing
 cleanup owner. Like the other instance lifecycle fields, it can be absent on an
 API host without a managed instance.
@@ -525,8 +546,9 @@ Without an unambiguous live owner, preparation loads separate instances. Borrowi
 turns run the Gateway's `registrationMode: "full"` registrations and share its
 services and runtime store; only plugins the Gateway lacks or configures
 differently load a separate discovery instance. After `openclaw plugins reload`,
-later turns use the reloaded Gateway instance, and the reload waits for turns that
-still hold the previous one. Borrowed channel methods and read-authority grants
+later turns use the reloaded Gateway instance. Serialized reload waits for turns
+that still hold the previous one; eligible generation overlap lets those turns
+finish on their predecessor after publication. Borrowed channel methods and read-authority grants
 expire with the borrowing runtime or invocation scope; retiring the borrower does
 not retire the Gateway's instance.
 

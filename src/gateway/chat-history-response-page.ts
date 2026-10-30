@@ -228,9 +228,13 @@ export function prepareChatHistoryResponsePage(
         ? pagination.offset + pagination.rawPageMessages
         : Math.max(pagination.offset + 1, pagination.totalMessages - oldestSeq + 1);
   }
+  const cursors = resolveChatHistoryPageCursors(historyPage.anchor, capped, normalized);
+  // Numeric pages may have no encodable IDs. Honor reader exhaustion unless
+  // response budgeting dropped older source rows from this page.
   const hasMore =
     pagination !== undefined && candidateNextOffset !== undefined
-      ? candidateNextOffset < pagination.totalMessages
+      ? candidateNextOffset < pagination.totalMessages &&
+        (!historyPage.anchor || historyPage.anchor.hasOlder || capped.length < messages.length)
       : undefined;
   const survivors = new Set(capped);
   const omittedCount = normalized.reduce<number>(
@@ -253,7 +257,7 @@ export function prepareChatHistoryResponsePage(
         }
       : {}),
     responseHistoryBytes,
-    ...resolveChatHistoryPageCursors(historyPage.anchor, capped, normalized),
+    ...cursors,
     ...(hasMore ? { nextOffset: candidateNextOffset } : {}),
     ...(hasMore !== undefined ? { hasMore } : {}),
     ...(pagination !== undefined ? { totalMessages: pagination.totalMessages } : {}),

@@ -34,8 +34,10 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/build-info-unicode.e2e.test.ts",
   "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-completed-assistant.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-daybreak.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-html-csp.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-html-publication.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-loading-geometry.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
@@ -46,6 +48,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/chat-session-diff-folding.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-stop-long-turn.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",
@@ -55,6 +58,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/composer-draft-store.e2e.test.ts",
   "ui/src/e2e/composer-recovery-fences.e2e.test.ts",
+  "ui/src/e2e/config-form.real-gateway.e2e.test.ts",
   "ui/src/e2e/config-raw-save.e2e.test.ts",
   "ui/src/e2e/control-ui-shell-routing.e2e.test.ts",
   "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
@@ -76,6 +80,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
   "ui/src/e2e/quiet-automations.real-gateway.e2e.test.ts",
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
+  "ui/src/e2e/session-management.child-failures.e2e.test.ts",
   "ui/src/e2e/session-management.delete.e2e.test.ts",
   "ui/src/e2e/session-progress-runtime.e2e.test.ts",
   "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
@@ -99,7 +104,6 @@ export const uiE2eRuntimeBudgetTestFile = resolveUiTypeScriptPath(
 export const uiE2eProductionArtifactTestFiles = [
   "ui/src/e2e/service-worker-update.e2e.test.ts",
   "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
-  "ui/src/e2e/stale-build-recovery.production.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
 
 const uiE2eStandaloneTestFiles = [

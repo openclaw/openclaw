@@ -68,6 +68,8 @@ describe("diagnostic support redaction", () => {
   });
 
   it.each([
+    "Update database backup volume: needs 8.5 GiB; available 7.8 GiB",
+    "Update database rollback volume: needs 80 MiB; available 70 MiB",
     "schema migration required",
     "database schema newer than candidate",
     "plugin load failed",
@@ -77,7 +79,7 @@ describe("diagnostic support redaction", () => {
     "native module missing",
     "native module ABI mismatch",
     "startup ran out of memory",
-  ])("admits only the exact startup template %s", (message) => {
+  ])("admits only the exact public diagnostic template %s", (message) => {
     const context = { env: {}, stateDir: tempDir };
     expect(redactPublicSupportDiagnosticLine(message, context)).toBe(message);
     expect(redactPublicSupportDiagnosticLine(`${message} private-tenant`, context)).toBe(

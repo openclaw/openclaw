@@ -3,9 +3,11 @@ import { Socket } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import type { ReadFilePage } from "../../agents/sessions/tools/read-file-page.js";
 import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
+import { spawnInAgentExecCgroup } from "../linux-exec-cgroup.js";
 import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
 import { waitForBrokerChildCompletion } from "./child-completion.js";
 import {
@@ -57,7 +59,7 @@ let resources: Awaited<ReturnType<typeof createBrokerNativeResourceServer>> | un
 let startup: "waiting" | "initializing" | "ready" = "waiting";
 let initialization = Promise.resolve();
 const launches = new Set<Promise<void>>();
-const fileReads = new Map<number, { canceled: boolean }>();
+const fileReads = new Map<number, { canceled: boolean; controller: AbortController }>();
 
 const sender = createWorkerSender((message, handle, callback) => {
   if (!process.send || !process.connected) {
@@ -144,6 +146,9 @@ function shutdown(): void {
     return;
   }
   stopping = true;
+  for (const read of fileReads.values()) {
+    read.controller.abort();
+  }
   for (const grant of launchGrants.values()) {
     grant.resolve(false);
   }
@@ -197,27 +202,33 @@ function disposeFailedChild(child: ChildProcess | undefined): void {
 }
 
 async function readFile(message: Extract<BrokerRequest, { type: "read-file" }>): Promise<void> {
-  const pending = { canceled: false };
+  const pending = { canceled: false, controller: new AbortController() };
   try {
     // Resource brokers can hold SQLite locks; only the command broker is a safe reader.
     if (resources || owned.size + starting.size + fileReads.size >= 256) {
       throw new SpawnBrokerError("Spawn broker cannot admit a raw file read");
     }
     fileReads.set(message.id, pending);
-    const { buffer } = await readRegularFile({ filePath: message.filePath });
-    // Bound each IPC message, not the file size. Await sends to avoid retaining a second payload.
-    for (let offset = 0; offset < buffer.length; offset += 512 * 1024) {
-      if (stopping || pending.canceled) {
-        return;
+    let page: ReadFilePage | undefined;
+    if (message.page) {
+      const { captureReadFilePage } = await import("../../agents/sessions/tools/read-file-page.js");
+      page = await captureReadFilePage(message.filePath, message.page, pending.controller.signal);
+    } else {
+      const { buffer } = await readRegularFile({ filePath: message.filePath });
+      // Bound IPC messages while preserving the existing complete-byte read.
+      for (let offset = 0; offset < buffer.length; offset += 512 * 1024) {
+        if (stopping || pending.canceled) {
+          return;
+        }
+        await report({
+          type: "file-read-chunk",
+          id: message.id,
+          bytes: buffer.subarray(offset, offset + 512 * 1024),
+        });
       }
-      await report({
-        type: "file-read-chunk",
-        id: message.id,
-        bytes: buffer.subarray(offset, offset + 512 * 1024),
-      });
     }
     if (!stopping && !pending.canceled) {
-      await report({ type: "file-read-result", id: message.id });
+      await report({ type: "file-read-result", id: message.id, page });
     }
   } catch (error) {
     if (!stopping && !pending.canceled) {
@@ -306,12 +317,14 @@ async function launch(
       }
       const execa =
         message.type === "spawn-execa"
-          ? await startBrokerExeca(message.argv, message.options, assertActive)
+          ? await startBrokerExeca(message.argv, message.options, assertActive, message.execCgroup)
           : undefined;
       const child =
         execa?.child ??
         (message.type !== "spawn-execa"
-          ? spawnWithInheritedOomScore(message.argv[0]!, message.argv.slice(1), message.options)
+          ? spawnInAgentExecCgroup(message.execCgroup, () =>
+              spawnWithInheritedOomScore(message.argv[0]!, message.argv.slice(1), message.options),
+            )
           : undefined);
       spawnedChild = child;
       if (!child) {
@@ -567,6 +580,7 @@ process.on("message", (raw: unknown, handle: SendHandle) => {
     const read = fileReads.get(message.id);
     if (read) {
       read.canceled = true;
+      read.controller.abort();
     }
     return;
   }

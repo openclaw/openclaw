@@ -6,6 +6,7 @@ import {
   recordDeferredPluginMigrations,
   recordDeferredPluginMigrationsInTransaction,
 } from "../infra/deferred-plugin-migrations.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import * as reads from "../state/openclaw-state-db-readonly.js";
 import {
@@ -15,11 +16,29 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { readPluginStateMigrationReadinessAsync as read } from "./plugin-state-migration-readiness.js";
+import {
+  confirmPluginStateMigrationReadiness,
+  readPluginStateMigrationReadinessAsync as read,
+} from "./plugin-state-migration-readiness.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(closeStateDatabaseForTest);
 afterEach(() => vi.restoreAllMocks());
+
+it("confirms live startup readiness without copying unrelated shared state", async () => {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("plugin-live-readiness-") };
+  writeConfigMachineState("fixture.unrelated", true, { env });
+  const backup = vi.spyOn(requireNodeSqlite(), "backup");
+  const warn = vi.fn();
+  await confirmPluginStateMigrationReadiness({
+    config: {},
+    env,
+    signal: new AbortController().signal,
+    warn,
+  });
+  expect(warn).not.toHaveBeenCalled();
+  expect(backup).not.toHaveBeenCalled();
+});
 
 it("retains settled readiness until a migration commits, independently of database and engine", async () => {
   const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("plugin-readiness-") };

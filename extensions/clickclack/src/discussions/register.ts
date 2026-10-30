@@ -10,6 +10,7 @@ import {
 } from "./binding-store.js";
 import { discussionSessionKey, isDiscussionSessionKey } from "./naming.js";
 import {
+  adoptLegacyMarkers,
   isClickClackDiscussionChannelRevoked,
   prepareClickClackDiscussionChannelRevocation,
 } from "./revoked-channel-store.js";
@@ -35,6 +36,7 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
   }
 
   const runtime = api.runtime;
+  void adoptLegacyMarkers(runtime);
   const service = new ClickClackDiscussionService(runtime);
   function isClickClackDiscussionSessionTarget(params: {
     requesterSessionKey: string;

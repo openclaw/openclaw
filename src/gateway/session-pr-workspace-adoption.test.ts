@@ -549,6 +549,7 @@ function stubPullRequestPreparation(sessionKey: string) {
     async ({ assertCurrent }) => ({
       result: { ...pullRequest, author: { accountId: 9, login: "guest" }, state: "open" },
       assertCurrent,
+      requirePublicRepositories: false,
     }),
   );
   vi.spyOn(availability, "prepareCurrentGitHubPublicationIdentity").mockResolvedValue({

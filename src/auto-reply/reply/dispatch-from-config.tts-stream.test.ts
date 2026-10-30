@@ -96,7 +96,7 @@ it.each(["See [", "Example:\n```text\nkeep two spaces  \nkeep a tab\t\n```"])(
     });
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
-      cfg: emptyConfig,
+      cfg: { tts: { auto: "always" } },
       dispatcher,
       replyResolver: async (_ctx, opts) => {
         await opts?.onBlockReply?.({ text });

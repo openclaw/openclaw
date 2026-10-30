@@ -6,6 +6,7 @@ import { getDatabaseEngineSelection } from "../infra/database-engine/context.js"
 import { getGatewayServiceInstallation } from "../infra/gateway-service-installation-context.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { resolveLegacyCronDefaultStoreKey } from "./openclaw-state-db-cron-identity-migration.js";
@@ -17,6 +18,7 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 export function captureOpenClawStateReadContextWithAdmission(
   pathname: string,
   captureAdmission: (pathname: string) => OpenClawStateWorkerContext["admission"],
+  knownIdentity: (pathname: string) => DatabasePathIdentity | undefined,
 ): Pick<
   OpenClawStateWorkerContext,
   | "admission"
@@ -30,6 +32,7 @@ export function captureOpenClawStateReadContextWithAdmission(
 > & { assertPublicationCurrent: () => void } {
   const schema = captureOpenClawStateSchemaReadAdmission(pathname);
   const capturedAdmission = captureAdmission(pathname);
+  const serviceInstallation = getGatewayServiceInstallation();
   const integrity = capturedAdmission.captureIntegrity?.();
   const assertPublicationCurrent = capturedAdmission.assertCurrent;
   let admission = capturedAdmission;
@@ -60,7 +63,13 @@ export function captureOpenClawStateReadContextWithAdmission(
     admission,
     assertPublicationCurrent,
     existingSchemaPath: schema?.path,
-    gatewayServiceInstallation: getGatewayServiceInstallation(),
+    // An unrelated installed service cannot change this database's worker policy.
+    // Admission already resolved its aliases; warm captures need no filesystem reads.
+    gatewayServiceInstallation:
+      serviceInstallation &&
+      knownIdentity(serviceInstallation.databasePath)?.key === capturedAdmission.identity.key
+        ? serviceInstallation
+        : undefined,
     stateIntegrity: integrity,
     runInCapturedSchemaScope,
     artifactPreservingReads: isArtifactPreservingStateRead("agent", pathname) || undefined,
@@ -71,6 +80,7 @@ export function captureOpenClawStateReadContextWithAdmission(
 export function captureOpenClawStateReadWorkerContextWithAdmission(
   options: { path?: string; env?: NodeJS.ProcessEnv },
   captureAdmission: (pathname: string) => OpenClawStateWorkerContext["admission"],
+  knownIdentity: (pathname: string) => DatabasePathIdentity | undefined,
 ): OpenClawStateWorkerContext {
   const source = options.env ?? process.env;
   const env = process.platform === "win32" ? cloneEnvWithPlatformSemantics(source) : source;
@@ -82,6 +92,7 @@ export function captureOpenClawStateReadWorkerContextWithAdmission(
     ...captureOpenClawStateReadContextWithAdmission(
       options.path ?? resolveOpenClawStateSqlitePath(environment),
       captureAdmission,
+      knownIdentity,
     ),
     environment,
   };
@@ -95,8 +106,13 @@ export function captureOpenClawStateWorkerContextWithAdmission(
     initializationAgentPaths?: readonly string[];
   },
   captureAdmission: (pathname: string) => OpenClawStateWorkerContext["admission"],
+  knownIdentity: (pathname: string) => DatabasePathIdentity | undefined,
 ): OpenClawStateWorkerContext {
-  const context = captureOpenClawStateReadWorkerContextWithAdmission(options, captureAdmission);
+  const context = captureOpenClawStateReadWorkerContextWithAdmission(
+    options,
+    captureAdmission,
+    knownIdentity,
+  );
   return {
     ...context,
     initializationCronDefaultStoreKey: resolveLegacyCronDefaultStoreKey(options.env ?? process.env),
