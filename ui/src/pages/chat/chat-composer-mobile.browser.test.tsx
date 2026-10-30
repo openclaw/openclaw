@@ -78,6 +78,8 @@ it.each(["menu", "padding"] as const)("keeps the mobile draft through %s focus",
     await page.elementLocator(trigger).click();
     await expect.element(page.getByRole("menu")).toBeVisible();
     await userEvent.keyboard("{ArrowDown}");
+    // Native visibility precedes the lazy body and keyboard navigation runtime.
+    await vi.dynamicImportSettled();
     const menu = document.querySelector<HTMLElement>('[role="menu"]:popover-open')!;
     await expect.poll(() => menu.contains(document.activeElement)).toBe(true);
     renderComposerInto(container, { ...props, mobileKeyboardVisible: false });
