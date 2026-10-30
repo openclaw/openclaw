@@ -40,10 +40,10 @@ export function createCrabboxHeartbeatManager(dependencies: { warn: (message: st
   let disposed = false;
   const isCurrent = (entry: HeartbeatEntry) =>
     !disposed && entries.get(entry.id) === entry && !entry.controller.signal.aborted;
-  const warn = (entry: HeartbeatEntry, message: string) =>
+  const warn = (entry: HeartbeatEntry, message: string, retry = true) =>
     dependencies.warn(
       entry.provider === "azure-sandbox"
-        ? `${message}; Sandbox idle activity is not being refreshed`
+        ? `${message}; Sandbox idle activity is not being refreshed; ${retry ? "OpenClaw will retry automatically; " : ""}save your work if failures persist`
         : `${message}; cloud worker machines may be reaped after ${entry.idleTimeout} of coordinator-idle time`,
     );
   const observe = (entry: HeartbeatEntry, lifetime?: CrabboxLeaseLifetime) => {
@@ -141,6 +141,7 @@ export function createCrabboxHeartbeatManager(dependencies: { warn: (message: st
       warn(
         entry,
         `Crabbox provider ${entry.provider} does not support heartbeat for worker lease ${entry.id}`,
+        false,
       );
       return;
     }
