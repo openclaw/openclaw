@@ -32,10 +32,10 @@ export function bucketRelativeTimeMs(durationMs: number): {
   if (minutes < 60) {
     return { value: minutes, unit: "minute" };
   }
-  const hours = Math.round(minutes / 60);
+  const hours = Math.round(durationMs / 3_600_000);
   return hours < 48
     ? { value: hours, unit: "hour" }
-    : { value: Math.round(hours / 24), unit: "day" };
+    : { value: Math.round(durationMs / 86_400_000), unit: "day" };
 }
 
 /** Formats a byte count with caller-explicit scale, labels, precision, and unit cap. */

@@ -7,6 +7,9 @@ describe("bucketRelativeTimeMs", () => {
     [59_500, { value: 1, unit: "minute" }],
     [60 * 60_000, { value: 1, unit: "hour" }],
     [48 * 3_600_000, { value: 2, unit: "day" }],
+    [2.49 * 86_400_000, { value: 2, unit: "day" }],
+    [2.5 * 86_400_000, { value: 3, unit: "day" }],
+    [3.49 * 86_400_000, { value: 3, unit: "day" }],
   ] as const)("buckets %sms with nested rounding", (durationMs, expected) => {
     expect(bucketRelativeTimeMs(durationMs)).toEqual(expected);
   });

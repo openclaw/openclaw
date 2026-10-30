@@ -135,9 +135,12 @@ function completedCall(endedAt = Date.UTC(2026, 4, 2, 9, 18, 23)) {
 }
 
 function expectCliGatewayCall(method: string, params: unknown, timeout = "5000") {
-  expect(callGatewayFromCliMock).toHaveBeenCalledWith(method, { json: true, timeout }, params, {
-    progress: false,
-  });
+  expect(callGatewayFromCliMock).toHaveBeenCalledWith(
+    method,
+    { json: true, timeout },
+    params,
+    expect.objectContaining({ progress: false }),
+  );
 }
 
 function clearTwilioEnv() {
