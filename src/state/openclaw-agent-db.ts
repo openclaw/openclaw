@@ -478,6 +478,7 @@ function* openOpenClawAgentDatabaseSteps(
           reusedSchema,
           integrityCheck,
           repairAdmission?.integrityTables ?? [],
+          preparedLease?.startupIntegrity,
         );
         assertCurrent(validationDatabase);
         if (!diagnostics.integrityGateOutcome || diagnostics.integrityGateOutcome === "cached") {

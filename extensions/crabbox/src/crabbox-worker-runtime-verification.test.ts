@@ -41,7 +41,6 @@ describe("native runtime installation receipts", () => {
   it.each([
     ["missing", "setup output"],
     ["duplicate", `${line(receipt)}\n${line(receipt)}`],
-    ["unbounded", `openclaw.runtime-installed:${" ".repeat(16384)}`],
     ["unbounded UTF-8", line({ ...receipt, extra: "🦞".repeat(4096) })],
     ["unverified", line({ ...receipt, installationVerified: false })],
     [

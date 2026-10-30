@@ -264,14 +264,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
             : name === "contextSystem"
               ? ["contextFree"]
               : name === "contextOffline"
-                ? [
-                    "contextUnavailable",
-                    "contextReserve",
-                    "contextCompactDescription",
-                    "contextCompact",
-                    "contextCompacting",
-                    "contextCompactShort",
-                  ]
+                ? ["contextUnavailable", "contextReserve"]
                 : name === "contextExactCount"
                   ? [
                       "contextFreeShort",

@@ -347,6 +347,40 @@ export function readOpenClawDatabaseQuarantineFailure(
   return failure;
 }
 
+/** A background integrity verdict survives later writes and restarts until Doctor clears it. */
+export function recordOpenClawDatabaseQuarantine(
+  pathname: string,
+  reason: string,
+  options: { env?: NodeJS.ProcessEnv; assertCurrent: () => void },
+): void {
+  const env = options.env ?? process.env;
+  options.assertCurrent();
+  invalidateSqliteDatabaseCleanClose(pathname);
+  withQuarantineWriter(env, (database) =>
+    runSqliteImmediateTransactionSync(
+      database,
+      () => {
+        options.assertCurrent();
+        const decision: QuarantineDecision = {
+          kind: "agent",
+          reason,
+          quarantinedAt: Date.now(),
+          verifiedGenerationJson: null,
+        };
+        database
+          .prepare(`INSERT INTO quarantined_databases
+            (path, kind, reason, quarantined_at, verified_generation)
+            VALUES (?, 'agent', ?, ?, NULL)
+            ON CONFLICT(path) DO UPDATE SET kind=excluded.kind, reason=excluded.reason,
+              quarantined_at=excluded.quarantined_at, verified_generation=NULL`)
+          .run(path.resolve(pathname), reason, decision.quarantinedAt);
+        publishSqliteDatabaseAdmission(database, quarantineDecisionAdmission(pathname), decision);
+      },
+      { databaseLabel: resolveQuarantineStorePath(env), operationLabel: "quarantine.record" },
+    ),
+  );
+}
+
 export function clearOpenClawDatabaseQuarantine(
   pathname: string,
   options: { env?: NodeJS.ProcessEnv } = {},

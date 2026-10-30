@@ -21,8 +21,9 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     dsn = connection!,
     namespace = schema,
     options: ConstructorParameters<typeof PostgresSyncConnection>[4] = { reuse: true },
+    storeId = schema,
   ) {
-    const db = run(() => new PostgresSyncConnection(dsn, namespace, anchor, schema, options));
+    const db = run(() => new PostgresSyncConnection(dsn, namespace, anchor, storeId, options));
     opened.push(db);
     return db;
   }
@@ -58,6 +59,8 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     const writer = open();
     expect(pid(writer)).toBe(firstPid);
     exec(writer, "BEGIN; INSERT INTO entries VALUES (1)");
+    writer.releaseIdleTransport();
+    expect(pid(writer)).toBe(firstPid);
     const reader = open();
     expect(pid(reader)).not.toBe(firstPid);
     expect(get(reader, "SELECT count(*)::int AS count FROM entries")).toEqual({ count: 0 });
@@ -180,7 +183,7 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     const lockKey = Number.parseInt(randomUUID().replaceAll("-", "").slice(0, 12), 16);
     run(() => first.prepare("SELECT pg_advisory_lock(?)").get(lockKey));
     close(first);
-    for (let index = 0; index < 4; index++) {
+    for (let index = 0; index < 2; index++) {
       const next = independent();
       close(next);
     }
@@ -226,12 +229,12 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     expect(rows(reader, "SELECT id FROM batch_entries")).toEqual([{ id: 1 }]);
   });
 
-  it("does not reuse across connection settings or namespaces", () => {
+  it("switches namespaces but does not reuse across connection settings", () => {
     const first = open();
     const originalPid = pid(first);
     close(first);
     const differentNamespace = open(connection!, "public");
-    expect(pid(differentNamespace)).not.toBe(originalPid);
+    expect(pid(differentNamespace)).toBe(originalPid);
     expect(get(differentNamespace, "SELECT current_schema() AS schema")).toEqual({
       schema: "public",
     });
@@ -240,6 +243,43 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     dsn.searchParams.set("application_name", "reuse-independent");
     const differentSettings = open(dsn.href);
     expect(pid(differentSettings)).not.toBe(originalPid);
+  });
+
+  it("switches A to B to A with prepared statements and the matching recovery namespace", async () => {
+    const namespaces = [`${schema}_a`, `${schema}_b_"quoted,part`];
+    for (const [index, namespace] of namespaces.entries()) {
+      const quoted = `"${namespace.replaceAll('"', '""')}"`;
+      await admin.query(
+        `CREATE SCHEMA ${quoted}; CREATE TABLE ${quoted}.entries (id integer);
+         CREATE TABLE ${quoted}.openclaw_schema_meta (store text, version integer, store_id text)`,
+      );
+      await admin.query(`INSERT INTO ${quoted}.entries VALUES ($1)`, [index + 1]);
+      await admin.query(`INSERT INTO ${quoted}.openclaw_schema_meta VALUES ('test', 1, $1)`, [
+        namespace,
+      ]);
+    }
+    const dsn = new URL(connection!);
+    dsn.searchParams.set("application_name", randomUUID());
+    let backend: unknown;
+    let generation: string | undefined;
+    for (const index of [0, 1, 0]) {
+      const namespace = namespaces[index]!;
+      const db = open(dsn.href, namespace, { reuse: true }, namespace);
+      backend ??= pid(db);
+      expect(pid(db)).toBe(backend);
+      expect(run(() => db.prepare("SELECT id FROM entries WHERE id > ?").all(0))).toEqual([
+        { id: index + 1 },
+      ]);
+      expect(get(db, "SELECT count(*)::int AS n FROM pg_prepared_statements")!.n).toBe(1);
+      const current = transaction(db, () => db.readRecoveryGeneration(), true);
+      if (index === 0) {
+        generation ??= current;
+        expect(current).toBe(generation);
+      } else {
+        expect(current).not.toBe(generation);
+      }
+      close(db);
+    }
   });
 
   it("inherits commit durability while applying settings with a quoted, comma-containing schema name", async () => {

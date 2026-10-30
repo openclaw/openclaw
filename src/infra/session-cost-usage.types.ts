@@ -176,7 +176,6 @@ export type DiscoveredSession = {
   sessionId: string;
   sessionFile: string;
   mtime: number;
-  transcriptFile?: UsageCostTranscriptFile;
 };
 
 export type SessionLogEntry = {

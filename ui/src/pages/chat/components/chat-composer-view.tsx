@@ -670,6 +670,10 @@ export function renderChatComposerView(
                     gateway={props.contextGateway}
                     agentId={props.currentAgentId}
                     onOpenContext={props.onOpenContext}
+                    onCompact={props.onCompact}
+                    compactionStatus={props.compactionStatus}
+                    runActive={props.runActive}
+                    connected={props.connected}
                   />
                 </div>
                 <Show when={props.composerControls}>

@@ -128,6 +128,47 @@ describe("resolveWorkingProgress", () => {
       ),
     ).toMatchObject({ runId: "second-run", startedAt: 60_300 });
   });
+
+  it("bounds working timing while keeping a recently read run across session churn", () => {
+    const retired = "agent:main:retired";
+    resolveWorkingProgress(retired, "retired-run", 1_000, [], [], []);
+    const current = progress("current-run", 2_000, [], [], []);
+    for (let index = 0; index < 40; index++) {
+      resolveWorkingProgress(`agent:main:other-${index}`, `run-${index}`, 3_000, [], [], []);
+      if (index % 5 === 0) {
+        expect(progress("current-run", 9_000, [], [], [])).toEqual(current);
+      }
+    }
+    expect(progress("current-run", 9_000, [], [], [])).toEqual(current);
+    expect(resolveWorkingProgress(retired, "retired-run", 9_000, [], [], [])).toMatchObject({
+      runId: "retired-run",
+      startedAt: 9_000,
+    });
+  });
+
+  it("bounds idle cutoffs while preserving a recently read session's stale-activity barrier", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(30_000);
+    const retired = "agent:main:retired";
+    clearWorkingProgress(retired);
+    clearWorkingProgress(SESSION);
+    vi.setSystemTime(60_000);
+    const stale = [{ runId: "stale-run", ts: 1_000 }];
+    for (let index = 0; index < 40; index++) {
+      clearWorkingProgress(`agent:main:other-${index}`);
+      if (index % 5 === 0) {
+        expect(progress(null, null, [], stale, [])).toMatchObject({
+          runId: null,
+          startedAt: 60_000,
+        });
+      }
+    }
+    expect(progress(null, null, [], stale, [])).toMatchObject({ runId: null, startedAt: 60_000 });
+    expect(resolveWorkingProgress(retired, null, null, [], stale, [])).toMatchObject({
+      runId: "stale-run",
+      startedAt: 1_000,
+    });
+  });
 });
 
 describe("resolveTurnRecap", () => {

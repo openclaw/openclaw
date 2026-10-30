@@ -20,6 +20,7 @@ import {
   getAsyncWorkSignal,
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import type { SessionUsageEntry } from "../../shared/usage-types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
@@ -32,7 +33,7 @@ export type UsageSessionSummaryTarget = {
   agentId: string;
   sessionId: string;
   sessionFile: string;
-  instances: Array<Pick<DiscoveredSession, "sessionId" | "sessionFile" | "transcriptFile">>;
+  instances: Array<Pick<DiscoveredSession, "sessionId" | "sessionFile">>;
 };
 
 const USAGE_AGENT_LOAD_CONCURRENCY = 12;
@@ -58,7 +59,6 @@ export async function discoverAllSessionsForUsage(params: {
   agentId?: string;
   startMs: number;
   endMs: number;
-  statistics?: false;
 }): Promise<DiscoveredSessionWithAgent[]> {
   return readWithSessionStoreTopology(async () => {
     const requestedAgentId = normalizeOptionalString(params.agentId);
@@ -72,7 +72,6 @@ export async function discoverAllSessionsForUsage(params: {
           agentId,
           startMs: params.startMs,
           endMs: params.endMs,
-          statistics: params.statistics,
         });
         return sessions.map((session) => Object.assign({}, session, { agentId }));
       }),
@@ -136,13 +135,12 @@ export async function loadUsageSessionSummaries(params: {
     Array<UsageSessionSummaryTarget["instances"][number] & { entryIndex: number }>
   >();
   for (const [entryIndex, merged] of mergedEntries.entries()) {
-    for (const { sessionId, sessionFile, transcriptFile } of merged.instances) {
+    for (const { sessionId, sessionFile } of merged.instances) {
       const agentSessions = sessionsByAgent.get(merged.agentId) ?? [];
       agentSessions.push({
         entryIndex,
         sessionId,
         sessionFile,
-        transcriptFile,
       });
       sessionsByAgent.set(merged.agentId, agentSessions);
     }
@@ -152,6 +150,7 @@ export async function loadUsageSessionSummaries(params: {
     Array.from(sessionsByAgent.entries()).map(([agentId, agentSessions]) => async () => {
       let usage: ReturnType<typeof createSessionCostSummaryAccumulator> | undefined;
       let reportBudgetBytes: number | undefined;
+      const publicationDeadline = monotonicNow() + USAGE_REPORT_PUBLICATION_WAIT_MS;
       for (let offset = 0; offset < agentSessions.length;) {
         // Concurrent reports share the worker pool's input-byte budget.
         const batch = agentSessions.slice(offset, offset + USAGE_REPORT_BATCH_SIZE);
@@ -165,7 +164,7 @@ export async function loadUsageSessionSummaries(params: {
               endMs,
               includeUntimestamped,
               dayBucket,
-              maxPublicationWaitMs: USAGE_REPORT_PUBLICATION_WAIT_MS,
+              maxPublicationWaitMs: Math.max(0, publicationDeadline - monotonicNow()),
               reportBudgetBytes,
             }),
           () => ({
