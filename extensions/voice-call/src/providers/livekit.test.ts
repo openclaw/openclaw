@@ -340,17 +340,17 @@ describe("LiveKit telephony lifecycle", () => {
   });
 
   it("preserves an extension From through normalization, manager state and the SIP SDK", async () => {
-    const h = await harness("open", livekit, true, "6018");
+    const h = await harness("open", livekit, true, "1001");
     const result = await h.manager.initiateCall(to, undefined, { mode: "conversation" });
     expect(result.success).toBe(true);
     const call = h.manager.getCall(result.callId)!;
-    expect(call.from).toBe("6018");
+    expect(call.from).toBe("1001");
     expect(call.to).toBe(to);
     expect(h.sip.createSipParticipant).toHaveBeenCalledWith(
       "ST_out",
       to,
       call.providerCallId,
-      expect.objectContaining({ fromNumber: "6018", waitUntilAnswered: true }),
+      expect.objectContaining({ fromNumber: "1001", waitUntilAnswered: true }),
     );
     await h.manager.endCall(result.callId);
     await h.provider.stop();

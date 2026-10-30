@@ -30,10 +30,9 @@ import { isTailscalePortAllowed, VoiceCallTailscaleConfigSchema } from "./tailsc
 const E164Schema = z
   .string()
   .regex(/^\+[1-9]\d{1,14}$/, "Expected E.164 format, e.g. +15550001234");
-// The exact end check also rejects a trailing newline (JavaScript's $ alone does not).
 const LiveKitExtensionNumberSchema = z
   .string()
-  .regex(/^[0-9]{1,15}$(?![\s\S])/, "Expected a 1–15 digit LiveKit PBX extension");
+  .regex(/^[0-9]{1,15}$/, "Expected a 1–15 digit LiveKit PBX extension");
 
 const InboundPolicySchema = z.enum(["disabled", "allowlist", "pairing", "open"]);
 
