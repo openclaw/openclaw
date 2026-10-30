@@ -1,2 +1,2 @@
-# Existing maintenance regressions verify early recovery and unsafe-cleanup guidance.
-15
+# Existing maintenance regressions and consumers verify early and terminal recovery guidance.
+22
