@@ -381,55 +381,6 @@ export function recordOpenClawDatabaseQuarantine(
   );
 }
 
-/** Persist known damage through shared-state custody after the agent writer is fenced. */
-export async function recordOpenClawDatabaseQuarantineAsync(
-  pathname: string,
-  reason: string,
-  options: { env?: NodeJS.ProcessEnv; assertCurrent: () => void; signal?: AbortSignal },
-): Promise<void> {
-  const [
-    { captureOpenClawStateWorkerContext },
-    { runOpenClawStateWorkerOperation },
-    { createSqliteWorkerOperationAdmission },
-  ] = await Promise.all([
-    import("./openclaw-state-worker-context.js"),
-    import("./openclaw-state-worker-store.js"),
-    import("../infra/sqlite-worker-operation-admission.js"),
-  ]);
-  options.assertCurrent();
-  const context = captureOpenClawStateWorkerContext({ env: options.env });
-  const recorded = await runOpenClawStateWorkerOperation(
-    context,
-    async (scope) => {
-      await scope.execute({ type: "quarantine.record", input: { pathname, reason } });
-      return true;
-    },
-    {
-      assertCurrent: options.assertCurrent,
-      signal: options.signal,
-      existingOnly: true,
-      createAdmission: () => ({
-        nativeLocations: [
-          context.admission.databasePath,
-          resolveQuarantineStorePath(context.environment),
-        ],
-        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-          if (request.stage !== "commit") {
-            throw new Error("Database quarantine requires its corruption-recording admission");
-          }
-          context.admission.assertCurrent();
-          options.signal?.throwIfAborted();
-          options.assertCurrent();
-          grant();
-        }),
-      }),
-    },
-  );
-  if (!recorded) {
-    throw new Error("Shared-state owner unavailable while recording database corruption");
-  }
-}
-
 export function clearOpenClawDatabaseQuarantine(
   pathname: string,
   options: { env?: NodeJS.ProcessEnv } = {},

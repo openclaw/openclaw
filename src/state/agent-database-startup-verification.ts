@@ -2,6 +2,7 @@ import { createSessionWorkerExecutionSource } from "../config/sessions/session-w
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
+import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
@@ -12,8 +13,10 @@ import {
 import type { AgentDatabaseStartupActivation } from "./agent-database-startup.types.js";
 import { recordOpenClawAgentDatabaseOpenFailure } from "./openclaw-agent-db-lifecycle.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import { recordOpenClawDatabaseQuarantineAsync } from "./openclaw-quarantine-store.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
+import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 
 const log = createSubsystemLogger("state/agent-admission");
 
@@ -109,3 +112,43 @@ export const verifyAgentDatabaseStartupIntegrity: NonNullable<
     }
   }
 };
+
+/** Persist known damage through shared-state custody after the agent writer is fenced. */
+async function recordOpenClawDatabaseQuarantineAsync(
+  pathname: string,
+  reason: string,
+  options: { env?: NodeJS.ProcessEnv; assertCurrent: () => void; signal?: AbortSignal },
+): Promise<void> {
+  options.assertCurrent();
+  const context = captureOpenClawStateWorkerContext({ env: options.env });
+  const recorded = await runOpenClawStateWorkerOperation(
+    context,
+    async (scope) => {
+      await scope.execute({ type: "quarantine.record", input: { pathname, reason } });
+      return true;
+    },
+    {
+      assertCurrent: options.assertCurrent,
+      signal: options.signal,
+      existingOnly: true,
+      createAdmission: () => ({
+        nativeLocations: [
+          context.admission.databasePath,
+          resolveQuarantineStorePath(context.environment),
+        ],
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          if (request.stage !== "commit") {
+            throw new Error("Database quarantine requires its corruption-recording admission");
+          }
+          context.admission.assertCurrent();
+          options.signal?.throwIfAborted();
+          options.assertCurrent();
+          grant();
+        }),
+      }),
+    },
+  );
+  if (!recorded) {
+    throw new Error("Shared-state owner unavailable while recording database corruption");
+  }
+}

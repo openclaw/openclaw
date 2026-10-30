@@ -30,7 +30,6 @@ const mocks = vi.hoisted(() => ({
   info: vi.fn(),
   warn: vi.fn(),
   integrityCheck: vi.fn(),
-  quarantine: vi.fn(),
   corruption: vi.fn(),
 }));
 
@@ -48,10 +47,6 @@ vi.mock("../state/openclaw-agent-execution.js", () => ({
 // mock-isolation: Observe corruption revocation without retiring unrelated database handles.
 vi.mock("../state/openclaw-agent-db-lifecycle.js", () => ({
   recordOpenClawAgentDatabaseOpenFailure: mocks.corruption,
-}));
-// mock-isolation: Observe durable quarantine requests without a shared-state database.
-vi.mock("../state/openclaw-quarantine-store.js", () => ({
-  recordOpenClawDatabaseQuarantineAsync: mocks.quarantine,
 }));
 
 // mock-isolation: This suite owns startup timers; filesystem observation has separate coverage.
@@ -710,7 +705,6 @@ it.for(["agent removal", "database move"] as const)(
       await withinTest(admission.pendingPreparation!, signal);
       expectAdmission(fleet, "large");
       expect(mocks.corruption).not.toHaveBeenCalled();
-      expect(mocks.quarantine).not.toHaveBeenCalled();
       expectLog(mocks.warn, "agent database background integrity verification incomplete", {
         agentId: "large",
         reason: expect.stringContaining("database configuration changed"),

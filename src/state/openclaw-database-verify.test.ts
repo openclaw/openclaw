@@ -36,7 +36,7 @@ import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
 import {
   clearOpenClawDatabaseQuarantine,
   readOpenClawDatabaseQuarantineFailure,
-  recordOpenClawDatabaseQuarantineAsync,
+  recordOpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-store.js";
 import {
   readPersistedQuarantineRow,
@@ -111,12 +111,12 @@ it("revalidates a latched integrity failure after external repair", () => {
   expect(f.agent().db.isOpen).toBe(true);
 });
 
-it("retains a background corruption verdict across writes until verified Doctor recovery", async () => {
+it("retains a recorded corruption verdict across writes until verified Doctor recovery", () => {
   const database = f.agent();
   expect(
     readOpenClawDatabaseQuarantineFailure("agent", database.path, { env: f.env }),
   ).toBeUndefined();
-  await recordOpenClawDatabaseQuarantineAsync(database.path, "corrupt index", {
+  recordOpenClawDatabaseQuarantine(database.path, "corrupt index", {
     env: f.env,
     assertCurrent() {},
   });
