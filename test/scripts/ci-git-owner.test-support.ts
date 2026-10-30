@@ -199,8 +199,10 @@ export async function runCiGitStep(options: {
     options.workflow || options.action === "mantis-validate-trusted-ref" || publisher;
   const clock = {
     ...options,
+    // Policy tests can accelerate escalation while lifecycle tests retain real grace.
     realDrain:
-      options.cancelDuringCleanup || options.scenario?.startsWith("cancel-") || options.realDrain,
+      options.realDrain ??
+      (options.cancelDuringCleanup || options.scenario?.startsWith("cancel-") || undefined),
   };
   const step: (Step & { run: string }) | undefined = options.action
     ? readActionSteps(options.action).find((entry) =>

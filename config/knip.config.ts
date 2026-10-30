@@ -46,7 +46,10 @@ const repositoryScriptEntries = [
   "scripts/perf/connect-profile-binding-measure.ts!",
   "scripts/perf/cron-reader-reuse-measure.ts!",
   "scripts/perf/cron-registry-read-measure.ts!",
+  "scripts/perf/doctor-retirement-measure.mts!",
   "scripts/perf/doctor-session-manifests.ts!",
+  "scripts/perf/doctor-sqlite-inspection.mjs!",
+  "scripts/perf/github-readiness-state-bench.ts!",
   "scripts/perf/history-model-projection-measure.ts!",
   "scripts/perf/inspection-read-admission.ts!",
   "scripts/perf/local-workspace-refresh-measure.ts!",
@@ -69,6 +72,7 @@ const repositoryScriptEntries = [
   "scripts/perf/trajectory-record-event-measure.ts!",
   "scripts/perf/transcript-json-array-measure.mjs!",
   "scripts/perf/transcript-pool-idle-measure.ts!",
+  "scripts/perf/update-state-io-measure.ts!",
   "scripts/perf/worktree-creation-measure.ts!",
   // The source header documents this matched Code Mode engine probe by path.
   "scripts/perf/code-mode-engine-measure.ts!",
@@ -1910,6 +1914,8 @@ const config = {
       ],
       // Platform tools, installed CLIs, and shell builtins used by scripts and boundary tests.
       ignoreBinaries: [
+        // doctor-sqlite-inspection.mjs compiles its native read counter with the host compiler.
+        "cc",
         "ffmpeg",
         "lsattr",
         "mint",

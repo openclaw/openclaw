@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:https";
 import type { LookupFunction, Server } from "node:net";
+import type { DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
 import {
   redactProviderResponseErrorText,
   resolveProviderHttpRequestConfigWithOriginTrust,
@@ -18,8 +19,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vite
 import type { RuntimeConfig } from "./config.js";
 import {
   collectRequest,
-  decisionContext,
-  registeredDecisionProvider,
+  registeredPreparedDecisionProvider,
   scoreAnswer,
   stubAmbientProxies,
 } from "./transport.test-support.js";
@@ -77,7 +77,7 @@ async function listen<T extends Server>(listener: T) {
 type ModelProviderConfig = NonNullable<RuntimeConfig["providerConfig"]>;
 
 const batch = {
-  state: { evidence: "Synthetic outage" },
+  state: { type: "json" as const, value: { evidence: "Synthetic outage" } },
   questions: { q: { type: "boolean" as const } },
 };
 const answer = {
@@ -164,12 +164,19 @@ function provider(source: ModelProviderConfig | (() => ModelProviderConfig)) {
       throw new Error("hosted key read");
     },
   };
-  return registeredDecisionProvider(() => ({
+  return registeredPreparedDecisionProvider(() => ({
     models: { providers: { typesafe: typeof source === "function" ? source() : source } },
     plugins: { entries: { typesafe: { config } } },
   }));
 }
-const context = () => decisionContext("nemotron-deciffusion", 3000);
+const context = (apiKey = "typesafe-local"): DecisionProviderContextV2 => ({
+  model: { provider: "typesafe", id: "nemotron-deciffusion", name: "Nemotron" },
+  config: {},
+  auth: { mode: "api-key", apiKey },
+  signal: new AbortController().signal,
+  deadlineMonotonicMs: performance.now() + 3000,
+  isAdmissible: () => true,
+});
 const endpointRef = {
   source: "store",
   provider: "default",
@@ -182,7 +189,10 @@ const settings = (overrides: Partial<ModelProviderConfig> = {}): ModelProviderCo
   ...overrides,
 });
 const evaluate = (overrides: Partial<ModelProviderConfig> = {}) =>
-  provider(settings(overrides)).evaluate(batch, context());
+  provider(settings(overrides)).evaluate(
+    batch,
+    context(typeof overrides.apiKey === "string" ? overrides.apiKey : undefined),
+  );
 async function expectUnavailable(
   pending: ReturnType<typeof evaluate>,
   reason = "transport",
@@ -227,8 +237,12 @@ it.each<[string, Partial<ModelProviderConfig>, string | undefined, string | unde
       ...(mode === "bearer" ? { baseUrl: baseUrl + "/v1/" } : {}),
     }),
   );
-  expect(registered.isReady?.()).toBe(true);
-  await expect(registered.evaluate(batch, context())).resolves.toMatchObject({
+  await expect(
+    registered.evaluate(
+      batch,
+      context(typeof config.apiKey === "string" ? config.apiKey : undefined),
+    ),
+  ).resolves.toMatchObject({
     status: "ok",
     result: {
       model: "nemotron-deciffusion",
@@ -242,7 +256,7 @@ it.each<[string, Partial<ModelProviderConfig>, string | undefined, string | unde
       authorization,
       apiKey,
       body: {
-        ...batch,
+        state: { evidence: "Synthetic outage" },
         model: "nemotron-deciffusion",
         questions: { q: { type: "noul", instructions: null } },
       },
@@ -300,7 +314,7 @@ it.each([
       config = { ...config, ...update };
       return [{ address: pinnedAddress, family: 4 }];
     });
-    await expectUnavailable(registered.evaluate(batch, context()));
+    await expectUnavailable(registered.evaluate(batch, context("synthetic-server-key")));
   },
 );
 
@@ -334,9 +348,11 @@ it("observes provider credential loss, rotation and recovery", async () => {
     "synthetic-recovered",
   ]) {
     config = settings({ apiKey: key });
-    expect(registered.isReady?.()).toBe(typeof key === "string");
     received.length = 0;
-    const result = await registered.evaluate(batch, context());
+    const result = await registered.evaluate(
+      batch,
+      context(typeof key === "string" ? key : undefined),
+    );
     if (typeof key === "string") {
       expect(result.status).toBe("ok");
       expect(received).toHaveLength(1);
@@ -409,7 +425,7 @@ it.each([false, true])(
   "preserves harmless rubric text with authenticated=%s",
   async (authenticated) => {
     const score = {
-      state: "synthetic",
+      state: { type: "text" as const, text: "synthetic" },
       questions: { q: { type: "score" as const, criteria: ["Bearer demo", "Routine"] } },
     };
     responsePayload = JSON.stringify({
@@ -420,7 +436,7 @@ it.each([false, true])(
     });
     const result = await provider(
       settings(authenticated ? { apiKey: "synthetic-server-key" } : {}),
-    ).evaluate(score, context());
+    ).evaluate(score, context(authenticated ? "synthetic-server-key" : undefined));
     expect(result).toMatchObject({
       status: "ok",
       result: { answers: { q: { type: "score", score: 0, probabilities: [1, 0] } } },

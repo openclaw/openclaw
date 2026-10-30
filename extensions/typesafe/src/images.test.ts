@@ -93,7 +93,7 @@ it("keeps text wire behavior and removes the image opt-in from text requests", a
   const fetch = mockJsonResponse(mixedFixture.response);
   const outcome = await provider({ request: { headers: { [imageHeader]: "true" } } }).evaluate(
     {
-      state: { type: "json", value: mixedFixture.batch.state },
+      state: mixedFixture.batch.state,
       questions: mixedFixture.batch.questions,
     },
     context(),

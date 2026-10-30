@@ -988,6 +988,12 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/parallel/**"
+"extensions: particle":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/particle/**"
+          - "docs/providers/particle.md"
+          - "docs/plugins/reference/particle.md"
 "extensions: perplexity":
   - changed-files:
       - any-glob-to-any-file:

@@ -4,7 +4,7 @@ import type { AgentsListResult } from "../../../api/types.ts";
 import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import "../../../components/openclaw-mascot.tsx";
-import { registerCommandPaletteEnglish } from "../../../i18n/locales/en-command-palette.ts";
+import { registerChatWelcomeEnglish } from "../../../i18n/locales/en-chat-welcome.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
@@ -15,7 +15,7 @@ import {
   type WelcomeSuggestionAuth,
 } from "./chat-welcome.ts";
 
-registerCommandPaletteEnglish();
+registerChatWelcomeEnglish();
 
 export type ChatWelcomeIdentityProps = {
   currentAgentId?: string;

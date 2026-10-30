@@ -4,6 +4,7 @@
  * --team-stress --approvals 0 --cron 0 --projects 0 --transcript-mib 0.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/agent-deletion-blocked-measure.ts
  *   --state-dir <fixture> [--owner <baseline-module.ts>] [--iterations 10000] [--prepared]
+ *   [--warmup 100000] [--samples 5]
  * Alternate base/candidate launches. Timing and sampled allocation are separate;
  * preparation is outside measurement. Both ordinary and inherited snapshot contexts
  * use the real owner and journal worker. This does not measure connected clients,
@@ -23,11 +24,17 @@ const { values } = parseArgs({
     owner: { type: "string" },
     prepared: { type: "boolean", default: false },
     iterations: { type: "string", default: "10000" },
+    warmup: { type: "string", default: "1000" },
+    samples: { type: "string", default: "1" },
   },
 });
 assert(values["state-dir"] && globalThis.gc, "Supply --state-dir and run with --expose-gc");
 const iterations = Number(values.iterations);
-assert(Number.isSafeInteger(iterations) && iterations > 0);
+const warmup = Number(values.warmup);
+const samples = Number(values.samples);
+for (const count of [iterations, warmup, samples]) {
+  assert(Number.isSafeInteger(count) && count > 0);
+}
 const root = path.resolve(values["state-dir"]);
 const summary = JSON.parse(readFileSync(path.join(root, "team-shape-summary.json"), "utf8"));
 assert.equal(summary.format, "openclaw-team-shape-v1");
@@ -63,8 +70,8 @@ try {
     }
     assert.equal(blocked, 0);
   };
-  const measure = async (context: string) => {
-    run(1000);
+  const measure = async (context: string, sample: number) => {
+    run(warmup);
     globalThis.gc!();
     const hostLoad = loadavg();
     const cpu = process.threadCpuUsage();
@@ -92,6 +99,8 @@ try {
         context,
         prepared: values.prepared,
         iterations,
+        warmup,
+        sample,
         sessions: summary.sessionCount,
         wallMs,
         cpuMs: (used.user + used.system) / 1000,
@@ -101,11 +110,13 @@ try {
       }),
     );
   };
-  await measure("ordinary");
-  await withOpenClawStateDatabaseReadSnapshot(() => measure("snapshot"), {
-    ...options,
-    lazy: true,
-  });
+  for (let sample = 1; sample <= samples; sample++) {
+    await measure("ordinary", sample);
+    await withOpenClawStateDatabaseReadSnapshot(() => measure("snapshot", sample), {
+      ...options,
+      lazy: true,
+    });
+  }
 } finally {
   inspector.disconnect();
   await closeOpenClawStateDatabaseAsync();

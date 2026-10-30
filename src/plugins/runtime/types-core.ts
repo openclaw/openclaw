@@ -451,7 +451,7 @@ export type PluginRuntimeCore = {
   tts: {
     /** Await machine preference preparation before rendering; optional for older custom runtimes. */
     buildSystemPromptHintAsync?: TtsRuntimeApi["buildTtsSystemPromptHintAsync"];
-    prepareTtsRequest: TtsRuntimeApi["prepareTtsRequest"];
+    prepareTtsRequest: typeof import("../../tts/tts-request.js").prepareTtsRequest;
     textToSpeech: typeof import("../../tts/tts.js").textToSpeech;
     textToSpeechStream: TtsRuntimeApi["textToSpeechStream"];
     textToSpeechTelephony: TtsRuntimeApi["textToSpeechTelephony"];
