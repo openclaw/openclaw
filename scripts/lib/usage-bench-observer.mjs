@@ -4,7 +4,7 @@ import { isMainThread, Worker } from "node:worker_threads";
 if (isMainThread && process.send) {
   const dispatches = [];
   // Node emits process's worker event on nextTick, after a pool can send its first task.
-  const postMessage = Worker.prototype.postMessage;
+  const postMessage = Worker.prototype.postMessage.call.bind(Worker.prototype.postMessage);
   Worker.prototype.postMessage = function (message, ...args) {
     const task = typeof message?.taskId === "number" ? message.input : undefined;
     const input = task?.kind === undefined ? task : task.input;
@@ -27,7 +27,7 @@ if (isMainThread && process.send) {
         packedBytes,
       });
     }
-    return Reflect.apply(postMessage, this, [message, ...args]);
+    return postMessage(this, message, ...args);
   };
   process.on("message", (message) => {
     if (message?.channel === "usage-volume-fixture" && message.action === "snapshot") {

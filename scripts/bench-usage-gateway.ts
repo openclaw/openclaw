@@ -1371,44 +1371,45 @@ try {
           if (values.diagnostic || values.structure) {
             await page.addInitScript(
               ({ watchModel01 }) => {
-                // oxlint-disable-next-line typescript/unbound-method -- Forward the original socket receiver with call.
-                const send = WebSocket.prototype.send;
                 const requests = new WeakMap<WebSocket, Set<string>>();
-                WebSocket.prototype.send = function (this: WebSocket, data) {
-                  if (typeof data === "string") {
-                    let frame;
-                    try {
-                      frame = JSON.parse(data);
-                    } catch {
-                      return send.call(this, data);
-                    }
-                    if (
-                      frame?.type === "req" &&
-                      frame.method === "sessions.usage" &&
-                      (frame.params?.query === "model:fixture-model-00-end" ||
-                        (watchModel01 && frame.params?.query === "model:fixture-model-01-end"))
-                    ) {
-                      let ids = requests.get(this);
-                      if (!ids) {
-                        ids = new Set();
-                        requests.set(this, ids);
-                        this.addEventListener("message", (event) => {
-                          let response;
-                          try {
-                            response = JSON.parse(event.data);
-                          } catch {
-                            return;
-                          }
-                          if (requests.get(this)?.delete(response?.id)) {
-                            // Observed in the page's message task, after earlier app listeners.
-                            performance.mark("usage:response-observed");
-                          }
-                        });
+                const NativeWebSocket = WebSocket;
+                globalThis.WebSocket = class extends NativeWebSocket {
+                  override send(data: Parameters<WebSocket["send"]>[0]) {
+                    if (typeof data === "string") {
+                      let frame;
+                      try {
+                        frame = JSON.parse(data);
+                      } catch {
+                        return super.send(data);
                       }
-                      ids.add(frame.id);
+                      if (
+                        frame?.type === "req" &&
+                        frame.method === "sessions.usage" &&
+                        (frame.params?.query === "model:fixture-model-00-end" ||
+                          (watchModel01 && frame.params?.query === "model:fixture-model-01-end"))
+                      ) {
+                        let ids = requests.get(this);
+                        if (!ids) {
+                          ids = new Set();
+                          requests.set(this, ids);
+                          this.addEventListener("message", (event) => {
+                            let response;
+                            try {
+                              response = JSON.parse(event.data);
+                            } catch {
+                              return;
+                            }
+                            if (requests.get(this)?.delete(response?.id)) {
+                              // Observed in the page's message task, after earlier app listeners.
+                              performance.mark("usage:response-observed");
+                            }
+                          });
+                        }
+                        ids.add(frame.id);
+                      }
                     }
+                    return super.send(data);
                   }
-                  return send.call(this, data);
                 };
               },
               { watchModel01: values["trace-adverse"] },

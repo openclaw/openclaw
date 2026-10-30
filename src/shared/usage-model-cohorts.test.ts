@@ -91,7 +91,9 @@ function report(
   dayBucket: UsageDailyBucket = utc,
 ) {
   const selected = selectUsageModelCohorts(prepared, options);
-  if (!selected) throw new Error("Expected model-only cohort query");
+  if (!selected) {
+    throw new Error("Expected model-only cohort query");
+  }
   const days = new Set<string>();
   const page = usageOverviewPage(
     selected.indices.map((index) => rows[index]!),
@@ -155,8 +157,8 @@ it("preserves tied order and first-selected metadata when cohorts interleave", (
   // The A cohort starts first, but its "later" tool follows the B cohort's "first".
   rows[1]!.usage!.toolUsage = { totalCalls: 0, uniqueTools: 0, tools: [] };
   rows[1]!.creatorKey = "unrelated";
-  rows[2]!.createdActor = { type: "human", source: "channel", id: "first" };
-  rows[3]!.createdActor = { type: "human", source: "channel", id: "later" };
+  rows[2]!.createdActor = { type: "human", id: "first" };
+  rows[3]!.createdActor = { type: "human", id: "later" };
   const options = { query: "model:A model:B", sort: "tokens", limit: 2 } as const;
   const result = report(rows, prepareUsageModelCohorts(rows, utc), options);
   expect(result.sessions.map(({ key }) => key)).toEqual(["a-first", "b"]);
@@ -211,8 +213,9 @@ it("leaves day, hour, session, recent and non-model predicates on the general pa
     { selectedHours: [12] },
     { selectedSessions: ["a"] },
     { recentKeys: [] },
-  ])
+  ]) {
     expect(selectUsageModelCohorts(prepared, options)).toBeUndefined();
+  }
 });
 
 it("reads only the returned page's usage after preparing a model filter", () => {
@@ -290,7 +293,9 @@ it("sorts packed cohort pages without losing sparse, stale, or missing-cost meta
     dayBucket: utc,
   };
   const prepared = runUsageOverviewTask({ kind: "prepare", input });
-  if (prepared.kind !== "prepared") throw new Error("Expected prepared cohorts");
+  if (prepared.kind !== "prepared") {
+    throw new Error("Expected prepared cohorts");
+  }
   const selectedUsage = readUsageOverviewBatch(batch, true, [2, 3, 0]);
   expect(selectedUsage.map((usage) => usage?.totalTokens ?? null)).toEqual([30, null, 10]);
   expect(selectedUsage[0]).toMatchObject({
@@ -301,7 +306,9 @@ it("sorts packed cohort pages without losing sparse, stale, or missing-cost meta
     missingCostByModel: { "synthetic/Alpha": 1 },
   });
   const fullUsage = readUsageOverviewBatch(batch, true);
-  const fullRows = source.map((entry, index) => ({ ...entry, usage: fullUsage[index]! }));
+  const fullRows = source.map((entry, index) =>
+    Object.assign({}, entry, { usage: fullUsage[index]! }),
+  );
   for (const sort of ["tokens", "cost", "messages", "errors", "recent"] as const) {
     for (const sortDirection of ["asc", "desc"] as const) {
       const options = { query: "model:Alpha", sort, sortDirection, limit: 2, offset: 1 };
@@ -319,7 +326,9 @@ it("sorts packed cohort pages without losing sparse, stale, or missing-cost meta
         options,
         dayBucket: utc,
       });
-      if (result.kind !== "report") throw new Error("Expected cohort report");
+      if (result.kind !== "report") {
+        throw new Error("Expected cohort report");
+      }
       expect(result.value).toEqual(buildUsageOverview({ rows: fullRows, options, dayBucket: utc }));
     }
   }

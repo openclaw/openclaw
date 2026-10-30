@@ -56,18 +56,28 @@ export function prepareUsageModelCohorts(
     };
     group.indices.push(index);
     groups.set(key, group);
-    const rank = (key: string) => {
-      if (!group.order.has(key)) group.order.set(key, position);
+    const rank = (aggregateKey: string) => {
+      if (!group.order.has(aggregateKey)) {
+        group.order.set(aggregateKey, position);
+      }
       position++;
     };
     for (const model of row.usage?.modelUsage ?? []) {
       rank(`model:${usageModelIdentity(model.provider, model.model)}`);
       rank(`provider:${model.provider ?? "unknown"}`);
     }
-    if (row.usage && row.agentId) rank(`agent:${row.agentId}`);
-    if (row.usage && row.channel) rank(`channel:${row.channel}`);
-    if (row.usage) rank(`creator:${row.creatorKey ?? UNKNOWN_USAGE_CREATOR_KEY}`);
-    for (const tool of row.usage?.toolUsage?.tools ?? []) rank(`tool:${tool.name}`);
+    if (row.usage && row.agentId) {
+      rank(`agent:${row.agentId}`);
+    }
+    if (row.usage && row.channel) {
+      rank(`channel:${row.channel}`);
+    }
+    if (row.usage) {
+      rank(`creator:${row.creatorKey ?? UNKNOWN_USAGE_CREATOR_KEY}`);
+    }
+    for (const tool of row.usage?.toolUsage?.tools ?? []) {
+      rank(`tool:${tool.name}`);
+    }
     for (const day of row.usage?.dailyModelUsage ?? []) {
       rank(`day:${usageDailyModelIdentity(day.date, day.provider, day.model)}`);
     }
@@ -164,23 +174,32 @@ function restoreFirstMetadata(aggregates: SessionsUsageAggregates, query: UsageM
     const first = (key: string) => cohort.order.get(key) === query.order.get(key);
     for (const row of cohort.report.aggregates.byModel) {
       const key = usageModelIdentity(row.provider, row.model);
-      if (first(`model:${key}`))
+      if (first(`model:${key}`)) {
         Object.assign(models.get(key)!, { provider: row.provider, model: row.model });
+      }
     }
     for (const row of cohort.report.aggregates.byProvider) {
       const key = row.provider ?? "unknown";
-      if (first(`provider:${key}`)) providers.get(key)!.provider = row.provider;
+      if (first(`provider:${key}`)) {
+        providers.get(key)!.provider = row.provider;
+      }
     }
     for (const row of cohort.report.aggregates.byCreator ?? []) {
-      if (!first(`creator:${row.key}`)) continue;
+      if (!first(`creator:${row.key}`)) {
+        continue;
+      }
       const target = creators.get(row.key)!;
-      if (row.actor) target.actor = row.actor;
-      else delete target.actor;
+      if (row.actor) {
+        target.actor = row.actor;
+      } else {
+        delete target.actor;
+      }
     }
     for (const row of cohort.report.aggregates.modelDaily ?? []) {
       const key = usageDailyModelIdentity(row.date, row.provider, row.model);
-      if (first(`day:${key}`))
+      if (first(`day:${key}`)) {
         Object.assign(days.get(key)!, { provider: row.provider, model: row.model });
+      }
     }
   }
 }
@@ -218,7 +237,6 @@ export function buildUsageModelCohortReport(
   const rank = (key: string) => query.order.get(key) ?? 0;
   const modelMetric = (a: { totals: { totalCost: number; totalTokens: number } }, b: typeof a) =>
     b.totals.totalCost - a.totals.totalCost || b.totals.totalTokens - a.totals.totalTokens;
-  /* oxlint-disable unicorn/no-array-sort -- These merged arrays are private until the report returns. */
   aggregates.byModel.sort(
     (a, b) =>
       modelMetric(a, b) ||
@@ -250,7 +268,6 @@ export function buildUsageModelCohortReport(
       rank(`day:${usageDailyModelIdentity(a.date, a.provider, a.model)}`) -
         rank(`day:${usageDailyModelIdentity(b.date, b.provider, b.model)}`),
   );
-  /* oxlint-enable unicorn/no-array-sort */
   overview.selectedSessionCount = aggregates.sessionCount ?? 0;
   overview.unfilteredSessionCount = query.unfilteredSessionCount;
   overview.filterOptions = query.filterOptions;

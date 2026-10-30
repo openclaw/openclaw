@@ -81,7 +81,9 @@ export function readUsageOverviewPage(input: UsageOverviewReportInput): SessionU
     positions.forEach((position, index) => {
       const row = rows[position]!;
       const usage = summaries[index]!;
-      if (usage) usage.sessionId = row.sessionId;
+      if (usage) {
+        usage.sessionId = row.sessionId;
+      }
       row.usage = usage;
     });
   });

@@ -181,9 +181,13 @@ export function readUsageOverviewSortValue(
   row: number,
   sort: UsageOverviewOptions["sort"],
 ): number | undefined {
-  if (sort === undefined || sort === "recent") return undefined;
+  if (sort === undefined || sort === "recent") {
+    return undefined;
+  }
   const base = batch.offsets[row]!;
-  if (base < 0) return 0;
+  if (base < 0) {
+    return 0;
+  }
   switch (sort) {
     case "tokens":
       return batch.values[base + TOTALS + 4]!;
@@ -207,7 +211,9 @@ export function readUsageOverviewBatch(
   refreshing = false,
   indices?: readonly number[],
 ): Array<UsageOverviewSessionSummary | null> {
-  if (indices?.length === 0) return [];
+  if (indices?.length === 0) {
+    return [];
+  }
   const { strings, values } = batch;
   const name = (id: number) => (id < 0 ? undefined : strings[id]);
   const missing = new Map<number, Map<string, Record<string, number>>>();
