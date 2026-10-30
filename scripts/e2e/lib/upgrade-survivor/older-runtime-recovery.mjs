@@ -22,17 +22,23 @@ async function main() {
     const deadline = Date.now() + 900_000;
     while (!(await predicate())) {
       assert(Date.now() < deadline, `Timed out waiting for ${label}`);
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 250);
+      });
     }
   };
   async function binding(packageRoot, prefix, symbol) {
     const matches = [];
     const owners = [];
     for (const name of fs.readdirSync(path.join(packageRoot, "dist")).toSorted()) {
-      if (!name.startsWith(`${prefix}-`) || !name.endsWith(".mjs")) continue;
+      if (!name.startsWith(`${prefix}-`) || !name.endsWith(".mjs")) {
+        continue;
+      }
       const file = path.join(packageRoot, "dist", name);
       const alias = resolveWorkerCellExport(fs.readFileSync(file, "utf8"), symbol);
-      if (!alias) continue;
+      if (!alias) {
+        continue;
+      }
       matches.push((await import(pathToFileURL(file).href))[alias]);
       owners.push({ name, sha256: hash(file) });
     }
@@ -173,7 +179,9 @@ async function main() {
         .at(-1)
         .startsWith("Z ");
     } catch (error) {
-      if (error.code === "ENOENT") return true;
+      if (error.code === "ENOENT") {
+        return true;
+      }
       throw error;
     }
   }, "helper process exit");
@@ -224,8 +232,9 @@ async function main() {
     ),
     0,
   );
-  for (const file of params.sensitivePaths)
+  for (const file of params.sensitivePaths) {
     assert(!fs.existsSync(file), `Sensitive helper file remains: ${path.basename(file)}`);
+  }
   const replacement = read(runtimeFile);
   assert.notEqual(replacement.pid, parentPid);
   process.kill(replacement.pid, 0);
@@ -260,11 +269,17 @@ async function main() {
     selectedCuts: ["older-runtime"],
   });
 }
-await main().catch((error) => {
-  fs.writeFileSync(path.join(process.argv[2], "driver.err"), String(error.stack ?? error), {
-    mode: 0o600,
-  });
-  console.error("[older-runtime-recovery] inspect driver.err in the private run evidence");
-  console.error("[older-runtime-recovery] FAILED (exit 1)");
-  process.exitCode = 1;
-});
+await main().catch(
+  /** @param {unknown} error */ (error) => {
+    fs.writeFileSync(
+      path.join(process.argv[2], "driver.err"),
+      String(error instanceof Error ? (error.stack ?? error.message) : error),
+      {
+        mode: 0o600,
+      },
+    );
+    console.error("[older-runtime-recovery] inspect driver.err in the private run evidence");
+    console.error("[older-runtime-recovery] FAILED (exit 1)");
+    process.exitCode = 1;
+  },
+);

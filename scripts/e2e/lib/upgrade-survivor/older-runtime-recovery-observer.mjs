@@ -20,10 +20,14 @@ if (specPath && path.basename(process.argv[2] ?? "") === "handoff.json") {
   assert(params.commandArgv.includes(path.join(spec.root, "openclaw.mjs")));
   const writers = [];
   for (const name of fs.readdirSync(path.join(spec.root, "dist")).toSorted()) {
-    if (!name.startsWith("restart-sentinel-") || !name.endsWith(".mjs")) continue;
+    if (!name.startsWith("restart-sentinel-") || !name.endsWith(".mjs")) {
+      continue;
+    }
     const file = path.join(spec.root, "dist", name);
     const alias = resolveWorkerCellExport(fs.readFileSync(file, "utf8"), "writeRestartSentinel");
-    if (alias) writers.push((await import(pathToFileURL(file).href))[alias]);
+    if (alias) {
+      writers.push((await import(pathToFileURL(file).href))[alias]);
+    }
   }
   const unique = [...new Set(writers)];
   assert.equal(unique.length, 1, "one published notice writer must own the concurrent notice");
@@ -74,9 +78,12 @@ if (specPath && path.basename(process.argv[2] ?? "") === "handoff.json") {
         assert(bytes <= 4 * 1024 * 1024, "updater result exceeds the owning helper's bound");
         chunks.push(chunk);
       });
+      // oxlint-disable-next-line typescript/unbound-method -- Every invocation below restores the original child receiver.
       const emit = child.emit;
       child.emit = function (event, ...values) {
-        if (event !== "close") return emit.call(this, event, ...values);
+        if (event !== "close") {
+          return emit.call(this, event, ...values);
+        }
         void (async () => {
           try {
             const result = JSON.parse(

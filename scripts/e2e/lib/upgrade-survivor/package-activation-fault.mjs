@@ -68,7 +68,9 @@ if (specPath) {
     const previousManifest = path.join(spec.previousRoot, "package.json");
     // The refusal case damages rollback bytes; the recovery case must leave the
     // real retained tree intact so only the updater can authorize restoration.
-    if (spec.cut === "verification") fs.appendFileSync(previousManifest, "\n");
+    if (spec.cut === "verification") {
+      fs.appendFileSync(previousManifest, "\n");
+    }
     const manifestDigest = createHash("sha256")
       .update(fs.readFileSync(previousManifest))
       .digest("hex");
