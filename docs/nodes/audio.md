@@ -242,6 +242,7 @@ provider-wide rather than scoped to the audio model entry.
         enabled: true,
         echoTranscript: true,
         echoFormat: '📝 "{transcript}"',
+        echoSilent: true, // optional: Telegram delivers the echo with a muted (soundless) notification
       },
     },
   },
@@ -263,6 +264,7 @@ provider-wide rather than scoped to the audio model entry.
 - OpenAI auto-detect default is `gpt-4o-transcribe`; set `model: "gpt-4o-mini-transcribe"` for a cheaper/faster option.
 - Transcript is available to templates as `{{Transcript}}`.
 - `tools.media.audio.echoTranscript` is off by default; `echoFormat` accepts a `{transcript}` placeholder.
+- `tools.media.audio.echoSilent` (default `false`) sends the echo as a muted (soundless) notification on channels that support silent delivery, such as Telegram (`disable_notification`). The agent reply still notifies normally; channels without silent delivery send the echo as usual.
 - Telegram echoes with an account, chat, and source message ID use the durable outbound queue to suppress same-source replays. Completed receipts are retained for 24 hours, capped at 2,000 receipts across Telegram transcript echoes; replay after pruning can echo again. If durable admission fails, the keyed echo is skipped while transcription and agent replies continue.
 - For deliverable channels (Telegram, Discord, WhatsApp, …) the echo is sent as an outbound message before agent processing. WebChat/Control UI and the mobile apps are internal clients, not deliverable channels: there the formatted transcript is persisted as part of the user's own turn text in the session transcript, so it stays visible in `chat.history` after reload. WebChat never becomes an outbound channel for the echo. Internal clients use the configured audio attachment selection for this transcription and reuse that selection during later media processing. An empty `echoFormat` or one without `{transcript}` leaves speech processing to the normal media pipeline and adds no transcript text to history.
 - CLI stdout is capped at 5MB; keep CLI output concise.

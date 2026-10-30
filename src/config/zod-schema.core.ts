@@ -707,6 +707,12 @@ const ToolsMediaAudioSchema = ToolsMediaCapabilitySchema.unwrap()
      * Default: '📝 "{transcript}"'
      */
     echoFormat: z.string().optional(),
+    /**
+     * Deliver the transcript echo silently on channels that support it (for
+     * example Telegram, where the notification still appears but without sound).
+     * Default: false.
+     */
+    echoSilent: z.boolean().optional(),
   })
   .optional();
 

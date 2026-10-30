@@ -67,6 +67,7 @@ Per-capability (`image`/`audio`/`video`) keys:
 | `attachments`    | object    | `{ mode: "first", maxAttachments: 1 }` | Select which matching attachments are processed                                                                                                       |
 | `echoTranscript` | `boolean` | `false`                                | Audio only: echo the transcript before agent processing (outbound on deliverable channels; persisted into the WebChat user turn for internal clients) |
 | `echoFormat`     | `string`  | `'📝 "{transcript}"'`                  | Audio only: format for the echoed transcript                                                                                                          |
+| `echoSilent`     | `boolean` | `false`                                | Audio only: deliver the echo with a muted notification (no sound) where the channel supports it (Telegram)                                            |
 
 Prompts, limits, language hints, request overrides, and provider options can be set as capability defaults or overridden on individual `tools.media.models[]` entries. Capability defaults also cover auto-detected providers when no explicit model is configured. A model list selects which entries run; it does not hide other enabled providers from provider discovery.
 

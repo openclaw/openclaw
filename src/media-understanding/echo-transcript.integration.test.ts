@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { MsgContext } from "../auto-reply/templating.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { installDeliveryQueueTmpDirHooks } from "../infra/outbound/delivery-queue.test-helpers.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -41,9 +42,9 @@ describe("Telegram transcript echo durable ownership", () => {
     vi.unstubAllEnvs();
   });
 
-  function echo(overrides: Partial<MsgContext> = {}) {
+  function echo(overrides: Partial<MsgContext> = {}, cfg: OpenClawConfig = {}) {
     return sendTranscriptEcho({
-      cfg: {},
+      cfg,
       ctx: {
         Provider: "telegram",
         AccountId: "account-fixture",
@@ -91,5 +92,14 @@ describe("Telegram transcript echo durable ownership", () => {
     await echo({ AccountId: "second-account" });
     await echo({ OriginatingTo: "telegram:-100456:topic:7" });
     expect(sendText).toHaveBeenCalledTimes(4);
+  });
+
+  it("delivers the echo silently only when echoSilent is enabled", async () => {
+    await echo();
+    await echo({ MessageSid: "43" }, { tools: { media: { audio: { echoSilent: true } } } });
+
+    expect(sendText).toHaveBeenCalledTimes(2);
+    expect(sendText.mock.calls[0]?.[0]?.silent).not.toBe(true);
+    expect(sendText.mock.calls[1]?.[0]).toMatchObject({ silent: true });
   });
 });

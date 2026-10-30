@@ -85,6 +85,7 @@ export async function sendTranscriptEcho(params: {
       accountId: ctx.AccountId ?? undefined,
       threadId: ctx.MessageThreadId ?? undefined,
       payloads: [{ text }],
+      ...(cfg.tools?.media?.audio?.echoSilent ? { silent: true } : {}),
       bestEffort: !deliveryIntentId,
       durability: deliveryIntentId ? "required" : "best_effort",
       ...(deliveryIntentId
