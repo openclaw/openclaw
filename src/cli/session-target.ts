@@ -65,24 +65,6 @@ function candidateId(key: string): string {
   return (uuid ?? key).slice(0, 16);
 }
 
-function formatAmbiguousCandidates(
-  candidates: Array<{ key: string; displayName?: string }>,
-  gatewayUrl: string | undefined,
-): string {
-  const rows = candidates.map((candidate) => ({
-    name: sanitizeTerminalText(candidate.displayName?.trim() || "(unnamed)").replace(/\s+/gu, " "),
-    id: candidateId(candidate.key),
-  }));
-  const nameWidth = Math.max(...rows.map((row) => visibleWidth(row.name)));
-  const width = Math.max("SESSION".length, Math.min(40, nameWidth));
-  return [
-    "Session reference is ambiguous:",
-    `${"SESSION".padEnd(width)}  ID PREFIX`,
-    ...rows.map((row) => `${formatTextCell(row.name, width)}  ${row.id}`),
-    `Pass a longer reference. ${sessionsListHint(gatewayUrl)}`,
-  ].join("\n");
-}
-
 function sessionsListHint(gatewayUrl: string | undefined): string {
   return gatewayUrl
     ? `Choose a full session key from that gateway's Control UI (${controlUiBaseUrl(gatewayUrl)}).`
@@ -96,35 +78,18 @@ function controlUiBaseUrl(gatewayUrl: string): string {
   return sanitizeTerminalText(url.toString().replace(/\/$/u, ""));
 }
 
-function isPriorGatewayShortIdRejection(error: unknown): boolean {
-  return (
-    error instanceof GatewayClientRequestError &&
-    error.gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes("invalid sessions.resolve params:") &&
-    error.message.includes("unexpected property 'shortId'")
-  );
-}
-
-function unreachableTargetError(error: Error, gatewayUrl: string | undefined): Error {
-  if (!gatewayUrl) {
-    return error;
-  }
-  const hostname = new URL(gatewayUrl).hostname;
-  const displayGatewayUrl = projectGatewayUrlForDiagnostics(gatewayUrl);
-  const tailscaleHint = hostname.endsWith(".ts.net")
-    ? " For this .ts.net host, check that Tailscale is connected and the gateway is reachable on your tailnet."
-    : "";
-  return new Error(
-    `${error.message}\nCould not reach gateway ${displayGatewayUrl}. Check whether the gateway is down and whether its tailnet or SSH tunnel is reachable.${tailscaleHint}`,
-  );
-}
-
 function shapeTargetError(
   error: unknown,
   gatewayUrl: string | undefined,
   shortRef: boolean,
 ): Error {
-  if (shortRef && isPriorGatewayShortIdRejection(error)) {
+  if (
+    shortRef &&
+    error instanceof GatewayClientRequestError &&
+    error.gatewayCode === "INVALID_REQUEST" &&
+    error.message.includes("invalid sessions.resolve params:") &&
+    error.message.includes("unexpected property 'shortId'")
+  ) {
     return new Error(
       `This gateway predates short-link resolution; pass the full session key. ${sessionsListHint(gatewayUrl)}`,
     );
@@ -160,7 +125,17 @@ function shapeTargetError(
     const effectiveGatewayUrl =
       gatewayUrl ??
       (error instanceof GatewayTransportError ? error.connectionDetails.url : undefined);
-    return unreachableTargetError(error, effectiveGatewayUrl);
+    if (!effectiveGatewayUrl) {
+      return error;
+    }
+    const hostname = new URL(effectiveGatewayUrl).hostname;
+    const displayGatewayUrl = projectGatewayUrlForDiagnostics(effectiveGatewayUrl);
+    const tailscaleHint = hostname.endsWith(".ts.net")
+      ? " For this .ts.net host, check that Tailscale is connected and the gateway is reachable on your tailnet."
+      : "";
+    return new Error(
+      `${error.message}\nCould not reach gateway ${displayGatewayUrl}. Check whether the gateway is down and whether its tailnet or SSH tunnel is reachable.${tailscaleHint}`,
+    );
   }
   return failure.remediation ? new Error(`${failure.userMessage}\n${failure.remediation}`) : error;
 }
@@ -224,7 +199,23 @@ export async function resolveSessionTarget(params: {
     return { gateway, sessionKey: result.key, agentId: owner.value };
   }
   if (result.candidates?.length) {
-    throw new Error(formatAmbiguousCandidates(result.candidates, gateway.url));
+    const rows = result.candidates.map((candidate) => ({
+      name: sanitizeTerminalText(candidate.displayName?.trim() || "(unnamed)").replace(
+        /\s+/gu,
+        " ",
+      ),
+      id: candidateId(candidate.key),
+    }));
+    const nameWidth = Math.max(...rows.map((row) => visibleWidth(row.name)));
+    const width = Math.max("SESSION".length, Math.min(40, nameWidth));
+    throw new Error(
+      [
+        "Session reference is ambiguous:",
+        `${"SESSION".padEnd(width)}  ID PREFIX`,
+        ...rows.map((row) => `${formatTextCell(row.name, width)}  ${row.id}`),
+        `Pass a longer reference. ${sessionsListHint(gateway.url)}`,
+      ].join("\n"),
+    );
   }
   throw new Error(`No session found.\n${sessionsListHint(gateway.url)}`);
 }

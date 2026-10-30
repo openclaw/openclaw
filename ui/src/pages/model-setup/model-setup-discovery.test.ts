@@ -3,14 +3,14 @@ import { describe, expect, it } from "vitest";
 import type { WizardNextParams } from "../../../../packages/gateway-protocol/src/schema/wizard.ts";
 import { WizardSession } from "../../../../src/wizard/session.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
+  missingWizardError,
+  running,
+  configuredDetection,
   waitForText,
-  waitForElement,
   runningStep,
-  authButton,
-  authOption,
   answerWizard,
   enterManualKey,
   mockRequests,
@@ -18,18 +18,14 @@ import {
   pendingReceipt,
   modalButton,
   callsFor,
-  setInput,
   candidate,
   clickCandidate,
   createFirstRunContext,
-  detection,
   mountDetection,
-  selectManualProvider,
 } from "./model-setup-first-run.test-support.ts";
 
 describe("Model Setup explicit discovery", () => {
   useFirstRunFixtures("test-device-key");
-  const nativeInput = ".model-setup__native-discovery input";
   it.each(["cancel at credentials", "finish final commit"] as const)(
     "retains the admitted wizard after protected cancellation: %s",
     async (outcome) => {
@@ -63,7 +59,7 @@ describe("Model Setup explicit discovery", () => {
               terminal.resolve();
             }
           });
-          return { done: false, status: "running" };
+          return running;
         },
         "wizard.next": async (params) => {
           const next = params as WizardNextParams;
@@ -79,11 +75,7 @@ describe("Model Setup explicit discovery", () => {
           session!.cancel();
           return { status: session!.getStatus(), error: session!.getError() };
         },
-        "openclaw.setup.detect": () => ({
-          ...detection,
-          configuredModel: "openai/selected",
-          setupComplete: true,
-        }),
+        "openclaw.setup.detect": () => configuredDetection("openai/selected"),
         "openclaw.setup.verify": () => ({ ok: true, modelRef: "openai/selected", latencyMs: 12 }),
       });
       const { page } = await mountDetection(context, client, {
@@ -141,14 +133,10 @@ describe("Model Setup explicit discovery", () => {
       let cancels = 0;
       const error =
         failure === "missing wizard"
-          ? new GatewayRequestError({
-              code: "INVALID_REQUEST",
-              message: "wizard not found",
-              details: { code: "WIZARD_NOT_FOUND" },
-            })
+          ? missingWizardError()
           : new GatewayRequestError({ code: "FORBIDDEN", message: "Cancel permission denied" });
       mockRequests(request, {
-        "openclaw.setup.activate.start": () => ({ done: false, status: "running" }),
+        "openclaw.setup.activate.start": () => running,
         "wizard.next": () =>
           runningStep({
             id: "credential",
@@ -203,65 +191,6 @@ describe("Model Setup explicit discovery", () => {
     },
   );
 
-  it("sends only an explicit fresh-install discovery opt-in", async () => {
-    const { context, client, request } = createFirstRunContext();
-    request.mockResolvedValue({ done: true, status: "cancelled" });
-    const { page } = await mountDetection(context, client, {
-      nativeSessionCatalogPreferenceRequired: true,
-      nativeSessionCatalogs: [{ pluginId: "codex", label: "Codex" }],
-      candidates: [candidate("codex-cli", "openai/available", true)],
-      manualProviders: [{ id: "api-key", label: "API provider" }],
-    });
-    const checkbox = page.querySelector<HTMLInputElement>(nativeInput)!;
-    expect(checkbox.checked).toBe(false);
-    expect(page.querySelector("[data-selected]")).toBeNull();
-    expect(request).not.toHaveBeenCalled();
-    expect(pendingReceipt()).toBeNull();
-    checkbox.click();
-    await page.updateComplete;
-    expect(request).not.toHaveBeenCalled();
-    await clickCandidate(page, "codex-cli");
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    expect(request.mock.calls[0]).toEqual([
-      "openclaw.setup.activate.start",
-      expect.objectContaining({
-        kind: "codex-cli",
-        modelRef: "openai/available",
-        nativeSessionCatalogsEnabled: true,
-      }),
-      { timeoutMs: null },
-    ]);
-  });
-
-  it.each(["install", "custom"] as const)(
-    "offers %s choices without installing or starting auth on discovery",
-    async (kind) => {
-      const { context, client, request } = createFirstRunContext();
-      request.mockResolvedValue({ done: true, status: "cancelled" });
-      const { page } = await mountDetection(context, client, {
-        nativeSessionCatalogPreferenceRequired: true,
-        nativeSessionCatalogs: [{ pluginId: "catalog-plugin", label: "Native conversations" }],
-        authOptions: [authOption("manifest-auth", "Provider", kind, false)],
-      });
-      expect(request).not.toHaveBeenCalled();
-      const button = authButton(page, "manifest-auth")!;
-      expect(button.closest("details")).toBeNull();
-      expect(button.textContent).toContain(
-        kind === "install" ? "Review & install" : "Set up endpoint",
-      );
-      button.click();
-      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-      expect(request.mock.calls[0]).toEqual([
-        "openclaw.setup.auth.start",
-        expect.objectContaining({
-          authChoice: "manifest-auth",
-          nativeSessionCatalogsEnabled: false,
-        }),
-        { timeoutMs: null },
-      ]);
-    },
-  );
-
   it("does not change upgrade catalog choices or select a manual provider implicitly", async () => {
     const { context, client, request } = createFirstRunContext();
     request.mockResolvedValue({ done: true, status: "cancelled" });
@@ -278,35 +207,5 @@ describe("Model Setup explicit discovery", () => {
     await enterManualKey(page, "provider-key", "test-only-key");
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(request.mock.calls[0]![1]).not.toHaveProperty("nativeSessionCatalogsEnabled");
-  });
-  it("clears a pending credential and native discovery opt-in when the Gateway identity changes", async () => {
-    const { context, client, request, snapshot, publishGatewaySnapshot } = createFirstRunContext();
-    const fresh = {
-      ...detection,
-      nativeSessionCatalogPreferenceRequired: true,
-      nativeSessionCatalogs: [{ pluginId: "codex", label: "Codex" }],
-      manualProviders: [{ id: "provider-key", label: "API provider" }],
-    };
-    request.mockResolvedValue(fresh);
-    const { page } = await mountDetection(context, client, fresh);
-    page.querySelector<HTMLInputElement>(nativeInput)!.click();
-    await selectManualProvider(page, "provider-key");
-    setInput(page, ".model-setup__manual input", "test-only-pending-key");
-    await page.updateComplete;
-    expect(request).not.toHaveBeenCalled();
-    Object.assign(context.gateway, { connectionRevision: context.gateway.connectionRevision + 1 });
-    publishGatewaySnapshot({ ...snapshot });
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith(
-        "openclaw.setup.detect",
-        { agentId: "main" },
-        expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.any(AbortSignal) }),
-      ),
-    );
-    await waitForElement(page, nativeInput);
-    expect(page.querySelector(nativeInput)).toMatchObject({ checked: false });
-    expect(page.querySelector(".model-setup__manual input")).toMatchObject({ value: "" });
-    expect(page.querySelector("[data-selected]")).toBeNull();
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["openclaw.setup.detect"]);
   });
 });

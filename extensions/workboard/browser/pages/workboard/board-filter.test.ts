@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { WorkboardBoardSummary, WorkboardCard } from "../../lib/workboard/index.ts";
+import { createWorkboardCard } from "../../lib/workboard/test/index-helpers.ts";
+import type { WorkboardBoardSummary, WorkboardCard } from "../../lib/workboard/types.ts";
 import {
   buildBoardFilterOptions,
   matchesBoardFilter,
@@ -7,17 +8,12 @@ import {
 } from "./board-filter.ts";
 
 function card(boardId?: string): WorkboardCard {
-  return {
+  return createWorkboardCard({
     id: boardId ?? "default-card",
     title: boardId ?? "Default card",
-    status: "todo",
-    priority: "normal",
-    labels: [],
     position: 1,
-    createdAt: 1,
-    updatedAt: 1,
     ...(boardId ? { metadata: { automation: { boardId } } } : {}),
-  };
+  });
 }
 
 function board(overrides: Partial<WorkboardBoardSummary> & Pick<WorkboardBoardSummary, "id">) {
@@ -31,7 +27,7 @@ function board(overrides: Partial<WorkboardBoardSummary> & Pick<WorkboardBoardSu
 }
 
 describe("Workboard board filter", () => {
-  it("uses one canonical default identity and includes empty archived boards", () => {
+  it.each([true, false])("keeps board identities, complete=%s", (cardsComplete) => {
     const options = buildBoardFilterOptions(
       [
         board({ id: "archive", name: "Old work", archivedAt: 9 }),
@@ -49,8 +45,8 @@ describe("Workboard board filter", () => {
           metadata: { automation: { boardId: "ops" }, archivedAt: 9 },
         },
       ],
+      cardsComplete,
     );
-
     expect(options.map((option) => option.value)).toEqual([
       WORKBOARD_ALL_BOARDS_FILTER,
       "default",
@@ -64,7 +60,7 @@ describe("Workboard board filter", () => {
     });
     expect(options[3]).toMatchObject({
       label: "Operations (ops)",
-      description: "2 active · 3 total",
+      description: cardsComplete ? "2 active · 3 total" : "99 active · 99 total",
     });
   });
 

@@ -1,4 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  hasAgentRunContextExecutionOwner,
+  listAgentRunsForSession,
+} from "../infra/agent-run-registry.js";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -12,10 +17,12 @@ import {
 import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
 import {
+  SessionMcpRuntimeCapacityError,
   resolveSessionMcpRuntimeIdleTtlMs,
   type CreateSessionMcpRuntime,
 } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
+  McpToolCatalog,
   SessionMcpRuntime,
   SessionMcpRuntimeLease,
   SessionMcpRuntimeManager,
@@ -44,7 +51,7 @@ const createSessionMcpRuntimeLazy: CreateSessionMcpRuntime = async (params) => {
 
 export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpts) {
   const lifecycle = createSessionMcpRuntimeManagerLifecycle(opts, createSessionMcpRuntimeLazy);
-  const { store } = lifecycle;
+  const { store, catalogs } = lifecycle;
   const install = createSessionMcpRuntimeManagerInstall(lifecycle);
   const leaseRuntime = (
     runtime: SessionMcpRuntime,
@@ -112,16 +119,103 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
         }
       }
     };
+  const createUnavailableRuntime = (
+    params: RuntimeAcquisitionParams,
+    error: SessionMcpRuntimeCapacityError,
+    runtimeKey = params.sessionId,
+  ): SessionMcpRuntime => {
+    const rememberedCatalog = store.catalogByRuntimeKey.get(runtimeKey)?.catalog;
+    if (error.notify && params.sessionKey) {
+      for (const run of listAgentRunsForSession({
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+      })) {
+        if (!hasAgentRunContextExecutionOwner(run.runId)) {
+          continue;
+        }
+        emitAgentEvent({
+          ...run,
+          sessionKey: params.sessionKey,
+          stream: "notice",
+          data: { phase: "warning", message: error.message },
+        });
+      }
+    }
+    const runtime = createCombinedSessionMcpRuntime({ ...params, parts: [] });
+    const catalog: McpToolCatalog = {
+      version: 1,
+      generatedAt: 0,
+      servers: {},
+      tools: [],
+      ...rememberedCatalog,
+      diagnostics: [
+        ...(rememberedCatalog?.diagnostics ?? []),
+        {
+          serverName: "Gateway",
+          safeServerName: "gateway",
+          launchSummary: "MCP runtime capacity",
+          message: error.message,
+        },
+      ],
+    };
+    runtime.getCatalog = async () => catalog;
+    runtime.peekCatalog = () => catalog;
+    runtime.callTool = async () => ({
+      isError: true,
+      content: [{ type: "text", text: error.message }],
+    });
+    const unavailable = async () => {
+      throw new Error(error.message);
+    };
+    runtime.listTools = unavailable;
+    runtime.listResources = unavailable;
+    runtime.readResource = unavailable;
+    runtime.listResourceTemplates = unavailable;
+    runtime.listPrompts = unavailable;
+    runtime.getPrompt = unavailable;
+    return runtime;
+  };
+  const withoutMcp = (params: RuntimeAcquisitionParams, error: SessionMcpRuntimeCapacityError) =>
+    leaseRuntime(createUnavailableRuntime(params, error), params.sessionId);
   const prepareAcquisition = (
     params: PreparedAcquisitionParams,
     configReloadAtAdmission: SessionMcpConfigPublication | undefined,
+    scope: "full" | "requester",
   ) => {
     const fullConfig = loadSessionMcpConfig({ ...params, logDiagnostics: false });
     const partition = partitionMcpServersByConnectionScope(fullConfig.loaded.mcpServers);
     // Full-set names stay stable when only some requester connections resolve.
     const { safeServerNamesByServer } = fullConfig;
     const requester = params.requester;
+    const advertisedCatalogConfigFingerprint = JSON.stringify([
+      params.sessionKey,
+      params.agentId ?? parseAgentSessionKey(params.sessionKey ?? "")?.agentId,
+      params.workspaceDir,
+      params.agentDir,
+      loadSessionMcpConfig({
+        ...params,
+        loaded: fullConfig.loaded,
+        logDiagnostics: false,
+        redactConnectionServerNames: new Set(partition.requesterScopedServerNames),
+        safeServerNamesByServer,
+      }).fingerprint,
+    ]);
+    // Static admissions can be projections; requester discovery owns this binding.
+    if (scope === "requester" || (requester && partition.requesterScopedServerNames.length > 0)) {
+      catalogs.reconcileAdvertisedScopedCatalogConfig(
+        {
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId ?? parseAgentSessionKey(params.sessionKey ?? "")?.agentId,
+          workspaceDir: params.workspaceDir,
+          agentDir: params.agentDir,
+          configFingerprint: advertisedCatalogConfigFingerprint,
+        },
+        requester !== undefined && partition.requesterScopedServerNames.length > 0,
+      );
+    }
     return {
+      advertisedCatalogConfigFingerprint,
       fullConfig,
       ...partition,
       safeServerNamesByServer,
@@ -164,16 +258,27 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       includeServerNames: params.scopedNameSet,
       redactConnectionServerNames: resolverRequesterNameSet,
     }).fingerprint;
+    const requesterScope = {
+      requesterSenderId: params.requesterSenderId,
+      ...(agentAccountId ? { agentAccountId } : {}),
+      ...(messageChannel ? { messageChannel } : {}),
+    };
     const runtime = await install.resolveAndInstallRequesterRuntime({
       ...params,
       fullScopedFingerprint,
       oauthRequesterNameSet,
       agentAccountId,
       messageChannel,
-      requesterScope: {
-        requesterSenderId: params.requesterSenderId,
-        ...(agentAccountId ? { agentAccountId } : {}),
-        ...(messageChannel ? { messageChannel } : {}),
+      requesterScope,
+      onCapacityRefusal(error, requesterConnect) {
+        return Object.assign(createUnavailableRuntime(params, error, params.runtimeKey), {
+          requesterScope,
+          // This facade has no revocation owner; retain sign-in schemas, never callbacks.
+          requesterConnect: requesterConnect && {
+            ...requesterConnect,
+            createExecute: () => undefined,
+          },
+        });
       },
     });
     return runtime ? leaseRuntime(runtime, params.runtimeKey) : undefined;
@@ -187,25 +292,37 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       }
 
       const {
+        fullConfig,
         staticServers,
         requesterScopedServerNames,
         safeServerNamesByServer,
         requester,
         acquireRequester,
-      } = prepareAcquisition(params, configReloadAtAdmission);
+      } = prepareAcquisition(params, configReloadAtAdmission, "full");
 
       const leases: SessionMcpRuntimeLease[] = [];
       try {
-        const staticLease = leaseRuntime(
-          await install.getOrCreateRuntimeEntry({
-            ...params,
-            runtimeKey: params.sessionId,
-            configReloadAtAdmission,
-            excludeServerNames: new Set(requesterScopedServerNames),
-            safeServerNamesByServer,
-          }),
-          params.sessionId,
-        );
+        let staticLease: SessionMcpRuntimeLease;
+        try {
+          staticLease = leaseRuntime(
+            await install.getOrCreateRuntimeEntry(
+              {
+                ...params,
+                runtimeKey: params.sessionId,
+                configReloadAtAdmission,
+                excludeServerNames: new Set(requesterScopedServerNames),
+                safeServerNamesByServer,
+              },
+              fullConfig.loaded,
+            ),
+            params.sessionId,
+          );
+        } catch (error) {
+          if (!(error instanceof SessionMcpRuntimeCapacityError)) {
+            throw error;
+          }
+          staticLease = withoutMcp(params, error);
+        }
         leases.push(staticLease);
         if (requesterScopedServerNames.length === 0) {
           return staticLease;
@@ -248,26 +365,11 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       // Anonymous turns own no requester runtime; reconcile first so a cached
       // catalog cannot survive a senderless harness turn.
       const {
-        fullConfig,
+        advertisedCatalogConfigFingerprint,
         requesterScopedServerNames,
-        safeServerNamesByServer,
         requester,
         acquireRequester,
-      } = prepareAcquisition(params, configReloadAtAdmission);
-      // Native acquisition can project only static servers. Requester discovery
-      // owns its advertised catalog; lease release/reload own server retirement.
-      const advertisedCatalogConfigFingerprint = loadSessionMcpConfig({
-        ...params,
-        loaded: fullConfig.loaded,
-        logDiagnostics: false,
-        redactConnectionServerNames: new Set(requesterScopedServerNames),
-        safeServerNamesByServer,
-      }).fingerprint;
-      lifecycle.reconcileAdvertisedScopedCatalogConfig(
-        params.sessionId,
-        advertisedCatalogConfigFingerprint,
-        requester !== undefined && requesterScopedServerNames.length > 0,
-      );
+      } = prepareAcquisition(params, configReloadAtAdmission, "requester");
       if (!requester) {
         return undefined;
       }
@@ -283,8 +385,8 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       }
       return { ...lease, advertisedCatalogConfigFingerprint };
     }),
-    rememberAdvertisedScopedCatalog: lifecycle.rememberAdvertisedScopedCatalog,
-    getAdvertisedScopedCatalog: lifecycle.getAdvertisedScopedCatalog,
+    rememberAdvertisedScopedCatalog: catalogs.rememberAdvertisedScopedCatalog,
+    getAdvertisedScopedCatalog: catalogs.getAdvertisedScopedCatalog,
     resolveSessionId(sessionKey) {
       return store.sessionIdBySessionKey.get(sessionKey);
     },
@@ -293,6 +395,36 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
         params.sessionId ??
         (params.sessionKey ? store.sessionIdBySessionKey.get(params.sessionKey) : undefined);
       return sessionId ? store.runtimesBySessionId.get(sessionId) : undefined;
+    },
+    captureSessionRetirement(params) {
+      const sessionId =
+        params.sessionId ??
+        (params.sessionKey ? store.sessionIdBySessionKey.get(params.sessionKey) : undefined);
+      if (!sessionId) {
+        return undefined;
+      }
+      const expectedRuntimes = new Map<string, SessionMcpRuntime>();
+      const catalogsAreCurrent = catalogs.captureSession(sessionId);
+      for (const key of lifecycle.runtimeKeysForSessionId(sessionId)) {
+        const runtime = store.runtimesBySessionId.get(key);
+        if (runtime) {
+          expectedRuntimes.set(key, runtime);
+        }
+      }
+      if (expectedRuntimes.size === 0 && !catalogsAreCurrent) {
+        return undefined;
+      }
+      return {
+        sessionId,
+        retire: (assertCurrent: () => void) =>
+          lifecycle.disposeManagedRuntimes(sessionId, {
+            expectedRuntimes,
+            catalogsAreCurrent,
+            assertCurrent,
+            preserveActiveLeases: true,
+            preserveRequiredRetirement: store.requiredRetirementSessionIds.has(sessionId),
+          }),
+      };
     },
     disposeSession: lifecycle.disposeManagedRuntimes,
     deferRetirement(sessionId, retirementOpts) {
@@ -307,6 +439,7 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       }
       if (
         lifecycle.runtimeKeysForSessionId(sessionId).length === 0 &&
+        !catalogs.hasSession(sessionId) &&
         !store.requiredRetirementSessionIds.has(sessionId)
       ) {
         return false;
@@ -337,7 +470,7 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
         return false;
       }
       const runtimeKeys = lifecycle.runtimeKeysForSessionId(sessionId);
-      if (runtimeKeys.length === 0) {
+      if (runtimeKeys.length === 0 && !catalogs.hasSession(sessionId)) {
         return false;
       }
       const pendingWork = runtimeKeys
@@ -364,7 +497,8 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
         pluginGeneration:
           (store.configReload?.pluginGeneration ?? 0) + (reload.reloadPlugins ? 1 : 0),
       };
-      store.advertisedScopedCatalogBySessionId.clear();
+      catalogs.clear();
+      lifecycle.pruneSessionBookkeeping();
       for (const runtime of store.runtimesBySessionId.values()) {
         const slot = store.runtimeSlots.get(runtime);
         if (slot) {
@@ -416,9 +550,13 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
           ...[...store.runtimesBySessionId.values()].flatMap((runtime) =>
             sessionMcpRuntimeOwners.get(runtime)?.agentId === agentId ? [runtime.sessionId] : [],
           ),
-          ...[...store.pendingDisposals].flatMap(([sessionId, receipt]) =>
-            receipt.agentId === agentId ? [sessionId] : [],
+          ...[...store.pendingDisposals.values()].flatMap((receipt) =>
+            receipt.agentId === agentId ? [receipt.sessionId] : [],
           ),
+          ...[
+            ...store.catalogByRuntimeKey.values(),
+            ...store.advertisedScopedCatalogBySessionId.values(),
+          ].flatMap((entry) => (entry.agentId === agentId ? [entry.sessionId] : [])),
         ]),
       ];
     },

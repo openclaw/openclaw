@@ -20,8 +20,9 @@ export type PlacementRecoveryDeps = {
   environments: Pick<
     WorkerDispatchEnvironmentService,
     | "get"
-    | "fenceWorkerTurnForRecovery"
     | "destroy"
+    | "reclaim"
+    | "fenceWorkerTurnForRecovery"
     | "startTunnel"
     | "stopTunnel"
     | "reconcileEnvironment"

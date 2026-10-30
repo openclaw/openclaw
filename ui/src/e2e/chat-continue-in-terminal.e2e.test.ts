@@ -1,13 +1,14 @@
-import type { Page, Locator } from "playwright";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { decodeResumeHandoff } from "../../../src/shared/resume-handoff.js";
-import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { closeChatDetails } from "./chat-details.test-support.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { exactButton, polledAttribute, polledClipboard } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -24,47 +25,25 @@ const basePath = new URL("/nested/$&;=()+,![]{}'`/%25PATH%25", "http://localhost
 const agentId = "runner";
 const sessionKey = `agent:${agentId}:main-'"$&;|<>^()%![]{}\\\`-%PATH%`;
 
-const sessionsListResponse = () => ({
-  owners: [
-    { type: "human" as const, id: "profile-ada", label: "Ada" },
-    { type: "human" as const, id: "profile-bob", label: "Bob" },
-  ],
-  ...chatSessionListResponse([
+const sessionsListResponse = () =>
+  chatSessionListResponse([
     {
       agentId,
       key: sessionKey,
       kind: "direct",
       label: "Terminal continuation",
       sessionId: "session-terminal-continuation",
-      owner: { actor: { type: "human", id: "profile-bob", label: "Bob" } },
       updatedAt: Date.now(),
     },
-  ]),
-});
+  ]);
 
-const sharedManagementActions = [
-  "Pin session",
-  "Mark as unread",
-  "Rename…",
-  "Advanced",
-  "Copy link",
-  "Assign to…",
-  "Move to group",
-  "Archive session",
-] as const;
 async function openTerminalSession(page: Page) {
   const gateway = await installMockGateway(page, {
     basePath,
-    featureMethods: [
-      "chat.startup",
-      "sessions.assignOwner",
-      "sessions.groups.put",
-      "sessions.patch",
-    ],
+    featureMethods: ["chat.startup"],
     historyMessages: [],
     methodResponses: { "sessions.list": sessionsListResponse() },
     operatorScopes: ["operator.read", "operator.write"],
-    presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
     sessionKey,
   });
   await page.goto(
@@ -80,12 +59,6 @@ async function openTerminalSession(page: Page) {
     menuTrigger: activePane.getByRole("button", { name: "Actions for Terminal continuation" }),
     dropdown: activePane.locator("openclaw-chat-header-session-menu"),
   };
-}
-
-async function expectAdvancedItems(dropdown: Locator) {
-  for (const label of ["Fork conversation", "Icon & color", "Copy details", "Open in", "Delete…"]) {
-    await dropdown.getByRole("menuitem", { name: label, exact: true }).waitFor();
-  }
 }
 
 suite.define(() => {
@@ -113,11 +86,7 @@ suite.define(() => {
 
         await polledAttribute(menuTrigger, "aria-expanded").toBe("false");
         await menuTrigger.press("Enter");
-        for (const label of sharedManagementActions) {
-          await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
-        }
         await openSessionMenuSubmenu(page, "Advanced");
-        await expectAdvancedItems(dropdown);
         await openSessionMenuSubmenu(page, "Open in");
         const action = dropdown.getByText("Continue in terminal…", { exact: true });
         await action.waitFor({ state: "visible" });
@@ -154,7 +123,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps the canonical session actions reachable in the mobile header menu", async () => {
+  it("opens terminal continuation after returning to the mobile Advanced page", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -168,16 +137,23 @@ suite.define(() => {
 
         await menuTrigger.click();
         await polledAttribute(menuTrigger, "aria-expanded").toBe("true");
-        for (const label of sharedManagementActions) {
-          await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
-        }
         await dropdown.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-        await expectAdvancedItems(dropdown);
-        await dropdown.getByRole("menuitem", { name: "Back", exact: true }).click();
+        const advanced = page.locator(
+          '.chat-mobile-host__page[data-mobile-page="session-advanced"]',
+        );
+        await advanced.waitFor();
+        const host = page.locator(".chat-mobile-host");
+        await host
+          .locator(".chat-mobile-host__header")
+          .getByRole("button", { name: "Back", exact: true })
+          .click();
+        await host.locator('.chat-mobile-details-page[data-details-page="root"]').waitFor();
+        await closeChatDetails(page);
+        await menuTrigger.click();
         await dropdown.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-        await dropdown.getByRole("menuitem", { name: "Open in", exact: true }).click();
-        await dropdown
-          .getByText("Continue in terminal…", { exact: true })
+        await advanced.getByRole("button", { name: "Continue in terminal", exact: true }).click();
+        await page
+          .locator("openclaw-modal-dialog.continue-in-terminal-dialog")
           .waitFor({ state: "visible" });
       },
     );

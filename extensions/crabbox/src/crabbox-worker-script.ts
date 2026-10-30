@@ -2,6 +2,17 @@ import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
 
 export const CRABBOX_RUNTIME_NODE_PATH = 'export PATH="$HOME/.openclaw-worker/runtime-node:$PATH"';
 
+/** Guest expression evaluated with fs, path, and the canonical home directory. */
+export function createCrabboxWorkerStateDirScript(leaseId: string): string {
+  return `(() => {
+  const previous = path.join(home, ".openclaw", ${JSON.stringify(`cloud-workers/${leaseId}`)});
+  // Retained leases keep their state, workspace identities, and process receipts.
+  if (process.platform !== "win32" || fs.existsSync(previous)) return previous;
+  const key = require("node:crypto").createHash("sha256").update(home).update("\\0").update(${JSON.stringify(leaseId)}).digest("hex").slice(0, 32);
+  return path.join(path.parse(home).root, "ocw", key);
+})()`;
+}
+
 const BIND_RUNTIME_NODE = `node <<'CRABBOX_BIND_RUNTIME_NODE'
 const fs = require("node:fs");
 const path = require("node:path");

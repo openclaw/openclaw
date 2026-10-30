@@ -17,20 +17,19 @@ import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js
 import * as sessionDelivery from "../../infra/session-delivery-queue-storage.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import {
   hasPendingGeneratedMediaTaskForSessionKey as hasPending,
   listMediaGenerationOperations,
 } from "../media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
 import { findDuplicateGuardImageGenerationTaskForSession as findDuplicate } from "../media-generation-task-status.js";
-import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import * as announceDelivery from "../subagents/announce/subagent-announce-delivery.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
@@ -40,7 +39,6 @@ import {
 } from "./media-generate-background-shared.js";
 import {
   imageGenerationTaskLifecycle,
-  resolveMediaGenerateToolContext,
   runMediaGenerationTask,
 } from "./media-generate-background.js";
 import { buildMediaGenerateToolExecutionResult as buildResult } from "./media-generate-result-shared.js";
@@ -48,12 +46,6 @@ import { buildMediaGenerateToolExecutionResult as buildResult } from "./media-ge
 const sessionKey = "agent:main:media";
 const sessionId = "original";
 const generated = { provider: "synthetic", model: "fixture", count: 1, wakeResult: "generated" };
-
-const { resolveSandboxContext } = vi.hoisted(() => ({
-  resolveSandboxContext: vi.fn<typeof import("../sandbox/context.js").resolveSandboxContext>(),
-}));
-// mock-isolation: sandbox provisioning is synthetic; session ownership and writes are real.
-vi.mock("../sandbox/context.js", () => ({ resolveSandboxContext }));
 
 afterEach(() => {
   vi.useRealTimers();
@@ -148,10 +140,12 @@ it.each([
   await withOpenClawTestState({ prefix: "media-retention-" }, async (state) => {
     const { scope } = await requester(state);
     vi.useFakeTimers({ toFake: ["Date"] });
+    const realPerformanceNow = performance.now.bind(performance);
+    let performanceClockSkewMs = 0;
     const enqueue = vi
       .spyOn(sessionDelivery, "enqueueClaimedSessionDelivery")
       .mockImplementation(async () => {
-        vi.setSystemTime(Date.now() + 120_001);
+        performanceClockSkewMs += 120_001;
         throw new Error("synthetic queue admission refused");
       });
     const append = transcript.appendAssistantMessageToSessionTranscript;
@@ -186,6 +180,9 @@ it.each([
     if (requesterState === "current") {
       await cleanupSessionStateForTest({ stateDir: state.stateDir });
     }
+    vi.spyOn(performance, "now").mockImplementation(
+      () => realPerformanceNow() + performanceClockSkewMs,
+    );
     const creationSql = requesterState === "current" ? observeMainThreadSql() : undefined;
     let handle;
     try {
@@ -231,6 +228,7 @@ it.each([
     if (requesterState === "current") {
       await complete();
     }
+    vi.restoreAllMocks();
     resetGeneratedMediaTaskActivityForTests();
     await cleanupSessionStateForTest({ stateDir: state.stateDir });
     const events = await loadTranscriptEvents({ ...scope, sessionId });
@@ -323,11 +321,7 @@ it("tracks a missing requester inline", async () => {
     const run = vi.fn(async (handle) => {
       expect(handle).toMatchObject({ detach: false, requesterTranscript: undefined });
       expect(hasPending(sessionKey, "main")).toBe(true);
-      return {
-        ...generated,
-        contentText: "inline result",
-        details: { generated: true },
-      };
+      return { ...generated, contentText: "inline result", details: { generated: true } };
     });
     const result = await runTask({ scheduleBackgroundWork: schedule, run });
     expect(run).toHaveBeenCalledOnce();
@@ -350,15 +344,16 @@ it.each([
 ] as const)("refuses provider work after %s %s revocation", async (phase, revocation) => {
   await withOpenClawTestState({ prefix: "media-admission-" }, async (state) => {
     await requester(state, sessionKey, sessionId, null);
-    const readStarted = createDeferredCore();
-    const resumeRead = createDeferredCore();
+    const lookup = createEnteredGate();
     const read = entryReader.withSessionEntryReadOnlyInWorker;
-    vi.spyOn(entryReader, "withSessionEntryReadOnlyInWorker").mockImplementation(
-      (scope, assertCurrent, consume) =>
-        read(scope, assertCurrent, async (result, owner) => {
-          readStarted.resolve();
-          await resumeRead.promise;
-          return consume(result, owner);
+    vi.spyOn(entryReader, "readSessionEntryReadOnlyInWorker").mockImplementation(
+      (scope, assertCurrent = () => {}) =>
+        read(scope, assertCurrent, async (result) => {
+          await lookup.wait();
+          if (!result.ok) {
+            throw result.error;
+          }
+          return result.value;
         }),
     );
     let current = true;
@@ -400,11 +395,11 @@ it.each([
           run,
         }),
     ).catch((error: unknown) => error);
-    await readStarted.promise;
+    await lookup.entered;
     if (phase === "lookup") {
       revoke();
     }
-    resumeRead.resolve();
+    lookup.release();
     expect(await pending).toBeInstanceOf(Error);
     expect(run).not.toHaveBeenCalled();
     expect(schedule).not.toHaveBeenCalled();
@@ -419,13 +414,11 @@ it.each([
 });
 it.each([
   ["current", 3, 2],
-  ["reset-during-generation", 0, undefined],
-  ["recreate-during-generation", 0, undefined],
+  ["reset-before-staging", 0, undefined],
+  ["recreate-before-staging", 0, undefined],
   ["reset-during-acquisition", 0, undefined],
   ["reset-after-gitignore", 1, undefined],
   ["reset-after-first-output", 2, 1],
-  ["read-only-during-generation", 0, undefined],
-  ["workspace-during-generation", 0, undefined],
 ] as const)(
   "binds detached staging to the admitted session: %s",
   async (transition, writes, staged) => {
@@ -441,9 +434,7 @@ it.each([
         attachments.map((attachment) => fs.writeFile(attachment.path, outputBytes)),
       );
       const sandbox = { root: workspace, bridge: createHostSandboxFsBridge(workspace) };
-      const { scope, entry, config } = await requester(state);
-      config.agents!.defaults = { sandbox: { mode: "all", workspaceAccess: "rw" } };
-      await configure(state, config);
+      const { scope, entry } = await requester(state);
       const lifecycle = createMediaGenerationTaskLifecycle("image");
       const handle = await lifecycle.createTaskRun({
         sessionKey,
@@ -451,18 +442,8 @@ it.each([
         prompt: "synthetic images",
       });
       assert(handle?.detach, "Expected an admitted detached generation");
-      const changesConfig =
-        transition.startsWith("read-only") || transition.startsWith("workspace");
       const invalidate = async () => {
-        if (changesConfig) {
-          const replacement: OpenClawConfig = structuredClone(config);
-          if (transition === "read-only-during-generation") {
-            replacement.agents!.defaults!.sandbox!.workspaceAccess = "ro";
-          } else {
-            replacement.agents!.entries!.main!.workspace = state.path("successor-workspace");
-          }
-          setRuntimeConfigSnapshot(replacement);
-        } else if (transition === "recreate-during-generation") {
+        if (transition === "recreate-before-staging") {
           await deleteRequester(scope);
           await replaceSessionEntry(scope, {
             sessionId: "successor",
@@ -491,76 +472,29 @@ it.each([
           }
           return result;
         });
-      const context = resolveMediaGenerateToolContext(
-        "imageGenerationProviders",
-        {
-          config,
-          agentSessionKey: sessionKey,
-          sandboxAgentId: "main",
-          requesterAgentId: "main",
-          spawnWorkspaceDir: workspace,
-          sandbox,
-        },
-        { warn: vi.fn(), error: vi.fn() },
-        true,
-      );
-      assert(context?.acquireOutputSandbox, "Expected a sandboxed media tool");
-      resolveSandboxContext.mockResolvedValue(
-        createSandboxTestContext({
-          overrides: {
-            workspaceDir: workspace,
-            fsBridge: sandbox.bridge,
-          },
-        }),
-      );
-      const acquire = vi.fn(async (assertCurrent: () => void) => {
-        if (changesConfig) {
-          return context.acquireOutputSandbox!(assertCurrent);
-        }
+      const acquire = vi.fn(async () => {
         if (transition === "reset-during-acquisition") {
           await invalidate();
         }
         return { ...sandbox, [Symbol.dispose]() {} };
       });
-      const deliver = successfulDelivery();
-      const generationStarted = createDeferredCore();
-      const finishGeneration = createDeferredCore();
-      let result: Awaited<ReturnType<typeof buildResult>> | undefined;
-      const complete = scheduleCompletion({
-        lifecycle,
-        handle,
-        run: async () => {
-          generationStarted.resolve();
-          await finishGeneration.promise;
-          result = await buildResult({
-            kind: "image",
-            result: { provider: "test", model: "test", attempts: [] },
-            maxBytes: 1024,
-            details: {},
-            attachments,
-            mediaUrls: attachments.map((attachment) => attachment.path),
-            sandbox: acquire,
-            taskHandle: handle,
-          });
-          return result;
-        },
-      });
-      const pending = complete();
-      await generationStarted.promise;
-      try {
-        if (transition.endsWith("during-generation")) {
-          await invalidate();
-        }
-      } finally {
-        finishGeneration.resolve();
-        await pending;
+      if (transition.endsWith("before-staging")) {
+        await invalidate();
       }
-      assert(result, "Expected generated media to survive staging refusal");
+      const result = await buildResult({
+        kind: "image",
+        result: { provider: "test", model: "test", attempts: [] },
+        maxBytes: 1024,
+        details: {},
+        attachments,
+        mediaUrls: attachments.map((attachment) => attachment.path),
+        sandbox: acquire,
+        taskHandle: handle,
+      });
       expect(result.attachments).toEqual(attachments);
       for (const attachment of attachments) {
         await expect(fs.readFile(attachment.path)).resolves.toEqual(outputBytes);
       }
-      expect(deliver).toHaveBeenCalledTimes(transition === "current" || changesConfig ? 1 : 0);
       expect(written).toHaveBeenCalledTimes(writes);
       if (staged === undefined) {
         expect(result.details.sandboxPaths).toBeUndefined();
@@ -576,12 +510,10 @@ it.each([
         }
       } else {
         expect(result.wakeResult).toContain(
-          changesConfig
-            ? "Sandbox copy unavailable: Error: The requesting sandbox configuration has changed"
-            : "Sandbox copy unavailable: Error: The requesting session is no longer current",
+          "Sandbox copy unavailable: Error: The requesting session is no longer current",
         );
-        if (transition.endsWith("during-generation")) {
-          expect(acquire).toHaveBeenCalledTimes(changesConfig ? 1 : 0);
+        if (transition.endsWith("before-staging")) {
+          expect(acquire).not.toHaveBeenCalled();
         }
         if (writes === 0) {
           await expect(fs.readdir(workspace)).resolves.toEqual([]);

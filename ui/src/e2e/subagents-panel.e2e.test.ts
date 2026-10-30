@@ -1,11 +1,15 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { CommandPaletteTargetDetail } from "../components/command-palette-contract.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiSessionUrl,
   installMockGateway,
+  pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -143,7 +147,156 @@ function scenario() {
 }
 
 suite.define(() => {
-  it("uses narrow subagent panel width without empty avatar gutters", async () => {
+  it("shows live native children separately and refreshes their read-only status", async () => {
+    await suite.withPage(
+      { viewport: { width: 1440, height: 1000 }, colorScheme: "dark", locale: "en-US" },
+      async ({ page }) => {
+        await page.clock.install();
+        const { parent, child } = scenario();
+        const nativeLabel = "/root/synthetic-audit";
+        const nativeResponse = (status: "running" | "completed") => ({
+          session: parent,
+          nativeSubagents: {
+            coverage: "live",
+            children: [{ id: "synthetic-native-child", label: nativeLabel, status }],
+            truncated: false,
+          },
+        });
+        const describeResponse = (response: unknown) => ({
+          cases: [
+            { match: { key: parent.key, includeNativeSubagents: true }, response },
+            { match: { key: parent.key }, response: { session: parent } },
+          ],
+        });
+        const gateway = await installMockGateway(page, {
+          ...previewModel,
+          sessionKey: parent.key,
+          communityInvite: false,
+          // Native observations deliberately have no Gateway session row or transcript.
+          sessions: [parent, child],
+          historyMessages: [{ role: "assistant", content: "Synthetic child visibility audit." }],
+          sessionTranscripts: { [child.key]: { messages: [] } },
+          methodResponses: {
+            "sessions.describe": describeResponse(nativeResponse("running")),
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
+        await openChatSidePanelType(page, "Subagents");
+        const panel = page.locator("openclaw-chat-subagents-panel");
+        const managed = panel.locator(`[data-session-key="${child.key}"]`);
+        const openManaged = managed.locator(
+          ".subagents-desktop__open, .chat-subagents-mobile__open",
+        );
+        const stopManaged = managed.getByRole("button", { name: `Stop ${child.label}` });
+        await openManaged.waitFor();
+        await stopManaged.waitFor();
+        const native = panel.getByRole("region", { name: "Live native agents", exact: true });
+        const nativeRow = native.getByRole("listitem").filter({ hasText: nativeLabel });
+        // The suite allocates one retained artifact directory per test attempt.
+        const directory = suite.artifactDir;
+        const capture = async (stage: string) => {
+          await managed.hover();
+          const content = [openManaged, stopManaged];
+          if (await nativeRow.isVisible()) {
+            content.push(nativeRow);
+          }
+          const surface = panel.locator(".subagents-desktop, .chat-subagents-mobile");
+          const frame = await takeControlUiScreenshotFrame(page, surface, content, {
+            animations: "disabled",
+            elements: [surface],
+          });
+          await writeFile(path.join(directory, `${stage}.png`), frame.png);
+          await writeFile(path.join(directory, `${stage}-panel.png`), frame.elements[0]!.png);
+          await writeFile(
+            path.join(directory, `${stage}-describe-requests.json`),
+            JSON.stringify(await gateway.getRequests("sessions.describe"), null, 2),
+          );
+        };
+        // Capture the unchanged base's missing row even when this visible assertion fails.
+        // Both builds receive valid responses; the failure must be missing rendered content.
+        try {
+          await nativeRow.getByText(nativeLabel, { exact: true }).waitFor({ timeout: 10_000 });
+          await nativeRow.getByText("Running", { exact: true }).waitFor();
+        } finally {
+          await capture("native-running");
+        }
+        expect(await nativeRow.count()).toBe(1);
+        expect(await nativeRow.getByRole("button").count()).toBe(0);
+        expect(await nativeRow.getByRole("link").count()).toBe(0);
+        expect(await nativeRow.getAttribute("data-session-key")).toBeNull();
+        expect(await panel.locator(".chat-subagents__running").getByText(nativeLabel).count()).toBe(
+          0,
+        );
+        expect(await openManaged.isVisible()).toBe(true);
+        expect(await stopManaged.isVisible()).toBe(true);
+        expect(await openManaged.isEnabled()).toBe(true);
+        expect(await stopManaged.isEnabled()).toBe(true);
+        const reads = await gateway.getRequests("sessions.describe", {
+          key: parent.key,
+          includeNativeSubagents: true,
+        });
+        expect(reads.length).toBeGreaterThan(0);
+        expect(reads[0]?.params).toEqual({
+          key: parent.key,
+          includeNativeSubagents: true,
+        });
+        await expectNoRequests(gateway, ["sessions.abort", "chat.send", "chat.abort"]);
+
+        await pauseVirtualClock(page);
+        await gateway.setMethodResponse(
+          "sessions.describe",
+          describeResponse(nativeResponse("completed")),
+        );
+        // Advance the production owner's five-second poll; keep the same visible panel.
+        await page.clock.runFor(5_100);
+        await nativeRow.getByText("Completed", { exact: true }).waitFor({ timeout: 10_000 });
+        expect(await nativeRow.getByText("Running", { exact: true }).count()).toBe(0);
+        expect(await nativeRow.getByRole("button").count()).toBe(0);
+        expect(await openManaged.isVisible()).toBe(true);
+        expect(await stopManaged.isVisible()).toBe(true);
+        await capture("native-completed");
+
+        await page.setViewportSize({ width: 390, height: 900 });
+        await page.locator(".shell--mobile-nav").waitFor();
+        await openChatSidePanelType(page, "Subagents");
+        await nativeRow.getByText("Completed", { exact: true }).waitFor();
+        expect(await nativeRow.getByRole("button").count()).toBe(0);
+        expect(await openManaged.isVisible()).toBe(true);
+        expect(await stopManaged.isVisible()).toBe(true);
+        await capture("native-mobile-completed");
+
+        await gateway.setMethodResponse(
+          "sessions.describe",
+          describeResponse({
+            __mockError: { code: "FORBIDDEN", message: "Synthetic parent access revoked" },
+          }),
+        );
+        await page.clock.runFor(5_100);
+        await native
+          .getByRole("alert")
+          .getByText(/Synthetic parent access revoked/)
+          .waitFor({ timeout: 10_000 });
+        expect(await native.getByRole("listitem").count()).toBe(0);
+        expect(await panel.getByText(nativeLabel, { exact: true }).count()).toBe(0);
+        await expectNoRequests(gateway, ["sessions.abort", "chat.send", "chat.abort"]);
+        await native
+          .getByText("Updates retry automatically while this panel is visible.")
+          .waitFor();
+        await capture("native-parent-denied");
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await page.locator(".shell:not(.shell--mobile-nav)").waitFor();
+        await openChatSidePanelType(page, "Subagents");
+        await native
+          .getByRole("alert")
+          .getByText(/Synthetic parent access revoked/)
+          .waitFor();
+        expect(await native.getByRole("listitem").count()).toBe(0);
+        await capture("native-desktop-parent-denied");
+      },
+    );
+  });
+
+  it("keeps narrow subagent reports inside the panel and scrollable", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 1000 }, colorScheme: "dark" },
       async ({ page }) => {
@@ -186,30 +339,76 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
         await openChatSidePanelType(page, "Subagents");
         const panel = page.locator("openclaw-chat-subagents-panel");
-        await panel.getByRole("button", { name: child.label, exact: true }).click();
+        await panel
+          .locator(".subagents-desktop__open")
+          .filter({ has: page.getByText(child.label, { exact: true }) })
+          .click();
         const detail = panel.locator(".chat-subagent-detail");
         const copy = detail.getByText(
           "Ready: the navigation preference repair is implemented and verified.",
           { exact: true },
         );
         await copy.waitFor();
-
-        const geometry = await copy.evaluate((element) => {
-          const thread = element.closest<HTMLElement>(".chat-thread")!;
-          const column = element.closest(".chat-group-messages")!;
-          const outer = thread.getBoundingClientRect();
-          const inner = column.getBoundingClientRect();
+        await page.mouse.move(10, 10);
+        const stop = detail.locator(".subagents-desktop__stop");
+        await stop.waitFor();
+        const stopInk = await stop.evaluate((button) => {
+          const glyph = button.querySelector("svg")!;
           return {
-            width: outer.width,
-            left: inner.left - outer.left,
-            right: outer.right - inner.right,
-            overflow: thread.scrollWidth - thread.clientWidth,
+            label: getComputedStyle(button).color,
+            glyph: getComputedStyle(glyph).color,
+            fill: getComputedStyle(glyph).fill,
           };
         });
-        expect(geometry.width).toBeLessThanOrEqual(560);
-        expect(geometry.left).toBeLessThanOrEqual(24);
-        expect(geometry.right).toBeLessThanOrEqual(24);
+        expect(stopInk.glyph, "Stop keeps its destructive label foreground at rest").toBe(
+          stopInk.label,
+        );
+        expect(stopInk.fill, "Stop paints its destructive glyph foreground").toBe(stopInk.label);
+
+        const thread = detail.locator(".chat-thread");
+        const initialWidth = (await thread.boundingBox())!.width;
+        expect(initialWidth).toBeLessThanOrEqual(560);
+        await page.setViewportSize({ width: 1440, height: 600 });
+        await page.getByRole("separator", { name: "Resize side panel", exact: true }).press("End");
+        await expect
+          .poll(async () => (await panel.boundingBox())!.width)
+          .toBeLessThan(initialWidth);
+        const geometry = await thread.evaluate((element) => {
+          const outer = element.closest("openclaw-chat-subagents-panel")!.getBoundingClientRect();
+          const inner = element.getBoundingClientRect();
+          return {
+            left: inner.left - outer.left,
+            right: inner.right - outer.right,
+            overflow: element.scrollWidth - element.clientWidth,
+          };
+        });
+        expect(geometry.left).toBeGreaterThanOrEqual(-1);
+        expect(geometry.right).toBeLessThanOrEqual(1);
         expect(geometry.overflow).toBeLessThanOrEqual(1);
+        const bounds = (await panel.boundingBox())!;
+        await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+        await page.mouse.wheel(0, -2000);
+        await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
+        await page.mouse.wheel(0, 2000);
+        await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+        const last = detail.getByText(
+          "Confirmed that narrow panels keep long paths and reports readable.",
+          { exact: true },
+        );
+        await expect
+          .poll(() =>
+            last.evaluate((element) => {
+              const text = element.getBoundingClientRect();
+              const viewport = element.closest(".chat-thread")!.getBoundingClientRect();
+              return text.top >= viewport.top && text.bottom <= viewport.bottom;
+            }),
+          )
+          .toBe(true);
+        await panel.getByRole("button", { name: "Back to Subagents", exact: true }).click();
+        await panel
+          .locator(".subagents-desktop__open")
+          .filter({ has: page.getByText(child.label, { exact: true }) })
+          .waitFor();
       },
     );
   });
@@ -239,13 +438,13 @@ suite.define(() => {
       const waitingRow = panel.locator(`[data-session-key="${waiting.key}"]`);
       await waitingRow.waitFor();
 
-      expect(await panel.locator(".chat-subagents__running").getByText(waiting.label).count()).toBe(
+      expect(await panel.locator('[data-group="waiting"]').getByText(waiting.label).count()).toBe(
         1,
       );
       expect(await waitingRow.getByRole("button", { name: `Stop ${waiting.label}` }).count()).toBe(
         0,
       );
-      await panel.locator(".chat-subagents__finished").getByText(finished.label).waitFor();
+      await panel.locator('[data-group="done"]').getByText(finished.label).waitFor();
       const settled = { ...waiting, hasActiveSubagentRun: false, updatedAt: Date.now() + 1 };
       await gateway.setSessionsListResponse({ sessions: [parent, child, settled, finished] });
       await gateway.emitGatewayEvent("sessions.changed", {
@@ -255,7 +454,7 @@ suite.define(() => {
         session: settled,
         ancestorSessions: [parent],
       });
-      await panel.locator(".chat-subagents__finished").getByText(waiting.label).waitFor();
+      await panel.locator('[data-group="done"]').getByText(waiting.label).waitFor();
       expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
     });
   });
@@ -378,20 +577,23 @@ suite.define(() => {
         await openChatSidePanelType(page, "Subagents");
         const panel = parentPane.locator("openclaw-chat-subagents-panel");
         const row = panel.locator(`[data-session-key="${child.key}"]`);
-        await row.getByRole("button", { name: child.label, exact: true }).waitFor();
-        await expect.poll(() => panel.locator(".chat-subagents__item").count()).toBe(5);
+        await row
+          .locator(".subagents-desktop__open")
+          .filter({ has: page.getByText(child.label, { exact: true }) })
+          .waitFor();
+        await expect.poll(() => panel.locator(".subagents-desktop__row").count()).toBe(5);
         await panel
-          .locator(`.chat-subagents__running [data-session-key="${queued.key}"]`)
+          .locator(`[data-group="waiting"][data-session-key="${queued.key}"]`)
           .getByText("Queued", { exact: true })
           .waitFor();
         await panel
-          .locator(".chat-subagents__running")
+          .locator('[data-group="active"]')
           .getByText(swarm.label, { exact: true })
           .waitFor();
         expect(await panel.getByText(persistent.label, { exact: true }).count()).toBe(0);
         await expect
-          .poll(() => row.locator(".chat-subagents__calls").textContent())
-          .toBe("2 calls");
+          .poll(() => row.locator(".subagents-desktop__open").getAttribute("title"))
+          .toContain("2 calls");
 
         const activity = {
           sessionKey: child.key,
@@ -413,10 +615,12 @@ suite.define(() => {
         };
         await gateway.emitGatewayEvent("agent", activity);
         await expect
-          .poll(() => row.locator(".chat-subagents__activity").textContent())
-          .toBe("Reading notice component");
+          .poll(() => row.locator(".subagents-desktop__open").getAttribute("title"))
+          .toContain("Reading notice component");
         await gateway.emitGatewayEvent("agent", activity);
-        expect(await row.locator(".chat-subagents__calls").textContent()).toBe("2 calls");
+        expect(await row.locator(".subagents-desktop__open").getAttribute("title")).toContain(
+          "2 calls",
+        );
         await gateway.emitGatewayEvent("agent", {
           sessionKey: other.key,
           agentId: "main",
@@ -427,21 +631,27 @@ suite.define(() => {
           data: { ...keyboardActivity, phase: "update" },
         });
         const otherRow = panel.locator(`[data-session-key="${other.key}"]`);
-        await otherRow.locator(".chat-subagents__activity").waitFor();
+        await otherRow.locator(".subagents-desktop__open").waitFor();
         await expect
-          .poll(() => otherRow.locator(".chat-subagents__activity").textContent())
-          .toBe("Retry failed benchmark targets");
+          .poll(() => otherRow.locator(".subagents-desktop__open").getAttribute("title"))
+          .toContain("Retry failed benchmark targets");
         await expect
-          .poll(() => otherRow.locator(".chat-subagents__calls").textContent())
-          .toBe("1+ calls");
-        expect(await row.locator("svg").count()).toBe(1);
+          .poll(() => otherRow.locator(".subagents-desktop__open").getAttribute("title"))
+          .toContain("1+ calls");
+        expect(await row.locator(".subagents-desktop__avatar").count()).toBe(1);
 
-        await panel.getByRole("button", { name: swarm.label, exact: true }).click();
+        await panel
+          .locator(".subagents-desktop__open")
+          .filter({ has: page.getByText(swarm.label, { exact: true }) })
+          .click();
         await panel.getByText("Comparing concurrent task results.", { exact: true }).waitFor();
         expect(page.url()).toBe(controlUiSessionUrl(suite.server.baseUrl, parent.key));
         expect(await draft.inputValue()).toBe("Keep this parent draft");
         await panel.getByRole("button", { name: "Back to Subagents", exact: true }).click();
-        await row.getByRole("button", { name: child.label, exact: true }).click();
+        await row
+          .locator(".subagents-desktop__open")
+          .filter({ has: page.getByText(child.label, { exact: true }) })
+          .click();
         const detail = panel.locator(".chat-subagent-detail");
         await detail.getByText("Inspecting the notice component.", { exact: true }).waitFor();
         await expectAbsent(detail, [
@@ -477,13 +687,26 @@ suite.define(() => {
         await detail.getByRole("button", { name: "Close Review", exact: true }).click();
         await detail.getByRole("button", { name: "Back to Subagents", exact: true }).click();
         await row.waitFor();
-        await otherRow.getByRole("button", { name: `Stop ${other.label}`, exact: true }).click();
-        await expectRequestCount(gateway, "sessions.abort", 1);
-        expect((await gateway.getRequests("sessions.abort"))[0]?.params).toMatchObject({
-          key: other.key,
-          agentId: "main",
-          runId: "keyboard-run",
-        });
+        await gateway.deferNext("sessions.abort");
+        const stop = otherRow.locator(".subagents-desktop__stop");
+        await stop.click();
+        try {
+          await expectRequestCount(gateway, "sessions.abort", 1);
+          expect((await gateway.getRequests("sessions.abort"))[0]?.params).toMatchObject({
+            key: other.key,
+            agentId: "main",
+            runId: "keyboard-run",
+          });
+          await expect.poll(() => stop.isDisabled()).toBe(true);
+          await otherRow.locator(".subagents-desktop__open").click();
+          const childPane = panel.locator("openclaw-chat-pane");
+          await childPane.getByRole("button", { name: "Back to Subagents", exact: true }).waitFor();
+          expect(await draft.inputValue()).toBe("Keep this parent draft");
+        } finally {
+          await gateway.resolveDeferred("sessions.abort", { aborted: true });
+        }
+        await panel.getByRole("button", { name: "Back to Subagents", exact: true }).click();
+        await row.waitFor();
         await expectNoRequests(gateway, ["chat.send", "chat.abort"]);
         expect(await draft.inputValue()).toBe("Keep this parent draft");
         await page.reload();
@@ -549,7 +772,8 @@ suite.define(() => {
         await openChatSidePanelType(page, "Subagents");
         await parentPane
           .locator("openclaw-chat-subagents-panel")
-          .getByRole("button", { name: child.label, exact: true })
+          .locator(".subagents-desktop__open")
+          .filter({ has: page.getByText(child.label, { exact: true }) })
           .click();
         const detail = parentPane.locator(".chat-subagent-detail");
         await detail.locator('.chat-bubble[data-entry-id="fork-request"]').waitFor();
@@ -563,7 +787,7 @@ suite.define(() => {
         await gateway.setSessionsListResponse({ sessions: [parent, completedChild, fork] });
         if (refuse) {
           // A route can advance before the chat page retires its presentation.
-          await page.evaluate(() => history.pushState(null, "", "/agents"));
+          await page.evaluate(() => history.pushState(null, "", "/sessions"));
         }
         await gateway.resolveDeferred("sessions.fork", {
           sessionKey: fork.key,
@@ -575,7 +799,7 @@ suite.define(() => {
         );
         await forkLink.waitFor();
         if (refuse) {
-          expect(new URL(page.url()).pathname).toBe("/agents");
+          expect(new URL(page.url()).pathname).toBe("/sessions");
           expect(await composer.inputValue()).toBe("Keep the original parent draft");
           await page.evaluate((url) => history.replaceState(null, "", url), originalUrl);
           await forkLink.click();
@@ -633,10 +857,19 @@ suite.define(() => {
             ".agent-chat__composer-combobox textarea",
             "openclaw-chat-outbox-recovery",
           ]);
-          await pane.getByRole("button", { name: "Stop generating", exact: true }).waitFor();
-          expect(
-            await notice.getByRole("button", { name: "Stop generating", exact: true }).count(),
-          ).toBe(0);
+          if (width < 900) {
+            await pane.getByRole("button", { name: "Actions for " + child.label }).click();
+            await pane.getByRole("menuitem", { name: "Stop generating", exact: true }).waitFor();
+            await page.keyboard.press("Escape");
+            expect(
+              await notice.getByRole("button", { name: "Stop generating", exact: true }).count(),
+            ).toBe(0);
+          } else {
+            await notice.getByRole("button", { name: "Stop generating", exact: true }).waitFor();
+            expect(
+              await pane.getByRole("button", { name: "Stop generating", exact: true }).count(),
+            ).toBe(1);
+          }
           expect(
             await notice.evaluate((element) => {
               const rect = element.getBoundingClientRect();

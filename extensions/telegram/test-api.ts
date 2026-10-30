@@ -1,4 +1,4 @@
-export { getOrCreateAccountThrottler } from "./src/account-throttler.js";
+export { getOrCreateAccountThrottler, releaseAccountThrottler } from "./src/account-throttler.js";
 export { apiThrottler } from "./src/bot.runtime.js";
 export type { ReplyResolverOptions } from "./src/bot-message-dispatch.telegram-http.test-support.js";
 // The Bot API dispatch fixture registers Vitest hooks, so host suites load it on demand.

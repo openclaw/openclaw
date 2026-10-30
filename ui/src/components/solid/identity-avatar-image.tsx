@@ -1,41 +1,48 @@
-import { createEffect, createMemo, onCleanup, type Accessor } from "solid-js";
-import { retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
+import { createEffect, createMemo, createSignal, onSettled, type Accessor } from "solid-js";
+import { recordAvatarImageError, retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 
 type IdentityAvatarImageProps = {
   view: { imageUrl: string | Promise<string | null> | null };
-  fallbackSelector: string;
+  onStateChange: (outcome: ImageOutcome) => void;
   class?: string;
   alt?: string;
   ariaHidden?: boolean;
   onImageError?: () => void;
 };
 
-function setIdentityAvatarState(element: Element, state: "none" | "pending" | "loaded" | "failed") {
-  if (element.getAttribute("data-avatar-state") === state) {
-    return;
-  }
-  element.setAttribute("data-avatar-state", state);
-  element.classList.toggle("is-pending", state === "pending");
-  element.classList.toggle("is-fallback", state === "none" || state === "failed");
-}
+type ImageOutcome = {
+  source: IdentityAvatarImageProps["view"]["imageUrl"];
+  url: string | null;
+  state: "pending" | "loaded" | "failed";
+};
 
-/** An image owns loaded/failed; frames without an image still need their fallback. */
-export function identityAvatarState(
+/** Known image URLs paint over their fallback without waiting for a decode event. */
+export function createIdentityAvatarPresentation(
   view: Accessor<IdentityAvatarImageProps["view"] & { pending: boolean }>,
 ) {
-  let frame: HTMLElement;
-  const fallback = createMemo(() => {
+  const [outcome, setOutcome] = createSignal<ImageOutcome>();
+  const state = createMemo(() => {
     const value = view();
-    return value.imageUrl ? undefined : value.pending ? "pending" : "none";
-  });
-  createEffect(fallback, (state) => {
-    if (state) {
-      setIdentityAvatarState(frame, state);
+    if (!value.imageUrl) {
+      return value.pending ? "pending" : "none";
     }
+    const current = outcome();
+    return current &&
+      (current.source === value.imageUrl ||
+        (typeof value.imageUrl === "string" && current.url === value.imageUrl))
+      ? current.state
+      : typeof value.imageUrl === "string"
+        ? "loaded"
+        : "pending";
   });
-  return (element: HTMLElement) => {
-    frame = element;
+  return {
+    state,
+    classes: () => ({
+      "is-pending": state() === "pending",
+      "is-fallback": state() === "none" || state() === "failed",
+    }),
+    onStateChange: (value: ImageOutcome) => setOutcome(value),
   };
 }
 
@@ -43,14 +50,13 @@ export function identityAvatarState(
 export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
   let image: HTMLImageElement;
   let release: (() => void) | undefined;
-  const state = (value: "pending" | "loaded" | "failed") => {
-    const frame = image.closest(props.fallbackSelector);
-    if (frame) {
-      setIdentityAvatarState(frame, value);
-    }
+  let activeSource: IdentityAvatarImageProps["view"]["imageUrl"] = null;
+  const state = (value: ImageOutcome["state"], url = image.getAttribute("src")) => {
+    props.onStateChange({ source: activeSource, url, state: value });
   };
   const load = () => state("loaded");
   const error = () => {
+    recordAvatarImageError(activeSource);
     state("failed");
     props.onImageError?.();
   };
@@ -59,6 +65,7 @@ export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
     equals: (previous, next) => previous.result === next.result,
   });
   createEffect(source, ({ result }) => {
+    activeSource = result;
     const nextRelease = retainAvatarImageUrl(result);
     release?.();
     release = nextRelease;
@@ -68,25 +75,13 @@ export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
         return;
       }
       if (!url || image.getAttribute("src") !== url) {
-        state(url ? "pending" : "failed");
+        state(url ? "loaded" : "failed", url);
         if (url) {
           image.setAttribute("src", url);
         } else {
           image.removeAttribute("src");
         }
       }
-      // Refs run before their wrapper is inserted; cached decodes emit no event.
-      queueMicrotask(() => {
-        if (
-          active &&
-          url &&
-          image.getAttribute("src") === url &&
-          image.complete &&
-          image.naturalWidth > 0
-        ) {
-          load();
-        }
-      });
     };
     if (typeof result === "string" || result === null) {
       apply(result);
@@ -100,18 +95,20 @@ export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
     };
   });
   // Retired image nodes can still emit errors after a replacement owns the avatar.
-  const cleanup = [() => release?.()];
-  onCleanup(() => cleanup.forEach((stop) => stop()));
+  onSettled(() => {
+    const cleanup = [() => release?.(), listen(image, "load", load), listen(image, "error", error)];
+    return () => cleanup.forEach((stop) => stop());
+  });
   return (
     <img
       ref={(element) => {
         image = element;
-        cleanup.push(listen(image, "load", load), listen(image, "error", error));
       }}
       class={props.class}
       alt={props.alt ?? ""}
       aria-hidden={props.ariaHidden ? "true" : undefined}
       referrerpolicy="no-referrer"
+      decoding="async"
     />
   );
 }

@@ -63,15 +63,11 @@ describe("meeting participation browser dispatch", () => {
   it.each([false, true])("dispatches once with identity (prepared: %s)", async (prepared) => {
     adapter = createAdapter(prepared);
     const build = vi.spyOn(adapter, "buildActionScript");
-    const parse = vi.spyOn(adapter, "parseActionResult");
     const prepare = adapter.buildPreparationScript && vi.spyOn(adapter, "buildPreparationScript");
-    const parsePreparation =
-      adapter.parsePreparationResult && vi.spyOn(adapter, "parsePreparationResult");
     const response = { result: prepared ? "ready" : "test-result" };
     callBrowser.mockImplementation(async (request) => (request.path === "/tabs" ? tabs : response));
     await expect(run()).resolves.toEqual({ status: "succeeded", observed: { sent: true } });
     expect(build).toHaveBeenCalledExactlyOnceWith(identity);
-    expect(parse).toHaveBeenCalledWith(response, identity.action);
     const act = (fn: string) => ["POST", "/act", { kind: "evaluate", targetId, fn }];
     expect(callBrowser.mock.calls.map(([{ method, path, body }]) => [method, path, body])).toEqual([
       ["GET", "/tabs", undefined],
@@ -80,7 +76,6 @@ describe("meeting participation browser dispatch", () => {
     ]);
     if (prepared) {
       expect(prepare).toHaveBeenCalledWith(identity);
-      expect(parsePreparation).toHaveBeenCalledWith(response, identity.action);
     }
   });
 

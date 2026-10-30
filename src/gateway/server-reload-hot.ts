@@ -26,7 +26,7 @@ import { reloadPlanNeedsRecovery } from "./config-reload-recovery.js";
 import type { GatewayHotReloadApplication } from "./config-reload-status.types.js";
 import { commitHookTransformMappingReload } from "./hooks-mapping.js";
 import { resolveHooksConfig } from "./hooks.js";
-import type { GatewayCronExitWatcherHandoff } from "./server-cron.js";
+import type { GatewayCronExitWatcherHandoff } from "./server-cron-contract.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import { reviveAgentDatabasesAfterConfigCommit } from "./server-reload-agent-databases.js";
@@ -268,13 +268,10 @@ export function createGatewayReloadHandlers(
         // Plugin publication can reject its prepared registry. Keep config and
         // secret rollback available until that selection succeeds.
         publication?.assertInvokerOwned?.();
-        runtime?.publish();
         if (runtime) {
+          runtime.publish();
           params.setState(nextState);
           runtimeCommitted = true;
-        }
-        if (plan.restartHeartbeat) {
-          nextState.heartbeatRunner.updateConfig(nextConfig);
         }
         if (modelRuntime.required) {
           // Retire model/auth inputs together so requests cannot mix generations.
@@ -341,22 +338,11 @@ export function createGatewayReloadHandlers(
         });
       }
       await runAfterPluginLifecycleCommit(async () => {
-        if (plan.restartHeartbeat) {
-          await reviveAgentDatabasesAfterConfigCommit(listAgentIds(nextConfig), (message) =>
-            params.logReload.warn(message),
-          );
-        }
+        await reviveAgentDatabasesAfterConfigCommit(listAgentIds(nextConfig), (message) =>
+          params.logReload.warn(message),
+        );
         if (!ownsCron()) {
           return;
-        }
-        // Only accepted runtime state may own monitor writes and emitted events.
-        if (plan.reconcileSystemJobs) {
-          const result = await nextState.cronState.reconcileSystemJobs().catch(failConfigCommit);
-          if (result === "retry-scheduled") {
-            params.logReload.warn(
-              "cron system jobs pending; continuing hot reload with cron retry",
-            );
-          }
         }
         if (plan.restartCron && ownsCron()) {
           startGatewayCronWithLogging({
@@ -619,7 +605,6 @@ export function createGatewayReloadHandlers(
             }),
           timeoutMs: MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS,
           onWarn: params.logReload.warn,
-          label: "bundle-mcp runtime disposal during config reload",
         });
       }
 

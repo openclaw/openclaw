@@ -28,6 +28,7 @@ import {
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
+import type { RecoveryInventoryScan } from "./recovery-inventory-scan.js";
 import {
   collectUpdateCaptureInventory,
   readCompletedUpdateHistory,
@@ -53,7 +54,14 @@ export function resolveRecoveryArtifact(
   );
 }
 
-export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv }) {
+export function collectRecoveryInventory(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  scan?: RecoveryInventoryScan;
+  readHistory?: boolean;
+}) {
+  const entries = (directory: string) =>
+    params.scan?.directory(directory) ?? fs.readdirSync(directory, { withFileTypes: true });
   const stateDir = canonicalMigrationFilePath(path.join(resolveStateDir(params.env), "anchor"));
   const root = path.dirname(stateDir);
   const stores = new Set<string>();
@@ -61,7 +69,7 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
   const agentIds = new Set(listAgentIds(params.cfg));
   const agentsRoot = path.join(root, "agents");
   if (statMigrationPath(agentsRoot)?.isDirectory() && !hasSymbolicLinkInDirectoryPath(agentsRoot)) {
-    for (const item of fs.readdirSync(agentsRoot, { withFileTypes: true })) {
+    for (const item of entries(agentsRoot)) {
       if (item.isDirectory()) {
         agentIds.add(item.name);
         stores.add(path.join(agentsRoot, item.name, "sessions", "sessions.json"));
@@ -84,7 +92,7 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
     }
   }
   const references = new Map<string, RecoveryArtifactReference[]>();
-  const manifestPaths: string[] = [];
+  let manifestPaths: string[] = [];
   const artifacts: RecoveryCleanupArtifact[] = [];
   const missingOriginals = new Set<string>();
   const protectUnmanifested = (filePath: string, bytes: number, reason: string) => {
@@ -101,8 +109,15 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       reason: "manifest-directory-alias",
     });
   } else {
-    manifestPaths.push(...listSessionSqliteMigrationManifestPaths(params.env));
+    manifestPaths = params.scan
+      ? [...params.scan.directory(manifestsDir)]
+          .filter((entry) => entry.name.endsWith(".json") && !entry.name.endsWith(".failure.json"))
+          .map((entry) => path.join(manifestsDir, entry.name))
+      : listSessionSqliteMigrationManifestPaths(params.env);
     for (const manifestPath of manifestPaths) {
+      if (params.scan && !params.scan.metadata(manifestPath)) {
+        continue;
+      }
       const stat = statMigrationPath(manifestPath);
       const manifest =
         stat?.isFile() && stat.nlink === 1
@@ -121,6 +136,9 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       const run = { manifest, manifestPath };
       const consumed = collectRecordedConsumedArchives(manifest);
       for (const target of manifest.targets) {
+        if (params.scan && !params.scan.available()) {
+          break;
+        }
         const expected = resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath);
         const trusted =
           isPathInside(root, target.sqlitePath) &&
@@ -146,17 +164,20 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       }
     }
   }
-  if ([...references.values()].some((refs) => refs.some((ref) => ref.target.databaseIdentity))) {
+  if (
+    params.readHistory !== false &&
+    [...references.values()].some((refs) => refs.some((ref) => ref.target.databaseIdentity))
+  ) {
     laterUpdateStartedAt = readCompletedUpdateHistory(params.env)?.latestCompletedStartedAt ?? 0;
   }
   for (const [archivePath, refs] of references) {
     const evidence = resolveRecoveryArtifact(refs);
     const stat = refs.every((ref) => ref.trusted)
-      ? fs.lstatSync(archivePath, { bigint: true, throwIfNoEntry: false })
+      ? statMigrationPath(archivePath, { bigint: true })
       : undefined;
     const claim =
       refs.every((ref) => ref.trusted) && evidence?.disposal.state === "pending-disposal"
-        ? fs.lstatSync(evidence.disposal.claimPath, { bigint: true, throwIfNoEntry: false })
+        ? statMigrationPath(evidence.disposal.claimPath, { bigint: true })
         : undefined;
     const current = stat ?? claim;
     if (
@@ -276,7 +297,7 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
     ) {
       continue;
     }
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    for (const entry of entries(directory)) {
       if (
         !isMigrationArchiveArtifactName(entry.name) &&
         !entry.name.includes(".pre-doctor-") &&
@@ -296,26 +317,25 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
     }
   }
   // Unknown files in known archive directories are visible, with no authority inferred from names.
+  const knownArchivePaths = new Set(artifacts.map((item) => item.path));
+  const pendingClaims = new Set<string>();
+  for (const refs of references.values()) {
+    for (const { move } of refs) {
+      if (move.artifact?.disposal.state === "pending-disposal") {
+        pendingClaims.add(move.artifact.disposal.claimPath);
+      }
+    }
+  }
   for (const directory of archiveDirs) {
     if (!statMigrationPath(directory)?.isDirectory() || hasSymbolicLinkInDirectoryPath(directory)) {
       continue;
     }
-    for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
+    for (const item of entries(directory)) {
       const filePath = path.join(directory, item.name);
-      if (references.has(filePath) || artifacts.some((artifact) => artifact.path === filePath)) {
+      if (knownArchivePaths.has(filePath) || pendingClaims.has(filePath)) {
         continue;
       }
-      if (
-        [...references.values()].some((refs) =>
-          refs.some(
-            ({ move }) =>
-              move.artifact?.disposal.state === "pending-disposal" &&
-              move.artifact.disposal.claimPath === filePath,
-          ),
-        )
-      ) {
-        continue;
-      }
+      knownArchivePaths.add(filePath);
       protectUnmanifested(
         filePath,
         item.isFile() ? fs.lstatSync(filePath).size : 0,
@@ -332,6 +352,16 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       if (item.outcome === "candidate" || item.outcome === "verification-required") {
         item.outcome = "blocked";
         item.reason = "unreadable-recovery-dependencies";
+      }
+    }
+  }
+  if (params.scan?.incomplete) {
+    // A skipped manifest may protect an original already seen in another run.
+    // Diagnostics retain observed bytes, never infer eligibility from a partial graph.
+    for (const item of artifacts) {
+      if (item.outcome === "candidate" || item.outcome === "verification-required") {
+        item.outcome = "protected";
+        item.reason = "incomplete-recovery-inventory";
       }
     }
   }
@@ -463,6 +493,8 @@ export function summarizeRecoveryCleanup(
 export function collectUpdateCleanupInventory(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  scan?: RecoveryInventoryScan;
+  readHistory?: boolean;
 }) {
   return withSynchronousArtifactPreservingStateSnapshot(
     () => {
@@ -470,6 +502,8 @@ export function collectUpdateCleanupInventory(params: {
       const captures = collectUpdateCaptureInventory({
         stateDir: inventory.report.stateDir,
         env: params.env,
+        scan: params.scan,
+        readHistory: params.readHistory,
       });
       return {
         ...inventory,

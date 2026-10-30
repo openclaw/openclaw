@@ -94,6 +94,7 @@ describe("AppSidebar agent chip", () => {
     expect(harness.list).toHaveBeenCalledWith({
       rowMode: "compact",
       source: "sidebar",
+      ifRowsRevision: "",
       spawnedBy: "agent:main:parent",
       limit: 100,
       includeGlobal: false,
@@ -122,16 +123,13 @@ describe("AppSidebar agent chip", () => {
       expect(row.querySelector("[data-sidebar-session-pin], .session-row-state")).toBeNull();
     }
     expect(sidebar.querySelector('[aria-label="Done"]')).not.toBeNull();
-    const runtimeStartMs = (
-      sidebar.querySelector('[data-session-key="agent:main:child-one"] openclaw-elapsed-time') as
-        | (HTMLElement & { startMs: number })
-        | null
-    )?.startMs;
+    const runtime = sidebar.querySelector(
+      '[data-session-key="agent:main:child-one"] openclaw-elapsed-time',
+    );
     const childTrail = childRows[0]?.querySelector<HTMLElement>(".session-row-trail");
     expect(childTrail?.querySelector("openclaw-elapsed-time")).not.toBeNull();
     expect(childRows[0]?.querySelector("a")?.getAttribute("aria-describedby")).toBe(childTrail?.id);
-    expect(runtimeStartMs).toBeGreaterThan(Date.now() - 31_000);
-    expect(runtimeStartMs).toBeLessThan(Date.now() - 29_000);
+    expect(runtime?.textContent).toMatch(/^(?:29|30|31)s$/);
 
     harness.list.mockResolvedValue(
       listResult(
@@ -211,11 +209,7 @@ describe("AppSidebar agent chip", () => {
     );
     expect(parentBadge?.dataset.workspaceConflicts).toBe("2");
     expect(parentBadge?.dataset.placementState).toBeUndefined();
-    expect(parentBadge?.hasAttribute("title")).toBe(false);
-    expect(
-      (parentBadge?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
-        ?.content,
-    ).toBe("Cloud worker children: 2 workspace conflicts");
+    expect(parentBadge?.getAttribute("title")).toBe("Cloud worker children: 2 workspace conflicts");
   });
 
   it("loads every child-session page before marking a parent complete", async () => {

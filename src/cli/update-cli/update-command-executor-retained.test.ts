@@ -2,9 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import { assert, beforeEach, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   resolvePackageActivationAnchor,
   resolvePackageActivationControl,
@@ -13,7 +12,6 @@ import {
   type PackageActivationDescriptor,
 } from "../../infra/package-update-activation-journal.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { runUtf8CommandWithTimeout, type CommandOptions } from "../../process/exec.js";
 import { updateExecutorEntrypoints } from "../cli-entrypoint.test-support.js";
@@ -24,8 +22,9 @@ import {
   withUpdateCommandExecutor as withExecutor,
   withUpdateCommandExecutorChild as withChild,
 } from "./update-command-executor.js";
+import { useExecutorFixture } from "./update-command-executor.test-support.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
+const fixture = useExecutorFixture("retained-update-owner-", { splitRoots: true });
 let root: string;
 let serviceRoot: string;
 let candidateRoot: string;
@@ -33,20 +32,13 @@ let receipt: string;
 let proceed: string;
 let output: string;
 beforeEach(() => {
-  const base = fs.realpathSync(dirs.make("retained-update-owner-"));
-  root = path.join(base, "package-B");
-  serviceRoot = path.join(base, "service-A");
-  candidateRoot = path.join(base, "candidate-C");
+  ({ root, serviceRoot } = fixture());
+  candidateRoot = path.join(path.dirname(root), "candidate-C");
   receipt = path.join(root, "receipt");
   proceed = path.join(root, "proceed");
   output = path.join(root, "effect");
-  const control = path.join(base, "control");
-  for (const directory of [root, serviceRoot, candidateRoot, control]) {
-    fs.mkdirSync(directory, { mode: 0o700 });
-  }
-  vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+  fs.mkdirSync(candidateRoot, { mode: 0o700 });
 });
-afterEach(() => vi.restoreAllMocks());
 
 const ownerModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href;
 const commandModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.processExec).href;
@@ -95,6 +87,10 @@ function receiver(input: Record<string, unknown>, options: CommandOptions) {
 }
 
 it.each([
+  { destination: "direct-C", revoke: "none" },
+  { destination: "direct-C", revoke: "B" },
+  { destination: "direct-C", revoke: "A" },
+  { destination: "direct-C", revoke: "C" },
   { destination: "C", revoke: "none" },
   { destination: "C", revoke: "B" },
   { destination: "C", revoke: "A" },
@@ -103,9 +99,11 @@ it.each([
   { destination: "B", revoke: "none" },
   { destination: "A", revoke: "none" },
 ] as const)(
-  "checks retained A authority through nested B->$destination, revoke $revoke",
+  "checks retained A authority through B->$destination, revoke $revoke",
   async ({ destination, revoke }) => {
-    const leafRoot = destination === "C" ? candidateRoot : destination === "A" ? serviceRoot : root;
+    const direct = destination === "direct-C";
+    const leafRoot =
+      direct || destination === "C" ? candidateRoot : destination === "A" ? serviceRoot : root;
     const ready = createDeferred();
     let revokedKey: string | undefined;
     const work = withExecutor(randomUUID(), async (executor) => {
@@ -113,9 +111,9 @@ it.each([
       expect(requiresRetainedOwner(fence)).toBe(true);
       const authority = authorityOf(fence);
       publishedPackageFixture(authority);
-      const pending = withChild(fence, root, (grant, beforeInput) =>
+      const pending = withChild(fence, direct ? leafRoot : root, (grant, beforeInput) =>
         receiver(
-          { grant, authority, nextRoot: leafRoot, program },
+          { grant, authority, nextRoot: direct ? undefined : leafRoot, program },
           {
             beforeInput,
             timeoutMs: 30000,
@@ -147,11 +145,15 @@ it.each([
           fs.readFileSync(receipt, "utf8"),
         );
         expect(observed.authority).toEqual(authority);
+        expect(() => fence.assertCurrent()).toThrow("The update process is still running.");
         const store = createManagedHandoffLeaseStore();
         for (const key of [root, serviceRoot, leafRoot]) {
           const current = store.read(key);
           assert(current.kind === "current");
           expect(store.release(current.lease)).toBe(false);
+          if (key === root) {
+            expect(store.bind(current.lease, process.pid)).toBeNull();
+          }
           expect(store.acquire(key, "contender", { kind: "update" }).kind).toBe("busy");
         }
         if (revoke !== "none") {
@@ -183,12 +185,22 @@ it.each([
         expect(createManagedHandoffLeaseStore().read(key)).toEqual({ kind: "absent" });
       }
     } else {
-      await expect(work).rejects.toThrow();
+      await expect(work).rejects.toThrow(
+        destination === "direct-C" ? /ownership|release/ : undefined,
+      );
       expect(fs.existsSync(output)).toBe(false);
       expect(createManagedHandoffLeaseStore().read(revokedKey!)).toMatchObject({
         kind: "current",
         lease: { owner: "replacement" },
       });
+      if (revoke === "C") {
+        expect(
+          createManagedHandoffLeaseStore().acquire(root, "next-original", { kind: "update" }).kind,
+        ).toBe("busy");
+      }
+      if (revoke === "B") {
+        expect(createManagedHandoffLeaseStore().read(candidateRoot)).toEqual({ kind: "absent" });
+      }
     }
   },
 );

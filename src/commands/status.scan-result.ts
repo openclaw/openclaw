@@ -25,8 +25,6 @@ export type StatusScanResult<
   AgentStatus extends StatusJsonAgentStatuses = AgentLocalStatusesResult,
 > = Omit<
   StatusScanOverviewResult,
-  | "coldStart"
-  | "hasConfiguredChannels"
   | "skipColdStartNetworkChecks"
   | "gatewaySnapshot"
   | "channelsStatus"
@@ -35,6 +33,8 @@ export type StatusScanResult<
   | "agentStatus"
 > &
   StatusScanGatewayResult & {
+    /** Local callers publish again after their final asynchronous preparation. */
+    publish?: () => { summary: StatusSummary; agentStatus: AgentStatus };
     summary: StatusSummary;
     memory: MemoryStatusSnapshot | null;
     memoryPlugin: MemoryPluginStatus;

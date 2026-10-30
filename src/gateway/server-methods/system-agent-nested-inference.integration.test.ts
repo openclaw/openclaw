@@ -15,6 +15,7 @@ import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run-orchest
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import * as embeddedAgent from "../../agents/embedded-agent.js";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import * as configModule from "../../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -39,6 +40,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { runSystemAgentTurn } from "../../system-agent/agent-turn.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import * as operations from "../../system-agent/operations.js";
 import type { SystemAgentOverview } from "../../system-agent/overview.js";
 import {
   createSystemAgentPluginMetadataTestSnapshot,
@@ -50,6 +52,7 @@ import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent
 import type { GatewayClient } from "./types.js";
 
 const RESPONSE_TEXT = "Synthetic expert response; no action was executed.";
+const nativeExecuteOperation = operations.executeSystemAgentOperation;
 const dispatch = vi.hoisted(() =>
   vi.fn<(params: RunEmbeddedAgentParams) => Promise<EmbeddedAgentRunResult>>(),
 );
@@ -141,19 +144,10 @@ async function createConversation() {
     config,
   );
   const readConfigFileSnapshot = async (): Promise<ConfigFileSnapshot> => ({
-    exists: true,
-    valid: true,
-    path: path.join(root, "synthetic-config.json"),
+    ...createTestConfigSnapshot(config, config, path.join(root, "synthetic-config.json")),
     hash: "synthetic-config-hash",
-    config,
-    runtimeConfig: config,
-    sourceConfig: config,
     raw: JSON.stringify(config),
     parsed: config,
-    resolved: config,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
   });
   const observed = createDeferred<"waiting" | "dispatched">();
   const captured: {
@@ -193,7 +187,6 @@ async function createConversation() {
     },
   };
   const deps = {
-    readConfigFileSnapshot,
     loadOverview: async () => overview,
   };
   vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(readConfigFileSnapshot);
@@ -208,19 +201,21 @@ async function createConversation() {
         },
       }),
   );
-  const executeOperation = vi.fn(async () => {
-    throw new Error("external operation");
+  const executeOperation = vi
+    .spyOn(operations, "executeSystemAgentOperation")
+    .mockImplementation((...args) => {
+      if (args[2]?.approved !== true) {
+        return nativeExecuteOperation(...args);
+      }
+      throw new Error("external operation");
+    });
+  const engine = new SystemAgentChatEngine({
+    surface: "gateway",
+    verifiedInference: proof.binding,
+    operatorApprovalOnly: true,
+    deps,
+    runAgentTurn: runSystemAgentTurn,
   });
-  const engine = new SystemAgentChatEngine(
-    {
-      surface: "gateway",
-      verifiedInference: proof.binding,
-      operatorApprovalOnly: true,
-      deps,
-      runAgentTurn: runSystemAgentTurn,
-    },
-    { executeOperation },
-  );
   engines.push(engine);
   const sessionId = "nested-inference-integration-conversation";
   const sessions = new Map<string, SystemAgentChatSession>([

@@ -14,17 +14,19 @@ import type {
 } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { resolveSessionRequestTargets } from "./session-request-targets.js";
 
 export function createContext(
   methods: Array<
     [name: string, scope: GatewayMethodScope, area: string, handler: GatewayMethodHandler]
   > = [],
+  getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({}),
 ): GatewayRequestContext {
   const context = {
     trackExecution: trackAsyncWork,
     dedupe: new Map(),
-    getRuntimeConfig: () => ({}),
+    getRuntimeConfig,
     logGateway: { error: vi.fn(), warn: vi.fn() },
   } as unknown as GatewayRequestContext;
   if (methods.length) {
@@ -61,24 +63,14 @@ export function createOperatorClient(
   return {
     connId: `conn-${profileId}`,
     authenticatedUserId: `${profileId}@example.com`,
-    authenticatedUserProfile: {
-      profileId,
-      displayName: profileId,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: gatewayProfile(profileId, profileId),
     connect: {
       ...(params.caps ? { caps: params.caps } : {}),
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      role: "operator",
-      scopes: params.scopes,
-      client: {
-        id: GATEWAY_CLIENT_IDS.TEST,
-        version: "1",
-        platform: "test",
-        mode: GATEWAY_CLIENT_MODES.TEST,
-      },
+      ...gatewayConnect(
+        params.scopes,
+        { id: GATEWAY_CLIENT_IDS.TEST, version: "1", mode: GATEWAY_CLIENT_MODES.TEST },
+        PROTOCOL_VERSION,
+      ),
     },
   };
 }

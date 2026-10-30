@@ -419,8 +419,9 @@ two; at most 4 GiB caps them at one. Committed timing weights are unchanged.
 
 Docker seed runs one published-upgrade survivor on every admitted upstream main
 run; QA Smoke retains owner-path selection. Ordinary manual CI and Full Release
-Validation select all six Docker seed lanes. Main builds the complete runtime
-and public SDK declarations through `ciArtifacts` before standard packaging;
+Validation select all six Docker seed lanes. Main builds the complete runtime,
+workspace package declarations, and public SDK declarations through
+`ciArtifacts` before standard packaging;
 manual/release runs retain full package generation. Pull requests and their
 exact-head fallback dispatches omit these jobs,
 real-Gateway UI, and named built-process verifiers. Unit/boundary and mocked
@@ -550,6 +551,18 @@ families, unqualified configs, builds, memory floors, and explicit large-runner
 anchors at their planned capacity. Resource-gated tooling tests remain outside
 this rule.
 RunsOn inherits the same hybrid choice for these retained Blacksmith jobs.
+The singleton `src/gateway/mcp-app-extension-runtime.test.ts` in `gateway-core`
+and `src/agents/cli-runner.helpers.test.ts` in `agents-core` also qualify under
+the same guards. Other files in those configs retain their planned capacity.
+At `137e7b2abc87`, a serial five-file replay through the production executor
+passed all 56 tests on both Bun (93.8 seconds) and Node (125.2 seconds) on a
+[16-class Testbox](https://github.com/openclaw/openclaw/actions/runs/39097664576).
+The machine supplied four CPUs and 15.42 GiB RAM. Whole-machine peak used memory
+was 5.00 GiB on Bun and 5.22 GiB on Node; both observed zero OOM kills and at most
+268 KiB of swap use. The replay included the selected embedded-agent and Gateway
+client siblings. Its infra file remains outside this rule: the current planner
+permits parallel execution without the required two-worker bound. These are
+capacity measurements; native billed savings still need post-merge observation.
 The isolated `attempt.llm-boundary.cache-stability.test.ts` selection also uses
 the 16-class when it is the group's only file and the same guards hold. A complete
 replay at `33488188fcab` passed all 19 tests in 105 seconds through the production

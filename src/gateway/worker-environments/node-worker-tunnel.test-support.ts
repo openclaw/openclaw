@@ -2,22 +2,19 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { vi } from "vitest";
 import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import {
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 // Keep this static: the tunnel graph reaches compiled-subprocess declarations, whose one-time
 // invocation-wide preparation must happen at collection, not inside a test deadline.
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
+import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { NodeWorkspaceTransferSnapshot } from "./node-workspace-transfer-snapshot.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -97,22 +94,13 @@ export function transport(): NodeWorkerSupervisorTransport {
     },
     hasCurrentRunner: () => true,
     listCurrentNodes: async () => [
-      {
-        nodeId: "node-1",
-        connId: "conn-1",
-        pairingIdentity: "pairing-1",
-        pairingGeneration: "generation-1",
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
-        protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+      createNodeWorkerBundleTestNode({
         workerHost: {
-          enabled: true,
-          capacity: { total: 2, available: 2 },
           environmentSession: 1,
           workspaceQuiescence: 1,
         },
         commands: ["system.run"],
-      },
+      }),
     ],
     isCurrent: () => true,
     invoke: withWorkspaceDrain(async ({ command }) =>
@@ -129,10 +117,7 @@ export function withWorkspaceDrain(
   return async (request) => {
     const input = request.params as { argv?: string[] } | undefined;
     return input?.argv?.[0] === NODE_WORKSPACE_DRAIN_COMMAND
-      ? {
-          ok: true,
-          payloadJSON: workspaceCommandPayload("/node/workspace", { stdout: "drained\n" }),
-        }
+      ? workspaceReply("/node/workspace", { stdout: "drained\n" })
       : await invoke(request);
   };
 }
@@ -158,6 +143,25 @@ export function createManager(
     launchNodeWorker: vi.fn(),
     validateWorkerTurn: () => true,
     workspaceTransfer: workspaceTransfer(),
+    ...overrides,
+  });
+}
+
+export function workspaceReply(workspaceDir: string, result: Partial<SpawnResult> = {}) {
+  return { ok: true, payloadJSON: workspaceCommandPayload(workspaceDir, result) };
+}
+
+type WorkspaceActionsOptions = Parameters<typeof createNodeWorkerWorkspaceActions>[0];
+export function workspaceActions(
+  overrides: Pick<WorkspaceActionsOptions, "workspaceTransfer" | "runWorkspaceCommand"> &
+    Partial<WorkspaceActionsOptions>,
+) {
+  return createNodeWorkerWorkspaceActions({
+    environmentId: "environment-1",
+    ownerEpoch: 1,
+    sessionId: "session-1",
+    ownerSignal: new AbortController().signal,
+    isOwnerCurrent: () => true,
     ...overrides,
   });
 }
@@ -242,10 +246,8 @@ export function manifestCaptureOutput(manifestRef: string): string {
     memo: [],
     metrics: {
       contentHashCount: 0,
-      contentHashDurationMs: 0,
       memoHitCount: 0,
       memoTruncatedCount: 0,
-      totalDurationMs: 0,
     },
   });
 }

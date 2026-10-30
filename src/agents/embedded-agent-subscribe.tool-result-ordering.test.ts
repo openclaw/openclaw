@@ -59,7 +59,55 @@ function harness(params: Omit<Params, "session" | "runId"> = {}) {
   };
 }
 
+function deliveryHarness(params: Omit<Params, "session" | "runId"> = {}) {
+  const observers = {
+    onToolResult: vi.fn<NonNullable<Params["onToolResult"]>>(),
+    onPartialReply: vi.fn<NonNullable<Params["onPartialReply"]>>(),
+    onBlockReply: vi.fn<NonNullable<Params["onBlockReply"]>>(),
+    onAgentEvent: vi.fn<NonNullable<Params["onAgentEvent"]>>(),
+  };
+  return { ...observers, ...harness({ ...observers, blockReplyBreak: "message_end", ...params }) };
+}
+
 describe("tool result ordering", () => {
+  it.each(["discarded", "rejected"] as const)(
+    "settles nested lifecycle accounting when terminal presentation is %s",
+    async (outcome) => {
+      const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
+      const h = harness({ onAgentEvent });
+      let lifecycleAtTerminal: ReturnType<typeof h.subscription.getItemLifecycle> | undefined;
+      const failure = new Error("terminal acceptance failed");
+      const execution = h.subscription.runToolLifecycle({
+        toolName: "read",
+        toolCallId: "discarded-terminal",
+        args: {},
+        execute: async (started) => {
+          started();
+          return jsonResult({ done: true });
+        },
+        onTerminal: () => {
+          lifecycleAtTerminal = h.subscription.getItemLifecycle();
+          if (outcome === "rejected") {
+            throw failure;
+          }
+          return false;
+        },
+      });
+      if (outcome === "rejected") {
+        await expect(execution).rejects.toBe(failure);
+      } else {
+        await execution;
+      }
+      expect(lifecycleAtTerminal).toEqual({ startedCount: 1, completedCount: 1, activeCount: 0 });
+      expect(h.subscription.getItemLifecycle()).toEqual(lifecycleAtTerminal);
+      expect(
+        onAgentEvent.mock.calls.some(
+          ([event]) => event.stream === "item" && event.data.phase === "end",
+        ),
+      ).toBe(false);
+    },
+  );
+
   it("settles subscribed nested dispatch exactly once across repeated exec and wait turns", async () => {
     const blockReplyFlush = createDeferred();
     const onBlockReplyFlush = vi.fn(() => blockReplyFlush.promise);
@@ -229,7 +277,6 @@ describe("tool result ordering", () => {
         name: "exec",
         args: { command: "printf fixture", apiKey },
       });
-      expect(JSON.stringify(recordEvent.mock.calls)).toContain(apiKey);
       await entered.promise;
       h.end("exec", "first-call", {
         content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
@@ -358,7 +405,15 @@ describe("tool result ordering", () => {
       const notice = createDeferred();
       const order: string[] = [];
       const answer = "I recovered the answer using another tool.";
-      const onToolResult = vi.fn(async () => {
+      const onBlockReplyFlush = vi.fn(async () => {});
+      const h = deliveryHarness({
+        onBlockReplyFlush: flush ? onBlockReplyFlush : undefined,
+        onAssistantMessageStart: () => {
+          order.push("assistant start");
+        },
+      });
+      const { onToolResult, onPartialReply, onBlockReply, onAgentEvent } = h;
+      onToolResult.mockImplementation(async () => {
         order.push("notice entered");
         entered.resolve();
         try {
@@ -367,28 +422,16 @@ describe("tool result ordering", () => {
           order.push("notice settled");
         }
       });
-      const onPartialReply = vi.fn(() => {
+      onPartialReply.mockImplementation(() => {
         order.push("partial");
       });
-      const onBlockReply = vi.fn(() => {
+      onBlockReply.mockImplementation(() => {
         order.push("block");
       });
-      const onBlockReplyFlush = vi.fn(async () => {});
-      const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>(({ stream, data }) => {
+      onAgentEvent.mockImplementation(({ stream, data }) => {
         if (stream === "lifecycle" && data.phase === "end") {
           order.push("terminal");
         }
-      });
-      const h = harness({
-        onToolResult,
-        onPartialReply,
-        onBlockReply,
-        onBlockReplyFlush: flush ? onBlockReplyFlush : undefined,
-        onAssistantMessageStart: () => {
-          order.push("assistant start");
-        },
-        onAgentEvent,
-        blockReplyBreak: "message_end",
       });
       try {
         h.start("exec", "notice");
@@ -396,8 +439,7 @@ describe("tool result ordering", () => {
           details: { status: "approval-unavailable", reason: "no-approval-route" },
         });
         await entered.promise;
-        expect(onToolResult).toHaveBeenCalledOnce();
-        expect(onToolResult).toHaveBeenCalledWith(
+        expect(onToolResult).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
             channelData: { execApprovalUnavailable: { reason: "no-approval-route" } },
           }),
@@ -471,17 +513,8 @@ describe("tool result ordering", () => {
   );
 
   it("suppresses live and terminal-only assistant blocks after an approval prompt", async () => {
-    const onToolResult = vi.fn();
-    const onBlockReply = vi.fn();
-    const onPartialReply = vi.fn();
-    const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
-    const h = harness({
-      onToolResult,
-      onBlockReply,
-      onPartialReply,
-      onAgentEvent,
-      blockReplyBreak: "message_end",
-    });
+    const h = deliveryHarness();
+    const { onToolResult, onBlockReply, onPartialReply, onAgentEvent } = h;
     const approvalId = "12345678-1234-1234-1234-123456789012";
     const first = createOpenAiResponsesPartial({
       text: "Approval is needed.",

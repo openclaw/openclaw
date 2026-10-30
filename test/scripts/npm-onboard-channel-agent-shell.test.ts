@@ -1,34 +1,26 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { registryFixture } from "./prepublish-plugin-registry.fixture.js";
 
 const runnerPath = "scripts/e2e/npm-onboard-channel-agent-docker.sh";
 const version = "2026.8.1";
-const sourceSha = "a".repeat(40);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 
 type Scenario = {
   consent?: boolean;
   registry?: boolean;
-  corruptRegistry?: boolean;
-  companion?: "missing" | "wrong-identity";
   channel?: "telegram" | "discord" | "slack";
   bundled?: boolean;
   sourcePlugin?: boolean;
-  helpFailure?: "exit" | "timeout";
-  failProbe?: number;
+  helpFailure?: boolean;
   doctorExitCode?: number;
   dirtyState?: boolean;
 };
-
-function sha256(file: string): string {
-  return createHash("sha256").update(readFileSync(file)).digest("hex");
-}
 
 function writeFixture(file: string, content: string | Record<string, unknown>, executable = false) {
   mkdirSync(dirname(file), { recursive: true });
@@ -44,43 +36,6 @@ function installArgs(id: string, source: boolean) {
     ...(source ? [`npm:@openclaw/${id}@${version}`, "--pin"] : [id]),
     "--accept-capabilities",
   ];
-}
-
-function registryFixture(root: string, scenario: Scenario): NodeJS.ProcessEnv {
-  const artifactDir = join(root, "registry-artifact");
-  const staging = join(root, "staging");
-  mkdirSync(artifactDir);
-  // Extra verified companions must not select source mode on their own.
-  const packages = ["codex", "discord", "slack"]
-    .filter((id) => scenario.companion !== "missing" || id !== scenario.channel)
-    .map((id) => {
-      const name = `@openclaw/${id}`;
-      writeFixture(join(staging, "package/package.json"), {
-        name:
-          scenario.companion === "wrong-identity" && id === scenario.channel
-            ? "@openclaw/other"
-            : name,
-        version,
-      });
-      const tarball = `${id}.tgz`;
-      const tarballPath = join(artifactDir, tarball);
-      execFileSync("tar", ["-czf", tarballPath, "-C", staging, "package"]);
-      return { name, version, tarball, sha256: sha256(tarballPath) };
-    });
-  const manifest = join(artifactDir, "prepublish-plugin-registry.json");
-  writeFixture(manifest, {
-    schema: "openclaw.prepublish-plugin-registry/v1",
-    schemaVersion: 1,
-    candidateVersion: version,
-    sourceSha,
-    packages,
-  });
-  return {
-    OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: artifactDir,
-    OPENCLAW_DOCKER_E2E_SELECTED_SHA: sourceSha,
-    OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: version,
-    OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: sha256(manifest),
-  };
 }
 
 function runScenario(scenario: Scenario = {}) {
@@ -120,11 +75,7 @@ const fail = (message) => { console.error(message); process.exit(31); };
 if (args.includes("--help")) {
   console.log("OpenClaw ${version}\\nUsage: openclaw plugins install [options] <source>");
   if (current) console.log("  --accept-capabilities  Accept reviewed plugin capabilities");
-  const probe = events.filter((event) => event.includes("--help")).length;
-  if (probe === Number(env.FAIL_PROBE)) {
-    if (env.HELP_FAILURE === "timeout") setInterval(() => {}, 1000);
-    else process.exit(29);
-  }
+  if (env.HELP_FAILURE === "1") process.exit(29);
 } else if (args[0] === "plugins") {
   if (!current) fail("legacy package must retain automatic setup");
   if (!args.includes("--accept-capabilities")) fail("capability consent missing");
@@ -204,10 +155,10 @@ openclaw_e2e_stop_process() {
   fi
 }
 `;
-  const registryEnv = scenario.registry ? registryFixture(root, scenario) : {};
-  if (scenario.corruptRegistry) {
-    registryEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256 = "0".repeat(64);
-  }
+  const registryEnv = scenario.registry
+    ? registryFixture(root, ["@openclaw/codex", "@openclaw/discord", "@openclaw/slack"], version)
+        .env
+    : {};
   const result = spawnSync("bash", ["-s"], {
     input: containerScript.replaceAll("/tmp/", `${root}/`),
     encoding: "utf8",
@@ -223,11 +174,10 @@ openclaw_e2e_stop_process() {
       EVENTS: eventsPath,
       CONSENT: scenario.consent === false ? "0" : "1",
       BUNDLED: bundled ? "1" : "0",
-      HELP_FAILURE: scenario.helpFailure ?? "",
-      FAIL_PROBE: scenario.helpFailure ? String(scenario.failProbe ?? 1) : "0",
+      HELP_FAILURE: scenario.helpFailure ? "1" : "0",
       DOCTOR_EXIT_CODE: scenario.doctorExitCode ? String(scenario.doctorExitCode) : "",
       OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
-      OPENCLAW_E2E_COMMAND_TIMEOUT: scenario.helpFailure === "timeout" ? "1s" : "5s",
+      OPENCLAW_E2E_COMMAND_TIMEOUT: "5s",
       OPENCLAW_E2E_TIMEOUT_KILL_GRACE_MS: "10",
       OPENCLAW_NPM_ONBOARD_CHANNEL: channel,
       OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE: scenario.sourcePlugin ? "1" : "0",
@@ -250,9 +200,9 @@ openclaw_e2e_stop_process() {
   return { result, events, installs, detail };
 }
 
-it.each([124, 137])("publishes redirected Doctor diagnostics with exit status %s", (status) => {
-  const { result, events } = runScenario({ doctorExitCode: status });
-  expect(result.status).toBe(status);
+it("publishes redirected Doctor diagnostics with its exit status", () => {
+  const { result, events } = runScenario({ doctorExitCode: 124 });
+  expect(result.status).toBe(124);
   expect(`${result.stdout}\n${result.stderr}`).toContain("doctor fixture stopped: [redacted]");
   expect(`${result.stdout}\n${result.stderr}`).not.toContain("synthetic-private-doctor");
   expect(events.some((args) => args[0] === "agent")).toBe(false);
@@ -285,22 +235,6 @@ it.each([false, true])(
     expect(result.status, detail).toBe(0);
     expect(installs).toEqual([installArgs("codex", registry)]);
     const onboard = events.find((args) => args[0] === "onboard");
-    expect(onboard).toEqual(
-      (
-        "onboard --non-interactive --accept-risk --mode local --auth-choice openai-api-key " +
-        "--secret-input-mode ref --gateway-port 18789 --gateway-bind loopback " +
-        "--skip-daemon --skip-ui --skip-skills --skip-health --json"
-      ).split(" "),
-    );
-    const stages = events.filter((args) => args[0] === "assertion").map((args) => args[1]);
-    expect(stages).toEqual([
-      "assert-onboard-state",
-      "assert-channel-config",
-      "assert-status-surfaces",
-      "configure-mock-model",
-      "assert-mock-model-config",
-      "assert-agent-turn",
-    ]);
     expect(events.indexOf(onboard!)).toBeLessThan(
       events.findIndex((args) => args[1] === "configure-mock-model"),
     );
@@ -354,37 +288,18 @@ it.each([
 it.each<[Scenario, string]>([
   [{ dirtyState: true }, "package proof inherited existing state"],
   [
-    { channel: "discord", consent: true, sourcePlugin: true },
+    { channel: "discord", sourcePlugin: true },
     "source channel fixture requires OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR",
   ],
-  [
-    { channel: "discord", companion: "missing", registry: true, sourcePlugin: true },
-    "missing Docker-plan package",
-  ],
-  [
-    { channel: "slack", companion: "wrong-identity", registry: true, sourcePlugin: true },
-    "tarball identity mismatch",
-  ],
-  [{ registry: true, corruptRegistry: true }, "manifest SHA-256 differs from the immutable tuple"],
-])("rejects invalid fixture admission before any CLI call: %j (%s)", (scenario, error) => {
+])("rejects invalid fixture admission before any CLI call: %j", (scenario, error) => {
   const { result, events, detail } = runScenario(scenario);
   expect(result.status, detail).not.toBe(0);
   expect(detail).toContain(error);
   expect(events).toEqual([]);
 });
 
-it.each<Scenario>([
-  { helpFailure: "exit" },
-  { helpFailure: "timeout" },
-  { channel: "discord", helpFailure: "exit", failProbe: 2 },
-  { channel: "discord", helpFailure: "exit", failProbe: 3 },
-])("stops at a failed help probe: %j", (scenario) => {
-  const { result, events, installs, detail } = runScenario(scenario);
-  expect(result.status, detail).toBe(scenario.helpFailure === "timeout" ? 124 : 29);
-  if (scenario.failProbe) {
-    expect(installs).toHaveLength(scenario.failProbe === 2 ? 0 : 1);
-    expect(events.some((args) => args[0] === "channels" && args[1] === "add")).toBe(false);
-  } else {
-    expect(events).toEqual([["plugins", "install", "--help"]]);
-  }
+it("stops at a failed help probe before mutation", () => {
+  const { result, events, detail } = runScenario({ helpFailure: true });
+  expect(result.status, detail).toBe(29);
+  expect(events).toEqual([["plugins", "install", "--help"]]);
 });

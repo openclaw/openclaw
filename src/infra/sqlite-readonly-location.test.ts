@@ -3,21 +3,30 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { defaultPayload } from "./gateway-state-owner-record.js";
+import { acquireGatewayStateOwner, resolveGatewayStateOwnerPath } from "./gateway-state-owner.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { startSqliteCheckpointWriter } from "./sqlite-checkpoint-writer.test-support.js";
 import { startSqliteConcurrentWriter } from "./sqlite-concurrent-writer.test-support.js";
+import * as copies from "./sqlite-file-copy.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import {
+  prepareSqliteReadOnlyCopyInProcess,
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
   SqliteSourceChangedError,
 } from "./sqlite-readonly-location.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
+import { MAX_SNAPSHOT_ATTEMPTS } from "./sqlite-snapshot-policy.js";
 import {
+  prepareSqliteReadOnlyLocationAwaited as prepareSnapshot,
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
 } from "./sqlite-snapshot-source.js";
+import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 
 const sqlite = requireNodeSqlite();
@@ -74,37 +83,54 @@ function readLogicalFamily(pathname: string): Map<string, Buffer> {
   return family;
 }
 
-it("keeps each scoped artifact-preserving inspection byte-neutral across writer commits", async () => {
-  const cacheRoot = path.join(tempDirs.make("openclaw-sqlite-snapshot-cache-"), "missing");
-  const databasePath = createTempDatabasePath();
-  const writer = new sqlite.DatabaseSync(databasePath);
-  try {
-    writer.exec(
-      "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE probe(value TEXT)",
-    );
-    await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, () =>
-      withSqliteReadOnlyWorkerScope(async () => {
-        for (const value of ["first", "second"]) {
-          writer.prepare("INSERT INTO probe VALUES (?)").run(value);
-          const familyBefore = readFamily(databasePath);
-          const prepared = await prepareSqliteReadOnlyLocation(databasePath, {
-            preserveSourceArtifacts: true,
-          });
-          inspectSnapshot(prepared, (snapshot) => {
-            expect(prepared.location.startsWith(`${cacheRoot}${path.sep}`)).toBe(true);
-            expect(fs.statSync(path.dirname(prepared.location)).mode & 0o777).toBe(0o700);
-            expect(readFamily(databasePath)).toEqual(familyBefore);
-            expect(
-              snapshot.prepare("SELECT value FROM probe ORDER BY rowid DESC LIMIT 1").get(),
-            ).toEqual({ value });
-          });
-        }
-      }),
-    );
-  } finally {
-    writer.close();
-  }
-});
+it.each(["cache", "update-tmpdir"])(
+  "keeps %s inspections byte-neutral across writer commits",
+  async (placement) => {
+    const cacheRoot = path.join(tempDirs.make("openclaw-sqlite-snapshot-cache-"), "missing");
+    const homeCache = path.join(path.dirname(cacheRoot), "home-cache");
+    const databasePath = createTempDatabasePath();
+    const writer = new sqlite.DatabaseSync(databasePath);
+    try {
+      writer.exec(
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE probe(value TEXT)",
+      );
+      await withEnvAsync(
+        placement === "cache"
+          ? { XDG_CACHE_HOME: cacheRoot }
+          : {
+              XDG_CACHE_HOME: homeCache,
+              TMPDIR: cacheRoot,
+              TMP: cacheRoot,
+              TEMP: cacheRoot,
+              OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            },
+        () =>
+          withSqliteReadOnlyWorkerScope(async () => {
+            for (const value of ["first", "second"]) {
+              writer.prepare("INSERT INTO probe VALUES (?)").run(value);
+              const familyBefore = readFamily(databasePath);
+              const prepared = await prepareSqliteReadOnlyLocation(databasePath, {
+                preserveSourceArtifacts: true,
+              });
+              inspectSnapshot(prepared, (snapshot) => {
+                expect(prepared.location.startsWith(`${cacheRoot}${path.sep}`)).toBe(true);
+                expect(fs.statSync(path.dirname(prepared.location)).mode & 0o777).toBe(0o700);
+                expect(readFamily(databasePath)).toEqual(familyBefore);
+                if (placement === "update-tmpdir") {
+                  expect(fs.existsSync(homeCache)).toBe(false);
+                }
+                expect(
+                  snapshot.prepare("SELECT value FROM probe ORDER BY rowid DESC LIMIT 1").get(),
+                ).toEqual({ value });
+              });
+            }
+          }),
+      );
+    } finally {
+      writer.close();
+    }
+  },
+);
 
 it.each([13, 778])(
   "retains SQLite destination write failure %i and identifies the snapshot cache",
@@ -364,15 +390,13 @@ it("names retry count and guidance for artifact-preserving synchronous inspectio
   }
   assert(error instanceof Error);
   expect.soft(error.message).toContain("after 10 read-only inspection attempts");
-  expect.soft(error.message).toContain("the database may be under concurrent write activity");
+  expect.soft(error.message).toContain("reason=source-disappeared, attempts=10");
   expect
     .soft(error.message)
     .toContain("Wait a moment for write activity to settle, then retry the inspection");
-  expect.soft(error.message).toContain(canonicalPath);
+  expect.soft(error.message).not.toContain(canonicalPath);
   expect.soft(error.cause).toBeInstanceOf(SqliteSourceChangedError);
-  expect.soft(error.cause).toMatchObject({
-    message: `SQLite source disappeared: ${canonicalPath}`,
-  });
+  expect.soft(error.cause).toMatchObject({ reason: "source-disappeared" });
   expect.soft(error.message).not.toContain("SQLite source disappeared");
 });
 
@@ -665,3 +689,103 @@ it.each([
     }
   },
 );
+
+it("snapshots a verified live writer once despite checkpoints that exhaust raw-copy retries", async () => {
+  const root = tempDirs.make("sqlite-live-metadata-");
+  const source = path.join(root, "state", "openclaw.sqlite");
+  const staging = path.join(root, "staging");
+  fs.mkdirSync(path.dirname(source));
+  fs.mkdirSync(staging);
+  const writer = await startSqliteCheckpointWriter(source);
+  const owner = acquireGatewayStateOwner({
+    databasePath: source,
+    payload: { ...defaultPayload(source), role: "gateway" },
+  });
+  try {
+    const copy = copies.copySqliteFile;
+    const raw = vi.spyOn(copies, "copySqliteFile").mockImplementation(async (...args) => {
+      const result = await copy(...args);
+      // Each copy overlaps a real checkpoint in the independent writer process.
+      await writer.commit();
+      return result;
+    });
+    await expect(prepareSqliteReadOnlyCopyInProcess(source, staging)).rejects.toThrow(
+      "reason=wal-copy-unstable, attempts=10",
+    );
+    expect(raw).toHaveBeenCalledTimes(MAX_SNAPSHOT_ATTEMPTS);
+    raw.mockRestore();
+    const prepared = await prepareSnapshot(source, snapshotOptions(source));
+    try {
+      using db = new (requireNodeSqlite().DatabaseSync)(prepared.location, { readOnly: true });
+      expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      const rows = db.prepare("SELECT generation FROM snapshot_pair ORDER BY id").all();
+      expect(rows[0]?.generation).toBeGreaterThan(0);
+      expect(rows[0]).toEqual(rows[1]);
+      expect(db.prepare("SELECT length(data) AS bytes FROM snapshot_payload").get()).toEqual({
+        bytes: 33554432,
+      });
+      const directory = path.dirname(prepared.location);
+      const retainedBytes = fs
+        .readdirSync(directory)
+        .reduce((bytes, name) => bytes + fs.statSync(path.join(directory, name)).size, 0);
+      expect(retainedBytes).toBeLessThan(34 * 1024 * 1024);
+    } finally {
+      expect(await prepared.cleanupAsync()).toBe(true);
+    }
+    expect(fs.readdirSync(staging)).toEqual([]);
+  } finally {
+    await writer.stop();
+    owner.release();
+  }
+});
+
+it.each(["absent", "unverifiable"])(
+  "keeps %s ownership byte-neutral, refuses unknown holders, and rejects a replaced source identity",
+  async (owner) => {
+    const root = tempDirs.make("sqlite-offline-metadata-");
+    const source = path.join(root, "openclaw.sqlite");
+    {
+      using db = new (requireNodeSqlite().DatabaseSync)(source);
+      db.exec(
+        "PRAGMA journal_mode=WAL; CREATE TABLE probe(value); INSERT INTO probe VALUES('offline');",
+      );
+    }
+    if (owner === "unverifiable") {
+      const ownerPath = resolveGatewayStateOwnerPath(source);
+      fs.mkdirSync(path.dirname(ownerPath), { recursive: true });
+      fs.writeFileSync(
+        ownerPath,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath: path.join(root, "openclaw.json"),
+          role: "gateway",
+        }),
+      );
+    }
+    const entries = fs.readdirSync(root);
+    const before = fs.readFileSync(source);
+    const options = snapshotOptions(source);
+    if (owner === "unverifiable") {
+      await expect(prepareSnapshot(source, options)).rejects.toThrow(
+        "cannot verify Gateway ownership from this process",
+      );
+    } else {
+      const prepared = await prepareSnapshot(source, options);
+      expect(await prepared.cleanupAsync()).toBe(true);
+    }
+    expect(fs.readFileSync(source)).toEqual(before);
+    expect(fs.readdirSync(root)).toEqual(entries);
+    fs.renameSync(source, path.join(root, "original.sqlite"));
+    fs.writeFileSync(source, before);
+    await expect(prepareSnapshot(source, options)).rejects.toThrow(/identity changed/);
+  },
+);
+
+function snapshotOptions(source: string) {
+  return {
+    signal: new AbortController().signal,
+    expectedSourceIdentity: readDatabasePathIdentitySync(source),
+    allowLiveOwner: true,
+  };
+}

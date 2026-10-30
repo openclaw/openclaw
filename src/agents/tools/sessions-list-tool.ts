@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deriveSessionTitle, prepareSessionTitleRead } from "../../gateway/session-utils-core.js";
 import { classifySessionKeyShape, isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
+import { largestFittingValue } from "../../shared/largest-fitting-value.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { requesterProfileSchema, stringEnum } from "../schema/typebox.js";
 import {
@@ -53,7 +54,7 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
-  user: requesterProfileSchema(),
+  user: requesterProfileSchema({ defaultToTurnOwner: true }),
   kinds: Type.Optional(Type.Array(stringEnum(SESSION_LIST_KINDS))),
   limit: SessionsListParamsSchema.properties.limit,
   offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
@@ -337,6 +338,7 @@ export function createSessionsListTool(opts?: {
                 : undefined,
             spawnedBy: readStringValue(entry.spawnedBy),
             parentSessionKey: readStringValue(entry.parentSessionKey),
+            childOwnerSessionKeys: entry.childOwnerSessionKeys,
           });
           const kind = classifySessionListKind(entry);
           if (
@@ -650,17 +652,7 @@ export function createSessionsListTool(opts?: {
         }
         let count = retainedRows.length;
         if (!fits(count)) {
-          let lower = 0;
-          let upper = count;
-          while (lower < upper) {
-            const middle = Math.ceil((lower + upper) / 2);
-            if (fits(middle)) {
-              lower = middle;
-            } else {
-              upper = middle - 1;
-            }
-          }
-          count = lower;
+          count = largestFittingValue(0, count, fits);
           if (count === 0) {
             throw new Error(
               "Session metadata exceeds the 64 KiB result budget even without previews; use a narrower inventory query",

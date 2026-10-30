@@ -69,6 +69,7 @@ export function createGatewayPresenceObserver(options: {
     );
   };
   return {
+    read: () => (version === undefined ? undefined : Array.from(rows.values())),
     synchronize(nextScope: object | null) {
       if (nextScope === scope) {
         return;

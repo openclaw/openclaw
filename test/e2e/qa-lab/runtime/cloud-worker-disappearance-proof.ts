@@ -261,6 +261,7 @@ async function runProof(options: ProducerOptions) {
     }
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
+      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",

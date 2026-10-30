@@ -9,7 +9,7 @@ struct StatusMenuHeaderView: View {
     @Bindable private var pairingPrompter = NodePairingApprovalPrompter.shared
     @Bindable private var devicePairingPrompter = DevicePairingApprovalPrompter.shared
     @AppStorage(cameraEnabledKey, store: AppDefaults.standard) private var cameraEnabled = false
-    @State private var browserEnabled = true
+    @State private var browser = BrowserControlSetting()
 
     private let isSleeping: Bool
     private let controlChannel = ControlChannel.shared
@@ -41,7 +41,7 @@ struct StatusMenuHeaderView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .transaction { $0.animation = nil }
         .task(id: self.state.connectionMode) {
-            await self.loadBrowserEnabled()
+            await self.browser.load()
         }
         .task {
             await self.nodesStore.prepareLocalNodeIdentity()
@@ -117,11 +117,9 @@ struct StatusMenuHeaderView: View {
             self.capabilityButton(
                 title: String(localized: "Browser"),
                 symbol: "globe",
-                enabled: self.browserEnabled)
+                enabled: self.browser.enabled)
             {
-                let enabled = !self.browserEnabled
-                self.browserEnabled = enabled
-                Task { await self.saveBrowserEnabled(enabled) }
+                self.browser.toggle()
             }
 
             self.capabilityButton(
@@ -313,23 +311,66 @@ struct StatusMenuHeaderView: View {
         .buttonStyle(.plain)
         .help(String(localized: "Show pairing requests"))
     }
+}
 
-    private func loadBrowserEnabled() async {
-        let config = await ConfigStore.load()
-        guard config.isCurrent else { return }
-        let browser = config.root["browser"] as? [String: Any]
-        self.browserEnabled = browser?["enabled"] as? Bool ?? true
+/// Owns the menu's Browser Control choice. Clicks record the newest intent; a single save
+/// writes it, because overlapping saves read the same config revision and the Gateway
+/// rejects all but the first as stale.
+@MainActor
+@Observable
+final class BrowserControlSetting {
+    private(set) var enabled = true
+    /// Bumped by every click; reads publish only when no newer click arrived meanwhile.
+    @ObservationIgnored private var intent = 0
+    /// The Gateway selected when the newest click was made; that choice is never written to another.
+    @ObservationIgnored private var intentSelection: ConfigStore.Selection?
+    @ObservationIgnored private var isSaving = false
+
+    func toggle() {
+        self.enabled.toggle()
+        self.intent += 1
+        self.intentSelection = .current()
+        // The running save picks up this click after its current write settles. Claim the
+        // save before the task starts: AppKit can deliver queued clicks in one turn.
+        guard !self.isSaving else { return }
+        self.isSaving = true
+        Task { await self.save() }
     }
 
-    private func saveBrowserEnabled(_ enabled: Bool) async {
-        var config = await ConfigStore.load()
-        var browser = config.root["browser"] as? [String: Any] ?? [:]
-        browser["enabled"] = enabled
-        config.root["browser"] = browser
-        do {
-            try await ConfigStore.save(config)
-        } catch {
-            await self.loadBrowserEnabled()
+    func load() async {
+        let intent = self.intent
+        let config = await ConfigStore.load()
+        guard config.isCurrent, intent == self.intent else { return }
+        let browser = config.root["browser"] as? [String: Any]
+        self.enabled = browser?["enabled"] as? Bool ?? true
+    }
+
+    private func save() async {
+        defer { self.isSaving = false }
+        while true {
+            var config = await ConfigStore.load()
+            let intent = self.intent
+            if config.selection != self.intentSelection {
+                // The read started before a Gateway switch and the newest click was made on the
+                // Gateway selected now: read again for it.
+                if self.intentSelection == .current() { continue }
+                // The newest click was made on a Gateway that is no longer selected; this one
+                // shows its own value instead of receiving that choice.
+                await self.load()
+            } else {
+                var browser = config.root["browser"] as? [String: Any] ?? [:]
+                browser["enabled"] = self.enabled
+                config.root["browser"] = browser
+                do {
+                    try await ConfigStore.save(config)
+                } catch {
+                    // Show the saved value only when this was the newest choice; a newer click
+                    // is written by the next pass from a fresh read instead.
+                    if intent == self.intent { await self.load() }
+                }
+            }
+            // A click during this pass is written by the next one.
+            if intent == self.intent { return }
         }
     }
 }

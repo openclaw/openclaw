@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { WorkerProvider } from "../../plugins/types.js";
 import { createWorkerEnvironmentTransportLifecycle } from "./environment-access.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import * as nodeTunnelSupport from "./node-worker-tunnel.test-support.js";
@@ -135,6 +136,7 @@ describe("worker provider node teardown", () => {
             start: vi.fn(),
             stop: async () => {},
             stopAll: async () => {},
+            beginClose: vi.fn(),
             observeProcesses: vi.fn(),
           },
         },
@@ -202,16 +204,24 @@ describe("worker provider node teardown", () => {
     },
   );
 
-  it.each(["destroy", "reconcile"] as const)(
-    "destroys a disconnected dedicated lease without losing retry ownership via %s",
-    async (retry) => {
+  it.each([
+    ["destroy", false],
+    ["reclaim", false],
+    ["reclaim", true],
+    ["reconcile", false],
+  ] as const)(
+    "destroys a disconnected dedicated lease without losing retry ownership via %s (acceptance=%s)",
+    async (retry, supportsAcceptance) => {
       const environmentId = "worker-offline-destroy";
       const { attached, nodeTunnels, listNodes, start, reconnect } =
         await disconnectedNodeOwner(environmentId);
       const destroy = vi
-        .fn(async () => {})
+        .fn<WorkerProvider["destroy"]>(async (lease) => {
+          expect(lease.onCleanupAccepted).toBeUndefined();
+        })
         .mockRejectedValueOnce(new Error("provider destruction is indeterminate"));
       const service = nodeService(nodeTunnels, {
+        ...(supportsAcceptance ? { supportsCleanupAcceptance: true } : {}),
         inspect: async () => ({ status: "unknown" }),
         destroy,
       });
@@ -248,11 +258,14 @@ describe("worker provider node teardown", () => {
 
         if (retry === "destroy") {
           await service.destroy(environmentId);
+        } else if (retry === "reclaim") {
+          await service.reclaim(environmentId);
         } else {
           await service.reconcileOnce();
         }
         expect(support.testState.store.get(environmentId)?.state).toBe("destroyed");
         expect(destroy).toHaveBeenCalledTimes(2);
+        listNodes.mockClear();
         await nodeTunnels.stopAll();
         expect(listNodes).not.toHaveBeenCalled();
       } finally {
@@ -262,20 +275,22 @@ describe("worker provider node teardown", () => {
   );
 
   it.each([
-    [true, true],
-    [true, false],
-    [null, true],
-    [null, false],
+    [true, true, "destroy"],
+    [true, false, "destroy"],
+    [null, true, "destroy"],
+    [null, false, "destroy"],
+    [true, true, "reclaim"],
+    [null, true, "reclaim"],
   ] as const)(
-    "requires confirmed worker stop before retiring a disconnected lease (%s, provider=%s)",
-    async (sharedHost, providersEnabled) => {
+    "requires confirmed worker stop before retiring a disconnected lease (%s, provider=%s, %s)",
+    async (sharedHost, providersEnabled, method) => {
       const environmentId = "worker-offline-shared-destroy";
       const { nodeTunnels, reconnect } = await disconnectedNodeOwner(environmentId, sharedHost);
       const destroy = vi.fn(async () => {});
-      const service = nodeService(nodeTunnels, { destroy });
+      const service = nodeService(nodeTunnels, { destroy, supportsCleanupAcceptance: true });
       support.testState.providersEnabled = providersEnabled;
       try {
-        await expect(service.destroy(environmentId)).rejects.toThrow("not connected");
+        await expect(service[method](environmentId)).rejects.toThrow("not connected");
         expect(destroy).not.toHaveBeenCalled();
         expect(support.testState.store.get(environmentId)?.state).toBe("attached");
         expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
@@ -322,7 +337,7 @@ describe("worker provider node teardown", () => {
         expect(destroy).not.toHaveBeenCalled();
 
         reconnect();
-        await service.reconcileOnce();
+        await service.reconcileOnce(environmentId);
 
         expect(support.testState.store.get(environmentId)).toMatchObject({
           ...retiredOwner,

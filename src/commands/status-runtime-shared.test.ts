@@ -1,6 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import {
   resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealthSafe,
@@ -13,8 +14,8 @@ const mocks = vi.hoisted(() => ({
   loadProviderUsageSummary: vi.fn(),
   runSecurityAudit: vi.fn(),
   callGateway: vi.fn(),
-  getDaemonStatusSummary: vi.fn(),
-  getNodeDaemonStatusSummary: vi.fn(),
+  resolveGatewayService: vi.fn(),
+  resolveNodeService: vi.fn(),
   resolveModelAuthLabelAsync: vi.fn(),
 }));
 
@@ -35,9 +36,17 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
 
-vi.mock("./status.daemon.js", () => ({
-  getDaemonStatusSummary: mocks.getDaemonStatusSummary,
-  getNodeDaemonStatusSummary: mocks.getNodeDaemonStatusSummary,
+vi.mock("../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service.js")>()),
+  resolveGatewayService: mocks.resolveGatewayService,
+}));
+vi.mock("../daemon/node-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/node-service.js")>()),
+  resolveNodeService: mocks.resolveNodeService,
+}));
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
+  resolveOpenClawPackageRoot: async () => null,
 }));
 
 function usageParams(runtime: "codex" | "openclaw" = "codex") {
@@ -60,6 +69,33 @@ function gatewayParams(timeoutMs = 4321) {
     config: { gateway: {} },
     ...createStatusGatewayProbeBudget(timeoutMs),
     gatewayReachable: true,
+  };
+}
+
+function expectGatewayCall(method: string, params: object, overrides = {}) {
+  expect(mocks.callGateway).toHaveBeenCalledWith({
+    method,
+    params,
+    timeoutMs: 4321,
+    config: { gateway: {} },
+    ...overrides,
+  });
+}
+
+function usageSummary(updatedAt: number, providers: object[]) {
+  return { updatedAt, providers };
+}
+
+function explicitAgents(
+  entries: NonNullable<OpenClawConfig["agents"]>["entries"],
+  systemAgentId?: string,
+) {
+  return {
+    agents: {
+      ownership: "explicit" as const,
+      entries,
+      ...(systemAgentId ? { defaults: { systemAgent: { agentId: systemAgentId } } } : {}),
+    },
   };
 }
 
@@ -92,24 +128,21 @@ describe("status-runtime-shared", () => {
     mocks.loadProviderUsageSummary.mockResolvedValue({ providers: [] });
     mocks.runSecurityAudit.mockResolvedValue({ summary: { critical: 0 }, findings: [] });
     mocks.callGateway.mockResolvedValue({ ok: true });
-    mocks.getDaemonStatusSummary.mockResolvedValue({ label: "LaunchAgent" });
-    mocks.getNodeDaemonStatusSummary.mockResolvedValue({ label: "node" });
+    mocks.resolveGatewayService.mockReturnValue(createMockGatewayService());
+    mocks.resolveNodeService.mockReturnValue(createMockGatewayService({ label: "node" }));
     mocks.resolveModelAuthLabelAsync.mockReturnValue(undefined);
   });
 
   afterEach(() => vi.restoreAllMocks());
 
   it("uses the named system agent for agent-scoped usage credentials", async () => {
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        defaults: { systemAgent: { agentId: "ops" } },
-        entries: {
-          main: { agentDir: "/tmp/status-main-agent" },
-          ops: { agentDir: "/tmp/status-ops-agent" },
-        },
+    const config = explicitAgents(
+      {
+        main: { agentDir: "/tmp/status-main-agent" },
+        ops: { agentDir: "/tmp/status-ops-agent" },
       },
-    };
+      "ops",
+    );
 
     await resolveStatusUsageSummary({ ...createStatusGatewayProbeBudget(), config });
 
@@ -127,7 +160,7 @@ describe("status-runtime-shared", () => {
     await expect(
       resolveStatusUsageSummary({
         ...createStatusGatewayProbeBudget(),
-        config: { agents: { ownership: "explicit", entries: { main: {}, ops: {} } } },
+        config: explicitAgents({ main: {}, ops: {} }),
         agentId,
       }),
     ).rejects.toThrow(error);
@@ -138,31 +171,18 @@ describe("status-runtime-shared", () => {
     mocks.loadProviderUsageSummary
       .mockImplementationOnce(async () => {
         vi.spyOn(performance, "now").mockReturnValue(3456);
-        return {
-          updatedAt: 1,
-          providers: [anthropicUsage()],
-        };
+        return usageSummary(1, [anthropicUsage()]);
       })
-      .mockResolvedValueOnce({
-        updatedAt: 2,
-        providers: [openaiUsage(9)],
-      });
+      .mockResolvedValueOnce(usageSummary(2, [openaiUsage(9)]));
 
-    await expect(resolveStatusUsageSummary(usageParams())).resolves.toEqual({
-      updatedAt: 1,
-      providers: [anthropicUsage(), openaiUsage(9)],
-    });
+    await expect(resolveStatusUsageSummary(usageParams())).resolves.toEqual(
+      usageSummary(1, [anthropicUsage(), openaiUsage(9)]),
+    );
 
     expect(mocks.loadProviderUsageSummary).toHaveBeenNthCalledWith(2, {
       timeoutMs: 0,
       providers: ["openai"],
-      auth: [
-        {
-          provider: "openai",
-          token: "codex-app-server",
-          hookProvider: "codex",
-        },
-      ],
+      auth: [{ provider: "openai", token: "codex-app-server", hookProvider: "codex" }],
       config: expect.any(Object),
       agentDir: "/tmp/status-agent",
     });
@@ -170,53 +190,39 @@ describe("status-runtime-shared", () => {
 
   it("keeps existing OpenAI usage when Codex synthetic usage has no windows", async () => {
     mocks.loadProviderUsageSummary
-      .mockResolvedValueOnce({
-        updatedAt: 1,
-        providers: [openaiUsage(22)],
-      })
-      .mockResolvedValueOnce({
-        updatedAt: 2,
-        providers: [openaiUsage()],
-      });
+      .mockResolvedValueOnce(usageSummary(1, [openaiUsage(22)]))
+      .mockResolvedValueOnce(usageSummary(2, [openaiUsage()]));
 
-    await expect(resolveStatusUsageSummary(usageParams())).resolves.toEqual({
-      updatedAt: 1,
-      providers: [openaiUsage(22)],
-    });
+    await expect(resolveStatusUsageSummary(usageParams())).resolves.toEqual(
+      usageSummary(1, [openaiUsage(22)]),
+    );
   });
 
-  it("does not add Codex synthetic usage for OpenAI routes pinned to OpenClaw runtime", async () => {
-    await resolveStatusUsageSummary(usageParams("openclaw"));
-
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce();
-    expect(mocks.loadProviderUsageSummary.mock.calls[0]?.[0]).not.toHaveProperty("auth");
-  });
-
-  it("does not add Codex synthetic usage for API-key-backed OpenAI Codex runtime routes", async () => {
-    mocks.resolveModelAuthLabelAsync.mockReturnValue("api-key (openai:api)");
-
-    await resolveStatusUsageSummary(usageParams());
-
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce();
-    expect(mocks.loadProviderUsageSummary.mock.calls[0]?.[0]).not.toHaveProperty("auth");
-    expect(mocks.resolveModelAuthLabelAsync).toHaveBeenCalledWith({
-      provider: "openai",
-      cfg: expect.any(Object),
-      agentDir: "/tmp/status-agent",
-      includeExternalProfiles: false,
-    });
-  });
+  it.each(["openclaw", "codex"] as const)(
+    "does not add synthetic usage for API-backed %s routes",
+    async (runtime) => {
+      mocks.resolveModelAuthLabelAsync.mockReturnValue(
+        runtime === "codex" ? "api-key (openai:api)" : undefined,
+      );
+      await resolveStatusUsageSummary(usageParams(runtime));
+      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce();
+      expect(mocks.loadProviderUsageSummary.mock.calls[0]?.[0]).not.toHaveProperty("auth");
+      if (runtime === "codex") {
+        expect(mocks.resolveModelAuthLabelAsync).toHaveBeenCalledWith({
+          provider: "openai",
+          cfg: expect.any(Object),
+          agentDir: "/tmp/status-agent",
+          includeExternalProfiles: false,
+        });
+      }
+    },
+  );
 
   it("resolves usage auth from an explicitly selected agent", async () => {
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        entries: {
-          alpha: { agentDir: "/tmp/alpha-agent" },
-          beta: { agentDir: "/tmp/beta-agent" },
-        },
-      },
-    };
+    const config = explicitAgents({
+      alpha: { agentDir: "/tmp/alpha-agent" },
+      beta: { agentDir: "/tmp/beta-agent" },
+    });
 
     await resolveStatusRuntimeSnapshot({
       ...createStatusGatewayProbeBudget(2345),
@@ -237,8 +243,7 @@ describe("status-runtime-shared", () => {
   it("returns a fallback health error when the gateway is unreachable", async () => {
     await expect(
       resolveStatusGatewayHealthSafe({
-        ...createStatusGatewayProbeBudget(),
-        config: { gateway: {} },
+        ...gatewayParams(),
         gatewayReachable: false,
         gatewayProbeError: "timeout",
       }),
@@ -249,36 +254,25 @@ describe("status-runtime-shared", () => {
   it("passes gateway call overrides through the safe health path", async () => {
     await resolveStatusGatewayHealthSafe({
       ...gatewayParams(),
-      callOverrides: {
+      callOverrides: { url: "ws://127.0.0.1:18789", token: "tok" },
+    });
+
+    expectGatewayCall(
+      "health",
+      { probe: true },
+      {
         url: "ws://127.0.0.1:18789",
         token: "tok",
       },
-    });
-
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "health",
-      params: { probe: true },
-      timeoutMs: 4321,
-      config: { gateway: {} },
-      url: "ws://127.0.0.1:18789",
-      token: "tok",
-    });
+    );
   });
 
   it("requests the typed exporter stability projection", async () => {
     await expect(
-      resolveStatusGatewayDiagnosticsSafe({
-        ...gatewayParams(),
-        type: "telemetry.exporter",
-      }),
+      resolveStatusGatewayDiagnosticsSafe({ ...gatewayParams(), type: "telemetry.exporter" }),
     ).resolves.toEqual({ ok: true, value: { ok: true } });
 
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "diagnostics.stability",
-      params: { limit: 1000, type: "telemetry.exporter" },
-      timeoutMs: 4321,
-      config: { gateway: {} },
-    });
+    expectGatewayCall("diagnostics.stability", { limit: 1000, type: "telemetry.exporter" });
   });
 
   it("preserves failed gateway diagnostics as a typed result", async () => {
@@ -303,22 +297,16 @@ describe("status-runtime-shared", () => {
       usage: { providers: [] },
       health: { ok: true },
       lastHeartbeat: { ok: true },
-      gatewayService: { label: "LaunchAgent" },
-      nodeService: { label: "node" },
+      gatewayService: expect.objectContaining({ label: "LaunchAgent" }),
+      nodeService: expect.objectContaining({ label: "node" }),
     });
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "health",
-      params: { probe: true },
-      timeoutMs: 1234,
-      config: { gateway: {} },
-    });
+    expectGatewayCall("health", { probe: true }, { timeoutMs: 1234 });
     expect(mocks.runSecurityAudit).toHaveBeenCalledWith({
       config: { gateway: {} },
       sourceConfig: { gateway: { mode: "local" } },
       deep: false,
       deepTimeoutMs: 1234,
       includeFilesystem: true,
-      includeChannelSecurity: true,
       loadPluginSecurityCollectors: false,
     });
   });

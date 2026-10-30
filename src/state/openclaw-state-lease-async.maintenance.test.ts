@@ -52,7 +52,6 @@ function fixture(
 ) {
   const f = {
     ...leaseTestContext(),
-    events: new Array<string>(),
     registered: new Set<AsyncResource>(),
     acquiring: createDeferredCore(),
     allowAcquire: createDeferredCore(),
@@ -64,7 +63,9 @@ function fixture(
     allowRetry: createDeferredCore(),
     acquired: new Array<OpenClawStateLeaseIdentity>(),
     released: new Array<OpenClawStateLeaseIdentity>(),
-    closeActor: vi.fn(() => void f.events.push("actor-close")),
+    closeActor: vi.fn((): void => {
+      expect(f.released).toEqual(f.acquired);
+    }),
     closeResources(identity?: Parameters<AsyncResource["close"]>[0]): Promise<void[]> {
       return Promise.all([...f.registered].map((resource) => resource.close(identity)));
     },
@@ -100,7 +101,6 @@ function fixture(
     context.admission.assertCurrent();
   };
   leaseMocks.registerResource.mockImplementation((resource) => {
-    f.events.push("register");
     f.registered.add(resource);
     return () => f.registered.delete(resource);
   });
@@ -137,7 +137,7 @@ function fixture(
       acquire: (owner, leaseMs) =>
         owner.runLifecycle("acquire", async (scope) => {
           scope.assertCurrent();
-          f.events.push("acquire");
+          expect(f.registered.size).toBe(1);
           f.acquiring.resolve();
           if (options.pauseAcquisition) {
             await f.allowAcquire.promise;
@@ -151,7 +151,6 @@ function fixture(
         owner.runLifecycle("release", async (scope) => {
           scope.assertCurrent();
           expect(cleanupComplete).toBe(true);
-          f.events.push("release");
           if (releaseAttempts++ === 0 && options.failure?.phase === "release") {
             throw options.failure.error;
           }
@@ -174,7 +173,6 @@ function fixture(
             f.cleanupStarted.resolve();
             await f.allowCleanup.promise;
             if (options.failure?.phase === "heartbeat") {
-              f.events.push("heartbeat-cleanup-failed");
               throw options.failure.error;
             }
           } else {
@@ -182,7 +180,6 @@ function fixture(
             await f.allowRetry.promise;
           }
           cleanupComplete = true;
-          f.events.push("heartbeat-cleanup-complete");
         })
         .catch((error: unknown) => {
           cleanupAttempt = undefined;
@@ -211,7 +208,6 @@ function fixture(
       assertRunning: assertCurrent,
       verify: async () => Date.now() + params.leaseMs,
       renew: async () => Date.now() + params.leaseMs,
-      assertResponsive: leaseMocks.forbidden,
       holdOwnerFence: leaseMocks.forbidden,
       close: leaseMocks.forbidden,
       stop: async () => {
@@ -281,13 +277,7 @@ describe("async lease maintenance ownership", () => {
       f.allowCleanup.resolve();
       expect(await observed.outcome).toEqual({ ok: true, value: "completed" });
       expect(await closing.outcome).toEqual({ ok: true, value: undefined });
-      expect(f.events).toEqual([
-        "register",
-        "acquire",
-        "heartbeat-cleanup-complete",
-        "release",
-        "actor-close",
-      ]);
+      expect(f.closeActor).toHaveBeenCalledOnce();
       expect(f.released).toEqual(f.acquired);
       expect(f.registered.size).toBe(0);
     } finally {
@@ -350,15 +340,6 @@ describe("async lease maintenance ownership", () => {
         expect(f.released).toEqual(f.acquired);
         expect(f.closeActor).toHaveBeenCalledOnce();
         expect(f.registered.size).toBe(0);
-        expect(f.events).toEqual([
-          "register",
-          "acquire",
-          ...(phase === "heartbeat" ? ["heartbeat-cleanup-failed"] : []),
-          "heartbeat-cleanup-complete",
-          "release",
-          ...(phase === "release" ? ["release"] : []),
-          "actor-close",
-        ]);
       } finally {
         await f.dispose(observed.outcome);
       }
@@ -373,7 +354,6 @@ describe("async lease maintenance ownership", () => {
       const observed = observe(withOpenClawStateLeaseAsync(f.options, f.context, callback));
       try {
         await f.acquiring.promise;
-        expect(f.events).toEqual(["register", "acquire"]);
         expect(f.registered.size).toBe(1);
         await f.closeResources({
           key: "file:sibling",

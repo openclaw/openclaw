@@ -1,19 +1,17 @@
-import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
+import type { toStreamingMarkdownDomParts } from "../../../components/markdown-live.ts";
 import {
-  partitionMarkdownHtml,
-  toSanitizedMarkdownHtml,
-  toStreamingMarkdownParts,
-} from "../../../components/markdown.ts";
-
-export type DuplicateSuffix = {
-  count: number;
-  label: string;
-};
+  MARKDOWN_PARSE_LIMIT,
+  type MarkdownRenderOptions,
+} from "../../../components/markdown-render-options.ts";
+import { partitionMarkdownHtml, toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import { markdownContentHtml, type MarkdownContent } from "../../../lib/markdown-content.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 
 export type MessageTextOptions = {
   role: string;
   isStreaming: boolean;
   isForwarded?: boolean;
+  fetchLinkFavicon?: LinkFaviconFetcher;
   isUserMessageExpanded?: (messageId: string) => boolean;
   onToggleUserMessageExpanded?: (messageId: string) => void;
   assistantMessageDisclosure?: AssistantMessageDisclosure;
@@ -32,7 +30,8 @@ export function prepareMessageMarkdown(
   messageKey: string,
   opts: MessageTextOptions,
   markdownRenderOptions: MarkdownRenderOptions,
-  duplicateSuffix?: DuplicateSuffix,
+  renderStreaming?: typeof toStreamingMarkdownDomParts,
+  mutableStreaming = false,
 ) {
   const disclosure = opts.assistantMessageDisclosure;
   const isAssistant = opts.role === "assistant";
@@ -43,42 +42,25 @@ export function prepareMessageMarkdown(
   const options: MarkdownRenderOptions = recovered
     ? { ...markdownRenderOptions, mode: "document" }
     : markdownRenderOptions;
-  const parts: [string, string] = opts.isStreaming
-    ? toStreamingMarkdownParts(source, options, isAssistant ? messageKey : undefined)
-    : partitionMarkdownHtml(toSanitizedMarkdownHtml(source, options), messageKey);
-  if (duplicateSuffix) {
-    const terminalPart = parts[1].trim() ? 1 : 0;
-    parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
-  }
-  return { messageKey, source, parts, recoverFullMessage };
-}
-
-function appendDuplicateSuffix(rendered: string, suffix: DuplicateSuffix): string {
-  const template = document.createElement("template");
-  template.innerHTML = rendered;
-  const terminalBlock = template.content.lastElementChild;
-  const target = terminalBlock ? duplicateSuffixTextOwner(terminalBlock) : null;
-
-  const badge = document.createElement("span");
-  badge.className = "chat-duplicate-count";
-  badge.setAttribute("aria-label", suffix.label);
-  badge.textContent = `×${suffix.count}`;
-  (target ?? template.content).append(document.createTextNode("\u00a0"), badge);
-  return template.innerHTML;
-}
-
-function duplicateSuffixTextOwner(block: Element): Element | null {
-  if (/^(?:P|H[1-6])$/u.test(block.tagName)) {
-    return block;
-  }
-  if (!/^(?:BLOCKQUOTE|LI|OL|UL)$/u.test(block.tagName)) {
-    // Fences, details, raw blocks, and table shells own interactive or copied
-    // content. Keep the status marker after the whole terminal block.
-    return null;
-  }
-  const terminalChild = block.lastElementChild;
-  if (!terminalChild) {
-    return block.textContent?.trim() ? block : null;
-  }
-  return duplicateSuffixTextOwner(terminalChild);
+  const streaming = opts.isStreaming;
+  const prepare = () => {
+    let parts: [MarkdownContent, MarkdownContent] =
+      streaming && renderStreaming
+        ? renderStreaming(source, options, isAssistant ? messageKey : undefined)
+        : partitionMarkdownHtml(toSanitizedMarkdownHtml(source, options), messageKey);
+    if (mutableStreaming) {
+      parts = ["", markdownContentHtml(parts[0]) + markdownContentHtml(parts[1])];
+    }
+    return parts;
+  };
+  // Settled content must be prepared before the row's first measurement.
+  const deferFormatting = streaming && !recovered && source.length <= MARKDOWN_PARSE_LIMIT;
+  const eagerParts = deferFormatting ? undefined : prepare();
+  return {
+    messageKey,
+    source,
+    parts: eagerParts ? () => eagerParts : prepare,
+    deferFormatting,
+    recoverFullMessage,
+  };
 }

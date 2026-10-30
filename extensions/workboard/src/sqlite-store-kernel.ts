@@ -94,13 +94,9 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
   }
 
   registerIfAbsent(key: string, value: PersistedWorkboardCard): boolean {
-    return runSqliteImmediateTransactionSync(this.db, () => {
-      if (this.db.prepare("SELECT 1 FROM workboard_cards WHERE id = ?").get(key)) {
-        return false;
-      }
-      insertCard(this.db, value.card);
-      return true;
-    });
+    return runSqliteImmediateTransactionSync(this.db, () =>
+      insertCard(this.db, value.card, { mode: "absent", key }),
+    );
   }
 
   registerIfUpdatedAt(
@@ -108,13 +104,9 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
     value: PersistedWorkboardCard,
     expectedUpdatedAt: number,
   ): boolean {
-    return runSqliteImmediateTransactionSync(this.db, () => {
-      if (!this.matchesUpdatedAt(key, expectedUpdatedAt)) {
-        return false;
-      }
-      insertCard(this.db, value.card);
-      return true;
-    });
+    return runSqliteImmediateTransactionSync(this.db, () =>
+      insertCard(this.db, value.card, { mode: "updated", key, updatedAt: expectedUpdatedAt }),
+    );
   }
 
   claimIfOwnerAvailable(

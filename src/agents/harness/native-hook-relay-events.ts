@@ -47,7 +47,10 @@ function getGlobalToolHookMatcherScope(hookName: "before_tool_call" | "after_too
 type NativeHookRelayPolicy = Pick<
   ActiveNativeHookRelayRegistration,
   "preToolUseLoopDetection" | "requirePreToolUse" | "sessionKey" | "config" | "agentId"
-> & { executionAdmissionToolNames?: readonly string[] };
+> & {
+  executionAdmissionToolNames?: readonly string[];
+  postToolUseToolNames?: readonly string[];
+};
 
 /** Snapshot the same canonical native tool family for planning and receipt admission. */
 export function snapshotNativeHookRelayExecutionAdmission(
@@ -85,7 +88,11 @@ export function nativeHookRelayEventHasLocalWork(
     );
   }
   if (event === "post_tool_use") {
-    return hasGlobalHooks("after_tool_call") || listAgentToolResultMiddlewares("codex").length > 0;
+    return (
+      Boolean(registration.postToolUseToolNames?.length) ||
+      hasGlobalHooks("after_tool_call") ||
+      listAgentToolResultMiddlewares("codex").length > 0
+    );
   }
   if (event === "before_agent_finalize") {
     return hasGlobalHooks("before_agent_finalize");
@@ -116,6 +123,9 @@ export function nativeHookRelayEventToolMatcher(
     const scope = mergePluginToolMatcherScopes([
       getGlobalToolHookMatcherScope("after_tool_call"),
       getAgentToolResultMiddlewareMatcherScope("codex"),
+      registration.postToolUseToolNames?.length
+        ? { matchAll: false, toolNames: registration.postToolUseToolNames }
+        : undefined,
     ]);
     return scope?.matchAll ? undefined : scope?.toolNames;
   }

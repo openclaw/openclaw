@@ -1,7 +1,7 @@
 import "./update-command-execution.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as openClawRoot from "../../infra/openclaw-root.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
@@ -21,6 +21,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import * as stateOwnership from "../../state/openclaw-state-ownership-preflight.js";
 import { updateConfigSource } from "./schema-preflight.js";
 import * as shared from "./shared.js";
+import { expectNoCalls as expectNotCalled } from "./update-boundary.test-support.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
@@ -46,11 +47,6 @@ const { bindExecutionGuards, executionParams, mocks, schemaContext, successfulUp
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const foregroundRunId = "b834d63c-0310-4a9b-9b04-48b6b5da6cfe";
 let claimPath: string;
-const expectNotCalled = (...spies: MockInstance[]) => {
-  for (const spy of spies) {
-    expect(spy).not.toHaveBeenCalled();
-  }
-};
 function mockPackageRoot(root: string) {
   vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
   vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
@@ -341,14 +337,27 @@ it.each([
   },
 );
 
-it.each([
+it.each<{
+  capable: boolean;
+  migrating: boolean;
+  omittedTimeout: boolean;
+  local?: { family: "client" | "daemon"; version: number };
+}>([
   { capable: true, migrating: true, omittedTimeout: false },
   { capable: false, migrating: false, omittedTimeout: false },
   { capable: false, migrating: true, omittedTimeout: false },
   { capable: true, migrating: true, omittedTimeout: true },
+  ...(["client", "daemon"] as const).flatMap((family) =>
+    [1, 2].map((version) => ({
+      capable: false,
+      migrating: false,
+      omittedTimeout: false,
+      local: { family, version },
+    })),
+  ),
 ])(
-  "parks foreground activation after candidate admission (capable=$capable, migrating=$migrating, omittedTimeout=$omittedTimeout)",
-  async ({ capable, migrating, omittedTimeout }) => {
+  "parks foreground activation after candidate admission (capable=$capable, migrating=$migrating, omittedTimeout=$omittedTimeout, local=$local)",
+  async ({ capable, migrating, omittedTimeout, local }) => {
     const root = dirs.make("foreground-candidate-");
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
@@ -383,6 +392,17 @@ it.each([
     });
     vi.spyOn(candidateState, "readUpdateStateSchemaVersions").mockResolvedValue([
       { path: path.join(root, "state", "openclaw.sqlite"), userVersion: migrating ? 14 : 15 },
+      ...(local
+        ? [
+            {
+              path: path.join(
+                root,
+                local.family === "client" ? "client/credentials.sqlite" : "control/services.sqlite",
+              ),
+              userVersion: local.version,
+            },
+          ]
+        : []),
     ]);
     mocks.validateCanary.mockResolvedValue({
       status: "ok",
@@ -411,7 +431,7 @@ it.each([
       });
       return executeMutableUpdate(await bindExecutionGuards(params));
     });
-    if (!capable && migrating) {
+    if (!capable && (migrating || (local !== undefined && local.version !== 1))) {
       expect(result?.result).toMatchObject({
         status: "error",
         reason: "target-native-unsupported",

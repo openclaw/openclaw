@@ -339,8 +339,7 @@ async function waitForManager(
         resolve();
       },
     };
-    const timer = setTimeout(waiter.resolve, startupWaitMs);
-    timer.unref?.();
+    const timer = setTimeout(waiter.resolve, startupWaitMs).unref();
     request.abortSignal?.addEventListener("abort", waiter.resolve, { once: true });
     managerWaiters.add(waiter);
   });

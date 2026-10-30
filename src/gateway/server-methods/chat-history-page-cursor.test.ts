@@ -8,6 +8,7 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { decodeChatHistoryPageCursor } from "../chat-history-page-cursor.js";
 import { serializeGatewayFrame } from "../serialized-json.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
 import {
@@ -84,72 +85,205 @@ async function walkPages(
   return { ids, emptyPages };
 }
 
-it("walks both sides of a byte-limited anchor without gaps and rejects replaced transcripts", async () => {
+it("keeps every source fragment when a one-message tail is followed by older history", async () => {
   await withHistoryState(async () => {
-    const { read, send } = await seedHistory(
-      Array.from({ length: 13 }, (_, index) => ({
-        role: index % 2 === 0 ? "user" : "assistant",
-        content: `Message ${index}: ${"x".repeat(100_000)}`,
-      })),
-    );
-    const before = await loadTranscriptEvents(scope);
-    const initial = await read({ messageId: "message-6", limit: 13, maxChars: 200_000 });
-    const initialIds = messageIds(initial);
-    expect(initialIds).toContain("message-6");
-    expect(initial).toMatchObject({
-      olderCursor: expect.any(String),
-      newerCursor: expect.any(String),
+    const segment = (id: string, text: string, phase: string) => ({
+      type: "text",
+      text,
+      textSignature: JSON.stringify({ v: 1, id, phase }),
     });
-    const seen = [...initialIds];
-    for (const direction of ["olderCursor", "newerCursor"] as const) {
-      const page = await walkPages(
-        initial,
-        direction,
-        read,
-        { limit: 13, maxChars: 200_000, maxBytes: 2_000_000 },
-        13,
-      );
-      seen.push(...page.ids);
-    }
-    const expectedIds = Array.from({ length: 13 }, (_, index) => `message-${index}`);
-    const compareIds = (a: string | undefined, b: string | undefined) =>
-      String(a).localeCompare(String(b));
-    expect(seen.toSorted(compareIds)).toEqual(expectedIds.toSorted(compareIds));
-    expect(await loadTranscriptEvents(scope)).toEqual(before);
-
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: "agent:main:unrelated" },
-      { sessionId: "unrelated", updatedAt: 1 },
-    );
-    expectHistoryError(
-      await send({
-        sessionKey: "agent:main:unrelated",
-        cursor: initial.olderCursor,
-      }),
+    const { read } = await seedHistory([
+      { role: "user", content: "Earlier question" },
       {
-        code: "INVALID_REQUEST",
-        message: "sessionId does not belong to sessionKey",
+        role: "assistant",
+        content: [
+          segment("fragment-a", "Commentary A", "commentary"),
+          segment("fragment-b", "Commentary B", "commentary"),
+          segment("final", "Final answer", "final_answer"),
+        ],
       },
-    );
-
-    await seedHistoryTranscript(scope, [
-      ["message-4", makeMessage("A different transcript generation", { role: "user" })],
     ]);
-    expect(await read({ cursor: initial.olderCursor })).toMatchObject({
-      messages: [],
-      windowReset: true,
-    });
+    const tail = await read({ limit: 1 });
+    expect(tail.nextOffset).toBe(1);
+    const older = await read({ offset: tail.nextOffset, limit: 1 });
+    expect(tail.messages).toMatchObject([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Commentary A" }],
+        openclawStreamFallback: { itemId: "fragment-a" },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Commentary B" }],
+        openclawStreamFallback: { itemId: "fragment-b" },
+      },
+      { role: "assistant", content: [{ type: "text", text: "Final answer" }] },
+    ]);
+    expect(older.messages).toMatchObject([{ role: "user", content: "Earlier question" }]);
+    expect(older.hasMore).toBe(false);
   });
 });
 
+it.each(["anchor", "tail", "offset"] as const)(
+  "walks both sides of a byte-limited %s page without gaps and rejects replaced transcripts",
+  async (selector) => {
+    await withHistoryState(async () => {
+      const { read, send } = await seedHistory(
+        Array.from({ length: 13 }, (_, index) => ({
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `Message ${index}: ${"x".repeat(100_000)}`,
+        })),
+      );
+      const before = await loadTranscriptEvents(scope);
+      const initial = await read({
+        ...(selector === "anchor"
+          ? { messageId: "message-6" }
+          : selector === "offset"
+            ? { offset: 4 }
+            : {}),
+        limit: 13,
+        maxChars: 200_000,
+      });
+      const initialIds = messageIds(initial);
+      expect(initialIds.length).toBeGreaterThan(0);
+      expect(initial.olderCursor).toEqual(expect.any(String));
+      if (selector === "anchor") {
+        expect(initialIds).toContain("message-6");
+      }
+      expect(Boolean(initial.newerCursor)).toBe(selector !== "tail");
+      const seen = [...initialIds];
+      for (const direction of ["olderCursor", "newerCursor"] as const) {
+        const page = await walkPages(
+          initial,
+          direction,
+          read,
+          { limit: 13, maxChars: 200_000, maxBytes: 2_000_000 },
+          13,
+        );
+        seen.push(...page.ids);
+      }
+      const expectedIds = Array.from({ length: 13 }, (_, index) => `message-${index}`);
+      const compareIds = (a: string | undefined, b: string | undefined) =>
+        String(a).localeCompare(String(b));
+      expect(seen.toSorted(compareIds)).toEqual(expectedIds.toSorted(compareIds));
+      expect(await loadTranscriptEvents(scope)).toEqual(before);
+
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:unrelated" },
+        { sessionId: "unrelated", updatedAt: 1 },
+      );
+      expectHistoryError(
+        await send({
+          sessionKey: "agent:main:unrelated",
+          cursor: initial.olderCursor,
+        }),
+        {
+          code: "INVALID_REQUEST",
+          message: "sessionId does not belong to sessionKey",
+        },
+      );
+
+      await seedHistoryTranscript(scope, [
+        ["message-4", makeMessage("A different transcript generation", { role: "user" })],
+      ]);
+      expect(await read({ cursor: initial.olderCursor })).toMatchObject({
+        messages: [],
+        windowReset: true,
+      });
+    });
+  },
+);
+
+it.each([undefined, 0])("pages across a dense silent gap from offset %s", async (offset) => {
+  await withHistoryState(async () => {
+    const { read } = await seedHistory([
+      makeMessage("Older question", { role: "user" }),
+      makeMessage("Older answer"),
+      ...Array.from({ length: 80 }, () => makeMessage("NO_REPLY")),
+      makeMessage("Latest answer"),
+    ]);
+    const first = await read({ limit: 1, offset, maxChars: 100 });
+    expect(messageIds(first)).toEqual(["message-82"]);
+    expect(first.hasMore).toBe(true);
+    expect(first.nextOffset).toBe(1);
+    expect(typeof first.olderCursor).toBe("string");
+    expect(decodeChatHistoryPageCursor(String(first.olderCursor))).toMatchObject({
+      messageId: "message-80",
+      direction: "older",
+    });
+    expect(
+      await walkPages(first, "olderCursor", read, { limit: 100, maxChars: 100 }, 3),
+    ).toMatchObject({
+      ids: ["message-0", "message-1"],
+    });
+    const older = await read({ limit: 2, offset: first.nextOffset, maxChars: 100 });
+    expect(messageIds(older)).toEqual(["message-0", "message-1"]);
+    expect(older.hasMore).toBe(false);
+    expect(older.nextOffset).toBeUndefined();
+  });
+});
+
+it.each([false, true])("terminates a hidden prefix with tool-only tail=%s", async (toolOnly) => {
+  await withHistoryState(async () => {
+    const { read } = await seedHistory([
+      ...Array.from({ length: 50 }, () => makeMessage("Hidden", { display: false })),
+      ...(toolOnly ? [makeMessage("Synthetic file contents", { role: "toolResult" })] : []),
+    ]);
+    for (const params of [{ limit: 2 }, { limit: 2, offset: 0 }]) {
+      const tail = await read(params);
+      expect(tail).toMatchObject({ hasMore: false });
+      expect(tail.messages).toHaveLength(toolOnly ? 1 : 0);
+      expect([tail.olderCursor, tail.newerCursor, tail.nextOffset]).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+    }
+  });
+});
+
+it.each([undefined, 0, 4])(
+  "issues append-stable, reversible cursors for an ordinary offset %s page",
+  async (offset) => {
+    await withHistoryState(async () => {
+      const { read } = await seedHistory(
+        Array.from({ length: 9 }, (_, index) =>
+          makeMessage(`Message ${index}`, { role: index % 2 ? "assistant" : "user" }),
+        ),
+      );
+      const end = 9 - (offset ?? 0);
+      const initial = await read({ limit: 2, ...(offset === undefined ? {} : { offset }) });
+      expect(messageIds(initial)).toEqual([`message-${end - 2}`, `message-${end - 1}`]);
+      expect(initial.olderCursor).toEqual(expect.any(String));
+      expect(Boolean(initial.newerCursor)).toBe((offset ?? 0) > 0);
+      await appendTranscriptMessage(scope, {
+        eventId: "appended-after-page",
+        message: { role: "user", content: "Appended after opening the page" },
+      });
+      const older = await read({ cursor: initial.olderCursor, limit: 2 });
+      expect(messageIds(older)).toEqual([`message-${end - 4}`, `message-${end - 3}`]);
+      const reversed = await read({ cursor: older.newerCursor, limit: 2 });
+      expect(messageIds(reversed)).toEqual(messageIds(initial));
+      const walk = await walkPages(initial, "olderCursor", read, { limit: 2 }, 9);
+      expect(walk.ids.toSorted((a, b) => String(a).localeCompare(String(b)))).toEqual(
+        Array.from({ length: end - 2 }, (_, index) => `message-${index}`).toSorted(),
+      );
+    });
+  },
+);
+
 it.each([
-  ["olderCursor", "display flags"],
-  ["olderCursor", "stale announce pairs"],
-  ["newerCursor", "display flags"],
-  ["newerCursor", "stale announce pairs"],
+  ["olderCursor", "display flags", false],
+  ["olderCursor", "stale announce pairs", false],
+  ["newerCursor", "display flags", false],
+  ["newerCursor", "stale announce pairs", false],
+  ["olderCursor", "display flags", true],
+  ["olderCursor", "stale announce pairs", true],
+  ["newerCursor", "display flags", true],
+  ["newerCursor", "stale announce pairs", true],
 ] as const)(
-  "%s advances through pages hidden by %s with a one-message limit",
-  async (direction, hiddenBy) => {
+  "%s advances through pages hidden by %s with a one-message limit (ordinary=%s)",
+  async (direction, hiddenBy, ordinary) => {
     await withHistoryState(async () => {
       const announcePair = hiddenBy === "stale announce pairs";
       const { read } = await seedHistory(
@@ -171,10 +305,15 @@ it.each([
         { sessionStartedAt: 2000 },
       );
       const older = direction === "olderCursor";
-      const page = await read({ messageId: older ? "message-3" : "message-0", limit: 1 });
+      const page = await read({
+        ...(ordinary
+          ? { offset: older ? 0 : 3 }
+          : { messageId: older ? "message-3" : "message-0" }),
+        limit: 1,
+      });
       expect(messageIds(page)).toEqual([older ? "message-3" : "message-0"]);
       expect(await walkPages(page, direction, read, { limit: 1 }, 5)).toEqual({
-        emptyPages: 2,
+        emptyPages: ordinary && older ? 0 : 2,
         ids: [older ? "message-0" : "message-3"],
       });
     });
@@ -188,6 +327,7 @@ it("stays in the retained reset interval after the live session advances", async
       makeMessage("Retained anchor"),
       makeMessage("Retained end", { role: "user" }),
     ]);
+    const ordinary = await read({ limit: 1 });
     await appendTranscriptEvent(scope, {
       type: "reset",
       id: "closed-reset",
@@ -201,13 +341,16 @@ it("stays in the retained reset interval after the live session advances", async
     });
     const initial = await read({ messageId: "message-1", limit: 1 });
     await upsertSessionEntryCore(scope, { sessionId: "new-live-session", updatedAt: 2 });
+    expect(messageIds(await read({ cursor: ordinary.olderCursor, limit: 1 }))).toEqual([
+      "message-1",
+    ]);
     for (const [cursor, id] of [
       [initial.olderCursor, "message-0"],
       [initial.newerCursor, "message-2"],
     ]) {
       const page = await read({ cursor, limit: 1 });
       expect(page.sessionId).toBe(scope.sessionId);
-      expect(messageIds(page)).toEqual([id]);
+      expect([messageIds(page), page.hasMore]).toEqual([[id], undefined]);
       if (id === "message-2") {
         const end = await read({ cursor: page.newerCursor, limit: 1 });
         expect(messageIds(end)).toEqual(["closed-reset"]);

@@ -1,3 +1,4 @@
+import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import type { ModelCatalogRef as BundledStaticCatalogLookup } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import {
@@ -35,16 +36,44 @@ import {
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { resolveBuiltInModelSuppressionFromManifest } from "../model-suppression.js";
-import { buildInlineProviderModels, completeInlineProviderModel } from "./model.inline-provider.js";
+import {
+  buildInlineProviderModels,
+  completeInlineProviderModel,
+  resolveProviderModelInput,
+} from "./model.inline-provider.js";
 import { resolveProviderTransport } from "./model.provider-transport.js";
-import { modelFromStaticCatalogRow } from "./model.static-catalog-row.js";
 import type { BundledStaticCatalogState } from "./model.static-catalog.types.js";
 import { createStaticModelIdMatcher, staticModelIdMatches } from "./model.static-id.js";
 
 export { resolveManifestModelCatalogProviderAliasMetadata } from "./model.manifest-alias.js";
 export type { ManifestModelCatalogProviderAliasMetadata } from "./model.manifest-alias.js";
+
+function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRuntimeModel {
+  return {
+    id: row.id,
+    name: row.name || row.id,
+    provider: row.provider,
+    api: row.api ?? "openai-responses",
+    baseUrl: row.baseUrl ?? "",
+    reasoning: row.reasoning,
+    input: resolveProviderModelInput({ input: row.input }),
+    cost: normalizeResolvedPricing(row.cost ?? {}),
+    contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    contextWindows: row.contextWindows?.map((option) => ({ ...option })),
+    contextWindowDefault: row.contextWindowDefault,
+    contextTokens: row.contextTokens,
+    ...(row.parameterCount !== undefined ? { parameterCount: row.parameterCount } : {}),
+    ...(row.family ? { family: row.family } : {}),
+    maxTokens: row.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+    thinkingLevelMap: row.thinkingLevelMap ? { ...row.thinkingLevelMap } : undefined,
+    headers: row.headers,
+    compat: row.compat,
+    mediaInput: row.mediaInput,
+  };
+}
 
 type StaticCatalogPlugin = Parameters<
   typeof planEffectiveModelCatalogRows
@@ -328,7 +357,8 @@ function resolveBundledProviderStaticCatalogPluginIds(
         : {}),
     }),
   );
-  return activatablePluginIds.filter((pluginId) => bundledPluginIds.has(pluginId)).toSorted();
+  // oxlint-disable-next-line unicorn/no-array-sort -- filter creates a private array.
+  return activatablePluginIds.filter((pluginId) => bundledPluginIds.has(pluginId)).sort();
 }
 
 async function loadBundledProviderStaticCatalogModels(
@@ -486,7 +516,8 @@ export async function loadBundledProviderStaticCatalogContextModels(
       : providerScopedPluginIds;
   const pluginIds = [...new Set(candidatePluginIds)]
     .filter((pluginId) => staticCatalogPluginIds.has(pluginId))
-    .toSorted((left, right) => left.localeCompare(right));
+    // oxlint-disable-next-line unicorn/no-array-sort -- filter creates a private array.
+    .sort((left, right) => left.localeCompare(right));
   if (pluginIds.length === 0) {
     return [];
   }
@@ -631,4 +662,23 @@ export async function resolveBundledProviderStaticCatalogModel(
   params: BundledStaticCatalogLookup & Partial<BundledStaticCatalogParams>,
 ): Promise<ProviderRuntimeModel | undefined> {
   return createScopedBundledProviderStaticCatalogModelResolver(params)(params);
+}
+
+/**
+ * Lists bundled first-party rows: rows of a provider whose manifest family names the provider
+ * itself (the model's vendor). Other routes look up model facts here by canonical model key.
+ */
+export function listBundledVendorCatalogRows(): Array<{ provider: string; id: string }> {
+  const params = { env: process.env };
+  const plugins = resolveBundledStaticCatalogState(
+    params,
+    resolveBundledStaticCatalogMetadataSnapshot(params),
+  ).plugins;
+  return plugins.flatMap((plugin) =>
+    Object.entries(plugin.modelCatalog?.providers ?? {}).flatMap(([provider, catalog]) =>
+      catalog.family && normalizeProviderId(catalog.family) === normalizeProviderId(provider)
+        ? (catalog.models ?? []).map((model) => ({ provider, id: model.id }))
+        : [],
+    ),
+  );
 }

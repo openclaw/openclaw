@@ -10,6 +10,8 @@ import {
 export type ContextEntry = SessionTreeEntry & { seq: number };
 export type ModelContextRequest = {
   entry: ContextEntry;
+  /** The payload stays at its acceptance row; this marker owns its model-visible position. */
+  placement?: ContextEntry;
   omitCheckpoint: boolean;
   toolResultOmission?: string;
 };
@@ -23,7 +25,7 @@ export type ModelContextPrefix = {
 
 function readToolResultOwners(messages: readonly AgentMessage[]): ModelContextPairingFacts {
   const owners = new Map<AgentMessage, Extract<AgentMessage, { role: "assistant" }>>();
-  for (const frame of classifyToolUseResultPairing(messages).frames) {
+  for (const frame of classifyToolUseResultPairing(messages)) {
     for (const occurrence of frame.occurrences) {
       if (occurrence.sourceResult) {
         owners.set(occurrence.sourceResult, frame.assistant);

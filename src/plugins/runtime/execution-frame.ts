@@ -4,9 +4,23 @@ import type { PluginExecutionScopes } from "../plugin-instance-invocation.types.
 import type { PluginRegistry } from "../registry-types.js";
 import type { PluginRuntimeGatewayRequestScope } from "./gateway-request-scope.types.js";
 
+export interface PluginRuntimeExecutionFrame extends InvocationFrame {
+  readonly gatewayScope: PluginRuntimeGatewayRequestScope | undefined;
+  readonly generationRegistry: PluginRegistry | undefined;
+  withScopes(scopes: PluginExecutionScopes): PluginRuntimeExecutionFrame;
+}
+
 // The frame store is one process-wide singleton, so every module instance that
 // reads it (source, built chunks, reloaded graphs) must narrow with one constructor.
-export const PluginRuntimeExecutionFrame = resolveGlobalSingleton(
+export const PluginRuntimeExecutionFrame: {
+  new (
+    scopes: PluginExecutionScopes,
+    gatewayScope: PluginRuntimeGatewayRequestScope | undefined,
+    generationRegistry: PluginRegistry | undefined,
+    invocation?: PluginExecutionScopes["invocation"],
+  ): PluginRuntimeExecutionFrame;
+  readonly prototype: PluginRuntimeExecutionFrame;
+} = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginRuntimeExecutionFrame"),
   () =>
     class RuntimeFrame extends InvocationFrame {
@@ -29,6 +43,8 @@ export const PluginRuntimeExecutionFrame = resolveGlobalSingleton(
     },
 );
 
-export function getPluginRuntimeExecutionFrame(frame = getPluginExecutionFrame()) {
+export function getPluginRuntimeExecutionFrame(
+  frame = getPluginExecutionFrame(),
+): PluginRuntimeExecutionFrame | undefined {
   return frame instanceof PluginRuntimeExecutionFrame ? frame : undefined;
 }

@@ -6,10 +6,12 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store-scope.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   getChatAttachmentDataUrl,
@@ -26,24 +28,24 @@ import {
   preparePaneStagedAttachments,
   restorePaneStagedAttachments,
 } from "./chat-pane-attachment-handoff.ts";
-import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+import { registerChatPane } from "./chat-pane-elements.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { enqueueChatMessage } from "./chat-queue.ts";
 import {
   captureChatCommandComposerRecovery,
   settleChatCommandComposer,
 } from "./chat-send-composer.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
+import { createChatAttachmentInputHandle } from "./components/chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./components/chat-attachment-inputs.tsx";
 import { AttachmentPreview } from "./components/chat-attachments.tsx";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
-import {
-  ChatComposerPersistence,
-  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
-  loadChatComposerState,
-  storedChatOutboxScopeKey,
-} from "./composer-persistence.ts";
+import { loadChatComposerState } from "./composer-draft-storage.ts";
+import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence-feedback.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
 import {
   activeQueuedMessageEdit,
   beginQueuedMessageEdit,
@@ -223,16 +225,17 @@ describe("cross-region Home composer ownership", () => {
 
   it.each(["complete", "remove"] as const)(
     "retains pending file custody through handoffs and source disposal (%s)",
-    (outcome) => {
+    async (outcome) => {
       const fixture = home();
       const { context, owner, page } = fixture;
       page.edit("Keep this draft and file");
       const container = document.createElement("div");
+      const inputHandle = createChatAttachmentInputHandle();
       const view = mountSolid(
         (props: { controls: ChatAttachmentControlsProps; showInputs: boolean }) => (
           <>
             <Show when={props.showInputs}>
-              <ChatAttachmentInputs {...props.controls} />
+              <ChatAttachmentInputs {...props.controls} inputHandle={inputHandle} />
             </Show>
             <AttachmentPreview {...props.controls} />
           </>
@@ -263,7 +266,9 @@ describe("cross-region Home composer ownership", () => {
         controls: dock.controller.attachmentInputProps(dock.current),
         showInputs: false,
       });
-      expect(container.querySelector('.chat-attachment-thumb[aria-busy="true"]')).not.toBeNull();
+      await waitForSolid(() =>
+        expect(container.querySelector('.chat-attachment-thumb[aria-busy="true"]')).not.toBeNull(),
+      );
 
       dock.view.presented = false;
       page.view.presented = true;
@@ -284,7 +289,8 @@ describe("cross-region Home composer ownership", () => {
         showInputs: false,
       });
       expect(
-        container.querySelector<HTMLElement>(".chat-attachment-loading > span")?.style.transform,
+        container.querySelector<HTMLElement>(".chat-attachment-loading__line > span")?.style
+          .transform,
       ).toBe("scaleX(0.5)");
 
       if (outcome === "remove") {
@@ -575,9 +581,17 @@ describe("staged chat attachment pane handoff", () => {
     };
   }
 
-  function retainedSessions(context: ApplicationContext, ...panes: HTMLElement[]) {
+  function retainedSessions(
+    context: ApplicationContext,
+    pane: ReturnType<typeof createTestChatPane>["pane"],
+  ) {
     const host = document.createElement("div");
-    host.append(...panes);
+    const element = Object.assign(pane.element, {
+      paneId: pane.paneId,
+      discardStagedAttachments: pane.discardStagedAttachments,
+    });
+    host.append(element);
+    disposals.push(registerChatPane(element));
     return new ChatPageRetainedSessions(host, {
       context: () => context,
       presented: () => true,

@@ -41,3 +41,11 @@ export async function withTempHome<T>(
     }
   }, options);
 }
+
+export function withMcpOAuthTempHome<T>(run: (home: string) => T | Promise<T>, prefix: string) {
+  return withTempHome(run, {
+    prefix,
+    skipSessionCleanup: true,
+    env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
+  });
+}

@@ -29,7 +29,6 @@ export function createAgentsApiSession(options: {
   assertCurrent: () => void;
   /** A fresh session whose creation request already admitted the sole input. */
   initialInputSubmitted?: true;
-  waitForRecovery?: (ms: number, signal: AbortSignal) => Promise<void>;
   onEvent: (event: AgentsApiEvent) => void | Promise<void>;
   onReconcile?: (turn: Turn, items: AgentsApiItem[]) => Promise<void | boolean>;
   onReconcileHistory?: (entries: Array<{ turn: Turn; items: AgentsApiItem[] }>) => Promise<void>;
@@ -37,17 +36,12 @@ export function createAgentsApiSession(options: {
   onUsageError?: (error: unknown) => void;
   onTranscriptOrderingGap?: () => void;
   executeFunction?: (call: AgentsApiFunctionCall) => Promise<AgentsApiToolExecutionResult>;
-  connectEnvironment?: (environmentId: string) => Promise<void>;
-  onSessionFailed?: () => Promise<void>;
   onFunctionResult?: (
     call: AgentsApiFunctionCall,
     result: AgentsApiToolExecutionResult,
   ) => void | Promise<void>;
 }) {
   const { client, cleanupClient, sessionId, signal, assertCurrent } = options;
-  const waitForRecovery =
-    options.waitForRecovery ??
-    ((ms: number, recoverySignal: AbortSignal) => delay(ms, undefined, { signal: recoverySignal }));
   let streamController = new AbortController();
   let submitted = options.initialInputSubmitted ?? false;
   let inputAdmissionClosed = false;
@@ -222,11 +216,7 @@ export function createAgentsApiSession(options: {
         await awaitReceipt(submissionFence);
         assertCurrent();
         const inputCount = admittedMessageCount;
-        const calls = await client.pendingFunctionCalls(
-          sessionId,
-          signal,
-          options.connectEnvironment,
-        );
+        const calls = await client.pendingFunctionCalls(sessionId, signal);
         if (!calls.length) {
           return;
         }
@@ -321,7 +311,7 @@ export function createAgentsApiSession(options: {
           const result = await options.executeFunction(call);
           assertCurrent();
           signal.throwIfAborted();
-          const terminate = result.terminate || result.sourceReplyDelivered;
+          const terminate = result.terminate;
           if (terminate) {
             // Fence new input before the acknowledgement can resume native work.
             // Already reserved input remains ahead of that acknowledgement.
@@ -386,7 +376,7 @@ export function createAgentsApiSession(options: {
           }
         });
         while (true) {
-          await waitForRecovery(500, signal);
+          await delay(500, undefined, { signal });
           assertCurrent();
           streamController = new AbortController();
           try {
@@ -407,22 +397,16 @@ export function createAgentsApiSession(options: {
         }
         nextEvent = events.next();
         void nextEvent.catch(() => {});
-        if (options.connectEnvironment) {
-          // Streams do not replay. Recover a connection request emitted while
-          // detached even when the input response has not arrived yet.
-          await client.pendingFunctionCalls(sessionId, signal, options.connectEnvironment);
-          assertCurrent();
-        }
       };
-      let initialConnectionReconciled = false;
-      const awaitReceipt = async (receipt: Promise<void>) => {
-        if (!initialConnectionReconciled && options.connectEnvironment) {
-          initialConnectionReconciled = true;
-          // The subscription cannot replay an action emitted before it opened.
-          // Resolve that action while the admitted input receipt is still pending.
-          await client.pendingFunctionCalls(sessionId, signal, options.connectEnvironment);
-          assertCurrent();
+      const disconnectedEvent = (error: unknown): IteratorReturnResult<undefined> => {
+        signal.throwIfAborted();
+        assertCurrent();
+        if (!isAgentsApiTransportDisconnect(error)) {
+          throw error;
         }
+        return { done: true, value: undefined };
+      };
+      const awaitReceipt = async (receipt: Promise<void>) => {
         const acknowledged = receipt.then(
           () => ({ kind: "acknowledged" as const }),
           (error: unknown) => ({ kind: "failed" as const, error }),
@@ -433,12 +417,7 @@ export function createAgentsApiSession(options: {
           try {
             chunk = await Promise.race([acknowledged, nextEvent]);
           } catch (error) {
-            signal.throwIfAborted();
-            assertCurrent();
-            if (!isAgentsApiTransportDisconnect(error)) {
-              throw error;
-            }
-            chunk = { done: true, value: undefined };
+            chunk = disconnectedEvent(error);
           }
           if ("kind" in chunk) {
             if (chunk.kind === "failed") {
@@ -453,12 +432,6 @@ export function createAgentsApiSession(options: {
           bufferedEvents.push(chunk.value);
           nextEvent = events.next();
           void nextEvent.catch(() => {});
-          if (chunk.value.type === "agent.session.requires_action" && options.connectEnvironment) {
-            // Only connection startup may cross an input receipt fence. Keep
-            // presentation and Gateway functions ordered in the main consumer.
-            await client.pendingFunctionCalls(sessionId, signal, options.connectEnvironment);
-            assertCurrent();
-          }
         }
       };
       const settleFromSavedState = async (recover = false): Promise<void> => {
@@ -471,7 +444,6 @@ export function createAgentsApiSession(options: {
         const session = await client.session(sessionId, signal);
         assertCurrent();
         if (session.status === "failed") {
-          await options.onSessionFailed?.();
           throw new Error(session.error ?? "Agents API session failed");
         }
         if (session.status === "requires_action") {
@@ -587,17 +559,12 @@ export function createAgentsApiSession(options: {
             } else if (reconciliationPending) {
               // Terminal and disconnected-stream records may lag their last live event.
               // Keep the next event in flight while reconciling within the attempt deadline.
-              chunk = await waitForAgentsApiEventOrRecovery(nextEvent, signal, waitForRecovery);
+              chunk = await waitForAgentsApiEventOrRecovery(nextEvent, signal);
             } else {
               chunk = await nextEvent;
             }
           } catch (error) {
-            signal.throwIfAborted();
-            assertCurrent();
-            if (!isAgentsApiTransportDisconnect(error)) {
-              throw error;
-            }
-            chunk = { done: true, value: undefined };
+            chunk = disconnectedEvent(error);
           }
           if (!chunk) {
             await settleFromSavedState(true);
@@ -659,7 +626,6 @@ export function createAgentsApiSession(options: {
             if (session.status !== "failed") {
               continue;
             }
-            await options.onSessionFailed?.();
             throw new AgentsApiError(session.error ?? "Agents API session failed", event.error);
           }
           if (event.type === "agent.session.environment.failed") {
@@ -714,9 +680,6 @@ export function createAgentsApiSession(options: {
       cleanupSignal.throwIfAborted();
       const session = await cleanupClient.session(sessionId, cleanupSignal);
       cleanupSignal.throwIfAborted();
-      if (session.status === "failed") {
-        await options.onSessionFailed?.();
-      }
       if (session.status !== "idle" && session.status !== "failed") {
         throw new Error("Agents API session cleanup requires native work to be retired");
       }

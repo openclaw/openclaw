@@ -3,8 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
-import { readBundledPluginAssetHooks } from "../../scripts/bundled-plugin-assets.mts";
-import { collectSourceCheckoutPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { createWorktreeSetupPlan, parseWorktreeSetupArgs } from "../../scripts/worktree-setup.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -221,30 +219,19 @@ it.skipIf(process.platform === "win32")("keeps the actual Claude startup hook so
   }
 });
 
-it("plans the actual checkout from canonical source and both asset inventories", async () => {
-  const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
-  const entries = collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot, env: {} });
-  const buildHooks = await readBundledPluginAssetHooks({ rootDir: repoRoot, phase: "build" });
-  const copyHooks = await readBundledPluginAssetHooks({ rootDir: repoRoot, phase: "copy" });
-  expect(entries.length).toBeGreaterThan(0);
-  expect(buildHooks.length).toBeGreaterThan(0);
-  expect(copyHooks.length).toBeGreaterThan(0);
-  const expected = new Set([
-    pkg.name + "...",
-    "./packages/*...",
-    "./ui...",
-    ...entries
-      .filter((entry) => entry.hasPackageJson)
-      .map((entry) => `./extensions/${entry.id}...`),
-    ...[...buildHooks, ...copyHooks].map(
-      (hook) => "./" + path.relative(repoRoot, hook.pluginDir).split(path.sep).join("/") + "...",
-    ),
-  ]);
-  const plan = await createWorktreeSetupPlan({ rootDir: repoRoot, workload: "gateway", env: {} });
+it("plans source plugins and both asset-only inventories", async () => {
+  const { rootDir } = makePreparationFixture();
+  const plan = await createWorktreeSetupPlan({ rootDir, workload: "gateway", env: {} });
   expect(plan.install).toEqual({
     command: "pnpm",
-    args: [...expected]
-      .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0))
+    args: [
+      "./extensions/asset-build...",
+      "./extensions/asset-copy...",
+      "./extensions/isolated...",
+      "./packages/*...",
+      "./ui...",
+      "openclaw...",
+    ]
       .flatMap((filter) => ["--filter", filter])
       .concat(["install", "--frozen-lockfile"]),
   });

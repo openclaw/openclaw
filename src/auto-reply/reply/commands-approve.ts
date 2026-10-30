@@ -5,22 +5,85 @@ import {
   getChannelPlugin,
   resolveChannelApprovalCapability,
 } from "../../channels/plugins/index.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { canChannelEnforcePluginReviewerPolicy } from "../../infra/approval-channel-policy-support.js";
 import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
 import {
   isPendingSystemAgentApprovalOverGateway,
   resolveApprovalOverGateway,
 } from "../../infra/approval-gateway-resolver.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
-import {
-  resolveApprovalCommandAuthorization,
-  type ApprovalCommandAuthorization,
-} from "../../infra/channel-approval-auth.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isImplicitSameChatApprovalAuthorization } from "../../plugin-sdk/approval-auth-helpers.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveChannelAccountId } from "./channel-context.js";
 import { commandReply, requireGatewayClientScope } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+
+type ApprovalCommandAuthorization = {
+  authorized: boolean;
+  reason?: string;
+  explicit: boolean;
+};
+
+/** Resolves whether a chat `/approve` command is authorized by channel-specific approval policy. */
+async function resolveApprovalCommandAuthorization(params: {
+  cfg: OpenClawConfig;
+  channel?: string | null;
+  accountId?: string | null;
+  senderId?: string | null;
+  kind: ChannelApprovalKind;
+}): Promise<ApprovalCommandAuthorization> {
+  const channel = normalizeMessageChannel(params.channel);
+  if (!channel) {
+    // Non-channel command paths keep legacy behavior: allow, but do not count as explicit chat auth.
+    return { authorized: true, explicit: false };
+  }
+  const approvalCapability = resolveChannelApprovalCapability(getChannelPlugin(channel));
+  if (
+    params.kind === "plugin" &&
+    !canChannelEnforcePluginReviewerPolicy(params.cfg, channel, approvalCapability)
+  ) {
+    return {
+      authorized: false,
+      explicit: true,
+      reason: `Plugin approvals on ${channel} require an updated channel plugin for the configured reviewer policy.`,
+    };
+  }
+  const authorize =
+    approvalCapability?.authorizeActorActionAsync ?? approvalCapability?.authorizeActorAction;
+  const resolved = await authorize?.({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    senderId: params.senderId,
+    action: "approve",
+    approvalKind: params.kind,
+  });
+  if (!resolved) {
+    return { authorized: true, explicit: false };
+  }
+  // Keep `resolved` by reference; cloning before this check would drop the
+  // non-enumerable implicit-fallback marker.
+  const implicitSameChatAuthorization = isImplicitSameChatApprovalAuthorization(resolved);
+  const availability = await (
+    approvalCapability?.getActionAvailabilityStateAsync ??
+    approvalCapability?.getActionAvailabilityState
+  )?.({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    action: "approve",
+    approvalKind: params.kind,
+  });
+  return {
+    authorized: resolved.authorized,
+    reason: resolved.reason,
+    explicit: resolved.authorized
+      ? !implicitSameChatAuthorization && availability?.kind !== "disabled"
+      : true,
+  };
+}
 
 const log = createSubsystemLogger("auto-reply/commands-approve");
 
@@ -100,11 +163,7 @@ export async function handleApproveCommandFromContext(
     return commandReply(parsed.error);
   }
 
-  const effectiveAccountId = resolveChannelAccountId({
-    cfg: params.cfg,
-    ctx: params.ctx,
-    command: params.command,
-  });
+  const effectiveAccountId = resolveChannelAccountId(params);
   const approvalCapability = resolveChannelApprovalCapability(
     getChannelPlugin(params.command.channel),
   );

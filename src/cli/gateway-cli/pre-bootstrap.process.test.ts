@@ -7,6 +7,7 @@ import {
   createSourceRuntime,
   runIsolatedModuleScript,
 } from "../../commands/doctor-config-preflight.process.test-support.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const runtimeParent = fs.realpathSync(tempDirs.make("openclaw-selection-runtime-"));
@@ -20,8 +21,8 @@ beforeEach(() => {
 
 function stateManifest(root: string): Record<string, string> {
   return Object.fromEntries(
-    fs
-      .readdirSync(root, { recursive: true, withFileTypes: true })
+    listDirectoryTreeStrictSync(root)
+      .map((walkEntry) => walkEntry.dirent)
       .filter((entry) => entry.isFile())
       .map((entry) => {
         const filename = path.join(entry.parentPath, entry.name);
@@ -94,7 +95,7 @@ describe("Gateway config selection before migration admission", () => {
       const { ExitError } = await import("./src/runtime.ts");
       const runtime = { log() {}, error: console.error, exit(code) { throw new ExitError(code); } };
       const params = { opts: {}, runtime };
-      await runDoctorConfigPreflight({ repairPrefixedConfig: true, doctorOnlyStateMigrations: true });
+      await runDoctorConfigPreflight({ repairPrefixedConfig: true, migrateState: false });
       const repairedBytes = fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8");
       if (!await selectGatewayRunEnvironment(params)) throw new Error("selection refused");
       if (!await prepareGatewayRunBootstrap(params)) throw new Error("preparation refused");
@@ -233,8 +234,9 @@ describe("Gateway config selection before migration admission", () => {
         writeJson(selectedPath, clobbered);
         writeJson(`${selectedPath}.bak`, future);
       } else if (name === "discarded clobbered environment") {
+        // Missing metadata alone is valid; retain a real gateway-mode loss signal.
         current = {
-          gateway: { mode: "local" },
+          ...clobbered,
           env: { vars: { OPENCLAW_GATEWAY_TOKEN: "discarded-test-token" } },
         };
         backup = healthy;
@@ -312,6 +314,7 @@ describe("Gateway config selection before migration admission", () => {
         ...process.env,
         ...env,
         OPENCLAW_TEST_FAST: "1",
+        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
       };
       const result = await runIsolatedModuleScript(
         inheritedEnv,
@@ -320,11 +323,21 @@ describe("Gateway config selection before migration admission", () => {
       const runtime = { log() {}, error() {}, exit(code) { throw new Error("unexpected exit " + code); } };
       if (!await selectGatewayRunEnvironment({ opts: {}, runtime })) throw new Error("selection refused");
       if (!await prepareGatewayRunBootstrap({ opts: {}, runtime })) throw new Error("preparation refused");
-      console.log("prepared");
+      const { consumeGatewayBootstrapSteps } = await import("./src/cli/startup-trace.ts");
+      console.log("__RESULT__" + JSON.stringify(consumeGatewayBootstrapSteps().map(({ name, calls }) => ({ name, calls }))));
     `,
         options,
       );
-      expect(result.stdout).toContain("prepared");
+      expect(readResult(result)).toEqual(
+        expect.arrayContaining([
+          { name: "cli.environment.imports", calls: 2 },
+          { name: "cli.environment.dotenv", calls: 2 },
+          { name: "cli.environment.config-import", calls: 2 },
+          { name: "cli.environment.config.snapshot.read.file", calls: 2 },
+          { name: "cli.environment.config.snapshot.read.validate", calls: 2 },
+          { name: "cli.environment.config-recovery", calls: 2 },
+        ]),
+      );
       expect(stateManifest(stateDir)).toEqual(before);
     },
     90_000,

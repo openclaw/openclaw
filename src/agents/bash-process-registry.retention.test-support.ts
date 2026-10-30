@@ -87,3 +87,37 @@ const unicode = createProcessSessionFixture({ id: "unicode", maxOutputChars: 4 }
 appendOutput(unicode, "stdout", "x🦞\ud800z");
 assert.equal(unicode.aggregated, "🦞\ud800z");
 assert.equal(prepareSessionPoll(unicode, undefined).output, "🦞\ud800z");
+
+const sparse = createProcessSessionFixture({ id: "sparse", maxOutputChars: 4_000 });
+addSession(sparse);
+const churn = "x".repeat(Buffer.poolSize / 2 - 8);
+const references = Array.from({ length: 32 }, () => {
+  // Separate callbacks with unrelated allocation, as happens for sparse process output.
+  for (let index = 0; index < 3; index++) {
+    Buffer.from(churn);
+  }
+  const beforeMarker = Buffer.from("marker");
+  appendOutput(sparse, "stdout", "🦞\ud800log\n");
+  const afterMarker = Buffer.from("marker");
+  return [new WeakRef(beforeMarker.buffer), new WeakRef(afterMarker.buffer)];
+}).flat();
+for (let index = 0; index < 3; index++) {
+  Buffer.from(churn);
+}
+const control = new WeakRef({});
+await new Promise<void>((resolve) => {
+  setImmediate(resolve);
+});
+gc();
+gc();
+assert.equal(control.deref(), undefined, "GC must collect the unreachable control");
+assert.equal(
+  references.filter((reference) => reference.deref() !== undefined).length,
+  0,
+  "live sparse output must not pin unrelated pooled backing stores",
+);
+assert.equal(getSession(sparse.id), sparse);
+assert.equal(sparse.aggregated, "🦞\ud800log\n".repeat(32));
+assert.equal(prepareSessionPoll(sparse, undefined).output, sparse.aggregated);
+markExited(sparse, 0, null, "completed");
+deleteSession(sparse.id);

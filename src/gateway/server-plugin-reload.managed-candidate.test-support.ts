@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, vi } from "vitest";
 import { PluginInstanceDrainTimeoutError } from "../plugins/plugin-instance-error.js";
-import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import {
   disposePluginRegistryInstances,
   waitForPluginRegistryRetirement,
@@ -15,6 +14,7 @@ import {
   rejectWith,
   heldWork,
   observeSettlement,
+  pluginInstance,
 } from "./server-plugin-reload.fixture-tools.test-support.js";
 import {
   createCleanupChannels,
@@ -75,8 +75,7 @@ export async function verifyManagedCandidateRetirement(
   try {
     await startupGate.entered;
     const candidate = fixture.candidates[0]!.registry;
-    const instance = getPluginInstance(candidate.plugins.find((record) => record.id === "first")!);
-    assert(instance);
+    const instance = pluginInstance(candidate);
     // Observe each existing deadline: failed startup, service stop, then instance drain.
     await vi.advanceTimersByTimeAsync(5_000);
     expect(instance.disposing).toBe(false);
@@ -180,7 +179,7 @@ export async function verifyPendingServiceCleanupRetry(
     registry: fixture.previousRegistry,
     config: fixture.getConfig(),
     onHandle: (handle) => {
-      expect(fixture.owner.publishServices(fixture.owner.currentClaim(), handle)).toBe(true);
+      fixture.owner.setServices(handle);
     },
   });
   await startupGate.entered;
@@ -389,10 +388,7 @@ export async function verifyCandidateCleanupRefusal(createRecoveryFixture: Recov
   expect(resourceOpen).toBe(true);
   expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
   expectSiblingUnchanged(fixture);
-  const sibling = getPluginInstance(
-    fixture.registryOwner.registry.plugins.find((record) => record.id === "sibling")!,
-  );
-  assert(sibling);
+  const sibling = pluginInstance(fixture.registryOwner.registry, "sibling");
   expect(sibling.run(() => "still serving")).toBe("still serving");
   await expect(fixture.reload()).rejects.toMatchObject({
     details: { phase: "prepare", committed: false },

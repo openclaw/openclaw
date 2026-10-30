@@ -1,19 +1,17 @@
-// @vitest-environment node
-
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
+// @vitest-environment node
 import { assert, describe, expect, it, vi } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { page } from "./route.ts";
 
-const loaderOptions: RouteLoaderOptions = {
-  signal: new AbortController().signal,
-  shouldRun: () => true,
-  revalidating: false,
-  location: { pathname: "/dashboards", search: "", hash: "" },
-  deps: "",
-  cause: "navigation",
-};
+const loaderOptions: RouteLoaderOptions = createRouteLoaderOptions({
+  pathname: "/dashboards",
+  search: "",
+  hash: "",
+});
 
 async function loadDashboards(
   context: ApplicationContext,
@@ -26,13 +24,7 @@ describe("dashboards route", () => {
   it.each([undefined, "global", "per-sender"] as const)(
     "seeds the managed query and configured scope %s",
     async (scope) => {
-      const result = {
-        ts: 1,
-        path: "",
-        count: 0,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [],
-      };
+      const result = sessionListResult(1, []);
       let snapshot = {
         result: null as typeof result | null,
         agentId: null,

@@ -80,6 +80,7 @@ type PackageOptions = RunOptions & {
   outputName?: string;
   packJsonPath?: string;
   pnpmPack?: boolean;
+  runtimeOnly?: boolean;
   prepareBundledAiRuntime?: typeof prepareBundledAiRuntimePackage;
   prepareChangelog?: (cwd: string) => Promise<unknown>;
   prepareDocsMap?: (cwd: string) => Promise<unknown>;
@@ -198,6 +199,7 @@ export function parseArgs(argv: string[]) {
       outputName: "",
       packJson: "",
       pnpmPack: false,
+      runtimeOnly: false,
       skipBuild: false,
       sourceDir: ROOT_DIR,
     },
@@ -208,6 +210,7 @@ export function parseArgs(argv: string[]) {
       stringFlag("--output-name", "outputName", { rejectShortOptions: true }),
       stringFlag("--pack-json", "packJson", { rejectShortOptions: true }),
       booleanFlag("--pnpm-pack", "pnpmPack"),
+      booleanFlag("--runtime-only", "runtimeOnly"),
       booleanFlag("--skip-build", "skipBuild"),
       stringFlag("--source-dir", "sourceDir", { rejectShortOptions: true }),
     ],
@@ -415,7 +418,7 @@ export async function buildPackageArtifacts(
   const buildEnv: NodeJS.ProcessEnv = {
     ...process.env,
     OPENCLAW_BUILD_ALL_NO_PNPM: "1",
-    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: packageOptions.runtimeOnly ? "1" : "0",
   };
   for (const envName of PACKAGE_BUILD_PLUGIN_SELECTION_ENV_NAMES) {
     delete buildEnv[envName];
@@ -704,6 +707,8 @@ export async function prepareBundledAiRuntimePackage(
       await fs.readFile(stagedPackageJsonPath, "utf8"),
     ) as MutableJsonRecord & {
       dependencies?: Record<string, unknown>;
+      peerDependencies?: Record<string, unknown>;
+      peerDependenciesMeta?: Record<string, unknown>;
       version?: unknown;
     };
     if (typeof stagedPackageJson.version !== "string" || !stagedPackageJson.version) {
@@ -720,6 +725,12 @@ export async function prepareBundledAiRuntimePackage(
     // Root owns these exact dependencies. Removing them from the staged copy keeps npm from
     // recursively bundling duplicate packages alongside the one private workspace runtime.
     delete stagedPackageJson.dependencies;
+    // npm may omit required dependencies when the bundled copy also declares them as peers.
+    // Root owns composed dependencies; the Anthropic SDK also requires the API transitively.
+    for (const peer of ["@opentelemetry/api", ...Object.keys(packageJson.dependencies!)]) {
+      delete stagedPackageJson.peerDependencies?.[peer];
+      delete stagedPackageJson.peerDependenciesMeta?.[peer];
+    }
     await fs.writeFile(stagedPackageJsonPath, `${JSON.stringify(stagedPackageJson, null, 2)}\n`);
 
     packageJson.dependencies![AI_RUNTIME_PACKAGE] = stagedPackageJson.version;
@@ -737,13 +748,28 @@ export async function prepareBundledAiRuntimePackage(
   }
 }
 
-async function normalizeOpenClawTarballModes(tarballPath: string) {
+async function normalizeOpenClawTarballModes(
+  tarballPath: string,
+  sourceDir: string,
+  normalizeModes: boolean,
+  bundleOwners: ReadonlyMap<string, string>,
+) {
   // npm can retain restrictive source read bits. Normalize those for non-root
-  // installers while preserving the archive's executable intent. pnpm derives
-  // that intent from bin and publishConfig.executableFiles, not source modes.
+  // installers while preserving the archive's executable intent.
   const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-package-modes-"));
   try {
     await runPackageTar("extract", tarballPath, stageDir);
+    const { materializeMissingBundledDependencies } =
+      await import("./lib/package-bundled-links.mts");
+    const repaired = await materializeMissingBundledDependencies(
+      sourceDir,
+      path.join(stageDir, "package"),
+      resolveTimeoutMs("OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS", DEFAULT_PACKAGE_PACK_TIMEOUT_MS),
+      bundleOwners,
+    );
+    if (!normalizeModes && !repaired) {
+      return;
+    }
     let stagedFileCount = 0;
     const normalizeStagedModes = async (dir: string): Promise<void> => {
       for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
@@ -752,9 +778,18 @@ async function normalizeOpenClawTarballModes(tarballPath: string) {
           await fs.chmod(entryPath, 0o755);
           await normalizeStagedModes(entryPath);
         } else if (entry.isFile()) {
+          const stats = await fs.stat(entryPath);
+          // npm preserves hardlinked dependency assets; tar must repack each as a regular file.
+          if (stats.nlink > 1) {
+            const copyDir = await fs.mkdtemp(path.join(stageDir, ".regular-file-"));
+            const copyPath = path.join(copyDir, "file");
+            await fs.copyFile(entryPath, copyPath);
+            await fs.rename(copyPath, entryPath);
+            await fs.rm(copyDir, { recursive: true });
+          }
           // Umask masking on extraction only clears group/other bits, so the
           // owner exec bit still says whether the packed entry was executable.
-          const executable = ((await fs.stat(entryPath)).mode & 0o100) !== 0;
+          const executable = (stats.mode & 0o100) !== 0;
           await fs.chmod(entryPath, executable ? 0o755 : 0o644);
           stagedFileCount += 1;
         }
@@ -849,17 +884,26 @@ export async function packOpenClawPackageForDocker(
     packageOptions.restoreDocsMap ??
     sourceDocsMapLifecycle?.restorePackageDocsMap ??
     (async () => false);
+  const manifestPrepareMethod = packageOptions.runtimeOnly
+    ? "prepareRuntimePackageManifest"
+    : "preparePackageManifest";
   const sourceManifestLifecycle =
-    packageOptions.prepareManifest && packageOptions.restoreManifest
+    !packageOptions.runtimeOnly && packageOptions.prepareManifest && packageOptions.restoreManifest
       ? null
       : await loadSourcePackageLifecycle(sourcePath, "package-manifest.mjs", [
-          "preparePackageManifest",
+          manifestPrepareMethod,
           "restorePackageManifest",
         ]);
-  const prepareManifest =
+  const prepareTypedManifest =
     packageOptions.prepareManifest ??
     sourceManifestLifecycle?.preparePackageManifest ??
     (async () => false);
+  const prepareManifest = packageOptions.runtimeOnly
+    ? sourceManifestLifecycle?.prepareRuntimePackageManifest
+    : prepareTypedManifest;
+  if (typeof prepareManifest !== "function") {
+    throw new Error("Source package lifecycle does not support private runtime-only packaging.");
+  }
   const restoreManifest =
     packageOptions.restoreManifest ??
     sourceManifestLifecycle?.restorePackageManifest ??
@@ -928,17 +972,20 @@ export async function packOpenClawPackageForDocker(
   try {
     let cleanupBundledAiRuntime = async () => {};
     let cleanupBundledPlugins = async () => {};
+    let bundledPluginOwners: ReadonlyMap<string, string> = new Map();
     const cleanupFailures = new Set<unknown>();
     const onCleanupFailure = (error: unknown) => void cleanupFailures.add(error);
     try {
       await cleanPackedOpenClawTarballs(outputPath);
       if (packageOptions.bundlePlugins?.length) {
         const { preparePackageBundledPlugins } = await import("./lib/package-bundled-plugins.mts");
-        cleanupBundledPlugins = await preparePackageBundledPlugins(
+        const prepared = await preparePackageBundledPlugins(
           sourcePath,
           packageOptions.bundlePlugins,
           onCleanupFailure,
         );
+        cleanupBundledPlugins = prepared.cleanup;
+        bundledPluginOwners = prepared.bundleOwners;
       }
       cleanupBundledAiRuntime = await prepareBundledAiRuntime(
         sourcePath,
@@ -952,9 +999,10 @@ export async function packOpenClawPackageForDocker(
       );
       // AI staging materializes the bundled tree; pack must not inherit the
       // source workspace's isolated linker setting for that prepared bundle.
+      // npm's silent level hides failure causes as well as routine notices.
       const packArgs = [
         "pack",
-        "--silent",
+        packTool === "npm" ? "--loglevel=error" : "--silent",
         ...(packTool === "pnpm"
           ? ["--config.ignore-scripts=true", "--config.node-linker=hoisted"]
           : ["--ignore-scripts"]),
@@ -1011,7 +1059,25 @@ export async function packOpenClawPackageForDocker(
         tarball = target;
       }
     }
-    await (packageOptions.normalizeTarballModes ?? normalizeOpenClawTarballModes)(tarball);
+    const { hasMissingBundledDependencies } = await import("./lib/package-bundled-links.mts");
+    // Complete selected plugin bundles from their owners, even when the packer
+    // found a same-version root copy. Other complete pnpm archives stay unchanged.
+    if (
+      !packageOptions.pnpmPack ||
+      packageOptions.bundlePlugins?.length ||
+      (await hasMissingBundledDependencies(tarball))
+    ) {
+      if (packageOptions.normalizeTarballModes) {
+        await packageOptions.normalizeTarballModes(tarball);
+      } else {
+        await normalizeOpenClawTarballModes(
+          tarball,
+          sourcePath,
+          !packageOptions.pnpmPack,
+          bundledPluginOwners,
+        );
+      }
+    }
     if (packageOptions.packJsonPath) {
       // npm's original receipt predates normalization. Inspect the finished bytes;
       // dry-run preserves the archive while npm owns hashes, modes, and inventory.
@@ -1102,7 +1168,10 @@ async function main() {
   await fs.mkdir(outputDir, { recursive: true });
 
   if (!options.skipBuild) {
-    await buildPackageArtifacts(sourceDir, { bundlePlugins: options.bundlePlugins });
+    await buildPackageArtifacts(sourceDir, {
+      bundlePlugins: options.bundlePlugins,
+      runtimeOnly: options.runtimeOnly,
+    });
   }
 
   const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
@@ -1111,6 +1180,7 @@ async function main() {
     outputName: options.outputName,
     packJsonPath: options.packJson,
     pnpmPack: options.pnpmPack,
+    runtimeOnly: options.runtimeOnly,
   });
 
   console.error("==> Checking OpenClaw package tarball");

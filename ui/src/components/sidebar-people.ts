@@ -1,4 +1,5 @@
-import { createEffect, createMemo, onSettled } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
+import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { createPresenceActivityLifecycle } from "../lib/presence-activity-lifecycle.ts";
 import { profileDirectory } from "../lib/profile-directory.ts";
@@ -11,12 +12,11 @@ import { registerPersonActivityData } from "./person-activity-data.ts";
 import type { SidebarPeopleRuntime } from "./sidebar-people.runtime.ts";
 
 export type SidebarPeopleStatusFilter = "all" | "running";
-export type SidebarPeoplePresenceFilter = "online" | "all";
 export type SidebarPeopleSortMode = "presence" | "running" | "open" | "name";
 
 /** Snapshot restoration reads these choices synchronously, before view consumers run. */
 export class SidebarPeoplePreferences {
-  presenceFilter: SidebarPeoplePresenceFilter = "online";
+  presenceFilter: "online" | "all" = "online";
   statusFilter: SidebarPeopleStatusFilter = "all";
   sortMode: SidebarPeopleSortMode = "presence";
 
@@ -38,6 +38,7 @@ export function createSidebarPeople(
   host: AppSidebarSessionNavigationElement,
   people: SidebarPeoplePreferences,
   current: () => AppSidebarSessionNavigationElement,
+  context: ApplicationContext,
 ) {
   let runtime: SidebarPeopleRuntime | null = null;
   let loading: Promise<typeof import("./sidebar-people.runtime.ts")> | null = null;
@@ -49,24 +50,6 @@ export function createSidebarPeople(
     () => (host.connected ? sidebarPresenceActivityViewers(host) : []),
     () => host.refreshPresencePresentation(),
   );
-  // Snapshot readiness reads the directory during prepareRender; observe raw inputs here.
-  const contextSource = createMemo(() => current().sessionDataContext);
-  // Register the shared activity source and follow presence packets without polling.
-  createEffect(contextSource, (context) => {
-    if (!context) {
-      return undefined;
-    }
-    const stopActivity = registerPersonActivityData(context, host.sessionData);
-    const stopPresence = context.gateway.subscribeEvents((event) => {
-      if (event.event === "presence") {
-        activityExpiry.sync();
-      }
-    });
-    return () => {
-      stopActivity();
-      stopPresence();
-    };
-  });
   const directory = createMemo(() => {
     const gateway = current().sessionDataContext?.gateway;
     return gateway && host.navigationView === "online" && people.presenceFilter === "all"
@@ -164,11 +147,19 @@ export function createSidebarPeople(
     );
   };
   onSettled(() => {
+    const stopActivity = registerPersonActivityData(context, host.sessionData);
+    const stopPresence = context.gateway.subscribeEvents((event) => {
+      if (event.event === "presence") {
+        activityExpiry.sync();
+      }
+    });
     const stops = ["pointerover", "pointerout", "focusin", "focusout", "click", "keydown"].map(
       (event) => listen(host.hostElement, event, handleEvent),
     );
     activityExpiry.connect();
     return () => {
+      stopActivity();
+      stopPresence();
       stops.forEach((stop) => stop());
       activityExpiry.disconnect();
       dismiss();

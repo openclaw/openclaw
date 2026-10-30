@@ -1,23 +1,14 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
-const toolAccountModule = await import("./tool-account.js");
 const clientModule = await import("./client.js");
 vi.spyOn(clientModule, "createFeishuClient").mockImplementation(() => createFeishuClientMock());
-vi.spyOn(toolAccountModule, "resolveAnyEnabledFeishuToolsConfig").mockReturnValue({
-  doc: true,
-  chat: false,
-  wiki: false,
-  drive: false,
-  perm: false,
-  scopes: false,
-  bitable: false,
-});
 const { registerFeishuDocTools } = await import("./docx.js");
 
 type Patch = Lark.Client["docx"]["documentBlock"]["patch"];
@@ -63,15 +54,28 @@ const actions = [
   },
 ];
 
-function createClient(httpInstance?: Lark.HttpInstance) {
+function createClient(domain: string | Lark.Domain = Lark.Domain.Feishu) {
   return new Lark.Client({
     appId: "loopback-table-app",
     appSecret: "loopback-table-placeholder", // pragma: allowlist secret
-    domain: Lark.Domain.Feishu,
+    domain,
     loggerLevel: Lark.LoggerLevel.error,
     disableTokenCache: true,
-    httpInstance,
   });
+}
+
+function createTableCellClient() {
+  const client = createClient();
+  vi.spyOn(client.docx.documentBlock, "get").mockResolvedValue({
+    code: 0,
+    data: {
+      block: {
+        block_type: 31,
+        table: { property: { row_size: 1, column_size: 1 }, cells: ["cell_existing"] },
+      },
+    },
+  });
+  return client;
 }
 
 function resolveTool(client: Lark.Client) {
@@ -118,16 +122,7 @@ describe("registered feishu_doc table patches", () => {
   });
 
   it("preserves existing table cell content when replacement Markdown conversion fails", async () => {
-    const client = createClient();
-    vi.spyOn(client.docx.documentBlock, "get").mockResolvedValue({
-      code: 0,
-      data: {
-        block: {
-          block_type: 31,
-          table: { property: { row_size: 1, column_size: 1 }, cells: ["cell_existing"] },
-        },
-      },
-    });
+    const client = createTableCellClient();
     vi.spyOn(client.docx.documentBlockChildren, "get").mockResolvedValue({
       code: 0,
       data: { items: [{ block_id: "text_existing", block_type: 2 }] },
@@ -166,6 +161,107 @@ describe("registered feishu_doc table patches", () => {
     params.row_count = 99;
     response.resolve({ code: 0, data: { block, client_token: "table-client-token" } });
     expectResult(await pending, { success: true, rows_deleted: 3, block });
+  });
+
+  it("replaces cell content with sequential supported blocks in document order", async () => {
+    const client = createTableCellClient();
+    const first = { block_id: "first", block_type: 2 };
+    const second = { block_id: "second", block_type: 2 };
+    vi.spyOn(client.docx.document, "convert").mockResolvedValue({
+      code: 0,
+      data: {
+        blocks: [
+          second,
+          { block_id: "table", block_type: 31 },
+          first,
+          { block_id: "cell", block_type: 32 },
+        ],
+        first_level_block_ids: ["first", "table", "cell", "second"],
+      },
+    });
+    vi.spyOn(client.docx.documentBlockChildren, "get").mockResolvedValue({
+      code: 0,
+      data: { items: [{ block_id: "old_text", block_type: 2 }] },
+    });
+    const remove = vi
+      .spyOn(client.docx.documentBlockChildren, "batchDelete")
+      .mockResolvedValue({ code: 0 });
+    const started = createDeferred<void>();
+    const response =
+      createDeferred<Awaited<ReturnType<Lark.Client["docx"]["documentBlockChildren"]["create"]>>>();
+    const insert = vi
+      .spyOn(client.docx.documentBlockChildren, "create")
+      .mockResolvedValue({ code: 0 })
+      .mockImplementationOnce(() => {
+        started.resolve();
+        return response.promise;
+      });
+    const pending = resolveTool(client).execute("replace-cell", {
+      action: "write_table_cells",
+      doc_token: "doc_table",
+      table_block_id: "table_target",
+      values: [["Replacement content"]],
+    });
+    await started.promise;
+    try {
+      expect(remove).toHaveBeenCalledExactlyOnceWith({
+        path: { document_id: "doc_table", block_id: "cell_existing" },
+        data: { start_index: 0, end_index: 1 },
+      });
+      expect(insert).toHaveBeenCalledExactlyOnceWith({
+        path: { document_id: "doc_table", block_id: "cell_existing" },
+        data: { children: [first] },
+      });
+    } finally {
+      response.resolve({ code: 0 });
+    }
+    expectResult(await pending, {
+      success: true,
+      table_block_id: "table_target",
+      cells_written: 1,
+      table_size: { rows: 1, cols: 1 },
+    });
+    expect(insert).toHaveBeenCalledTimes(2);
+    expect(insert).toHaveBeenNthCalledWith(2, {
+      path: { document_id: "doc_table", block_id: "cell_existing" },
+      data: { children: [second] },
+    });
+  });
+
+  it.each(["selected", "missing"])("deletes only the located block (%s)", async (blockId) => {
+    const client = createClient();
+    vi.spyOn(client.docx.documentBlock, "get").mockResolvedValue({
+      code: 0,
+      data: { block: { parent_id: "parent", block_type: 2 } },
+    });
+    vi.spyOn(client.docx.documentBlockChildren, "get").mockResolvedValue({
+      code: 0,
+      data: {
+        items: [
+          { block_id: "before", block_type: 2 },
+          { block_id: "selected", block_type: 2 },
+          { block_id: "after", block_type: 2 },
+        ],
+      },
+    });
+    const remove = vi
+      .spyOn(client.docx.documentBlockChildren, "batchDelete")
+      .mockResolvedValue({ code: 0 });
+    const result = await resolveTool(client).execute("delete-block", {
+      action: "delete_block",
+      doc_token: "doc_table",
+      block_id: blockId,
+    });
+    if (blockId === "missing") {
+      expectResult(result, { error: "Block not found" });
+      expect(remove).not.toHaveBeenCalled();
+    } else {
+      expectResult(result, { success: true, deleted_block_id: "selected" });
+      expect(remove).toHaveBeenCalledExactlyOnceWith({
+        path: { document_id: "doc_table", block_id: "parent" },
+        data: { start_index: 1, end_index: 2 },
+      });
+    }
   });
 
   it.each([
@@ -260,14 +356,11 @@ describe("registered feishu_doc table patches", () => {
     let reply: PatchResponse = { code: 0, data: { block, client_token: "table-client-token" } };
     const server = createServer((request, response) => {
       void (async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.from(chunk));
-        }
+        const bodyBuffer = await consumeBuffer(request);
         requests.push({
           method: request.method,
           url: request.url,
-          body: Buffer.concat(chunks).toString("utf8"),
+          body: bodyBuffer.toString("utf8"),
         });
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify(reply));
@@ -279,21 +372,7 @@ describe("registered feishu_doc table patches", () => {
     });
     try {
       const address = server.address() as AddressInfo;
-      const transport = Object.create(Lark.defaultHttpInstance) as Lark.HttpInstance;
-      transport.request = async (options) => {
-        const upstream = new URL(options.url ?? "");
-        const target = new URL(
-          `${upstream.pathname}${upstream.search}`,
-          `http://127.0.0.1:${address.port}`,
-        );
-        const response = await fetch(target, {
-          method: options.method,
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(options.data),
-        });
-        return response.json();
-      };
-      const tool = resolveTool(createClient(transport));
+      const tool = resolveTool(createClient(`http://127.0.0.1:${address.port}`));
       for (const sample of actions) {
         reply = { code: 0, data: { block, client_token: "table-client-token" } };
         expectResult(await tool.execute("http-patch", paramsFor(sample)), {

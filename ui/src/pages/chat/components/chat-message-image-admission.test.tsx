@@ -8,6 +8,7 @@ import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
+import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
 import {
   imageResponse,
@@ -19,6 +20,7 @@ import {
   releaseChatMediaResourceOwner,
   type ImageBlock,
   type ImageRenderOptions,
+  type AssistantAttachmentItem,
 } from "./chat-message-media.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 
@@ -48,14 +50,23 @@ beforeEach(() => {
       readonly rootMargin = "240px 0px";
       readonly scrollMargin = "0px";
       readonly thresholds = [0];
-      constructor(callback: IntersectionObserverCallback) {
-        intersections.push(() =>
-          callback([{ isIntersecting: true } as IntersectionObserverEntry], this),
-        );
+      private readonly targets = new Set<Element>();
+      constructor(private readonly callback: IntersectionObserverCallback) {}
+      observe(target: Element) {
+        this.targets.add(target);
+        intersections.push(() => {
+          if (this.targets.has(target)) {
+            // SAFETY: The viewport owner reads only target and isIntersecting.
+            this.callback([{ target, isIntersecting: true } as IntersectionObserverEntry], this);
+          }
+        });
       }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
       takeRecords() {
         return [];
       }
@@ -121,6 +132,92 @@ async function loadAdmittedImage() {
   loaded.dispatchEvent(new Event("load"));
   return loaded;
 }
+
+it("keeps saved network images inert until live admission while retaining local draft bytes", async () => {
+  const fetch = vi.fn(async () => imageResponse());
+  vi.stubGlobal("fetch", fetch);
+  const local = "data:image/png;base64,cG5n";
+  const remote = "https://images.example.test/saved.png";
+  const images = [{ url: managedSource() }, { url: remote }, { url: local }];
+  const options = { authToken: "saved-token", mediaReadAllowed: false };
+  draw(images, options);
+  for (const intersect of intersections) {
+    intersect();
+  }
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetch).not.toHaveBeenCalled();
+  expect(container.querySelector(`img[src="${remote}"]`)).toBeNull();
+  expect(container.querySelector(`img[src="${local}"]`)).not.toBeNull();
+
+  options.mediaReadAllowed = true;
+  draw(images, options);
+  for (const intersect of intersections) {
+    intersect();
+  }
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(container.querySelector(`img[src="${remote}"]`)).not.toBeNull();
+});
+
+it("holds saved audio sources and their authorization until live admission", async () => {
+  const fetch = vi.fn(async () => ticketResponse());
+  vi.stubGlobal("fetch", fetch);
+  const source = managedSource();
+  const resolveArtifactDownload = vi.fn(async () => ({ url: source + "?mediaTicket=live" }));
+  const attachments: AssistantAttachmentItem[] = [
+    {
+      type: "attachment",
+      attachment: {
+        kind: "audio",
+        label: "Local recording",
+        url: "/tmp/saved.wav",
+        mimeType: "audio/wav",
+      },
+    },
+    {
+      type: "attachment",
+      attachment: {
+        kind: "audio",
+        label: "Managed recording",
+        url: source,
+        artifactId: crypto.randomUUID(),
+        mimeType: "audio/mpeg",
+      },
+    },
+    {
+      type: "attachment",
+      attachment: {
+        kind: "audio",
+        label: "Remote recording",
+        url: "https://media.example.test/saved.mp3",
+        mimeType: "audio/mpeg",
+      },
+    },
+  ];
+  const [allowed, setAllowed] = createSignal(false);
+  const root = mountSolid(
+    () => (
+      <AssistantAttachments
+        attachments={attachments}
+        options={{ mediaReadAllowed: allowed(), authToken: "saved-token", resolveArtifactDownload }}
+      />
+    ),
+    { container },
+  );
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(resolveArtifactDownload).not.toHaveBeenCalled();
+    expect(container.querySelector("audio, video")).toBeNull();
+    setAllowed(true);
+    flush();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalled();
+    expect(resolveArtifactDownload).toHaveBeenCalledOnce();
+  } finally {
+    root.unmount();
+  }
+});
 
 it.each(["render", "click"] as const)(
   "does not replay an automatic image retry already claimed by %s",
@@ -480,8 +577,12 @@ it.each([
   unmount();
   await Promise.resolve();
   expect(loaded.parentNode).toBeNull();
-  expect(removeListener).toHaveBeenCalledWith("load", expect.any(Function));
-  expect(removeListener).toHaveBeenCalledWith("error", expect.any(Function));
+  expect(removeListener.mock.calls.map(([type, listener]) => [type, listener])).toEqual(
+    expect.arrayContaining([
+      ["load", expect.any(Function)],
+      ["error", expect.any(Function)],
+    ]),
+  );
   if (change === "expiry") {
     await vi.advanceTimersByTimeAsync(300_001);
   } else if (change === "connectionEpoch") {

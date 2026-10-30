@@ -1,7 +1,10 @@
-import { render } from "@solidjs/web";
-import { createMemo, createSignal, For, onCleanup, runWithOwner, Show } from "solid-js";
+import "../styles/session-progress-hovercard.css";
+import "../styles/person-activity-card.css";
+import { render, spread } from "@solidjs/web";
+import { createMemo, createSignal, Errored, For, Loading, runWithOwner, Show } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { registerChatComposerEnglish } from "../i18n/locales/en-chat-composer.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { presenceConnectionDescriptions } from "../lib/presence-connections.ts";
 import {
   presenceMatchesProfile,
@@ -10,7 +13,8 @@ import {
   presenceUserLabel,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
-import { getLocale, i18nRevision, t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, getLocale, i18nRevision, t } from "../lib/reactive/i18n.ts";
+import { createResizeObserver } from "../lib/reactive/observers.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   resolveSessionPreferredFace,
@@ -22,15 +26,23 @@ import {
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
+import { ElapsedTime } from "./elapsed-time.tsx";
 import type { PersonActivityData } from "./person-activity-data.ts";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
+import {
+  controlsForHovercard,
+  createHovercardControlRef,
+  HovercardControlsContext,
+} from "./portaled-hovercard-focus.ts";
 import { Icon } from "./solid/icon.tsx";
-import "./elapsed-time.tsx";
-import "./viewer-facepile.ts";
+import "./solid/viewer-facepile.tsx";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 type ScopedSession = { row: GatewaySessionRow; agentId: string };
-type PersonCardInput = {
+export type PersonCardInput = {
   user: PresenceViewer;
+  ariaName?: string;
   sessionData: PersonActivityData | undefined;
   watchAgentId: string;
   mainKey: string;
@@ -83,10 +95,10 @@ function Elapsed(props: {
       title={localizedDate()}
       aria-label={props.display === "minute-compact" ? undefined : localizedDate()}
     >
-      <openclaw-elapsed-time
-        prop:startMs={props.timestamp}
-        prop:minimumUnit={props.display === "minute-compact" ? "minute" : "second"}
-        prop:singleUnit={props.display === "single-unit"}
+      <ElapsedTime
+        startMs={props.timestamp}
+        minimumUnit={props.display === "minute-compact" ? "minute" : "second"}
+        singleUnit={props.display === "single-unit"}
       />
     </time>
   );
@@ -128,14 +140,14 @@ function Sessions(props: {
                   });
                 return (
                   <a
+                    ref={createHovercardControlRef()}
                     class="person-activity-card__session session-row-host"
                     href={target().href}
-                    onClick={(event) => {
-                      if (shouldHandleNavigationClick(event)) {
-                        event.preventDefault();
+                    onClick={(event) =>
+                      handleNavigationClick(event, () => {
                         props.input.openSession(session().row, session().agentId, target().options);
-                      }
-                    }}
+                      })
+                    }
                   >
                     <span class="person-activity-card__session-icon" aria-hidden="true">
                       <Icon name="messageSquare" />
@@ -302,7 +314,11 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
       <Show when={activityLink()}>
         {(link) => (
           <footer>
-            <a href={link().href} onClick={(event) => link().open(event)}>
+            <a
+              ref={createHovercardControlRef()}
+              href={link().href}
+              onClick={(event) => link().open(event)}
+            >
               {t("presence.card.viewActivity")}
               <span aria-hidden="true">
                 <Icon name="chevronRight" />
@@ -315,45 +331,97 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
   );
 }
 
-type CardValue = PersonCardInput | string;
+type CardStatus = { status: "loading" | "unavailable"; name: string };
+type ResolvedCard = PersonCardInput | CardStatus;
+type CardValue = ResolvedCard | { name: string; read: Promise<ResolvedCard> };
+
+function cardName(input: CardValue) {
+  return "user" in input
+    ? (input.ariaName ?? presenceUserLabel(input.user, t("presence.card.person")).name)
+    : input.name;
+}
+
 const cards = new WeakMap<
   HTMLElement,
   { update: (value: CardValue) => void; dispose: () => void }
 >();
 
 /** The portal owns one Solid root and retires its retained selection when closed. */
-export function updatePersonActivityCard(container: HTMLElement, input?: CardValue) {
+export function updatePersonActivityCard(
+  container: HTMLElement,
+  input?: CardValue,
+  onPosition?: () => void,
+) {
   const existing = cards.get(container);
   if (input === undefined) {
     existing?.dispose();
   } else if (existing) {
     existing.update(input);
   } else {
+    let update!: (value: CardValue) => void;
     // The portal outlives the caller’s transient render scope.
     const dispose = runWithOwner(null, () =>
       render(() => {
+        function PersonCardContents(props: { input: ResolvedCard }) {
+          spread(
+            container,
+            () => ({ "aria-label": t("presence.card.ariaLabel", { name: cardName(props.input) }) }),
+            true,
+          );
+          return (
+            <Show
+              when={"status" in props.input ? undefined : props.input}
+              fallback={
+                <div class="person-reference__status" role="status">
+                  {"status" in props.input
+                    ? t(
+                        props.input.status === "loading"
+                          ? "common.loading"
+                          : "chat.mentions.unavailable",
+                      )
+                    : ""}
+                </div>
+              }
+            >
+              {(current) => <PersonActivityCard input={current()} />}
+            </Show>
+          );
+        }
         const [value, setValue] = createSignal<CardValue>(input, { ownedWrite: true });
-        cards.set(container, { update: setValue, dispose: () => dispose() });
-        onCleanup(() => cards.delete(container));
+        const read = createMemo(() => {
+          const current = value();
+          return "read" in current ? current.read : current;
+        });
+        update = setValue;
+        if (onPosition) {
+          // Translated text can resize the retained card without another owner update.
+          createResizeObserver(() => [container], onPosition);
+        }
         return (
-          <Show
-            when={(() => {
-              const current = value();
-              return typeof current === "object" ? current : undefined;
-            })()}
-            fallback={
-              <div class="person-reference__status" role="status">
-                {(() => {
-                  const current = value();
-                  return typeof current === "string" ? current : "";
-                })()}
-              </div>
-            }
-          >
-            {(current) => <PersonActivityCard input={current()} />}
-          </Show>
+          <HovercardControlsContext value={controlsForHovercard(container)}>
+            <Errored
+              fallback={
+                <PersonCardContents input={{ status: "unavailable", name: cardName(value()) }} />
+              }
+            >
+              <Loading
+                fallback={
+                  <PersonCardContents input={{ status: "loading", name: cardName(value()) }} />
+                }
+              >
+                <PersonCardContents input={read()} />
+              </Loading>
+            </Errored>
+          </HovercardControlsContext>
         );
       }, container),
     );
+    cards.set(container, {
+      update,
+      dispose: () => {
+        cards.delete(container);
+        dispose();
+      },
+    });
   }
 }

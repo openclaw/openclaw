@@ -324,22 +324,22 @@ OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for *
   - This operator-selected tradeoff is by design and not, by itself, a security vulnerability.
 - Canvas host note: network-visible canvas is **intentional** for trusted node scenarios (LAN/tailnet).
   - Expected setup: non-loopback bind + Gateway auth (token/password/trusted-proxy) + firewall/tailnet controls.
-  - Expected routes: `/__openclaw__/canvas/`, `/__openclaw__/a2ui/`.
+  - Expected routes: `/__openclaw__/canvas/`.
   - This deployment model alone is not a security vulnerability.
 - Do **not** expose it to the public internet (no direct bind to `0.0.0.0`, no public reverse proxy). It is not hardened for public exposure.
 - If you need remote access, prefer an SSH tunnel or Tailscale serve/funnel (so the Gateway still binds to loopback), plus strong Gateway auth.
-- The Gateway HTTP surface includes the canvas host (`/__openclaw__/canvas/`, `/__openclaw__/a2ui/`). Treat canvas content as sensitive/untrusted and avoid exposing it beyond loopback unless you understand the risk.
+- The Gateway HTTP surface includes the canvas host (`/__openclaw__/canvas/`). Treat canvas content as sensitive/untrusted and avoid exposing it beyond loopback unless you understand the risk.
 
 ## Runtime Requirements
 
 ### Node.js Version
 
-OpenClaw requires **Node.js 24.16+ or Node.js 26.1+**. Node 26 is recommended; Node 24 is the supported LTS line. These minimum versions include the upstream SQLite WAL-reset corruption fix and preserve embedded NUL characters in SQLite TEXT reads. Node 22, 23, and 25 are unsupported.
+OpenClaw requires **Node.js 24.22.1+ or Node.js 26.12.1+**. Node 26 is recommended; Node 24 is the supported LTS line. These minimum versions include the upstream SQLite WAL-reset corruption fix, preserve embedded NUL characters in SQLite TEXT reads, and reject the keys compromised in the October 2026 eMudhra incident. Node 22, 23, and 25 are unsupported.
 
 Verify your Node.js version:
 
 ```bash
-node --version  # Should be v24.16+ or v26.1+
+node --version  # Should be v24.22.1+ or v26.12.1+
 ```
 
 ### Docker Security

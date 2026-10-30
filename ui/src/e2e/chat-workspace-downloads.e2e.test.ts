@@ -1,16 +1,16 @@
-import { readFile } from "node:fs/promises";
 import { createServer, request } from "node:http";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 suite.define(() => {
-  it("hands original small and large files to the browser from Files and previews", async () => {
+  it("hands original small and large files to the browser from their Files previews", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const files = [
@@ -84,24 +84,20 @@ suite.define(() => {
       expect(await button.isEnabled()).toBe(true);
       releaseBody = createDeferredCore();
       transferFinished = false;
-      const pending = page.waitForEvent("download");
-      await button.click();
-      const download = await pending;
+      const [download] = await Promise.all([page.waitForEvent("download"), button.click()]);
       // Saving begins while the body is deliberately held. A fetch/blob path cannot do this.
       expect(transferFinished).toBe(false);
       expect(download.url()).toBe(new URL(downloadPath, baseUrl).href);
       releaseBody.resolve();
       expect(download.suggestedFilename()).toBe(selected.name);
-      const saved = await download.path();
-      expect(saved).toBeTruthy();
-      expect((await readFile(saved!)).equals(selected.bytes)).toBe(true);
+      expect((await readControlUiE2eDownload(download)).equals(selected.bytes)).toBe(true);
       expect(await download.failure()).toBeNull();
     };
     try {
       await page.goto(baseUrl + "chat");
       const originalUrl = page.url();
       await openChatSidePanelType(page, "Files");
-      const rail = page.locator(".chat-workspace-rail");
+      const rail = page.locator(".workspace-desktop");
       const rowFor = (name: string) => rail.getByRole("listitem").filter({ hasText: name });
       const downloadButton = (surface: Locator | Page) =>
         surface.getByRole("button", { name: "Download file", exact: true });
@@ -109,6 +105,9 @@ suite.define(() => {
         0,
       );
       for (const file of files) {
+        if (file !== files[0]) {
+          await page.getByRole("button", { name: "Toggle file tree", exact: true }).click();
+        }
         selected = file;
         await gateway.setMethodResponse("sessions.files.download", {
           filename: file.name,
@@ -117,24 +116,9 @@ suite.define(() => {
           expiresAt: "2099-01-01T00:00:00Z",
         });
         const row = rowFor(file.name);
-        const button = downloadButton(row);
-        await button.hover();
-        const beforePreviewReads = (await gateway.getRequests("sessions.files.get")).length;
-        if (file === files[0]) {
-          const before = await gateway.deferNext("sessions.files.download");
-          await button.click();
-          await gateway.waitForRequest("sessions.files.download", { after: before });
-          await gateway.rejectDeferred("sessions.files.download", {
-            code: "FORBIDDEN",
-            message: "File access denied",
-          });
-          await page.getByText(/Could not download this file:.*File access denied/).waitFor();
-        }
-        await save(button);
-        expect((await gateway.getRequests("sessions.files.get")).length).toBe(beforePreviewReads);
-        const before = await gateway.deferNext("sessions.files.get");
-        await row.getByRole("button", { name: "Preview", exact: true }).click();
-        await gateway.waitForRequest("sessions.files.get", { after: before });
+        const beforePreview = await gateway.deferNext("sessions.files.get");
+        await row.getByRole("button", { name: file.name, exact: true }).click();
+        await gateway.waitForRequest("sessions.files.get", { after: beforePreview });
         if (file === files[0]) {
           await gateway.resolveDeferred("sessions.files.get", {
             ...scope,
@@ -164,10 +148,33 @@ suite.define(() => {
           .locator(".chat-files-panel__page:visible")
           .filter({ has: downloadButton(page) });
         await preview.waitFor();
-        await save(downloadButton(preview));
-        await preview.getByRole("button", { name: "Show in Files", exact: true }).click();
+        // Oversized files expose the primary action in their unavailable-preview state.
+        const button = downloadButton(
+          file === files[0]
+            ? preview.locator(".sidebar-file-view__path-bar")
+            : preview.locator("openclaw-panel-empty-state"),
+        );
+        const beforeDownloadReads = (await gateway.getRequests("sessions.files.get")).length;
+        if (file === files[0]) {
+          const beforeDownload = await gateway.deferNext("sessions.files.download");
+          await button.click();
+          await gateway.waitForRequest("sessions.files.download", { after: beforeDownload });
+          await gateway.rejectDeferred("sessions.files.download", {
+            code: "FORBIDDEN",
+            message: "File access denied",
+          });
+          const denied = page.locator(".app-toast").filter({
+            hasText: /Could not download this file:.*File access denied/,
+          });
+          await denied.waitFor();
+          await denied.getByRole("button", { name: "Dismiss", exact: true }).click();
+          await denied.waitFor({ state: "hidden" });
+        }
+        await save(button);
+        expect((await gateway.getRequests("sessions.files.get")).length).toBe(beforeDownloadReads);
       }
-      expect(await gateway.getRequests("sessions.files.download")).toHaveLength(5);
+      expect(await gateway.getRequests("sessions.files.download")).toHaveLength(3);
+      expect(await gateway.getRequests("sessions.files.get")).toHaveLength(2);
       expect(page.url()).toBe(originalUrl);
       expect(context.pages()).toHaveLength(1);
     } finally {

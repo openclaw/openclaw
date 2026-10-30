@@ -84,25 +84,15 @@ export async function readSessionFallbackModelAsync(
   if (!completed) {
     return undefined;
   }
-  const terminalModel = await readSessionTerminalFallbackModelAsync({
-    sessionEntry: completed.entry,
-    sessionScope: completed.scope,
-  });
-  return selectCompletedFallbackModel(params, completed.entry, terminalModel);
-}
-
-async function readSessionTerminalFallbackModelAsync(params: {
-  sessionEntry: InternalSessionEntry;
-  sessionScope: NonNullable<SessionFallbackSource["sessionScope"]>;
-}) {
+  let terminalModel: SessionTerminalModel | undefined;
   const { readSessionTranscriptBoundedMessageTailPageAsync } =
     await import("../gateway/session-transcript-readers.js");
   try {
     const page = await readSessionTranscriptBoundedMessageTailPageAsync(
-      { ...params.sessionScope, sessionId: params.sessionEntry.sessionId },
+      { ...completed.scope, sessionId: completed.entry.sessionId },
       { maxBytes: 256 * 1024, maxMessages: 1, offset: 0, readOnly: true },
     );
-    return selectSessionTerminalFallbackModel(params.sessionEntry, page.events[0]?.event);
+    terminalModel = selectSessionTerminalFallbackModel(completed.entry, page.events[0]?.event);
   } catch (error) {
     if (
       !isSessionTranscriptProjectionUnavailableError(error) &&
@@ -111,7 +101,7 @@ async function readSessionTerminalFallbackModelAsync(params: {
       throw error;
     }
   }
-  return undefined;
+  return selectCompletedFallbackModel(params, completed.entry, terminalModel);
 }
 
 /** Durable and memory readers apply the same terminal-run selection to a bounded tail. */

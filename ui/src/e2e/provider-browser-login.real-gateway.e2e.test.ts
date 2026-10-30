@@ -180,7 +180,7 @@ suite.define(() => {
         const cancelledPage = await begin();
         expect(pagePreviewRequests).toBe(0);
         expect(await page.locator(".link-hovercard").count()).toBe(0);
-        await closeModal("Cancel");
+        await closeModal("Cancel sign-in");
         const cancelledResponse = await approve(cancelledPage);
         await expectRejected(cancelledResponse);
         await cancelledPage.waitForURL(cancelledResponse.url());

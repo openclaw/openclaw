@@ -340,6 +340,25 @@ describe("FaceTime talk driver lifecycle", () => {
     }
   });
 
+  it("does not talk over a caller who speaks during the settle window", async () => {
+    const driver = await startReadyFaceTimeTalkDriver();
+
+    vi.useFakeTimers();
+    try {
+      driver.activate();
+      mocks.sessionParams?.onTranscript?.("user", "I have a question", true);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(mocks.bridge.triggerGreeting).not.toHaveBeenCalled();
+    } finally {
+      try {
+        await driver.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
   it("keeps direct hangup available without consult tools and deduplicates requests", async () => {
     await startReadyFaceTimeTalkDriver(
       startParams({

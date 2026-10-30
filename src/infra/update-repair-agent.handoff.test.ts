@@ -1,27 +1,35 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
-import { createExternalAuthRuntime } from "../agents/auth-profiles/external-auth.js";
-import { createAuthProfileStoreRuntime } from "../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { providerConfig } from "../agents/model-auth.fixtures.test-support.js";
 import type { StreamFn } from "../agents/runtime/index.js";
+import { createQueuedAssistantStream } from "../agents/test-helpers/assistant-event-stream.test-support.js";
+import {
+  buildEmbeddedRunnerAssistant,
+  createMockUsage,
+} from "../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease.js";
-import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createOpenClawDatabaseMaintenanceScope as createMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { withOpenClawTestState as withState } from "../test-utils/openclaw-test-state.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
-import { runUpdateRepairTurn } from "./update-repair-agent.runtime.js";
+import { runUpdateRepairTurn as runTurn } from "./update-repair-agent.runtime.js";
+import {
+  createRepairAuthRuntime,
+  repairModel,
+  repairTurnInput as turnInput,
+} from "./update-repair-agent.test-support.js";
 
 const fixture = vi.hoisted(() => ({
   stream: vi.fn<StreamFn>(),
   handoff: undefined as ReturnType<typeof createManagedHandoffTestBinding> | undefined,
 }));
-// Only inference is synthetic; admission, tool preparation/execution, terminal
-// resolution, auth bookkeeping, and database lifecycle are production owners.
+// Only inference is synthetic; tool execution, auth and database lifecycle are real.
 vi.mock("../agents/provider-stream.js", () => ({
   registerProviderStreamForModel: () => fixture.stream,
 }));
@@ -41,152 +49,89 @@ afterEach(() => {
   fixture.stream.mockReset();
 });
 
-it("settles the real repair handoff without closing a parent lease before Doctor admission", async () => {
-  await withOpenClawTestState({ layout: "home" }, async (state) => {
+it("settles the real repair turn without closing a parent lease before Doctor admission", async () => {
+  await withState({ layout: "home" }, async (state) => {
     fixture.handoff = createManagedHandoffTestBinding(state.root);
     vi.stubEnv(
       "NODE_OPTIONS",
       [process.env.NODE_OPTIONS, fixture.handoff.nodeOption].filter(Boolean).join(" "),
     );
-    expect(fixture.handoff.assertPath(resolveManagedUpdateLeaseDatabasePath())).toBe(
-      fixture.handoff.databasePath,
-    );
+    fixture.handoff.assertPath(resolveManagedUpdateLeaseDatabasePath());
     vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", "external");
     const agentDir = state.agentDir("owner");
-    const auth = createAuthProfileStoreRuntime(
-      createExternalAuthRuntime(
-        () => [],
-        async (_params, run) => run(),
-      ),
-    );
-    const seed = createOpenClawDatabaseMaintenanceScope();
+    const auth = await createRepairAuthRuntime();
+    const save = (profiles: AuthProfileStore["profiles"], dir = agentDir) =>
+      auth.saveAuthProfileStore({ version: 1, profiles }, dir);
+    const leases = () => readActiveOpenClawAgentDatabaseLeasesReadOnly({ env: state.env });
+    const load = () =>
+      auth.loadAuthProfileStoreForRuntime(agentDir, {
+        readOnly: true,
+        externalCli: { mode: "none" },
+      });
+    const seed = createMaintenanceScope();
     try {
       seed.run(() =>
-        auth.saveAuthProfileStore(
-          {
-            version: 1,
-            profiles: {
-              "fixture:repair": { type: "token", provider: "fixture", token: "synthetic-token" },
-            },
-          },
-          agentDir,
-        ),
+        save({
+          "fixture:repair": { type: "token", provider: "fixture", token: "synthetic-token" },
+        }),
       );
     } finally {
       await seed.close();
     }
-    expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).toEqual([]);
+    expect(leases()).toEqual([]);
     const config: OpenClawConfig = {
       plugins: { enabled: false },
       agents: { defaults: { skipBootstrap: true }, entries: { owner: { agentDir } } },
       tools: { toolSearch: { enabled: false } },
-      models: {
-        providers: {
-          fixture: {
-            baseUrl: "https://repair.invalid/v1",
-            api: "openai-responses",
-            models: [
-              {
-                id: "repair",
-                name: "Synthetic repair",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128000,
-                maxTokens: 1024,
-              },
-            ],
-          },
-        },
-      },
+      ...providerConfig("fixture", {
+        baseUrl: "https://repair.invalid/v1",
+        api: "openai-responses",
+        models: [repairModel()],
+      }),
     };
     await state.writeConfig(config);
     setRuntimeConfigSnapshot(config);
-    fixture.stream.mockImplementation((model, context) => {
-      expect(context.tools?.map((tool) => tool.name)).toContain("request_update_maintenance");
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        stream.push({
+    fixture.stream.mockImplementation((model) =>
+      createQueuedAssistantStream((push) =>
+        push({
           type: "done",
-          reason: "toolUse",
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "maintenance-request",
-                name: "request_update_maintenance",
-                arguments: { operation: "doctor-fix" },
-              },
-            ],
+          reason: "stop",
+          message: buildEmbeddedRunnerAssistant({
+            content: [{ type: "text", text: "Repair completed." }],
             api: model.api,
             provider: model.provider,
             model: model.id,
-            usage: {
-              input: 1,
-              output: 1,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 2,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: Date.now(),
-          },
-        });
-        stream.end();
-      });
-      return stream;
-    });
-    // Cold module loading is outside the deterministic model turn budget. The
-    // automatic caller allows ten minutes; this fixture exercises one immediate inference.
+            usage: createMockUsage(1, 1),
+            stopReason: "stop",
+          }),
+        }),
+      ),
+    );
+    // Keep cold loading outside the deterministic model-turn budget.
     await Promise.all([
       import("../agents/embedded-agent.js"),
       import("../agents/embedded-agent-runner/run-entry.js"),
     ]);
-    const parent = createOpenClawDatabaseMaintenanceScope();
+    const parent = createMaintenanceScope();
     try {
-      parent.run(() =>
-        auth.saveAuthProfileStore({ version: 1, profiles: {} }, state.agentDir("independent")),
-      );
+      parent.run(() => save({}, state.agentDir("independent")));
       const result = await parent.run(() =>
-        runUpdateRepairTurn({
-          target: { ...state, installRoot: state.workspaceDir },
-          route: {
-            runner: "embedded",
-            provider: "fixture",
-            model: "repair",
-            modelLabel: "fixture/repair",
-            agentId: "owner",
-            agentDir,
+        runTurn(
+          turnInput(state, {
+            config,
             authProfileId: "fixture:repair",
-            runConfig: config,
-            sourceConfig: config,
-          },
-          modelFallbacks: [],
-          prompt: "Request Doctor repair using the maintenance tool.",
-          timeoutMs: 30000,
-          maxToolCalls: 1,
-          signal: new AbortController().signal,
-          maintenanceHandoff: true,
-        }),
+            prompt: "Diagnose the failed update.",
+            timeoutMs: 30000,
+          }),
+        ),
       );
       expect(result, JSON.stringify(result)).toMatchObject({
         status: "completed",
-        envelope: { status: "ok" },
-        maintenance: { operation: "doctor-fix" },
+        envelope: { status: "ok", final: "Repair completed." },
       });
-      expect(fixture.stream).toHaveBeenCalledTimes(1);
       // These checks must precede fixture teardown: cleanup must not hide a leaked lease.
-      expect(
-        readActiveOpenClawAgentDatabaseLeasesReadOnly({ env: state.env }).map(
-          (lease) => lease.agent_id,
-        ),
-      ).toEqual(["independent"]);
-      const saved = auth.loadAuthProfileStoreForRuntime(agentDir, {
-        readOnly: true,
-        externalCli: { mode: "none" },
-      });
+      expect(leases().map((lease) => lease.agent_id)).toEqual(["independent"]);
+      const saved = load();
       expect(saved.usageStats?.["fixture:repair"]?.lastUsed).toBeGreaterThan(0);
       const admitDoctor = () =>
         beginDoctorMaintenance({
@@ -198,7 +143,7 @@ it("settles the real repair handoff without closing a parent lease before Doctor
         refusal: { kind: "deferred", reason: "agent-database-in-use" },
       });
       await parent.close();
-      expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).toEqual([]);
+      expect(leases()).toEqual([]);
       const doctor = await admitDoctor();
       expect(doctor).toBeDefined();
       try {
@@ -206,13 +151,8 @@ it("settles the real repair handoff without closing a parent lease before Doctor
       } finally {
         await doctor?.release();
       }
-      expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).toEqual([]);
-      expect(
-        auth.loadAuthProfileStoreForRuntime(agentDir, {
-          readOnly: true,
-          externalCli: { mode: "none" },
-        }),
-      ).toEqual(saved);
+      expect(leases()).toEqual([]);
+      expect(load()).toEqual(saved);
     } finally {
       await parent.close();
     }

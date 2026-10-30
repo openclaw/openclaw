@@ -36,6 +36,7 @@ export type BrowserToolCapabilities = {
 };
 
 export function resolveBrowserToolCapabilities(params?: {
+  canJudge?: boolean;
   tabBound?: boolean;
   evaluateEnabled?: boolean;
   profileCapabilities?: Pick<
@@ -49,6 +50,9 @@ export function resolveBrowserToolCapabilities(params?: {
   const actions = params?.tabBound ? BROWSER_TAB_BOUND_ACTIONS : BROWSER_TOOL_ACTIONS;
   return {
     actions: actions.filter((action) => {
+      if (action === "judge" && params?.canJudge !== true) {
+        return false;
+      }
       const capability = BROWSER_TOOL_ACTION_FACTS[action].capability;
       return !capability || profileCapabilities?.[capability] !== false;
     }),
@@ -116,6 +120,12 @@ function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
     ...(capabilities.actKinds.includes("evaluate") ? { fn: Type.Optional(Type.String()) } : {}),
   };
 }
+
+// Legacy input repair accepts the full contract, even when this run hides a capability.
+export const BROWSER_ACT_REQUEST_KEYS = [
+  "kind",
+  ...Object.keys(createBrowserActProperties(resolveBrowserToolCapabilities())),
+];
 
 // IMPORTANT: OpenAI function tool schemas must have a top-level `type: "object"`.
 // A root-level `Type.Union([...])` compiles to `{ anyOf: [...] }` (no `type`),
@@ -246,6 +256,29 @@ export const BrowserToolOutputSchema = Type.Object(
     refs: Type.Optional(Type.Union([Type.Number(), Type.Record(Type.String(), Type.Unknown())])),
     stats: Type.Optional(BrowserSnapshotStatsSchema),
     truncated: Type.Optional(Type.Boolean()),
+    observation: Type.Optional(Type.Object({ chars: Type.Number(), truncated: Type.Boolean() })),
+    judgment: Type.Optional(
+      Type.Object(
+        {
+          status: stringEnum(["ok", "unavailable"] as const),
+          reason: Type.Optional(Type.String()),
+          result: Type.Optional(
+            Type.Object(
+              {
+                model: Type.String(),
+                answers: Type.Record(Type.String(), Type.Unknown()),
+              },
+              { additionalProperties: true },
+            ),
+          ),
+        },
+        {
+          additionalProperties: true,
+          description:
+            "Selected Decision provider outcome; missing/error/null answers remain unknown. Not a page-usability verdict.",
+        },
+      ),
+    ),
     newElements: Type.Optional(Type.Number()),
     tabs: Type.Optional(
       Type.Array(

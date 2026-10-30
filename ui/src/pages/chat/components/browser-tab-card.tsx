@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, createUniqueId, onCleanup } from "solid-js";
+import { createMemo, createStore, createUniqueId, onSettled } from "solid-js";
 import type { ControlUiLinkPreview } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
@@ -14,31 +14,84 @@ import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { loadLinkPreview } from "../../../lib/link-preview.ts";
 import { openExternalUrlSafe, resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
+import { projectApplicationConfig, projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
-import { browserTabTweet } from "./browser-tab-tweet.ts";
-import "../../../styles/session-menu.css";
-import "./browser-tab-card.css";
+import { sharedThemeProjection } from "../../../lib/reactive/shared-application-projections.ts";
+
+/** Adapts existing anonymous page metadata; never fetches or embeds remote markup. */
+function browserTabTweet(url: string, title?: string, page?: ControlUiLinkPreview) {
+  const parsed = URL.parse(url);
+  if (
+    !parsed ||
+    !["http:", "https:"].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.port ||
+    !/^(?:(?:www|mobile)\.)?(?:x|twitter)\.com$/u.test(parsed.hostname)
+  ) {
+    return undefined;
+  }
+  const status = /^\/([a-zA-Z0-9_]{1,15})\/status\/\d+(?:\/(?:photo|video)\/\d+)?\/?$/u.exec(
+    parsed.pathname,
+  );
+  const anonymous = /^\/i\/(?:web\/)?status\/\d+\/?$/u.test(parsed.pathname);
+  if (!status && !anonymous) {
+    return undefined;
+  }
+  let handle = anonymous ? undefined : status?.[1];
+  let author: string | undefined;
+  let text: string | undefined;
+  for (const candidate of [page?.title, title]) {
+    const clean = candidate?.trim().replace(/\s+\/\s+(?:X|Twitter)$/u, "");
+    if (!clean) {
+      continue;
+    }
+    const named =
+      /^(.*?)\s+\(@([a-zA-Z0-9_]{1,15})\)(?:\s+on (?:X|Twitter))?(?::\s*([\s\S]+))?$/u.exec(clean);
+    if (named && (!handle || named[2]!.toLowerCase() === handle.toLowerCase())) {
+      author ??= named[1]?.trim() || undefined;
+      handle ??= named[2];
+      text ??= named[3];
+    }
+    const quoted = /^(.*?)\s+on (?:X|Twitter):\s*([\s\S]+)$/u.exec(clean);
+    if (quoted && !named) {
+      author ??= quoted[1]?.trim() || undefined;
+      text ??= quoted[2];
+    }
+  }
+  text = text?.trim();
+  if (
+    text &&
+    ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("“") && text.endsWith("”")))
+  ) {
+    text = text.slice(1, -1);
+  }
+  return {
+    author,
+    handle: handle ? "@" + handle : undefined,
+    text: page?.description?.trim() || text,
+  };
+}
 
 type BrowserTabCardProps = {
   context?: ApplicationContext;
   preview?: Extract<ToolPreview, { kind: "browser-tab" }>;
   revision?: string;
-  latest: boolean;
+  latest?: boolean;
 };
 
-function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<BrowserTabCardProps>) {
+export function BrowserTabCardHost(props: BrowserTabCardProps) {
+  let host!: HTMLElement;
   const application = useOptionalApplication();
   const menuId = createUniqueId();
   const sources = createMemo(() => {
     const context = props.context ?? application;
     return (
       context && [
-        projectOwner(context.gateway, (owner) => owner),
-        projectOwner(context.config, (owner) => owner),
-        projectOwner(context.theme, (owner) => owner),
+        projectGateway(context.gateway),
+        projectApplicationConfig(context.config),
+        sharedThemeProjection(context.theme),
       ]
     );
   });
@@ -46,105 +99,105 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
     sources()?.forEach((source) => source.read());
     return props.context ?? application;
   };
-  const [thumbnail, setThumbnail] = createSignal<string>();
-  const [pagePreview, setPagePreview] = createSignal<ControlUiLinkPreview>();
-  const [failedImages, setFailedImages] = createSignal<ReadonlySet<string>>(new Set<string>());
-  let requestIdentity: { client: unknown; key: string } | undefined;
-  let pageIdentity: { client: unknown; url: string } | undefined;
   let active = true;
-  const canLoadPagePreview = (current: ApplicationContext | undefined) => {
-    return Boolean(
-      current?.config.current.automaticallyFetchFavicons &&
-      canCallGatewayMethod(current.gateway.snapshot, "controlUi.linkPreview", "operator.read", {
-        requireAdvertisement: false,
-      }),
-    );
-  };
-  const pagePreviewCurrent = (current: ApplicationContext | undefined, url: string | undefined) => {
-    const client = current?.gateway.snapshot.client;
-    return Boolean(
-      pageIdentity &&
-      client &&
-      canLoadPagePreview(current) &&
-      pageIdentity.client === client &&
-      pageIdentity.url === url,
-    );
-  };
-  // Fetch browser screenshots and link metadata from the current Gateway client.
-  createEffect(
-    () => [context(), props.preview, props.revision, props.latest] as const,
-    ([current, preview, revision, latest]) => {
-      const client = current?.gateway.snapshot.client;
-      const url = preview?.url;
-      if (!canLoadPagePreview(current) || !client || !url) {
-        pageIdentity = undefined;
-        setPagePreview(undefined);
-      } else if (!pagePreviewCurrent(current, url)) {
-        // Link metadata may stay cached through a same-client reconnect.
-        const identity = { client, url };
-        pageIdentity = identity;
-        setPagePreview(undefined);
-        setFailedImages(new Set<string>());
-        void loadLinkPreview(client, url).then((loadedPreview) => {
-          if (active && pageIdentity === identity) {
-            setPagePreview(loadedPreview);
-          }
-        });
-      }
+  const pageTarget = createMemo(
+    () => {
+      const current = context();
       const snapshot = current?.gateway.snapshot;
+      const url = props.preview?.url;
+      return current?.config.current.automaticallyFetchFavicons &&
+        snapshot?.client &&
+        url &&
+        canCallGatewayMethod(snapshot, "controlUi.linkPreview", "operator.read", {
+          requireAdvertisement: false,
+        })
+        ? { client: snapshot.client, url }
+        : undefined;
+    },
+    {
+      equals: (before, after) => before?.client === after?.client && before?.url === after?.url,
+    },
+  );
+  const pagePreview = createMemo(() => {
+    const target = pageTarget();
+    // Each identity starts empty; loading never suspends the card's controls.
+    return (
+      target &&
+      createMemo<ControlUiLinkPreview | undefined>(
+        () => loadLinkPreview(target.client, target.url),
+        { loadingValue: undefined },
+      )
+    );
+  });
+  // Screenshot refreshes and unavailable targets retain failures; a new target retries them.
+  const [failedImages, setFailedImages] = createStore<Record<string, boolean>>((draft) => {
+    if (pageTarget()) {
+      for (const url of Object.keys(draft)) {
+        delete draft[url];
+      }
+    }
+  }, {});
+  const thumbnailTarget = createMemo(
+    () => {
+      const current = context();
+      const preview = props.preview;
+      const revision = props.revision;
+      const snapshot = current?.gateway.snapshot;
+      const client = snapshot?.client;
       if (
         !preview ||
         !current ||
         !snapshot ||
         !client ||
         !isBrowserPanelAvailable(snapshot) ||
-        !latest ||
+        !props.latest ||
         !revision
       ) {
-        if (!latest || !snapshot || !isBrowserPanelAvailable(snapshot)) {
-          requestIdentity = undefined;
-          setThumbnail(undefined);
-        }
-        return;
+        return undefined;
       }
-      const key = JSON.stringify([browserTabKey(preview), revision]);
-      if (requestIdentity?.key === key && requestIdentity.client === client) {
-        return;
-      }
-      const identity = { client, key };
-      requestIdentity = identity;
-      setThumbnail(undefined);
-      void loadBrowserTabThumbnail({
+      return {
         client,
+        key: JSON.stringify([browserTabKey(preview), revision]),
         tab: preview,
         revision,
-        resourceBasePath: current.resourceBasePath,
-        authToken: resolveControlUiAuthToken({
-          hello: snapshot.hello,
-          settings: { token: current.gateway.connection.token },
-          password: current.gateway.connection.password,
-        }),
-      }).then((src) => {
-        if (active && requestIdentity === identity) {
-          setThumbnail(src);
-        }
-      });
+        context: current,
+      };
     },
+    { equals: (before, after) => before?.client === after?.client && before?.key === after?.key },
   );
-  onCleanup(() => {
+  const thumbnail = createMemo(() => {
+    const target = thumbnailTarget();
+    return (
+      target &&
+      createMemo<string | undefined>(
+        () =>
+          loadBrowserTabThumbnail({
+            client: target.client,
+            tab: target.tab,
+            revision: target.revision,
+            resourceBasePath: target.context.resourceBasePath,
+            authToken: resolveControlUiAuthToken({
+              hello: target.context.gateway.snapshot.hello,
+              settings: { token: target.context.gateway.connection.token },
+              password: target.context.gateway.connection.password,
+            }),
+          }),
+        { loadingValue: undefined },
+      )
+    );
+  });
+  onSettled(() => () => {
     active = false;
-    requestIdentity = undefined;
-    pageIdentity = undefined;
   });
   const opensExternally = () => context()?.theme.settings.openLinksExternally === true;
   const openExternal = () => {
-    const url = resolveSafeExternalUrl(host.preview?.url ?? "", window.location.href);
+    const url = resolveSafeExternalUrl(props.preview?.url ?? "", window.location.href);
     if (url && !postNativeExternalLink(url)) {
       openExternalUrlSafe(url);
     }
   };
   const openPanel = () => {
-    const browserTab = readBrowserTabTarget(host.preview);
+    const browserTab = readBrowserTabTarget(props.preview);
     if (browserTab) {
       host.dispatchEvent(
         new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {
@@ -157,12 +210,12 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
   };
   const open = () => (opensExternally() ? openExternal() : openPanel());
   const onMenuSelect = (value: string) => {
-    const url = host.preview?.url;
+    const url = props.preview?.url;
     if (!url) {
       return;
     }
     if (value === "copy-url") {
-      void copyToClipboard(url, () => active && host.preview?.url === url);
+      void copyToClipboard(url, () => active && props.preview?.url === url);
     } else if (value === "open-new-tab") {
       openExternal();
     } else if (value === "open-within-openclaw") {
@@ -195,27 +248,14 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
     },
   ]);
   const data = createMemo(() => {
-    const loadedThumbnail = thumbnail();
-    const loadedPage = pagePreview();
     const preview = props.preview;
     if (!preview) {
       return undefined;
     }
-    const currentImage =
-      props.latest &&
-      requestIdentity?.client === context()?.gateway.snapshot.client &&
-      requestIdentity?.key === JSON.stringify([browserTabKey(preview), props.revision])
-        ? loadedThumbnail
-        : undefined;
-    const page = pagePreviewCurrent(context(), preview.url) ? loadedPage : undefined;
-    const image =
-      currentImage && !failedImages().has(currentImage) ? currentImage : page?.imageDataUrl;
-    let pageHost = preview.url;
-    try {
-      pageHost = new URL(preview.url ?? "").host || preview.url;
-    } catch {
-      /* Internal URLs keep their supplied label. */
-    }
+    const currentImage = thumbnail()?.();
+    const page = pagePreview()?.();
+    const image = currentImage && !failedImages[currentImage] ? currentImage : page?.imageDataUrl;
+    const pageHost = URL.parse(preview.url)?.host || preview.url;
     const title = preview.title?.trim() || page?.title || pageHost || t("browser.title");
     return {
       preview,
@@ -229,10 +269,18 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
     };
   });
   const renderImage = (src: string) => (
-    <img src={src} alt="" onError={() => setFailedImages((images) => new Set([...images, src]))} />
+    <img
+      src={src}
+      alt=""
+      onError={() =>
+        setFailedImages((images) => {
+          images[src] = true;
+        })
+      }
+    />
   );
   return (
-    <>
+    <openclaw-browser-tab-card ref={(element) => (host = element)}>
       {data() && (
         <div class={["card", { tweet: Boolean(data()!.tweet) }]}>
           {data()!.tweet && (
@@ -259,7 +307,7 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
               )}
             </>
           )}
-          {data()!.image && !failedImages().has(data()!.image!) && (
+          {data()!.image && !failedImages[data()!.image!] && (
             <button
               type="button"
               class={["shot", { social: data()!.image !== data()!.currentImage }]}
@@ -277,8 +325,7 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
             ) : (
               <>
                 <span class="icon" aria-hidden="true">
-                  {data()!.page?.faviconDataUrl &&
-                  !failedImages().has(data()!.page!.faviconDataUrl!) ? (
+                  {data()!.page?.faviconDataUrl && !failedImages[data()!.page!.faviconDataUrl!] ? (
                     renderImage(data()!.page!.faviconDataUrl!)
                   ) : (
                     <Icon name="globe" />
@@ -314,23 +361,13 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
           </div>
         </div>
       )}
-    </>
+    </openclaw-browser-tab-card>
   );
 }
-export const BrowserTabCardHost = defineSolidBridge<BrowserTabCardProps>(
-  "openclaw-browser-tab-card",
-  BrowserTabCard,
-  {
-    properties: {
-      context: { default: undefined, attribute: false },
-      preview: { default: undefined, attribute: false },
-      revision: { default: undefined, attribute: false },
-      latest: { default: false },
-    },
-  },
-);
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-browser-tab-card": SolidBridgeElement<BrowserTabCardProps>;
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-browser-tab-card": HTMLAttributes<HTMLElement>;
+    }
   }
 }

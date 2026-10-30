@@ -1,7 +1,5 @@
-import {
-  getSessionActorStorageBinding,
-  withSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { captureSessionStoreReadCandidates } from "../config/sessions/session-store-target-inventory.js";
@@ -22,6 +20,7 @@ import type { ProgressCardStore } from "../session-cards/progress-card-store.typ
 import type { ProgressCardWorkerOperations } from "../session-cards/progress-card-store.worker.js";
 import { createSessionActorProgressCardStore } from "../session-cards/session-actor-progress-card-store.js";
 import { IncognitoSessionMissingError } from "../state/incognito-session-error.js";
+import { toAgentExecutionConstraints } from "../state/openclaw-agent-execution-scope.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../state/openclaw-agent-worker-store.js";
 import {
@@ -150,16 +149,7 @@ export const progressCardStore: ProgressCardStore = {
           }
           const execution = captureOpenClawAgentDatabaseExecution(
             options,
-            identity.key.startsWith("file:")
-              ? {
-                  expectedIdentity: {
-                    kind: "file",
-                    physicalIdentity: identity.key.slice("file:".length),
-                    nativeLocation: identity.canonicalPath,
-                    birthtime: identity.birthtime,
-                  },
-                }
-              : { expectedCreationIdentity: identity },
+            toAgentExecutionConstraints(identity),
           );
           const assertOwnerCurrent = () => {
             assertCurrent();

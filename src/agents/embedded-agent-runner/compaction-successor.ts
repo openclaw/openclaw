@@ -3,7 +3,6 @@ import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
 } from "../../auto-reply/reply/session-hooks.js";
-import { projectHarnessCompletionCompaction } from "../../config/sessions/harness-completion-compaction.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -244,7 +243,6 @@ export async function acceptCompactionSuccessor(params: {
         requireCompactionWriterEntry(entry, expected);
         return {
           sessionId: successor.sessionId,
-          ...projectHarnessCompletionCompaction(entry, successor.sessionId),
         };
       },
       {
@@ -268,12 +266,16 @@ export async function acceptCompactionSuccessor(params: {
               }),
             }),
           };
-          params.onCommitted?.(committed);
-          if (committed.admissionTransition) {
-            params.assertActive.onSessionCompactionCommitted?.(
-              committed.admissionTransition,
-              entry,
-            );
+          try {
+            params.onCommitted?.(committed);
+          } finally {
+            // Every committed successor must reach its authority owner, even if another sink fails.
+            if (committed.admissionTransition) {
+              params.assertActive.onSessionCompactionCommitted?.(
+                committed.admissionTransition,
+                entry,
+              );
+            }
           }
         },
       },
@@ -329,7 +331,6 @@ function emitCompactionSessionLifecycleHooks(params: {
   }
   if (params.nextEntry.sessionId && params.storePath) {
     noteActiveSessionForShutdown({
-      cfg: params.cfg,
       sessionKey: params.sessionKey,
       sessionId: params.nextEntry.sessionId,
       storePath: params.storePath,

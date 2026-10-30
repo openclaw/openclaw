@@ -5,8 +5,13 @@ import { collectRuntimeConfigAssignments } from "./secret-contract.js";
 
 describe("Zalo secret contract", () => {
   it.each([
-    { label: "only a file-backed account", inherited: false, owners: [] },
-    { label: "another eligible account", inherited: true, owners: ["zalo:inherited"] },
+    // The root botToken also starts the implicit default account, which inherits it.
+    { label: "only a file-backed account", inherited: false, owners: ["zalo:default"] },
+    {
+      label: "another eligible account",
+      inherited: true,
+      owners: ["zalo:inherited", "zalo:default"],
+    },
   ])("does not assign an inherited botToken to a file-backed account with $label", (scenario) => {
     const sourceConfig = {
       channels: {

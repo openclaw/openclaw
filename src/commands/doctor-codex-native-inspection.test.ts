@@ -13,16 +13,12 @@ import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-sur
 
 const inspection = vi.hoisted(() => ({ stagingRoot: "", onRead: () => {} }));
 
-// mock-isolation: Keep real copying and queries; intercept their boundaries to
-// schedule same-process commits without timers or worker scheduling races.
-vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/sqlite-snapshot-source.js")>();
-  return {
-    ...actual,
-    prepareSqliteReadOnlyLocation: async (pathname: string) =>
-      prepareSqliteReadOnlyLocationSyncInProcess(pathname, inspection.stagingRoot),
-  };
-});
+// mock-isolation: Keep real copies/queries; schedule deterministic commits at their boundaries.
+vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/sqlite-snapshot-source.js")>()),
+  prepareSqliteReadOnlyLocation: async (pathname: string) =>
+    prepareSqliteReadOnlyLocationSyncInProcess(pathname, inspection.stagingRoot),
+}));
 vi.mock("../state/openclaw-state-db-schema-helpers.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../state/openclaw-state-db-schema-helpers.js")>();
@@ -37,10 +33,10 @@ vi.mock("../state/openclaw-state-db-schema-helpers.js", async (importOriginal) =
     },
   };
 });
-vi.mock("../infra/sqlite-snapshot-policy.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/sqlite-snapshot-policy.js")>();
-  return { ...actual, waitForSnapshotRetrySync: () => {} };
-});
+vi.mock("../infra/sqlite-snapshot-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/sqlite-snapshot-policy.js")>()),
+  waitForSnapshotRetrySync: () => {},
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -74,8 +70,7 @@ async function fixture() {
     expect(result.changes).toBe(1);
     writes += 1;
   };
-  // Run the production copy algorithm in-process so every copy can interleave
-  // a real commit deterministically, without timers or a large database.
+  // Exercise the real copy with a commit/checkpoint/commit interleaving on every fsync.
   const fsync = fs.fsyncSync.bind(fs);
   vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
     fsync(descriptor);
@@ -85,12 +80,10 @@ async function fixture() {
     renew();
   });
   inspection.onRead = renew;
-  const contract = await loadBundledPluginFacade<{
+  const { stateMigrations } = await loadBundledPluginFacade<{
     stateMigrations: PluginDoctorStateMigration[];
   }>({ pluginId: "codex", artifactBasename: "doctor-contract-api.js" });
-  const migration = contract.stateMigrations.find(
-    (entry) => entry.id === "codex-native-task-assignments",
-  );
+  const migration = stateMigrations.find((entry) => entry.id === "codex-native-task-assignments");
   if (!migration) {
     throw new Error("Codex native assignment migration is missing");
   }
@@ -129,7 +122,7 @@ it("detects native assignments while Doctor commits state writes and sees later 
 it("keeps the instability refusal without Doctor's admitted ownership", async () => {
   const { migration, params, writes } = await fixture();
   await expect(migration.detectLegacyState(params)).rejects.toThrow(
-    "SQLite source did not stabilize after 10 read-only inspection attempts",
+    "reason=wal-copy-unstable, attempts=10",
   );
   expect(writes()).toBeGreaterThanOrEqual(10);
 });

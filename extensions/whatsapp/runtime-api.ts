@@ -32,27 +32,20 @@ export {
   WhatsAppAuthUnstableError,
   type WhatsAppWebAuthState,
 } from "./src/auth-store.js";
-export {
-  DEFAULT_WEB_MEDIA_BYTES,
-  HEARTBEAT_PROMPT,
-  HEARTBEAT_TOKEN,
-  monitorWebChannel,
-  SILENT_REPLY_TOKEN,
-  stripHeartbeatToken,
-  type WebChannelStatus,
-  type WebMonitorTuning,
-} from "./src/auto-reply.js";
-export {
-  extractContactContext,
-  extractLocationData,
-  extractText,
-  monitorWebInbox,
-  resetWebInboundDedupe,
-  type WebInboundCallbackMessage,
-  type WebInboundMessage,
-  type WebListenerCloseReason,
-  type WhatsAppInboundAdmission,
-} from "./src/inbound.js";
+export { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
+
+export { DEFAULT_WEB_MEDIA_BYTES } from "./src/auto-reply/constants.js";
+export { monitorWebChannel } from "./src/auto-reply/monitor.js";
+export type { WebChannelStatus, WebMonitorTuning } from "./src/auto-reply/types.js";
+export { resetWebInboundDedupe } from "./src/inbound/dedupe.js";
+export { extractContactContext, extractLocationData, extractText } from "./src/inbound/extract.js";
+export { monitorWebInbox } from "./src/inbound/monitor.js";
+export type { WhatsAppInboundAdmission } from "./src/inbound/admission.js";
+export type {
+  WebInboundCallbackMessage,
+  WebInboundMessage,
+  WebListenerCloseReason,
+} from "./src/inbound/types.js";
 export { loginWeb } from "./src/login.js";
 export {
   getDefaultLocalRoots,
@@ -63,7 +56,7 @@ export {
   optimizeImageToPng,
   type LocalMediaAccessErrorCode,
   type WebMediaResult,
-} from "./src/media.js";
+} from "openclaw/plugin-sdk/web-media";
 export {
   sendMessageWhatsApp,
   sendPollWhatsApp,

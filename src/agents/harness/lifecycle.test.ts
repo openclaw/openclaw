@@ -2,7 +2,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
-import type { ContextEngine } from "../../context-engine/types.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   resetDiagnosticEventsForTest,
@@ -20,6 +19,7 @@ import {
   markCoreTtsAttemptResult,
 } from "../tools/tts-tool-result-provenance.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
+import { createContextEngineRequiringAssembly } from "./context-engine-lifecycle.test-support.js";
 import { AgentHarnessPreflightError, resolveAgentHarnessPreflightOwner } from "./errors.js";
 import {
   runAgentHarnessLifecycleAttempt,
@@ -32,35 +32,11 @@ import {
   createDiagnosticTrace,
   createFinalAssistant,
   createFinalizationParams,
+  createLifecycleHarness,
   flushDiagnosticEvents,
 } from "./lifecycle.test-support.js";
 import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
 import type { AgentHarness, AgentHarnessAttemptResult } from "./types.js";
-
-function createContextEngineRequiringAssembly(): ContextEngine {
-  // Requires the harness to advertise assemble-before-prompt. Tests use this
-  // to prove context-engine capabilities are enforced before runAttempt.
-  return {
-    info: {
-      id: "lossless-claw",
-      name: "Lossless",
-      hostRequirements: {
-        "agent-run": {
-          requiredCapabilities: ["assemble-before-prompt"],
-        },
-      },
-    },
-    async ingest() {
-      return { ingested: true };
-    },
-    async assemble({ messages }) {
-      return { messages, estimatedTokens: 0 };
-    },
-    async compact() {
-      return { ok: true, compacted: false };
-    },
-  };
-}
 
 describe("AgentHarness lifecycle runner", () => {
   afterEach(() => {
@@ -82,7 +58,7 @@ describe("AgentHarness lifecycle runner", () => {
       const emit = (data: Record<string, unknown>, runId = params.runId) =>
         emitAgentEvent({ runId, stream: "item", data });
       const preamble = { kind: "preamble", itemId: "item-1", progressText: text };
-      const harness: AgentHarness = {
+      const harness = createLifecycleHarness({
         id,
         label: id,
         supports: () => ({ supported: true, priority: 100 }),
@@ -96,7 +72,7 @@ describe("AgentHarness lifecycle runner", () => {
           });
           return createAttemptResult();
         },
-      };
+      });
       try {
         await runWithDiagnosticTraceContext(createDiagnosticTrace(), () =>
           runAgentHarnessLifecycleAttempt(harness, params),
@@ -147,12 +123,10 @@ describe("AgentHarness lifecycle runner", () => {
         emit("during-run");
         throw new Error("failed turn");
       };
-      const harness: AgentHarness = {
-        id: "codex",
-        label: "Codex",
+      const harness = createLifecycleHarness({
         supports: () => ({ supported: true, priority: 100 }),
         runAttempt: execute,
-      };
+      });
       try {
         await expect(
           runWithDiagnosticTraceContext(createDiagnosticTrace(), () =>
@@ -176,13 +150,11 @@ describe("AgentHarness lifecycle runner", () => {
     const result = createAttemptResult();
     result.toolMediaUrls = ["/tmp/reply.opus"];
     markCoreTtsAttemptResult(result, ["/tmp/reply.opus"], operationalRunInstance);
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
+    const harness = createLifecycleHarness({
       pluginId: "codex-plugin",
       supports: () => ({ supported: true, priority: 100 }),
       runAttempt: async () => result,
-    };
+    });
 
     const normalized = await runAgentHarnessLifecycleAttempt(harness, params);
 
@@ -198,12 +170,11 @@ describe("AgentHarness lifecycle runner", () => {
   it("backfills omitted current-attempt provenance from the harness assistant", async () => {
     const assistant = createFinalAssistant();
     const result = { ...createAttemptResult(), lastAssistant: assistant };
-    const harness: AgentHarness = {
+    const harness = createLifecycleHarness({
       id: "legacy-harness",
       label: "Legacy Harness",
-      supports: () => ({ supported: true }),
       runAttempt: async () => result,
-    };
+    });
 
     const attemptResult = await runAgentHarnessLifecycleAttempt(harness, createAttemptParams());
 
@@ -217,12 +188,11 @@ describe("AgentHarness lifecycle runner", () => {
       lastAssistant: assistant,
       currentAttemptAssistant: undefined,
     };
-    const harness: AgentHarness = {
+    const harness = createLifecycleHarness({
       id: "current-harness",
       label: "Current Harness",
-      supports: () => ({ supported: true }),
       runAttempt: async () => result,
-    };
+    });
 
     const attemptResult = await runAgentHarnessLifecycleAttempt(harness, createAttemptParams());
 
@@ -234,14 +204,13 @@ describe("AgentHarness lifecycle runner", () => {
     const preflightError = new AgentHarnessPreflightError("Codex preflight failed", {
       scope: "harness",
     });
-    const harness: AgentHarness = {
+    const harness = createLifecycleHarness({
       id: "custom-codex",
       label: "Custom Codex",
-      supports: () => ({ supported: true }),
       runAttempt: async () => {
         throw preflightError;
       },
-    };
+    });
 
     await expect(runAgentHarnessLifecycleAttempt(harness, params)).rejects.toBe(preflightError);
     expect(resolveAgentHarnessPreflightOwner(preflightError)).toBe("custom-codex");
@@ -250,13 +219,7 @@ describe("AgentHarness lifecycle runner", () => {
 
   it("runs isolated finalization through the narrow lifecycle contract", async () => {
     const params = createFinalizationParams();
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      pluginId: "codex-plugin",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => createAttemptResult(),
-    };
+    const harness = createLifecycleHarness({ pluginId: "codex-plugin" });
     const diagnostics = captureDiagnosticEvents();
     const result = await runAgentHarnessLifecycleFinalization(harness, params, async () => ({
       assistant: createFinalAssistant(),
@@ -276,13 +239,7 @@ describe("AgentHarness lifecycle runner", () => {
 
   it("records a normally completed empty finalization without emitting an error", async () => {
     const params = createFinalizationParams();
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      pluginId: "codex-plugin",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => createAttemptResult(),
-    };
+    const harness = createLifecycleHarness({ pluginId: "codex-plugin" });
     const diagnostics = captureDiagnosticEvents();
     const emptyAssistant = { ...createFinalAssistant(), content: [] };
 
@@ -305,13 +262,7 @@ describe("AgentHarness lifecycle runner", () => {
 
   it("records an empty finalization already validated by the harness owner", async () => {
     const params = createFinalizationParams();
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      pluginId: "codex-plugin",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => createAttemptResult(),
-    };
+    const harness = createLifecycleHarness({ pluginId: "codex-plugin" });
     const diagnostics = captureDiagnosticEvents();
     const result = {
       assistant: { ...createFinalAssistant(), content: [] },
@@ -335,12 +286,7 @@ describe("AgentHarness lifecycle runner", () => {
 
   it("reports narrow finalization validation failures in the resolve phase", async () => {
     const params = createFinalizationParams();
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => createAttemptResult(),
-    };
+    const harness = createLifecycleHarness();
     const diagnostics = captureDiagnosticEvents();
     await expect(
       runAgentHarnessLifecycleFinalization(harness, params, async () => ({
@@ -362,12 +308,11 @@ describe("AgentHarness lifecycle runner", () => {
     const params = createAttemptParams();
     params.contextEngine = createContextEngineRequiringAssembly();
     const runAttempt = vi.fn(async () => createAttemptResult());
-    const harness: AgentHarness = {
+    const harness = createLifecycleHarness({
       id: "custom",
       label: "Custom",
-      supports: () => ({ supported: true }),
       runAttempt,
-    };
+    });
 
     await expect(runAgentHarnessLifecycleAttempt(harness, params)).rejects.toThrow(
       'Context engine "lossless-claw" cannot run operation "agent-run" on agent harness "custom".',
@@ -392,13 +337,10 @@ describe("AgentHarness lifecycle runner", () => {
       yieldDetected: true,
       itemLifecycle: { startedCount: 3, completedCount: 2, activeCount: 1 },
     } as EmbeddedRunAttemptResult;
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
+    const harness = createLifecycleHarness({
       pluginId: "codex-plugin",
-      supports: () => ({ supported: true }),
       runAttempt: async () => result,
-    };
+    });
     const diagnostics = captureDiagnosticEvents();
     try {
       await runAgentHarnessLifecycleAttempt(harness, params);
@@ -450,12 +392,7 @@ describe("AgentHarness lifecycle runner", () => {
         failure: { source: "prompt", error: new Error("request timed out") },
       },
     } as EmbeddedRunAttemptResult;
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => result,
-    };
+    const harness = createLifecycleHarness({ runAttempt: async () => result });
     const diagnostics = captureDiagnosticEvents();
     try {
       await runAgentHarnessLifecycleAttempt(harness, params);
@@ -477,12 +414,7 @@ describe("AgentHarness lifecycle runner", () => {
       ...createAttemptResult(),
       terminal: { kind: "failed", source: "prompt", error: "" },
     } as EmbeddedRunAttemptResult;
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => result,
-    };
+    const harness = createLifecycleHarness({ runAttempt: async () => result });
     const diagnostics = captureDiagnosticEvents();
     try {
       await runAgentHarnessLifecycleAttempt(harness, params);
@@ -513,17 +445,14 @@ describe("AgentHarness lifecycle runner", () => {
       classifyTrace = getActiveDiagnosticTraceContext();
       return "ok";
     });
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
+    const harness = createLifecycleHarness({
       pluginId: "codex-plugin",
-      supports: () => ({ supported: true }),
       runAttempt: async () => {
         runAttemptTrace = getActiveDiagnosticTraceContext();
         return result;
       },
       classify,
-    };
+    });
     const diagnostics = captureDiagnosticEvents(
       (event) =>
         event.type === "harness.run.started" ||
@@ -580,12 +509,7 @@ describe("AgentHarness lifecycle runner", () => {
       ...createAttemptResult(),
       terminal: { kind: "failed", source: "prompt", error: new Error("provider stream failed") },
     } as EmbeddedRunAttemptResult;
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => result,
-    };
+    const harness = createLifecycleHarness({ runAttempt: async () => result });
     const diagnostics = captureDiagnosticEvents(
       (event) => event.type === "run.completed" || event.type === "harness.run.completed",
     );
@@ -620,12 +544,7 @@ describe("AgentHarness lifecycle runner", () => {
         error: new Error("blocked by policy"),
       },
     } as EmbeddedRunAttemptResult;
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => result,
-    };
+    const harness = createLifecycleHarness({ runAttempt: async () => result });
     const diagnostics = captureDiagnosticEvents((event) => event.type === "run.completed");
     try {
       await runWithDiagnosticTraceContext(harnessTrace, () =>
@@ -665,13 +584,12 @@ describe("AgentHarness lifecycle runner", () => {
     const classify = vi.fn<NonNullable<AgentHarness["classify"]>>((raw) =>
       "promptError" in raw && raw.promptError ? "empty" : "ok",
     );
-    const harness: AgentHarness = {
+    const harness = createLifecycleHarness({
       id: "legacy",
       label: "Legacy",
-      supports: () => ({ supported: true }),
       runAttempt: vi.fn(async () => result),
       classify,
-    };
+    });
 
     const outcome = await runAgentHarnessLifecycleAttempt(harness, params);
 

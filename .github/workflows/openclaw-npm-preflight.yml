@@ -54,7 +54,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
   PREFLIGHT_WORKFLOW_SHA: ${{ github.workflow_sha }}
 
 jobs:
@@ -500,7 +500,7 @@ jobs:
             --head "$target_sha"
             --evidence "${GITHUB_WORKSPACE}/.artifacts/npm-sdk-proof/plugin-sdk-api-release-evidence.json"
             --json "${GITHUB_WORKSPACE}/.artifacts/npm-sdk-proof/plugin-sdk-api-release-diff.json"
-            --summary "$GITHUB_STEP_SUMMARY"
+            --summary "${GITHUB_WORKSPACE}/.artifacts/npm-sdk-proof/plugin-sdk-api-release-diff.md"
           )
           if [[ "$(jq 'length' <<< "$bases_json")" == 2 ]]; then
             diff_args+=(--bases-json "$bases_json")
@@ -512,6 +512,7 @@ jobs:
             pnpm install --frozen-lockfile --ignore-scripts --filter openclaw
             pnpm run plugin-sdk:api:diff -- "${diff_args[@]}"
           )
+          cat "${GITHUB_WORKSPACE}/.artifacts/npm-sdk-proof/plugin-sdk-api-release-diff.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload npm sdk proof
         id: artifact
@@ -916,6 +917,7 @@ jobs:
           path: |
             ${{ runner.temp }}/openclaw-prepared-npm/qualification/sdk/plugin-sdk-api-release-diff.json
             ${{ runner.temp }}/openclaw-prepared-npm/qualification/sdk/plugin-sdk-api-release-evidence.json
+            ${{ runner.temp }}/openclaw-prepared-npm/qualification/sdk/plugin-sdk-api-release-diff.md
           retention-days: 30
 
       - name: Upload dependency release evidence

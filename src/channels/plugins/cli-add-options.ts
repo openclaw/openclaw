@@ -1,6 +1,6 @@
 // Resolves plugin-owned `channels add` CLI options from bundled and catalog metadata.
 import { Option } from "commander";
-import { listBundledPackageChannelMetadata } from "../../plugins/bundled-package-channel-metadata.js";
+import { listChannelCatalogEntries } from "../../plugins/channel-catalog-registry.js";
 import type {
   PluginPackageChannel,
   PluginPackageChannelCliOption,
@@ -44,7 +44,9 @@ export function resolveChannelSetupCliOptionMetadata(
   channelId?: string,
   params: { includeAll?: boolean } = {},
 ) {
-  const bundledChannels = listBundledPackageChannelMetadata().toSorted(compareChannels);
+  const bundledChannels = listChannelCatalogEntries({ origin: "bundled" })
+    .map((entry) => entry.channel)
+    .toSorted(compareChannels);
   const catalogChannels = listRawChannelPluginCatalogEntries({
     excludeWorkspace: true,
     excludeOrigins: ["bundled"],

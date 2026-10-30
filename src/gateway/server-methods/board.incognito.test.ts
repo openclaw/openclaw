@@ -1,11 +1,10 @@
-import assert from "node:assert/strict";
 import { afterAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.entry.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import * as approvals from "../../infra/exec-approvals-store.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
@@ -14,7 +13,7 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { boardStore } from "../board-store.js";
 import { progressCardStore } from "../progress-card-store.js";
 import { createBoardHarness } from "./board.test-support.js";
-import { createProgressCardHandlers } from "./progress-card.js";
+import { progressCardHandlers } from "./progress-card.js";
 import { sessionDeleteHandlers } from "./sessions-delete.js";
 
 const review = vi.hoisted(() => vi.fn());
@@ -82,20 +81,14 @@ it.each([
       incognito: true as const,
       permissionMode: outcome === "guarded" ? ("guarded" as const) : ("workspace" as const),
     };
-    const binding = await acquireSessionActorStorage(
-      { sessionKey, agentId: "main", storePath, env },
+    const scope = { sessionKey, agentId: "main", storePath, env };
+    const created = await withSessionActorStorage(
+      scope,
       { authority, lifetime: { assertCurrent() {}, assertReadable() {} }, create: true },
+      ({ actor }) =>
+        actor.storage.mutate({ type: "session.entry.create", input: { entry } }, authority),
     );
-    assert(binding);
-    try {
-      const result = await binding.actor.storage.mutate(
-        { type: "session.entry.create", input: { entry } },
-        authority,
-      );
-      expect(result.kind).toBe("committed");
-    } finally {
-      await binding.actor.release();
-    }
+    expect(created?.kind).toBe("committed");
     const harness = privateBoard(sessionKey);
     const started = createDeferred();
     const release = createDeferred();
@@ -121,7 +114,6 @@ it.each([
         await awaitGateBeforeSettlement(started.promise, putting, "Board put did not reach review");
       }
       if (outcome === "permission" || outcome === "replacement") {
-        const scope = { sessionKey, agentId: "main", storePath, env };
         if (outcome === "permission") {
           await patchSessionEntryCore(scope, () => ({ permissionMode: "guarded" }));
         } else {
@@ -170,7 +162,7 @@ it.each([
 it("returns explicit absence without opening Board, progress, or deletion sources", async () => {
   const sessionKey = "agent:absent:dashboard:incognito-missing";
   const harness = privateBoard(sessionKey);
-  Object.assign(harness.handlers, createProgressCardHandlers(), sessionDeleteHandlers);
+  Object.assign(harness.handlers, progressCardHandlers, sessionDeleteHandlers);
   const sql = observeMainThreadSql();
   onTestFinished(() => sql.restore());
   expect(await harness.rpc("board.get")).toMatchObject([true, { revision: 0, widgets: [] }]);

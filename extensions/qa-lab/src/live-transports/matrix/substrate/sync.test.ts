@@ -65,8 +65,12 @@ describe("matrix sync helpers", () => {
     );
   });
 
-  it("lets a second wait reuse later same-batch events without another /sync", async () => {
+  it("shares an in-flight poll and reuses its later same-batch events", async () => {
+    const fetchStarted = createDeferred<void>();
+    const fetchCanComplete = createDeferred<void>();
     const fetchImpl = vi.fn<typeof fetch>(async () => {
+      fetchStarted.resolve();
+      await fetchCanComplete.promise;
       return syncResponse([
         message("$preview", "preview", {
           msgtype: "m.notice",
@@ -77,6 +81,7 @@ describe("matrix sync helpers", () => {
             "m.in_reply_to": { event_id: "$driver" },
           },
         }),
+        message("$notice", "notice", { msgtype: "m.notice" }),
         message("$final", "final", {
           "m.new_content": {
             body: "final",
@@ -90,8 +95,20 @@ describe("matrix sync helpers", () => {
     const observedEvents: MatrixQaObservedEvent[] = [];
     const observer = makeObserver(fetchImpl, observedEvents, "token");
 
-    const preview = await observer.waitForRoomEvent(eventWait("$preview"));
-    expect(observedEvents.map((event) => event.eventId)).toEqual(["$preview", "$final"]);
+    const waits = Promise.all([
+      observer.waitForRoomEvent(eventWait("$preview")),
+      observer.waitForOptionalRoomEvent(eventWait("$notice")),
+    ]);
+    await fetchStarted.promise;
+    await Promise.resolve();
+    fetchCanComplete.resolve();
+    const [preview, notice] = await waits;
+    expect(notice).toMatchObject({
+      event: { kind: "notice", eventId: "$notice" },
+      matched: true,
+      since: "next-batch-2",
+    });
+    expect(observedEvents.map((event) => event.eventId)).toEqual(["$preview", "$notice", "$final"]);
     const finalized = await observer.waitForRoomEvent(eventWait("$final"));
 
     expect(preview.event.eventId).toBe("$preview");
@@ -116,61 +133,18 @@ describe("matrix sync helpers", () => {
     const observer = makeObserver(fetchImpl, [], "token");
 
     const nowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(1);
-    try {
-      await expect(
-        observer.waitForOptionalRoomEvent({
-          predicate: (event) => event.sender === "@sut:matrix-qa.test",
-          roomId: "!secondary:matrix-qa.test",
-          timeoutMs: 1,
-        }),
-      ).resolves.toEqual({ matched: false, since: "next-batch-2" });
-    } finally {
-      nowSpy.mockRestore();
-    }
+    await expect(
+      observer.waitForOptionalRoomEvent({
+        predicate: (event) => event.sender === "@sut:matrix-qa.test",
+        roomId: "!secondary:matrix-qa.test",
+        timeoutMs: 1,
+      }),
+    ).resolves.toEqual({ matched: false, since: "next-batch-2" });
+    nowSpy.mockRestore();
 
     await expect(
       observer.waitForRoomEvent(eventWait("$main-reply", "!main:matrix-qa.test")),
     ).resolves.toMatchObject({ event: { eventId: "$main-reply" } });
-    expect(fetchImpl).toHaveBeenCalledOnce();
-  });
-
-  it("shares one in-flight /sync poll across concurrent waits", async () => {
-    const fetchStarted = createDeferred<void>();
-    const fetchCanComplete = createDeferred<void>();
-    const fetchImpl = vi.fn<typeof fetch>(async () => {
-      fetchStarted.resolve();
-      await fetchCanComplete.promise;
-      return syncResponse([
-        message("$reply", "reply"),
-        message("$notice", "notice", { msgtype: "m.notice" }),
-      ]);
-    });
-    const observer = makeObserver(fetchImpl, [], "token");
-
-    const waits = Promise.all([
-      observer.waitForRoomEvent(eventWait("$reply")),
-      observer.waitForOptionalRoomEvent(eventWait("$notice")),
-    ]);
-
-    await fetchStarted.promise;
-    await Promise.resolve();
-    fetchCanComplete.resolve();
-    const [reply, notice] = await waits;
-
-    expect(reply.event.eventId).toBe("$reply");
-    expect(notice).toEqual({
-      event: {
-        kind: "notice",
-        roomId: defaultRoomId,
-        eventId: "$notice",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        body: "notice",
-        msgtype: "m.notice",
-      },
-      matched: true,
-      since: "next-batch-2",
-    });
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 

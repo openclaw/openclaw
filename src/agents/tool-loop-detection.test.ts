@@ -1,3 +1,4 @@
+import { hash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { wrapExternalContent } from "../security/external-content.js";
@@ -111,6 +112,32 @@ function createSendLoop() {
 }
 
 describe("tool-loop-detection", () => {
+  it("records complete large outcomes without joining complete container strings", () => {
+    const rows = Array.from({ length: 64 }, () => ({ body: "🦞".repeat(512) }));
+    const result = { details: { rows }, content: [] };
+    const expected = hash("sha256", JSON.stringify({ details: { rows }, text: "" }));
+    const join = Array.prototype.join;
+    let largestJoin = 0;
+    const spy = vi.spyOn(Array.prototype, "join").mockImplementation(function (
+      this: unknown[],
+      separator,
+    ) {
+      const text = join.call(this, separator);
+      largestJoin = Math.max(largestJoin, text.length);
+      return text;
+    });
+    const loop = createLoop("browser", {});
+    try {
+      expect(loop.record(result)?.resultHash).toBe(expected);
+      expect(loop.record({ content: [], details: { rows } })?.resultHash).toBe(expected);
+      rows.at(-1)!.body += "changed tail";
+      expect(loop.record(result)?.resultHash).not.toBe(expected);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(largestJoin).toBeLessThan(64 * 1024);
+  });
+
   it("warns only for history belonging to the current run", () => {
     const state = createState();
     const params = { path: "/same.txt" };
@@ -254,7 +281,6 @@ describe("tool-loop-detection", () => {
       stuck: true,
       level: "warning",
       detector: "argument_churn",
-      livenessSignal: "argument_churn",
       count: HISTORY_SIZE,
     });
     recordToolCall(loop.state, "write", writeParams("/a"), "pending-sibling");
@@ -277,7 +303,7 @@ describe("tool-loop-detection", () => {
         toolCallId: "rewritten-call",
         warningThreshold: 6,
       }),
-    ).toEqual({ active: true, count: 6, variantCount: 2 });
+    ).toBe(true);
   });
 
   it("does not reconcile a completed loop veto as a pending call", () => {
@@ -292,7 +318,7 @@ describe("tool-loop-detection", () => {
         toolParams: writeParams("/rewritten"),
         warningThreshold: 6,
       }),
-    ).toEqual({ active: false, count: 0, variantCount: 0 });
+    ).toBe(false);
     expect(state.toolCallHistory[0]?.argsHash).not.toBe("pending-args");
     expect(state.toolCallHistory[1]?.argsHash).toBe("vetoed-args");
   });
@@ -307,16 +333,6 @@ describe("tool-loop-detection", () => {
     );
     const result = loop.detect();
     expect(result).toMatchObject({ stuck: true, level: "warning", detector: "generic_repeat" });
-    expect(result).not.toHaveProperty("livenessSignal");
-  });
-
-  it("preserves churn liveness when strict alternation owns the warning", () => {
-    expect(createChurn(WARNING_THRESHOLD, ["/a", "/b"]).detect()).toMatchObject({
-      stuck: true,
-      level: "warning",
-      detector: "ping_pong",
-      livenessSignal: "argument_churn",
-    });
   });
 
   it.each([

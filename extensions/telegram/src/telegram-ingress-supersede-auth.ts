@@ -10,14 +10,7 @@ import { resolveTelegramEffectiveGroupPolicy } from "./group-access.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 
-type UpdateSenderFacts = {
-  senderId: string;
-  chatId: number;
-  isGroup: boolean;
-  message: Message;
-};
-
-function extractUpdateSenderFacts(update: unknown): UpdateSenderFacts | null {
+function extractUpdateSenderFacts(update: unknown) {
   if (!update || typeof update !== "object") {
     return null;
   }

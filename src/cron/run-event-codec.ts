@@ -1,10 +1,6 @@
-/** Write-side cron codec: converts a finished service event into a run-history entry.
- * Kept separate from run-history-detail.ts so the read/history codec stays free of the
- * agents failover tree (which transitively pulls the sandbox module graph). */
-import { resolveCronRunErrorReason } from "./run-error-reason.js";
+/** Persistence consumes prepared classification without loading provider runtimes. */
 import type { CronRunLogEntry } from "./run-log-types.js";
-import type { CronEvent } from "./service/state.js";
-import type { CronRunErrorClassification } from "./types.js";
+import type { CronEvent } from "./types.js";
 
 type CronFinishedEvent = CronEvent & { action: "finished" };
 
@@ -25,9 +21,8 @@ function resolveCronRunEndedAt(event: CronFinishedEvent, fallbackTs: number): nu
 export function cronRunLogEntryFromEvent(
   event: CronFinishedEvent,
   fallbackTs: number,
-  errorClassification?: CronRunErrorClassification,
+  errorReason: CronRunLogEntry["errorReason"],
 ): CronRunLogEntry {
-  const errorReason = resolveCronRunErrorReason(event.error, event.provider, errorClassification);
   return {
     ts: resolveCronRunEndedAt(event, fallbackTs),
     jobId: event.jobId,
@@ -37,6 +32,7 @@ export function cronRunLogEntryFromEvent(
     error: event.error,
     errorReason,
     summary: event.summary,
+    result: event.result,
     diagnostics: event.diagnostics,
     delivered: event.delivered,
     deliveryStatus: event.deliveryStatus,

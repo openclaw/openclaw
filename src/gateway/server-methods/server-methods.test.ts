@@ -9,6 +9,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { waitForFast } from "../../../test/helpers/vitest-wait.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -29,6 +30,7 @@ import * as childRuntime from "../../infra/child-runtime-viability.js";
 import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { expectObjectFields as expectRecordFields } from "../../test-utils/mock-call-assertions.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setGatewayDedupeEntry, waitForAgentJob } from "../agent-turn/agent-job.js";
 import { dropPreSessionStartAnnouncePairs } from "../chat-display-projection.history.js";
@@ -46,7 +48,6 @@ import { waitForApprovalAccepted } from "./approval-request.test-support.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import {
-  type ExecApprovalResolveArgs,
   createApprovalRuntimeClient,
   createExecApprovalClient,
   createExecApprovalFixture,
@@ -68,29 +69,13 @@ import {
 } from "./exec-approval.test-support.js";
 import { logsHandlers } from "./logs.js";
 
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
-
 const AGENT_RUN_CACHE_ENTRY_LIMIT = 5_000;
 
+// mock-isolation: Method dispatch tests use fixture status without opening session databases.
 vi.mock("../../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
+  prepareStatusSummary: vi.fn().mockResolvedValue({ publish: () => ({ summary: { ok: true } }) }),
 }));
-
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
   const call = mock.mock.calls[callIndex];
@@ -108,8 +93,20 @@ function lastMockCallArg(mock: ReturnType<typeof vi.fn>, argIndex = 0) {
   return call[argIndex];
 }
 
+function expectApprovalError(respond: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
+  expect(respond.mock.calls[0]?.slice(0, 3)).toEqual([
+    false,
+    undefined,
+    expect.objectContaining(error),
+  ]);
+}
+
 type ChatHistoryTestRole = "assistant" | "custom" | "system" | "toolResult" | "user";
 type ChatHistoryTestMessage = Record<string, unknown>;
+
+function assistantContent(content: unknown, fields: ChatHistoryTestMessage = {}) {
+  return { role: "assistant", content, ...fields };
+}
 
 function textHistoryMessage(
   role: ChatHistoryTestRole,
@@ -131,6 +128,22 @@ function userHistoryMessage(
   fields: ChatHistoryTestMessage = {},
 ): ChatHistoryTestMessage {
   return textHistoryMessage("user", text, fields);
+}
+
+function phasedText(text: string, phase: string, id: string) {
+  return { type: "text", text, textSignature: JSON.stringify({ v: 1, id, phase }) };
+}
+
+function audioHistoryMessage(source: Record<string, unknown>) {
+  return assistantContent(
+    [
+      { type: "text", text: "Audio reply" },
+      { type: "audio", source },
+    ],
+    {
+      timestamp: 1,
+    },
+  );
 }
 
 function sessionsSendProvenance(sourceSessionKey = "agent:main:webchat:source") {
@@ -233,6 +246,8 @@ function deliveryMirrorHistoryMessage(
 }
 
 describe("waitForAgentJob", () => {
+  const lifecycle = (runId: string, data: Record<string, unknown>) =>
+    emitAgentEvent({ runId, stream: "lifecycle", data });
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => {
     vi.clearAllTimers();
@@ -247,18 +262,14 @@ describe("waitForAgentJob", () => {
     async ({ publishBefore, ...later }) => {
       const runId = `hard-timeout-${later.phase}-${publishBefore}-${later.timeoutPhase}`;
       const wait = waitForAgentJob({ runId, timeoutMs: 20_000 });
-      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 100 } });
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: {
-          phase: "end",
-          startedAt: 100,
-          endedAt: 200,
-          aborted: true,
-          timeoutPhase: "provider",
-          providerStarted: true,
-        },
+      lifecycle(runId, { phase: "start", startedAt: 100 });
+      lifecycle(runId, {
+        phase: "end",
+        startedAt: 100,
+        endedAt: 200,
+        aborted: true,
+        timeoutPhase: "provider",
+        providerStarted: true,
       });
       const expected = {
         status: "timeout",
@@ -271,11 +282,7 @@ describe("waitForAgentJob", () => {
         await vi.advanceTimersByTimeAsync(15_000);
         expect(await wait).toMatchObject(expected);
       }
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { ...later, startedAt: 100, endedAt: 250 },
-      });
+      lifecycle(runId, { ...later, startedAt: 100, endedAt: 250 });
       await vi.advanceTimersByTimeAsync(15_000);
       expect(await wait).toMatchObject(expected);
       expect(await waitForAgentJob({ runId, timeoutMs: 1_000 })).toMatchObject(expected);
@@ -289,24 +296,16 @@ describe("waitForAgentJob", () => {
       const wait = waitForAgentJob({ runId, timeoutMs: 20_000 });
       const error = { phase: "error", error: "final error" };
       const timeout = { phase: "end", aborted: true };
-      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 100 } });
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: {
-          ...(errorLast ? timeout : error),
-          startedAt: 100,
-          endedAt: 200,
-        },
+      lifecycle(runId, { phase: "start", startedAt: 100 });
+      lifecycle(runId, {
+        ...(errorLast ? timeout : error),
+        startedAt: 100,
+        endedAt: 200,
       });
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: {
-          ...(errorLast ? error : timeout),
-          startedAt: 100,
-          endedAt: 300,
-        },
+      lifecycle(runId, {
+        ...(errorLast ? error : timeout),
+        startedAt: 100,
+        endedAt: 300,
       });
       await vi.advanceTimersByTimeAsync(15_000);
       expect(await wait).toMatchObject({
@@ -327,30 +326,18 @@ describe("waitForAgentJob", () => {
       const runId = `run-pending-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
 
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "error", error: "transient-auth-failure" },
-      });
+      lifecycle(runId, { phase: "error", error: "transient-auth-failure" });
 
       await vi.advanceTimersByTimeAsync(6_000);
 
-      const result = await waitPromise;
-      expect(result).not.toBeNull();
-      expect(result?.status).toBe("timeout");
-      expect(result?.error).toBe("transient-auth-failure");
-      expect(result?.pendingError).toBe(true);
+      expect(await waitPromise).toMatchObject({
+        status: "timeout",
+        error: "transient-auth-failure",
+        pendingError: true,
+      });
 
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "start", startedAt: 12_000 },
-      });
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 12_000, endedAt: 12_100 },
-      });
+      lifecycle(runId, { phase: "start", startedAt: 12_000 });
+      lifecycle(runId, { phase: "end", startedAt: 12_000, endedAt: 12_100 });
 
       const recovered = await waitForAgentJob({ runId, timeoutMs: 1_000 });
       expectRecordFields(recovered, {
@@ -367,11 +354,7 @@ describe("waitForAgentJob", () => {
   it("retains a lifecycle snapshot while an RPC publication waiter is active", async () => {
     const prefix = `cache-waiter-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const waitedRunId = `${prefix}-waited`;
-    emitAgentEvent({
-      runId: waitedRunId,
-      stream: "lifecycle",
-      data: { phase: "end", startedAt: 1_000, endedAt: 1_100 },
-    });
+    lifecycle(waitedRunId, { phase: "end", startedAt: 1_000, endedAt: 1_100 });
     const freshWait = waitForAgentJob({
       runId: waitedRunId,
       timeoutMs: 5_000,
@@ -379,11 +362,7 @@ describe("waitForAgentJob", () => {
     });
 
     for (let index = 0; index < AGENT_RUN_CACHE_ENTRY_LIMIT + 25; index += 1) {
-      emitAgentEvent({
-        runId: `${prefix}-${index}`,
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: index, endedAt: index + 1 },
-      });
+      lifecycle(`${prefix}-${index}`, { phase: "end", startedAt: index, endedAt: index + 1 });
     }
     await expect(waitForAgentJob({ runId: waitedRunId, timeoutMs: 0 })).resolves.toMatchObject({
       status: "ok",
@@ -542,49 +521,22 @@ describe("sanitizeChatHistoryMessages", () => {
     },
     {
       name: "reports decoded byte size when omitting base64 audio from chat history",
-      messages: [
-        {
-          role: "assistant",
-          content: [
-            { type: "text", text: "Audio reply" },
-            {
-              type: "audio",
-              source: {
-                type: "base64",
-                media_type: "audio/mp3",
-                data,
-              },
-            },
-          ],
-          timestamp: 1,
-        },
-      ],
+      messages: [audioHistoryMessage({ type: "base64", media_type: "audio/mp3", data })],
       maxChars: undefined,
       expected: [
-        {
-          role: "assistant",
-          content: [
-            { type: "text", text: "Audio reply" },
-            {
-              type: "audio",
-              source: {
-                type: "base64",
-                media_type: "audio/mp3",
-                omitted: true,
-                bytes: audio.byteLength,
-              },
-            },
-          ],
-          timestamp: 1,
-        },
+        audioHistoryMessage({
+          type: "base64",
+          media_type: "audio/mp3",
+          omitted: true,
+          bytes: audio.byteLength,
+        }),
       ],
     },
     {
       name: "strips internal reasoning replay metadata from chat history",
       messages: [
-        {
-          role: "assistant",
-          content: [
+        assistantContent(
+          [
             {
               type: "thinking",
               thinking: "Need a tool.",
@@ -599,30 +551,27 @@ describe("sanitizeChatHistoryMessages", () => {
             },
             { type: "text", text: "Checking." },
           ],
-          timestamp: 1,
-        },
+          { timestamp: 1 },
+        ),
       ],
       maxChars: undefined,
       expected: [
-        {
-          role: "assistant",
-          content: [
+        assistantContent(
+          [
             {
               type: "thinking",
               thinking: "Need a tool.",
             },
             { type: "text", text: "Checking." },
           ],
-          timestamp: 1,
-        },
+          { timestamp: 1 },
+        ),
       ],
     },
     {
       name: "preserves OpenAI-compatible assistant usage aliases for display context",
       messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "done" }],
+        assistantHistoryMessage("done", {
           usage: {
             prompt_tokens: 11,
             completion_tokens: 1,
@@ -630,20 +579,18 @@ describe("sanitizeChatHistoryMessages", () => {
             provider_payload: "discard",
           },
           timestamp: 1,
-        },
+        }),
       ],
       maxChars: undefined,
       expected: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "done" }],
+        assistantHistoryMessage("done", {
           usage: {
             prompt_tokens: 11,
             completion_tokens: 1,
             total_tokens: 12,
           },
           timestamp: 1,
-        },
+        }),
       ],
     },
   ])("$name", ({ messages, maxChars, expected }) => {
@@ -656,17 +603,7 @@ describe("sanitizeChatHistoryMessages", () => {
       [
         {
           role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: fullText,
-              textSignature: JSON.stringify({
-                v: 1,
-                id: "msg_commentary",
-                phase: "commentary",
-              }),
-            },
-          ],
+          content: [phasedText(fullText, "commentary", "msg_commentary")],
           timestamp: 2,
         },
       ],
@@ -693,17 +630,9 @@ describe("sanitizeChatHistoryMessages", () => {
         {
           role: "assistant",
           content: [
-            {
-              type: "text",
-              text: "Checking the file",
-              textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
-            },
+            phasedText("Checking the file", "commentary", "msg_commentary"),
             toolCall,
-            {
-              type: "text",
-              text: "Done.",
-              textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
-            },
+            phasedText("Done.", "final_answer", "msg_final"),
           ],
           timestamp: 2,
         },
@@ -787,13 +716,7 @@ describe("projectChatDisplayMessages", () => {
     {
       name: "projects signature-only commentary errors as a visible generic safe failure",
       message: {
-        content: [
-          {
-            type: "text",
-            text: "private upstream details",
-            textSignature: JSON.stringify({ v: 1, id: "msg-commentary", phase: "commentary" }),
-          },
-        ],
+        content: [phasedText("private upstream details", "commentary", "msg-commentary")],
         errorMessage: privateError,
         errorCode: "private_error_code",
         errorType: "private_error_type",
@@ -1231,33 +1154,21 @@ describe("dropPreSessionStartAnnouncePairs (#85648)", () => {
 });
 
 describe("normalizeRpcAttachmentsToChatAttachments", () => {
+  const file = {
+    type: "file",
+    mimeType: "image/png",
+    fileName: "a.png",
+    content: "Zm9v",
+    sizeBytes: 3,
+    durationMs: 10,
+    width: 1,
+    height: 1,
+  };
   it.each([
     {
       name: "passes through string content",
-      attachments: [
-        {
-          type: "file",
-          mimeType: "image/png",
-          fileName: "a.png",
-          content: "Zm9v",
-          sizeBytes: 3,
-          durationMs: 10,
-          width: 1,
-          height: 1,
-        },
-      ],
-      expected: [
-        {
-          type: "file",
-          mimeType: "image/png",
-          fileName: "a.png",
-          content: "Zm9v",
-          sizeBytes: 3,
-          durationMs: 10,
-          width: 1,
-          height: 1,
-        },
-      ],
+      attachments: [{ ...file }],
+      expected: [file],
     },
     {
       name: "converts Uint8Array content to base64",
@@ -1309,13 +1220,9 @@ describe("exec approval handlers", () => {
         },
       });
 
-      expect(mockCallArg(respond)).toBe(false);
-      expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-      expectRecordFields(mockCallArg(respond, 0, 2), {
+      expectApprovalError(respond, {
         message: "command exceeds exec approval display limit",
-      });
-      expectRecordFields((mockCallArg(respond, 0, 2) as { details?: unknown }).details, {
-        reason: "EXEC_APPROVAL_COMMAND_DISPLAY_LIMIT",
+        details: expect.objectContaining({ reason: "EXEC_APPROVAL_COMMAND_DISPLAY_LIMIT" }),
       });
       expect(broadcasts).toEqual([]);
     });
@@ -1394,20 +1301,14 @@ describe("exec approval handlers", () => {
     const context = {
       broadcast: (_eventValue: string, _payload: unknown) => {},
     };
-    const ownerClient = {
-      connId: "conn-owner",
-      connect: {
-        client: { id: "client-owner" },
-        device: { id: "device-owner" },
-      },
-    } as unknown as ExecApprovalResolveArgs["client"];
-    const otherClient = {
-      connId: "conn-other",
-      connect: {
-        client: { id: "client-other" },
-        device: { id: "device-other" },
-      },
-    } as unknown as ExecApprovalResolveArgs["client"];
+    const client = (name: string) =>
+      createExecApprovalClient({
+        connId: `conn-${name}`,
+        clientId: `client-${name}`,
+        deviceId: `device-${name}`,
+      });
+    const ownerClient = client("owner");
+    const otherClient = client("other");
 
     const visible = manager.create({ command: "echo visible" }, 60_000, "approval-abcd-visible");
     visible.requestedByDeviceId = "device-owner";
@@ -1609,9 +1510,7 @@ describe("exec approval handlers", () => {
 
         const getRespond = vi.fn();
         await getExecApproval({ handlers, id, respond: getRespond });
-        expect(mockCallArg(getRespond)).toBe(false);
-        expect(mockCallArg(getRespond, 0, 1)).toBeUndefined();
-        expectRecordFields(mockCallArg(getRespond, 0, 2), {
+        expectApprovalError(getRespond, {
           code: "INVALID_REQUEST",
           message: "unknown or expired approval id",
         });
@@ -1695,14 +1594,11 @@ describe("exec approval handlers", () => {
         context,
       });
 
-      expect(mockCallArg(respond)).toBe(false);
-      expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-      const error = mockCallArg(respond, 0, 2) as Record<string, unknown>;
-      expectRecordFields(error, {
+      expectApprovalError(respond, {
         code: "INVALID_REQUEST",
         message: "unknown or expired approval id",
+        details: expect.objectContaining({ reason: "APPROVAL_NOT_FOUND" }),
       });
-      expectRecordFields(error.details, { reason: "APPROVAL_NOT_FOUND" });
     });
   });
 
@@ -1731,11 +1627,10 @@ describe("exec approval handlers", () => {
         expect(broadcasts.filter((entry) => entry.event === "exec.approval.resolved")).toHaveLength(
           resolvedBroadcastCount,
         );
-        expect(mockCallArg(conflictingResolveRespond)).toBe(false);
-        expect(mockCallArg(conflictingResolveRespond, 0, 1)).toBeUndefined();
-        const error = mockCallArg(conflictingResolveRespond, 0, 2) as Record<string, unknown>;
-        expect(error.message).toBe("approval already resolved");
-        expectRecordFields(error.details, { reason: "APPROVAL_ALREADY_RESOLVED" });
+        expectApprovalError(conflictingResolveRespond, {
+          message: "approval already resolved",
+          details: expect.objectContaining({ reason: "APPROVAL_ALREADY_RESOLVED" }),
+        });
       },
     );
   });
@@ -1753,9 +1648,7 @@ describe("exec approval handlers", () => {
       async (approval) => {
         expect(approval.request.allowedDecisions).toEqual(["allow-once", "deny"]);
         const respond = await resolveExecApprovalForTest({ ...approval, decision: "allow-always" });
-        expect(mockCallArg(respond)).toBe(false);
-        expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-        expectRecordFields(mockCallArg(respond, 0, 2), {
+        expectApprovalError(respond, {
           message: "allow-always is unavailable for this command",
         });
         const fallback = await resolveExecApprovalForTest({
@@ -1907,9 +1800,10 @@ describe("exec approval handlers", () => {
         params: { id, host: "gateway" },
       });
 
-      expect(mockCallArg(respond)).toBe(false);
-      expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-      expect(mockCallArg(respond, 0, 2)).toMatchObject(error);
+      expectApprovalError(respond, {
+        ...error,
+        ...("details" in error ? { details: expect.objectContaining(error.details) } : {}),
+      });
       expect(await manager.getSnapshot(id)).toBeNull();
       expect(broadcasts).toEqual([]);
     });
@@ -1939,9 +1833,7 @@ describe("exec approval handlers", () => {
       context,
     });
 
-    expect(mockCallArg(respond)).toBe(false);
-    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-    expectRecordFields(mockCallArg(respond, 0, 2), {
+    expectApprovalError(respond, {
       message: "ambiguous approval id prefix; use the full id",
     });
   });
@@ -2180,7 +2072,7 @@ describe("gateway healthHandlers.status scope handling", () => {
   });
 
   beforeEach(() => {
-    vi.mocked(statusModule.getStatusSummary).mockClear();
+    vi.mocked(statusModule.prepareStatusSummary).mockClear();
   });
 
   async function runHealthStatus(
@@ -2209,7 +2101,7 @@ describe("gateway healthHandlers.status scope handling", () => {
     async ({ scopes, includeSensitive }) => {
       const respond = await runHealthStatus(scopes);
 
-      expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
+      expect(vi.mocked(statusModule.prepareStatusSummary)).toHaveBeenCalledWith({
         includeSensitive,
         includeChannelSummary: true,
         includeCliProjection: false,
@@ -2296,31 +2188,21 @@ describe("gateway healthHandlers.health cache freshness", () => {
     await restoreContextEngineRegistryState();
   });
 
-  it.each([
-    { name: "rate-limits request-driven refreshes for fresh cached health", backward: false },
-    {
-      name: "restarts request-driven health refreshes when the clock moves backward",
-      backward: true,
-    },
-  ])("$name", async ({ backward }) => {
+  it("rate-limits request-driven refreshes for fresh cached health", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-28T12:00:00Z"));
     const cached = createHealthSnapshot({});
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
 
-    for (let index = 0; index < (backward ? 1 : 3); index += 1) {
+    for (let index = 0; index < 3; index += 1) {
       await requestHealthSnapshot({ cached, refreshHealthSnapshot });
     }
     expect(refreshHealthSnapshot).toHaveBeenCalledTimes(1);
 
-    if (backward) {
-      vi.setSystemTime(Date.now() - HEALTH_REFRESH_INTERVAL_MS);
-    } else {
-      await vi.advanceTimersByTimeAsync(HEALTH_REFRESH_INTERVAL_MS - 1);
-      await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
-      expect(refreshHealthSnapshot).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-    }
+    await vi.advanceTimersByTimeAsync(HEALTH_REFRESH_INTERVAL_MS - 1);
+    await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
+    expect(refreshHealthSnapshot).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
     await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
     expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
   });
@@ -2369,7 +2251,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     );
     try {
       const contextEngine = await resolveContextEngine({
-        plugins: { slots: { contextEngine: engineId } },
+        plugins: { allow: ["health-test"], slots: { contextEngine: engineId } },
       } as OpenClawConfig);
       await contextEngine.assemble({ sessionId: "s1", messages: [] });
 

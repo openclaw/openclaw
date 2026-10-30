@@ -21,7 +21,12 @@ const edge = vi.hoisted(() => ({
 }));
 
 vi.mock("node:sqlite", () => ({ DatabaseSync: edge.forbidden }));
-vi.mock("node:worker_threads", () => ({ isMainThread: true, threadId: 0, Worker: edge.forbidden }));
+vi.mock("node:worker_threads", () => ({
+  isMainThread: true,
+  threadId: 0,
+  workerData: null,
+  Worker: edge.forbidden,
+}));
 vi.mock("node:child_process", () =>
   Object.fromEntries(
     ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"].map((name) => [
@@ -40,21 +45,12 @@ vi.mock("../../infra/kysely-sync.js", async (importOriginal) => ({
   executeSqliteQuerySync: edge.forbidden,
   executeSqliteQueryTakeFirstSync: edge.forbidden,
 }));
-vi.mock("../../../packages/gateway-protocol/src/index.js", () => ({
-  ErrorCodes: { INVALID_REQUEST: "INVALID_REQUEST", UNAVAILABLE: "UNAVAILABLE" },
-  errorShape: (code: string, message: string) => ({ code, message }),
-  validateSessionsGoalClearParams: () => true,
-  validateSessionsGoalUpdateParams: () => true,
-}));
 vi.mock("../../config/sessions/goals-operations.js", () => ({
   mutateSessionGoal: edge.mutate,
   SessionGoalOperationError: class extends Error {},
 }));
 vi.mock("../../sessions/session-state-events.js", () => ({
   recordSessionGoalChanged: edge.record,
-}));
-vi.mock("../session-plugin-ownership.js", () => ({
-  resolvePluginSessionOwnershipError: () => null,
 }));
 vi.mock("../session-request-agent.js", () => ({
   resolveRequestedSessionAgentId: () => ({ ok: true, agentId: "main" }),

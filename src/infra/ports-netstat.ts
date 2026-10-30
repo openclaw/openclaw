@@ -35,10 +35,7 @@ export function parseTcpEndpoint(raw: string): { host: string; port: number } | 
 }
 
 /** Parses the address field emitted for a TCP listener by lsof or netstat. */
-export function parseTcpListenerEndpoint(raw: string | undefined): {
-  host: string;
-  port: number;
-} | null {
+export function parseTcpListenerEndpoint(raw: string | undefined) {
   const normalized = raw
     ?.trim()
     .replace(/^tcp6?\s+/i, "")

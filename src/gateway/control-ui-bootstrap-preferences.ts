@@ -19,6 +19,7 @@ export async function prepareControlUiBootstrapPreferences(
     ? getCanonicalUserPreferences(profileId, [
         ...Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
         "ui.railShortcuts",
+        "ui.personalSessionGroups",
       ]).catch(() => undefined)
     : undefined;
   // Config display has the same scope ceiling and redaction as config.get.
@@ -29,6 +30,7 @@ export async function prepareControlUiBootstrapPreferences(
             ui: { prefs: config.ui?.prefs },
             gateway: { publicOrigin: config.gateway?.publicOrigin },
             messages: { queue: config.messages?.queue },
+            tts: config.tts ? { maxTextLength: config.tts.maxTextLength } : null,
             tools: {
               swarm: config.tools?.swarm,
               web: { search: { enabled: config.tools?.web?.search?.enabled } },

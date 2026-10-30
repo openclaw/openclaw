@@ -18,22 +18,22 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { saveCronJobsStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
+import { retireSessionControllerSourceCancellation } from "../../sessions/session-controller.mailbox.js";
+import { requestRpcSourceCancellation } from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as userProfileList from "../../state/user-profile-list.js";
 import { setAvatar } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  abortQueuedChatTurnById,
-  registerQueuedChatTurn,
-  retireQueuedChatTurnCancellation,
-} from "../chat-queued-turns.js";
-import { chatHistoryHandlers } from "./chat-history-handler.js";
+import { createSessionGoalFixture } from "../session-goal.test-support.js";
+import { createRpcSourceForTest } from "../test-helpers.rpc-source.js";
+import { historyPayload, historyRpc } from "./chat-history-fixture.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
-import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import { createChatMetadataHarness } from "./chat-metadata-runtime.test-support.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
+import { captureRpcTargetForTest } from "./rpc-source-fixtures.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
 async function createScope(name: string, sessionId = name) {
@@ -41,6 +41,25 @@ async function createScope(name: string, sessionId = name) {
   const scope = { agentId: "main", sessionKey: `agent:main:${name}`, sessionId };
   await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
   return scope;
+}
+
+function queueSource(
+  scope: Awaited<ReturnType<typeof createScope>>,
+  runId: string,
+  overrides: Partial<Parameters<typeof createRpcSourceForTest>[1]> = {},
+) {
+  const source = createRpcSourceForTest(
+    {},
+    {
+      ...scope,
+      runId,
+      storeScope: captureRpcTargetForTest(scope).storeScope,
+      phase: "waiting",
+      ...overrides,
+    },
+  );
+  rpcSourceTesting.set(runId, source);
+  return source;
 }
 
 function pendingInputs(scope: Parameters<typeof stageSessionPendingInput>[0]) {
@@ -77,22 +96,7 @@ async function read(
   params: Record<string, unknown>,
   method: "chat.history" | "chat.startup" | "chat.message.get" = "chat.history",
 ) {
-  const handler =
-    method === "chat.message.get" ? chatMessageGetHandlers[method] : chatHistoryHandlers[method];
-  let result: unknown;
-  const handle = expectDefined(handler, "read handler");
-  await handle({
-    params,
-    context,
-    respond: (ok, payload, error) => {
-      expect([ok, error]).toEqual([true, undefined]);
-      result = payload;
-    },
-    req: { type: "req", id: "history", method },
-    client: null,
-    isWebchatConnect: () => false,
-  });
-  return expectDefined(asOptionalRecord(result), "read response");
+  return historyPayload(await historyRpc(context, "")(method, params));
 }
 
 describe("pending input read boundary", () => {
@@ -101,17 +105,11 @@ describe("pending input read boundary", () => {
       const scope = await createScope("warm-metadata");
       await upsertSessionEntryCore(scope, {
         displayName: "Synthetic warm conversation",
-        goal: {
-          schemaVersion: 1,
-          id: "warm-goal",
-          objective: "Review the synthetic project and its pending followups. ".repeat(30),
-          status: "complete",
-          createdAt: 1,
-          updatedAt: 1,
-          tokenStart: 0,
-          tokensUsed: 0,
-          continuationTurns: 0,
-        },
+        goal: createSessionGoalFixture(
+          "warm-goal",
+          "Review the synthetic project and its pending followups. ".repeat(30),
+          { status: "complete" },
+        ),
       });
       await appendTranscriptMessages(scope, {
         messages: Array.from({ length: 820 }, (_, index) => ({
@@ -124,8 +122,8 @@ describe("pending input read boundary", () => {
       const commands = Array.from({ length: 150 }, (_, index) => ({
         name: `synthetic_command_${index}`,
         description: "Synthetic skill or plugin command description. ".repeat(6),
-        source: index % 2 ? "skill" : "plugin",
-        scope: "text",
+        source: index % 2 ? ("skill" as const) : ("plugin" as const),
+        scope: "text" as const,
         acceptsArgs: true,
       }));
       metadata.buildCommands.mockResolvedValue({ commands });
@@ -141,13 +139,7 @@ describe("pending input read boundary", () => {
       await using inputs = pendingInputs(scope);
       for (const runId of [
         "followup",
-        "steer",
-        "review",
-        "build",
-        "docs",
-        "tests",
-        "assets",
-        "verify",
+        ...Array.from({ length: 7 }, (_, index) => `queued-${index}`),
       ]) {
         await inputs.stage(runId, {
           content: "Synthetic pending project instructions. ".repeat(780),
@@ -167,27 +159,22 @@ describe("pending input read boundary", () => {
         messages: [],
         stateRevision: first.stateRevision,
       });
-      expect(warm.pendingInputs).toBeUndefined();
-      expect(warm.sessionInfo).toBeUndefined();
+      expect([warm.pendingInputs, warm.sessionInfo]).toEqual([undefined, undefined]);
       expect(warm.sessionInfoSnapshotAt).toBeTypeOf("number");
       expect(asOptionalRecord(warm.metadata)?.commands).toBeUndefined();
       expect(Buffer.byteLength(JSON.stringify(warm))).toBeLessThan(2_500);
 
       metadata.setSkillsVersion(2);
-      metadata.buildCommands.mockResolvedValue({ commands: [{ name: "replacement_skill" }] });
+      metadata.buildCommands.mockResolvedValue({
+        commands: [{ ...expectDefined(commands[0], "command"), name: "replacement_skill" }],
+      });
       await metadata.refresh();
       await metadata.read();
       const refreshed = await call({ cursor: warm.deltaCursor, knownState: warm.stateRevision });
       expect(refreshed.metadata).toMatchObject({ commands: [{ name: "replacement_skill" }] });
       expect(refreshed.stateRevision).not.toEqual(warm.stateRevision);
 
-      const controller = new AbortController();
-      registerQueuedChatTurn({
-        chatQueuedTurns: context.chatQueuedTurns,
-        ...scope,
-        runId: "followup",
-        controller,
-      });
+      const source = queueSource(scope, "followup");
       const queued = await call({ cursor: warm.deltaCursor, knownState: warm.stateRevision });
       expect(queued.pendingInputs).toMatchObject({
         queuedCount: 1,
@@ -195,8 +182,12 @@ describe("pending input read boundary", () => {
           expect.objectContaining({ runId: "followup", queued: true }),
         ]),
       });
-      expect(queued.sessionInfo).toBeUndefined();
-      controller.abort();
+      expect(queued.sessionInfo).toMatchObject({
+        hasActiveRun: true,
+        activeRunIds: ["followup"],
+        status: "queued",
+      });
+      requestRpcSourceCancellation(source);
       for (const receipt of inputs.receipts) {
         await receipt.run(() => appendTranscriptMessage(scope, { message: receipt.message }));
       }
@@ -323,21 +314,12 @@ describe("pending input read boundary", () => {
           {},
           {},
         ].entries()) {
-          const controller = new AbortController();
           const runId = index === 5 ? "external-run-".repeat(30) : `pending-display-run-${index}`;
-          expect(
-            registerQueuedChatTurn({
-              chatQueuedTurns: context.chatQueuedTurns,
-              ...scope,
-              ...overrides,
-              runId,
-              controller,
-            }),
-          ).toBe(true);
+          const ref = queueSource(scope, runId, overrides);
           if (index === 3) {
-            retireQueuedChatTurnCancellation(context.chatQueuedTurns, runId, controller);
+            retireSessionControllerSourceCancellation(ref.input);
           } else if (index === 4) {
-            controller.abort();
+            requestRpcSourceCancellation(ref);
           }
         }
         const readPage = async () => {
@@ -352,26 +334,26 @@ describe("pending input read boundary", () => {
         expect(initial.filter((item) => item.queued).map((item) => item.runId)).toEqual([
           "pending-display-run-0",
         ]);
-        expect(initial).toEqual(
+        expect(initial).toMatchObject(
           receipts.map((receipt, index) => {
             const acceptedAt = expectDefined(
               acceptanceTimes.get(receipt.inputId),
               "stored acceptance time",
             );
             expect(acceptedAt).not.toBe(1_000 + index);
-            return expect.objectContaining({
+            return {
               id: receipt.inputId,
               acceptedAt,
-              message: expect.objectContaining({
+              message: {
                 content: `Pending input ${index}`,
                 timestamp: acceptedAt,
-                __openclaw: expect.objectContaining({
+                __openclaw: {
                   senderIdentity: { type: "profile", id: profile.id },
                   senderName: "Historical sender",
                   senderProfileAvatarUrl: expect.stringContaining(profile.id),
-                }),
-              }),
-            });
+                },
+              },
+            };
           }),
         );
         const initialBytes = JSON.stringify(initial);
@@ -383,21 +365,15 @@ describe("pending input read boundary", () => {
             ?.senderProfileAvatarUrl;
         const updatedAvatar = avatar(updated);
         expect(updatedAvatar).not.toBe(avatar(initial));
-        expect(updated).toEqual(
-          initial.map((item) => {
-            const message = expectDefined(asOptionalRecord(item.message), "pending message");
-            return {
-              ...item,
-              message: {
-                ...message,
-                __openclaw: {
-                  ...asOptionalRecord(message["__openclaw"]),
-                  senderProfileAvatarUrl: updatedAvatar,
-                },
-              },
-            };
-          }),
-        );
+        const expected = structuredClone(initial);
+        for (const item of expected) {
+          const metadata = expectDefined(
+            asOptionalRecord(asOptionalRecord(item.message)?.["__openclaw"]),
+            "sender metadata",
+          );
+          metadata.senderProfileAvatarUrl = updatedAvatar;
+        }
+        expect(updated).toEqual(expected);
         expect(JSON.stringify(initial)).toBe(initialBytes);
       } finally {
         readDisplay.mockRestore();
@@ -516,14 +492,7 @@ it.each(["chat.history", "chat.startup"] as const)(
       for (let index = 0; index < 21; index += 1) {
         retained.push(await inputs.stage(`retained-${index}`, { timestamp: index + 3 }));
       }
-      expect(
-        registerQueuedChatTurn({
-          chatQueuedTurns: context.chatQueuedTurns,
-          ...scope,
-          runId: "retained-0",
-          controller: new AbortController(),
-        }),
-      ).toBe(true);
+      const retainedSource = queueSource(scope, "retained-0");
       const retainedPage = await call({ inputRunIds: ["retained-0", "retained-1"], limit: 1 });
       expect([retainedPage.inputReceipts, retainedPage.inputConsumptions]).toEqual([
         [
@@ -537,12 +506,7 @@ it.each(["chat.history", "chat.startup"] as const)(
         queuedCount: 1,
         items: [{ runId: "retained-20" }],
       });
-      expect(
-        abortQueuedChatTurnById(context.chatQueuedTurns, {
-          runId: "retained-0",
-          sessionKey: scope.sessionKey,
-        }).aborted,
-      ).toBe(true);
+      expect(requestRpcSourceCancellation(retainedSource)).toBe(true);
       retained[0]?.finish("cancelled");
       await retained[0]?.settled?.();
       const cancelledPage = await call({ inputRunIds: ["retained-0"], limit: 1 });

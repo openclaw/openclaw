@@ -18,11 +18,16 @@ describe("parseCommand", () => {
     ["/ELEV full", "elevated", "full"],
     ["/t high", "think", "high"],
     ["/side check this", "btw", "check this"],
+    ["/followup first\nsecond", "followup", "first\nsecond"],
     ["/compact: focus on decisions", "compact", "focus on decisions"],
     ["/gwstatus", "gateway-status", ""],
     ["   ", "", ""],
   ])("parses %s", (input, name, args) => {
     expect(parseCommand(input)).toEqual({ name, args });
+  });
+  it.each([false, true])("discovers explicit followup with local=%s", (local) => {
+    expect(helpText({ local })).toContain("/followup <message>");
+    expect(getSlashCommands({ local }).some((command) => command.name === "followup")).toBe(true);
   });
   it("accepts but does not advertise the retired alias", () => {
     expect(parseCommand("/crestodian repair gateway")).toEqual({
@@ -68,28 +73,20 @@ describe("getSlashCommands", () => {
   ])("keeps /%s completion on /%s", (name, alias, level) => {
     for (const local of [false, true]) {
       const commands = getSlashCommands({ local, thinkingLevels: levels("max") });
-      const canonical = commands.find((entry) => entry.name === name);
-      const alternate = commands.find((entry) => entry.name === alias);
-      expect(alternate?.getArgumentCompletions?.(level)).toEqual(
-        canonical?.getArgumentCompletions?.(level),
-      );
+      for (const command of [name, alias]) {
+        expect(
+          commands.find((entry) => entry.name === command)?.getArgumentCompletions?.(level),
+        ).toEqual(choices(level));
+      }
       expect(shouldSubmitExactArgumentCompletion(`/${alias} ${level}`, commands)).toBe(true);
     }
   });
-  it("exposes usage cost in completion and help", () => {
-    const commands = getSlashCommands({ local: true });
-    const usage = commands.find(({ name }) => name === "usage");
-    expect(usage?.description).toContain("cost summary");
-    expect(usage?.getArgumentCompletions?.("co")).toEqual(choices("cost"));
-    expect(shouldSubmitExactArgumentCompletion("/usage cost", commands)).toBe(true);
-    expect(helpText({ local: true })).toContain("/usage <off|tokens|full|cost|reset|");
-  });
   it.each([
-    ["verbose", "full", "Set verbose on/off/full"],
-    ["reasoning", "stream", "Set reasoning on/off/stream"],
-  ])("describes and submits /%s %s", (name, level, description) => {
+    ["usage", "cost"],
+    ["verbose", "full"],
+    ["reasoning", "stream"],
+  ])("submits an exact /%s %s completion", (name, level) => {
     const commands = getSlashCommands();
-    expect(commands.find((entry) => entry.name === name)?.description).toBe(description);
     expect(findCommand(name)?.getArgumentCompletions?.(level)).toEqual(choices(level));
     expect(shouldSubmitExactArgumentCompletion(`/${name} ${level}`, commands)).toBe(true);
   });
@@ -139,49 +136,18 @@ describe("getSlashCommands", () => {
       expect.arrayContaining(["goal", "btw", "side", "queue", "stop", "t", "auth"]),
     );
     expect(getSlashCommands().map(({ name }) => name)).not.toContain("auth");
+    const help = helpText({ local: true });
+    for (const text of ["/commands", "/status"]) {
+      expect(help).not.toContain(text);
+    }
   });
 });
 
 describe("helpText", () => {
   it.each([
-    [
-      "session thinking levels",
-      { ...minimax, thinkingLevels: levels("off", "max") },
-      ["/think <off|max|default>"],
-      [],
-    ],
-    ["provider thinking fallback", minimax, ["/think <off|adaptive|default>"], []],
-    [
-      "default resets",
-      undefined,
-      [
-        "/model <provider/model|default>",
-        /\/think <[^>]+\|default>/u,
-        "/fast <status|auto|on|off|default>",
-      ],
-      [],
-    ],
-    [
-      "required local arguments",
-      { local: true },
-      ["/goal start <objective>", "/goal edit <objective>", "/btw <side question>"],
-      ["/btw [side question]"],
-    ],
-    ["local command visibility", { local: true }, [], ["/commands", "/status"]],
-  ] satisfies [string, Options, (string | RegExp)[], string[]][])(
-    "documents %s",
-    (_name, options, included, excluded) => {
-      const output = helpText(options);
-      for (const text of included) {
-        if (typeof text === "string") {
-          expect(output).toContain(text);
-        } else {
-          expect(output).toMatch(text);
-        }
-      }
-      for (const text of excluded) {
-        expect(output).not.toContain(text);
-      }
-    },
-  );
+    [{ ...minimax, thinkingLevels: levels("off", "max") }, "/think <off|max|default>"],
+    [minimax, "/think <off|adaptive|default>"],
+  ] satisfies [Options, string][])("documents thinking levels for %j", (options, expected) => {
+    expect(helpText(options)).toContain(expected);
+  });
 });

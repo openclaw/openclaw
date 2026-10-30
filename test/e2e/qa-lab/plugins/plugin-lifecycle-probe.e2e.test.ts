@@ -3,7 +3,6 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { setTimeout as nativeProcessTick } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
 import {
@@ -12,6 +11,10 @@ import {
 } from "../../../helpers/fixture-receipts.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import {
+  isProcessAlive as isProcessRunning,
+  waitForProcessExit,
+} from "../../../scripts/live-process-fixture.test-support.js";
 import {
   assertInspectDisabled,
   assertInspectLoaded,
@@ -41,30 +44,6 @@ function fixtureTarball(prefix: string) {
   writeFileSync(tarball, "fixture package");
   const packages: [string, string, string][] = [["registry-probe", "1.0.0", tarball]];
   return { dir, packages };
-}
-
-function isProcessRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Once the parent exits, its descendant has no ChildProcess handle in this test.
-async function waitForProcessExit(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (isProcessRunning(pid)) {
-      // Reaping uses native time even while command deadlines use fake timers.
-      await nativeProcessTick(5, undefined, { signal });
-    }
-  } catch (error) {
-    if (signal.aborted) {
-      throw new Error(`process still alive: ${pid}`, { cause: error });
-    }
-    throw error;
-  }
 }
 
 class FakeCommandChild extends EventEmitter {
@@ -106,21 +85,18 @@ it("joins registry cleanup when its startup is cancelled", async () => {
 });
 
 it.each([
-  { name: "loaded", check: assertInspectLoaded, plugin: { enabled: true, status: "loaded" } },
-  {
-    name: "disabled",
-    check: assertInspectDisabled,
-    plugin: { enabled: false, status: "disabled" },
-  },
-  {
-    name: "disabled but loaded",
-    check: assertInspectDisabled,
-    plugin: { enabled: false, status: "loaded" },
-    error: "expected lifecycle-claw inspect status disabled, got loaded",
-  },
-  { name: "missing", check: assertInspectLoaded, plugin: undefined, error: "missing" },
-])("validates $name inspect JSON", ({ check, plugin, error }) => {
-  const file = inspectFile(plugin);
+  ["loaded", true, "loaded", undefined],
+  ["disabled", false, "disabled", undefined],
+  [
+    "disabled but loaded",
+    false,
+    "loaded",
+    "expected lifecycle-claw inspect status disabled, got loaded",
+  ],
+  ["missing", true, undefined, "missing"],
+] as const)("validates %s inspect JSON", (_name, enabled, status, error) => {
+  const check = enabled ? assertInspectLoaded : assertInspectDisabled;
+  const file = inspectFile(status === undefined ? undefined : { enabled, status });
   const result = expect(() => check("lifecycle-claw", file));
   if (error) {
     result.toThrow(error === "missing" ? `failed to read JSON from ${file}` : error);

@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { preparePersonalGitHubSessionReceiptDeletion } from "../state/github-personal-publication-lifecycle.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -8,10 +8,12 @@ import {
   personalPublicationAccount,
   expectPersonalPublicationReplay,
 } from "./github-personal-publication.test-support.js";
+import { createGitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
 import { claimRepositoryGitHubPublicationAsync } from "./github-publication-store-async.js";
 import {
   SESSION_ID,
   SESSION_KEY,
+  commandResult,
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
@@ -20,6 +22,7 @@ import { listRepositoryGitHubPublicationsInDatabase } from "./github-repository-
 import { readRepositoryGitHubPublicationInDatabase } from "./github-repository-publication-store.worker.js";
 import {
   createRepositoryPublicationFixture,
+  observeRepositoryCommands,
   repositoryPublicationTestUrl as url,
 } from "./github-repository-publication.test-support.js";
 import {
@@ -128,16 +131,13 @@ it.each(["shared", "personal"] as const)(
   async (source) => {
     const { f, person, coordinator, publish } = await sourceFixture(source);
     let current = true;
-    const transport = mocks.runCommand.getMockImplementation()!;
-    mocks.runCommand.mockImplementation(async (args: string[], options) => {
-      const result = await transport(args, options);
+    observeRepositoryCommands((args) => {
       if (args.includes("repos/owner/repository/pulls") && args.includes("POST")) {
         current = false;
         if (person) {
           person.runtime.live = false;
         }
       }
-      return result;
     });
     const request = () =>
       publish("accepted-before-close", {
@@ -315,6 +315,78 @@ it("extends its recorded pushed head after the earlier PR was closed before conf
   expect(f.runtime.effects).toEqual(["push", "pull_request", "push", "pull_request"]);
 });
 
+it("settles unreadable repository publication without replaying its dispatched push", async () => {
+  const f = await repositoryFixture();
+  f.runtime.interruptPush = true;
+  const first = await f.publish("unconfirmed-repository");
+  expect(first.status).toBe("requested");
+  const before = readReceipt(first.requestId)!;
+  expect(before).toMatchObject({ last_effect: "push", effect_state: "dispatched" });
+  const transport = mocks.runCommand.getMockImplementation()!;
+  mocks.runCommand.mockImplementation(async (args: string[], ...rest: unknown[]) =>
+    args.includes("repos/owner/repository") ? commandResult("", 1) : transport(args, ...rest),
+  );
+  let now = performance.now();
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+  onTestFinished(() => clock.mockRestore());
+  const coordinator = createTestGitHubPublicationCoordinator({
+    placements: f.placements,
+    recovery: {
+      shared: createGitHubPublicationRecoveryBackoff(),
+      repository: createGitHubPublicationRecoveryBackoff(),
+    },
+  });
+  for (const waitMs of [0, 60_000, 120_000]) {
+    now += waitMs;
+    await coordinator.resumeSessionRequests();
+  }
+  expect(readReceipt(first.requestId)).toMatchObject({
+    status: "failed",
+    error_code: "unavailable",
+    next_action: expect.stringContaining("unconfirmed"),
+    head_commit: before.head_commit,
+    last_effect: "push",
+    effect_state: "dispatched",
+  });
+  const calls = mocks.runCommand.mock.calls.length;
+  now += 3_600_000;
+  await coordinator.resumeSessionRequests();
+  expect(mocks.runCommand).toHaveBeenCalledTimes(calls);
+  expect(f.runtime.effects).toEqual(["push"]);
+});
+
+it("keeps waiting for the first accepted checkpoint without exhausting recovery", async () => {
+  const f = await repositoryFixture(undefined, undefined, {}, false);
+  const first = await f.publish("waiting-for-checkpoint");
+  expect(first.status).toBe("requested");
+  let now = performance.now();
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+  onTestFinished(() => clock.mockRestore());
+  const coordinator = createTestGitHubPublicationCoordinator({
+    placements: f.placements,
+    recovery: {
+      shared: createGitHubPublicationRecoveryBackoff(),
+      repository: createGitHubPublicationRecoveryBackoff(),
+    },
+  });
+  for (const waitMs of [0, 60_000, 120_000, 3_600_000]) {
+    now += waitMs;
+    await coordinator.resumeSessionRequests();
+  }
+  expect(readReceipt(first.requestId)).toMatchObject({
+    status: "requested",
+    checkpoint_ref: null,
+    last_effect: null,
+  });
+  expect(f.runtime.effects).toEqual([]);
+  await f.capture("first accepted checkpoint\n", "ready");
+  await coordinator.resumeSessionRequests();
+  expect(await coordinator.readAsync(first.requestId)).toMatchObject({
+    status: "published",
+    url,
+  });
+});
+
 it("records a recovered push response even when authority closes during its observation", async () => {
   const f = await repositoryFixture();
   f.runtime.interruptPush = true;
@@ -351,14 +423,11 @@ it.each([
     const { f, person, publish } = await sourceFixture(source);
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const transport = mocks.runCommand.getMockImplementation()!;
-    mocks.runCommand.mockImplementation(async (args: string[], options) => {
-      const result = await transport(args, options);
+    observeRepositoryCommands(async (args) => {
       if (args.includes("graphql")) {
         entered.resolve();
         await release.promise;
       }
-      return result;
     });
     const pending = publish("reset-during-push");
     try {

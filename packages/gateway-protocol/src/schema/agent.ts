@@ -2,7 +2,6 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
-// Gateway Protocol schema module defines protocol validation shapes.
 import { stringLiteralUnion } from "./string-literal-union.js";
 
 /**
@@ -324,11 +323,6 @@ export const AgentParamsSchema = closedObject({
   bootstrapContextRunKind: Type.Optional(stringLiteralUnion(["default", "heartbeat", "cron"])),
   acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
   internalRuntimeHandoffId: Type.Optional(NonEmptyString),
-  // Enabled backend recovery supplies only capture/retry mode. Disabled collection omits it;
-  // the private token, when present, remains in durable session state.
-  internalExecutionIdentityRetry: Type.Optional(Type.Boolean()),
-  /** Exact durable recovery attempt that owns any post-admission identity bind. */
-  internalExecutionIdentityRecoveryAttempt: Type.Optional(Type.Integer({ minimum: 1 })),
   execApprovalFollowupExpectedSessionId: Type.Optional(NonEmptyString),
   internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
   inputProvenance: Type.Optional(InputProvenanceSchema),
@@ -338,10 +332,6 @@ export const AgentParamsSchema = closedObject({
   disableMessageTool: Type.Optional(Type.Boolean()),
   swarmCollector: Type.Optional(Type.Boolean()),
   swarmOutputSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-  // Host-owned recovery turns can force every Code Mode exec onto the
-  // restart-safe path even if the model omits or clears the tool argument.
-  forceRestartSafeTools: Type.Optional(Type.Boolean()),
-  forceCodeModeTools: Type.Optional(Type.Boolean()),
   voiceWakeTrigger: Type.Optional(Type.String()),
   idempotencyKey: NonEmptyString,
   label: Type.Optional(SessionLabelString),

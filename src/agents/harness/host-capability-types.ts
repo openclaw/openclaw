@@ -39,8 +39,18 @@ type AgentHarnessToolSurfaceOptions = Omit<
 >;
 
 type AgentHarnessModelExecutionBinder = (
-  model: import("@openclaw/model-catalog-core/model-catalog-refs").ProviderModelRef | undefined,
+  model:
+    | (import("@openclaw/model-catalog-core/model-catalog-refs").ProviderModelRef & {
+        cyberAccessProgram?: import("../../../packages/gateway-protocol/src/schema/sessions-row.js").CyberAccessProgram;
+      })
+    | undefined,
 ) => Readonly<{ signal: AbortSignal; assertCurrent: () => void; release: () => void }> | undefined;
+
+type AgentHarnessToolSurfaceBindingOptions = Readonly<{
+  cwd?: string;
+  /** The selected native runtime permits local execution outside Gateway tool policy. */
+  nativeLocalExecution?: true;
+}>;
 
 export type AgentHarnessHostCapabilities = Readonly<{
   kind: "agent-harness-host-capability";
@@ -72,16 +82,16 @@ export type AgentHarnessHostCapabilities = Readonly<{
     /** Await the existing workspace owner while preserving this run's authority. */
     waitUntilReady: () => Promise<void>;
   }>;
-  /** Native delegation without person selection must remain unambiguous at admission. */
+  /** Native delegation retains the incumbent execution and requires its current authority. */
   assertNativeSubagentSpawnAllowed?: () => void;
-  /** Binds the actual native model; returns undefined only for runs without an operator source. */
+  /** Binds the actual native model and Access selection; returns undefined only for runs without an operator source. */
   bindModelExecution?: AgentHarnessModelExecutionBinder;
   /** Retains the original source for already-admitted work beyond foreground completion. */
   retainSourceAuthority?: () =>
     | Readonly<{
         assertCurrent: () => void;
         signal?: AbortSignal;
-        /** Live preflight fact; absence means unknown, not an unrestricted source. */
+        /** Model or Access dispatch enforcement; absence means unknown, not unrestricted. */
         modelPolicyRequired?: boolean;
         /** Opaque equality for compatible active input; never authority by itself. */
         sourceIdentity?: object;
@@ -165,12 +175,12 @@ export type AgentHarnessHostCapabilities = Readonly<{
   /** @deprecated Await createToolSurfaceAsync for worker-backed exec policy. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   createToolSurface?: (
     options: AgentHarnessToolSurfaceOptions,
-    bindingOptions?: Readonly<{ cwd?: string }>,
+    bindingOptions?: AgentHarnessToolSurfaceBindingOptions,
   ) => AnyAgentTool[];
   /** Prepares fresh exec policy, then creates and binds tools to this exact live host. */
   createToolSurfaceAsync?: (
     options: AgentHarnessToolSurfaceOptions,
-    bindingOptions?: Readonly<{ cwd?: string }>,
+    bindingOptions?: AgentHarnessToolSurfaceBindingOptions,
   ) => Promise<AnyAgentTool[]>;
   /** Core-owned byte binding for a native command approval, scoped to this admitted run. */
   prepareMutableFileApproval?: (request: { command: string; cwd?: string }) => Promise<

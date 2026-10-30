@@ -11,16 +11,10 @@ export const TELEGRAM_MINIAPP_PATH_PREFIX = "/__openclaw_tg_miniapp/";
 export const TELEGRAM_MINIAPP_URL_ERROR =
   "Mini App needs an HTTPS gateway URL. Set `gateway.tailscale.mode: serve` or `funnel`, then retry /controlui.";
 
-type TelegramMiniAppUrls = {
-  pageUrl: string;
-  controlUiUrl: string;
-  gatewayUrl: string;
-};
-
 export async function resolveTelegramMiniAppUrls(params: {
   cfg: OpenClawConfig;
   runCommand?: TailscaleStatusCommandRunner;
-}): Promise<TelegramMiniAppUrls> {
+}) {
   const mode = params.cfg.gateway?.tailscale?.mode ?? "off";
   if (mode !== "serve" && mode !== "funnel") {
     throw new Error(TELEGRAM_MINIAPP_URL_ERROR);

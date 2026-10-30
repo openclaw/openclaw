@@ -18,8 +18,10 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { journalOwner } from "./placement-suite.test-support.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
+import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile-recovery.js";
 import { createWorkspaceResultJournal } from "./workspace-result-settlement.js";
 
@@ -45,24 +47,16 @@ describe("worker placement workspace journal", () => {
       remoteWorkspaceDir: "/worker/workspace",
       seedEnvironment: "before-dispatch",
     });
-    const owner = {
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      placementGeneration: active.generation,
-    };
+    const owner = journalOwner(active);
     const basePack = Buffer.from("orphaned workspace base pack");
-    await store.beginWorkspaceReconciliation(owner, {
-      version: 1,
-      temporaryNonce: "c".repeat(32),
-      baseManifestRef: active.workspaceBaseManifestRef,
-      currentManifestRef: `sha256:${"d".repeat(64)}`,
-      baseEntries: [],
-      appliedEntries: [],
-      baseTree: "e".repeat(40),
-      basePackSha256: sha256(basePack),
-      basePack,
-    });
+    await store.beginWorkspaceReconciliation(
+      owner,
+      workspaceJournal(active.workspaceBaseManifestRef, `sha256:${"d".repeat(64)}`, {
+        temporaryNonce: "c".repeat(32),
+        baseTree: "e".repeat(40),
+        basePack,
+      }),
+    );
     const journal = await store.loadWorkspaceReconciliation(owner);
     assert(journal, "expected journal");
     return { active, owner, journal };

@@ -23,19 +23,21 @@ Policy and grants are rechecked after CI/security inspection and retained with
 the existing outcome. Scoped land authority includes this inherited-failure
 exception; the confirmed-operator flag records that scope without asserting that
 the bot is an administrator. No grant changes or alternate credentials occur.
-The existing authoritative classic-protection absence gate remains mandatory:
-generic REST 404s and permission-projected GraphQL nulls do not prove absence.
-Missing policy-read capability is an external authority blocker, not an
-implicit fallback or permission to elevate the writer.
-This blocks the selected exception, not ordinary green-CI landing. A MAINTAIN
-writer can use ordinary `scripts/pr merge-run` when normal CI, review, and merge
-admission succeed, without organization-admin or CI-bypass authority. Repair the
-failed CI and use that route when classic policy cannot be read; do not change
-credentials or supply a policy snapshot to make the exception pass.
-Repository write access, organization membership, branch-policy read access,
-CI bypass, release environment approval, and production deployment authority are
-separate capabilities. A missing capability on one route proves nothing about
-the others.
+Classic branch-protection discovery is not a prerequisite for landing. The
+helper does not request `/branches/main/protection`, infer its absence from a
+404, or require administrator access merely to inspect it. Applicable rules
+supply required-check, review, and delegated CI-bypass evidence. The admin route
+also pages GitHub's native per-PR required-check markers, bound to the prepared
+head on every page. Requirements absent from the ruleset inventory use the
+existing latest-run and publisher checks; failed, pending, or missing results
+remain blocking. Optional failures and superseded runs do not become required.
+These observations do not attest that an unreported classic requirement is absent.
+GitHub evaluates the writer's actual permissions and applicable enforcement at
+the exact-head merge request. A provider refusal is retained and investigated
+under normal recovery, never retried through another writer or treated as
+permission to change credentials.
+Repository write access, organization membership, CI bypass, release environment
+approval, and production deployment authority remain separate capabilities.
 The original conflict-resolution route permits only
 pending/skipped `openclaw/ci-gate`. An explicitly approved `pre-existing-failure`
 attribution instead binds the current failed attempt, effective gate check-run,
@@ -80,6 +82,45 @@ its baseline/prior head and tested merge objects. Exact PR/policy facts and the
 landing-parent audit still apply; active prior-CI admission may accept verified
 forward-main movement under the [merge admission contract](/reference/scripts/merge-admission). See the [landing workflow](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-pr-maintainer/references/landing.md#explicit-prior-ci-admin-landing)
 for the evidence fields and supported policy limits.
+
+## Artifact-build failure with successful primary CI
+
+The same confirmed admin route accepts an independently attributed failure in
+`.github/workflows/ci-build-artifacts-testbox.yml` when primary `ci.yml` passed
+on the exact prepared PR head. This is the supported artifact-build contract;
+it does not admit arbitrary secondary workflows.
+
+Keep `runId` and `runAttempt` bound to the failed artifact-build run, including
+`tests.result: "fail"` and the review's `tests.preExistingCi`. Add
+`primaryCi: { runId, runAttempt }` naming the separate successful primary attempt.
+Retain the ordinary tested merge, baseline, artifact hashes, per-job attribution,
+and scoped passing checks. Every failure's unchanged `sourcePaths` must include
+the artifact-build workflow itself. Omit `aggregate` and `cancellation`:
+all artifact-build jobs must be terminal and none may be cancelled.
+
+Admission binds the failed jobs to current optional check-runs, their suite,
+workflow, and attempt. A newer PR run of the same workflow invalidates this evidence; older successful
+or skipped runs do not.
+Primary CI's gate and `security-fast`, the combined CI/security status, and every
+current required check must pass. Security Review replay verification uses the
+primary CI run and attempt. Other failed or unfinished rollup contexts remain
+blocking; the ordinary watcher and cancellation contracts are unchanged.
+
+A PR bound to older tooling with no retained merge outcome can explicitly select
+current official-main tooling for this one confirmed admin invocation:
+
+```bash
+scripts/pr merge-run <PR> --current-workflow --admin-evidence <file> --confirmed-operator-admin
+```
+
+The native lock, fresh official-main acquisition, complete wrapper verification,
+exact review/preparation/head checks, and existing writer authority still apply.
+Any retained outcome or unresolved merge capture blocks first admission.
+The original binding is unchanged. The outcome retains `workflowAdmission`
+with the binding and old/new sources; ordinary reconciliation and completion
+continue through the original workflow. The new tooling must land through the
+existing trusted workflow before use. Never edit a binding or invent a recovery
+outcome to select unlanded code.
 
 ## Requalification on a busy main
 

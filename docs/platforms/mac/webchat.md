@@ -148,9 +148,12 @@ The anchored compact chat panel from the menu bar keeps the compact single-colum
 Native chat preserves Markdown paragraph breaks, including before lists and
 while responses are streaming.
 
-In the full macOS chat window, completed commentary, reasoning, and tool work
-collapse into a **Worked for…** disclosure above the answer. Expand it to inspect
-the work; final text, images, and other attachments stay visible. Active turns,
+In the full macOS chat window, all assistant text, images, and other attachments
+stay visible after a turn completes. Contiguous reasoning and tool work fold into
+separate **Worked** disclosures in place. Expand one to inspect that stretch of work;
+loading older history keeps expanded sections open. Collapsed headings list operation
+kinds and failed, blocked, skipped, or unknown outcomes; expanding a section also
+shows its total tool-call count. Active turns,
 work without a final answer, and unresolved or failed work after the answer remain
 expanded. Work stays on its own side of forwarded messages, new inputs, and
 history dividers. Find in Conversation expands the transcript while searching.
@@ -396,7 +399,7 @@ If images or files prompt you to **Sign in to continue loading content**, choose
 returns to the open conversation. Signing in to an ordinary browser tab alone
 does not refresh the Mac app's separate browser session.
 
-Choose **File → New Gateway Window…** or press Shift-Cmd-N, then select a Gateway.
+Choose **File → New Gateway Window…**, then select a Gateway. This action has no keyboard shortcut.
 The picker includes the primary Gateway, **This Mac** when it also hosts a local
 Gateway, and saved profiles. It remembers the selected Gateway. Every selection
 creates a new independent window in the chosen Web or Native experience, so the

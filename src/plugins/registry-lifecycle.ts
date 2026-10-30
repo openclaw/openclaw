@@ -190,6 +190,25 @@ export function bindPluginRegistryLifetime(
   registryLifetimes.set(getPluginRegistryResourceOwner(registry), lifetime);
 }
 
+// Published records move to their runtime owner; unpublished cached registries retire with the cache.
+function isRetiredWithPluginCache(registry: PluginRegistry, record: PluginRecord): boolean {
+  return (
+    !isPluginRecordActive(registry, record) && registryEpochs.get(registry)?.epoch === undefined
+  );
+}
+
+/** Lists the lazily loaded registries that retiring this cache will dispose. */
+export function listPluginCacheRetiringRegistries(cache: PluginCache): PluginRegistry[] {
+  const registries = new Set<PluginRegistry>();
+  for (const instance of cache.instances) {
+    const owner = getPluginInstanceOwner(instance);
+    if (owner?.registry && isRetiredWithPluginCache(owner.registry, owner.record)) {
+      registries.add(owner.registry);
+    }
+  }
+  return [...registries];
+}
+
 export function getPluginLoaderCacheState(cache = getPluginCache()) {
   const cached = registryLoads.get(cache);
   if (cached) {
@@ -220,7 +239,7 @@ export function getPluginLoaderCacheState(cache = getPluginCache()) {
       // Publication transfers exact instances to their runtime owner, including adopted records.
       if (isPluginRecordActive(owner.registry, owner.record)) {
         releasePluginCacheInstance(instance, cache);
-      } else if (registryEpochs.get(owner.registry)?.epoch === undefined) {
+      } else if (isRetiredWithPluginCache(owner.registry, owner.record)) {
         instance.quiesce();
         registries.add(owner.registry);
       }
@@ -409,6 +428,23 @@ export function isPluginRecordActive(registry: PluginRegistry, record: PluginRec
   );
 }
 
+/**
+ * A retained scoped registry can outlive one plugin's replacement: the replaced
+ * instance is disposed while the registry itself is never retired. Callers that
+ * cache such a registry must stop reusing it once any loaded plugin it dispatches
+ * can no longer admit calls.
+ */
+export function isPluginRegistryRecordSetAdmitting(registryView: PluginRegistry): boolean {
+  const registry = getPluginRegistryResourceOwner(registryView);
+  return registry.plugins.every(
+    (record) =>
+      !record.enabled ||
+      record.status !== "loaded" ||
+      (!pluginInstanceState.records.get(record)?.revoked &&
+        getPluginInstance(record)?.acceptingCalls !== false),
+  );
+}
+
 export function revokePluginRecord(registry: PluginRegistry, record: PluginRecord): void {
   resolvePluginInstanceOwner(record, registry).revoked = true;
 }
@@ -499,9 +535,9 @@ export function capturePluginLifecycleAuthority(
             registration.instance === owner.instance &&
             owner.instance?.hasActiveCall === true) ||
           (options?.scopedRuntime === true &&
-            registryEpochs.get(registry)?.epoch === undefined &&
-            !retiredRegistries.has(registry) &&
-            registry.plugins.includes(record)))
+            registryEpochs.get(owner.registry)?.epoch === undefined &&
+            !retiredRegistries.has(owner.registry) &&
+            owner.registry.plugins.includes(record)))
       );
     };
     // Mint only from the current owner; retained closures follow legitimate adoption.

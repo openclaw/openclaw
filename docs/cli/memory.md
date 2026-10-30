@@ -42,7 +42,8 @@ dreaming consolidation sidecar:
   index. `--json` returns
   `[{"agentId","provider","health","memoryCore":"consolidation-sidecar"}]`.
   `--deep`, `--index`, and `--fix` exit with code 1 because they inspect
-  Memory Core's own index.
+  Memory Core's own index. With `--json`, these refusals return the standard
+  [CLI JSON failure envelope](/cli#json-failures).
 - `memory search` exits with code 1 and names the slot owner instead of
   searching the sidecar index.
 - `index`, `reset`, `forget`, `promote`, and the REM commands keep working on
@@ -91,13 +92,28 @@ configured, falls back to the default agent.
 With local llama.cpp embeddings, `--deep` and `--index` also show available
 server, model, capability, and endpoint diagnostics.
 
+In the Control UI, **Memory → Overview → Test** checks embedding readiness on
+demand. The Gateway reuses the result for 30 seconds, including across page
+reloads. After it expires, **No recent check** means readiness needs a fresh
+check, not that embeddings have failed. Reloading the page does not probe the
+provider. CLI `memory status --deep` runs in a separate process and does not
+refresh the Gateway's readiness cache.
+
 Repair preserves recorded recall days, including local dates that differ from
 UTC. It fills in a day from the last recall timestamp only when no day is recorded.
 
-If the `Dreaming` line stays `off` even with `dreaming.enabled: true`, or
-scheduled sweeps never seem to run, the managed dreaming cron depends on the
-default agent's heartbeat firing to trigger reconciliation. See
-[Dreaming](/concepts/dreaming) for scheduling details.
+The `Dreaming` line summarizes the loaded
+`plugins.entries.memory-core.config.dreaming` settings; it does not report
+whether a sweep is scheduled or has run. If it shows `off` with
+`dreaming.enabled: true`, check that the setting sits under that path in the
+configuration the CLI loads.
+
+Scheduled sweeps do not depend on heartbeat. They run as the isolated
+`Memory Dreaming Promotion` cron job, which memory-core reconciles at Gateway
+startup and again during runtime. If sweeps never seem to run, look for that job
+with `openclaw automations list --all`, then see
+[Dreaming scheduling](/concepts/dreaming#scheduling) for the cron scheduler,
+ambient system owner, and `openclaw doctor --fix` requirements.
 
 Status also lists any extra search paths from `memory.search.extraPaths`.
 Storage diagnostics show the shared agent database file, WAL, reusable free pages,
@@ -129,7 +145,9 @@ extra-path details before showing indexing progress. The completion message
 reports the indexed file count. An empty corpus is a successful no-op: the
 command reports the resolved workspace path and that nothing was indexed, and
 leaves the missing `memory/` directory for the first memory write to create.
-Internal dreaming-narrative, cron, and heartbeat session transcripts are
+An index request that joins an active pass also processes newly observed
+memory-file changes before reporting completion.
+Internal Active Memory recall, dreaming-narrative, cron, and heartbeat session transcripts are
 excluded from indexing, including retained compressed narrative archives whose
 original sessions are no longer active. Sessions previously selected by
 `memory forget` also remain excluded. `--force` removes stale index records for
@@ -137,8 +155,29 @@ both groups without reindexing their retained transcripts. Ordinary retained,
 reset, and deleted user-session archives remain eligible until explicitly
 targeted.
 
+Recognizable Active Memory recall helpers are also excluded from existing search
+indexes before result limits are applied. Ordinary synchronization removes their
+stale index records without `--force` or re-embedding unchanged conversations.
+Historical transcripts without a recognizable helper identity remain eligible.
+
+When a memory file changes, indexing can reuse unchanged chunks from the published
+index of that same file and source, even when their line numbers shift or the
+embedding cache is disabled. Reuse requires matching provider settings, model, input
+format, and vector dimensions; conflicting published vectors are embedded again
+unless the cache already holds a valid match. This does not remove existing cache
+rows or change cache retention.
+
 Full rebuilds wait for temporary database cleanup before reporting completion.
+Searches remain available against the published index while a rebuild finishes.
 File removal runs asynchronously so cleanup does not block the Gateway event loop.
+On `SIGINT` or `SIGTERM`, the CLI reports the signal and waits for admitted work
+and cleanup before exiting (130 or 143 respectively). An admitted rebuild can
+finish during shutdown; an incomplete or failed rebuild never replaces the
+published index.
+SQLite background rebuilds retain completed work when foreground activity interrupts
+indexing. The next sync resumes the rebuild, incorporating source changes before
+publishing the complete index. Closing the memory owner or restarting the Gateway
+discards this unfinished work. PostgreSQL rebuilds restart after an interruption.
 
 When an embedding provider rate-limits indexing, each embedding operation gets
 up to five attempts. Retries honor valid provider cooldown hints, capped at
@@ -205,9 +244,10 @@ every configured agent, falling back to the default agent when no list is
 configured. The command asks for confirmation. `--yes` skips the prompt and is
 required in a non-interactive terminal.
 
-Reset atomically drops and recreates only memory-owned derived tables in
-`agents/<agentId>/agent/openclaw-agent.sqlite`, clearing indexed content and
-cached embeddings while retaining required revision bookkeeping. Non-memory
+Reset atomically clears memory-owned derived content and cached embeddings in
+the selected agent database (SQLite or PostgreSQL), retaining required revision
+bookkeeping. SQLite recreates the derived tables; PostgreSQL retains their
+definitions and deletes the derived rows. Non-memory
 database tables and memory source files remain untouched. An agent with no index
 is a successful no-op. Reset coordinates with existing memory maintenance and
 does not restart the Gateway; a running Gateway can reindex retained sources
@@ -238,6 +278,10 @@ openclaw memory search [query] [--query <text>] [--agent <id>] [--max-results <n
 - `--min-score <n>`: filter out matches below this score.
 
 Routine indexing can continue after search returns and does not add a warning.
+Standalone searches print results from the available index, then finish pending
+indexing before exiting so the next search can see file edits. When routed through
+the Gateway, results arrive before that indexing finishes; the Gateway keeps the
+request's resources alive until it settles.
 If automatic indexing failed, or the index identity is incompatible, human
 output warns that matches may be incomplete. With `--json`, the response adds
 `stale: true`, plus `warning` and `action` fields. Treat an empty `results`
@@ -398,7 +442,7 @@ new entries later, but regeneration is not guaranteed.
 ### Readmission and retained data
 
 A real purge records the selected session IDs as forgotten in the agent's
-SQLite database before removing artifacts. Automatic dreaming ingestion,
+selected database before removing artifacts. Automatic dreaming ingestion,
 `memory session-backfill`, and transcript indexing, including
 `memory index --force`, check those records. Automatic ingestion records the
 reason `forgotten`. Repeating the purge does not remove the exclusion, and

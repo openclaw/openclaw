@@ -1,32 +1,28 @@
 import type { TalkConfigResult, TalkVoiceChangeEvent } from "@openclaw/gateway-protocol";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { RealtimeVoiceCloseOptions } from "../../../../src/talk/provider-types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { loadSettings, patchSettings, type UiSettings } from "../../app/settings.ts";
+import { loadSettings, type UiSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
-import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import {
   createRealtimeTalkConversationState,
   continueRealtimeTalkConversation,
-  orderRealtimeTalkConversation,
-  updateRealtimeTalkConversation,
   type RealtimeTalkConversationState,
-} from "./talk/conversation.ts";
-import {
-  discoverRealtimeTalkCameras,
-  RealtimeTalkSelectedMicrophoneError,
-  type RealtimeTalkCameraDevice,
-} from "./talk/input.ts";
+} from "./talk/conversation-state.ts";
+import type { RealtimeTalkCameraDevice } from "./talk/input.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
-import { RealtimeTalkSession, type RealtimeTalkStatus } from "./talk/session.ts";
+import type { RealtimeTalkSession, RealtimeTalkStatus } from "./talk/session.ts";
 import type { SplitTalkOptions } from "./talk/split.ts";
-import { RealtimeTalkVoiceSelection } from "./talk/voice-selection.ts";
+import type { RealtimeTalkVoiceSelection } from "./talk/voice-selection.ts";
 
 export type ChatRealtimeState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   settings: UiSettings;
   sessionKey: string;
+  chatMessages: unknown[];
   lastError?: string | null;
   chatError?: string | null;
   realtimeTalk: ChatRealtimeOwner;
@@ -36,22 +32,26 @@ export type ChatRealtimeState = {
   switchRealtimeTalkCamera: () => Promise<void>;
 };
 
-type ChatRealtimeSnapshot = {
+export type ChatRealtimeView = {
   realtimeTalkActive: boolean;
   realtimeTalkStatus: RealtimeTalkStatus;
   realtimeTalkDetail: string | null;
   realtimeTalkInputNotice: string | null;
-  realtimeTalkUseSystemDefault: (() => Promise<void>) | null;
   realtimeTalkInputLevel: RealtimeTalkLevelSignal;
   realtimeTalkVideoStream: MediaStream | null;
   realtimeTalkCameraDevices: RealtimeTalkCameraDevice[];
   realtimeTalkVideoCapable: boolean;
   realtimeTalkVideoPending: boolean;
   realtimeTalkCameraError: boolean;
+};
+
+type ChatRealtimeSnapshot = {
+  realtimeTalkUseSystemDefault: (() => Promise<void>) | null;
   realtimeTalkSession: RealtimeTalkSession | null;
   realtimeTalkVoiceController: RealtimeTalkVoiceSelection | null;
+  realtimeTalkPlayback: GatewaySpeechPlayback | null;
   realtimeTalkConversationState: RealtimeTalkConversationState;
-};
+} & ChatRealtimeView;
 
 /** Synchronous call/device authority; projections observe complete state transitions. */
 class ChatRealtimeOwner {
@@ -69,9 +69,10 @@ class ChatRealtimeOwner {
     realtimeTalkCameraError: false,
     realtimeTalkSession: null,
     realtimeTalkVoiceController: null,
+    realtimeTalkPlayback: null,
     realtimeTalkConversationState: createRealtimeTalkConversationState(),
   };
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
 
   get snapshot(): Readonly<ChatRealtimeSnapshot> {
     return this.value;
@@ -79,17 +80,12 @@ class ChatRealtimeOwner {
 
   update(patch: Partial<ChatRealtimeSnapshot>) {
     this.value = { ...this.value, ...patch };
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.publish();
   }
 
   subscribe(listener: () => void) {
     const notify = () => listener();
-    this.listeners.add(notify);
-    return () => {
-      this.listeners.delete(notify);
-    };
+    return this.listeners.subscribe(notify);
   }
 }
 
@@ -102,12 +98,14 @@ export function stopChatRealtimeTalk(
   options: RealtimeVoiceCloseOptions & { preserveConversation?: boolean } = {},
 ) {
   const session = state.realtimeTalk.snapshot.realtimeTalkSession;
+  const playback = state.realtimeTalk.snapshot.realtimeTalkPlayback;
   state.realtimeTalk.snapshot.realtimeTalkVoiceController?.dispose();
   // Retire callback ownership before stop() can synchronously report idle.
   // Otherwise a closing session can still mutate the newly selected route.
   state.realtimeTalk.snapshot.realtimeTalkInputLevel.set(0);
   state.realtimeTalk.update({
     realtimeTalkVoiceController: null,
+    realtimeTalkPlayback: null,
     realtimeTalkSession: null,
     realtimeTalkUseSystemDefault: null,
     realtimeTalkActive: false,
@@ -123,6 +121,7 @@ export function stopChatRealtimeTalk(
       ? continueRealtimeTalkConversation(state.realtimeTalk.snapshot.realtimeTalkConversationState)
       : createRealtimeTalkConversationState(),
   });
+  playback?.stop();
   void session?.stop({ disposition: options.disposition ?? "detach" });
 }
 
@@ -140,70 +139,7 @@ export function attachChatRealtimeActions(
   maxSpeechTextLength?: () => number | Promise<number>,
 ) {
   let conversationGeneration = 0;
-  const talkStatusIsError = () => state.realtimeTalk.snapshot.realtimeTalkStatus === "error";
-  const persistCameraPreference = (enabled: boolean) => {
-    state.settings = patchSettings({ talkCameraAutoEnable: enabled });
-  };
-  const showCameraError = (error: unknown) => {
-    state.realtimeTalk.update({
-      realtimeTalkDetail: formatUiError(error),
-      realtimeTalkCameraError: true,
-    });
-  };
-  const refreshCameraDevices = async (session: RealtimeTalkSession) => {
-    const result = await discoverRealtimeTalkCameras(() => false);
-    if (state.realtimeTalk.snapshot.realtimeTalkSession !== session) {
-      return;
-    }
-    state.realtimeTalk.update({
-      realtimeTalkCameraDevices: result.devices,
-    });
-  };
-  const setRealtimeTalkCameraEnabled = async (
-    enabled: boolean,
-    options: { disableAutoEnableOnFailure?: boolean } = {},
-  ) => {
-    const session = state.realtimeTalk.snapshot.realtimeTalkSession;
-    if (
-      !session ||
-      !state.realtimeTalk.snapshot.realtimeTalkVideoCapable ||
-      state.realtimeTalk.snapshot.realtimeTalkVideoPending ||
-      talkStatusIsError()
-    ) {
-      return;
-    }
-    state.realtimeTalk.update({
-      realtimeTalkVideoPending: true,
-      realtimeTalkCameraError: false,
-      realtimeTalkDetail: null,
-    });
-    if (!enabled) {
-      persistCameraPreference(false);
-    }
-    try {
-      if (enabled) {
-        await session.switchCamera(loadSettings().realtimeTalkVideoDeviceId);
-      }
-      await session.setVideoEnabled(enabled);
-    } catch (error) {
-      if (state.realtimeTalk.snapshot.realtimeTalkSession !== session || talkStatusIsError()) {
-        return;
-      }
-      if (options.disableAutoEnableOnFailure) {
-        persistCameraPreference(false);
-      }
-      state.realtimeTalk.update({
-        realtimeTalkVideoStream: null,
-      });
-      showCameraError(error);
-    } finally {
-      if (state.realtimeTalk.snapshot.realtimeTalkSession === session) {
-        state.realtimeTalk.update({
-          realtimeTalkVideoPending: false,
-        });
-      }
-    }
-  };
+  let actionsRuntime: typeof import("./talk/chat-actions-runtime.ts") | undefined;
   state.resetRealtimeTalkConversation = () => {
     state.realtimeTalk.update({
       realtimeTalkConversationState: createRealtimeTalkConversationState(),
@@ -231,10 +167,12 @@ export function attachChatRealtimeActions(
       ? undefined
       : talkSettings.realtimeTalkInputDeviceId?.trim() || undefined;
     const { client, sessionKey } = state;
-    let voiceController = state.realtimeTalk.snapshot.realtimeTalkVoiceController;
+    const voiceController = voiceChange
+      ? state.realtimeTalk.snapshot.realtimeTalkVoiceController
+      : null;
     const playback = new GatewaySpeechPlayback();
     const onSuperseded = () => {
-      if (state.realtimeTalk.snapshot.realtimeTalkVoiceController === voiceController) {
+      if (state.realtimeTalk.snapshot.realtimeTalkPlayback === playback) {
         stopChatRealtimeTalk(state);
       }
     };
@@ -244,13 +182,13 @@ export function attachChatRealtimeActions(
     if (voiceChange && !replacementTransport) {
       throw new Error(t("chat.voice.selectionFailed"));
     }
+    let closed: Promise<void> | undefined;
     if (voiceChange) {
       const previous = state.realtimeTalk.snapshot.realtimeTalkSession;
-      const previousController = state.realtimeTalk.snapshot.realtimeTalkVoiceController;
       state.realtimeTalk.update({
         realtimeTalkSession: null,
       });
-      const closed = previous?.stop();
+      closed = previous?.stop();
       state.realtimeTalk.update({
         realtimeTalkVideoStream: null,
         realtimeTalkCameraDevices: [],
@@ -259,47 +197,11 @@ export function attachChatRealtimeActions(
         ),
       });
       conversationGeneration += 1;
-      try {
-        playback.prepare(client, onSuperseded);
-        await closed;
-      } catch (error) {
-        playback.stop();
-        throw error;
-      }
-      if (
-        state.realtimeTalk.snapshot.realtimeTalkVoiceController !== previousController ||
-        state.client !== client ||
-        state.sessionKey !== sessionKey ||
-        !state.connected ||
-        !canStart()
-      ) {
-        playback.stop();
-        return undefined;
-      }
     } else {
       conversationGeneration = 0;
       state.realtimeTalk.snapshot.realtimeTalkVoiceController?.dispose();
-      const controller: RealtimeTalkVoiceSelection = new RealtimeTalkVoiceSelection({
-        client,
-        sessionKey,
-        isCurrent: () =>
-          state.realtimeTalk.snapshot.realtimeTalkVoiceController === controller &&
-          state.client === client &&
-          state.sessionKey === sessionKey &&
-          state.connected,
-        currentCall: () => state.realtimeTalk.snapshot.realtimeTalkSession,
-        restart: (request) => startRealtimeTalk(useSystemDefault, request),
-        cancel: (message) => {
-          stopChatRealtimeTalk(state, { preserveConversation: true });
-          state.realtimeTalk.update({
-            realtimeTalkStatus: "error",
-            realtimeTalkDetail: message,
-          });
-        },
-      });
-      voiceController = controller;
       state.realtimeTalk.update({
-        realtimeTalkVoiceController: controller,
+        realtimeTalkVoiceController: null,
       });
     }
     const itemPrefix = voiceChange ? `voice-${conversationGeneration}:` : "";
@@ -308,8 +210,9 @@ export function attachChatRealtimeActions(
       : 0;
     const videoDeviceId = talkSettings.realtimeTalkVideoDeviceId?.trim() || undefined;
     const autoEnableCamera = talkSettings.talkCameraAutoEnable === true;
-    let autoEnableCameraAttempted = false;
     state.realtimeTalk.update({
+      // The prepared playback owns this attempt before the lazy voice controller exists.
+      realtimeTalkPlayback: playback,
       realtimeTalkActive: true,
       realtimeTalkStatus: "connecting",
       realtimeTalkDetail: null,
@@ -323,212 +226,85 @@ export function attachChatRealtimeActions(
       state.resetRealtimeTalkConversation();
     }
     let split: SplitTalkOptions | undefined;
-    if (!voiceChange) {
-      try {
-        playback.prepare(client, onSuperseded);
-        const [result, maxTextLength] = await Promise.all([
-          client.request<TalkConfigResult>("talk.config", {}),
-          maxSpeechTextLength?.(),
-        ]);
-        if (
-          state.realtimeTalk.snapshot.realtimeTalkVoiceController !== voiceController ||
-          state.client !== client ||
-          !state.connected ||
-          state.sessionKey !== sessionKey ||
-          !canStart()
-        ) {
-          playback.stop();
-          if (state.realtimeTalk.snapshot.realtimeTalkVoiceController === voiceController) {
-            stopChatRealtimeTalk(state);
-          }
-          return undefined;
-        }
-        const talk = result.config?.talk;
-        if (talk?.realtime?.mode === "stt-tts") {
-          if (!sendMessage) {
-            throw new Error(t("chat.voice.replyFailed"));
-          }
-          split = {
-            silenceTimeoutMs: talk.silenceTimeoutMs ?? 900,
-            speechMethod: talk.provider || talk.resolved?.provider ? "talk.speak" : "tts.speak",
-            sendMessage,
-            playback,
-            maxTextLength,
-          };
-        }
-      } catch (error) {
-        playback.stop();
-        if (state.realtimeTalk.snapshot.realtimeTalkVoiceController === voiceController) {
-          stopChatRealtimeTalk(state);
-          state.realtimeTalk.update({
-            realtimeTalkStatus: "error",
-            realtimeTalkDetail: formatUiError(error),
-          });
-        }
-        return undefined;
-      }
-    }
-    const forCurrentSession =
-      <Args extends unknown[]>(callback: (...args: Args) => void) =>
-      (...args: Args) => {
-        if (state.realtimeTalk.snapshot.realtimeTalkSession === session) {
-          callback(...args);
-        }
-      };
-    const session: RealtimeTalkSession = new RealtimeTalkSession(
-      client,
-      sessionKey,
-      {
-        onStatus: forCurrentSession((status, detail) => {
-          state.realtimeTalk.update({
-            realtimeTalkStatus: status,
-            realtimeTalkDetail:
-              status === "error" && detail ? formatUiExternalText(detail) : (detail ?? null),
-            realtimeTalkCameraError: false,
-            realtimeTalkActive: status !== "idle",
-          });
-          if (status === "idle" || status === "error") {
-            state.realtimeTalk.update({
-              realtimeTalkInputNotice: null,
-            });
-            state.realtimeTalk.snapshot.realtimeTalkInputLevel.set(0);
-          }
-          if (status === "error") {
-            voiceController?.failed(session);
-          }
-          // Remembered camera intent waits for "listening": capability is reported
-          // before transport start, and acquiring the camera while microphone
-          // startup can still fail would prompt for a call that never happens.
-          if (
-            status === "listening" &&
-            state.realtimeTalk.snapshot.realtimeTalkVideoCapable &&
-            autoEnableCamera &&
-            !autoEnableCameraAttempted
-          ) {
-            autoEnableCameraAttempted = true;
-            void setRealtimeTalkCameraEnabled(true, { disableAutoEnableOnFailure: true });
-          }
-        }),
-        onInputNotice: forCurrentSession((detail) => {
-          state.realtimeTalk.update({
-            realtimeTalkInputNotice: formatUiExternalText(detail),
-          });
-        }),
-        onVideoCapability: forCurrentSession((capable) => {
-          state.realtimeTalk.update({
-            realtimeTalkVideoCapable: capable,
-          });
-        }),
-        onInputLevel: forCurrentSession((level) => {
-          state.realtimeTalk.snapshot.realtimeTalkInputLevel.set(level);
-        }),
-        onTranscript: forCurrentSession((entry) => {
-          state.realtimeTalk.update({
-            realtimeTalkConversationState: updateRealtimeTalkConversation(
-              state.realtimeTalk.snapshot.realtimeTalkConversationState,
-              entry.itemId === undefined
-                ? entry
-                : {
-                    ...entry,
-                    itemId: `${itemPrefix}${entry.itemId}`,
-                    order: entry.order === undefined ? undefined : orderOffset + entry.order,
-                  },
-            ),
-          });
-        }),
-        onTranscriptOrder: forCurrentSession((orders) => {
-          state.realtimeTalk.update({
-            realtimeTalkConversationState: orderRealtimeTalkConversation(
-              state.realtimeTalk.snapshot.realtimeTalkConversationState,
-              orders.map(({ itemId, order }) => ({
-                itemId: `${itemPrefix}${itemId}`,
-                order: orderOffset + order,
-              })),
-            ),
-          });
-        }),
-        onVideoStream: forCurrentSession((stream) => {
-          if (stream && state.realtimeTalk.snapshot.realtimeTalkStatus === "error") {
-            void session.setVideoEnabled(false).catch(() => undefined);
-            return;
-          }
-          state.realtimeTalk.update({
-            realtimeTalkVideoStream: stream,
-          });
-          if (stream) {
-            persistCameraPreference(true);
-            state.realtimeTalk.update({
-              realtimeTalkDetail: null,
-              realtimeTalkCameraError: false,
-            });
-            void refreshCameraDevices(session);
-          }
-        }),
-        onVideoError: forCurrentSession((error) => {
-          if (!talkStatusIsError()) {
-            showCameraError(error);
-          }
-        }),
-        onTalkEvent: forCurrentSession((event) => {
-          if (state.client !== client || state.sessionKey !== sessionKey) {
-            return;
-          }
-          if (event.type === "session.ready") {
-            voiceController?.ready(session);
-          } else if (event.type === "session.closed") {
-            voiceController?.failed(session);
-          }
-        }),
-      },
-      voiceChange
-        ? {
-            voice: voiceChange.voice,
-            voiceChangeId: voiceChange.changeId,
-            transport: replacementTransport,
-          }
-        : {},
-      { inputDeviceId, videoDeviceId, split, playback },
-    );
-    state.realtimeTalk.update({
-      realtimeTalkSession: session,
-    });
+    let runtime: typeof import("./talk/chat-actions-runtime.ts");
     try {
-      await session.start();
-      return state.realtimeTalk.snapshot.realtimeTalkSession === session ? session : undefined;
-    } catch (error) {
-      if (state.realtimeTalk.snapshot.realtimeTalkSession !== session) {
+      // Preserve Safari's gesture-bound audio preparation before loading optional code.
+      playback.prepare(client, onSuperseded);
+      const [result, maxTextLength, loaded] = await Promise.all([
+        voiceChange ? undefined : client.request<TalkConfigResult>("talk.config", {}),
+        voiceChange ? undefined : maxSpeechTextLength?.(),
+        import("./talk/chat-actions-runtime.ts").then(
+          ({
+            startChatRealtimeSession,
+            setRealtimeTalkCameraEnabled,
+            switchRealtimeTalkCamera,
+          }) => ({
+            startChatRealtimeSession,
+            setRealtimeTalkCameraEnabled,
+            switchRealtimeTalkCamera,
+          }),
+        ),
+        closed,
+      ]);
+      if (
+        state.realtimeTalk.snapshot.realtimeTalkPlayback !== playback ||
+        state.client !== client ||
+        !state.connected ||
+        state.sessionKey !== sessionKey ||
+        !canStart()
+      ) {
+        playback.stop();
+        if (!voiceChange && state.realtimeTalk.snapshot.realtimeTalkPlayback === playback) {
+          stopChatRealtimeTalk(state);
+        }
         return undefined;
       }
+      runtime = loaded;
+      actionsRuntime = loaded;
+      const talk = result?.config?.talk;
+      if (talk?.realtime?.mode === "stt-tts") {
+        if (!sendMessage) {
+          throw new Error(t("chat.voice.replyFailed"));
+        }
+        split = {
+          silenceTimeoutMs: talk.silenceTimeoutMs ?? 900,
+          speechMethod: talk.provider || talk.resolved?.provider ? "talk.speak" : "tts.speak",
+          sendMessage,
+          playback,
+          maxTextLength,
+        };
+      }
+    } catch (error) {
+      playback.stop();
       if (voiceChange) {
         throw error;
       }
-      const detail = formatUiError(error);
-      stopChatRealtimeTalk(state);
-      state.realtimeTalk.update({
-        realtimeTalkStatus: "error",
-        realtimeTalkDetail: detail,
-      });
-      if (error instanceof RealtimeTalkSelectedMicrophoneError) {
-        const retry = async () => {
-          // This exact failed attempt owns consent. Stop/dismiss/route teardown or
-          // another start revokes it; consume synchronously before any async work.
-          if (state.realtimeTalk.snapshot.realtimeTalkUseSystemDefault !== retry) {
-            return;
-          }
-          state.realtimeTalk.update({
-            realtimeTalkUseSystemDefault: null,
-          });
-          if (!state.connected || state.client !== client || state.sessionKey !== sessionKey) {
-            return;
-          }
-          await startRealtimeTalk(true);
-        };
+      if (state.realtimeTalk.snapshot.realtimeTalkPlayback === playback) {
+        stopChatRealtimeTalk(state);
         state.realtimeTalk.update({
-          realtimeTalkUseSystemDefault: retry,
+          realtimeTalkStatus: "error",
+          realtimeTalkDetail: formatUiError(error),
         });
       }
+      return undefined;
     }
-    return undefined;
+    return runtime.startChatRealtimeSession(state, {
+      client,
+      sessionKey,
+      voiceController,
+      useSystemDefault,
+      voiceChange,
+      replacementTransport,
+      inputDeviceId,
+      videoDeviceId,
+      split,
+      playback,
+      autoEnableCamera,
+      itemPrefix,
+      orderOffset,
+      startRealtimeTalk,
+      stopRealtimeTalk: stopChatRealtimeTalk,
+    });
   };
   state.toggleRealtimeTalk = async () => {
     if (
@@ -540,49 +316,12 @@ export function attachChatRealtimeActions(
     }
     await startRealtimeTalk();
   };
+  // A call cannot exist before startup loads the runtime. Keep camera dispatch
+  // synchronous afterward so disabling it retires the saved intent immediately.
   state.toggleRealtimeTalkCamera = async () =>
-    setRealtimeTalkCameraEnabled(state.realtimeTalk.snapshot.realtimeTalkVideoStream === null);
-  state.switchRealtimeTalkCamera = async () => {
-    const session = state.realtimeTalk.snapshot.realtimeTalkSession;
-    const stream = state.realtimeTalk.snapshot.realtimeTalkVideoStream;
-    const devices = state.realtimeTalk.snapshot.realtimeTalkCameraDevices;
-    if (
-      !session ||
-      !stream ||
-      devices.length < 2 ||
-      state.realtimeTalk.snapshot.realtimeTalkVideoPending
-    ) {
-      return;
-    }
-    const activeDeviceId =
-      stream.getVideoTracks()[0]?.getSettings?.().deviceId?.trim() ||
-      loadSettings().realtimeTalkVideoDeviceId?.trim();
-    const activeIndex = devices.findIndex((device) => device.deviceId === activeDeviceId);
-    const nextDevice = devices[(activeIndex + 1) % devices.length];
-    if (!nextDevice) {
-      return;
-    }
-
-    state.realtimeTalk.update({
-      realtimeTalkVideoPending: true,
-      realtimeTalkCameraError: false,
-      realtimeTalkDetail: null,
-    });
-    try {
-      await session.switchCamera(nextDevice.deviceId);
-      if (state.realtimeTalk.snapshot.realtimeTalkSession === session) {
-        state.settings = patchSettings({ realtimeTalkVideoDeviceId: nextDevice.deviceId });
-      }
-    } catch (error) {
-      if (state.realtimeTalk.snapshot.realtimeTalkSession === session && !talkStatusIsError()) {
-        showCameraError(error);
-      }
-    } finally {
-      if (state.realtimeTalk.snapshot.realtimeTalkSession === session) {
-        state.realtimeTalk.update({
-          realtimeTalkVideoPending: false,
-        });
-      }
-    }
-  };
+    actionsRuntime?.setRealtimeTalkCameraEnabled(
+      state,
+      state.realtimeTalk.snapshot.realtimeTalkVideoStream === null,
+    );
+  state.switchRealtimeTalkCamera = async () => actionsRuntime?.switchRealtimeTalkCamera(state);
 }

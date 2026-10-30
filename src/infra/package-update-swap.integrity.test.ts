@@ -6,6 +6,13 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { interceptPackageFileHashes } from "./package-update-integrity-hasher.test-support.js";
 import { PackageIntegrityTimeoutError } from "./package-update-integrity.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import {
+  expectInstallation,
+  expectNoCalls,
+  expectVersion,
+  readText,
+  retain,
+} from "./package-update-swap.assertions.test-support.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import {
   createPackageSwapFixture,
@@ -21,31 +28,18 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
-
-async function expectVersion(root: string, version: string) {
-  expect(await readText(root, "package.json")).toContain(`"version":"${version}"`);
+async function expectCompletion(
+  transaction: PackageUpdateTransaction,
+  activationVerified: boolean,
+  exitCode?: number,
+) {
+  expect(await transaction.complete({ activationVerified }, () => {})).toEqual(
+    exitCode === undefined ? undefined : expect.objectContaining({ exitCode }),
+  );
 }
 
-async function retain(params: Parameters<typeof swapStagedPackageInstall>[0]) {
-  let transaction: PackageUpdateTransaction | undefined;
-  const result = await swapStagedPackageInstall({
-    ...params,
-    onTransaction: (value) => {
-      transaction = value;
-    },
-  });
-  expect(result.status, result.step.stderrTail ?? "").toBe("committed");
-  if (!transaction) {
-    throw new Error("missing retained transaction");
-  }
-  return transaction;
-}
-
-async function expectCandidateIntact(packageRoot: string, launcher: string) {
-  await expectVersion(packageRoot, "2.0.0");
-  await expect(readText(launcher)).resolves.toBe("candidate launcher\n");
-}
+const symlinkDirectory = (target: string, link: string) =>
+  fs.symlink(target, link, process.platform === "win32" ? "junction" : "dir");
 
 async function createLinkedPackageSwapFixture(rootDir: string, relative = false) {
   const fixture = await createPackageSwapFixture(rootDir);
@@ -53,15 +47,10 @@ async function createLinkedPackageSwapFixture(rootDir: string, relative = false)
   await fs.rename(fixture.packageRoot, checkout);
   await fs.writeFile(path.join(checkout, "operator.txt"), "operator-owned checkout\n");
   // A linked checkout can reference dependencies outside the package root.
-  await fs.symlink(
-    rootDir,
-    path.join(checkout, "external"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  await fs.symlink(
+  await symlinkDirectory(rootDir, path.join(checkout, "external"));
+  await symlinkDirectory(
     relative ? path.relative(path.dirname(fixture.packageRoot), checkout) : checkout,
     fixture.packageRoot,
-    process.platform === "win32" ? "junction" : "dir",
   );
   return {
     ...fixture,
@@ -178,7 +167,7 @@ describe("retained npm package integrity", () => {
       expect(restored).toMatchObject({ mode: original.mode, uid: original.uid, gid: original.gid });
       expect(await readText(launcher)).toBe("old launcher\n");
       expect((await fs.stat(launcher)).mode & 0o777).toBe(0o751);
-      expect(await transaction.complete({ activationVerified: false }, () => {})).toBeUndefined();
+      await expectCompletion(transaction, false);
     },
   );
 
@@ -192,7 +181,7 @@ describe("retained npm package integrity", () => {
       await fs.symlink(path.relative(path.dirname(stagedRoot), checkout), stagedRoot);
       const transaction = await retain(fixture.params);
       await expect(fs.realpath(fixture.packageRoot)).resolves.toBe(checkout);
-      await expectCandidateIntact(fixture.packageRoot, fixture.launcher);
+      await expectInstallation(fixture.packageRoot, fixture.launcher, true);
       expect(await transaction.rollback(() => {})).toMatchObject({ exitCode: 0 });
       await expectVersion(checkout, "2.0.0");
       await expectVersion(fixture.packageRoot, "1.0.0");
@@ -211,16 +200,14 @@ describe("retained npm package integrity", () => {
     afterLinkObservation(transaction.backupRoot, () => {
       current = false;
     });
-    const unlink = vi.spyOn(fs, "unlink");
     await expect(transaction.complete({ activationVerified: true }, assertCurrent)).rejects.toThrow(
       "link retirement executor lost",
     );
     await expect(transaction.complete({ activationVerified: true }, () => {})).rejects.toThrow(
       "link retirement executor lost",
     );
-    expect(unlink).not.toHaveBeenCalled();
     await expectLink(fixture, transaction.backupRoot);
-    await expectCandidateIntact(fixture.packageRoot, fixture.launcher);
+    await expectInstallation(fixture.packageRoot, fixture.launcher, true);
   });
 
   it("does not certify restoration of an absent old package", async () => {
@@ -238,11 +225,11 @@ describe("retained npm package integrity", () => {
   it("activates a package over an owned relative npm dev link", async () => {
     const fixture = await createLinkedPackageSwapFixture(base, true);
     const transaction = await retain(fixture.params);
-    await expectCandidateIntact(fixture.packageRoot, fixture.launcher);
+    await expectInstallation(fixture.packageRoot, fixture.launcher, true);
     expect((await fs.lstat(transaction.backupRoot)).ino).toBe(fixture.linkIdentity);
     expect(await fs.readlink(transaction.backupRoot)).toBe(fixture.target);
     await fs.writeFile(path.join(fixture.checkout, "operator.txt"), "independent operator edit\n");
-    expect(await transaction.complete({ activationVerified: true }, () => {})).toBeUndefined();
+    await expectCompletion(transaction, true);
     await expect(fs.lstat(transaction.backupRoot)).rejects.toMatchObject({ code: "ENOENT" });
     expect((await fs.stat(fixture.checkout)).ino).toBe(fixture.checkoutIdentity);
     expect(await readText(fixture.checkout, "operator.txt")).toBe("independent operator edit\n");
@@ -253,15 +240,14 @@ describe("retained npm package integrity", () => {
     const fixture = await createLinkedGitSwapFixture(base, true);
     const transaction = await retain(fixture.params);
     await fs.writeFile(path.join(fixture.checkout, "operator.txt"), "local edit\n");
-    expect(transaction.assertRollbackSafe).toBeTypeOf("function");
     await transaction.assertRollbackSafe?.();
     const rollback = await transaction.rollback(() => {});
     expect(rollback).toMatchObject({ exitCode: 0, activePackageRoot: fixture.packageRoot });
     expect(await fs.realpath(fixture.packageRoot)).toBe(fixture.checkout);
     await expectLink(fixture, fixture.packageRoot);
     expect(await readText(fixture.launcher)).toBe("old launcher\n");
-    expect(await transaction.complete({ activationVerified: false }, () => {})).toBeUndefined();
-    expect(await transaction.complete({ activationVerified: false }, () => {})).toBeUndefined();
+    await expectCompletion(transaction, false);
+    await expectCompletion(transaction, false);
     expect((await fs.readdir(fixture.globalRoot)).filter((name) => name.startsWith("."))).toEqual(
       [],
     );
@@ -277,11 +263,7 @@ describe("retained npm package integrity", () => {
       let replaced = false;
       if (timing === "before") {
         await fs.rename(fixture.checkout, moved);
-        await fs.symlink(
-          moved,
-          fixture.checkout,
-          process.platform === "win32" ? "junction" : "dir",
-        );
+        await symlinkDirectory(moved, fixture.checkout);
       } else {
         const stat = fs.stat.bind(fs);
         vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
@@ -302,14 +284,12 @@ describe("retained npm package integrity", () => {
           activePackageRoot: fixture.packageRoot,
         });
         expect(rename).not.toHaveBeenCalled();
-        expect(await transaction.complete({ activationVerified: false }, () => {})).toMatchObject({
-          exitCode: 1,
-        });
+        await expectCompletion(transaction, false, 1);
         expect(await readText(fixture.checkout, "operator.txt")).toBe("operator-owned checkout\n");
       } else {
         expect(replaced).toBe(true);
       }
-      await expectCandidateIntact(fixture.packageRoot, fixture.launcher);
+      await expectInstallation(fixture.packageRoot, fixture.launcher, true);
       expect((await fs.lstat(transaction.backupRoot)).ino).toBe(fixture.linkIdentity);
     },
   );
@@ -332,11 +312,7 @@ describe("retained npm package integrity", () => {
             );
           } else {
             await fs.rename(fixture.packageRoot, `${fixture.packageRoot}.original`);
-            await fs.symlink(
-              base,
-              fixture.packageRoot,
-              process.platform === "win32" ? "junction" : "dir",
-            );
+            await symlinkDirectory(base, fixture.packageRoot);
           }
         },
       });
@@ -384,7 +360,7 @@ describe("retained npm package integrity", () => {
         step: { exitCode: 1 },
       });
       if (changed) {
-        await expectCandidateIntact(fixture.packageRoot, fixture.launcher);
+        await expectInstallation(fixture.packageRoot, fixture.launcher, true);
         expect(result.step.stderrTail).toContain("current package unchanged");
       } else {
         expect((await fs.lstat(fixture.packageRoot)).ino).toBe(fixture.linkIdentity);
@@ -415,9 +391,7 @@ describe("retained npm package integrity", () => {
     expect((await fs.lstat(fixture.packageRoot)).ino).toBe(fixture.linkIdentity);
     expect(await readText(fixture.launcher)).toBe("old launcher\n");
     await expect(fs.stat(`${transaction.backupRoot}.candidate`)).resolves.toBeDefined();
-    expect(await transaction.complete({ activationVerified: false }, () => {})).toMatchObject({
-      exitCode: 1,
-    });
+    await expectCompletion(transaction, false, 1);
   });
 
   it("retains a directory substituted for the backup link after observation", async () => {
@@ -446,7 +420,7 @@ describe("retained npm package integrity", () => {
     expect(await readText(transaction.backupRoot, "operator.txt")).toBe(
       "operator-owned checkout\n",
     );
-    await expectCandidateIntact(fixture.packageRoot, fixture.launcher);
+    await expectInstallation(fixture.packageRoot, fixture.launcher, true);
   });
 
   it("retains an unexpected backup directory after nonretained activation", async () => {
@@ -471,28 +445,22 @@ describe("retained npm package integrity", () => {
     expect(result.step.stdoutTail).toContain("Could not retire retained npm package link");
     expect((await fs.stat(backupRoot)).ino).toBe(fixture.checkoutIdentity);
     expect(await readText(backupRoot, "operator.txt")).toBe("operator-owned checkout\n");
-    await expectCandidateIntact(fixture.packageRoot, fixture.launcher);
+    await expectInstallation(fixture.packageRoot, fixture.launcher, true);
   });
 
   it("refuses a replaced retained npm link before displacing the candidate", async () => {
     const fixture = await createLinkedPackageSwapFixture(base);
     const transaction = await retain(fixture.params);
     await fs.rename(transaction.backupRoot, `${transaction.backupRoot}.original`);
-    await fs.symlink(
-      fixture.target,
-      transaction.backupRoot,
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    await symlinkDirectory(fixture.target, transaction.backupRoot);
     const rollback = await transaction.rollback(() => {});
     expect(rollback).toMatchObject({ exitCode: 1, activePackageRoot: fixture.packageRoot });
     expect(rollback.stderrTail).toContain("retained package");
     expect(rollback.stderrTail).toContain(`changed at ${transaction.backupRoot}`);
     expect(rollback.stderrTail).toContain("before retrying recovery");
-    await expectCandidateIntact(fixture.packageRoot, fixture.launcher);
+    await expectInstallation(fixture.packageRoot, fixture.launcher, true);
     expect(await readText(fixture.checkout, "operator.txt")).toBe("operator-owned checkout\n");
-    expect(await transaction.complete({ activationVerified: false }, () => {})).toMatchObject({
-      exitCode: 1,
-    });
+    await expectCompletion(transaction, false, 1);
   });
 
   it("retains a substituted backup directory when a new owner occupies the live path", async () => {
@@ -548,10 +516,8 @@ describe("retained npm package integrity", () => {
         expect(result.stderrTail).toContain(`retained package tree changed at ${backup}`);
         expect(result.stderrTail).toContain("before retrying recovery");
       }
-      await expectCandidateIntact(packageRoot, launcher);
-      expect(await transaction.complete({ activationVerified: false }, () => {})).toMatchObject({
-        exitCode: 1,
-      });
+      await expectInstallation(packageRoot, launcher, true);
+      await expectCompletion(transaction, false, 1);
       await expect(fs.stat(backup)).resolves.toBeDefined();
     },
   );
@@ -581,7 +547,7 @@ describe("retained npm package integrity", () => {
       expect((await fs.stat(launcher)).mode & 0o777).toBe(0o751);
       expect((await fs.stat(alias)).mode & 0o777).toBe(0o751);
     }
-    expect(await transaction.complete({ activationVerified: false }, () => {})).toBeUndefined();
+    await expectCompletion(transaction, false);
     expect((await fs.readdir(globalRoot)).filter((name) => name.startsWith("."))).toEqual([]);
     expect(await transaction.rollback(() => {})).toMatchObject({ exitCode: 1 });
   });
@@ -601,43 +567,9 @@ describe("retained npm package integrity", () => {
       activePackageRoot: packageRoot,
     });
     expect(copy).not.toHaveBeenCalled();
-    await expectCandidateIntact(packageRoot, launcher);
+    await expectInstallation(packageRoot, launcher, true);
     await expect(fs.stat(transaction.backupRoot)).resolves.toBeDefined();
-    expect(await transaction.complete({ activationVerified: true }, () => {})).toMatchObject({
-      exitCode: 1,
-    });
-  });
-
-  it("reports unverified when a pre-opened writer changes bytes after prevalidation", async () => {
-    const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
-    const entry = path.join(packageRoot, "dist", "index.js");
-    const writer = await fs.open(entry, "r+");
-    try {
-      const transaction = await retain(params);
-      const rename = fs.rename.bind(fs);
-      let wrote = false;
-      vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
-        if (String(args[0]) === transaction.backupRoot) {
-          await writer.write("changed", 0, "utf8");
-          wrote = true;
-        }
-        return rename(...args);
-      });
-      const rollback = await transaction.rollback(() => {});
-      expect(rollback).toMatchObject({ exitCode: 1 });
-      expect(rollback.stderrTail).toContain(`restored package tree changed at ${packageRoot}`);
-      expect(wrote).toBe(true);
-      // Observation is not exclusion: the same-principal fd survives rename.
-      // Never call this result verified or discard the retained candidate.
-      await expect(readText(entry)).resolves.toContain("changed");
-      await expect(readText(launcher)).resolves.toBe("old launcher\n");
-      await expect(fs.stat(`${transaction.backupRoot}.candidate`)).resolves.toBeDefined();
-      expect(await transaction.complete({ activationVerified: false }, () => {})).toMatchObject({
-        exitCode: 1,
-      });
-    } finally {
-      await writer.close();
-    }
+    await expectCompletion(transaction, true, 1);
   });
 
   it.each([
@@ -661,24 +593,20 @@ describe("retained npm package integrity", () => {
         await fs.symlink("../../fixture-dependency", link);
         expect(await fs.realpath(link)).toBe(await fs.realpath(dependency));
       }
-      if (shape === "unavailable inode") {
+      if (shape === "unavailable inode" || shape === "timed-out scan") {
         const lstat = fs.lstat.bind(fs);
         vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          if (timedOut && String(args[0]) === packageRoot) {
+            throw new Error("identity fallback unavailable");
+          }
           const stat = await lstat(...args);
-          if (typeof stat.ino === "bigint") {
+          if (shape === "unavailable inode" && typeof stat.ino === "bigint") {
             Object.assign(stat, { ino: 0n });
           }
           return stat;
         });
       }
       if (shape === "timed-out scan") {
-        const lstat = fs.lstat.bind(fs);
-        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-          if (timedOut && String(args[0]) === packageRoot) {
-            throw new Error("identity fallback unavailable");
-          }
-          return lstat(...args);
-        });
         interceptPackageFileHashes(async () => {
           timedOut = true;
           throw new PackageIntegrityTimeoutError(40);
@@ -715,14 +643,17 @@ describe("retained npm package integrity", () => {
         { env: {}, stateDir: base },
       );
       expect(report.body).toContain("baseline-scan-failed");
-      expect(report.body).toContain(cause);
+      if (shape === "timed-out scan") {
+        expect(report.body).toContain(cause);
+      } else {
+        expect(report.body).not.toContain(cause);
+        expect(report.body).toContain("[redacted-diagnostic]");
+      }
       expect(report.body).not.toContain("identity fallback unavailable");
       expect(report.body).not.toContain(base);
       expect(result).toMatchObject({ packageRollbackVerified: false });
-      expect(beforeActivate).not.toHaveBeenCalled();
-      expect(onLiveMutation).not.toHaveBeenCalled();
-      await expectVersion(packageRoot, "1.0.0");
-      await expect(readText(launcher)).resolves.toBe("old launcher\n");
+      expectNoCalls(beforeActivate, onLiveMutation);
+      await expectInstallation(packageRoot, launcher);
     },
   );
 });

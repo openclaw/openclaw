@@ -247,6 +247,11 @@ export function isTelegramMessageDeleteNoopError(err: unknown): boolean {
   return MESSAGE_DELETE_NOOP_RE.test(formatErrorMessage(err));
 }
 
+// Only absence proves the requested end state; the other no-op refusals leave the message visible.
+export function isTelegramMessageAlreadyDeletedError(err: unknown): boolean {
+  return /message to delete not found/i.test(formatErrorMessage(err));
+}
+
 export type TelegramApiContext = {
   cfg: OpenClawConfig;
   account: ResolvedTelegramAccount;
@@ -393,6 +398,7 @@ function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; i
       "Likely: bot not started in DM, bot removed from group/channel, group migrated (new -100… id), or wrong bot token.",
       `Input was: ${JSON.stringify(params.input)}.`,
     ].join(" "),
+    { cause: err },
   );
 }
 

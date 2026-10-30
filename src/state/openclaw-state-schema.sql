@@ -641,40 +641,6 @@ CREATE TABLE IF NOT EXISTS device_pairing_join_codes (
   expires_at_ms INTEGER
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS device_identities (
-  identity_key TEXT NOT NULL PRIMARY KEY,
-  device_id TEXT NOT NULL,
-  public_key_pem TEXT NOT NULL,
-  private_key_pem TEXT NOT NULL,
-  created_at_ms INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_device_identities_device
-  ON device_identities(device_id, updated_at_ms DESC);
-
-CREATE TABLE IF NOT EXISTS device_auth_tokens (
-  device_id TEXT NOT NULL,
-  role TEXT NOT NULL,
-  token TEXT NOT NULL,
-  scopes_json TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (device_id, role)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_device_auth_tokens_updated
-  ON device_auth_tokens(updated_at_ms DESC, device_id, role);
-
-CREATE TABLE IF NOT EXISTS gateway_origin_device_tokens (
-  gateway_scope TEXT NOT NULL,
-  device_id TEXT NOT NULL,
-  role TEXT NOT NULL,
-  token TEXT NOT NULL,
-  scopes_json TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (gateway_scope, device_id, role)
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
   pid INTEGER NOT NULL PRIMARY KEY,
   port INTEGER NOT NULL,
@@ -1238,7 +1204,7 @@ CREATE TABLE IF NOT EXISTS agent_deletion_journal (
 
 CREATE TABLE IF NOT EXISTS agent_provenance (
   agent_id TEXT PRIMARY KEY,
-  created_via TEXT NOT NULL CHECK (created_via IN ('operator', 'agent', 'claw')),
+  created_via TEXT NOT NULL CHECK (created_via IN ('operator', 'agent', 'template')),
   creator_agent_id TEXT,
   created_at_ms INTEGER NOT NULL
 ) STRICT;
@@ -1435,6 +1401,40 @@ CREATE INDEX IF NOT EXISTS idx_sandbox_registry_session
 CREATE INDEX IF NOT EXISTS idx_sandbox_registry_last_used
   ON sandbox_registry_entries(registry_kind, last_used_at_ms DESC, container_name)
   WHERE last_used_at_ms IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS durable_background_processes (
+  id TEXT NOT NULL PRIMARY KEY,
+  record_json TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS sandbox_persistent_execs (
+  owner_key TEXT NOT NULL PRIMARY KEY,
+  source_identity TEXT NOT NULL,
+  attempt_id TEXT NOT NULL UNIQUE,
+  owner_json TEXT NOT NULL,
+  backend_id TEXT NOT NULL CHECK (backend_id = 'docker'),
+  backend_target_json TEXT NOT NULL,
+  workspace_binding_json TEXT NOT NULL,
+  container_id TEXT NOT NULL,
+  container_name TEXT NOT NULL,
+  container_started_at TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  phase TEXT NOT NULL CHECK (phase IN ('reserved', 'prepared', 'running', 'stopping', 'uncertain', 'stopped')),
+  receipt_json TEXT,
+  error TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  CHECK (phase NOT IN ('prepared', 'running') OR receipt_json IS NOT NULL)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_sandbox_persistent_execs_container
+  ON sandbox_persistent_execs(container_id, owner_key);
+
+CREATE INDEX IF NOT EXISTS idx_sandbox_persistent_execs_container_name
+  ON sandbox_persistent_execs(container_name, owner_key);
+
+CREATE INDEX IF NOT EXISTS idx_sandbox_persistent_execs_source
+  ON sandbox_persistent_execs(source_identity, owner_key);
 
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
@@ -2136,6 +2136,7 @@ CREATE TABLE IF NOT EXISTS github_repository_publication_requests (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   reported_at_ms INTEGER,
+  draft INTEGER,
   CHECK ((identity_source = 'personal' AND owner_profile_id IS NOT NULL AND connection_generation IS NOT NULL)
     OR (identity_source <> 'personal' AND owner_profile_id IS NULL AND connection_generation IS NULL)),
   CHECK ((checkpoint_ref IS NULL AND checkpoint_digest IS NULL) OR (checkpoint_ref IS NOT NULL AND checkpoint_digest IS NOT NULL)),
@@ -2365,9 +2366,40 @@ CREATE TABLE IF NOT EXISTS local_workspace_projections (
   journal_pack BLOB CHECK (journal_pack IS NULL OR length(journal_pack) <= 268435456),
   revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
   created_at_ms INTEGER NOT NULL,
-  CHECK ((baseline_json IS NULL) = (baseline_ref IS NULL)),
+  checkpoint_json TEXT,
+  tree_root_digest BLOB,
+  source_paths_digest BLOB,
+  canonical_fingerprints BLOB,
+  projection_fingerprints BLOB,
+  CHECK (baseline_json IS NULL OR baseline_ref IS NOT NULL),
   CHECK ((journal_json IS NULL) = (journal_pack IS NULL))
 ) STRICT;
+
+-- The projection owner advances changed nodes and its root in one acceptance.
+-- Legacy baseline_json remains only until that owner's resumable conversion.
+CREATE TABLE IF NOT EXISTS local_workspace_manifest_nodes (
+  worktree_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  node_json TEXT NOT NULL,
+  PRIMARY KEY (worktree_id, path),
+  FOREIGN KEY (worktree_id)
+    REFERENCES local_workspace_projections(worktree_id) ON DELETE CASCADE
+) STRICT;
+
+-- Immutable subtrees and source inventories are shared across projections and revisions.
+-- Large JSON packs measured 410k VFS reads/load WITHOUT ROWID versus 10k with rowid.
+CREATE TABLE IF NOT EXISTS local_workspace_tree_packs (
+  tree_digest BLOB NOT NULL PRIMARY KEY CHECK (length(tree_digest) = 32),
+  records_json TEXT NOT NULL,
+  children_json TEXT NOT NULL,
+  sweep_epoch INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS local_workspace_source_path_sets (
+  path_digest BLOB NOT NULL PRIMARY KEY CHECK (length(path_digest) = 32),
+  paths_zstd BLOB NOT NULL,
+  sweep_epoch INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;
 
 -- A reconciliation journal is written before managed-worktree mutation. The
 -- bounded Git base snapshot repairs any subset left by an interrupted apply.
@@ -2447,6 +2479,7 @@ CREATE TABLE IF NOT EXISTS github_publication_requests (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   reported_at_ms INTEGER,
+  draft INTEGER,
   UNIQUE (session_id, idempotency_key),
   CHECK (
     (claim_id IS NULL AND run_id IS NULL AND environment_id IS NULL
@@ -2519,6 +2552,7 @@ CREATE TABLE IF NOT EXISTS github_personal_publication_requests (
   created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
   updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
   reported_at_ms INTEGER,
+  draft INTEGER,
   UNIQUE (owner_profile_id, session_id, idempotency_key),
   CHECK ((status = 'publishing' AND gateway_instance_id IS NOT NULL AND execution_id IS NOT NULL) OR status <> 'publishing'),
   CHECK ((last_effect IS NULL AND effect_state IS NULL) OR (last_effect IS NOT NULL AND effect_state IS NOT NULL)),
@@ -2612,12 +2646,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_inference_turns_pending_run
   ON worker_inference_turns(session_id, run_epoch, run_id)
   WHERE state = 'pending';
 
-CREATE TABLE IF NOT EXISTS claw_installs (
+CREATE TABLE IF NOT EXISTS template_installs (
   agent_id TEXT NOT NULL PRIMARY KEY,
   schema_version TEXT NOT NULL,
   source_kind TEXT NOT NULL,
-  claw_name TEXT NOT NULL,
-  claw_version TEXT NOT NULL,
+  template_name TEXT NOT NULL,
+  template_version TEXT NOT NULL,
   package_root TEXT NOT NULL,
   manifest_path TEXT NOT NULL,
   integrity_kind TEXT NOT NULL,
@@ -2637,7 +2671,7 @@ CREATE TABLE IF NOT EXISTS claw_installs (
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS claw_workspace_files (
+CREATE TABLE IF NOT EXISTS template_workspace_files (
   agent_id TEXT NOT NULL,
   target_path TEXT NOT NULL,
   schema_version TEXT NOT NULL,
@@ -2650,7 +2684,7 @@ CREATE TABLE IF NOT EXISTS claw_workspace_files (
   PRIMARY KEY (agent_id, target_path)
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS claw_package_refs (
+CREATE TABLE IF NOT EXISTS template_package_refs (
   agent_id TEXT NOT NULL,
   package_kind TEXT NOT NULL,
   package_source TEXT NOT NULL,
@@ -2658,10 +2692,10 @@ CREATE TABLE IF NOT EXISTS claw_package_refs (
   package_version TEXT NOT NULL,
   package_integrity TEXT NOT NULL,
   schema_version TEXT NOT NULL,
-  claw_name TEXT NOT NULL,
+  template_name TEXT NOT NULL,
   package_status TEXT NOT NULL,
   relationship TEXT NOT NULL CHECK (relationship IN ('managed', 'referenced')),
-  origin TEXT NOT NULL CHECK (origin IN ('claw-introduced', 'pre-existing')),
+  origin TEXT NOT NULL CHECK (origin IN ('template-introduced', 'pre-existing')),
   independent_owner INTEGER NOT NULL CHECK (independent_owner IN (0, 1)),
   extension_id TEXT,
   extension_format TEXT,
@@ -2674,7 +2708,7 @@ CREATE TABLE IF NOT EXISTS claw_package_refs (
   PRIMARY KEY (agent_id, package_kind, package_source, package_ref, package_version)
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS claw_cron_refs (
+CREATE TABLE IF NOT EXISTS template_cron_refs (
   agent_id TEXT NOT NULL,
   manifest_id TEXT NOT NULL,
   schema_version TEXT NOT NULL,
@@ -2688,13 +2722,13 @@ CREATE TABLE IF NOT EXISTS claw_cron_refs (
   PRIMARY KEY (agent_id, manifest_id)
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS claw_mcp_server_refs (
+CREATE TABLE IF NOT EXISTS template_mcp_server_refs (
   agent_id TEXT NOT NULL,
   name TEXT NOT NULL,
   schema_version TEXT NOT NULL,
   config_digest TEXT NOT NULL,
   relationship TEXT NOT NULL CHECK (relationship IN ('managed', 'referenced')),
-  origin TEXT NOT NULL CHECK (origin IN ('claw-introduced', 'pre-existing')),
+  origin TEXT NOT NULL CHECK (origin IN ('template-introduced', 'pre-existing')),
   independent_owner INTEGER NOT NULL DEFAULT 0 CHECK (independent_owner IN (0, 1)),
   status TEXT NOT NULL,
   error TEXT,

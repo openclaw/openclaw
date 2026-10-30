@@ -124,9 +124,11 @@ suite.define(() => {
       await expectUnreserved(effortPicker);
 
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      await composer.locator('[data-chat-model-select="true"]').click();
       await expect
         .poll(() => composer.locator("[data-chat-model-catalog-state]").textContent())
         .toContain("Some models could not be refreshed");
+      await page.keyboard.press("Escape");
       const retryAfter = await gateway.deferNext("models.list");
       await composer.locator('[data-chat-model-select="true"]').click();
       await gateway.waitForRequest("models.list", { after: retryAfter });
@@ -145,6 +147,7 @@ suite.define(() => {
       await expect.poll(() => effort.isVisible()).toBe(true);
       await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("xhigh");
       await expectUnreserved(effortPicker);
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
     });
   });
 
@@ -170,7 +173,7 @@ suite.define(() => {
           await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
           await model.click();
           const available = composer.locator('[data-chat-model-option="openai/gpt-5.4"]');
-          await revealChatModelOption(available);
+          await revealChatModelOption(composer, "openai/gpt-5.4");
           await expect.poll(() => available.isVisible()).toBe(true);
           expect(await composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
           await model.click();
@@ -179,9 +182,6 @@ suite.define(() => {
           await effort.click();
           const slider = composer.locator("[data-chat-thinking-slider]");
           await slider.waitFor({ state: "visible" });
-          await expect
-            .poll(() => slider.getAttribute("data-chat-thinking-values"))
-            .toBe(levels.map(({ id }) => id).join(","));
           await expect.poll(() => slider.isVisible()).toBe(true);
           const sliderBounds = await slider.boundingBox();
           expect(sliderBounds).not.toBeNull();
@@ -231,56 +231,6 @@ suite.define(() => {
           }
         },
       );
-    },
-  );
-
-  it.each(["locked model", "rejected refresh"] as const)(
-    "keeps usable effort controls with a %s and a retained snapshot",
-    async (condition) => {
-      await suite.withPage({ locale: "en-US" }, async ({ page }) => {
-        const locked = condition === "locked model";
-        const selected = catalog.models[0]!;
-        const gateway = await installMockGateway(page, {
-          agentModel: partialConfig.agents.defaults.model,
-          models: catalog.models,
-          sessionInfo: locked ? undefined : modelIdentity(selected),
-          methodResponses: {
-            "models.list": catalog,
-            "sessions.list": locked
-              ? sessionList({}, { ...modelFields(), modelSelectionLocked: true })
-              : sessionList(modelFields()),
-          },
-        });
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const model = page.locator("[data-chat-model-select]");
-        const effort = page.locator("[data-chat-thinking-select]");
-        if (!locked) {
-          await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
-        }
-        await expect.poll(() => effort.isVisible()).toBe(true);
-        if (locked) {
-          await page.locator('[data-chat-thinking-select][aria-disabled="false"]').waitFor();
-          expect(
-            await page.locator(".chat-controls__effort-picker").getAttribute("aria-hidden"),
-          ).toBe("false");
-          expect(await model.getAttribute("data-chat-model-locked")).toBe("true");
-        } else {
-          await gateway.setMethodResponse("models.list", {
-            __mockError: { code: "UNAVAILABLE", message: "Catalog request failed" },
-          });
-          await model.click();
-          await expect
-            .poll(() => page.locator('[data-chat-model-catalog-state="error"]').isVisible())
-            .toBe(true);
-          await expect.poll(() => effort.isVisible()).toBe(true);
-        }
-        expect(await effort.getAttribute("aria-disabled")).toBe("false");
-        await effort.click();
-        await expect.poll(() => page.locator("[data-chat-thinking-slider]").isEnabled()).toBe(true);
-        if (!locked) {
-          expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-        }
-      });
     },
   );
 

@@ -1,10 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  createOperationalRunInstanceRef,
-  getAdmittedRunDelegatedAuthority,
-  prepareAgentRunAdmission,
-} from "../agents/admitted-run-context.js";
+import { getAdmittedRunDelegatedAuthority } from "../agents/admitted-run-context.js";
 import {
   captureCronRequesterGrantIssuer,
   createCronCreatorAuthorityCapability,
@@ -21,7 +17,8 @@ import {
   resolveMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
 } from "../gateway/mcp-grant-store.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { prepareAdmission } from "../gateway/mcp-http-request.test-support.js";
+import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { loadCronStore } from "./store.js";
@@ -36,16 +33,7 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 
 beforeEach(async () => {
   ({ storePath } = await makeStorePath());
-  cron = new CronService({
-    scheduler: createTestGatewayScheduler(),
-    nowMs: () => Date.now(),
-    storePath,
-    cronEnabled: false,
-    log: logger,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-  });
+  cron = new CronService(cronTestDeps({ storePath, cronEnabled: false, log: logger }));
 });
 // Teardown hooks run in reverse registration order, before the store is closed.
 afterEach(() => cron?.stop());
@@ -103,31 +91,24 @@ const localAuthority = {
   toolsAllowProvenance: localProvenance,
 };
 
-const requesterDeclaration = (overrides: Partial<CronJobCreate> = {}): CronJobCreate => ({
-  name: "daily report",
-  declarationKey: "agent:ops:daily-report",
-  displayName: "Daily report",
-  enabled: true,
-  schedule: { kind: "every", everyMs: 60_000 },
-  sessionTarget: "isolated",
-  wakeMode: "next-heartbeat",
-  owner: requesterOwner,
-  sessionKey: requesterOwner.sessionKey,
-  payload: { kind: "agentTurn", message: "report", toolsAllow: ["message"] },
-  delivery: { mode: "none" },
-  ...overrides,
-});
+const requesterDeclaration = (overrides: Partial<CronJobCreate> = {}): CronJobCreate =>
+  cronTestInput({
+    name: "daily report",
+    declarationKey: "agent:ops:daily-report",
+    displayName: "Daily report",
+    owner: requesterOwner,
+    sessionKey: requesterOwner.sessionKey,
+    payload: { kind: "agentTurn", message: "report", toolsAllow: ["message"] },
+    delivery: { mode: "none" },
+    ...overrides,
+  });
 
 it("rejects a minted requester token at commit after its MCP capture is deactivated", async () => {
   const runId = "cron-requester-mcp-commit";
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-    facts: {
-      runId,
-      agentId: requesterOwner.agentId,
-      ingress: { kind: "system", boundary: "cron-requester-mcp-test", state: "present" },
-    },
+  const config = {};
+  const admission = prepareAdmission(runId, "cron-requester-mcp-test", {
+    cfg: config,
+    agentId: requesterOwner.agentId,
   });
   let loopbackToken: string | undefined;
   try {
@@ -158,6 +139,7 @@ it("rejects a minted requester token at commit after its MCP capture is deactiva
         },
         runtimeOwnerToken: "cron-requester-mcp-commit-runtime",
         admittedRunContext: admitted,
+        toolPolicyConfig: config,
         cronRequesterGrantIssuer: expectDefined(
           captureCronRequesterGrantIssuer(runId),
           "native requester issuer",
@@ -299,18 +281,10 @@ it.each(["update", "declaration"] as const)(
     if (mutation === "update") {
       await cron.update(created.id, { payload }, options);
     } else {
-      expect(await repeat()).toMatchObject({
-        id: created.id,
-        created: false,
-        updated: true,
-      });
+      expect(await repeat()).toMatchObject({ id: created.id, created: false, updated: true });
       expect(commitGuard).toHaveBeenCalled();
       commitGuard.mockClear();
-      expect(await repeat()).toMatchObject({
-        id: created.id,
-        created: false,
-        updated: false,
-      });
+      expect(await repeat()).toMatchObject({ id: created.id, created: false, updated: false });
     }
     expect(commitGuard).toHaveBeenCalled();
     const stored = (await readJob())!;
@@ -405,4 +379,30 @@ it("does not authorize an unchanged declarative job, but rebinds a changed decla
     ),
   ).toMatchObject({ created: false, updated: true });
   expect((await readJob())?.toolsAllowProvenance).toEqual(localProvenance);
+});
+
+it.each([
+  { provenance: "native channel requester", authority: fullAuthority },
+  { provenance: "local caller origin", authority: localAuthority },
+])("keeps the $provenance when bind records the parent link", async ({ authority }) => {
+  const created = await cron.add(
+    requesterDeclaration({ declarationKey: undefined, sessionTarget: "isolated" }),
+    authority,
+  );
+  const stored = (await readJob())!;
+  const sourceConversation = {
+    sessionKey: requesterOwner.sessionKey,
+    sessionId: "parent-session",
+    lifecycleRevision: "parent-revision",
+  };
+  await cron.update(created.id, {}, { bindSourceConversation: sourceConversation });
+  const bound = (await readJob())!;
+  expect(bound.sourceConversation).toEqual(sourceConversation);
+  expect(bound.toolsAllowProvenance).toEqual(stored.toolsAllowProvenance);
+  // A later executable edit still clears requester facts it was not bound to.
+  await cron.update(created.id, { name: "Changed model context" });
+  expect((await readJob())?.toolsAllowProvenance?.channelRequester).toBeUndefined();
+  expect((await readJob())?.toolsAllowProvenance?.callerOrigin ?? { kind: "unknown" }).toEqual({
+    kind: "unknown",
+  });
 });

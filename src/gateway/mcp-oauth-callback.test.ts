@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { requesterMcpOAuthStoreKeyPrefix } from "../agents/mcp-oauth-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -27,38 +27,21 @@ const SERVER_URL = "https://calendar.example.com/mcp";
 const STORE_KEY = `${requesterMcpOAuthStoreKeyPrefix("calendar", SERVER_URL)}fedcba9876543210`;
 const AUTHORIZATION_URL =
   "https://accounts.example.com/authorize?state=state-1234567890&client_id=openclaw";
+const server = {
+  url: SERVER_URL,
+  transport: "streamable-http",
+  auth: "oauth",
+  oauth: { identity: "per-requester" },
+} as const;
 
 function callbackConfig(serverName = "calendar"): OpenClawConfig {
-  return {
-    mcp: {
-      servers: {
-        [serverName]: {
-          url: SERVER_URL,
-          transport: "streamable-http",
-          auth: "oauth",
-          oauth: { identity: "per-requester" },
-        },
-      },
-    },
-  };
-}
-
-function pendingStore() {
-  return {
-    codeVerifier: "verifier",
-    lastAuthorizationUrl: AUTHORIZATION_URL,
-    redirectUrl: "https://gateway.example.com/oauth/mcp/callback",
-  };
+  return { mcp: { servers: { [serverName]: server } } };
 }
 
 async function dispatch(
-  path: string,
+  path = "/oauth/mcp/callback?code=authorization-code&state=state-1234567890",
   options?: { config?: OpenClawConfig; method?: string },
-): Promise<{
-  handled: boolean;
-  response: ReturnType<typeof createResponse>;
-  warn: ReturnType<typeof vi.fn>;
-}> {
+) {
   const response = createResponse();
   const warn = vi.fn();
   const handled = await handleMcpOAuthCallback(
@@ -69,138 +52,116 @@ async function dispatch(
   return { handled, response, warn };
 }
 
+function expectPage(
+  { handled, response }: Awaited<ReturnType<typeof dispatch>>,
+  code = 404,
+  text = "expired or was already used",
+) {
+  expect([handled, response.res.statusCode]).toEqual([true, code]);
+  expect(response.getBody()).toContain(text);
+}
+
 beforeEach(() => {
   mocks.complete.mockReset().mockResolvedValue("authorized");
   mocks.readPending.mockReset().mockResolvedValue(STORE_KEY);
-  mocks.readStore.mockReset().mockResolvedValue(pendingStore());
+  mocks.readStore.mockReset().mockResolvedValue({ lastAuthorizationUrl: AUTHORIZATION_URL });
 });
 
-describe("Gateway MCP OAuth callback", () => {
-  it("completes the requester row selected by exact OAuth state", async () => {
-    const result = await dispatch(
-      "/oauth/mcp/callback?code=authorization-code&state=state-1234567890",
-    );
+it("completes the requester row selected by exact OAuth state", async () => {
+  const result = await dispatch(
+    "/oauth/mcp/callback?code=authorization-code&state=state-1234567890&iss=https%3A%2F%2Faccounts.example.com%2Ftenant%2F",
+  );
 
-    expect(result.handled).toBe(true);
-    expect(result.response.res.statusCode).toBe(200);
-    expect(result.response.getBody()).toContain("You&#39;re connected.");
-    expect(result.response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
-    expect(mocks.readPending).toHaveBeenCalledWith("state-1234567890", mocks.context);
-    expect(mocks.readStore).toHaveBeenCalledWith(STORE_KEY, mocks.context);
-    expect(mocks.complete).toHaveBeenCalledWith(
-      {
-        storeKey: STORE_KEY,
-        principal: "requester",
-        serverName: "calendar",
-        serverUrl: SERVER_URL,
-      },
-      expect.objectContaining({ kind: "http", url: SERVER_URL }),
-      { code: "authorization-code", state: "state-1234567890" },
-      undefined,
-      mocks.context,
-    );
-  });
+  expectPage(result, 200, "You&#39;re connected.");
+  expect(result.response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+  expect(mocks.readPending).toHaveBeenCalledWith("state-1234567890", mocks.context);
+  expect(mocks.readStore).toHaveBeenCalledWith(STORE_KEY, mocks.context);
+  expect(mocks.complete).toHaveBeenCalledWith(
+    {
+      storeKey: STORE_KEY,
+      principal: "requester",
+      serverName: "calendar",
+      serverUrl: SERVER_URL,
+    },
+    expect.objectContaining({ kind: "http", url: SERVER_URL }),
+    {
+      code: "authorization-code",
+      state: "state-1234567890",
+      iss: "https://accounts.example.com/tenant/",
+    },
+    undefined,
+    mocks.context,
+  );
+});
 
-  it("rejects a callback whose state was consumed concurrently", async () => {
+it("rejects ambiguous issuer parameters without consuming authorization", async () => {
+  const result = await dispatch(
+    "/oauth/mcp/callback?code=authorization-code&state=state-1234567890&iss=https%3A%2F%2Faccounts.example.com&iss=https%3A%2F%2Fother.example",
+  );
+  expectPage(result, 400, "Ask the bot to connect again.");
+  expect(mocks.complete).not.toHaveBeenCalled();
+});
+
+it("rejects unknown and replayed states with the same generic page", async () => {
+  mocks.readPending.mockResolvedValue(undefined);
+
+  const unknown = await dispatch("/oauth/mcp/callback?code=authorization-code&state=unknown-state");
+  const replay = await dispatch();
+
+  for (const result of [unknown, replay]) {
+    expectPage(result);
+  }
+  expect(mocks.readStore).not.toHaveBeenCalled();
+  expect(mocks.complete).not.toHaveBeenCalled();
+});
+
+it.each(["consumed", "replaced", "renamed"])("rejects %s OAuth ownership", async (ownership) => {
+  if (ownership === "consumed") {
     mocks.complete.mockResolvedValue("expired");
-
-    const result = await dispatch(
-      "/oauth/mcp/callback?code=authorization-code&state=state-1234567890",
-    );
-
-    expect(result.response.res.statusCode).toBe(404);
-    expect(result.response.getBody()).toContain("expired or was already used");
-  });
-
-  it("rejects unknown and replayed states with the same generic page", async () => {
-    mocks.readPending.mockResolvedValue(undefined);
-
-    const unknown = await dispatch(
-      "/oauth/mcp/callback?code=authorization-code&state=unknown-state",
-    );
-    const replay = await dispatch(
-      "/oauth/mcp/callback?code=authorization-code&state=state-1234567890",
-    );
-
-    for (const result of [unknown, replay]) {
-      expect(result.handled).toBe(true);
-      expect(result.response.res.statusCode).toBe(404);
-      expect(result.response.getBody()).toContain("expired or was already used");
-    }
-    expect(mocks.readStore).not.toHaveBeenCalled();
-    expect(mocks.complete).not.toHaveBeenCalled();
-  });
-
-  it("rejects correlation when the OAuth store no longer owns the state", async () => {
+  } else if (ownership === "replaced") {
     mocks.readStore.mockResolvedValue({
-      ...pendingStore(),
-      lastAuthorizationUrl: "https://accounts.example.com/authorize?state=replaced-state",
+      lastAuthorizationUrl: "https://example.com/?state=replaced",
     });
-
-    const result = await dispatch(
-      "/oauth/mcp/callback?code=authorization-code&state=state-1234567890",
-    );
-
-    expect(result.response.res.statusCode).toBe(404);
-    expect(result.response.getBody()).toContain("expired or was already used");
+  }
+  const config = callbackConfig(ownership === "renamed" ? "renamed" : "calendar");
+  expectPage(await dispatch(undefined, { config }));
+  if (ownership !== "consumed") {
     expect(mocks.complete).not.toHaveBeenCalled();
-  });
+  }
+});
 
-  it("renders the retry path for provider errors without exchanging a code", async () => {
-    const result = await dispatch(
-      "/oauth/mcp/callback?error=access_denied&error_description=nope&state=state-1234567890",
-    );
-
-    expect(result.response.res.statusCode).toBe(400);
-    expect(result.response.getBody()).toContain("Ask the bot to connect again.");
+it.each(["provider", "exchange"])("does not expose %s failures", async (source) => {
+  const provider = source === "provider";
+  if (!provider) {
+    mocks.complete.mockRejectedValue(new Error("invalid_grant for secret-code"));
+  }
+  const query = provider ? "error=access_denied&error_description=nope" : "code=wrong-code";
+  const result = await dispatch(`/oauth/mcp/callback?${query}&state=state-1234567890`);
+  expectPage(result, 400, "Ask the bot to connect again.");
+  if (provider) {
     expect(result.response.getBody()).not.toContain("nope");
     expect(mocks.complete).not.toHaveBeenCalled();
-  });
-
-  it("fails generically when the configured server no longer owns the row", async () => {
-    const result = await dispatch(
-      "/oauth/mcp/callback?code=authorization-code&state=state-1234567890",
-      { config: callbackConfig("renamed") },
-    );
-
-    expect(result.response.res.statusCode).toBe(404);
-    expect(result.response.getBody()).toContain("expired or was already used");
-    expect(mocks.complete).not.toHaveBeenCalled();
-  });
-
-  it("does not expose authorization-code exchange failures", async () => {
-    mocks.complete.mockRejectedValue(new Error("invalid_grant for secret-code"));
-
-    const result = await dispatch("/oauth/mcp/callback?code=wrong-code&state=state-1234567890");
-
-    expect(result.response.res.statusCode).toBe(400);
-    expect(result.response.getBody()).toContain("Ask the bot to connect again.");
-    expect(result.response.getBody()).not.toContain("invalid_grant");
-    expect(result.response.getBody()).not.toContain("wrong-code");
+  } else {
+    expect(result.response.getBody()).not.toMatch(/invalid_grant|wrong-code/);
     expect(result.warn).toHaveBeenCalledOnce();
-  });
+  }
+});
 
-  it("leaves other methods and paths unclaimed", async () => {
-    const wrongMethod = await dispatch(
-      "/oauth/mcp/callback?code=authorization-code&state=state-1234567890",
-      { method: "POST" },
-    );
-    const wrongPath = await dispatch("/oauth/other?code=authorization-code&state=state-1234567890");
+it("leaves other methods and paths unclaimed", async () => {
+  const wrongMethod = await dispatch(undefined, { method: "POST" });
+  const wrongPath = await dispatch("/oauth/other?code=authorization-code&state=state-1234567890");
 
-    expect(wrongMethod.handled).toBe(false);
-    expect(wrongPath.handled).toBe(false);
-    expect(mocks.readPending).not.toHaveBeenCalled();
-  });
+  expect([wrongMethod, wrongPath]).toMatchObject([{ handled: false }, { handled: false }]);
+  expect(mocks.readPending).not.toHaveBeenCalled();
+});
 
-  it("bounds the callback query before reading durable state", async () => {
-    const result = await dispatch(
-      `/oauth/mcp/callback?code=${"x".repeat(8 * 1024)}&state=state-1234567890`,
-    );
+it("bounds the callback query before reading durable state", async () => {
+  const result = await dispatch(
+    `/oauth/mcp/callback?code=${"x".repeat(8 * 1024)}&state=state-1234567890`,
+  );
 
-    expect(result.handled).toBe(true);
-    expect(result.response.res.statusCode).toBe(400);
-    expect(mocks.readPending).not.toHaveBeenCalled();
-    expect(mocks.readStore).not.toHaveBeenCalled();
-    expect(mocks.complete).not.toHaveBeenCalled();
-  });
+  expectPage(result, 400, "Ask the bot to connect again.");
+  expect(mocks.readPending).not.toHaveBeenCalled();
+  expect(mocks.readStore).not.toHaveBeenCalled();
+  expect(mocks.complete).not.toHaveBeenCalled();
 });

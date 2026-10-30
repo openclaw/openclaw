@@ -6,7 +6,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
  * normalized text. Use in both prepare and debounce gate for consistency.
  */
 export function stripSlackMentionsForCommandDetection(text: string): string {
-  return (text ?? "")
+  return text
     .replace(/<@[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();

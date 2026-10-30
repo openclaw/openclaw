@@ -18,10 +18,15 @@ function sqlitePath(root: string) {
   return path.join(root, "state", "openclaw.sqlite");
 }
 
-function openSqlite(root: string) {
+function withSqlite<T>(root: string, action: (db: DatabaseSync) => T): T {
   const dbPath = sqlitePath(root);
   mkdirSync(path.dirname(dbPath), { recursive: true });
-  return new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath);
+  try {
+    return action(db);
+  } finally {
+    db.close();
+  }
 }
 
 function writeLegacyIndex(root: string, text: string) {
@@ -35,67 +40,35 @@ function currentValueJson(installRecords: unknown) {
 }
 
 function writeCurrentSqliteIndex(root: string, valueJson: string, schemaVersion = 13) {
-  const db = openSqlite(root);
-  try {
-    db.exec(`
-      PRAGMA user_version = ${schemaVersion};
-      CREATE TABLE IF NOT EXISTS config_machine_state (
-        state_key TEXT NOT NULL PRIMARY KEY,
-        value_json TEXT NOT NULL,
-        updated_at_ms INTEGER NOT NULL
-      );
-    `);
+  withSqlite(root, (db) => {
+    db.exec(`PRAGMA user_version = ${schemaVersion}`);
     db.prepare(
-      `
-        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-        VALUES (?, ?, ?)
-        ON CONFLICT(state_key) DO UPDATE SET value_json = excluded.value_json
-      `,
-    ).run("plugins.installedIndex", valueJson, Date.now());
-  } finally {
-    db.close();
-  }
+      `CREATE TABLE config_machine_state AS
+       SELECT 'plugins.installedIndex' AS state_key, ? AS value_json`,
+    ).run(valueJson);
+  });
 }
 
 function writePreV13SqliteIndex(root: string, installRecordsJson: string, schemaVersion = 12) {
-  const db = openSqlite(root);
-  try {
-    db.exec(`
-      PRAGMA user_version = ${schemaVersion};
-      CREATE TABLE IF NOT EXISTS installed_plugin_index (
-        index_key TEXT NOT NULL PRIMARY KEY, version INTEGER NOT NULL,
-        host_contract_version TEXT NOT NULL, compat_registry_version TEXT NOT NULL,
-        migration_version INTEGER NOT NULL, policy_hash TEXT NOT NULL,
-        generated_at_ms INTEGER NOT NULL, refresh_reason TEXT,
-        install_records_json TEXT NOT NULL, plugins_json TEXT NOT NULL,
-        diagnostics_json TEXT NOT NULL, warning TEXT, updated_at_ms INTEGER NOT NULL
-      );
-    `);
+  withSqlite(root, (db) => {
+    db.exec(`PRAGMA user_version = ${schemaVersion}`);
     db.prepare(
-      `
-        INSERT INTO installed_plugin_index (
-          index_key, version, host_contract_version, compat_registry_version,
-          migration_version, policy_hash, generated_at_ms, refresh_reason,
-          install_records_json, plugins_json, diagnostics_json, warning, updated_at_ms
-        ) VALUES ('installed-plugin-index', 1, '1', '1', 1, 'hash', ?, NULL,
-          ?, '[]', '[]', NULL, ?)
-        ON CONFLICT(index_key) DO UPDATE SET
-          install_records_json = excluded.install_records_json
-      `,
-    ).run(Date.now(), installRecordsJson, Date.now());
-  } finally {
-    db.close();
-  }
+      `CREATE TABLE installed_plugin_index AS SELECT
+       'installed-plugin-index' AS index_key, 1 AS version, '1' AS host_contract_version,
+       '1' AS compat_registry_version, 1 AS migration_version, 'hash' AS policy_hash,
+       0 AS generated_at_ms, NULL AS refresh_reason, ? AS install_records_json,
+       '[]' AS plugins_json, '[]' AS diagnostics_json, NULL AS warning`,
+    ).run(installRecordsJson);
+  });
 }
 
 function readTableNames(root: string) {
   const db = new DatabaseSync(sqlitePath(root), { readOnly: true });
   try {
-    return (
-      db
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
-        .all() as Array<{ name: string }>
-    ).map((row) => row.name);
+    return db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+      .all()
+      .map((row) => row.name);
   } finally {
     db.close();
   }
@@ -120,100 +93,87 @@ describe("plugin index SQLite E2E helpers", () => {
     });
   });
 
-  it("keeps malformed legacy install JSON as an empty fallback", async () => {
-    writeLegacyIndex(root, "{not-json");
+  const sources = [
+    ["legacy JSON", writeLegacyIndex, "JSON artifact"],
+    ["current SQLite", writeCurrentSqliteIndex, "value_json"],
+    ["pre-v13 SQLite", writePreV13SqliteIndex, "install_records_json"],
+  ] as const;
+  it.each(sources)("keeps malformed %s as an empty fallback", async (_name, write) => {
+    write(root, "{not-json");
     expect(await readRecords()).toEqual({});
   });
-
-  it("rejects oversized legacy install JSON before parsing it", async () => {
-    writeLegacyIndex(root, JSON.stringify({ records: {}, filler: "x".repeat(128) }));
-
-    const { readPluginInstallRecords } = await loadPluginIndex({
-      OPENCLAW_PLUGIN_INDEX_JSON_MAX_BYTES: "64",
-    });
-
-    expect(() => readPluginInstallRecords(options)).toThrow(
-      "plugin index JSON artifact exceeded 64 bytes",
+  it.each(sources)("rejects oversized %s before parsing it", async (_name, write, column) => {
+    write(root, JSON.stringify({ filler: "x".repeat(128) }));
+    const index = await loadPluginIndex({ OPENCLAW_PLUGIN_INDEX_JSON_MAX_BYTES: "64" });
+    expect(() => index.readPluginInstallIndex(options)).toThrow(
+      `plugin index ${column} exceeded 64 bytes`,
     );
   });
 
-  it("reads the current index for schema v13", async () => {
-    writeCurrentSqliteIndex(root, currentValueJson({ current: { source: "npm" } }));
-
-    expect(await readRecords()).toEqual({
-      current: { source: "npm" },
-    });
+  it.each([
+    [13, "current"],
+    [12, "legacy"],
+    [0, "current"],
+  ] as const)("selects the authoritative %s schema index", async (schema, selected) => {
+    writePreV13SqliteIndex(root, JSON.stringify({ legacy: { source: "npm" } }), schema);
+    writeCurrentSqliteIndex(root, currentValueJson({ current: { source: "npm" } }), schema);
+    expect(await readRecords()).toEqual({ [selected]: { source: "npm" } });
   });
 
-  it("reads the retired index for pre-v13 schemas", async () => {
-    writePreV13SqliteIndex(root, JSON.stringify({ legacy: { source: "npm" } }));
+  it.each([
+    [13, writePreV13SqliteIndex, JSON.stringify({ stale: { source: "npm" } })],
+    [12, writeCurrentSqliteIndex, currentValueJson({ future: { source: "npm" } })],
+  ] as const)("never cross-reads another schema's table for v%s", async (schema, write, value) => {
+    write(root, value, schema);
+    expect(await readRecords()).toEqual({});
+  });
+
+  it.each([12, 13])("bounds only required summary fields in schema v%s", async (schema) => {
     const index = await loadPluginIndex();
-    expect(index.readPluginInstallIndex(options)).toMatchObject({
-      installRecords: { legacy: { source: "npm" } },
+    const installRecords = { demo: { source: "npm", future: { values: [false, null, "keep"] } } };
+    const plugins = [
+      { pluginId: "disabled", enabled: false, rootDir: "/disabled" },
+      { pluginId: "enabled", enabled: true, rootDir: "/enabled" },
+      { pluginId: "missing" },
+      { pluginId: "null", enabled: null, rootDir: null },
+    ];
+    index.writePluginInstallIndexForE2E(
+      {
+        installRecords,
+        plugins: plugins.map((plugin) => ({ ...plugin, description: "x".repeat(300_000) })),
+        diagnostics: ["y".repeat(1024 * 1024)],
+      },
+      { ...options, storageMode: schema === 12 ? "pre-v13" : "current" },
+    );
+    withSqlite(root, (db) => db.exec(`PRAGMA user_version = ${schema}`));
+
+    expect(index.readPluginInstallIndex({ ...options, summary: true })).toEqual({
+      installRecords,
+      plugins,
     });
+    expect(() => index.readPluginInstallIndex(options)).toThrow(/exceeded 1048576 bytes/u);
   });
 
-  it("prefers current state for unversioned databases", async () => {
-    writePreV13SqliteIndex(root, JSON.stringify({ stale: { source: "npm" } }), 0);
-    writeCurrentSqliteIndex(root, currentValueJson({ current: { source: "npm" } }), 0);
-
-    expect(await readRecords()).toEqual({
-      current: { source: "npm" },
-    });
-  });
-
-  it("does not fall back to a retired row for schema v13", async () => {
-    writePreV13SqliteIndex(root, JSON.stringify({ stale: { source: "npm" } }), 13);
-
-    expect(await readRecords()).toEqual({});
-  });
-
-  it("does not read current state for pre-v13 schemas", async () => {
-    writeCurrentSqliteIndex(root, currentValueJson({ future: { source: "npm" } }), 12);
-
-    expect(await readRecords()).toEqual({});
-  });
-
-  it.each([
-    {
-      name: "current",
-      write: () => writeCurrentSqliteIndex(root, "{not-json"),
-    },
-    {
-      name: "pre-v13",
-      write: () => writePreV13SqliteIndex(root, "{not-json"),
-    },
-  ])("keeps malformed $name SQLite state as an empty fallback", async ({ write }) => {
-    write();
-
-    expect(await readRecords()).toEqual({});
-  });
-
-  it.each([
-    {
-      name: "current",
-      expected: "plugin index value_json exceeded 64 bytes",
-      write: () => writeCurrentSqliteIndex(root, currentValueJson({ filler: "x".repeat(128) })),
-    },
-    {
-      name: "pre-v13",
-      expected: "plugin index install_records_json exceeded 64 bytes",
-      write: () => writePreV13SqliteIndex(root, JSON.stringify({ filler: "x".repeat(128) })),
-    },
-  ])("rejects oversized $name SQLite state before parsing it", async ({ expected, write }) => {
-    write();
-
-    const { readPluginInstallIndex } = await loadPluginIndex({
-      OPENCLAW_PLUGIN_INDEX_JSON_MAX_BYTES: "64",
-    });
-
-    expect(() => readPluginInstallIndex(options)).toThrow(expected);
+  it.each(["receipts", "roots"])("retains the summary byte cap for required %s", async (field) => {
+    const index = await loadPluginIndex();
+    index.writePluginInstallIndexForE2E(
+      {
+        installRecords: { demo: { future: field === "receipts" ? "é".repeat(600_000) : "kept" } },
+        plugins: [
+          { pluginId: "demo", rootDir: field === "roots" ? "x".repeat(1024 * 1024) : "/demo" },
+        ],
+      },
+      options,
+    );
+    expect(() => index.readPluginInstallIndex({ ...options, summary: true })).toThrow(
+      "plugin index summary exceeded 1048576 bytes",
+    );
   });
 
   it.each([
     { mode: "current", schemaVersion: 0, options: {}, current: true },
     { mode: "pre-v13", schemaVersion: 0, options: { storageMode: "pre-v13" }, current: false },
-    ...[0, 12, 13].map((schemaVersion) => ({
+    ...[0, 13].map((schemaVersion) => ({
       mode: `existing schema v${schemaVersion}`,
       schemaVersion,
       options: { storageMode: "existing-schema" },
@@ -222,9 +182,7 @@ describe("plugin index SQLite E2E helpers", () => {
   ])(
     "writes only the $mode storage contract",
     async ({ current, options: writerOptions, schemaVersion }) => {
-      const db = openSqlite(root);
-      db.exec(`PRAGMA user_version = ${schemaVersion}`);
-      db.close();
+      withSqlite(root, (db) => db.exec(`PRAGMA user_version = ${schemaVersion}`));
       const index = await loadPluginIndex();
       index.writePluginInstallIndexForE2E(
         { installRecords: { demo: { source: "npm" } } },

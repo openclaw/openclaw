@@ -23,7 +23,6 @@ import type {
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { createNativeModelOwnedRuntimeModel } from "../defaults.js";
 import type { FailoverReason } from "../failover/signal.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
 import type { AgentHarnessAttemptParams } from "../harness/types.js";
@@ -989,8 +988,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     };
   });
 
-  vi.doMock("../defaults.js", () => ({
-    createNativeModelOwnedRuntimeModel,
+  vi.doMock("../defaults.js", async () => ({
+    ...(await vi.importActual<typeof import("../defaults.js")>("../defaults.js")),
     DEFAULT_CONTEXT_TOKENS: 200000,
     DEFAULT_MODEL: "test-model",
     DEFAULT_PROVIDER: "anthropic",
@@ -1005,9 +1004,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     resolveFailoverStatus: mockedResolveFailoverStatus,
   }));
 
+  // mock-isolation: overflow fixtures pin lane selection without loading lane runtime state.
   vi.doMock("./lanes.js", () => ({
-    resolveSessionLane: vi.fn((key: string) => `session:${key}`),
-    resolveEmbeddedSessionLane: vi.fn((key: string) => `session:${key}`),
     resolveGlobalLane: vi.fn(() => "global-lane"),
   }));
 

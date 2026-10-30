@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPlainObject } from "../utils.js";
@@ -19,7 +20,6 @@ import { getActivePluginRegistry } from "./runtime.js";
 import {
   createPluginToolMatcherScope,
   normalizePluginToolMatcher,
-  pluginToolMatcherCoversTool,
   type PluginToolMatcherScope,
 } from "./tool-hook-matcher.js";
 
@@ -29,14 +29,12 @@ type TrustedToolPolicyRegistry =
   | null
   | undefined;
 
-/** Diagnostic entry for an installed trusted tool policy. */
 type TrustedToolPolicyDiagnosticEntry = {
   id: string;
   pluginId: string;
   pluginName?: string;
 };
 
-/** True when the supplied or active plugin registry has trusted tool policies. */
 export function hasTrustedToolPolicies(
   registry: TrustedToolPolicyRegistry = getActivePluginRegistry(),
 ): boolean {
@@ -151,7 +149,6 @@ function trustedPolicyFailureResult(
   };
 }
 
-/** Lists trusted tool policies for status and diagnostics. */
 export function getTrustedToolPolicyDiagnosticEntries(
   registry: TrustedToolPolicyRegistry = getActivePluginRegistry(),
 ): TrustedToolPolicyDiagnosticEntry[] {
@@ -270,7 +267,7 @@ export async function runTrustedToolPolicies(
     if (matcher === null) {
       return trustedPolicyFailureResult(registration, "policy matcher is unreadable");
     }
-    if (!pluginToolMatcherCoversTool(matcher, event.toolName)) {
+    if (matcher && !matcher.includes(normalizeLowercaseStringOrEmpty(event.toolName))) {
       continue;
     }
 

@@ -122,9 +122,7 @@ it("cleans transfer scratch before serving and removes it on shutdown", async ()
     const registry = createEmptyPluginRegistry();
     const runtime = await createWorkerStartupRuntime(startup, () => registry);
     const service = runtime.workerEnvironmentService;
-    if (!service) {
-      throw new Error("worker environment service was not created");
-    }
+    assert(service, "worker environment service was not created");
     try {
       await expect(fs.readdir(transferRoot)).resolves.toEqual([]);
     } finally {
@@ -361,10 +359,7 @@ it.each([
       }
     });
     const invokedBefore = f.invoked.length;
-    const operation = f[action]().then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    const operation = f[action]().catch((error: unknown) => error);
     try {
       await entered.promise;
       if (loss === "capability") {
@@ -421,10 +416,7 @@ it("cancels a register before its node commits after the caller aborts", async (
       return result;
     });
     const caller = new AbortController();
-    const registering = f.register(caller.signal).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    const registering = f.register(caller.signal).catch((error: unknown) => error);
     try {
       await entered.promise;
       caller.abort();

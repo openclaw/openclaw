@@ -6,9 +6,6 @@ import {
 import { PinnedDispatcherPool } from "../infra/net/pinned-dispatcher-pool.js";
 import { setProviderTransportDispatcherPoolActive } from "./provider-runtime-lifecycle.js";
 
-const PROVIDER_DISPATCHER_POOL_MAX_ENTRIES = 16;
-const PROVIDER_DISPATCHER_POOL_IDLE_TTL_MS = 60_000;
-
 let activePool: PinnedDispatcherPool | undefined;
 
 /** Reuse provider connections without exposing their lifecycle-owned pool to callers. */
@@ -24,10 +21,7 @@ export function fetchWithProviderHttpGuard(
 /** Returns the current process-lifecycle provider dispatcher pool generation. */
 function getProviderTransportDispatcherPool(): PinnedDispatcherPool {
   if (!activePool) {
-    activePool = new PinnedDispatcherPool({
-      maxEntries: PROVIDER_DISPATCHER_POOL_MAX_ENTRIES,
-      idleTtlMs: PROVIDER_DISPATCHER_POOL_IDLE_TTL_MS,
-    });
+    activePool = new PinnedDispatcherPool();
     setProviderTransportDispatcherPoolActive(true);
   }
   return activePool;

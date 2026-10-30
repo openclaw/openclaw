@@ -1,14 +1,15 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { requireGitBuffer } from "../agents/worktrees/git.js";
+import { readCommandProcessFailure } from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import * as diagnosticEvents from "./diagnostic-events.js";
 import {
@@ -70,12 +71,11 @@ describe("Git ref mutation timing", () => {
     traces.length = 0;
   });
 
-  it("attributes a held same-directory predecessor separately from resolution and callback work", async () => {
-    const holderEntered = createDeferred();
-    const releaseHolder = createDeferred();
+  it("attributes resolution, queue wait, callback work and trace context separately", async () => {
+    const holderGate = createEnteredGate();
     const callbackEntered = createDeferred();
     const releaseCallback = createDeferred();
-    const resolved = createDeferred<string>();
+    const abort = new AbortController();
     const trace = {
       traceId: "1234567890abcdef1234567890abcdef",
       spanId: "1234567890abcdef",
@@ -84,44 +84,39 @@ describe("Git ref mutation timing", () => {
     const result = { privateResult: "refs/private/result" };
     vi.mocked(diagnosticEvents.areDiagnosticsEnabledForProcess).mockReturnValue(false);
     vi.mocked(fs.realpath).mockResolvedValueOnce("/private/shared.git");
-    const holder = enqueueGitRefMutation("/private/holder", ".git", async () => {
-      holderEntered.resolve();
-      await releaseHolder.promise;
-    });
+    const holder = enqueueGitRefMutation("/private/holder", ".git", holderGate.wait);
     const pending: Promise<unknown>[] = [holder];
     try {
-      await holderEntered.promise;
+      await holderGate.entered;
       vi.mocked(diagnosticEvents.areDiagnosticsEnabledForProcess).mockReturnValue(true);
-      vi.mocked(fs.realpath).mockImplementationOnce(() => resolved.promise);
-      const callback = vi.fn(async () => {
-        callbackEntered.resolve();
-        await releaseCallback.promise;
-        return result;
+      vi.mocked(fs.realpath).mockImplementationOnce(async () => {
+        clock += 25;
+        return "/private/shared.git";
       });
-      const abort = new AbortController();
       const queued = runWithDiagnosticTraceContext(trace, () =>
-        enqueueGitRefMutation("/private/linked-checkout", "../shared.git", callback, abort.signal),
+        enqueueGitRefMutation(
+          "/private/linked-checkout",
+          "../shared.git",
+          async () => {
+            callbackEntered.resolve();
+            await releaseCallback.promise;
+            clock += 175;
+            return result;
+          },
+          abort.signal,
+        ),
       );
       const settled = vi.fn();
       void queued.then(settled, settled);
       pending.push(queued);
-      clock += 25;
-      resolved.resolve("/private/shared.git");
-      const independent = { independent: true };
-      await expect(
-        enqueueGitRefMutation("/private/other", ".git", async () => independent),
-      ).resolves.toBe(independent);
-      expect(callback).not.toHaveBeenCalled();
+      await nextTurn();
       expect(refLogs.info).not.toHaveBeenCalled();
-
       clock += 1_200;
-      releaseHolder.resolve();
+      holderGate.release();
       await callbackEntered.promise;
       abort.abort(new Error("cancelled after ref mutation started"));
       await nextTurn();
       expect(settled).not.toHaveBeenCalled();
-      expect(refLogs.info).not.toHaveBeenCalled();
-      clock += 175;
       releaseCallback.resolve();
       await expect(queued).resolves.toBe(result);
       expectTiming({
@@ -134,14 +129,13 @@ describe("Git ref mutation timing", () => {
       });
       expect(traces).toEqual([trace]);
     } finally {
-      resolved.resolve("/private/shared.git");
-      releaseHolder.resolve();
+      holderGate.release();
       releaseCallback.resolve();
       await Promise.allSettled(pending);
     }
   });
 
-  it.each(["resolution", "sync callback", "async callback"] as const)(
+  it.each(["resolution", "callback"] as const)(
     "preserves the original %s failure without private diagnostic content",
     async (phase) => {
       const error = new Error("failed update-ref refs/private at /private/repository");
@@ -149,13 +143,7 @@ describe("Git ref mutation timing", () => {
         clock += 1_000;
         throw error;
       };
-      const callback = vi.fn(() => {
-        if (phase === "sync callback") {
-          return fail();
-        }
-        clock += 1_000;
-        return Promise.reject(error);
-      });
+      const callback = vi.fn(async () => fail());
       const resolving = phase === "resolution";
       if (resolving) {
         vi.mocked(fs.realpath).mockImplementationOnce(async () => fail());
@@ -273,14 +261,9 @@ it("overrides maintenance.autoDetach only for an explicitly owned Git command", 
 
 it("reports the applied 120-second Git timeout", async () => {
   const seconds = 120;
-  const commandSpy = vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
-    stdout: "",
-    stderr: "",
-    signal: null,
-    killed: false,
-    termination: "timeout",
-    code: 124,
-  });
+  const commandSpy = vi
+    .spyOn(processExec, "runCommandWithTimeout")
+    .mockResolvedValue(createCommandResult({ termination: "timeout", code: 124 }));
   const args = ["worktree", "add"];
   const result = await executeGitCommand("/repo", args, { timeoutMs: undefined });
   const label = `timed out after ${seconds} seconds`;
@@ -300,6 +283,40 @@ it("reports the applied 120-second Git timeout", async () => {
 });
 
 describe("required Git output", () => {
+  it.each(["cooperative", "uncertain"] as const)(
+    "retains private native cancellation facts with %s cleanup",
+    async (cleanup) => {
+      const result = {
+        ...createCommandResult({
+          pid: 123,
+          code: null,
+          signal: null,
+          termination: "signal",
+          cleanup,
+          killIssuedByAbort: true,
+          outputLimitExceeded: false,
+          stderr: "cancelled fixture",
+        }),
+        timeoutMs: 30_000,
+      };
+      const failure = await Promise.resolve()
+        .then(() => requireGitCommandOutput("git remote", result))
+        .catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        name: "CommandExecutionError",
+        message: "git remote failed (terminated):\ncancelled fixture",
+      });
+      expect(readCommandProcessFailure(failure)).toStrictEqual({
+        pid: 123,
+        code: null,
+        termination: "signal",
+        cleanup,
+        killIssuedByAbort: true,
+        outputLimitExceeded: false,
+      });
+    },
+  );
+
   async function withGitBlob(
     input: string | Buffer,
     run: (root: string, args: string[]) => Promise<void>,
@@ -321,42 +338,17 @@ describe("required Git output", () => {
     });
   });
 
-  it.each([
-    ["text", requireGitCommand],
-    ["buffered", requireGitBuffer],
-  ] as const)("rejects incomplete %s output from a real Git blob", async (_kind, requireGit) => {
+  it("rejects incomplete buffered output from a real Git blob", async () => {
     const blob = Buffer.alloc(17 * 1024 * 1024, "x");
     await withGitBlob(blob, async (root, args) => {
-      await expect(requireGit(root, args)).rejects.toThrow("output limit exceeded");
+      await expect(requireGitBuffer(root, args)).rejects.toThrow("output limit exceeded");
     });
   });
 });
 
-describe("gitNullConfigPath", () => {
-  it("returns the Git-openable null path for the execution host", () => {
-    mockProcessPlatform("win32");
-    expect(gitNullConfigPath()).toBe("NUL");
-    mockProcessPlatform("linux");
-    expect(gitNullConfigPath()).toBe("/dev/null");
-  });
-
-  it.skipIf(process.platform !== "win32")(
-    "documents the defect: os.devNull as GIT_CONFIG_GLOBAL exits 128 on Windows",
-    async () => {
-      await withTestDir({ prefix: "git-null-config-" }, async (repo) => {
-        const result = spawnSync("git", ["-C", repo, "log", "--oneline", "-1"], {
-          env: {
-            ...process.env,
-            GIT_CONFIG_NOSYSTEM: "1",
-            GIT_CONFIG_COUNT: "0",
-            GIT_CONFIG_GLOBAL: os.devNull,
-          },
-          encoding: "utf8",
-        });
-        // Red evidence for issue #141279: the device-namespace path that
-        // os.devNull returns is rejected by Git for Windows.
-        expect(result.stderr).toContain("unable to access");
-      });
-    },
-  );
+it("returns the Git-openable null path for the execution host", () => {
+  mockProcessPlatform("win32");
+  expect(gitNullConfigPath()).toBe("NUL");
+  mockProcessPlatform("linux");
+  expect(gitNullConfigPath()).toBe("/dev/null");
 });

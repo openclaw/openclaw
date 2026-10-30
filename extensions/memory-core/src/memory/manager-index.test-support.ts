@@ -5,8 +5,12 @@ import type {
   EmbeddingInput,
   EmbeddingProviderCallOptions,
 } from "openclaw/plugin-sdk/embedding-providers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  loadSqliteVecExtension,
+  type MemoryExtraPath,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -33,7 +37,7 @@ type ManagerConfig = Parameters<GetMemorySearchManager>[0]["cfg"];
 type ManagerResult = Awaited<ReturnType<GetMemorySearchManager>>;
 
 type ManagerIndexFixtureConfig = {
-  extraPaths?: string[];
+  extraPaths?: MemoryExtraPath[];
   sources?: Array<"memory" | "sessions">;
   sessionMemory?: boolean;
   rememberAcrossConversations?: boolean;
@@ -55,8 +59,6 @@ type ManagerIndexFixtureConfig = {
 };
 
 type ProviderCall = Pick<ManagerIndexFixtureConfig, "provider" | "model" | "outputDimensionality">;
-
-export type ManagerIndexFixture = ReturnType<typeof createManagerIndexFixture>;
 
 type SessionTranscript = {
   messages: Array<{
@@ -87,6 +89,7 @@ const { providerState, resetProviderState } = vi.hoisted(() => {
       | null,
     providerRuntimeBatchErrors: [] as unknown[],
     providerRuntimeBatchFailuresRemaining: 0,
+    providerRuntimeBatchDeclines: false,
     providerRuntimeActiveBatchCalls: 0,
     providerRuntimeMaxActiveBatchCalls: 0,
     providerCloseCalls: 0,
@@ -231,6 +234,9 @@ vi.mock("./embeddings.js", async (importOriginal) => {
                     if (providerState.providerRuntimeBatchFailuresRemaining > 0) {
                       providerState.providerRuntimeBatchFailuresRemaining -= 1;
                       throw new Error("provider runtime batch failed");
+                    }
+                    if (providerState.providerRuntimeBatchDeclines) {
+                      return null;
                     }
                     return texts.map(embedText);
                   } finally {
@@ -388,12 +394,11 @@ export function createManagerIndexFixture(deps: {
     managers.add(manager);
   };
 
-  const getFreshManager = async (
+  const getManager = async (
     cfg: ManagerConfig,
     purpose?: "default" | "status" | "cli",
     inspectSources?: boolean,
   ): Promise<MemoryIndexManager> => {
-    setRuntimeConfigSnapshot(cfg);
     const manager = requireManager(
       await deps.getMemorySearchManager({
         runInBackgroundContext: runInMemoryTestBackgroundContext,
@@ -407,10 +412,24 @@ export function createManagerIndexFixture(deps: {
     return manager;
   };
 
-  const getPersistentManager = async (cfg: ManagerConfig): Promise<MemoryIndexManager> => {
-    const manager = await getFreshManager(cfg);
+  const getFreshManager = async (
+    cfg: ManagerConfig,
+    purpose?: "default" | "status" | "cli",
+    inspectSources?: boolean,
+  ): Promise<MemoryIndexManager> => {
+    setRuntimeConfigSnapshot(cfg);
+    return getManager(cfg, purpose, inspectSources);
+  };
+
+  const getPreparedPersistentManager = async (cfg: ManagerConfig): Promise<MemoryIndexManager> => {
+    const manager = await getManager(cfg);
     await resetManager(manager);
     return manager;
+  };
+
+  const getPersistentManager = async (cfg: ManagerConfig): Promise<MemoryIndexManager> => {
+    setRuntimeConfigSnapshot(cfg);
+    return getPreparedPersistentManager(cfg);
   };
 
   const seedSessionTranscript = async (params: SessionTranscript): Promise<void> => {
@@ -516,6 +535,7 @@ export function createManagerIndexFixture(deps: {
     trackManager,
     resetManager,
     getPersistentManager,
+    getPreparedPersistentManager,
     getFreshManager,
     getFtsSessionManager,
     seedSessionTranscript,
@@ -546,6 +566,20 @@ export function countMemoryIndexFtsMatches(databasePath: string, marker: string)
   } finally {
     observer.close();
   }
+}
+
+export function holdMemoryTestOperation<T>(value: () => T) {
+  const entered = createDeferred<void>();
+  const gate = createDeferred<void>();
+  return {
+    entered: entered.promise,
+    release: () => gate.resolve(),
+    run: async () => {
+      entered.resolve();
+      await gate.promise;
+      return value();
+    },
+  };
 }
 
 export function readPublishedSessionIndex(

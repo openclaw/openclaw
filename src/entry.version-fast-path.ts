@@ -18,8 +18,8 @@ export function tryHandleRootVersionFastPath(argv: string[]): boolean {
         import("./cli/dotenv.js"),
         import("./logging/json-console-line.js"),
       ]);
-      loadCliDotEnv({ quiet: true });
-      process.stderr.write(formatConsoleDiagnosticBlock({ level: "error", message }));
+      loadCliDotEnv();
+      process.stderr.write(formatConsoleDiagnosticBlock({ message }));
     } catch {
       process.stderr.write(message);
     } finally {

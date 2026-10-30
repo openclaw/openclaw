@@ -15,7 +15,6 @@ import { readPackageVersionIfPresent } from "./package-update-integrity.js";
 import type { PackageUpdateStepRunner } from "./package-update-lifecycle.js";
 import {
   prepareStagedPackageInstall,
-  discardPackageUpdateStage,
   runPackageUpdateLifecycle,
   verifyUnchangedPackageUpdateRecovery,
 } from "./package-update-lifecycle.js";
@@ -28,6 +27,7 @@ import {
 } from "./package-update-manager-preflight.js";
 import { prepareNpmGitSourceInstallSpec } from "./package-update-npm-pack.js";
 import { PACKAGE_REFUSAL_CODES, type PackageRefusalCode } from "./package-update-refusal.js";
+import { discardPackageUpdateStage } from "./package-update-stage-cleanup.js";
 import {
   PackageUpdateActivationError,
   type PackageActivationOptions,
@@ -128,12 +128,12 @@ export async function runGlobalPackageUpdateSteps(params: {
       stage: stagedInstall,
       committed,
     });
-    if (cleanup.status === "failed") {
-      uncertainLifecycleStage = stagedInstall;
-      return cleanup.step;
-    }
-    if (cleanup.status === "advisory") {
-      steps.push(cleanup.step);
+    if (cleanup) {
+      if (!cleanup.advisory) {
+        uncertainLifecycleStage = stagedInstall;
+        return cleanup;
+      }
+      steps.push(cleanup);
     }
     stagedInstall = null;
     return null;
@@ -283,6 +283,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       params.installTarget,
       params.packageName,
       nativeOptions,
+      params.env,
     );
     if (preparedInstall.failedStep) {
       return await packageUpdateFailure(preparedInstall.failedStep);
@@ -419,6 +420,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         params.installTarget,
         params.packageName,
         nativeOptions,
+        params.env,
       );
       if (preparedFallbackInstall.failedStep) {
         steps.push(preparedFallbackInstall.failedStep);
@@ -571,9 +573,13 @@ export async function runGlobalPackageUpdateSteps(params: {
         return await packageUpdateFailure(lifecycle.step, steps);
       }
     }
+    const verificationWarnings: string[] = [];
     if (!params.expectedGitCheckout && verificationErrors.length === 0) {
       verificationErrors.push(
-        ...(await collectPackageDistContentInventoryErrors(verificationPackageRoot)),
+        ...(await collectPackageDistContentInventoryErrors(
+          verificationPackageRoot,
+          verificationWarnings,
+        )),
       );
     }
     if (verificationErrors.length > 0) {
@@ -584,6 +590,15 @@ export async function runGlobalPackageUpdateSteps(params: {
           params.env,
         ),
       );
+    } else if (verificationWarnings.length) {
+      steps.push({
+        name: "package-verify",
+        command: `verify ${verificationPackageRoot}`,
+        cwd: verificationPackageRoot,
+        durationMs: 0,
+        exitCode: 0,
+        warnings: verificationWarnings,
+      });
     }
     let failedVerification = verificationErrors.length > 0;
     if (verificationErrors.length === 0) {

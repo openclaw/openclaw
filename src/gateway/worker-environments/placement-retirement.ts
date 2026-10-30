@@ -15,7 +15,6 @@ export type WorkerSessionPlacementRetirement = {
 export function retireWorkerSessionPlacement(
   db: EngineConnection,
   input: WorkerSessionPlacementRetirement,
-  options: { onlyIfCurrent?: boolean } = {},
 ): WorkerSessionPlacementIdentity | undefined {
   const sessionId = required(input.sessionId, "session id");
   if (!RETIRABLE_PLACEMENT_STATES.some((state) => state === input.expectedState)) {
@@ -32,11 +31,8 @@ export function retireWorkerSessionPlacement(
       .returning(["session_id as sessionId", "agent_id as agentId", "session_key as sessionKey"]),
   );
   if (!result) {
-    if (options.onlyIfCurrent) {
-      return undefined;
-    }
-    throw new Error(`Worker session placement ${sessionId} changed before retirement`);
+    return undefined;
   }
-  publishPlacementTurnClaimCleared(db, sessionId, input.expectedState, true);
+  publishPlacementTurnClaimCleared(db, sessionId, input.expectedState);
   return result;
 }

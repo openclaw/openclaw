@@ -4,9 +4,14 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createChannelIngressQueue } from "./ingress-queue.js";
 
 describe("source-authorized ingress enqueue", () => {
-  it.each(["transaction", "commit"] as const)(
-    "refuses a source retired at %s without revoking its shared account queue",
-    async (stage) => {
+  it.each([
+    ["transaction", false],
+    ["commit", false],
+    ["transaction", true],
+    ["commit", true],
+  ] as const)(
+    "refuses a source retired at %s (batch=%s) without revoking its shared account queue",
+    async (stage, batch) => {
       await withOpenClawTestState(
         { layout: "state-only", label: "event-enqueue-authority", applyEnv: false },
         async ({ stateDir }) => {
@@ -34,18 +39,27 @@ describe("source-authorized ingress enqueue", () => {
               }, attachment),
             );
           try {
+            const assertCurrent = () => {
+              if (!current) {
+                throw new Error("source retired");
+              }
+            };
             await expect(
-              queue.enqueueAuthorized(
-                "retired",
-                { text: "must not persist" },
-                {
-                  assertCurrent: () => {
-                    if (!current) {
-                      throw new Error("source retired");
-                    }
-                  },
-                },
-              ),
+              batch
+                ? queue.enqueueBatchAuthorized!(
+                    [
+                      { id: "retired", payload: { text: "must not persist" } },
+                      { id: "retired-sibling", payload: { text: "atomic sibling" } },
+                    ],
+                    { assertCurrent },
+                  )
+                : queue.enqueueAuthorized(
+                    "retired",
+                    { text: "must not persist" },
+                    {
+                      assertCurrent,
+                    },
+                  ),
             ).rejects.toThrow("source retired");
             expect(reached).toBe(true);
           } finally {

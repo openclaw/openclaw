@@ -1,4 +1,3 @@
-// Codex harness live gateway tests exercise real CLI backend sessions, cron probes, media probes, and command surfaces.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -66,7 +65,6 @@ import {
   buildCodexHarnessAppServerArgs,
   buildCodexHarnessLargeOutputCommand,
   CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
-  EXPECTED_CODEX_MODELS_COMMAND_TEXT,
   EXPECTED_CODEX_STATUS_COMMAND_TEXT,
   isExpectedCodexStatusCommandText,
   isExpectedYieldedAgentTimeout,
@@ -82,6 +80,8 @@ import {
   runOpenClawCliJson,
   type CronListJob,
 } from "./live-agent-probes.js";
+// Codex harness live gateway tests exercise real CLI backend sessions, cron probes, media probes, and command surfaces.
+import { liveOpenAiApiKeyModels } from "./live-openai-models.test-support.js";
 
 const LIVE = isLiveTestEnabled();
 const CODEX_HARNESS_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS);
@@ -563,17 +563,7 @@ async function writeLiveGatewayConfig(params: {
     ...(CODEX_HARNESS_AUTH_MODE === "api-key" && parsedModel.provider === "openai"
       ? {
           secrets: { providers: { default: { source: "env" } } },
-          models: {
-            mode: "merge",
-            providers: {
-              openai: {
-                api: "openai-responses",
-                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-                baseUrl: "https://api.openai.com/v1",
-                models: [],
-              },
-            },
-          },
+          models: liveOpenAiApiKeyModels(),
         }
       : {}),
   };
@@ -2669,7 +2659,7 @@ describeLive("gateway live (Codex harness)", () => {
               events: gatewayEvents,
               sessionKey,
               command: "/codex models",
-              expectedText: [...EXPECTED_CODEX_MODELS_COMMAND_TEXT],
+              expectedText: "usable model evidence",
               isExpectedText: isStrictExpectedCodexModelsCommandText,
               predicateOnly: true,
             });

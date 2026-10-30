@@ -1,4 +1,3 @@
-// CLI config readiness guard and invalid-config recovery.
 import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
 import type {
   StartupConfigPreflightOptions,
@@ -183,15 +182,6 @@ export async function ensureConfigReady(params: {
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
     : false;
-  const [{ formatConfigIssueLines }, { renderConfigValidationIssueLines }] = await Promise.all([
-    import("../../config/issue-format.js"),
-    import("../../config/issue-location.js"),
-  ]);
-  const issues =
-    snapshot.exists && !snapshot.valid ? renderConfigValidationIssueLines(snapshot) : [];
-  const legacyIssues =
-    snapshot.legacyIssues.length > 0 ? formatConfigIssueLines(snapshot.legacyIssues, "-") : [];
-
   const invalid = snapshot.exists && !snapshot.valid;
   if (!invalid) {
     setRuntimeConfigSnapshot(snapshot.runtimeConfig ?? snapshot.config, snapshot.sourceConfig);
@@ -206,18 +196,25 @@ export async function ensureConfigReady(params: {
   }
 
   const [
+    { formatConfigIssueLines },
+    { renderConfigValidationIssueLines },
     { colorize, isRich, theme },
     { shortenHomePath },
     { formatCliCommand },
     { isPluginPackagingRuntimeOutputInvalidConfigSnapshot },
     { formatPluginPackagingRuntimeOutputRecoveryHint },
   ] = await Promise.all([
+    import("../../config/issue-format.js"),
+    import("../../config/issue-location.js"),
     import("../../../packages/terminal-core/src/theme.js"),
     import("../../utils.js"),
     import("../command-format.js"),
     import("../../config/recovery-policy.js"),
     import("../config-recovery-hints.js"),
   ]);
+  const issues = renderConfigValidationIssueLines(snapshot);
+  const legacyIssues =
+    snapshot.legacyIssues.length > 0 ? formatConfigIssueLines(snapshot.legacyIssues, "-") : [];
   const rich = isRich();
   const muted = (value: string) => colorize(rich, theme.muted, value);
   const error = (value: string) => colorize(rich, theme.error, value);

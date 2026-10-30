@@ -100,6 +100,9 @@ configured tools continue to read current credentials at execution time.
 
 ## Choosing a provider
 
+`tools.web.search.provider` is matched case-insensitively and ignores surrounding
+whitespace. For example, `SearXNG` selects the existing `searxng` provider.
+
 <CardGroup cols={2}>
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
     Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
@@ -247,6 +250,13 @@ payload carrying an `error` key is always reported as `kind: "error"` with the
 raw provider code preserved inside the wrapped message. Raw passthrough
 payloads keep whatever markers the provider set.
 
+Structured results share a 20,000-character budget for URLs and sanitized prose,
+excluding external-content envelopes. URLs are reserved first. Prose is allocated
+from shorter to longer sanitized rows without changing provider result order, so
+long early snippets cannot consume the entire budget before later rows receive a
+share. Sanitization expansion counts toward the budget; truncated output sets
+`truncated: true`.
+
 Perplexity, Tavily, and xAI HTTP errors retain the status code and bounded
 diagnostics, with reflected request credentials redacted. Review diagnostics
 before sharing them; redaction does not remove every kind of sensitive content.
@@ -280,7 +290,7 @@ API-backed providers first:
 9. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
 10. **Parallel** -- paid Parallel Search API via `PARALLEL_API_KEY` or `plugins.entries.parallel.config.webSearch.apiKey`; optional `plugins.entries.parallel.config.webSearch.baseUrl` overrides the endpoint (order 75)
 
-11. **DeepSeek** -- `DEEPSEEK_API_KEY`, `plugins.entries.deepseek.config.webSearch.apiKey`, or `models.providers.deepseek.apiKey` (order 80; install the official DeepSeek plugin first)
+11. **DeepSeek** -- `DEEPSEEK_API_KEY`, `plugins.entries.deepseek.config.webSearch.apiKey`, or `models.providers.deepseek.apiKey` while that provider and its models use `https://api.deepseek.com` (order 80; install the official DeepSeek plugin first)
 
 Configured endpoint providers after that:
 

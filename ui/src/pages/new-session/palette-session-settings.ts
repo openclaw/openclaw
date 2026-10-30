@@ -23,16 +23,6 @@ export type SettingsOptions = {
   onConnectMachine: () => void;
 };
 
-type MachineChoice = {
-  id: string;
-  label: string;
-  remote: boolean;
-  hosted?: boolean;
-  selected: boolean;
-  disabledReason?: string;
-  select: () => void;
-};
-
 export function resolvePaletteSessionSettings(options: SettingsOptions, search: string) {
   const { draft } = options;
   const { place, gateway, submission } = draft;
@@ -60,7 +50,15 @@ export function resolvePaletteSessionSettings(options: SettingsOptions, search: 
     projectQuery: "",
     freshWorkspace: place.freshWorkspace,
   });
-  const machines: MachineChoice[] = [
+  const machines: {
+    id: string;
+    label: string;
+    remote: boolean;
+    hosted?: boolean;
+    selected: boolean;
+    disabledReason?: string;
+    select: () => void;
+  }[] = [
     ...place.modelControl.hostedEnvironments().map((environment) => ({
       id: "runtime:" + environment.id,
       label: environment.label,

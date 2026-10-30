@@ -10,7 +10,7 @@ import {
   mintAgentRuntimeIdentityToken,
   verifyAgentRuntimeIdentityToken,
 } from "../../gateway/agent-runtime-identity-token.js";
-import { resolveExecutionIdentitySpawnFacts } from "../../gateway/agent-turn/agent-run-execution-lineage.js";
+import { prepareAgentRunExecutionIdentityFacts } from "../../gateway/agent-turn/agent-run-execution-lineage.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import {
   createTestApprovalManager,
@@ -123,10 +123,7 @@ const createSession = () =>
   callGatewayTool(
     "sessions.create",
     {},
-    {
-      parentSessionKey: "agent:ops:main",
-      spawnDepth: 1,
-    },
+    { parentSessionKey: "agent:ops:main", spawnDepth: 1 },
     requiredIdentity,
   );
 const capabilities: string[] = [];
@@ -348,7 +345,7 @@ describe("Gateway tool identity and hosted routing", () => {
   );
 
   it("redeems private spawn lineage once", async () => {
-    const result = await withCaller({ executionIdentityToken: parent }, async () => {
+    await withCaller({ executionIdentityToken: parent }, async () => {
       await runWithGatewaySessionSpawnContext(lineageContext, () =>
         runWithGatewaySessionSpawnParentExecutionIdentity(parent, () =>
           callGatewayTool(
@@ -370,15 +367,20 @@ describe("Gateway tool identity and hosted routing", () => {
         /private-parent|private-requester|private-controller|private-local|private-target/,
       );
       const identity = await verifyAgentRuntimeIdentityToken(token);
-      return {
-        identity,
-        facts: resolveExecutionIdentitySpawnFacts(identity ? { ...identity } : undefined),
-        replayFacts: resolveExecutionIdentitySpawnFacts(identity),
-      };
+      const prepareFacts = (agentRuntimeIdentity: typeof identity) =>
+        prepareAgentRunExecutionIdentityFacts(
+          {
+            client: { internal: { agentRuntimeIdentity } },
+            context,
+          },
+          {},
+        );
+      expect(identity).toBeDefined();
+      expect(prepareFacts(identity ? { ...identity } : undefined)?.spawnAdmission).toEqual(
+        expect.any(String),
+      );
+      expect(prepareFacts(identity)).toBeUndefined();
     });
-    expect(result.identity).toBeDefined();
-    expect(result.facts?.spawnAdmission).toEqual(expect.any(String));
-    expect(result.replayFacts).toBeUndefined();
     await expect(verifyCallIdentity()).resolves.toBeUndefined();
   });
 
@@ -404,10 +406,7 @@ describe("Gateway tool identity and hosted routing", () => {
       await expectRefusal({ sourceReplyToolCallId: undefined }, "tool-call correlation");
       await expectRefusal({ turnCapability: "missing-capability" }, "an active turn capability");
       await expectRefusal({ turnCapability: sourceLess }, "source-turn correlation");
-      await expectRefusal({ target: "remote" }, "the trusted local gateway context");
-      await expect(
-        resolve({ target: "remote", callerOwnsTerminalReceipt: true }),
-      ).resolves.toBeUndefined();
+      await expect(resolve({ target: "remote" })).resolves.toBeUndefined();
       await expect(
         resolveMessageActionAgentRuntimeIdentityToken({ opts: {}, target: "local" }),
       ).resolves.toBeUndefined();

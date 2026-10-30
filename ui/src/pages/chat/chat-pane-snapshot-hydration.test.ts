@@ -6,15 +6,18 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import {
+  createInitializationContext,
+  createGatewayBrowserClientFixture,
+} from "./chat-application-context.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { chatHistoryRequests } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
-  createInitializationContext,
   createPaneTestHost,
   getPaneTestRuntime,
-  createGatewayBrowserClientFixture,
   nativeHistoryMessage,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
@@ -36,6 +39,7 @@ import {
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
 import "./chat-pane.tsx";
 
@@ -108,7 +112,8 @@ describe("stored chat snapshot hydration", () => {
     messages: ReturnType<typeof nativeHistoryMessage>[],
   ) {
     const writer = new SessionSnapshotStore();
-    writer.write(
+    writeSnapshotFixture(
+      writer,
       resolveChatSnapshotKey(
         { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
         { sessionKey: targetSessionKey },
@@ -121,6 +126,43 @@ describe("stored chat snapshot hydration", () => {
     );
     await writer.flush();
   }
+
+  it.each([
+    { phase: "connecting", socketBlocked: false },
+    { phase: "connected", socketBlocked: false },
+    { phase: "connecting", socketBlocked: true },
+  ] as const)(
+    "adopts stored history without waiting for connection or paint ($phase, blocked=$socketBlocked)",
+    async ({ phase, socketBlocked }) => {
+      const client = createGatewayBrowserClientFixture();
+      if (socketBlocked) {
+        Object.defineProperty(client, "connectSent", { get: () => new Promise(() => {}) });
+      }
+      const pane = createMountedPane("agent:main:first-paint", new Map(), client);
+      pane.context.gateway.snapshot.phase = phase;
+      const snapshot = {
+        messages: [nativeHistoryMessage(1, "cached first paint")],
+        sessionId: "saved-session",
+        pagination: { hasMore: false as const },
+      };
+      const read = createDeferred<typeof snapshot>();
+      const store = new SessionSnapshotStore();
+      vi.spyOn(store, "read").mockReturnValue(read.promise);
+      pane.sessionSnapshotStore = store;
+      try {
+        const state = startPane(pane);
+        read.resolve(snapshot);
+        await chatHistoryRequests(state).initialSnapshotHydration?.promise;
+        expect(state.chatMessages).toEqual(snapshot.messages);
+        if (socketBlocked) {
+          expect(state.connected).toBe(false);
+        }
+      } finally {
+        pane.disconnectedCallback();
+        store.disconnect();
+      }
+    },
+  );
 
   it.each(
     ["memory", "stored"].flatMap((cacheMode) =>
@@ -226,9 +268,12 @@ describe("stored chat snapshot hydration", () => {
         const { container } = renderPane();
         transcript.start();
         flush();
-        const displayed = expectDefined(
-          container.querySelector<HTMLImageElement>(".chat-message-image"),
-          "remounted initial image",
+        await vi.dynamicImportSettled();
+        const displayed = await waitForSolid(() =>
+          expectDefined(
+            container.querySelector<HTMLImageElement>(".chat-message-image"),
+            "remounted initial image",
+          ),
         );
         // jsdom has no decoder; deliver the loaded-preview boundary before custody.
         Object.defineProperty(displayed, "naturalWidth", { value: 1 });
@@ -302,89 +347,68 @@ describe("stored chat snapshot hydration", () => {
     },
   );
 
-  it("paints a persistent snapshot before requesting its network refresh", async () => {
-    vi.stubGlobal("indexedDB", new IDBFactory());
-    const targetSessionKey = "agent:main:persistent";
-    const cachedMessages = [nativeHistoryMessage(1, "persistent history")];
-    const networkMessages = [nativeHistoryMessage(1, "network history")];
-    await writeStoredSnapshot(targetSessionKey, cachedMessages);
-    const response = createDeferred<Record<string, unknown>>();
-    const request = vi.fn(() => response.promise);
-    const client = createGatewayBrowserClientFixture({ request });
-    const hydration = networkHydration(targetSessionKey, client);
-
-    try {
-      const attachedState = hydration.start();
-      expect(request).not.toHaveBeenCalled();
-      await vi.waitFor(() => expect(attachedState?.chatMessages).toEqual(cachedMessages));
-      expect(request).toHaveBeenCalledWith(
-        "chat.history",
-        expect.objectContaining({ sessionKey: targetSessionKey }),
-        { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
+  it.each(["delayed", "immediate"] as const)(
+    "hydrates persistent history without overwriting its %s network refresh",
+    async (timing) => {
+      vi.stubGlobal("indexedDB", new IDBFactory());
+      const targetSessionKey = "agent:main:persistent";
+      const cachedMessages = [nativeHistoryMessage(1, "persistent history")];
+      const networkMessages = [nativeHistoryMessage(1, "network history")];
+      await writeStoredSnapshot(targetSessionKey, cachedMessages);
+      const response = createDeferred<Record<string, unknown>>();
+      const request = vi.fn(() => response.promise);
+      const hydration = networkHydration(
+        targetSessionKey,
+        timing === "delayed"
+          ? createGatewayBrowserClientFixture({ request })
+          : ({ request } as unknown as GatewayBrowserClient),
       );
-
-      response.resolve({ messages: networkMessages, sessionId: "network-session" });
-      await vi.waitFor(() => expect(attachedState?.chatMessages).toEqual(networkMessages));
-    } finally {
-      await hydration.dispose();
-    }
-  });
-
-  it("keeps the authoritative snapshot after a fast network refresh", async () => {
-    vi.stubGlobal("indexedDB", new IDBFactory());
-    const targetSessionKey = "agent:main:network-first";
-    await writeStoredSnapshot(targetSessionKey, [
-      nativeHistoryMessage(1, "stale persistent history"),
-    ]);
-    const networkMessages = [nativeHistoryMessage(1, "authoritative network history")];
-    const request = vi.fn(async () => ({
-      messages: networkMessages,
-      sessionId: "network-session",
-    }));
-    const client = { request } as unknown as GatewayBrowserClient;
-    const hydration = networkHydration(targetSessionKey, client);
-
-    try {
-      const attachedState = hydration.start();
-      await vi.waitFor(() => expect(attachedState?.chatMessages).toEqual(networkMessages));
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-      expect(attachedState?.chatMessages).toEqual(networkMessages);
-    } finally {
-      await hydration.dispose();
-    }
-  });
+      if (timing === "immediate") {
+        response.resolve({ messages: networkMessages, sessionId: "network-session" });
+      }
+      try {
+        const state = hydration.start();
+        if (timing === "delayed") {
+          await vi.waitFor(() => expect(state.chatMessages).toEqual(cachedMessages));
+          expect(request).toHaveBeenCalledWith(
+            "chat.history",
+            expect.objectContaining({ sessionKey: targetSessionKey }),
+            { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
+          );
+          response.resolve({ messages: networkMessages, sessionId: "network-session" });
+        }
+        await vi.waitFor(() => expect(state.chatMessages).toEqual(networkMessages));
+        if (timing === "immediate") {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+          });
+          expect(state.chatMessages).toEqual(networkMessages);
+        }
+      } finally {
+        await hydration.dispose();
+      }
+    },
+  );
 
   it("merges stored history with an admitted prompt when hydration resolves late", async () => {
+    vi.useFakeTimers();
     const targetSessionKey = "agent:main:first-turn-retry";
     const client = {
       addEventListener: vi.fn(() => vi.fn()),
       request: vi.fn(),
     } as unknown as GatewayBrowserClient;
-    const context = createInitializationContext(
-      createGatewayBrowserClientFixture({
-        offlineRecoveryScope: "test-recovery-scope",
-        recoveryScopeReady: false,
-      }),
-    );
-    context.gateway.snapshot.client = client;
-    // SAFETY: The fixture uses the real pane runtime and its forwarded test surface.
-    const pane = createPaneTestHost(
-      "openclaw-chat-runtime-test",
-      ChatPaneRuntime,
-    ) as unknown as TestChatPane;
-    pane.sessionKey = targetSessionKey;
     const sharedMessages: ChatMessageCache = new Map();
-    pane.chatMessagesBySession = sharedMessages;
+    const pane = createMountedPane(targetSessionKey, sharedMessages);
+    const context = pane.context;
+    context.gateway.snapshot.client = client;
     let deliverStoredSnapshot: ((snapshot: unknown) => void) | undefined;
     pane.sessionSnapshotStore = {
+      readReady: () => undefined,
       read: () =>
         new Promise((resolve) => {
           deliverStoredSnapshot = resolve;
         }),
     } as never;
-    pane.context = context;
     context.chatSubmissions.retain(
       buildInitialChatSubmission(
         targetSessionKey,
@@ -410,8 +434,9 @@ describe("stored chat snapshot hydration", () => {
         pagination: storedPagination,
         sessionId: "stored-session",
       });
-      await Promise.resolve();
-      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      vi.advanceTimersToNextFrame();
+      await vi.advanceTimersByTimeAsync(1);
       expect(deliverStoredSnapshot).toBeDefined();
       expect(attachedState?.chatMessages).toEqual([
         storedMessage,
@@ -438,6 +463,7 @@ describe("stored chat snapshot hydration", () => {
       });
     } finally {
       pane.disconnectedCallback();
+      vi.useRealTimers();
     }
   });
 });

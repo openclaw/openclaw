@@ -1,21 +1,16 @@
-import { listen } from "../lib/reactive/listener.ts";
+import { observeWindowResize } from "../lib/reactive/window-resize.ts";
 import type { DockPanelLayoutStore, DockPanelPlacement } from "./dock-panel-layout.ts";
 
-type DockLayoutDependencies<TDock extends DockPanelPlacement> = {
+/** Geometry and open intent stay synchronous for panel actions and persistence. */
+export function createDockLayout<TDock extends DockPanelPlacement>(deps: {
   layout: DockPanelLayoutStore<TDock>;
   reservationPrefix: string;
   isAvailable: () => boolean;
   isEmbedded?: () => boolean;
   isFullscreen?: () => boolean;
-  maxWidth?: () => number;
   onResize?: () => void;
   notify: () => void;
-};
-
-/** Geometry and open intent stay synchronous for panel actions and persistence. */
-export function createDockLayout<TDock extends DockPanelPlacement>(
-  deps: DockLayoutDependencies<TDock>,
-) {
+}) {
   let suppressed = false;
   let persistedOpen = false;
   let stopResize: (() => void) | undefined;
@@ -23,11 +18,6 @@ export function createDockLayout<TDock extends DockPanelPlacement>(
   // Embedded/fullscreen parents own geometry; only standalone docks reserve the viewport.
   const reservesViewport = () => !isFullscreen() && !deps.isEmbedded?.();
   const size = () => (dock.dock === "bottom" ? window.innerHeight : window.innerWidth);
-  const maxWidth = () =>
-    Math.max(
-      deps.layout.minWidth,
-      Math.min(deps.layout.maxWidth(), deps.maxWidth?.() ?? Number.POSITIVE_INFINITY),
-    );
   const dock = {
     open: false,
     dock: deps.layout.defaults.dock,
@@ -44,10 +34,10 @@ export function createDockLayout<TDock extends DockPanelPlacement>(
       dock.open = layout.open && deps.isAvailable();
       dock.dock = layout.dock;
       dock.height = layout.height;
-      dock.width = Math.min(layout.width, maxWidth());
-      stopResize = listen(window, "resize", () => {
+      dock.width = Math.min(layout.width, deps.layout.maxWidth());
+      stopResize = observeWindowResize(window, () => {
         const height = Math.min(dock.height, deps.layout.maxHeight());
-        const width = Math.min(dock.width, maxWidth());
+        const width = Math.min(dock.width, deps.layout.maxWidth());
         if (height === dock.height && width === dock.width) {
           return;
         }
@@ -141,7 +131,7 @@ export function createDockLayout<TDock extends DockPanelPlacement>(
     resize(event: CustomEvent<{ splitRatio: number }>) {
       const horizontal = dock.dock === "bottom";
       const minimum = horizontal ? deps.layout.minHeight : deps.layout.minWidth;
-      const maximum = horizontal ? deps.layout.maxHeight() : maxWidth();
+      const maximum = horizontal ? deps.layout.maxHeight() : deps.layout.maxWidth();
       const next = Math.min(maximum, Math.max(minimum, (1 - event.detail.splitRatio) * size()));
       if (horizontal) {
         dock.height = next;
@@ -154,13 +144,13 @@ export function createDockLayout<TDock extends DockPanelPlacement>(
     },
 
     get resizer() {
-      if (isFullscreen() || dock.dock === "main") {
+      if (isFullscreen() || dock.dock === "main" || (!dock.open && !deps.isEmbedded?.())) {
         return null;
       }
       const horizontal = dock.dock === "bottom";
       const viewportSize = size();
       const minimum = horizontal ? deps.layout.minHeight : deps.layout.minWidth;
-      const maximum = horizontal ? deps.layout.maxHeight() : maxWidth();
+      const maximum = horizontal ? deps.layout.maxHeight() : deps.layout.maxWidth();
       const current = horizontal ? dock.height : dock.width;
       return {
         orientation: horizontal ? ("horizontal" as const) : ("vertical" as const),

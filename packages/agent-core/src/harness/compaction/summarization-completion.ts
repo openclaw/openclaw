@@ -3,6 +3,7 @@ import { resolveCompletionTokenReservation } from "@openclaw/ai/transports";
 import {
   resolveClaudeFable5ModelIdentity,
   type Model,
+  type ModelRequestHeaders,
   type SimpleStreamOptions,
   type StreamFn,
 } from "@openclaw/llm-core";
@@ -58,31 +59,6 @@ const MIN_SUMMARY_INPUT_CHARS = 4_000;
  */
 const MAX_OVERFLOW_SHRINKS = 2;
 
-/**
- * Conversation budget for one summary request: the fixed cap, lowered when the
- * summarizer's own window cannot hold it next to the prompt and the largest
- * completion the transport may request.
- */
-function resolveSummaryInputChars(
-  model: Model,
-  completionTokens: number,
-  promptText: string,
-): number {
-  const contextWindow = model.contextWindow ?? 0;
-  if (contextWindow <= 0) {
-    return MAX_SUMMARY_INPUT_CHARS;
-  }
-  const windowChars =
-    ((contextWindow - completionTokens - SUMMARY_FRAMING_TOKENS) * CHARS_PER_TOKEN_ESTIMATE) /
-    SUMMARY_WINDOW_SAFETY_MARGIN;
-  const available = Math.floor(
-    windowChars -
-      estimateStringChars(SUMMARIZATION_SYSTEM_PROMPT) -
-      estimateStringChars(promptText),
-  );
-  return Math.min(MAX_SUMMARY_INPUT_CHARS, available);
-}
-
 export interface SummarizationCompletionParams {
   messages: AgentMessage[];
   prompt: string;
@@ -91,7 +67,7 @@ export interface SummarizationCompletionParams {
   model: Model;
   maxTokens: number;
   apiKey: string | undefined;
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   signal?: AbortSignal;
   thinkingLevel?: ThinkingLevel;
   streamFn?: StreamFn;
@@ -99,7 +75,7 @@ export interface SummarizationCompletionParams {
   errorLabel: string;
 }
 
-/** Runs one summarization completion and maps abort/error stops to CompactionError. */
+/** Runs one summarization completion and rejects failed or incomplete output. */
 export async function runSummarizationCompletion(
   params: SummarizationCompletionParams,
 ): Promise<Result<string, CompactionError>> {
@@ -121,11 +97,26 @@ export async function runSummarizationCompletion(
     options.reasoning = resolveAgentReasoningOption(model, thinkingLevel);
   }
   const completionTokens = resolveCompletionTokenReservation(model, maxTokens, options.reasoning);
-  const fullBudget = resolveSummaryInputChars(
-    model,
-    completionTokens,
-    `${instructions}\n\n${OMITTED_ENTRIES_INSTRUCTION}`,
-  );
+  /**
+   * Conversation budget for one summary request: the fixed cap, lowered when the
+   * summarizer's own window cannot hold it next to the prompt and the largest
+   * completion the transport may request.
+   */
+  const contextWindow = model.contextWindow ?? 0;
+  let fullBudget: number;
+  if (contextWindow <= 0) {
+    fullBudget = MAX_SUMMARY_INPUT_CHARS;
+  } else {
+    const windowChars =
+      ((contextWindow - completionTokens - SUMMARY_FRAMING_TOKENS) * CHARS_PER_TOKEN_ESTIMATE) /
+      SUMMARY_WINDOW_SAFETY_MARGIN;
+    const available = Math.floor(
+      windowChars -
+        estimateStringChars(SUMMARIZATION_SYSTEM_PROMPT) -
+        estimateStringChars(`${instructions}\n\n${OMITTED_ENTRIES_INSTRUCTION}`),
+    );
+    fullBudget = Math.min(MAX_SUMMARY_INPUT_CHARS, available);
+  }
   const budgetError = () =>
     err<string, CompactionError>(
       new SummaryOutputBudgetError(
@@ -192,7 +183,7 @@ export async function runSummarizationCompletion(
     if (response.stopReason === "length") {
       return err(
         new SummaryOutputBudgetError(
-          `${params.errorLabel} failed: summary output budget (${params.maxTokens} tokens) was exhausted without visible text; reduce thinking or increase the selected model's maxTokens before retrying`,
+          `${params.errorLabel} failed: summary output budget (${maxTokens} tokens) was exhausted without visible text for ${model.provider}/${model.id} (model maxTokens: ${model.maxTokens}); set agents.defaults.compaction.thinkingLevel to "off" if supported, or use agents.defaults.compaction.model to select a model that can summarize within this budget`,
         ),
       );
     }
@@ -200,5 +191,13 @@ export async function runSummarizationCompletion(
       new InvalidSummaryOutputError(`${params.errorLabel} failed: model returned no summary text`),
     );
   }
+  if (response.stopReason === "length") {
+    return err(
+      new InvalidSummaryOutputError(
+        `${params.errorLabel} failed: summary truncated at the output token limit`,
+      ),
+    );
+  }
+
   return ok(summary);
 }

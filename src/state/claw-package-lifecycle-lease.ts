@@ -1,4 +1,3 @@
-import { formatErrorMessage } from "../infra/errors.js";
 import {
   CLAW_PACKAGE_LIFECYCLE_LEASE_SCOPE,
   clawPackageLifecycleLeaseKey,
@@ -6,7 +5,11 @@ import {
 } from "./claw-package-lifecycle-lease-key.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
-import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+import {
+  withOpenClawStateLeaseAsync,
+  type OpenClawStateAsyncLeaseContext,
+} from "./openclaw-state-lease.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 export type ClawPackageLifecycleLeaseIdentity = {
   scope: typeof CLAW_PACKAGE_LIFECYCLE_LEASE_SCOPE;
@@ -14,25 +17,16 @@ export type ClawPackageLifecycleLeaseIdentity = {
   owner: string;
 };
 
-type ClawPackageLifecycleLease = {
-  identity: ClawPackageLifecycleLeaseIdentity;
-  heartbeat: (nowMs?: number) => void;
-  assertCurrent?: () => void;
-  release: () => Promise<void> | void;
-};
-
-export type MaintainedClawPackageLifecycleLease = {
+export type ClawPackageLifecycleLease = {
   identity: ClawPackageLifecycleLeaseIdentity;
   assertCurrent: () => void;
-  withHeartbeatPaused: <T>(operation: () => Promise<T>) => Promise<T>;
+  assertOwned: () => Promise<void>;
   release: () => Promise<void> | void;
 };
 
 type ClawPackageLifecycleLeaseOptions = OpenClawStateDatabaseOptions & {
   required?: boolean;
 };
-
-const LEASE_TTL_MS = 5 * 60_000;
 
 /** Add holds this lease while it commits package references through the state worker. */
 export async function acquireClawPackageLifecycleLease(
@@ -51,13 +45,16 @@ export async function acquireClawPackageLifecycleLease(
           if (!active) {
             throw new Error("Package lifecycle lease has been released.");
           }
-          lease.assertOwned();
+          lease.assertCurrent();
         },
-        heartbeat: () => {
+        assertOwned: async () => {
           if (!active) {
             throw new Error("Package lifecycle lease has been released.");
           }
-          lease.assertOwned();
+          await lease.assertOwned();
+          if (!active) {
+            throw new Error("Package lifecycle lease has been released.");
+          }
         },
         release: async () => {
           if (active) {
@@ -85,73 +82,30 @@ export async function acquireClawPackageLifecycleLease(
   }
 }
 
-/** Check an Add lease during asynchronous package installation; its state owner renews it. */
-export function maintainClawPackageLifecycleLease(
-  lease: ClawPackageLifecycleLease,
-): MaintainedClawPackageLifecycleLease {
-  let heartbeatError: unknown;
-  let paused = 0;
-  const heartbeat = setInterval(() => {
-    if (paused > 0) {
-      return;
-    }
-    try {
-      lease.heartbeat();
-    } catch (error) {
-      heartbeatError ??= error;
-    }
-  }, LEASE_TTL_MS / 3);
-  heartbeat.unref();
-  const assertActive = () => {
-    if (heartbeatError) {
-      throw heartbeatError instanceof Error
-        ? heartbeatError
-        : new Error(formatErrorMessage(heartbeatError));
-    }
-    lease.assertCurrent?.();
-  };
-  return {
-    identity: lease.identity,
-    assertCurrent: () => {
-      assertActive();
-      lease.heartbeat();
-    },
-    async withHeartbeatPaused<T>(operation: () => Promise<T>): Promise<T> {
-      paused++;
-      try {
-        return await operation();
-      } finally {
-        paused--;
-      }
-    },
-    release: () => {
-      clearInterval(heartbeat);
-      return lease.release();
-    },
-  };
-}
-
 /** Retain shared artifact ownership through asynchronous work and worker settlement. */
 export function withClawPackageLifecycleLease<T>(
   artifact: ClawPackageLifecycleArtifact,
   operation: (
-    lease: OpenClawStateLeaseContext,
+    lease: OpenClawStateAsyncLeaseContext,
     identity: ClawPackageLifecycleLeaseIdentity,
   ) => Promise<T>,
   options: OpenClawStateDatabaseOptions & { signal?: AbortSignal } = {},
 ): Promise<T> {
-  const capturedArtifact = { ...artifact };
-  return withOpenClawStateLease(
+  const context = captureOpenClawStateWorkerContext({
+    env: options.env,
+    path: options.database?.path ?? options.path,
+  });
+  return withOpenClawStateLeaseAsync(
     {
       scope: CLAW_PACKAGE_LIFECYCLE_LEASE_SCOPE,
-      key: clawPackageLifecycleLeaseKey(capturedArtifact),
-      database: { scope: "shared", options },
+      key: clawPackageLifecycleLeaseKey(artifact),
       leaseMs: 5 * 60_000,
       waitMs: 0,
       signal: options.signal,
       leaseLabel: "Claw package lifecycle",
       operationLabel: "claw.package.lifecycle",
     },
+    context,
     (lease, identity) => {
       return operation(lease, {
         scope: CLAW_PACKAGE_LIFECYCLE_LEASE_SCOPE,

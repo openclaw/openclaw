@@ -7,6 +7,7 @@ import type { GatewaySessionRow } from "../../../src/gateway/session-utils.types
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 let proofDir: string;
@@ -18,11 +19,136 @@ beforeEach(() => {
 const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
-  it("preserves tool and approval activity received before the send ACK", async () => {
+  it("keeps observed run activity separate from the next turn", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { width: 1280, height: 900 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:main";
+    const runId = "observed-workspace-run";
+    const prompt = "Check the workspace and summarize the results.";
+    const progress = "The checks passed. I am preparing the final summary.";
+    const gateway = await installMockGateway(page, {
+      sessionKey,
+      historyMessages: [{ role: "user", content: prompt, timestamp: Date.now() - 1_000 }],
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByText(prompt, { exact: true }).waitFor();
+      await gateway.emitGatewayEvent("sessions.changed", {
+        key: sessionKey,
+        sessionId: `session:${sessionKey}`,
+        kind: "direct",
+        updatedAt: Date.now(),
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: [runId],
+        reason: "agent.run.started",
+      });
+      // Another client's run can publish progress before this pane adopts its history.
+      await gateway.emitGatewayEvent("agent", {
+        sessionKey,
+        runId,
+        seq: 2,
+        ts: Date.now(),
+        stream: "item",
+        data: {
+          kind: "preamble",
+          itemId: "workspace-progress",
+          phase: "end",
+          progressText: progress,
+        },
+      });
+      const reply = page.locator(".chat-text").getByText(progress, { exact: true });
+      await reply.waitFor();
+      const working = page.locator('.chat-working-indicator[role="status"]');
+      await working.waitFor();
+      if (capture) {
+        const artifacts = createControlUiE2eArtifactDir("observed-run-startup-label");
+        await page.screenshot({ path: path.join(artifacts, "progress.png") });
+      }
+      expect(await working.textContent()).not.toContain("Waiting for turn to start");
+      const persistedProgress = {
+        role: "assistant",
+        phase: "commentary",
+        content: progress,
+        timestamp: Date.now(),
+        __openclaw: { id: "workspace-progress-message", seq: 2, runId },
+        openclawStreamFallback: {
+          source: "segment",
+          itemId: "workspace-progress",
+          replacementText: progress,
+        },
+      };
+      const historyReads = (await gateway.getRequests("chat.history")).length;
+      await gateway.setMethodResponse("chat.history", {
+        messages: [{ role: "user", content: prompt }, persistedProgress],
+        sessionId: `session:${sessionKey}`,
+        sessionInfo: {
+          key: sessionKey,
+          sessionId: `session:${sessionKey}`,
+          status: "running",
+          hasActiveRun: true,
+          activeRunIds: [runId],
+        },
+        // History's response budget may omit replay events; received activity remains known.
+        inFlightRun: { runId, text: "", events: [] },
+      });
+      await gateway.emitGatewayEvent("session.message", {
+        sessionKey,
+        hasActiveRun: true,
+        activeRunIds: [runId],
+        messageId: "workspace-progress-message",
+        messageSeq: 2,
+        message: persistedProgress,
+      });
+      await gateway.waitForRequest("chat.history", { after: historyReads });
+      await page.locator('[data-entry-id="workspace-progress-message"]').waitFor();
+      expect(await working.isVisible()).toBe(true);
+      expect(await working.textContent()).not.toContain("Waiting for turn to start");
+      await gateway.emitChatFinal({ runId, sessionKey, text: "The workspace checks passed." });
+      await page
+        .locator(".chat-text")
+        .getByText("The workspace checks passed.", { exact: true })
+        .waitFor();
+      await working.waitFor({ state: "hidden" });
+
+      await page
+        .locator(".agent-chat__composer-combobox textarea")
+        .fill("Check the next workspace.");
+      await page.getByRole("button", { name: "Send message", exact: true }).click();
+      await gateway.waitForRequest("chat.send");
+      const workingLabel = working.getByText("Working…", { exact: true });
+      await workingLabel.waitFor({ state: "attached" });
+      expect(await workingLabel.getAttribute("class")).toContain("sr-only");
+      // A late event from the previous run must not claim the next run's progress.
+      await gateway.emitGatewayEvent("agent", {
+        sessionKey,
+        runId,
+        seq: 3,
+        ts: Date.now(),
+        stream: "lifecycle",
+        data: { phase: "end" },
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          }),
+      );
+      expect(await working.isVisible()).toBe(true);
+      expect(await workingLabel.textContent()).toBe("Working…");
+      expect(await workingLabel.getAttribute("class")).toContain("sr-only");
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("preserves tool and approval activity received before the send ACK", async () => {
+    const context = await suite.newBrowserContext({
+      ...createControlUiE2eContextOptions(),
       ...(capture ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } } : {}),
     });
     const page = await context.newPage();
@@ -32,7 +158,7 @@ suite.define(() => {
     });
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await gateway.waitForRequest("exec.approval.list");
       await gateway.deferNext("chat.send");
       const composer = page.locator(".agent-chat__composer-combobox textarea");
@@ -103,9 +229,7 @@ suite.define(() => {
 
   it("retains current startup progress through delayed history", async () => {
     const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
+      ...createControlUiE2eContextOptions(),
       ...(capture ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } } : {}),
     });
     const page = await context.newPage();
@@ -141,7 +265,7 @@ suite.define(() => {
     });
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const working = page.locator('.chat-working-indicator[role="status"]');
       await expect.poll(() => working.textContent()).toContain("Naming worktree…");
       const before = (await gateway.getRequests("chat.history")).length;
@@ -239,7 +363,7 @@ suite.define(() => {
     const artifactDir = capture ? createControlUiE2eArtifactDir("cloud-start-status") : undefined;
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const working = page.locator('.chat-working-indicator[role="status"]');
       await expect.poll(() => working.textContent()).toContain("Provisioning environment…");
       const screenshot = async (fileName: string) => {
@@ -290,7 +414,6 @@ suite.define(() => {
           ...buildGatewaySessionSnapshot({
             sessionRow: session,
             agentId: "main",
-            includeSession: true,
           }),
           placement: session.placement,
           placementMove: null,

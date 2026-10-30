@@ -1,12 +1,15 @@
 import { createMemo, For, Show } from "solid-js";
 import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   type MessageReactionOptions,
   messageReactionOptions,
   ownReactionEmoji,
 } from "./chat-message-reaction-model.ts";
 import { MessageReactionPicker } from "./chat-message-reactions-view.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 function reactorsLabel(reaction: MessageReactionSummary, userId: string | null | undefined) {
   const you = t("chat.reactions.you");
@@ -35,7 +38,13 @@ export function GroupMessageReactions(props: {
   const own = () => ownReactionEmoji(reactions(), options().userId);
   return (
     <Show when={messageId() && reactions()?.length}>
-      <div class="chat-message-reactions" data-message-id={messageId()}>
+      <div
+        class={[
+          "chat-message-reactions",
+          { "chat-message-reactions--single": reactions()?.length === 1 },
+        ]}
+        data-message-id={messageId()}
+      >
         <For each={reactions()} keyed={(reaction) => reaction.emoji}>
           {(reaction) => {
             const pressed = () => own().has(reaction().emoji);

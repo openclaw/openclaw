@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import * as logging from "../../logging/logger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "../../state/agent-database-admission-error.js";
 import * as databaseResources from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -13,17 +15,19 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import * as maintenanceKick from "./session-accessor.sqlite-maintenance-kick.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
+import { observeNextPeriodicMaintenance } from "./session-accessor.sqlite-maintenance.test-support.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
+import {
+  SqliteMutationWorkerRetiredError,
+  withSqliteMutationWorkerLifetime,
+} from "./session-accessor.sqlite-worker-request.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it.for([
-  { owner: "canonical agent", alias: false },
-  { owner: "aliased shared store", alias: true },
-])(
-  "joins active maintenance finalization during physical close ($owner)",
-  async ({ alias }, test) => {
+it.for([false, true])(
+  "joins active maintenance finalization during physical close (alias=%s)",
+  async (alias, test) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const options = {
         agentId: "main",
@@ -55,20 +59,21 @@ it.for([
       const releaseStarted = createDeferredCore<{ completion: Promise<void> }>();
       const closeEntered = createDeferredCore<{ completion: Promise<void> }>();
       let insideKick = false;
-      let insideExecutorCapture = false;
+      let maintenanceExecutionCaptured = false;
       const captureExecution = databaseExecution.captureOpenClawAgentDatabaseExecution;
       vi.spyOn(databaseExecution, "captureOpenClawAgentDatabaseExecution").mockImplementation(
         (...args) => {
-          if (!insideKick) {
+          const [executionOptions, constraints] = args;
+          if (
+            maintenanceExecutionCaptured ||
+            executionOptions.agentId !== scope.databaseAgentId ||
+            executionOptions.path !== requestedPath ||
+            constraints?.expectedIdentity?.nativeLocation !== canonicalPath
+          ) {
             return captureExecution(...args);
           }
-          insideExecutorCapture = true;
-          let execution: ReturnType<typeof captureExecution>;
-          try {
-            execution = captureExecution(...args);
-          } finally {
-            insideExecutorCapture = false;
-          }
+          maintenanceExecutionCaptured = true;
+          const execution = captureExecution(...args);
           const release = execution.release.bind(execution);
           vi.spyOn(execution, "release").mockImplementation(() => {
             releaseStarted.resolve({ completion: release() });
@@ -80,7 +85,7 @@ it.for([
       const register = databaseResources.registerOpenClawAgentDatabaseAsyncResource;
       vi.spyOn(databaseResources, "registerOpenClawAgentDatabaseAsyncResource").mockImplementation(
         (resource) => {
-          if (!insideKick || insideExecutorCapture || resource.path !== canonicalPath) {
+          if (!insideKick || resource.path !== canonicalPath) {
             return register(resource);
           }
           return register({
@@ -104,10 +109,7 @@ it.for([
           throw new Error("Automatic maintenance omitted its live owner predicate");
         }
         finalizerEntered.resolve(isCurrent);
-        finalization = (async () => {
-          await releaseFinalizer.promise;
-          return finalize(...args);
-        })();
+        finalization = releaseFinalizer.promise.then(() => finalize(...args));
         return finalization;
       });
       const reclaim = vi.spyOn(reclamationRun, "runSqliteSessionReclamation");
@@ -156,6 +158,114 @@ it.for([
         releaseAck.resolve();
         releaseFinalizer.resolve();
         await Promise.allSettled([nativeClosing, finalization]);
+      }
+    });
+  },
+);
+
+it.for([
+  "retired admission",
+  "retired mutation",
+  "live admission",
+  "live mutation",
+  "retired plain error",
+  "retired plain mutation",
+  "retired wrapped mutation",
+  "retired aggregate",
+  "retired I/O error",
+] as const)(
+  "reports automatic maintenance failures accurately for %s",
+  async (scenario, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = { agentId: "main", env: state.env };
+      const database = openOpenClawAgentDatabase(scope);
+      const request = {
+        activeSessionKey: "agent:main:maintenance-close",
+        archiveDirectory: state.sessionsDir(),
+        maintenanceConfig: resolveMaintenanceConfigFromInput({ mode: "enforce" }),
+        scope,
+        storePath: database.path,
+      };
+      const execution = databaseExecution.captureOpenClawAgentDatabaseExecution(scope);
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const message = "Agent database execution admission is closed";
+      const mutationMessage = "SQLite mutation Worker request was revoked";
+      const logger = logging.getChildLogger({ subsystem: "session-sqlite" });
+      vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
+      const warn = vi.spyOn(logger, "warn");
+      vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementationOnce(async () => {
+        if (scenario === "retired mutation") {
+          return withSqliteMutationWorkerLifetime(
+            { ...scope, path: database.path },
+            async ({ assertCurrent }) => {
+              entered.resolve();
+              await resume.promise;
+              assertCurrent();
+              throw new Error("Retired mutation admitted maintenance");
+            },
+          );
+        }
+        entered.resolve();
+        await resume.promise;
+        if (scenario === "retired admission") {
+          // Exercise the actual refusal producer after physical close revoked its owner.
+          execution.assertCurrent();
+          throw new Error("Retired execution admitted maintenance");
+        }
+        const ioError = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
+        throw {
+          "live admission": new AgentDatabaseExecutionAdmissionClosedError(message),
+          "live mutation": new SqliteMutationWorkerRetiredError(),
+          "retired plain error": new Error(message),
+          "retired plain mutation": new Error(mutationMessage),
+          "retired wrapped mutation": new Error("mutation cleanup failed", {
+            cause: new SqliteMutationWorkerRetiredError(),
+          }),
+          "retired aggregate": new AggregateError(
+            [new SqliteMutationWorkerRetiredError(), ioError],
+            "mutation and cleanup failed",
+          ),
+          "retired I/O error": new Error("maintenance write failed", { cause: ioError }),
+        }[scenario];
+      });
+      const scheduled = observeNextPeriodicMaintenance();
+      let closing: Promise<boolean> | undefined;
+      try {
+        maintenanceKick.kickSessionEntryMaintenanceAfterWrite(request);
+        await withinTest(entered.promise, signal);
+        if (scenario !== "live admission" && scenario !== "live mutation") {
+          closing = closeOpenClawAgentDatabaseByPathAsync(database.path);
+        }
+        resume.resolve();
+        if (closing) {
+          await withinTest(closing, signal);
+        } else {
+          await scheduled(signal);
+        }
+        if (scenario === "retired admission" || scenario === "retired mutation") {
+          expect(warn).not.toHaveBeenCalled();
+        } else {
+          const expectedErrors = {
+            "live admission": message,
+            "live mutation": mutationMessage,
+            "retired plain error": message,
+            "retired plain mutation": mutationMessage,
+            "retired wrapped mutation": `mutation cleanup failed | ${mutationMessage}`,
+            "retired aggregate": `mutation and cleanup failed | ${mutationMessage} | disk I/O error | SQLITE_IOERR`,
+            "retired I/O error": "maintenance write failed | disk I/O error | SQLITE_IOERR",
+          };
+          expect(warn).toHaveBeenCalledExactlyOnceWith(
+            "SQLite automatic session maintenance failed",
+            {
+              error: expectedErrors[scenario],
+              path: database.path,
+            },
+          );
+        }
+      } finally {
+        resume.resolve();
+        await Promise.allSettled([closing, execution.release()]);
       }
     });
   },

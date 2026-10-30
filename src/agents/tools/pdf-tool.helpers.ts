@@ -13,7 +13,6 @@ import type { Context } from "../../llm/types.js";
 import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
 import type { PdfExtractedContent } from "../../media/pdf-extract.js";
 import { wrapExternalContent } from "../../security/external-content.js";
-import { createMediaAssistantTextCoercer } from "./media-tool-text.js";
 
 type PdfModelConfig = Exclude<AgentModelConfig, string>;
 
@@ -78,8 +77,6 @@ export function parsePageRange(
   }
   return { pages, truncated: false };
 }
-
-export const coercePdfAssistantText = createMediaAssistantTextCoercer("PDF");
 
 export function coercePdfModelConfig(cfg?: OpenClawConfig): PdfModelConfig {
   const primary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.pdfModel);

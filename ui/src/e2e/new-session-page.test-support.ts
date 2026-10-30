@@ -250,7 +250,7 @@ export async function expectPendingSessionPlacementStartupBeforeRuntime(
   );
   await pollDisabled(page.locator(".agent-chat__composer-combobox textarea")).toBe(false);
   expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
-  expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+  expect(await gateway.getRequests("chat.send")).toHaveLength(0);
   await captureUiProof(owner, page, "02-cloud-startup-chunk-pending.png");
   return startupStatus;
 }
@@ -270,7 +270,6 @@ function proofCapture(directory: string) {
 
 export const captureUiProof = proofCapture("cloud-worker-session");
 export const captureProjectUiProof = proofCapture("project-registry");
-export const captureNewSessionComposerUiProof = proofCapture("new-session-slash-menu");
 export const captureDeviceRuntimeUiProof = proofCapture("device-runtime-gating");
 
 export async function captureEnvironmentMetadataUiProof(
@@ -332,12 +331,21 @@ export async function waitForCommittedNewSessionDraft(
   page: Page,
   expectedText: string | null,
   expectedAttachments: number | readonly string[],
+  permissionMode?: string,
 ): Promise<void> {
   const params = new URL(page.url()).searchParams;
   const scopeKey = JSON.stringify(
     ["agent", "catalog", "group"].map((key) => params.get(key)?.trim() ?? ""),
   );
-  await waitForCommittedComposerDraft(page, scopeKey, expectedText, expectedAttachments);
+  await waitForCommittedComposerDraft(
+    page,
+    scopeKey,
+    expectedText,
+    expectedAttachments,
+    undefined,
+    undefined,
+    permissionMode,
+  );
 }
 
 export async function waitForGatewayRecoveryScope(page: Page, ready = true) {

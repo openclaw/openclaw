@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawnSync as realSpawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -20,25 +21,24 @@ import {
 } from "../../test/scripts/run-node.test-support.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
+import { writeFixtureTree } from "./fixture-tree.test-support.js";
 import {
   expectRuntime,
   writeRuntime,
   expectFile,
+  expectMissing,
   readText,
-  writeFixtureTree,
+  runFixtureGit,
 } from "./update-runner-git-candidate.test-support.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 
 const removeTree = (target: string) => fs.rm(target, { recursive: true, force: true });
 const inode = async (target: string) => (await fs.lstat(target, { bigint: true })).ino;
 const entries = async (target: string) =>
-  (await fs.readdir(target, { recursive: true })).toSorted();
+  (await listDirectoryTreeStrict(target)).map((walkEntry) => walkEntry.relativePath).toSorted();
 async function initCandidate(candidate: string, ignored = "node_modules/\ndist/\ndist-runtime/\n") {
-  const result = await runCommandWithTimeout(
-    ["git", "-C", candidate, "init", "--initial-branch=main"],
-    { timeoutMs: 5000 },
-  );
-  expect(result.code, result.stderr).toBe(0);
+  await runFixtureGit(candidate, "init", "--initial-branch=main");
   await writeFixtureTree(candidate, { ".gitignore": ignored });
 }
 
@@ -152,6 +152,44 @@ describe("Git runtime promotion", () => {
     await expectRuntime(root, "candidate");
     await promotion.cleanup();
   });
+
+  it.each([false, true])(
+    "retries partial runtime restoration without losing originals (cleanup first: %s)",
+    async (cleanupFirst) => {
+      const candidate = await createCandidate();
+      const promotion = await preparePromotion(candidate);
+      await removeTree(path.dirname(candidate));
+      const rename = fs.rename.bind(fs);
+      const destination = path.join(root, "dist");
+      let backup: string | undefined;
+      let rejectRestore = true;
+      vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+        if (source === destination) {
+          backup = String(target);
+        }
+        if (rejectRestore && source === backup && target === destination) {
+          await writeFixtureTree(target, { "restore-race": "occupied" });
+        }
+        return rename(source, target);
+      });
+      await promotion.activate();
+      await expectRuntime(root, "candidate");
+      await expect(promotion.restore()).rejects.toThrow();
+      if (cleanupFirst) {
+        await promotion.cleanup();
+      }
+      assert(backup, "The original dist backup was not observed.");
+      expect(JSON.parse(await readText(path.join(backup, "build-info.json")))).toMatchObject({
+        commit: "original",
+      });
+      expect(await readText(path.join(root, "node_modules", "identity.cjs"))).toContain("original");
+      rejectRestore = false;
+      await promotion.restore();
+      await expectRuntime(root, "original");
+      await promotion.cleanup();
+      await expectMissing(path.dirname(backup));
+    },
+  );
 
   it.each([false, true])(
     "does not repeat completed restoration after authority is lost (previous runtime: %s)",
@@ -300,40 +338,36 @@ describe("Git runtime promotion", () => {
     async (phase) => {
       const candidateRoot = await createCandidate();
       const outside = path.join(directory, "outside-packages");
-      if (phase === "prepare") {
-        await fs.rename(path.join(root, "packages"), outside);
-        await fs.symlink(outside, path.join(root, "packages"), "junction");
-        const before = await entries(outside);
-        await expect(preparePromotion(candidateRoot, assertDestination)).rejects.toThrow(
-          "symbolic link",
-        );
-        expect(await entries(outside)).toEqual(before);
-        // Restore the fixture's physical depth before resolving its relative dependency links.
-        await fs.unlink(path.join(root, "packages"));
-        await fs.rename(outside, path.join(root, "packages"));
-        await expectRuntime(root, "original");
-        return;
-      }
-      const promotion = await preparePromotion(candidateRoot, assertDestination);
-      if (phase !== "activate") {
+      const promotion =
+        phase === "prepare" ? undefined : await preparePromotion(candidateRoot, assertDestination);
+      if (promotion && phase !== "activate") {
         await promotion.activate();
         await expectRuntime(root, "candidate");
       }
-      const heldPackages = path.join(directory, "held-packages");
+      const heldPackages = phase === "prepare" ? outside : path.join(directory, "held-packages");
       const outsideModules = path.join(outside, "runtime", "node_modules");
-      await writeFixtureTree(outsideModules, { "operator.cjs": "outside content\n" });
+      if (promotion) {
+        await writeFixtureTree(outsideModules, { "operator.cjs": "outside content\n" });
+      }
       await fs.rename(path.join(root, "packages"), heldPackages);
       await fs.symlink(outside, path.join(root, "packages"), "junction");
-
-      await expect(promotion[phase]()).rejects.toThrow("symbolic link");
-      await expectFile(path.join(outsideModules, "operator.cjs"), "outside content\n");
-      expect(await fs.readdir(outsideModules)).toEqual(["operator.cjs"]);
-
+      const before = await entries(outside);
+      await expect(
+        phase === "prepare"
+          ? preparePromotion(candidateRoot, assertDestination)
+          : promotion![phase](),
+      ).rejects.toThrow("symbolic link");
+      expect(await entries(outside)).toEqual(before);
+      if (promotion) {
+        await expectFile(path.join(outsideModules, "operator.cjs"), "outside content\n");
+        expect(await fs.readdir(outsideModules)).toEqual(["operator.cjs"]);
+      }
+      // Restore physical depth before resolving the fixture's relative dependency links.
       await fs.unlink(path.join(root, "packages"));
       await fs.rename(heldPackages, path.join(root, "packages"));
-      await promotion.restore();
+      await promotion?.restore();
       await expectRuntime(root, "original");
-      await promotion.cleanup();
+      await promotion?.cleanup();
     },
   );
 

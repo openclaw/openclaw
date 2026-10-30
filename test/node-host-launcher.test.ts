@@ -7,7 +7,7 @@ import { build as esbuild } from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resolveNodeProgramArguments } from "../src/daemon/program-args.js";
 import { buildSystemdUnit, parseSystemdExecStart } from "../src/daemon/systemd-unit.js";
-import { createLauncherCommandBoundaryPlugin } from "./helpers/launcher-esbuild.js";
+import { stageLauncherFixture } from "./helpers/openclaw-launcher-fixture.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -24,7 +24,6 @@ beforeAll(async () => {
       format: "esm",
       platform: "node",
       target: "node24",
-      plugins: [createLauncherCommandBoundaryPlugin()],
       banner: {
         js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);',
       },
@@ -55,7 +54,8 @@ afterEach(async () => {
 });
 
 async function writePackage(root: string, version: string, body: string, schema = 1) {
-  await fs.mkdir(path.join(root, "dist"), { recursive: true });
+  await fs.mkdir(root, { recursive: true });
+  await stageLauncherFixture(root);
   await fs.writeFile(path.join(root, "dist", "node-host-launcher-bootstrap.js"), bootstrapSource);
   await fs.writeFile(path.join(root, "dist", "launcher-client.js"), launcherClientSource);
   await fs.symlink(
@@ -63,23 +63,6 @@ async function writePackage(root: string, version: string, body: string, schema 
     path.join(root, "node_modules"),
     process.platform === "win32" ? "junction" : "dir",
   );
-  for (const name of [
-    "openclaw.mjs",
-    "cli-invocation.mjs",
-    "node-host-launcher.mjs",
-    "node-compile-cache.mjs",
-    "node-version.mjs",
-    "node-sqlite.mjs",
-    "node-runtime-update.mjs",
-    "node-runtime-recovery.mjs",
-    "cli-parent-lifetime.mjs",
-    "node-runtime-env.mjs",
-    "cli-root-options.mjs",
-    "gateway-run-argv.mjs",
-    "gateway-shutdown-budget.mjs",
-  ]) {
-    await fs.copyFile(path.resolve(name), path.join(root, name));
-  }
   await fs.writeFile(
     path.join(root, "package.json"),
     JSON.stringify({
@@ -104,22 +87,34 @@ import {
 const version = ${JSON.stringify(version)};
 const report = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
 const ready = () => notifyNodeHostLauncherReady(version);
+const restart = () => requestNodeHostLauncherRestart({ runtimeRoot: process.env.TEST_RUNTIME_ROOT, version: process.env.TEST_VERSION });
+async function restartAndExit(failureLabel, successCode = 0, failureCode = 2) {
+  try {
+    await restart();
+    report({ok: true});
+    process.exit(successCode);
+  } catch (error) {
+    report({ok: false, error: error.message});
+    if (failureLabel) report(failureLabel);
+    process.exit(failureCode);
+  }
+}
 ${body}
 `,
   );
   return root;
 }
 
-async function fixture(body: string) {
+async function fixture(body = "throw new Error('the selected runtime must own the run');") {
   const root = temporary.make("node-launcher-");
   const base = await writePackage(path.join(root, "base"), "2026.9.1", body);
   const stateDir = path.join(root, "state");
   const runtimeDirectory = path.join(stateDir, "node-runtime");
-  const release = async (version: string, source: string, schema = 1) => {
+  const release = async (source: string, version = "2026.9.2", schema = 1) => {
     const prefix = path.join(runtimeDirectory, "releases", version);
     const packageRoot = path.join(prefix, "lib", "node_modules", "openclaw");
     await writePackage(packageRoot, version, source, schema);
-    return { prefix, packageRoot };
+    return { prefix, packageRoot, version };
   };
   const current = path.join(runtimeDirectory, "current");
   const select = async (prefix: string, options: { stale?: boolean } = {}) => {
@@ -129,22 +124,43 @@ async function fixture(body: string) {
       await fs.lutimes(current, old, old);
     }
   };
-  return { root, base, stateDir, runtimeDirectory, current, release, select };
-}
-
-function run(
-  base: string,
-  stateDir: string,
-  args = ["node", "run"],
-  extraEnv: NodeJS.ProcessEnv = {},
-  execArgv: readonly string[] = [],
-) {
-  return runProgram(
+  const run = (env: NodeJS.ProcessEnv = {}, args = ["node", "run"], execArgv: string[] = []) =>
+    runProgram(
+      base,
+      stateDir,
+      [process.execPath, ...execArgv, path.join(base, "openclaw.mjs"), ...args],
+      env,
+    );
+  const update = (
+    candidate: Awaited<ReturnType<typeof release>>,
+    env: NodeJS.ProcessEnv = {},
+    args?: string[],
+    execArgv?: string[],
+  ) =>
+    run(
+      {
+        TEST_RUNTIME_ROOT: candidate.prefix,
+        TEST_VERSION: candidate.version,
+        TEST_CURRENT: current,
+        TEST_ATTEMPT: path.join(root, "attempt"),
+        ...env,
+      },
+      args,
+      execArgv,
+    );
+  return {
+    root,
     base,
     stateDir,
-    [process.execPath, ...execArgv, path.join(base, "openclaw.mjs"), ...args],
-    extraEnv,
-  );
+    runtimeDirectory,
+    current,
+    release,
+    select,
+    run,
+    update,
+    state: path.join(stateDir, "state", "openclaw.sqlite"),
+    lock: path.join(runtimeDirectory, "activation.lock"),
+  };
 }
 
 function runProgram(
@@ -185,17 +201,35 @@ function runProgram(
   return { child, done, output: () => stdout };
 }
 
-const requestUpdate = `
-await ready();
-try {
-  await requestNodeHostLauncherRestart({ runtimeRoot: process.env.TEST_RUNTIME_ROOT, version: process.env.TEST_VERSION });
-  report({ok: true});
-  process.exit(0);
-} catch (error) {
-  report({ok: false, error: error.message});
-  process.exit(2);
+const requestUpdate = "await ready(); await restartAndExit();";
+const restartingRuntime = (onRepeat: string) => `
+if (fs.existsSync(process.env.TEST_ATTEMPT)) {
+  ${onRepeat}
+} else {
+  fs.writeFileSync(process.env.TEST_ATTEMPT, 'started');
+  ${requestUpdate}
 }
 `;
+const jsonLines = (stdout: string) =>
+  stdout
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+
+async function completed(process: ReturnType<typeof runProgram>, code = 0) {
+  const result = await process.done;
+  expect(result.code, result.stderr).toBe(code);
+  return result;
+}
+
+async function expectSelection(selector: string, prefix: string, mtime?: number) {
+  expect(await fs.realpath(selector)).toBe(await fs.realpath(prefix));
+  if (mtime !== undefined) {
+    expect((await fs.lstat(selector)).mtimeMs).toBe(mtime);
+  }
+}
+
+const expectMissing = (file: string) => expect(fs.access(file)).rejects.toThrow();
 
 async function windowsSelectorFixture(root: string, current: string, failure: string) {
   const preload = path.join(root, "windows-selector.mjs");
@@ -258,8 +292,7 @@ process.exit(0);
     expect(execStart).toBeDefined();
     const storedArguments = parseSystemdExecStart(execStart!.slice("ExecStart=".length));
     const service = runProgram(f.base, f.stateDir, storedArguments);
-    const result = await service.done;
-    expect(result.code, result.stderr).toBe(0);
+    const result = await completed(service);
     const child = JSON.parse(result.stdout.trim());
     expect(child).toMatchObject({
       parentPid: service.child.pid,
@@ -271,45 +304,18 @@ process.exit(0);
 
   it("rejects private managed-child arguments without supervisor IPC", async () => {
     const f = await fixture("throw new Error('private arguments must not reach the entry point');");
-    const result = await run(f.base, f.stateDir, [
-      "--openclaw-node-host-managed-child",
-      path.join(f.stateDir, "state", "openclaw.sqlite"),
-      "node",
-      "run",
-    ]).done;
+    const result = await f.run({}, ["--openclaw-node-host-managed-child", f.state, "node", "run"])
+      .done;
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("requires a supervisor connection");
   });
 
-  it("revokes the managed state path when supervisor IPC disconnects", async () => {
-    const f = await fixture("throw new Error('the managed runtime must own the run');");
-    const managed = await f.release(
-      "2026.9.2",
-      `
-await ready();
-const before = getManagedNodeHostStatePath();
-process.disconnect();
-report({before, after: getManagedNodeHostStatePath() ?? null});
-process.exit(0);
-`,
-    );
-    await f.select(managed.prefix);
-    const result = await run(f.base, f.stateDir).done;
-    expect(result.code, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout.trim())).toEqual({
-      before: path.join(f.stateDir, "state", "openclaw.sqlite"),
-      after: null,
-    });
-  });
-
-  it("restarts into a healthy candidate, preserving root flags and replacing one-use pairing arguments", async () => {
+  it("restarts with paired arguments and revokes managed state when the healthy candidate disconnects", async () => {
     const f = await fixture(`
 await setNodeHostLauncherRestartArguments(['node', 'run', '--display-name', 'paired']);
 ${requestUpdate}
 `);
-    const candidate = await f.release(
-      "2026.9.2",
-      `
+    const candidate = await f.release(`
 if (!process.env.TEST_CANDIDATE_BOOTSTRAPPED) {
   await requestNodeHostLauncherBootstrap({ execArgv: [...process.execArgv, '--disable-warning=ExperimentalWarning'], env: {...process.env, TEST_CANDIDATE_BOOTSTRAPPED:'1'} });
   process.exit(0);
@@ -319,55 +325,37 @@ setTimeout(async () => {
   const first = fs.lstatSync(process.env.TEST_CURRENT).mtimeMs;
   await ready();
   setTimeout(() => {
-    report({ argv: process.argv.slice(2), first, second: fs.lstatSync(process.env.TEST_CURRENT).mtimeMs, cwd: process.cwd(), state: getManagedNodeHostStatePath() ?? null, execArgv: process.execArgv });
+    const state = getManagedNodeHostStatePath() ?? null;
+    process.disconnect();
+    report({ argv: process.argv.slice(2), first, second: fs.lstatSync(process.env.TEST_CURRENT).mtimeMs, cwd: process.cwd(), state, disconnectedState: getManagedNodeHostStatePath() ?? null, execArgv: process.execArgv });
     process.exit(0);
   }, 30);
 }, 30);
-`,
+`);
+    const result = await completed(
+      f.update(candidate, {}, ["connect", "one-use-code", "--profile", "work", "--no-color"]),
     );
-    const result = await run(
-      f.base,
-      f.stateDir,
-      ["connect", "one-use-code", "--profile", "work", "--no-color"],
-      {
-        TEST_RUNTIME_ROOT: candidate.prefix,
-        TEST_VERSION: "2026.9.2",
-        TEST_CURRENT: f.current,
-      },
-    ).done;
-    expect(result.code, result.stderr).toBe(0);
-    const lines = result.stdout
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
+    const lines = jsonLines(result.stdout);
     expect(lines[0]).toMatchObject({ ok: true });
     expect(lines[1]).toMatchObject({
       argv: ["--profile", "work", "--no-color", "node", "run", "--display-name", "paired"],
       cwd: f.base,
-      state: path.join(f.stateDir, "state", "openclaw.sqlite"),
+      state: f.state,
+      disconnectedState: null,
       execArgv: ["--disable-warning=ExperimentalWarning"],
     });
     expect(lines[1].first).toBe(lines[1].second);
-    expect(await fs.realpath(f.current)).toBe(await fs.realpath(candidate.prefix));
-    await expect(fs.access(path.join(f.runtimeDirectory, "activation.lock"))).rejects.toThrow();
+    await expectSelection(f.current, candidate.prefix);
+    await expectMissing(f.lock);
   });
 
   it("keeps an authenticated candidate serving when its selector cannot be persisted", async () => {
-    const f = await fixture("throw new Error('the selected runtime must own the run');");
+    const f = await fixture();
     const previous = await f.release(
+      restartingRuntime("report('fallback-started'); process.exit(9);"),
       "2026.9.1",
-      `
-if (fs.existsSync(process.env.TEST_ATTEMPT)) {
-  report('fallback-started');
-  process.exit(9);
-}
-fs.writeFileSync(process.env.TEST_ATTEMPT, 'started');
-${requestUpdate}
-`,
     );
-    const candidate = await f.release(
-      "2026.9.2",
-      `
+    const candidate = await f.release(`
 fs.mkdirSync(process.env.TEST_CURRENT + '.' + process.ppid + '.next');
 report('candidate-work-started');
 await ready();
@@ -375,25 +363,17 @@ setTimeout(() => {
   report('candidate-work-complete');
   process.exit(0);
 }, 100);
-`,
-    );
+`);
     await f.select(previous.prefix, { stale: true });
     const before = await fs.lstat(f.current);
-    const result = await run(f.base, f.stateDir, ["node", "run"], {
-      TEST_RUNTIME_ROOT: candidate.prefix,
-      TEST_VERSION: "2026.9.2",
-      TEST_CURRENT: f.current,
-      TEST_ATTEMPT: path.join(f.root, "attempt"),
-    }).done;
-    expect(result.code, result.stderr).toBe(0);
+    const result = await completed(f.update(candidate));
     expect(result.stdout).toContain('"candidate-work-started"');
     expect(result.stdout).toContain('"candidate-work-complete"');
     expect(result.stdout).not.toContain("fallback-started");
     expect(result.stderr).toContain("could not remove the staged node selector");
     expect(result.stderr).toMatch(/could not record the updated node runtime: [^\n]*\bsymlink\b/);
-    expect(await fs.realpath(f.current)).toBe(await fs.realpath(previous.prefix));
-    expect((await fs.lstat(f.current)).mtimeMs).toBe(before.mtimeMs);
-    await expect(fs.access(path.join(f.runtimeDirectory, "activation.lock"))).rejects.toThrow();
+    await expectSelection(f.current, previous.prefix, before.mtimeMs);
+    await expectMissing(f.lock);
   });
 
   it.each(["publish-fails", "rollback-fails", "crash"])(
@@ -407,70 +387,46 @@ if (process.env.TEST_SELECT_ONLY || version === process.env.TEST_VERSION) {
   ${requestUpdate}
 }
 `;
-      const f = await fixture("throw new Error('the global runtime must not load');");
-      const previous = await f.release("2026.9.2", body);
-      const candidate = await f.release("2026.9.3", body);
+      const f = await fixture();
+      const previous = await f.release(body);
+      const candidate = await f.release(body, "2026.9.3");
       await f.select(previous.prefix, { stale: true });
       const previousMtime = (await fs.lstat(f.current)).mtimeMs;
       const { env, execArgv } = await windowsSelectorFixture(f.root, f.current, failure);
-      const result = await run(
-        f.base,
-        f.stateDir,
-        ["node", "run"],
-        {
-          ...env,
-          TEST_RUNTIME_ROOT: candidate.prefix,
-          TEST_VERSION: "2026.9.3",
-        },
-        execArgv,
-      ).done;
-      expect(result.code, result.stderr).toBe(failure === "crash" ? 91 : 0);
+      const result = await completed(
+        f.update(candidate, env, undefined, execArgv),
+        failure === "crash" ? 91 : 0,
+      );
       const backup = `${f.current}.previous`;
       const interrupted = failure === "rollback-fails" || failure === "crash";
       const persisted = interrupted ? backup : f.current;
-      expect(await fs.realpath(persisted)).toBe(await fs.realpath(previous.prefix));
-      expect((await fs.lstat(persisted)).mtimeMs).toBe(previousMtime);
-      await expect(fs.access(interrupted ? f.current : backup)).rejects.toThrow();
+      await expectSelection(persisted, previous.prefix, previousMtime);
+      await expectMissing(interrupted ? f.current : backup);
       if (failure === "rollback-fails") {
         expect(result.stderr).toContain(backup);
       }
-      const restarted = await run(
-        f.base,
-        f.stateDir,
-        ["node", "run"],
-        {
-          ...env,
-          TEST_SELECT_ONLY: "1",
-          TEST_RENAME_FAILURE: undefined,
-        },
-        execArgv,
-      ).done;
-      expect(restarted.code, restarted.stderr).toBe(0);
+      const restarted = await completed(
+        f.run(
+          { ...env, TEST_SELECT_ONLY: "1", TEST_RENAME_FAILURE: undefined },
+          undefined,
+          execArgv,
+        ),
+      );
       expect(JSON.parse(restarted.stdout.trim())).toEqual({
         version: "2026.9.2",
       });
       if (interrupted) {
         if (failure === "crash") {
           // Crash recovery keeps the existing operator-owned stale-lock policy.
-          await fs.unlink(path.join(f.runtimeDirectory, "activation.lock"));
+          await fs.unlink(f.lock);
         }
-        const recovered = await run(
-          f.base,
-          f.stateDir,
-          ["node", "run"],
-          {
-            ...env,
-            TEST_RUNTIME_ROOT: candidate.prefix,
-            TEST_VERSION: "2026.9.3",
-            TEST_RENAME_FAILURE: undefined,
-          },
-          execArgv,
-        ).done;
-        expect(recovered.code, recovered.stderr).toBe(0);
-        expect(await fs.realpath(f.current)).toBe(await fs.realpath(candidate.prefix));
-        await expect(fs.access(backup)).rejects.toThrow();
+        await completed(
+          f.update(candidate, { ...env, TEST_RENAME_FAILURE: undefined }, undefined, execArgv),
+        );
+        await expectSelection(f.current, candidate.prefix);
+        await expectMissing(backup);
       }
-      await expect(fs.access(path.join(f.runtimeDirectory, "activation.lock"))).rejects.toThrow();
+      await expectMissing(f.lock);
     },
   );
 
@@ -479,67 +435,36 @@ if (process.env.TEST_SELECT_ONLY || version === process.env.TEST_VERSION) {
       "report({version,state:getManagedNodeHostStatePath() ?? null,argv:process.argv.slice(2)});";
     const body = `
 ${reportRuntime}
-if (fs.existsSync(process.env.TEST_ATTEMPT)) {
-  await ready();
-  try {
-    await requestNodeHostLauncherRestart({ runtimeRoot: process.env.TEST_RUNTIME_ROOT, version: process.env.TEST_VERSION });
-    report({ok: true});
-    process.exit(3);
-  } catch (error) {
-    report({ok: false, error: error.message});
-    report('old-runtime-serving');
-    process.exit(0);
-  }
-} else {
-  fs.writeFileSync(process.env.TEST_ATTEMPT, 'started');
-  ${requestUpdate}
-}
+${restartingRuntime("await ready(); await restartAndExit('old-runtime-serving', 3, 0);")}
 `;
     const f = await fixture(body);
-    const previous = await f.release("2026.9.1", body);
+    const previous = await f.release(body, "2026.9.1");
     await f.select(previous.prefix, { stale: true });
-    const candidate = await f.release("2026.9.2", `${reportRuntime} process.exit(42);`);
-    const result = await run(f.base, f.stateDir, ["node", "run"], {
-      TEST_RUNTIME_ROOT: candidate.prefix,
-      TEST_VERSION: "2026.9.2",
-      TEST_ATTEMPT: path.join(f.root, "attempt"),
-    }).done;
-    expect(result.code, result.stderr).toBe(0);
+    const candidate = await f.release(`${reportRuntime} process.exit(42);`);
+    const result = await completed(f.update(candidate));
     expect(result.stdout).toContain('"old-runtime-serving"');
     expect(result.stdout).toContain("12 hours");
     expect(result.stderr).toContain("restarting the previous runtime");
-    const state = path.join(f.stateDir, "state", "openclaw.sqlite");
-    const observed = result.stdout
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    expect(observed.filter((entry) => entry.version)).toEqual([
-      { version: "2026.9.1", state, argv: ["node", "run"] },
-      { version: "2026.9.2", state, argv: ["node", "run"] },
-      { version: "2026.9.1", state, argv: ["node", "run"] },
-    ]);
-    expect(await fs.realpath(f.current)).toBe(await fs.realpath(previous.prefix));
+    expect(jsonLines(result.stdout).filter((entry) => entry.version)).toEqual(
+      ["2026.9.1", "2026.9.2", "2026.9.1"].map((version) => ({
+        version,
+        state: f.state,
+        argv: ["node", "run"],
+      })),
+    );
+    await expectSelection(f.current, previous.prefix);
   });
 
   it("keeps the selected runtime when an acknowledged candidate changes before shutdown", async () => {
-    const f = await fixture("throw new Error('the selected previous runtime must own the run');");
+    const f = await fixture();
     const previous = await f.release(
-      "2026.9.1",
       `
 await ready();
 if (fs.existsSync(process.env.TEST_ATTEMPT)) {
-  try {
-    await requestNodeHostLauncherRestart({ runtimeRoot: process.env.TEST_RUNTIME_ROOT, version: process.env.TEST_VERSION });
-    report({ok: true});
-    process.exit(3);
-  } catch (error) {
-    report({ok: false, error: error.message});
-    report('previous-runtime-serving');
-    process.exit(0);
-  }
+  await restartAndExit('previous-runtime-serving', 3, 0);
 } else {
   fs.writeFileSync(process.env.TEST_ATTEMPT, 'started');
-  await requestNodeHostLauncherRestart({ runtimeRoot: process.env.TEST_RUNTIME_ROOT, version: process.env.TEST_VERSION });
+  await restart();
   report('restart-accepted');
   const manifest = JSON.parse(fs.readFileSync(process.env.TEST_CANDIDATE_MANIFEST, 'utf8'));
   manifest.openclaw.schemaVersions.state += 1;
@@ -547,34 +472,29 @@ if (fs.existsSync(process.env.TEST_ATTEMPT)) {
   process.exit(0);
 }
 `,
+      "2026.9.1",
     );
-    const candidate = await f.release(
-      "2026.9.2",
-      `
+    const candidate = await f.release(`
 fs.writeFileSync(process.env.TEST_CANDIDATE_STARTED, 'started');
 await ready();
 process.exit(0);
-`,
-    );
+`);
     await f.select(previous.prefix, { stale: true });
     const before = await fs.lstat(f.current);
     const candidateStarted = path.join(f.root, "candidate-started");
-    const result = await run(f.base, f.stateDir, ["node", "run"], {
-      TEST_RUNTIME_ROOT: candidate.prefix,
-      TEST_VERSION: "2026.9.2",
-      TEST_ATTEMPT: path.join(f.root, "attempt"),
-      TEST_CANDIDATE_MANIFEST: path.join(candidate.packageRoot, "package.json"),
-      TEST_CANDIDATE_STARTED: candidateStarted,
-    }).done;
-    expect(result.code, result.stderr).toBe(0);
+    const result = await completed(
+      f.update(candidate, {
+        TEST_CANDIDATE_MANIFEST: path.join(candidate.packageRoot, "package.json"),
+        TEST_CANDIDATE_STARTED: candidateStarted,
+      }),
+    );
     expect(result.stdout).toContain('"restart-accepted"');
     expect(result.stdout).toContain('"previous-runtime-serving"');
     expect(result.stdout).toContain("12 hours");
     expect(result.stderr).toContain("staged node runtime changed before restart");
-    expect(await fs.realpath(f.current)).toBe(await fs.realpath(previous.prefix));
-    expect((await fs.lstat(f.current)).mtimeMs).toBe(before.mtimeMs);
-    await expect(fs.access(candidateStarted)).rejects.toThrow();
-    await expect(fs.access(path.join(f.runtimeDirectory, "activation.lock"))).rejects.toThrow();
+    await expectSelection(f.current, previous.prefix, before.mtimeMs);
+    await expectMissing(candidateStarted);
+    await expectMissing(f.lock);
   });
 
   it("refuses an already-published shared runtime at the backup selector", async () => {
@@ -585,44 +505,33 @@ fs.lutimesSync(process.env.TEST_CURRENT, old, old);
 ${requestUpdate}
 `);
     const current = await f.release(
-      "2026.9.2-1",
       "throw new Error('must not relaunch shared runtime');",
+      "2026.9.2-1",
     );
     const selectedPath = path.join(f.runtimeDirectory, "current.previous");
-    const result = await run(f.base, f.stateDir, ["node", "run"], {
-      TEST_SHARED_RUNTIME: current.prefix,
-      TEST_CURRENT: selectedPath,
-      TEST_RUNTIME_ROOT: current.prefix,
-      TEST_VERSION: "2026.9.2-1",
-    }).done;
-    expect(result.code, result.stderr).toBe(2);
+    const result = await completed(
+      f.update(current, {
+        TEST_SHARED_RUNTIME: current.prefix,
+        TEST_CURRENT: selectedPath,
+      }),
+      2,
+    );
     expect(result.stdout).toContain("Another node already selected");
-    expect(await fs.realpath(selectedPath)).toBe(await fs.realpath(current.prefix));
+    await expectSelection(selectedPath, current.prefix);
   });
 
   it("rejects automatic activation across database schema versions", async () => {
     const f = await fixture(requestUpdate);
-    const candidate = await f.release("2026.9.2", "throw new Error('must not launch');", 2);
-    const result = await run(f.base, f.stateDir, ["node", "run"], {
-      TEST_RUNTIME_ROOT: candidate.prefix,
-      TEST_VERSION: "2026.9.2",
-    }).done;
-    expect(result.code, result.stderr).toBe(2);
-    expect(
-      result.stdout
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    ).toEqual([expect.objectContaining({ ok: false })]);
+    const candidate = await f.release("throw new Error('must not launch');", undefined, 2);
+    const result = await completed(f.update(candidate), 2);
+    expect(jsonLines(result.stdout)).toEqual([expect.objectContaining({ ok: false })]);
     expect(result.stdout).toContain("schema");
   });
 
   it("serializes competing parents until the candidate reconnects", async () => {
     const f = await fixture(requestUpdate);
     const releaseFile = path.join(f.root, "release-candidate");
-    const candidate = await f.release(
-      "2026.9.2",
-      `
+    const candidate = await f.release(`
 report('candidate-started');
 const poll = setInterval(async () => {
   if (fs.existsSync(process.env.TEST_RELEASE)) {
@@ -631,21 +540,14 @@ const poll = setInterval(async () => {
     setTimeout(() => process.exit(0), 20);
   }
 }, 10);
-`,
-    );
-    const env = {
-      TEST_RUNTIME_ROOT: candidate.prefix,
-      TEST_VERSION: "2026.9.2",
-      TEST_RELEASE: releaseFile,
-    };
-    const first = run(f.base, f.stateDir, ["node", "run"], env);
+`);
+    const env = { TEST_RELEASE: releaseFile };
+    const first = f.update(candidate, env);
     await expect.poll(() => first.output(), { timeout: 10_000 }).toContain("candidate-started");
-    const second = await run(f.base, f.stateDir, ["node", "run"], env).done;
-    expect(second.code, second.stderr).toBe(2);
+    const second = await completed(f.update(candidate, env), 2);
     expect(second.stdout).toContain("activation lock");
     await fs.writeFile(releaseFile, "release");
-    const result = await first.done;
-    expect(result.code, result.stderr).toBe(0);
-    expect(await fs.realpath(f.current)).toBe(await fs.realpath(candidate.prefix));
+    await completed(first);
+    await expectSelection(f.current, candidate.prefix);
   });
 });

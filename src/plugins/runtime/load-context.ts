@@ -33,6 +33,7 @@ export type PluginRuntimeLoadContext = {
   installRecords?: Record<string, PluginInstallRecord>;
   preferBuiltPluginArtifacts?: boolean;
   expectedSourceDigests?: PluginLoadOptions["expectedSourceDigests"];
+  selectedContextEngine?: PluginRuntimeLoadContextState["selectedContextEngine"];
 };
 
 const immutableActivationValueHashes = new WeakMap<object, string>();
@@ -75,6 +76,10 @@ export function setPluginRuntimeLoadContext(
     ...context,
     activationInputFingerprint: activationInputFingerprint(context.rawConfig, context.env),
     ...(capturedIdentity ? { loaderCacheIdentity: capturedIdentity } : {}),
+    // Selection belongs to the generation that registered these closures, not later metadata.
+    selectedContextEngine: previous
+      ? previous.selectedContextEngine
+      : context.selectedContextEngine,
     // Host preparation may rebind metadata, but it cannot change already-registered closures.
     registrationConfigKey:
       previous?.registrationConfigKey ??
@@ -152,6 +157,7 @@ type PluginRuntimeResolvedLoadValues = Pick<
   | "env"
   | "logger"
   | "manifestRegistry"
+  | "metadataSnapshot"
   | "installRecords"
   | "preferBuiltPluginArtifacts"
   | "expectedSourceDigests"
@@ -176,6 +182,7 @@ export function buildPluginRuntimeLoadOptions(
     env: values.env,
     logger: values.logger,
     manifestRegistry: values.manifestRegistry,
+    metadataSnapshot: values.metadataSnapshot,
     installRecords: values.installRecords,
     preferBuiltPluginArtifacts: values.preferBuiltPluginArtifacts,
     expectedSourceDigests: values.expectedSourceDigests,

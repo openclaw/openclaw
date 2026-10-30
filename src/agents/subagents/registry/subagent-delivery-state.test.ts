@@ -51,32 +51,6 @@ describe("normalizeSubagentRunState", () => {
     expect(entry.suppressCompletionDelivery).toBe(true);
   });
 
-  it("keeps only complete interrupted-recovery terminal ownership", () => {
-    const terminal = {
-      endedReason: "subagent-error" as const,
-      execution: {
-        status: "terminal" as const,
-        startedAt: 100,
-        endedAt: 200,
-        outcome: { status: "error" as const, error: "restart interrupted run" },
-      },
-      terminalOwner: "interrupted-recovery" as const,
-    };
-    const valid = normalizeSubagentRunState(baseRun(terminal));
-    const malformed = [
-      baseRun({ ...terminal, execution: { ...terminal.execution, endedAt: undefined } }),
-      baseRun({
-        ...terminal,
-        execution: { ...terminal.execution, outcome: { status: "ok" } },
-      }),
-      baseRun({ ...terminal, endedReason: "subagent-complete" }),
-      baseRun({ ...terminal, pauseReason: "sessions_yield" }),
-    ].map((entry) => normalizeSubagentRunState(entry));
-
-    expect(valid.terminalOwner).toBe("interrupted-recovery");
-    expect(malformed.every((entry) => entry.terminalOwner === undefined)).toBe(true);
-  });
-
   it("clears stale cleanupHandled locks after delivered notification if cleanup did not finish", () => {
     const entry = normalizeSubagentRunState(
       baseRun({

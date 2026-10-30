@@ -12,13 +12,6 @@ const { OpenAIQuicksilverAudioPeer }: typeof import("./realtime-quicksilver-peer
   await import(resolveRuntimeWorkerUrl(realtimeAudioTestEntrypoints.peer).href);
 const weriftUrl = pathToFileURL(createRequire(import.meta.url).resolve("werift")).href;
 
-async function waitUntil(predicate: () => boolean, timeoutMs: number) {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate() && Date.now() < deadline) {
-    await delay(20);
-  }
-}
-
 function createPeer(
   callbacks: Parameters<typeof OpenAIQuicksilverAudioPeer.create>[0]["callbacks"],
   options: Omit<Parameters<typeof OpenAIQuicksilverAudioPeer.create>[0], "callbacks"> = {},
@@ -149,9 +142,9 @@ describe("GPT-Live audio thread", () => {
   }, 15_000);
 
   it("fences already-posted PCM at interruption while accepting the next output generation", async () => {
-    const audio: Buffer[] = [];
+    const onAudio = vi.fn();
     const peer = await createPeer({
-      onAudio: (chunk) => audio.push(chunk),
+      onAudio,
       onError: (error) => {
         throw error;
       },
@@ -162,9 +155,9 @@ describe("GPT-Live audio thread", () => {
       // Emulate PCM already queued on the real Worker emitter when sideband clear
       // ran first. A worker command alone cannot recall these posted messages.
       worker.emit("message", { type: "audio", audio: new Uint8Array([1, 2]), generation: 0 });
-      expect(audio).toEqual([]);
+      expect(onAudio).not.toHaveBeenCalled();
       worker.emit("message", { type: "audio", audio: new Uint8Array([3, 4]), generation: 1 });
-      expect(audio).toEqual([Buffer.from([3, 4])]);
+      expect(onAudio).toHaveBeenCalledExactlyOnceWith(Buffer.from([3, 4]));
     } finally {
       peer.close();
     }
@@ -257,12 +250,13 @@ describe("GPT-Live audio thread", () => {
         receiver.postMessage({ type: "offer", sdp: await peer.createOffer() });
         await peer.applyAnswer((await answer)[0] as string);
         const observedAudibleSamples = () => (direct ? Atomics.load(counts, 2) : audibleSamples);
-        await waitUntil(
-          () => Atomics.load(counts, 0) >= 5 && observedAudibleSamples() >= 1_000,
-          10_000,
+        await vi.waitFor(
+          () => {
+            expect(Atomics.load(counts, 0)).toBeGreaterThanOrEqual(5);
+            expect(observedAudibleSamples()).toBeGreaterThan(1_000);
+          },
+          { timeout: 10_000, interval: 20 },
         );
-        expect(Atomics.load(counts, 0)).toBeGreaterThanOrEqual(5);
-        expect(observedAudibleSamples()).toBeGreaterThan(1_000);
         const before = Atomics.load(counts, 0);
         const outputBefore = Atomics.load(counts, 1);
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
@@ -285,8 +279,10 @@ describe("GPT-Live audio thread", () => {
         // The next PCM batch fails the sink, which hangs up the peer.
         hungUp = true;
         failAudioSink = true;
-        await waitUntil(() => errors.length > 0, 2_000);
-        expect(errors).toEqual([sinkError]);
+        await vi.waitFor(() => expect(errors).toEqual([sinkError]), {
+          timeout: 2_000,
+          interval: 20,
+        });
         await expect(peer.createOffer()).rejects.toThrow("closed");
         expect(receiverErrors).toEqual([]);
       } finally {

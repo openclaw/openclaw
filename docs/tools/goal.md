@@ -13,9 +13,13 @@ title: "Goal"
 
 A **goal** is one durable objective attached to the current OpenClaw session.
 It gives the agent and the operator a shared target for long-running work.
-In built-in chat runs, OpenClaw continues pursuing an active goal after a normal
-turn finishes, even when the model ends with a final reply instead of calling
+In built-in chat runs and supported local or cloud-worker Codex sessions, OpenClaw continues
+pursuing an active goal after a normal turn finishes, even when the model ends with a final reply instead of calling
 another tool. A goal is not a reminder, cron job, or standing order.
+
+Local Codex sessions also support explicit Resume of an existing goal. Resume
+retains the goal identity, objective, and conversation history. If current work is
+still active, wait for it to settle before retrying Resume.
 
 Goals are session state: they move with the session key, survive process
 restarts, and appear in `/goal`, the model-facing goal tools, and the TUI
@@ -91,8 +95,29 @@ Commands: /goal edit <objective>, /goal pause, /goal complete, /goal clear
 | `/goal blocked [note]`                              | Alias for `block`.                                                       |
 | `/goal clear`                                       | Remove the goal from the session.                                        |
 
-Only one goal can exist on a session at a time. Starting a second goal fails
-with `Goal error: goal already exists` until the current one is cleared.
+Only one goal can exist on a session at a time. In the Control UI, submitting
+a new objective through `/goal <objective>` or the Goal composer asks whether
+to replace the current objective. For an idle or paused goal, confirming uses
+**Edit** and preserves its status. For an executing active goal, confirming
+interrupts that exact turn, waits for its work to settle, pauses and edits the
+same goal, then resumes it through normal continuation admission. Its identity,
+token accounting, budget, and history are retained; replacement does not reset
+an exhausted budget. Canceling leaves running work untouched and keeps the
+proposed objective in the composer. Completed goals cannot be edited.
+
+The decision is bound to the displayed session, goal revision, and executing
+turn. If those change before interruption, review the current goal and confirm
+again; a stale decision never interrupts a newer turn. If a later stage fails,
+replacement stops there without automatically resuming. The saved request can
+reconcile or retry completed stages using their existing durable receipts.
+Changing the goal with another control invalidates that recovery decision. If
+interruption cannot be verified, review the stopped or running goal and use its
+explicit controls; replacement never guesses that it is safe to resume. A warning
+that interrupted output could not be saved also stops replacement before the
+objective is edited or resumed; copy any visible text as the warning instructs.
+
+In textual CLI/TUI commands, starting a second goal still fails with
+`Goal error: goal already exists` until the current one is cleared.
 
 `/goal start` does not take a token-budget flag. Only the model-facing `create_goal` tool can set a budget.
 
@@ -192,16 +217,25 @@ The normal follow-up queue owns these turns. They wait for the previous turn's
 execution and delivery to settle, use normal session admission and permissions,
 and do not appear as new human messages. Queued user input and existing
 child/tool continuations take precedence; the nudge does not run alongside them.
+When a built-in chat Goal yields to children, their settled requester turn
+receives the current Goal context. A normal final returns pursuit to the same
+follow-up queue only after the child completion batch is committed; it does not
+make independent command runs autonomous.
 The goal and session are checked again at admission, so a stale queued nudge
 cannot pursue a cleared, replaced, completed, blocked, paused, or limited goal.
 
 **Stop** cancels the current work and pending follow-ups; it does not mark an
-unfinished goal complete. Pause prevents further goal turns. Terminal errors
-and timeouts pause the goal as described above. Resuming a paused or limited
+unfinished goal complete. Once the stopped work has fully settled, **Resume**
+can pursue the same goal again without clearing its history. Pause prevents further
+goal turns. Terminal errors and timeouts pause the goal as described above. Resuming a paused or limited
 goal remains an explicit operator action, not something the continuation does.
 
-Automatic nudges apply to built-in chat/auto-reply execution, not native Codex,
-other external runtimes, heartbeat turns, or independent scheduled work. They
+Each settled automatic Goal turn increments `continuationTurns` once, including
+the turn that completes the Goal. Human Start and Resume turns do not increment it.
+
+Automatic nudges apply to built-in chat/auto-reply execution and supported local
+and cloud-worker Codex sessions, not other external runtimes, heartbeat turns, or independent
+scheduled work. They
 use the existing queue and run lifecycle rather than a periodic background
 scanner. A saved active goal alone does not start a new process or create a
 schedule after shutdown; normal session recovery or another admitted turn
@@ -223,18 +257,31 @@ the objective as a normal chat draft. Complete pasted commands such as
 `/goal start Fix the tests` and explicit management commands such as
 `/goal status` retain their text-command behavior.
 
-Starting a Goal saves the Goal, its user turn, and the run admission together
-before acknowledging Send. A failed admission leaves the draft intact and
+Starting a Goal saves the Goal and its user turn together with the operation
+receipt before acknowledging Send. A failed admission leaves the draft intact and
 does not create a Goal. A failed older chat send stays separate from a newly opened
-Goal draft instead of filling its empty objective. Start and Resume require the built-in OpenClaw runtime
-and an idle local session with recoverable history. They are unavailable for
-native Codex and other external runtimes, and are not queued or steered into
-another run. The UI reports unsupported or busy sessions rather than creating
-an inactive Goal.
+Goal draft instead of filling its empty objective. Start and Resume require an idle
+built-in local session with recoverable history, or an idle existing Codex session
+running locally or on a cloud worker with remote execution. Codex input must pass
+native admission before the runtime commits the Goal and its operation receipt.
+Cloud-worker sessions also require worker setup to admit that input. Other external
+runtimes remain unsupported. Goals are not queued or steered into another run.
+The UI reports unsupported or busy sessions rather than creating an inactive Goal.
+
+Codex worker Goals use the same OpenClaw Goal ID, history, budgets, accounting,
+and continuation queue. Codex's separate autonomous Goal engine stays disabled;
+the core `get_goal`, `create_goal`, and `update_goal` tools remain available when
+native shell tools are enabled, subject to normal tool policy.
+Continuation retains the operator's current authority; it does not replay old
+input or recreate authority after a Gateway restart.
 
 The web Control UI shows the goal as a compact pill above the chat composer:
 a status icon, the status label (for example `Pursuing goal`), the truncated
-objective, and a live elapsed timer.
+objective, and a live elapsed timer. Seconds appear only below one minute;
+longer durations use whole minutes (`4m`) or hours and minutes (`2h 5m`).
+Day and week durations retain the remaining hours and minutes, including zeros
+(for example `1d 0h 0m` or `1wk 5d 17h 15m`), so long-running goals stay precise
+without a seconds counter.
 
 Active goals use a green target icon. Paused goals use a neutral pause icon,
 the normal card surface, and a frozen elapsed timer. Blocked or limited goals
@@ -257,6 +304,9 @@ The pill carries inline controls:
   note, token usage, and elapsed time.
 
 Resume stays visible in the collapsed pill, including on narrow mobile screens.
+It is disabled while the session is sending, queued, or running another turn;
+Pause, Edit, and Clear remain available. A saved Resume request can still be
+checked to reconcile its outcome without starting another turn.
 Expand the pill to reveal the other compact labeled controls above the full
 objective. Token usage and elapsed time remain below the objective and status note.
 
@@ -297,7 +347,9 @@ delivery-route overrides are rejected. Goal work uses the session settings and
 local delivery so recovery keeps the same contract. Objectives
 must contain non-whitespace text and are limited to 16,000 characters.
 
-`sessions.goal.update` accepts `edit` with `objective`, or `pause`, `resume`,
+`sessions.goal.update` accepts `replace` with `objective`, the session ID,
+`expectedGoalUpdatedAt`, and `expectedRunId` for a confirmed executing-goal
+replacement; `edit` with `objective`; or `pause`, `resume`,
 `block`, and `complete` with an optional `note` of at most 2,000 characters.
 `sessions.goal.clear` removes the Goal. Both methods require `sessionKey`,
 `goalId`, `operationId`, and `issuedAtMs`. `agentId` and `sessionId` can pin the

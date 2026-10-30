@@ -1,14 +1,25 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { hasAvailableAuthForProvider as checkAvailableAuth } from "../agents/model-auth.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
+import { readImageMetadataFromHeader } from "../media/media-services.js";
+import type { ImageCompressionModelPolicy } from "../media/web-media.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { MediaAttachmentCache } from "./attachments.cache.js";
+import { mediaModels } from "./media-config.test-support.js";
+import { runMediaFixture } from "./runner-case.test-support.js";
+import { runProviderEntry } from "./runner.entries.js";
+import { resolveAutoImageModel } from "./runner.js";
 import { withMediaFixture } from "./runner.test-utils.js";
-import type { MediaUnderstandingProvider } from "./types.js";
+import type { ImageDescriptionRequest, MediaUnderstandingProvider } from "./types.js";
 
 type TestCatalogEntry = Pick<ModelDefinitionConfig, "id" | "name" | "input"> & { provider: string };
 
@@ -17,11 +28,13 @@ let catalog: TestCatalogEntry[] = [...baseCatalog];
 const plantedVisionSentinel = "PLANTED_VISION_DESC_zq7x";
 
 const loadModelCatalog = vi.hoisted(() => vi.fn(async (_params: unknown) => catalog));
+const discover = vi.hoisted(() => vi.fn());
+const imagePolicy = vi.hoisted(() => vi.fn<() => Promise<ImageCompressionModelPolicy>>());
+const selectionAuth = vi.mocked(checkAvailableAuth);
 
-// These cases own native-vision routing; model compression policy has its own
-// resize-boundary suite and must not bootstrap real provider runtimes here.
+// mock-isolation: Routing and resize cases use fixed policy without provider runtime bootstrap.
 vi.mock("../agents/image-compression-policy.js", () => ({
-  resolveImageCompressionModelPolicy: vi.fn(async () => ({})),
+  resolveImageCompressionModelPolicy: imagePolicy,
 }));
 
 vi.mock("../agents/model-auth.js", async () => {
@@ -29,19 +42,12 @@ vi.mock("../agents/model-auth.js", async () => {
   return createAvailableModelAuthMockModule();
 });
 
-vi.mock("../plugins/capability-provider-runtime.js", async () => {
-  const runtime =
-    await vi.importActual<typeof import("../plugins/runtime.js")>("../plugins/runtime.js");
-  return {
-    resolvePluginCapabilityProviders: ({ key }: { key: string }) =>
-      key === "mediaUnderstandingProviders"
-        ? (runtime
-            .getActivePluginRegistry()
-            ?.mediaUnderstandingProviders.map((entry) => entry.provider) ?? [])
-        : [],
-  };
-});
+// mock-isolation: Synthetic discovery and failure spies must not load installed plugins.
+vi.mock("../plugins/capability-provider-runtime.js", () => ({
+  resolvePluginCapabilityProviders: discover,
+}));
 
+// mock-isolation: Supply only each scenario's catalog, without provider discovery.
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   readPreparedModelCatalog: loadModelCatalog,
@@ -189,10 +195,119 @@ const explicitImageConfig = imageConfig([
 ]);
 
 beforeEach(() => {
+  imagePolicy.mockReset().mockResolvedValue({});
   catalog = [...baseCatalog];
   loadModelCatalog.mockClear();
   setActivePluginRegistry(createEmptyPluginRegistry());
+  discover
+    .mockReset()
+    .mockImplementation(({ key }: { key: string }) =>
+      key === "mediaUnderstandingProviders"
+        ? (getActivePluginRegistry()?.mediaUnderstandingProviders.map((entry) => entry.provider) ??
+          [])
+        : [],
+    );
+  selectionAuth.mockReset().mockResolvedValue(true);
   vi.unstubAllEnvs();
+});
+
+describe("automatic media selection", () => {
+  beforeEach(() => {
+    catalog = [];
+  });
+
+  it("resolves explicit image defaults when fallback discovery is unavailable", async () => {
+    discover.mockImplementation(() => {
+      throw new Error("fallback provider discovery unavailable");
+    });
+    await expect(
+      resolveAutoImageModel({
+        cfg: {
+          agents: { defaults: { imageModel: { primary: "openrouter/google/gemini-2.5-flash" } } },
+        },
+        activeModel: activeVisionModel,
+      }),
+    ).resolves.toEqual({ provider: "openrouter", model: "google/gemini-2.5-flash" });
+  });
+
+  it.each(["manifest", "config"] as const)(
+    "auto-selects hookless image providers from %s",
+    async (source) => {
+      const provider = "selection-image";
+      const cfg: OpenClawConfig = {};
+      if (source === "config") {
+        cfg.models = mediaModels(provider, "vision", ["text", "image"]);
+      } else {
+        activateProvider(cfg, {
+          id: provider,
+          capabilities: ["image"],
+          defaultModels: { image: "vision" },
+          autoPriority: { image: 1 },
+        });
+      }
+      expect(await resolveAutoImageModel({ cfg })).toEqual({ provider, model: "vision" });
+      expect(selectionAuth).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ provider }));
+    },
+  );
+
+  it.each(["image", "video"] as const)(
+    "normalizes the active %s provider alias",
+    async (capability) => {
+      const providerRegistry = activateProvider(
+        {},
+        {
+          id: "google",
+          capabilities: ["image", "video"],
+          describeImage: async ({ model }) => ({ text: "image", model }),
+          describeVideo: async ({ model }) => ({ text: "video", model }),
+        },
+      );
+      const activeModel = { provider: " GEMINI ", model: "selected-model" };
+      let outcome: { provider?: string; model?: string } | null;
+      if (capability === "image") {
+        outcome = await resolveAutoImageModel({ cfg: {}, activeModel });
+      } else {
+        const result = await runMediaFixture("video", "media-selection-alias", {
+          cfg: {},
+          activeModel,
+          providerRegistry,
+        });
+        expect(result.decision.outcome).toBe("success");
+        expect(result.outputs).toHaveLength(1);
+        outcome = result.outputs[0] ?? null;
+      }
+      expect(outcome).toMatchObject({ model: "selected-model", provider: "google" });
+      expect(selectionAuth).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ provider: "google" }),
+      );
+    },
+  );
+
+  it("checks audio providers once in priority order until auth is available", async () => {
+    selectionAuth.mockImplementation(async ({ provider }) => provider === "second");
+    const providers = ["first", "second"].map((id, priority): MediaUnderstandingProvider => ({
+      id,
+      capabilities: ["audio"],
+      autoPriority: { audio: priority },
+      defaultModels: { audio: `${id}-transcription` },
+      transcribeAudio: async ({ model }) => ({ text: id, model }),
+    }));
+    const result = await runMediaFixture("audio", "media-selection-provider-order", {
+      cfg: {},
+      providerRegistry: new Map(providers.map((provider) => [provider.id, provider])),
+    });
+    expect(selectionAuth.mock.calls.map(([{ provider }]) => provider)).toEqual(["first", "second"]);
+    expect(result.outputs).toEqual([
+      {
+        kind: "audio.transcription",
+        attachmentIndex: 0,
+        provider: "second",
+        model: "second-transcription",
+        text: "second",
+      },
+    ]);
+    expect(result.decision.outcome).toBe("success");
+  });
 });
 
 it("skips imageModel fallback when MiniMax M3 supports vision", async () => {
@@ -458,4 +573,183 @@ it("skips configured image providers without an auto-resolvable model", async ()
   expect(result.outputs).toHaveLength(0);
   expect(result.decision.outcome).toBe("skipped");
   expect(result.decision.attachments).toEqual([{ attachmentIndex: 0, attempts: [] }]);
+});
+
+describe("image resizing", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  type ImageFixtureOptions = Partial<Pick<ImageDescriptionRequest, "fileName" | "mime" | "cfg">> & {
+    maxBytes?: number;
+    policy?: ImageCompressionModelPolicy;
+  };
+  async function setupProvider(source: Buffer, options: ImageFixtureOptions = {}) {
+    imagePolicy
+      .mockReset()
+      .mockResolvedValue(options.policy ?? { maxSidePx: 1600, preferredSidePx: 1400 });
+    const root = tempDirs.make("openclaw-image-resize-");
+    const attachmentPath = path.join(root, options.fileName ?? "phone.png");
+    await fs.writeFile(attachmentPath, source);
+    const cache = new MediaAttachmentCache(
+      [{ index: 0, path: attachmentPath, mime: options.mime ?? "image/png" }],
+      { localPathRoots: [root], includeDefaultLocalPathRoots: false },
+    );
+    const description = { text: "described", model: "vision-v1" };
+    const describeImage = vi.fn(async (_request: ImageDescriptionRequest) => description);
+    const run = async () => {
+      try {
+        return await runProviderEntry({
+          capability: "image",
+          entry: { provider: "vision-plugin", model: "vision-v1", maxBytes: options.maxBytes },
+          cfg: options.cfg ?? {},
+          attachmentIndex: 0,
+          cache,
+          agentDir: root,
+          providerRegistry: new Map<string, MediaUnderstandingProvider>([
+            ["vision-plugin", { id: "vision-plugin", capabilities: ["image"], describeImage }],
+          ]),
+        });
+      } finally {
+        await cache.cleanup();
+      }
+    };
+    return {
+      async describe() {
+        await expect(run()).resolves.toMatchObject({
+          ok: true,
+          value: { ...description, provider: "vision-plugin" },
+        });
+        expect(describeImage).toHaveBeenCalledOnce();
+        return describeImage.mock.calls[0]![0];
+      },
+      async reject(maxBytes: number) {
+        await expect(run()).rejects.toMatchObject({
+          name: "MediaUnderstandingSkipError",
+          reason: "maxBytes",
+          message: `Attachment 1 exceeds maxBytes ${maxBytes}`,
+        });
+        expect(describeImage).not.toHaveBeenCalled();
+      },
+    };
+  }
+
+  const png = (width: number, height: number) =>
+    createSolidPngBuffer(width, height, { r: 24, g: 96, b: 208 });
+
+  it.each(["high", "efficient", undefined] as const)(
+    "respects model limits rather than the image-tool preference %s",
+    async (quality) => {
+      const source = quality ? png(1600, 1200) : png(2400, 1800);
+      const provider = await setupProvider(source, {
+        cfg: quality ? { agents: { defaults: { imageQuality: quality } } } : {},
+        policy: quality ? undefined : {},
+      });
+      const request = await provider.describe();
+      expect(readImageMetadataFromHeader(request.buffer)).toEqual(
+        quality ? { width: 1400, height: 1050 } : { width: 2400, height: 1800 },
+      );
+      expect(request).toMatchObject({
+        provider: "vision-plugin",
+        model: "vision-v1",
+        fileName: expect.stringMatching(/^phone\.(png|jpg)$/),
+      });
+      if (!quality) {
+        expect(request.buffer.equals(source)).toBe(true);
+        expect(request).toMatchObject({ mime: "image/png", fileName: "phone.png" });
+      }
+    },
+  );
+
+  it.each(["source", "PNG", "provider-owned"])(
+    "enforces the %s byte cap before provider I/O",
+    async (format) => {
+      const custom = format === "provider-owned";
+      const source = custom ? Buffer.from("custom-image") : png(1, 1);
+      const maxBytes = format === "source" ? source.length - 1 : 8;
+      const provider = await setupProvider(source, {
+        ...(custom ? { fileName: "phone.custom", mime: "image/x-custom" } : {}),
+        maxBytes: format === "source" ? maxBytes : undefined,
+        policy: { maxBytes: 8 },
+      });
+      await provider.reject(maxBytes);
+      expect(imagePolicy).toHaveBeenCalledTimes(format === "source" ? 0 : 1);
+    },
+  );
+});
+
+describe("apply registry lifetime", () => {
+  const activeModel = { provider: "usage-proxy", model: "gpt-5.4" };
+  const registryBuild = vi.fn();
+  const visionConfig: OpenClawConfig = {
+    models: mediaModels(activeModel.provider, activeModel.model, ["text", "image"]),
+  };
+  function configWithModels(capabilities?: ("image" | "audio" | "video")[]): OpenClawConfig {
+    return {
+      ...visionConfig,
+      ...(capabilities
+        ? { tools: { media: { models: [{ provider: activeModel.provider, capabilities }] } } }
+        : {}),
+    };
+  }
+  function imageContext(withAudio = false): MsgContext {
+    return {
+      media: [
+        { path: "/tmp/image.png", contentType: "image/png" },
+        ...(withAudio ? [{ path: "/tmp/note.ogg", contentType: "audio/ogg" }] : []),
+      ],
+    };
+  }
+  const apply = (ctx: MsgContext, cfg: OpenClawConfig) =>
+    applyMediaUnderstanding({ ctx, cfg, activeModel });
+  const breakRegistry = () =>
+    registryBuild.mockImplementation(() => {
+      throw new Error("registry build failed");
+    });
+  beforeEach(() => {
+    catalog = [catalogModel(activeModel.provider, activeModel.model, "GPT-5.4")];
+    registryBuild.mockReset();
+    discover.mockImplementation(({ key }: { key: string }) => {
+      if (key === "mediaUnderstandingProviders") {
+        registryBuild();
+      }
+      return [];
+    });
+  });
+
+  it.each([
+    ["explicit image model", configWithModels(["image"]), false, ["text", "image"]],
+    ["text-only model", {}, false, ["text"]],
+    ["mixed image and audio", visionConfig, true, ["text", "image"]],
+  ] as const)("builds the registry once for %s", async (_name, cfg, audio, input) => {
+    catalog = [{ ...catalogModel(activeModel.provider, activeModel.model), input: [...input] }];
+    await apply(imageContext(audio), cfg);
+    expect(registryBuild).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects apply on registry failure without partially recording decisions", async () => {
+    breakRegistry();
+    catalog = [{ ...catalogModel(activeModel.provider, activeModel.model), input: ["text"] }];
+    const ctx = imageContext(true);
+    await expect(apply(ctx, {})).rejects.toThrow("registry build failed");
+    expect(registryBuild).toHaveBeenCalledTimes(1);
+    expect(ctx.MediaUnderstandingDecisions).toBeUndefined();
+  });
+
+  it.each([
+    { name: "no shared models", capabilities: undefined },
+    { name: "audio and video shared models", capabilities: ["audio", "video"] },
+  ] as const)("keeps native vision with $name", async ({ capabilities }) => {
+    breakRegistry();
+    const ctx = imageContext();
+    await expect(
+      apply(ctx, configWithModels(capabilities ? [...capabilities] : undefined)),
+    ).resolves.toEqual({ extractedFileImages: [] });
+    expect(ctx.MediaUnderstandingDecisions).toContainEqual(
+      expect.objectContaining({
+        capability: "image",
+        outcome: "skipped",
+        nativeVisionActive: true,
+        attachmentDispositions: { 0: { kind: "handed-to-native-vision" } },
+      }),
+    );
+    expect(registryBuild).not.toHaveBeenCalled();
+  });
 });

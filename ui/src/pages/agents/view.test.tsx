@@ -1,23 +1,27 @@
+import { createMemo } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ChannelAccountSnapshot, CronJob } from "../../api/types.ts";
+import type { ChannelAccountSnapshot, ToolsCatalogResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
-import { createInitialCronState, loadCronJobsPage } from "../../lib/cron/index.ts";
+import { createInitialCronState } from "../../lib/cron/index.ts";
 import { formatNextRun } from "../../lib/presenter.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid as mountConnected } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createSkill } from "../skills/view.test-support.ts";
+import { createAgentCronPresenter } from "./agent-cron-presenter.ts";
 import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
 import {
   createAgentViewTestProps as createProps,
+  createCronJob,
   inertAgentFileControls,
   primaryModelPicker,
 } from "./agents-view.test-helpers.ts";
@@ -27,12 +31,8 @@ import { Agents, type AgentsProps } from "./view.tsx";
 
 function config(configForm: ReturnType<typeof createProps>["config"]["configForm"]) {
   return {
+    ...createProps().config,
     configForm,
-    configSnapshot: null,
-    configLoading: false,
-    configSaving: false,
-    configFormDirty: false,
-    lastError: null,
   };
 }
 
@@ -49,9 +49,11 @@ function renderView(overrides: Partial<ReturnType<typeof createProps>>, containe
 }
 
 function renderFiles(
-  params: Partial<Parameters<typeof AgentFiles>[0]> &
+  params: Partial<
+    Parameters<typeof AgentFiles>[0] & ReturnType<Parameters<typeof AgentFiles>[0]["readData"]>
+  > &
     Pick<
-      Parameters<typeof AgentFiles>[0],
+      ReturnType<Parameters<typeof AgentFiles>[0]["readData"]>,
       "agentFilesList" | "agentFileActive" | "agentFileEditors"
     >,
   container: HTMLElement,
@@ -59,31 +61,23 @@ function renderFiles(
   mountSolid(
     AgentFiles,
     {
+      readData() {
+        return { ...createProps().readData(), ...this };
+      },
+      presentationRetired: createProps().presentationRetired,
       agentId: "alpha",
+      listRead: null,
+      agentFileConflict: null,
       canWrite: true,
       agentFilesLoading: false,
-      agentFilesError: null,
+      agentFileRead: null,
+      agentFileOutcome: null,
       agentFileSaving: false,
       ...inertAgentFileControls,
       ...params,
     },
     container,
   );
-}
-
-function createCronJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
-  return {
-    id,
-    name: `Scheduled job ${id}`,
-    enabled: true,
-    createdAtMs: 0,
-    updatedAtMs: 0,
-    schedule: { kind: "cron", expr: "0 9 * * *" },
-    sessionTarget: "main",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text: "ping" },
-    ...overrides,
-  } as CronJob;
 }
 
 function directText(element: Element | null | undefined): string | undefined {
@@ -105,20 +99,48 @@ function expectAgentTab(container: Element, text: string): HTMLElement & { disab
 }
 
 describe("renderAgents", () => {
-  it("renders the selected agent's tool catalog loading state", () => {
+  it("announces an agent list failure as an alert", async () => {
     const container = document.createElement("div");
-    const props = createProps();
-    renderView(
-      { activePanel: "tools", tools: { ...props.tools, toolsCatalogLoading: true } },
-      container,
+    renderView({ listRead: Promise.resolve({ error: "Agent list unavailable" }) }, container);
+    await waitForSolid(() =>
+      expect(
+        Array.from(container.querySelectorAll('[role="alert"]'), (alert) =>
+          alert.textContent?.trim(),
+        ),
+      ).toEqual(["Agent list unavailable"]),
     );
-    expect(container.querySelector('.settings-loading-skeleton[aria-busy="true"]')).not.toBeNull();
+  });
+
+  it("renders the selected agent's tool catalog loading state", async () => {
+    const mounted = mountConnected(() => {
+      const readCatalog = createMemo(() => new Promise<ToolsCatalogResult>(() => {}));
+      const props = createProps();
+      return (
+        <Agents
+          {...props}
+          tools={{ ...props.tools, readCatalog }}
+          readData={() => ({ ...props.readData(), agentsPanel: "tools" })}
+        />
+      );
+    });
+    await vi.dynamicImportSettled();
+
+    await waitForSolid(() =>
+      expect(
+        mounted.container.querySelector(
+          `.settings-loading-skeleton[aria-label="${t("agentTools.loadingCatalog")}"]`,
+        ),
+      ).not.toBeNull(),
+    );
   });
 
   it("renders the active agent tab and selects a different panel", () => {
     const container = document.createElement("div");
     const onSelectPanel = vi.fn();
-    renderView({ activePanel: "files", onSelectPanel }, container);
+    renderView(
+      { onSelectPanel, readData: () => ({ ...createProps().readData(), agentsPanel: "files" }) },
+      container,
+    );
 
     expect(container.querySelector("#agents-tab-files")?.hasAttribute("active")).toBe(true);
     expectAgentTab(container, "Tools").dispatchEvent(
@@ -148,7 +170,7 @@ describe("renderAgents", () => {
     ).toBe("🦊");
   });
 
-  it("renders and counts a server-scoped default-agent cron job without an explicit agentId", () => {
+  it("renders and counts a server-scoped default-agent cron job without an explicit agentId", async () => {
     const job = createCronJob("implicit-default-job", {
       name: "Implicit default-agent reminder",
     });
@@ -157,25 +179,33 @@ describe("renderAgents", () => {
     const container = document.createElement("div");
     renderView(
       {
-        activePanel: "cron",
         selectedAgentId: "alpha",
-        cron: {
-          ...createProps().cron,
-          status: { enabled: true, triggersEnabled: true, jobs: 51, nextWakeAtMs },
-          jobs: [job],
-          jobsTotal: 1,
-          jobsHasMore: false,
-          jobsLoadingMore: false,
-          scopedTotal: 1,
-          scopedNextWakeAtMs,
-          loading: false,
-          error: null,
-        },
+        cron: { ...createProps().cron },
+        readData: () => ({
+          ...createProps().readData(),
+          agentsPanel: "cron",
+          cron: {
+            ...createProps().readData().cron,
+            cronStatus: { enabled: true, triggersEnabled: true, jobs: 51, nextWakeAtMs },
+            cronJobs: [job],
+            cronJobsTotal: 1,
+            cronJobsHasMore: false,
+            cronJobsLoadingMore: false,
+            cronScopedTotal: 1,
+            cronScopedNextWakeAtMs: scopedNextWakeAtMs,
+            cronLoading: false,
+            cronError: null,
+          },
+        }),
       },
       container,
     );
 
-    expect(container.textContent).toContain("Implicit default-agent reminder");
+    await vi.dynamicImportSettled();
+
+    await waitForSolid(() =>
+      expect(container.textContent).toContain("Implicit default-agent reminder"),
+    );
     expect(
       expectAgentTab(container, t("agents.tabs.cronJobs")).querySelector(".hub-tab__badge--count")
         ?.textContent,
@@ -195,6 +225,64 @@ describe("renderAgents", () => {
       formatNextRun(scopedNextWakeAtMs),
     );
     expect(nextWakeRow?.textContent).not.toContain(formatNextRun(nextWakeAtMs));
+  });
+
+  it("shows a rejected agent jobs refresh beside retained jobs without hiding scheduler feedback", async () => {
+    const client = createTestGatewayClient(async (method) => {
+      throw new Error(
+        method === "cron.status"
+          ? "Scheduler status is unavailable."
+          : "Agent jobs could not be refreshed.",
+      );
+    });
+    const cronState = {
+      ...createInitialCronState({ client, connected: true }),
+      cronAgentId: "alpha",
+      cronError: "Scheduler status is unavailable.",
+      cronJobs: [createCronJob("retained-job", { name: "Retained reminder" })],
+    };
+    const container = document.createElement("div");
+    const presenter = createAgentCronPresenter({
+      currentState: () => cronState,
+      readState: () => cronState,
+      canCall: () => true,
+      publish: () => renderCurrent(),
+    });
+    const renderCurrent = (): void => {
+      renderView(
+        {
+          selectedAgentId: "alpha",
+          cron: {
+            ...createProps().cron,
+            read: presenter.read,
+            onRefresh: presenter.onRefresh,
+          },
+          readData: () => ({ ...createProps().readData(), agentsPanel: "cron", cron: cronState }),
+        },
+        container,
+      );
+    };
+    renderCurrent();
+    await waitForSolid(() => expect(container.textContent).toContain("Retained reminder"));
+    const scheduler = [...container.querySelectorAll(".settings-section")].find(
+      (section) =>
+        section.querySelector("h2")?.textContent === t("agents.cronPanel.schedulerTitle"),
+    );
+    const refresh = scheduler?.querySelector<HTMLButtonElement>("button");
+    expect(refresh).toBeInstanceOf(HTMLButtonElement);
+    refresh?.click();
+
+    await waitForSolid(() => {
+      const jobs = [...container.querySelectorAll(".settings-section")].find(
+        (section) =>
+          section.querySelector("h2")?.textContent === t("agents.cronPanel.agentJobsTitle"),
+      );
+      expect(jobs?.querySelector('[role="alert"]')?.textContent).toContain(
+        "Agent jobs could not be refreshed.",
+      );
+      expect(jobs?.textContent).toContain("Retained reminder");
+      expect(container.textContent).toContain("Scheduler status is unavailable.");
+    });
   });
 
   it("loads and renders the selected agent's 51st cron job when Load more is clicked", async () => {
@@ -226,33 +314,44 @@ describe("renderAgents", () => {
       cronJobsNextOffset: 50,
     };
     const container = document.createElement("div");
+    const presenter = createAgentCronPresenter({
+      currentState: () => cronState,
+      readState: () => cronState,
+      canCall: () => true,
+      publish: () => renderCurrentPage(),
+    });
     const renderCurrentPage = (): void => {
       renderView(
         {
-          activePanel: "cron",
           selectedAgentId: "alpha",
           cron: {
             ...createProps().cron,
-            status: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
-            jobs: cronState.cronJobs,
-            jobsTotal: cronState.cronJobsTotal,
-            jobsHasMore: cronState.cronJobsHasMore,
-            jobsLoadingMore: cronState.cronJobsLoadingMore,
-            scopedTotal: 51,
-            scopedNextWakeAtMs: null,
-            loading: cronState.cronLoading,
-            error: cronState.cronError,
-            onLoadMore: () => {
-              const nextPage = loadCronJobsPage(cronState, { append: true, tableFilters: true });
-              renderCurrentPage();
-              void nextPage.then(renderCurrentPage);
-            },
+            read: presenter.read,
+            onLoadMore: presenter.onLoadMore,
           },
+          readData: () => ({
+            ...createProps().readData(),
+            agentsPanel: "cron",
+            cron: {
+              ...createProps().readData().cron,
+              cronStatus: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
+              cronJobs: cronState.cronJobs,
+              cronJobsTotal: cronState.cronJobsTotal,
+              cronJobsHasMore: cronState.cronJobsHasMore,
+              cronJobsLoadingMore: cronState.cronJobsLoadingMore,
+              cronScopedTotal: 51,
+              cronScopedNextWakeAtMs: null,
+              cronLoading: cronState.cronLoading,
+              cronError: cronState.cronError,
+              cronNotice: cronState.cronNotice,
+            },
+          }),
         },
         container,
       );
     };
     renderCurrentPage();
+    await waitForSolid(() => expect(container.querySelector(".cron-load-more")).not.toBeNull());
 
     expect(
       expectAgentTab(container, t("agents.tabs.cronJobs")).querySelector(".hub-tab__badge--count")
@@ -297,17 +396,22 @@ describe("renderAgents", () => {
           <Agents {...props} />
         </ApplicationProvider>
       ),
-      createProps({ activePanel: "memory" }),
+      createProps({ readData: () => ({ ...createProps().readData(), agentsPanel: "memory" }) }),
       container,
     );
+
+    await vi.dynamicImportSettled();
 
     const tabs = [...container.querySelectorAll(".agents-hub-tabs .hub-tab")].map((tab) =>
       directText(tab),
     );
     expect(tabs.slice(-2)).toEqual([t("agents.tabs.cronJobs"), t("agents.tabs.memory")]);
-    expect(
-      container.querySelector("openclaw-agent-memory-panel .agent-memory-panel__header"),
-    ).not.toBeNull();
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
+      expect(
+        container.querySelector("openclaw-agent-memory-panel .agent-memory-panel__header"),
+      ).not.toBeNull(),
+    );
     await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "beta" }),
     );
@@ -468,18 +572,16 @@ describe("renderAgents", () => {
     const container = document.createElement("div");
     renderView(
       {
-        agentSkills: {
-          ...createProps().agentSkills,
-          report: {
+        agentSkills: { ...createProps().agentSkills, filter: "" },
+        readData: () => ({
+          ...createProps().readData(),
+          agentSkillsReport: {
             workspaceDir: "/tmp/workspace",
             managedSkillsDir: "/tmp/skills",
             skills: [createSkill()],
           },
-          loading: false,
-          error: null,
-          activeAgentId: "alpha",
-          filter: "",
-        },
+          agentSkillsAgentId: "alpha",
+        }),
       },
       container,
     );
@@ -491,18 +593,16 @@ describe("renderAgents", () => {
 
     renderView(
       {
-        agentSkills: {
-          ...createProps().agentSkills,
-          report: {
+        agentSkills: { ...createProps().agentSkills, filter: "" },
+        readData: () => ({
+          ...createProps().readData(),
+          agentSkillsReport: {
             workspaceDir: "/tmp/workspace",
             managedSkillsDir: "/tmp/skills",
             skills: [createSkill()],
           },
-          loading: false,
-          error: null,
-          activeAgentId: "beta",
-          filter: "",
-        },
+          agentSkillsAgentId: "beta",
+        }),
       },
       container,
     );
@@ -522,14 +622,15 @@ describe("renderAgents", () => {
     try {
       renderView(
         {
-          activePanel: "channels",
-          channels: {
-            ...createProps().channels,
-            snapshot: null,
-            loading: false,
-            error: null,
-            lastSuccess: null,
-          },
+          channels: { ...createProps().channels },
+          readData: () => ({ ...createProps().readData(), agentsPanel: "channels" }),
+          readChannels: () => ({
+            ...createProps().readChannels(),
+            channelsSnapshot: null,
+            channelsRead: null,
+            channelsError: null,
+            channelsLastSuccess: null,
+          }),
         },
         container,
       );
@@ -542,12 +643,15 @@ describe("renderAgents", () => {
       const chinese = flattenTranslations(zh_CN);
       const tabs = ["overview", "files", "tools", "skills", "channels", "cronJobs", "memory"];
       expect(tabLabels).toEqual(tabs.map((tab) => chinese.get(`agents.tabs.${tab}`)));
-      const sectionDescs = Array.from(container.querySelectorAll(".settings-section__desc"));
       const lastRefresh = chinese
         .get("agents.channels.lastRefresh")
         ?.replace("{time}", chinese.get("common.never") ?? "");
-      expect(sectionDescs.map((desc) => desc.textContent?.replace(/\s+/gu, " ").trim())).toContain(
-        `${chinese.get("agents.channels.subtitle")} ${lastRefresh}`,
+      await waitForSolid(() =>
+        expect(
+          Array.from(container.querySelectorAll(".settings-section__desc"), (desc) =>
+            desc.textContent?.replace(/\s+/gu, " ").trim(),
+          ),
+        ).toContain(`${chinese.get("agents.channels.subtitle")} ${lastRefresh}`),
       );
     } finally {
       await i18n.setLocale("en");
@@ -572,17 +676,19 @@ describe("renderAgentChannels", () => {
           isDefault: true,
         },
         configForm: null,
-        snapshot: {
-          ts: Date.now(),
-          channelOrder: ["discord"],
-          channelLabels: { discord: "Discord" },
-          channels: {},
-          channelAccounts: { discord: accounts },
-          channelDefaultAccountId: { discord: "default" },
-        },
-        loading: false,
-        error: null,
-        lastSuccess: Date.now(),
+        readState: () => ({
+          channelsSnapshot: {
+            ts: Date.now(),
+            channelOrder: ["discord"],
+            channelLabels: { discord: "Discord" },
+            channels: {},
+            channelAccounts: { discord: accounts },
+            channelDefaultAccountId: { discord: "default" },
+          },
+          channelsRead: null,
+          channelsError: null,
+          channelsLastSuccess: Date.now(),
+        }),
         onRefresh: () => undefined,
         onSelectPanel: () => undefined,
       },
@@ -811,29 +917,37 @@ describe("renderAgentFiles", () => {
 });
 
 describe("renderAgents toolbar", () => {
-  it("keeps standalone agent creation available with no agents", () => {
-    const container = document.createElement("div");
-    const onCreateAgent = vi.fn();
-    renderView(
-      {
-        agentsList: {
-          defaultId: "alpha",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [],
+  it.each([false, true])(
+    "keeps standalone creation with no selectable agents (system: %s)",
+    (system) => {
+      const container = document.createElement("div");
+      const onCreateAgent = vi.fn();
+      renderView(
+        {
+          selectedAgentId: "alpha",
+          onCreateAgent,
+          readData: () => ({
+            ...createProps().readData(),
+            agentsList: {
+              defaultId: "alpha",
+              mainKey: "main",
+              scope: "per-sender",
+              agents: system ? [{ id: "alpha", kind: "system" }] : [],
+            },
+          }),
         },
-        selectedAgentId: "alpha",
-        onCreateAgent,
-      },
-      container,
-    );
+        container,
+      );
 
-    expect(container.querySelector("openclaw-agent-select")).toBeNull();
-    const createButton = container.querySelector<HTMLButtonElement>(".agents-create-btn");
-    expect(createButton?.textContent?.trim()).toBe(t("custodian.newAgent"));
-    createButton?.click();
-    expect(onCreateAgent).toHaveBeenCalledOnce();
-  });
+      expect(container.querySelector("openclaw-agent-select")).toBeNull();
+      expect(container.querySelector("#agent-panel")).toBeNull();
+      expect(container.textContent).toContain(t("agents.selectSubtitle"));
+      const createButton = container.querySelector<HTMLButtonElement>(".agents-create-btn");
+      expect(createButton?.textContent?.trim()).toBe(t("custodian.newAgent"));
+      createButton?.click();
+      expect(onCreateAgent).toHaveBeenCalledOnce();
+    },
+  );
 
   it("keeps unavailable creation visible and disabled with a recovery reason", () => {
     const container = document.createElement("div");
@@ -842,21 +956,20 @@ describe("renderAgents toolbar", () => {
     try {
       renderView(
         {
-          agentsList: {
-            defaultId: "alpha",
-            mainKey: "main",
-            scope: "per-sender",
-            agents: [{ id: "alpha" }, { id: "beta" }],
-          },
           access: {
+            ...createProps().access,
             canCreateAgent: false,
-            canPatchConfig: false,
-            canUpdateConfig: false,
-            canUpdateIdentity: false,
-            canWriteFiles: false,
-            canRunCron: false,
           },
           onCreateAgent,
+          readData: () => ({
+            ...createProps().readData(),
+            agentsList: {
+              defaultId: "alpha",
+              mainKey: "main",
+              scope: "per-sender",
+              agents: [{ id: "alpha" }, { id: "beta" }],
+            },
+          }),
         },
         container,
       );
@@ -875,76 +988,77 @@ describe("renderAgents toolbar", () => {
   });
 });
 
-it("surfaces agent config save errors in the active panel", () => {
+it("retires agent config errors during save and retains all owner error messages", () => {
   const container = document.createElement("div");
-  renderView(
-    {
-      config: {
-        configForm: { agents: { entries: { beta: {} } } },
-        configSnapshot: null,
-        configLoading: false,
-        configSaving: false,
-        configFormDirty: true,
-        lastError: "mock validation failure",
-      },
-    },
-    container,
-  );
-
-  const alert = container.querySelector('[role="alert"]');
-  expect(alert?.textContent).toContain("mock validation failure");
+  const failedConfig = {
+    ...config({ agents: { entries: { beta: {} } } }),
+    configFormDirty: true,
+    lastError: "mock validation failure",
+  };
+  renderView({ config: failedConfig }, container);
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(failedConfig.lastError);
+  renderView({ config: { ...failedConfig, configSaving: true, lastError: null } }, container);
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  for (const lastError of [failedConfig.lastError, "Config could not be loaded"]) {
+    renderView({ config: { ...failedConfig, lastError } }, container);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(lastError);
+  }
 });
 
 it.each([
   { name: "paused authorized job", enabled: false, canRunCron: true, canRun: true },
   { name: "enabled unauthorized job", enabled: true, canRunCron: false, canRun: false },
-])("preserves edit links and gates Run Now for a $name", ({ enabled, canRunCron, canRun }) => {
-  const container = document.createElement("div");
-  const onCronRunNow = vi.fn();
-  const job: CronJob = {
-    id: "job /?&",
-    name: "Weekly report",
-    agentId: "alpha",
-    enabled,
-    createdAtMs: 0,
-    updatedAtMs: 0,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "now",
-    payload: { kind: "agentTurn", message: "Summarize notes." },
-    state: {},
-  };
-  const props = createProps({
-    activePanel: "cron",
-    selectedAgentId: "alpha",
-    basePath: "/gateway",
-  });
-  renderView(
-    {
-      ...props,
-      access: { ...props.access, canRunCron },
-      cron: { ...props.cron, jobs: [job], onRunNow: onCronRunNow },
-    },
-    container,
-  );
-  const link = [...container.querySelectorAll("a")].find(
-    (entry) => entry.textContent?.trim() === "Edit",
-  );
-  expect(link?.getAttribute("href")).toBe("/gateway/automations?job=job%20%2F%3F%26");
+])(
+  "preserves edit links and gates Run Now for a $name",
+  async ({ enabled, canRunCron, canRun }) => {
+    const container = document.createElement("div");
+    const onCronRunNow = vi.fn();
+    const job = createCronJob("job /?&", {
+      name: "Weekly report",
+      agentId: "alpha",
+      enabled,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "Summarize notes." },
+      state: {},
+    });
+    const props = createProps({
+      selectedAgentId: "alpha",
+      basePath: "/gateway",
+      readData: () => ({ ...createProps().readData(), agentsPanel: "cron" }),
+    });
+    renderView(
+      {
+        ...props,
+        access: { ...props.access, canRunCron },
+        cron: { ...props.cron, onRunNow: onCronRunNow },
+        readData: () => ({
+          ...props.readData(),
+          cron: { ...props.readData().cron, cronJobs: [job] },
+        }),
+      },
+      container,
+    );
+    await waitForSolid(() => expect(container.textContent).toContain("Weekly report"));
+    const link = [...container.querySelectorAll("a")].find(
+      (entry) => entry.textContent?.trim() === "Edit",
+    );
+    expect(link?.getAttribute("href")).toBe("/gateway/automations?job=job%20%2F%3F%26");
 
-  const jobRow = [...container.querySelectorAll(".settings-row")].find(
-    (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === job.name,
-  );
-  const runNow = [...(jobRow?.querySelectorAll("button") ?? [])].find(
-    (button) => button.textContent?.trim() === "Run Now",
-  );
-  expect(runNow).toBeInstanceOf(HTMLButtonElement);
-  expect(runNow?.disabled).toBe(!canRun);
-  runNow?.click();
-  if (canRun) {
-    expect(onCronRunNow).toHaveBeenCalledTimes(1);
-    expect(onCronRunNow).toHaveBeenCalledWith(job.id);
-  } else {
-    expect(onCronRunNow).not.toHaveBeenCalled();
-  }
-});
+    const jobRow = [...container.querySelectorAll(".settings-row")].find(
+      (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === job.name,
+    );
+    const runNow = [...(jobRow?.querySelectorAll("button") ?? [])].find(
+      (button) => button.textContent?.trim() === "Run Now",
+    );
+    expect(runNow).toBeInstanceOf(HTMLButtonElement);
+    expect(runNow?.disabled).toBe(!canRun);
+    runNow?.click();
+    if (canRun) {
+      expect(onCronRunNow).toHaveBeenCalledTimes(1);
+      expect(onCronRunNow).toHaveBeenCalledWith(job.id);
+    } else {
+      expect(onCronRunNow).not.toHaveBeenCalled();
+    }
+  },
+);

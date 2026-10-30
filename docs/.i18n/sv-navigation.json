@@ -464,6 +464,12 @@
               ]
             },
             {
+              "group": "Beslutsmodeller",
+              "pages": [
+                "sv/providers/liquid-ai"
+              ]
+            },
+            {
               "group": "Tal och ljud",
               "pages": [
                 "sv/providers/azure-speech"

@@ -7,8 +7,16 @@ import {
   ServiceInspectionError,
   findServiceOwnershipRefusal,
 } from "../daemon/service-inspection-error.js";
+import {
+  currentGatewayServiceRebindReceipt,
+  fingerprintGatewayServiceDefinition,
+  withGatewayServiceRebindCapture,
+} from "../daemon/service-rebind.js";
 import type { GatewayServiceState } from "../daemon/service-types.js";
+import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { UpdateDoctorError } from "../infra/update-doctor-result.js";
+import { createUpdateFailureFact, type UpdateFailureFact } from "../infra/update-failure-facts.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
@@ -18,6 +26,54 @@ type StoppedGatewayInspection =
   | { kind: "owned-offline" }
   | { kind: "not-ours"; reason: string }
   | { kind: "inconclusive"; reason: string };
+
+/** Decides whether Doctor may start a managed Gateway that it did not stop itself. */
+export async function resolveUnstoppedGatewayRestoration(params: {
+  before: PreManagedServiceStop;
+  serviceEnv: NodeJS.ProcessEnv;
+  root: string;
+  leaveStopped: boolean;
+  reportStopped: boolean;
+}): Promise<{ restore: boolean; warning?: string }> {
+  const { before, serviceEnv } = params;
+  const verdict = before.serviceUpdateVerdict;
+  if (verdict?.kind === "owned" && verdict.requiresInstallRootRefresh) {
+    const { inspectGatewayServiceInstallationDrift } = await import("../daemon/service-layout.js");
+    const drift = await inspectGatewayServiceInstallationDrift(
+      { packageRootReal: verdict.root },
+      params.root,
+    );
+    if (drift) {
+      const { formatGatewayServiceInstallationDrift } = await import("../cli/daemon-cli/shared.js");
+      const warning = formatGatewayServiceInstallationDrift(drift, serviceEnv, {
+        stopped: true,
+        port: before.servicePort,
+      });
+      return { restore: false, warning };
+    }
+  }
+  if (
+    !params.leaveStopped &&
+    before.offline === true &&
+    verdict?.kind === "owned" &&
+    !verdict.requiresInstallRootRefresh
+  ) {
+    return { restore: true };
+  }
+  // Public update repair would otherwise report success over a Gateway that stays down.
+  if (
+    params.reportStopped &&
+    verdict?.kind === "owned" &&
+    before.runtimeInspected &&
+    !before.running
+  ) {
+    return {
+      restore: false,
+      warning: `Gateway service is stopped and remains stopped; update repair does not start a Gateway that a failed update or the operator stopped. Start it with \`${formatCliCommand("openclaw gateway start", serviceEnv)}\`, then check \`${formatCliCommand("openclaw gateway status --deep", serviceEnv)}\`.`,
+    };
+  }
+  return { restore: false };
+}
 
 export async function restoreDoctorGatewayService(params: {
   before: PreManagedServiceStop;
@@ -66,7 +122,26 @@ export async function restoreDoctorGatewayService(params: {
       assertInspectionCurrent();
       assertRestoreAdmission?.();
     };
-    assertMaintenanceCurrent();
+    const assertAutoStartCurrent = async () => {
+      assertMaintenanceCurrent();
+      if (before.serviceAutoStartEnabled === undefined) {
+        return;
+      }
+      const readEnabled = service.isEnabled;
+      if (!readEnabled) {
+        throw new Error(
+          "Gateway native autostart policy could not be verified after Doctor repair.",
+        );
+      }
+      const enabled = await settle(() => readEnabled({ env: serviceEnv }));
+      assertMaintenanceCurrent();
+      if (enabled !== before.serviceAutoStartEnabled) {
+        throw new Error(
+          "Gateway native autostart policy changed during Doctor repair; automatic restoration was refused. Inspect gateway status --deep before starting it.",
+        );
+      }
+    };
+    await assertAutoStartCurrent();
     const readCurrent = () =>
       settle(() =>
         readGatewayServiceState(service, {
@@ -87,6 +162,7 @@ export async function restoreDoctorGatewayService(params: {
       );
     let current: Awaited<ReturnType<typeof readGatewayServiceState>> | undefined;
     let inspectionFailure: unknown;
+    let expectedDefinitionFingerprint: string | undefined;
     const readInspection = async () => {
       current = undefined;
       inspectionFailure = undefined;
@@ -168,6 +244,7 @@ export async function restoreDoctorGatewayService(params: {
             root,
             preManagedServiceStop: before,
             allowIncompleteInspection,
+            expectedDefinitionFingerprint,
           }),
         );
       } catch (error) {
@@ -206,43 +283,72 @@ export async function restoreDoctorGatewayService(params: {
           params.assertInstallationAdmission?.();
         };
         assertInstallationCurrent();
+        await assertAutoStartCurrent();
         const [{ maybeRepairGatewayServiceConfig }, { createDoctorPrompter }] = await Promise.all([
           import("./doctor-gateway-services.js"),
           import("./doctor-prompter.js"),
         ]);
         assertInstallationCurrent();
-        cfg = await settle(() =>
-          maybeRepairGatewayServiceConfig(
-            cfg,
-            "local",
-            params.runtime,
-            createDoctorPrompter({
-              runtime: params.runtime,
-              options: params.options,
-              signal: params.signal,
-            }),
-            {
-              async writeConfig(nextConfig) {
-                assertInstallationCurrent();
-                // Failed maintenance entry has no inspected Doctor writer context.
-                // Do not fall back to an independent config replacement on recovery.
-                if (!writeConfig) {
-                  throw new Error(
-                    "Doctor config writer is unavailable during service restoration.",
-                  );
-                }
-                const committed = await writeConfig(nextConfig);
-                assertInstallationCurrent();
-                return committed;
-              },
-              serviceMaintenance: {
-                managerUid: before.serviceManagerUid,
-                assertCurrent: assertInstallationCurrent,
-                assertReadCurrent: assertInspectionCurrent,
-              },
-            },
-          ),
+        const originalDefinition = await fingerprintGatewayServiceDefinition(
+          current?.command ?? null,
         );
+        assertInstallationCurrent();
+        try {
+          cfg = await withGatewayServiceRebindCapture(originalDefinition, async () => {
+            try {
+              return await settle(() =>
+                maybeRepairGatewayServiceConfig(
+                  cfg,
+                  "local",
+                  params.runtime,
+                  createDoctorPrompter({
+                    runtime: params.runtime,
+                    options: params.options,
+                    signal: params.signal,
+                  }),
+                  {
+                    async writeConfig(nextConfig) {
+                      assertInstallationCurrent();
+                      // Failed maintenance entry has no inspected Doctor writer context.
+                      // Do not fall back to an independent config replacement on recovery.
+                      if (!writeConfig) {
+                        throw new Error(
+                          "Doctor config writer is unavailable during service restoration.",
+                        );
+                      }
+                      const committed = await writeConfig(nextConfig);
+                      assertInstallationCurrent();
+                      return committed;
+                    },
+                    serviceMaintenance: {
+                      managerUid: before.serviceManagerUid,
+                      assertCurrent: assertInstallationCurrent,
+                      assertReadCurrent: assertInspectionCurrent,
+                      beforeMutation: assertAutoStartCurrent,
+                    },
+                  },
+                ),
+              );
+            } finally {
+              // The native writer records its settled result, including compensation.
+              expectedDefinitionFingerprint =
+                currentGatewayServiceRebindReceipt()?.after ?? originalDefinition;
+            }
+          });
+        } catch (error) {
+          if (
+            originalInstallation.requiresInstallRootRefresh ||
+            hasCommandProcessCleanupError(error) ||
+            findServiceOwnershipRefusal(error) ||
+            !(error instanceof GatewayServiceAuthorityError) ||
+            (error.outcome !== "unchanged" && error.outcome !== "restored")
+          ) {
+            throw error;
+          }
+          const warning = `Warning: Gateway service repair failed; its previous definition was ${error.outcome}. Restoring the previously running service after verifying its definition and ownership. Reason: ${formatErrorMessage(error)}`;
+          warnings.push(warning);
+          params.runtime.log(warning);
+        }
         assertInstallationCurrent();
         const repairedState = before.stopped ? await readCurrent() : await readInspection();
         assertInstallationCurrent();
@@ -293,6 +399,8 @@ export async function restoreDoctorGatewayService(params: {
         env: current?.env ?? serviceEnv,
         stdout: params.options.json ? process.stderr : process.stdout,
         preserveDefinition: true,
+        preserveAutoStart: true,
+        beforeMutation: assertAutoStartCurrent,
         assertCurrent: assertMaintenanceCurrent,
         ...(before.serviceSystemdIdentity
           ? { systemdIdentity: before.serviceSystemdIdentity }
@@ -303,4 +411,45 @@ export async function restoreDoctorGatewayService(params: {
     return current ?? { env: serviceEnv, command: null };
   });
   return { service, state: restoredState, cfg };
+}
+
+export async function recordDoctorGatewayRestorationRefusal({
+  serviceEnv,
+  error,
+  before,
+  warnings,
+  failureFacts,
+  runtime,
+}: {
+  serviceEnv: NodeJS.ProcessEnv;
+  error: GatewayServiceAuthorityError;
+  before: PreManagedServiceStop;
+  warnings: string[];
+  failureFacts: UpdateFailureFact[];
+  runtime: RuntimeEnv;
+}) {
+  const { formatDaemonServiceInstallCommand } = await import("../cli/daemon-cli/shared.js");
+  const outcome = error.outcome ?? "recovery-pending";
+  const recovery =
+    outcome === "unchanged"
+      ? "The previous service definition was left unchanged."
+      : outcome === "restored"
+        ? "The previous service definition was restored from its captured backup."
+        : "Restoration was not verified; inspect the current service before replacing it.";
+  const message = `Doctor could not finish Gateway installation or activation under its maintenance authority (${outcome}). ${recovery} Run \`${formatCliCommand("openclaw gateway status --deep", serviceEnv)}\`; after the active maintenance or update finishes, run \`${formatDaemonServiceInstallCommand(serviceEnv, before.servicePort)}\` from the active CLI. Reason: ${error.message}`;
+  failureFacts.push(
+    createUpdateFailureFact(
+      {
+        check: "gateway-restoration",
+        code: `${error.code}-${outcome}`,
+        message,
+      },
+      serviceEnv,
+    ),
+  );
+  warnings.push(message);
+  runtime.error(message);
+  if (outcome === "recovery-pending") {
+    throw new UpdateDoctorError(message, failureFacts, { cause: error });
+  }
 }

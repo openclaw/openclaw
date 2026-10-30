@@ -2,30 +2,56 @@ import { expect, it, vi } from "vitest";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
+  createDynamicSessionSourceAssertion,
+  prepareSessionSourceEffect,
   prepareSessionSourceAuthority,
   runWithSessionSourceScope,
+  type SessionSourceAssertion,
+  type PreparedSessionSourceAuthority,
 } from "./session-source-authority.js";
+
+const sourceWith = (methods: Partial<SessionSourceAssertion>) => Object.assign(() => {}, methods);
+
+it("prepares empty predicates without allocating intermediate mapped arrays", async () => {
+  const live = revocable("source revoked after preparation");
+  const checks: PreparedSessionSourceAuthority["checks"] = [];
+  const map = vi.spyOn(checks, "map");
+  const assertion = composeSessionSourceAssertion([
+    sourceWith({ prepareSessionSource: async () => ({ checks, ...live }) }),
+  ]);
+  const prepared = await assertion.prepareSessionSource();
+  expect(prepared.checks).toEqual([]);
+  expect(map).not.toHaveBeenCalled();
+  prepared.assertCurrent();
+  prepared.assertPreparedCurrent?.();
+  live.revoke();
+  expect(prepared.assertCurrent).toThrow("source revoked after preparation");
+  expect(prepared.assertPreparedCurrent).toThrow("source revoked after preparation");
+});
+
+function revocable(message: string) {
+  const controller = new AbortController();
+  return {
+    revoke: () => controller.abort(new Error(message)),
+    assertCurrent: vi.fn(() => controller.signal.throwIfAborted()),
+  };
+}
 
 it.each(["plain", "scoped", "mixed"] as const)(
   "keeps %s source guards at their consumer boundary",
   async (kind) => {
-    let guardCurrent = true;
-    const guard = vi.fn(() => {
-      if (!guardCurrent) {
-        throw new Error("consumer guard revoked");
-      }
-    });
+    const { assertCurrent: guard, revoke } = revocable("consumer guard revoked");
     const release = vi.fn();
     const open = vi.fn(async () => ({ checks: [], assertCurrent() {}, release }));
     const assertion = composeSessionSourceAssertion([
       kind === "scoped" ? undefined : guard,
-      kind === "plain" ? undefined : Object.assign(() => {}, { prepareSessionSourceScope: open }),
+      kind === "plain" ? undefined : sourceWith({ prepareSessionSourceScope: open }),
     ]);
     await runWithSessionSourceScope(assertion, async () => {
       await Promise.resolve();
       assertion();
       if (kind !== "scoped") {
-        guardCurrent = false;
+        revoke();
         expect(assertion).toThrow("consumer guard revoked");
       }
     });
@@ -38,28 +64,18 @@ it.each(["plain", "scoped", "mixed"] as const)(
 it.each([false, true])(
   "revalidates prepared facts and releases them without rerunning a plain guard (mixed=%s)",
   async (mixed) => {
-    let current = true;
+    const prepared = revocable("prepared source revoked");
     const guard = vi.fn();
     const release = vi.fn();
     const assertion = composeSessionSourceAssertion([
       mixed ? guard : undefined,
-      Object.assign(() => {}, {
-        prepareSessionSourceScope: async () => ({
-          checks: [],
-          assertCurrent() {
-            if (!current) {
-              throw new Error("prepared source revoked");
-            }
-          },
-          release,
-        }),
-      }),
+      sourceWith({ prepareSessionSourceScope: async () => ({ checks: [], ...prepared, release }) }),
     ]);
     await expect(
       runWithSessionSourceScope(assertion, async () => {
         assertion();
         await Promise.resolve();
-        current = false;
+        prepared.revoke();
       }),
     ).rejects.toThrow("prepared source revoked");
     expect(guard).toHaveBeenCalledTimes(mixed ? 1 : 0);
@@ -72,11 +88,7 @@ it("preserves a scoped acquisition failure without invoking its plain sibling gu
   const failure = new Error("source acquisition failed");
   const assertion = composeSessionSourceAssertion([
     guard,
-    Object.assign(() => {}, {
-      prepareSessionSourceScope: async (): Promise<never> => {
-        throw failure;
-      },
-    }),
+    sourceWith({ prepareSessionSourceScope: () => Promise.reject(failure) }),
   ]);
   await expect(runWithSessionSourceScope(assertion, async () => {})).rejects.toBe(failure);
   expect(guard).not.toHaveBeenCalled();
@@ -126,13 +138,68 @@ it("retains every composed source until accepted work releases its hold", () => 
 it("releases earlier source holds when a later acquisition fails", () => {
   const release = vi.fn();
   const assertion = composeSessionSourceAssertion([
-    Object.assign(() => {}, { retain: () => release }),
-    Object.assign(() => {}, {
+    sourceWith({ retain: () => release }),
+    sourceWith({
       retain: () => {
         throw new Error("source released");
       },
     }),
   ]);
   expect(() => assertion.retain!()).toThrow("source released");
+  expect(release).toHaveBeenCalledOnce();
+});
+
+it("binds prepared effect facts through indirect reads and keeps legacy guards live", async () => {
+  const raw = vi.fn(() => {
+    throw new Error("synchronous storage read");
+  });
+  const live = revocable("prepared source retired");
+  const release = vi.fn();
+  const source = composeSessionSourceAssertion(
+    [sourceWith({ prepareSessionSourceEffect: async () => ({ ...live, release }) })],
+    () => raw(),
+  );
+  // The owned producer supplies the memory-only assertion for its effect scope.
+  source.prepareSessionSourceEffect = async () => ({ ...live, release });
+  const legacy = revocable("legacy callback retired");
+  const composed = composeSessionSourceAssertion(
+    [source, legacy.assertCurrent],
+    (assertSources) => {
+      assertSources();
+      source();
+    },
+  );
+  const effect = await prepareSessionSourceEffect(composed);
+  effect.assertCurrent();
+  expect(raw).not.toHaveBeenCalled();
+  legacy.revoke();
+  expect(effect.assertCurrent).toThrow("legacy callback retired");
+  await effect.release?.();
+  expect(release).toHaveBeenCalledOnce();
+  expect(effect.assertCurrent).toThrow("released");
+  expect(source).toThrow("synchronous storage read");
+});
+
+it("refuses a selected source replaced during effect preparation", async () => {
+  const ready = Promise.withResolvers<void>();
+  const release = vi.fn();
+  let selected = sourceWith({
+    prepareSessionSourceEffect: async () => {
+      await ready.promise;
+      return { assertCurrent() {}, release };
+    },
+  });
+  const source = createDynamicSessionSourceAssertion(
+    () => selected,
+    () => {
+      throw new Error("source replaced");
+    },
+  );
+  const pending = prepareSessionSourceEffect(source);
+  selected = sourceWith({});
+  ready.resolve();
+  const effect = await pending;
+  expect(effect.assertCurrent).toThrow("source replaced");
+  await effect.release?.();
   expect(release).toHaveBeenCalledOnce();
 });

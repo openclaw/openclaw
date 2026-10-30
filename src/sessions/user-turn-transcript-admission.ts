@@ -1,5 +1,7 @@
+import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { SessionPendingInputReceipt } from "../config/sessions/session-pending-input-receipt.types.js";
 import type { SessionReactionWrite } from "../config/sessions/session-reaction-store.types.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptAdmissionReceipt,
@@ -23,11 +25,15 @@ export type UserTurnPromptReactionSource = Readonly<{
 }>;
 
 type AdmissionOwner = {
+  requesterOrigin: () => RequesterOrigin | undefined;
   promptReactionSource?: UserTurnPromptReactionSource;
   pendingInput: () => SessionPendingInputReceipt | undefined;
   withdrawnInputId: () => string | undefined;
   receipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
   message: () => PersistedUserTurnMessage | undefined;
+  submittedText?: string;
+  captureSubmittedText: (message: PersistedUserTurnMessage | undefined) => void;
+  invalidateSubmittedText: () => void;
   blocked: () => boolean;
   sentToProvider: () => boolean;
   refresh: (
@@ -41,15 +47,39 @@ const admissionOwners = new WeakMap<UserTurnTranscriptRecorder, AdmissionOwner>(
 
 export function registerUserTurnTranscriptAdmissionOwner(
   recorder: UserTurnTranscriptRecorder,
-  owner: AdmissionOwner,
-): void {
-  admissionOwners.set(recorder, owner);
+  owner: Omit<AdmissionOwner, "captureSubmittedText" | "invalidateSubmittedText">,
+): AdmissionOwner {
+  const registered = Object.assign(owner, {
+    captureSubmittedText(message: PersistedUserTurnMessage | undefined) {
+      if (!message || owner.pendingInput() || owner.receipt()) {
+        return;
+      }
+      // Hooks can mutate content in place. Capture before adoption; late media
+      // cannot supply or change the original input's comparison text.
+      owner.submittedText ??=
+        extractTextFromChatContent(message.content, {
+          joinWith: "\n",
+          normalizeText: (value) => value,
+        }) ?? "";
+    },
+    invalidateSubmittedText() {
+      delete owner.submittedText;
+    },
+  });
+  admissionOwners.set(recorder, registered);
+  return registered;
 }
 
 export function getUserTurnTranscriptAdmissionOwner(
   recorder: UserTurnTranscriptRecorder,
 ): AdmissionOwner | undefined {
   return admissionOwners.get(recorder);
+}
+
+/** Preserve prepared producer facts; accepted input takes precedence after durable custody. */
+export function readUserTurnRequesterOrigin(recorder: UserTurnTranscriptRecorder | undefined) {
+  const owner = recorder && admissionOwners.get(recorder);
+  return owner?.requesterOrigin();
 }
 
 export function bindUserTurnPromptReactionSource(

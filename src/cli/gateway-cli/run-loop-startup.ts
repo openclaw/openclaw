@@ -1,7 +1,9 @@
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { markGatewayRestartTrace } from "../../gateway/restart-trace.js";
 import type { GatewayServerOptions, GatewayStartupOperation } from "../../gateway/server-public.js";
+import type { GatewayInstallationReplacement } from "../../gateway/stale-install.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import type { GatewayOwnerSupervisor } from "../../infra/gateway-owner-lease.types.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
@@ -26,11 +28,7 @@ export async function prepareGatewayRunLoop(
     "cli.bootstrap.lifecycle-runtime",
     () => lifecycleRuntimeLoader.load(),
   );
-  const supervisor = lifecycleRuntime.detectGatewayRespawnSupervisorIdentity(
-    process.env,
-    process.platform,
-    { includeLinuxOpenClawGatewayServiceMarker: true },
-  );
+  const supervisor = lifecycleRuntime.detectGatewayRespawnSupervisorIdentity();
   const supervisorMode = supervisor?.kind ?? null;
   const restartDecision = lifecycleRuntime.resolveGatewayRestartDecision();
   // Resolve the native deadline before acquiring custody that needs final settlement.
@@ -54,6 +52,7 @@ export type GatewayRunLoopStartOptions = Pick<
   | "startupStartedAt"
   | "hostLifecycle"
   | "startupOperation"
+  | "exitAfterStartupFailure"
   | "gatewayStateOwner"
 > & { requestHotReloadRecovery?: GatewayRestartEmitter };
 
@@ -75,6 +74,14 @@ export function createGatewayRestartRecovery(
     | { controller: AbortController; settled: ReturnType<GatewayRestartStartupFailureHandler> }
     | undefined;
   return {
+    reportInstallationReplacement(
+      replacement: GatewayInstallationReplacement,
+    ): GatewayBootLifecycleCompletion {
+      logger.error(
+        `${replacement.message} Cannot continue in this process. Run: ${formatCliCommand(supervisor ? "openclaw gateway restart" : "openclaw gateway run")}`,
+      );
+      return { outcome: "planned_restart", reason: "gateway.installation_replaced" };
+    },
     reportStartupFailure(error: unknown, retryFailed: boolean) {
       const stack = error instanceof Error && error.stack ? `\n${error.stack}` : "";
       logger.error(
@@ -141,15 +148,7 @@ export function createGatewayRestartRecovery(
   };
 }
 
-export function createGatewayStartupOperations(): {
-  run: GatewayStartupOperation;
-  close(): void;
-  cancelledWith(error: unknown): boolean;
-  failedWith(error: unknown): boolean;
-  getStopCompletion(): Promise<void> | undefined;
-  retainStopCompletion(completion: Promise<void>): void;
-  drain(): Promise<void>;
-} {
+export function createGatewayStartupOperations() {
   const scope = new AsyncWorkScope();
   let stopCompletion: Promise<void> | undefined;
   let failure: { error: unknown } | undefined;
@@ -176,8 +175,9 @@ export function createGatewayStartupOperations(): {
   };
   return {
     run,
+    signal: scope.signal,
     getStopCompletion: () => stopCompletion,
-    retainStopCompletion: (completion) => {
+    retainStopCompletion: (completion: Promise<void>) => {
       stopCompletion = completion;
     },
     close: () => scope.beginClose(),

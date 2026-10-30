@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 
@@ -43,6 +44,7 @@ export function writeUnreadableNewerStateSchema(databasePath: string) {
 export function snapshotPreflightSourceManifest(stateDir: string, allowAgentReadMarks?: string) {
   // Opening/closing the main file in the writer's process releases its POSIX
   // locks. Observe in a child so SQLite still sees a live owner during inspection.
+  const entries = listDirectoryTreeStrictSync(stateDir).map((entry) => entry.relativePath);
   const result = spawnSync(
     process.execPath,
     [
@@ -52,8 +54,8 @@ export function snapshotPreflightSourceManifest(stateDir: string, allowAgentRead
       import fs from "node:fs";
       import path from "node:path";
       import { createHash } from "node:crypto";
-      const [stateDir, allowAgentReadMarks] = process.argv.slice(1);
-      const manifest = fs.readdirSync(stateDir, { recursive: true, encoding: "utf8" })
+      const [stateDir, allowAgentReadMarks, entries] = process.argv.slice(1);
+      const manifest = JSON.parse(entries)
         .filter(entry => !entry.startsWith("tmp" + path.sep))
         .filter(entry => fs.statSync(path.join(stateDir, entry)).isFile())
         .toSorted().map(entry => {
@@ -66,6 +68,7 @@ export function snapshotPreflightSourceManifest(stateDir: string, allowAgentRead
       `,
       stateDir,
       allowAgentReadMarks ?? "",
+      JSON.stringify(entries),
     ],
     { encoding: "utf8" },
   );

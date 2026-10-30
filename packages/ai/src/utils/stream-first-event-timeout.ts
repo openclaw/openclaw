@@ -1,13 +1,11 @@
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
-type StreamStage = "responses" | "completions";
-
 export type FirstStreamEventTimeoutContext = {
   provider?: string;
   api?: string;
   model?: string;
   timeoutMs: number;
-  stage?: StreamStage;
+  stage?: "responses" | "completions";
   hint?: string;
   abort?: (reason: Error) => void;
   onTimeout?: (reason: Error) => void;
@@ -46,9 +44,12 @@ export function createFirstStreamEventTimeoutError(context: FirstStreamEventTime
     formatOptionalField("api", context.api),
     formatOptionalField("model", context.model),
   ].join("");
-  return new Error(
-    `${stage}HTTP stream opened but did not deliver a first SSE event within ${context.timeoutMs}ms after streaming headers (first-event timeout).${details}` +
-      (context.hint ? ` ${context.hint}` : ""),
+  return Object.assign(
+    new Error(
+      `${stage}HTTP stream opened but did not deliver a first SSE event within ${context.timeoutMs}ms after streaming headers (first-event timeout).${details}` +
+        (context.hint ? ` ${context.hint}` : ""),
+    ),
+    { name: "FirstStreamEventTimeoutError" },
   );
 }
 
@@ -90,21 +91,23 @@ export function withFirstStreamEventTimeout<T>(
       let timer: ReturnType<typeof setTimeout> | undefined;
       let completed = false;
       try {
-        const first = await new Promise<IteratorResult<T>>((resolve, reject) => {
-          timer = setTimeout(() => {
-            const timeoutError = createFirstStreamEventTimeoutError(timeoutContext);
-            timeoutContext.onTimeout?.(timeoutError);
-            reject(timeoutError);
-            timeoutContext.abort?.(timeoutError);
-          }, timeoutMs);
-          timer.unref?.();
-          iterator.next().then(resolve, reject);
-        }).finally(() => {
+        let next: IteratorResult<T>;
+        try {
+          next = await new Promise<IteratorResult<T>>((resolve, reject) => {
+            timer = setTimeout(() => {
+              const timeoutError = createFirstStreamEventTimeoutError(timeoutContext);
+              timeoutContext.onTimeout?.(timeoutError);
+              reject(timeoutError);
+              timeoutContext.abort?.(timeoutError);
+            }, timeoutMs);
+            timer.unref?.();
+            iterator.next().then(resolve, reject);
+          });
+        } finally {
           if (timer) {
             clearTimeout(timer);
           }
-        });
-        let next = first;
+        }
         while (!next.done) {
           yield next.value;
           next = await iterator.next();

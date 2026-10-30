@@ -217,6 +217,8 @@ export async function watchExistingReply(page: Page, prefix: string) {
 }
 
 type ScrollSample = {
+  keys: string[];
+  anchorText: string;
   top: number;
   anchor: number | null;
   distance: number;
@@ -252,6 +254,10 @@ export async function startScrollProbe(page: Page) {
       const pane = element.closest<HTMLElement & { state?: ChatPageHost }>("openclaw-chat-pane");
       const state = pane?.state;
       return {
+        keys: [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")].map(
+          (row) => row.dataset.virtualRowKey!,
+        ),
+        anchorText,
         policy: state ? { locked: state.chatFollowLocked } : undefined,
         top: element.scrollTop,
         distance: element.scrollHeight - element.clientHeight - element.scrollTop,

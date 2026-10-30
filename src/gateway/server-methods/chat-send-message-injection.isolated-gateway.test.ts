@@ -1,30 +1,48 @@
+/**
+ * Loopback Gateway proof of ordinary steering order and durable input admission.
+ * Synthetic active sources exercise the real chat.send handler and wire delivery.
+ */
+
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RawData, WebSocket } from "ws";
+import type { WebSocket } from "ws";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { installQueueRuntimeErrorSilencer } from "../../auto-reply/reply/queue.test-helpers.js";
-import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
-import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.registry.js";
-import { forceClearReplyOperation } from "../../auto-reply/reply/reply-run-registry.state.js";
+import { listSessionPendingInputs } from "../../config/sessions/session-accessor.js";
 import {
   areDiagnosticsEnabledForProcess,
   onTrustedInternalDiagnosticEvent,
   setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import {
+  getGatewayContextResolver,
+  withPluginRuntimeGatewayContextResolver,
+} from "../../plugins/runtime/gateway-request-scope.js";
+import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.contracts.js";
+import {
+  createReplyOperation,
+  bindSessionControllerSourceTurnId,
+} from "../../sessions/session-controller.js";
+import {
+  captureSessionControllerSettlement,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
+import { retireSessionControllerInput } from "../../sessions/session-controller.mailbox-source.js";
+import { reserveSessionControllerSource } from "../../sessions/session-controller.mailbox.js";
+import { getGatewayLifecycleRuntime } from "../server-lifecycle-runtime-context.js";
 import {
   dispatchInboundMessageMock,
+  gatewayReplyMock,
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
+  onceMessage,
   rpcReq,
   testState,
   writeSessionStore,
@@ -51,11 +69,13 @@ installConnectedControlUiServerSuite((started) => {
   ws = started.ws;
 });
 
-function clearLiveOperation(cause: string) {
+function clearLiveOperation() {
   if (liveOperation) {
     try {
-      forceClearReplyOperation(liveOperation, cause);
-    } catch {}
+      liveOperation.complete();
+    } catch {
+      // Best-effort cleanup of an operation left behind by a failed test.
+    }
     liveOperation = undefined;
   }
 }
@@ -73,25 +93,19 @@ beforeEach(() => {
 
 afterEach(async () => {
   const sessionKey = liveOperation?.key;
-  try {
-    if (sessionKey && testState.sessionStorePath) {
-      // Dispatch diagnostics precede cleanup; settle its writes before reseeding this store.
-      await getSessionWorkAdmissionRelease({
-        scope: testState.sessionStorePath,
-        identities: [sessionKey],
-      });
-    }
-  } finally {
-    clearLiveOperation("test-cleanup");
-  }
+  // Capture producer custody before completing the synthetic active turn.
+  const settled =
+    sessionKey && testState.sessionStorePath
+      ? captureSessionControllerSettlement({
+          scope: testState.sessionStorePath,
+          identities: [sessionKey],
+        })
+      : undefined;
+  clearLiveOperation();
+  await settled;
 });
 
-async function seedActiveTurn(params: {
-  sessionKey?: string;
-  terminalRunId: string;
-  sourceTurnId?: string;
-  deliverySourceRunId?: string;
-}) {
+async function seedActiveTurn(params: { sessionKey?: string; sourceTurnId?: string }) {
   const { sessionKey = SESSION_KEY } = params;
   const sessionId = "session-steer";
   // One suite Gateway keeps one physical store; retained populated stores collide in discovery.
@@ -102,12 +116,28 @@ async function seedActiveTurn(params: {
       [sessionKey]: {
         sessionId,
         updatedAt: Date.now(),
-        restartRecoveryTerminalRunIds: [params.terminalRunId],
-        restartRecoveryDeliverySourceRunId: params.deliverySourceRunId,
       },
     },
   });
-  const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+  const runtime = getGatewayLifecycleRuntime();
+  const resolveGatewayContext = runtime && getGatewayContextResolver(runtime);
+  if (!resolveGatewayContext) {
+    throw new Error("Expected the suite Gateway runtime owner");
+  }
+  const operation = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
+    createReplyOperation({
+      sessionKey,
+      sessionId,
+      agentId: "main",
+      target: captureSessionTarget({
+        storeScope: testState.sessionStorePath!,
+        sessionKey,
+        incarnation: sessionId,
+        agentId: "main",
+      }),
+      resetTriggered: false,
+    }),
+  );
   liveOperation = operation;
   const fingerprint = "isolated-steer-authority";
   operation.bindToolAuthoritySnapshot({
@@ -124,19 +154,20 @@ async function seedActiveTurn(params: {
   operation.attachBackend({
     kind: "embedded",
     runId: "live-run-steer",
+    supportsTranscriptCommitWait: true,
     toolAuthorityFingerprint: fingerprint,
     cancel: () => {},
     isStreaming: () => false,
     messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
   });
   if (params.sourceTurnId) {
-    replyRunRegistry.bindSourceTurnId(operation, params.sourceTurnId);
+    bindSessionControllerSourceTurnId(operation, params.sourceTurnId);
   }
   return queueMessage;
 }
 
 afterAll(async () => {
-  clearLiveOperation("test-cleanup-final");
+  clearLiveOperation();
   if (sessionStoreDir) {
     // Defer removal until Gateway teardown; Windows may still hold SQLite handles.
     await fs.rm(sessionStoreDir, { recursive: true, force: true }).catch(() => undefined);
@@ -145,161 +176,197 @@ afterAll(async () => {
   testState.sessionStorePath = undefined;
 });
 
-describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => {
-  it.for([9_400, 15_800, 120_001])(
-    "classifies an accepted steer waiting %sms as steering over the real transport",
-    async (durationMs, { signal }) => {
-      const queueMessage = await seedActiveTurn({
-        terminalRunId: "source-old",
-        sourceTurnId: SOURCE_TURN_ID,
-      });
-      const commit = createDeferred();
-      const reported = createDeferred<DiagnosticEventPayload>();
-      const previousDiagnostics = areDiagnosticsEnabledForProcess();
-      setDiagnosticsEnabledForProcess(true);
-      const stop = onTrustedInternalDiagnosticEvent(
-        (event) => {
-          if (event.type === "diagnostic.phase.completed" && event.name === "chat.send.dispatch") {
-            reported.resolve(event);
-          }
-        },
-        { include: ["diagnostic.phase.completed"] },
-      );
-      let clock = 0;
-      const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
-      queueMessage.mockImplementation(async (_text, options, assertCurrent) => {
-        assertCurrent();
-        options?.onQueueAccepted?.(true);
-        await commit.promise;
-        assertCurrent();
-      });
-      try {
+describe("ordinary steering isolated-gateway proof", () => {
+  it("acknowledges ordered durable steers and classifies their delayed completion as steering", async ({
+    signal,
+  }) => {
+    const queueMessage = await seedActiveTurn({
+      sourceTurnId: SOURCE_TURN_ID,
+    });
+    const older = reserveSessionControllerSource(SESSION_KEY, {
+      policy: { mode: "followup" },
+      target: captureSessionTarget({
+        storeScope: testState.sessionStorePath!,
+        sessionKey: SESSION_KEY,
+        incarnation: "session-steer",
+        agentId: "main",
+      }),
+    });
+    expect(older.mailbox.owner.active).toBe(liveOperation);
+    const commit = createDeferred();
+    const injected = createDeferred();
+    type PhaseEvent = Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>;
+    const reported = createDeferred<PhaseEvent>();
+    const phases: PhaseEvent[] = [];
+    const previousDiagnostics = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
+    const stop = onTrustedInternalDiagnosticEvent(
+      (event) => {
+        if (event.type !== "diagnostic.phase.completed") {
+          return;
+        }
+        phases.push(event);
+        if (event.name === "chat.send.runAdmission" && event.details?.stage === "steer") {
+          reported.resolve(event);
+        }
+      },
+      { include: ["diagnostic.phase.completed"] },
+    );
+    let clock = 0;
+    const realNow = performance.now.bind(performance);
+    const now = vi.spyOn(performance, "now").mockImplementation(() => realNow() + clock);
+    const runIds = ["ordered-steer-first", "ordered-steer-second"];
+    const messages = ["First synthetic steering input.", "Second synthetic steering input."];
+    queueMessage.mockImplementation(async (_text, options, assertCurrent) => {
+      assertCurrent();
+      options?.onQueueAccepted?.(true);
+      if (queueMessage.mock.calls.length === 2) {
+        injected.resolve();
+      }
+      await commit.promise;
+      assertCurrent();
+      await options?.userTurnTranscriptRecorder?.persistApproved();
+    });
+    try {
+      for (const [index, runId] of runIds.entries()) {
+        // `older` is retired only after this loop, so an acknowledgement that waited for
+        // injection would never arrive; the default RPC timeout still fails that case.
+        // A tighter bound is unsafe: the first call pays cold handler setup (>1s on CI).
         const response = await rpcReq(ws, "chat.send", {
           sessionKey: SESSION_KEY,
-          message: "Synthetic steer awaiting the active run boundary.",
-          idempotencyKey: `slow-steer-${durationMs}`,
+          message: messages[index],
+          idempotencyKey: runId,
           queueMode: "steer",
         });
-        expect(response, JSON.stringify(response)).toMatchObject({
-          ok: true,
-          payload: { status: "started" },
-        });
-        expect(queueMessage).toHaveBeenCalledOnce();
-        expect(queueMessage.mock.calls[0]?.[0]).toContain(
-          "Synthetic steer awaiting the active run boundary.",
-        );
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-        clock = durationMs;
-        commit.resolve();
-        expect(await withinTest(reported.promise, signal)).toMatchObject({
-          name: "chat.send.dispatch",
-          durationMs,
-          details: { stage: "steer" },
-        });
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      } finally {
-        commit.resolve();
-        now.mockRestore();
-        stop();
-        setDiagnosticsEnabledForProcess(previousDiagnostics);
+        expect(response).toMatchObject({ ok: true, payload: { status: "started", runId } });
       }
-    },
-  );
-
-  it.for([
-    {
-      name: "a tombstone for the active source",
-      terminalRunId: SOURCE_TURN_ID,
-      sourceTurnId: SOURCE_TURN_ID,
-      deliverySourceRunId: SOURCE_TURN_ID,
-    },
-    {
-      name: "a retained tombstone with unknown active source identity",
-      sessionKey: "agent:main:unknown-source",
-      terminalRunId: "source-old",
-    },
-  ])(
-    "$name rejects steering and delivers exactly one follow-up reply over the real transport",
-    { timeout: 30_000 },
-    async (scenario, { signal }) => {
-      const sessionKey = scenario.sessionKey ?? SESSION_KEY;
-      const message = "isolated-gateway inbound";
-      const replyText = "follow-up reply from the production dispatcher";
-      const queueMessage = await seedActiveTurn(scenario);
-      const resolved = createDeferred();
-
-      // Exercise the production dispatcher; only its reply source is controlled.
-      dispatchInboundMessageMock.mockReset();
-      const resolveReply = vi.fn<Parameters<typeof mockGetReplyFromConfigOnce>[0]>(async () => {
-        resolved.resolve();
-        return { text: replyText };
+      expect(queueMessage).not.toHaveBeenCalled();
+      expect(
+        await listSessionPendingInputs({
+          agentId: "main",
+          sessionKey: SESSION_KEY,
+          sessionId: "session-steer",
+          storePath: testState.sessionStorePath!,
+        }),
+      ).toMatchObject({
+        items: runIds.map((runId) => ({ runId, state: "queued" })),
+        total: 2,
       });
-      mockGetReplyFromConfigOnce(resolveReply);
-
-      const runId = `idem-iso-gw-${randomUUID()}`;
-      const chatFrames: ChatWirePayload[] = [];
-      const finalReceived = createDeferred();
-      const onChatFrame = (raw: RawData) => {
-        try {
-          const frame = JSON.parse(rawDataToString(raw)) as {
-            type?: string;
-            event?: string;
-            payload?: ChatWirePayload;
-          };
-          if (frame.type === "event" && frame.event === "chat" && frame.payload?.runId === runId) {
-            chatFrames.push(frame.payload);
-            if (frame.payload.state === "final") {
-              finalReceived.resolve();
-            }
-          }
-        } catch {
-          // Unrelated frames on the shared test socket.
-        }
-      };
-      ws.on("message", onChatFrame);
-      try {
-        const res = await rpcReq(
-          ws,
-          "chat.send",
-          {
-            sessionKey,
-            message,
-            idempotencyKey: runId,
-            queueMode: "steer",
-          },
-          20_000,
-        );
-
-        expect(res, JSON.stringify(res)).toMatchObject({
-          ok: true,
-          payload: { status: "started", runId },
-        });
-        expect(queueMessage).not.toHaveBeenCalled();
-        await withinTest(resolved.promise, signal);
-        expect(resolveReply).toHaveBeenCalledOnce();
-        expect(resolveReply.mock.calls[0]?.slice(0, 2)).toEqual([
-          expect.objectContaining({ Body: message }),
-          expect.objectContaining({ runId, messageInjectionDisposition: "rejected" }),
-        ]);
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-
-        await withinTest(finalReceived.promise, signal);
-        await getSessionWorkAdmissionRelease({
-          scope: testState.sessionStorePath!,
-          identities: [sessionKey, "session-steer"],
-        });
-        // The producer is settled; a pong drains earlier frames on this same connection.
-        const pong = once(ws, "pong", { signal });
-        ws.ping();
-        await withinTest(pong, signal);
-        const finals = chatFrames.filter((frame) => frame.state === "final");
-        expect(finals).toHaveLength(1);
-        expect(finals[0]).toMatchObject({
-          message: { content: [{ text: expect.stringContaining(replyText) }] },
-        });
-      } finally {
-        ws.off("message", onChatFrame);
-      }
-    },
-  );
+      retireSessionControllerInput(older);
+      await withinTest(injected.promise, signal);
+      expect(queueMessage.mock.calls.map(([text]) => text)).toEqual(messages);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      clock = 120_001;
+      commit.resolve();
+      const report = await withinTest(reported.promise, signal);
+      expect(report).toMatchObject({
+        name: "chat.send.runAdmission",
+        details: { stage: "steer" },
+      });
+      expect(report.durationMs).toBeGreaterThanOrEqual(clock);
+      await waitForDiagnosticEventsDrained();
+      const settlement = phases.find(
+        (event) => event.name === "chat.send.detail.run_admission.steer_settlement",
+      );
+      expect(settlement).toMatchObject({ details: { stage: "steer" } });
+      expect(settlement?.durationMs).toBeGreaterThanOrEqual(clock);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      retireSessionControllerInput(older);
+      commit.resolve();
+      now.mockRestore();
+      stop();
+      setDiagnosticsEnabledForProcess(previousDiagnostics);
+    }
+  });
 });
+
+it(
+  "keeps public chat.send runnable when sessions.patch marks the conversation read",
+  { timeout: 30_000 },
+  async ({ signal }) => {
+    const sessionKey = "agent:main:read-ack-admission";
+    const sessionId = "read-ack-session";
+    sessionStoreDir ??= await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-iso-gw-"));
+    testState.sessionStorePath = path.join(sessionStoreDir, "sessions.json");
+    await writeSessionStore({ entries: { [sessionKey]: { sessionId, updatedAt: Date.now() } } });
+    dispatchInboundMessageMock.mockReset();
+    gatewayReplyMock.mockClear();
+    const replyText = "Accepted prompt completed after its read acknowledgement";
+    mockGetReplyFromConfigOnce(async () => ({ text: replyText }));
+
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const markerQueued = createDeferred();
+    const entries = await import("../../config/sessions/session-accessor.sqlite-entry.js");
+    const read = entries.loadSessionEntryForAdmission;
+    const readSpy = vi
+      .spyOn(entries, "loadSessionEntryForAdmission")
+      .mockImplementationOnce(async (...args) => {
+        const result = await read(...args);
+        entered.resolve();
+        await resume.promise;
+        return result;
+      });
+    const lifecycle = await import("../../sessions/session-controller.lifecycle.js");
+    const mutate = lifecycle.runSessionMutation;
+    const mutationSpy = vi.spyOn(lifecycle, "runSessionMutation").mockImplementation((params) => {
+      const result = mutate(params);
+      if (params.kind === "read-marker") {
+        markerQueued.resolve();
+      }
+      return result;
+    });
+    const runId = randomUUID();
+    const final = onceMessage<{ type: string; event?: string; payload?: ChatWirePayload }>(
+      ws,
+      (frame) =>
+        frame.type === "event" &&
+        frame.event === "chat" &&
+        frame.payload?.runId === runId &&
+        frame.payload.state === "final",
+      25_000,
+    );
+    let patch: ReturnType<typeof rpcReq> | undefined;
+    try {
+      const accepted = await rpcReq(ws, "chat.send", {
+        sessionKey,
+        message: "Synthetic read-acknowledgement overlap",
+        idempotencyKey: runId,
+      });
+      expect(accepted).toMatchObject({ ok: true, payload: { status: "started", runId } });
+      await withinTest(entered.promise, signal);
+      patch = rpcReq(ws, "sessions.patch", { key: sessionKey, unread: false });
+      await withinTest(markerQueued.promise, signal);
+      resume.resolve();
+      expect(await withinTest(patch, signal)).toMatchObject({ ok: true });
+      expect((await withinTest(final, signal)).payload).toMatchObject({
+        message: { content: [{ text: expect.stringContaining(replyText) }] },
+      });
+      await captureSessionControllerSettlement({
+        scope: testState.sessionStorePath!,
+        identities: [sessionKey],
+      });
+      const duplicate = await rpcReq(ws, "chat.send", {
+        sessionKey,
+        message: "Synthetic read-acknowledgement overlap",
+        idempotencyKey: runId,
+      });
+      expect(duplicate).toMatchObject({ ok: true });
+      expect(gatewayReplyMock).toHaveBeenCalledOnce();
+      expect(
+        await listSessionPendingInputs({
+          agentId: "main",
+          sessionKey,
+          sessionId,
+          storePath: testState.sessionStorePath!,
+        }),
+      ).toMatchObject({ total: 0 });
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([patch, final]);
+      readSpy.mockRestore();
+      mutationSpy.mockRestore();
+    }
+  },
+);

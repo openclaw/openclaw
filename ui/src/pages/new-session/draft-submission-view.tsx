@@ -4,12 +4,11 @@ import { IdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
-import { resolveIdentityHue } from "../../lib/identity-avatar.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { participantPalette } from "../../lib/reactive/participant-palette.ts";
 import { ChatAuthorAvatar, UserAvatarSlot } from "../chat/components/chat-author-avatar.ts";
-import { AssistantAttachments } from "../chat/components/chat-message-attachments-solid.tsx";
 import { hasUserFileAttachments } from "../chat/components/chat-message-attachments.ts";
-import { MessageImages } from "../chat/components/chat-message-images-solid.tsx";
+import { AssistantAttachments, MessageImages } from "../chat/components/chat-message-deferred.tsx";
 import { projectMessageMedia } from "../chat/components/chat-message-media.ts";
 import { MessageJson, MessageMarkdown } from "../chat/components/chat-message-text-view.tsx";
 import { ChatWorkingIndicator } from "../chat/components/chat-working-indicator.tsx";
@@ -24,10 +23,6 @@ export function NewSessionSubmission(props: {
 }) {
   const key = "new-session-submission";
   const normalized = createMemo(() => normalizeMessage(props.message));
-  const senderHue = createMemo(() => {
-    const sender = normalized().sender;
-    return sender ? resolveIdentityHue(sender) : null;
-  });
   const media = createMemo(() => projectMessageMedia(props.message, normalized().content));
   const hasUserFiles = createMemo(() => hasUserFileAttachments(media().attachments));
   const markdown = createMemo(() => resolveMessageDisplayMarkdown(props.message, normalized()));
@@ -40,14 +35,8 @@ export function NewSessionSubmission(props: {
   return (
     <div class="new-session-page__starting chat-thread-inner">
       <div
-        class={[
-          "chat-group user",
-          {
-            "chat-group--with-footer": Boolean(normalized().sender),
-            "chat-group--sender-tint": senderHue() !== null,
-          },
-        ]}
-        style={senderHue() === null ? undefined : `--chat-sender-hue: ${senderHue()}`}
+        class="chat-group user chat-group--with-footer"
+        style={participantPalette.read()?.style(null)}
         data-chat-row-key={key}
       >
         <Show when={props.avatarPlacement === "gutter" ? normalized().sender : undefined}>
@@ -99,13 +88,17 @@ export function NewSessionSubmission(props: {
             </Show>
           </div>
         </div>
-        <Show when={normalized().sender && props.avatarPlacement === "footer"}>
-          <div class="chat-group-footer">
-            <div class="chat-group-footer__meta">
-              <ChatAuthorAvatar sender={normalized().sender} />
-            </div>
-          </div>
-        </Show>
+        {/* Chat reserves this row on every user turn; omitting it here would
+            move the working indicator down when Chat replaces this preview. */}
+        <div class="chat-group-footer">
+          <Show when={props.avatarPlacement === "footer" ? normalized().sender : undefined}>
+            {(sender) => (
+              <div class="chat-group-footer__meta">
+                <ChatAuthorAvatar sender={sender()} />
+              </div>
+            )}
+          </Show>
+        </div>
       </div>
       <div class="chat-group assistant chat-group--working">
         <div class="chat-group-messages">

@@ -1,8 +1,7 @@
 // Atomic publication installs all capacities before dispatch.
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
-  clearCommandLane,
   enqueueCommandInLane,
   getCommandLaneSnapshot,
   publishLaneConfiguration,
@@ -35,6 +34,7 @@ function clearGroups() {
 
 function park(lane: string, onStart?: () => void, onFinish?: () => void, priority?: "background") {
   const gate = createDeferred();
+  const cancellation = new AbortController();
   const run = enqueueCommandInLane(
     lane,
     async () => {
@@ -42,21 +42,20 @@ function park(lane: string, onStart?: () => void, onFinish?: () => void, priorit
       await gate.promise;
       onFinish?.();
     },
-    { priority },
+    { priority, abortSignal: cancellation.signal },
   );
-  return { run, resolve: gate.resolve };
+  return { run, resolve: gate.resolve, cancel: () => cancellation.abort() };
 }
 
-async function releaseAll(tasks: ReturnType<typeof park>[], clear = false) {
+async function releaseAll(tasks: ReturnType<typeof park>[], cancelPending = false) {
   for (const task of tasks) {
     task.resolve();
   }
-  if (clear) {
-    clearCommandLane(CRON);
-    clearCommandLane(HOOK);
+  if (cancelPending) {
+    tasks.forEach((task) => task.cancel());
   }
   const runs = tasks.map(({ run }) => run);
-  await (clear ? Promise.allSettled(runs) : Promise.all(runs));
+  await (cancelPending ? Promise.allSettled(runs) : Promise.all(runs));
 }
 
 beforeEach(() => {
@@ -69,7 +68,7 @@ afterEach(() => {
 });
 
 describe("publishLaneConfiguration", () => {
-  test("no member dispatches above budget DURING publication", async () => {
+  test("no member dispatches above budget DURING publication", async ({ signal: testSignal }) => {
     // A per-lane drain before group installation would admit 8 + 4 tasks.
     setCommandLaneConcurrency(CRON, 0);
     setCommandLaneConcurrency(HOOK, 0);
@@ -98,18 +97,16 @@ describe("publishLaneConfiguration", () => {
     expect(getCommandLaneSnapshot(HOOK).activeCount).toBe(0);
     try {
       publish(8, { [CRON]: 8, [HOOK]: 4 }, { [HOOK]: 1 });
-      await withTestTimeout(
-        publishedStarts.promise,
-        1_000,
-        "publication did not start the shared group budget",
-      );
+      await withinTest(publishedStarts.promise, testSignal);
       expect(peak).toBe(8);
     } finally {
       await releaseAll(tasks, true);
     }
   });
 
-  test("commit dispatch uses group order rather than publication object order", async () => {
+  test("commit dispatch uses group order rather than publication object order", async ({
+    signal: testSignal,
+  }) => {
     setCommandLaneConcurrency(CRON, 0);
     setCommandLaneConcurrency(HOOK, 0);
     const starts: string[] = [];
@@ -130,19 +127,11 @@ describe("publishLaneConfiguration", () => {
     try {
       // HOOK is published first; the older CRON head must still win.
       publish(1, { [HOOK]: 1, [CRON]: 1 }, undefined, [HOOK, CRON]);
-      await withTestTimeout(
-        cronStarted.promise,
-        1_000,
-        "publication did not start the older cron task",
-      );
+      await withinTest(cronStarted.promise, testSignal);
       expect(starts).toEqual([CRON]);
       cron.resolve();
       await cron.run;
-      await withTestTimeout(
-        hookStarted.promise,
-        1_000,
-        "cron completion did not start the queued hook",
-      );
+      await withinTest(hookStarted.promise, testSignal);
       expect(starts).toEqual([CRON, HOOK]);
     } finally {
       await releaseAll([cron, hook], true);

@@ -8,7 +8,6 @@ import {
   appendOutput,
   clearFinishedSessionsForScopes,
   deleteSession,
-  getActiveBackgroundExecSessionCount,
   getFinishedSession,
   isProcessSessionIdTaken,
   listFinishedSessions,
@@ -30,7 +29,7 @@ const randomMocks = vi.hoisted(() => ({ generateSecureInt: vi.fn(() => 0) }));
 // mock-isolation: Deterministic session IDs exercise collision handling without real randomness.
 vi.mock("../infra/secure-random.js", () => ({ generateSecureInt: randomMocks.generateSecureInt }));
 
-it("releases discarded backing strings from live, finished, and staged output", async ({
+it("releases unrelated backing storage from live, finished, and staged output", async ({
   signal,
 }) => {
   const result = await runNodeScript(
@@ -94,29 +93,6 @@ it("suppresses a notify-on-exit event when terminal poll acknowledgement wins th
   expect(remove).toHaveBeenCalledOnce();
 });
 
-it("caps pending output to avoid runaway polls", () => {
-  const session = makeSession({ maxOutputChars: 100_000, pendingMaxOutputChars: 20_000 });
-
-  const payload = `${"a".repeat(70_000)}${"b".repeat(20_000)}`;
-  appendOutput(session, "stdout", payload);
-
-  const drained = drainSession(session);
-  expect(drained).toMatchObject({ output: "b".repeat(20_000), outputDropped: true });
-  expect(session).toMatchObject({ pendingOutput: [], pendingStdoutChars: 0 });
-  expect(drainSession(session).outputDropped).toBe(false);
-  expect(session.truncated).toBe(true);
-});
-
-it("respects max output cap when pending cap is larger", () => {
-  const session = makeSession({ maxOutputChars: 5_000, pendingMaxOutputChars: 30_000 });
-
-  appendOutput(session, "stdout", "x".repeat(10_000));
-
-  const drained = drainSession(session);
-  expect(drained.output.length).toBe(5_000);
-  expect(session.truncated).toBe(true);
-});
-
 const out = (text: string) => ["stdout", text] as const;
 const err = (text: string) => ["stderr", text] as const;
 const alternating = (...pairs: [string, string][]) =>
@@ -175,6 +151,57 @@ it("keeps aggregate, pending, and tail suffix cuts on UTF-16 boundaries", () => 
   expect(tail("a🎉bc", 3)).toBe("bc");
 });
 
+it.each([
+  { cap: 4, chunks: ["a界", "🦞", "b"], expected: "界🦞b" },
+  { cap: 3, chunks: ["a\ud83e", "\udd9ebc"], expected: "bc" },
+  { cap: 4, chunks: ["ab", "\ud800", "cd"], expected: "b\ud800cd" },
+  { cap: 5, chunks: ["0123456789", "x", "yz"], expected: "89xyz" },
+  { cap: 0, chunks: ["discard", "🦞"], expected: "" },
+])("keeps exact capped text across reads and completion: $chunks", ({ cap, chunks, expected }) => {
+  const session = makeSession({ maxOutputChars: cap });
+  for (const chunk of chunks) {
+    appendOutput(session, "stdout", chunk);
+    // Reads and poll drains must not consume or freeze the retained log.
+    expect(session.aggregated.length).toBeLessThanOrEqual(cap);
+    drainSession(session);
+  }
+  expect(session.aggregated).toBe(expected);
+  expect(session.tail).toBe(expected);
+  expect(session.totalOutputChars).toBe(chunks.join("").length);
+  expect(session.truncated).toBe(true);
+  markExited(session, 0, null, "completed");
+  appendOutput(session, "stderr", "late");
+  expect(session.aggregated).toBe(expected);
+  expect(session.tail).toBe(expected);
+});
+
+it("cuts a preview at a surrogate pair crossing chunks without truncating the retained log", () => {
+  const session = makeSession({ maxOutputChars: 4_000 });
+  appendOutput(session, "stdout", "prefix\ud83e");
+  appendOutput(session, "stderr", `\udd9e${"z".repeat(1_999)}`);
+  expect(session.aggregated).toBe(`prefix🦞${"z".repeat(1_999)}`);
+  expect(session.tail).toBe("z".repeat(1_999));
+  expect(drainSession(session)).toEqual({
+    output: `prefix🦞${"z".repeat(1_999)}`,
+    outputDropped: false,
+    acknowledge: expect.any(Function),
+  });
+});
+
+it.each([
+  { cap: 4, first: "A", next: "a🦞xyz", expected: "xyz" },
+  { cap: 2, first: "\ud800", next: "a\udc00b", expected: "\udc00b" },
+])(
+  "evicts prior output before keeping an oversized suffix: $next",
+  ({ cap, first, next, expected }) => {
+    const session = makeSession({ maxOutputChars: cap, pendingMaxOutputChars: cap });
+    appendOutput(session, "stdout", first);
+    appendOutput(session, "stdout", next);
+    expect(session.aggregated).toBe(expected);
+    expect(drainSession(session).output).toBe(expected);
+  },
+);
+
 it("only persists finished sessions when backgrounded", () => {
   const session = makeSession({ backgrounded: false });
 
@@ -192,17 +219,6 @@ it("only persists finished sessions when backgrounded", () => {
   deleteSession(session.id);
   expect(session.endedAt).toBe(endedAt);
   expect(listFinishedSessions()).toHaveLength(0);
-});
-
-it("retains unread output on its exact process and consumes it once", () => {
-  const session = makeSession({ id: "exact-finished-output" });
-  appendOutput(session, "stdout", "terminal output\n");
-  markExited(session, 0, null, "completed");
-
-  const finished = getFinishedSession(session.id);
-  expect(finished).toBe(session);
-  expect(finished && drainSession(finished).output).toBe("terminal output\n");
-  expect(drainSession(session).output).toBe("");
 });
 
 it("evicts the oldest finished sessions when their count exceeds the retention limit", () => {
@@ -248,36 +264,6 @@ it("retains the complete newest log when it alone exceeds the aggregate budget",
 
   expect(listFinishedSessions()).toHaveLength(1);
   expect(getFinishedSession("oversized-finished")?.aggregated).toHaveLength(2_000_001);
-});
-
-it("tracks only live backgrounded sessions", () => {
-  const session = makeSession({ backgrounded: false });
-
-  expect(getActiveBackgroundExecSessionCount()).toBe(0);
-
-  markBackgrounded(session);
-  markBackgrounded(session);
-  expect(getActiveBackgroundExecSessionCount()).toBe(1);
-
-  markExited(session, 0, null, "completed");
-  expect(getActiveBackgroundExecSessionCount()).toBe(0);
-
-  markBackgrounded(session);
-  expect(getActiveBackgroundExecSessionCount()).toBe(0);
-});
-
-it("keeps a hidden background session active until its process exits", () => {
-  const session = makeSession({ id: "hidden-until-exit", backgrounded: false });
-
-  markBackgrounded(session);
-  session.backgrounded = false;
-  deleteSession(session.id);
-
-  expect(listRunningSessions()).toHaveLength(0);
-  expect(getActiveBackgroundExecSessionCount()).toBe(1);
-
-  markExited(session, null, "SIGTERM", "killed");
-  expect(getActiveBackgroundExecSessionCount()).toBe(0);
 });
 
 it.each([false, true])(

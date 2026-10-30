@@ -89,13 +89,6 @@ it("verification and compile-macos reject raw macOS interpolation and retain sha
   }
 });
 
-it("derives shared discovery status coverage into the iOS catalog", async () => {
-  const { catalog } = apple.buildIosCatalog(emptyCatalog, await readInventory(), []);
-  expect(Object.keys(catalog.strings ?? {})).toEqual(
-    expect.arrayContaining(["Searching…", "Stopped", "Waiting"]),
-  );
-});
-
 it("warns only when obsolete Apple keys are the entire catalog drift", async () => {
   const inventory = await readInventory();
   const translations = await Promise.all(

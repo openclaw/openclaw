@@ -26,10 +26,11 @@ public enum OpenClawChatOutboxMessageState: Equatable, Sendable {
 /// strictly in createdAt order when health recovers. A gateway ACK only moves
 /// a row to awaiting-confirmation; canonical history owns durable completion.
 extension OpenClawChatViewModel {
-    static func isRestartRejectedSend(_ error: Error) -> Bool {
+    static func isRetryableAdmissionRejection(_ error: Error) -> Bool {
         guard let response = error as? GatewayResponseError else { return false }
-        return response.code == "UNAVAILABLE" && response.detailsReason == "gateway-restarting" &&
-            response.details["retryable"]?.boolValue == true
+        return response.isRetryableStartupAdmissionRefusal ||
+            (response.code == "UNAVAILABLE" && response.detailsReason == "gateway-restarting" &&
+                response.details["retryable"]?.boolValue == true)
     }
 
     /// True when this view model owns a gateway-scoped durable text outbox.
@@ -52,6 +53,10 @@ extension OpenClawChatViewModel {
 
     public func outboxState(for messageID: UUID) -> OpenClawChatOutboxMessageState? {
         self.outboxStatesByMessageID[messageID]
+    }
+
+    public func outboxQueueMode(for messageID: UUID) -> OpenClawChatQueueMode? {
+        self.outboxQueueModesByMessageID[messageID]
     }
 
     static func activeBranchLeafEntryID(in branches: [OpenClawChatSessionBranch]) -> String? {
@@ -353,6 +358,7 @@ extension OpenClawChatViewModel {
             self.outboxCommandIDsByMessageID.removeValue(forKey: messageID)
             self.outboxMessageIDsByCommandID.removeValue(forKey: commandID)
             self.outboxStatesByMessageID.removeValue(forKey: messageID)
+            self.outboxQueueModesByMessageID.removeValue(forKey: messageID)
             // `.missing` with no current row means another view already
             // canceled (or canonical history completed) this mapping. Never
             // leave its stale bubble looking like an ordinary sent message;
@@ -372,6 +378,7 @@ extension OpenClawChatViewModel {
         draftInput: String,
         draftRevision: UInt64,
         draftAttachments: [OpenClawPendingAttachment] = [],
+        queueMode: OpenClawChatQueueMode? = nil,
         session: SessionSnapshot) async -> Bool
     {
         guard let outbox else { return false }
@@ -422,6 +429,7 @@ extension OpenClawChatViewModel {
                     durationSeconds: $0.durationSeconds)
             },
             thinking: thinking,
+            queueMode: queueMode,
             expectedSessionSettings: expectedSessionSettings,
             createdAt: Date().timeIntervalSince1970,
             status: .queued,
@@ -516,6 +524,7 @@ extension OpenClawChatViewModel {
         self.outboxCommandIDsByMessageID.removeAll()
         self.outboxMessageIDsByCommandID.removeAll()
         self.outboxStatesByMessageID.removeAll()
+        self.outboxQueueModesByMessageID.removeAll()
         self.outboxFailureVersionsByMessageID.removeAll()
     }
 
@@ -670,6 +679,7 @@ extension OpenClawChatViewModel {
         self.outboxCommandIDsByMessageID[messageID] = command.id
         self.outboxMessageIDsByCommandID[command.id] = messageID
         self.outboxStatesByMessageID[messageID] = Self.outboxDisplayState(for: command)
+        self.outboxQueueModesByMessageID[messageID] = command.queueMode
         if command.status == .failed {
             self.outboxFailureVersionsByMessageID[messageID] = (
                 command.attemptVersion, command.retryCount, command.lastError)
@@ -688,6 +698,7 @@ extension OpenClawChatViewModel {
                 self.outboxMessageIDsByCommandID.removeValue(forKey: commandID)
             }
             self.outboxStatesByMessageID.removeValue(forKey: messageID)
+            self.outboxQueueModesByMessageID.removeValue(forKey: messageID)
             self.outboxFailureVersionsByMessageID.removeValue(forKey: messageID)
         }
     }
@@ -909,8 +920,11 @@ extension OpenClawChatViewModel {
         do {
             let response = try await routeLease.sendMessage(
                 sessionKey: command.deliverySessionKey,
-                agentID: command.agentID,
-                expectedSessionSettings: command.expectedSessionSettings,
+                target: OpenClawChatSendTarget(
+                    agentID: command.agentID,
+                    expectedSessionRoutingContract: command.routingContract,
+                    expectedSessionSettings: command.expectedSessionSettings,
+                    queueMode: command.queueMode),
                 message: command.text,
                 // Preserve the queued level when supported, but never send an
                 // explicit unsupported level after the gate changes.
@@ -937,9 +951,14 @@ extension OpenClawChatViewModel {
                     reason: "Run failed to start (\(response.status)).")
             }
             return await self.finishAcceptedOutboxCommand(command, outbox: outbox)
-        } catch let error where error is OpenClawChatTransportSendError || Self.isRestartRejectedSend(error) {
-            // Both a local non-send and the restart admission fence prove no
-            // run started. Keep the same command for reconnect without spending retries.
+        } catch let error as OpenClawChatQueueModeUnsupportedError {
+            let update = await self.failOutboxCommand(
+                command, outbox: outbox, retryCount: command.retryCount, reason: error.localizedDescription)
+            self.errorText = error.localizedDescription
+            return update == .unavailable ? .stop : .continueFlush
+        } catch let error where error is OpenClawChatTransportSendError || Self.isRetryableAdmissionRejection(error) {
+            // A local non-send or admission refusal proves no run started. Keep the same command for reconnect without
+            // spending retries.
             _ = await outbox.markCommandQueued(
                 id: command.id,
                 attemptVersion: command.attemptVersion,
@@ -1189,6 +1208,7 @@ extension OpenClawChatViewModel {
         guard let messageID = self.outboxMessageIDsByCommandID.removeValue(forKey: commandID) else { return }
         self.outboxCommandIDsByMessageID.removeValue(forKey: messageID)
         self.outboxStatesByMessageID.removeValue(forKey: messageID)
+        self.outboxQueueModesByMessageID.removeValue(forKey: messageID)
         self.outboxFailureVersionsByMessageID.removeValue(forKey: messageID)
     }
 

@@ -28,17 +28,15 @@ type ExpectedGatewayAuth =
   | { token: string; deviceToken?: never }
   | { token?: never; deviceToken: string };
 
-async function startGateway(
-  handle: (ws: WebSocket, frame: Request) => void,
+export async function startGateway(
+  handle: ((ws: WebSocket, frame: Request) => void) | Record<string, unknown>,
   connect?: (frame: Request) => Hello,
   host = "127.0.0.1",
 ) {
-  let connectionCount = 0;
   const calls: string[] = [];
   const wss = new WebSocketServer({ host, port: 0 });
   activeServers.add(wss);
   wss.on("connection", (ws) => {
-    connectionCount += 1;
     sendMinimalGatewayConnectChallenge(ws);
     ws.on("message", (data) => {
       const frame = parseMinimalGatewayRequestFrame(data);
@@ -56,7 +54,11 @@ async function startGateway(
         if (typeof frame.method === "string") {
           calls.push(frame.method);
         }
-        handle(ws, request);
+        if (typeof handle === "function") {
+          handle(ws, request);
+        } else if (frame.method && Object.hasOwn(handle, frame.method)) {
+          sendMinimalGatewayResponse(ws, frame.id, handle[frame.method]);
+        }
       }
     });
   });
@@ -66,8 +68,9 @@ async function startGateway(
     calls,
     url: "ws://" + host + ":" + port,
     port,
-    get connectionCount() {
-      return connectionCount;
+    close: async () => {
+      await closeMinimalGatewayServer(wss);
+      activeServers.delete(wss);
     },
   };
 }
@@ -187,19 +190,14 @@ export async function startNodePairingGateway(
   expectedAuth: ExpectedGatewayAuth,
   issuedDeviceToken?: string,
 ) {
-  const gateway = await startGateway(
-    (ws, frame) => {
-      const replies: Record<string, unknown> = {
-        "node.pair.list": {
-          pending: [{ requestId: "request-1", nodeId: "node-1", commands: [] }],
-          paired: [],
-        },
-        "node.list": { nodes: [] },
-        "node.pair.approve": { approved: true },
-      };
-      if (Object.hasOwn(replies, frame.method ?? "")) {
-        sendMinimalGatewayResponse(ws, frame.id, replies[frame.method ?? ""]);
-      }
+  return await startGateway(
+    {
+      "node.pair.list": {
+        pending: [{ requestId: "request-1", nodeId: "node-1", commands: [] }],
+        paired: [],
+      },
+      "node.list": { nodes: [] },
+      "node.pair.approve": { approved: true },
     },
     authenticate(
       expectedAuth,
@@ -207,7 +205,6 @@ export async function startNodePairingGateway(
       issuedDeviceToken,
     ),
   );
-  return gateway;
 }
 
 export async function startGatewayStabilityRpcServer(
@@ -221,16 +218,9 @@ export async function startGatewayStabilityRpcServer(
     issuedDeviceToken,
   );
   const gateway = await startGateway(
-    (ws, frame) => {
-      if (frame.method === "diagnostics.stability") {
-        sendMinimalGatewayResponse(ws, frame.id, EMPTY_STABILITY_SNAPSHOT);
-      }
-      if (frame.method === "status") {
-        sendMinimalGatewayResponse(ws, frame.id, {
-          runtimeVersion: "2026.8.17-test",
-          status: "ok",
-        });
-      }
+    {
+      "diagnostics.stability": EMPTY_STABILITY_SNAPSHOT,
+      status: { runtimeVersion: "2026.8.17-test", status: "ok" },
     },
     (frame) => {
       const hello = connect(frame);
@@ -255,14 +245,10 @@ export async function startStateDirStatusGateway(target: {
   stateDir: string;
   configPath: string;
 }): Promise<{ url: string }> {
-  return await startGateway(
-    (ws, frame) => {
-      if (frame.method === "status") {
-        sendMinimalGatewayResponse(ws, frame.id, { status: "ok" });
-      }
-    },
-    () => ({ methods: ["status"], snapshot: target }),
-  );
+  return await startGateway({ status: { status: "ok" } }, () => ({
+    methods: ["status"],
+    snapshot: target,
+  }));
 }
 
 export async function startAgentTurnGateway(params: { status: "ok" | "error"; text: string }) {

@@ -1,5 +1,10 @@
+import type { AssistantMessageEvent } from "@openclaw/llm-core";
 import { expect, it } from "vitest";
+import { makeOpenAIProviderModel } from "../providers/openai-provider.test-support.js";
+import { createAssistantOutput } from "./assistant-output.js";
+import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import {
+  blockEvent,
   completed,
   outputItem,
   runFixture,
@@ -22,6 +27,67 @@ const argumentEvent = (type: string, slot: number, fields: Record<string, unknow
   ...fields,
 });
 const cipher = "synthetic-ciphertext";
+
+it.each([
+  { added: true, itemOnly: false },
+  { added: false, itemOnly: true },
+  { added: false, itemOnly: false },
+])(
+  "keeps generated tool-call ids stable and unique (added=$added, item-only=$itemOnly)",
+  async ({ added: hasAdded, itemOnly }) => {
+    const runOnce = async () => {
+      const model = makeOpenAIProviderModel(
+        hasAdded || itemOnly ? "openai-responses" : "azure-openai-responses",
+      );
+      const output = createAssistantOutput(model);
+      const events: AssistantMessageEvent[] = [];
+      const item = {
+        type: "function_call",
+        name: "computer",
+        arguments: '{"action":"screenshot"}',
+        status: "completed",
+        ...(itemOnly ? { id: "fc_item_only" } : {}),
+      };
+      async function* source() {
+        if (hasAdded) {
+          yield outputItem("added", { ...item, arguments: "", status: "in_progress" }, 0);
+        }
+        yield outputItem("done", item, 0);
+        yield completed("resp_idless", [item]);
+      }
+      // The parity fixture normalizes generated ids; compare the actual identities here.
+      await processResponsesStream(
+        source(),
+        output,
+        { push: (event) => events.push(event) },
+        model,
+      );
+      expect(output.stopReason).toBe("toolUse");
+      expect(output.content).toEqual([
+        {
+          type: "toolCall",
+          id: expect.stringMatching(
+            itemOnly ? /^call_[0-9a-f]{24}\|fc_item_only$/ : /^call_[0-9a-f]{24}$/,
+          ),
+          name: "computer",
+          arguments: { action: "screenshot" },
+        },
+      ]);
+      expect(events).toMatchObject([
+        { type: "toolcall_start", contentIndex: 0 },
+        { type: "toolcall_end", contentIndex: 0 },
+      ]);
+      const block = output.content[0];
+      const end = events[1];
+      if (block?.type !== "toolCall" || end?.type !== "toolcall_end") {
+        throw new Error("missing tool-call lifecycle");
+      }
+      expect(end.toolCall.id).toBe(block.id);
+      return block.id;
+    };
+    expect(await runOnce()).not.toBe(await runOnce());
+  },
+);
 
 it.each([
   ["completed", cipher, "completed", undefined],
@@ -47,11 +113,11 @@ it.each([
     ];
     const terminalEvent =
       terminal === "completed"
-        ? completed("resp_deferred", terminalOutput)
+        ? completed("resp", terminalOutput)
         : {
             type: `response.${terminal}`,
             response: {
-              id: "resp_deferred",
+              id: "resp",
               status: ending === "conflicting-status" ? "completed" : terminal,
               ...(terminal === "failed"
                 ? { error: { code: "server_error", message: "Synthetic failure" } }
@@ -76,7 +142,7 @@ it.each([
       { asyncToolExecution: true },
     );
     expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([
-      { type: "toolcall_end", contentIndex: 1 },
+      blockEvent("toolcall_end", 1),
     ]);
     expect(result.error === null).toBe(!sibling && terminal !== "failed");
     if (ending === "content-filter") {
@@ -100,13 +166,13 @@ it.each([
           { type: "response.output_item.done", item: tool(slot, anonymous) },
         ];
       }),
-      completed("resp_ambiguous_done", [tool(0), tool(1)]),
+      completed("resp", [tool(0), tool(1)]),
     ],
     expect.any(String),
   ],
   [
     "duplicate terminal calls",
-    [added(0), completed("resp_unresolved", [tool(0), tool(0)])],
+    [added(0), completed("resp", [tool(0), tool(0)])],
     expect.any(String),
   ],
   [
@@ -115,7 +181,7 @@ it.each([
       added(0),
       {
         type: "response.incomplete",
-        response: { id: "resp_incomplete", status: "incomplete", output: [tool(0)] },
+        response: { id: "resp", status: "incomplete", output: [tool(0)] },
       },
     ],
     "Responses stream completed with unresolved tool calls",
@@ -130,14 +196,11 @@ it("completes an unindexed call exactly once when its item-done event is missing
   const item = tool(0, { arguments: '{"slot":0,"id":9007199254740993}' });
   const result = await runFixture([
     { ...added(0), output_index: undefined },
-    completed("resp_missing_done", [item]),
+    completed("resp", [item]),
   ]);
   expect(result.error).toBeNull();
   expect(result.stopReason).toBe("toolUse");
-  expect(result.events).toEqual([
-    { type: "toolcall_start", contentIndex: 0 },
-    { type: "toolcall_end", contentIndex: 0 },
-  ]);
+  expect(result.events).toEqual([blockEvent("toolcall_start"), blockEvent("toolcall_end")]);
   expect(result.content).toEqual([
     toolCall("call_0|fc_0", "lookup", { slot: 0, id: "9007199254740993" }),
   ]);
@@ -151,7 +214,7 @@ it.each([
   const result = await runFixture([
     added(0),
     added(1),
-    completed("resp_invalid_batch", [tool(0), tool(1, override)]),
+    completed("resp", [tool(0), tool(1, override)]),
   ]);
   expect(result.error).not.toBeNull();
   expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([]);
@@ -161,11 +224,11 @@ it("rejects a changed completed call identity before another active call complet
   const result = await runFixture([
     done(0),
     added(1),
-    completed("resp_completed_conflict", [tool(0, { call_id: "call_conflicting" }), tool(1)]),
+    completed("resp", [tool(0, { call_id: "call_conflicting" }), tool(1)]),
   ]);
   expect(result.error).toBe("Responses stream changed output item identity");
   expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([
-    { type: "toolcall_end", contentIndex: 0 },
+    blockEvent("toolcall_end"),
   ]);
 });
 
@@ -193,7 +256,7 @@ it.each([false, true])(
           ]
         : [argumentEvent("done", 0, { name: "lookup", arguments: streamedArgs })]),
       done(0, { arguments: doneArgs }),
-      completed(unreliable ? "resp_unreliable" : "resp_schema_valid_disagree", [
+      completed("resp", [
         tool(0, { arguments: unreliable ? doneArgs : streamedArgs }),
         ...(unreliable ? [tool(1)] : []),
       ]),

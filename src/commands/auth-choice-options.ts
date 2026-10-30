@@ -23,12 +23,6 @@ export function isFeaturedAuthChoiceGroup(group: AuthChoiceGroup): boolean {
   return isFeaturedProviderAuthChoiceGroup(group.value);
 }
 
-function compareAssistantOptions(a: AuthChoiceOption, b: AuthChoiceOption): number {
-  const priorityA = a.assistantPriority ?? 0;
-  const priorityB = b.assistantPriority ?? 0;
-  return priorityA - priorityB || compareOptionLabels(a, b);
-}
-
 /** Sort auth-choice groups with featured providers first, then stable labels. */
 export function compareAuthChoiceGroups(a: AuthChoiceGroup, b: AuthChoiceGroup): number {
   return compareProviderAuthChoiceGroups(
@@ -135,7 +129,11 @@ export function buildAuthChoiceGroups(params: {
     });
   }
   for (const group of groupsById.values()) {
-    group.options = group.options.toSorted(compareAssistantOptions);
+    group.options = group.options.toSorted((a, b) => {
+      const priorityA = a.assistantPriority ?? 0;
+      const priorityB = b.assistantPriority ?? 0;
+      return priorityA - priorityB || compareOptionLabels(a, b);
+    });
   }
   const groups = Array.from(groupsById.values()).toSorted(compareAuthChoiceGroups);
 

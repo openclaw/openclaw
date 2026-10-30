@@ -2,7 +2,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import { preserveDocumentStyle } from "../../test-helpers/preserve-document-style.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { DesktopClient, DesktopConnectionHandle } from "./desktop-client.ts";
@@ -126,6 +127,7 @@ async function handoffFixture(initialControl = false, delayedHandle = false) {
 
 describe("embedded desktop panel presentation", () => {
   beforeEach(() => {
+    preserveDocumentStyle();
     vi.stubGlobal("localStorage", createStorageMock());
   });
 
