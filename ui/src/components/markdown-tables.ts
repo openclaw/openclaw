@@ -53,18 +53,20 @@ export function markdownTableCopyText(table: HTMLTableElement): string {
     .join("\n");
 }
 
-function syncTableOverflow(shell: HTMLElement): void {
+function measureTableOverflow(shell: HTMLElement): (() => void) | undefined {
   const viewport = shell.querySelector<HTMLElement>(tableViewportSelector);
   if (!viewport) {
-    return;
+    return undefined;
   }
   const { scrollWidth, clientWidth, scrollLeft } = viewport;
   const overflows = scrollWidth - clientWidth > 1;
-  shell.classList.toggle("markdown-table--can-scroll-left", overflows && scrollLeft > 1);
-  shell.classList.toggle(
-    "markdown-table--can-scroll-right",
-    overflows && scrollLeft + clientWidth < scrollWidth - 1,
-  );
+  return () => {
+    shell.classList.toggle("markdown-table--can-scroll-left", overflows && scrollLeft > 1);
+    shell.classList.toggle(
+      "markdown-table--can-scroll-right",
+      overflows && scrollLeft + clientWidth < scrollWidth - 1,
+    );
+  };
 }
 
 function enhanceTableShell(shell: HTMLElement): void {
@@ -92,14 +94,31 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
   let state = tableOwnerStates.get(owner);
   if (!state) {
     const observedNodes = new Set<HTMLElement>();
+    const overflowUpdates = new Map<HTMLElement, () => void>();
+    let overflowFrame: number | undefined;
     const resizeObserver = new ResizeObserver((entries) => {
       const shells = new Set(
         entries.map((entry) => entry.target.closest<HTMLElement>(tableShellSelector)),
       );
       for (const shell of shells) {
         if (shell) {
-          syncTableOverflow(shell);
+          const update = measureTableOverflow(shell);
+          if (update) {
+            overflowUpdates.set(shell, update);
+          }
         }
+      }
+      if (overflowUpdates.size && overflowFrame === undefined) {
+        // WebKit can resize masked scrollports; write after ResizeObserver delivery.
+        overflowFrame = requestAnimationFrame(() => {
+          overflowFrame = undefined;
+          for (const [shell, update] of overflowUpdates) {
+            if (owner.contains(shell)) {
+              update();
+            }
+          }
+          overflowUpdates.clear();
+        });
       }
     });
     const syncTables = (shells: Iterable<HTMLElement>) => {
@@ -179,7 +198,8 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
         }
         const shell = viewport.closest<HTMLElement>(tableShellSelector);
         if (shell) {
-          syncTableOverflow(shell);
+          overflowUpdates.delete(shell);
+          measureTableOverflow(shell)?.();
         }
       },
       { capture: true, passive: true },
@@ -189,6 +209,10 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
         stopScroll();
         mutationObserver.disconnect();
         resizeObserver.disconnect();
+        if (overflowFrame !== undefined) {
+          cancelAnimationFrame(overflowFrame);
+        }
+        overflowUpdates.clear();
       },
     };
     tableOwnerStates.set(owner, state);

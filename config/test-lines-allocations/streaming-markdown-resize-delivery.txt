@@ -1,0 +1,2 @@
+# Resize delivery must defer overflow writes and cancel stale work on scroll, hide, or release.
+57

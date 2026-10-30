@@ -2,7 +2,7 @@
 import { t } from "../i18n/index.ts";
 import { registerCodeBlocksEnglish } from "../i18n/locales/en-code-blocks.ts";
 import { subscribeDocumentVisibility } from "../lib/reactive/platform.ts";
-import { updateCodeBlockWidthOverflow } from "./markdown-code-blocks.ts";
+import { measureCodeBlockWidthOverflow } from "./markdown-code-blocks.ts";
 import { MarkdownCodeHighlights } from "./markdown-code-highlight.ts";
 import { enhanceMarkdownTables, releaseMarkdownTables } from "./markdown-tables.ts";
 
@@ -30,6 +30,8 @@ export class MarkdownBlocks {
 
   private readonly pendingBlocks = new Set<HTMLElement>();
   private readonly observedNodes = new Set<HTMLElement>();
+  private readonly widthUpdates = new Map<HTMLElement, () => void>();
+  private widthFrame: number | undefined;
   private readonly resizeObserver = new ResizeObserver((entries) => {
     if (!this.active || this.disposed) {
       return;
@@ -39,8 +41,23 @@ export class MarkdownBlocks {
     );
     for (const wrapper of wrappers) {
       if (wrapper) {
-        updateCodeBlockWidthOverflow(wrapper);
+        const update = measureCodeBlockWidthOverflow(wrapper);
+        if (update) {
+          this.widthUpdates.set(wrapper, update);
+        }
       }
+    }
+    if (this.widthUpdates.size && this.widthFrame === undefined) {
+      // Overflow chrome can resize the observed code. Keep writes out of delivery.
+      this.widthFrame = requestAnimationFrame(() => {
+        this.widthFrame = undefined;
+        for (const [wrapper, update] of this.widthUpdates) {
+          if (this.root.contains(wrapper)) {
+            update();
+          }
+        }
+        this.widthUpdates.clear();
+      });
     }
   });
   private readonly mutationObserver = new MutationObserver((records) => {
@@ -104,6 +121,11 @@ export class MarkdownBlocks {
     this.pendingBlocks.clear();
     this.resizeObserver.disconnect();
     this.observedNodes.clear();
+    if (this.widthFrame !== undefined) {
+      cancelAnimationFrame(this.widthFrame);
+      this.widthFrame = undefined;
+    }
+    this.widthUpdates.clear();
     this.codeHighlights?.pause();
     releaseMarkdownTables(this.root);
   }
