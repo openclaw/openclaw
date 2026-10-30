@@ -27,19 +27,15 @@ export function installGatewayServerChatTestSuite(
   waitForAdditionalWork?: () => Promise<void>,
 ) {
   const connectWork: Promise<unknown>[] = [];
-  let joinedConnectWork = 0;
   let restoreConnectWork: (() => void) | undefined;
-
   const waitForConnectWork = async () => {
-    while (joinedConnectWork < connectWork.length) {
-      // A producer can register catalog tails before releasing its own root.
-      const pending = connectWork.slice(joinedConnectWork);
-      joinedConnectWork = connectWork.length;
-      await Promise.allSettled(pending);
+    // A producer can register catalog tails before releasing its own root.
+    while (connectWork.length > 0) {
+      await Promise.allSettled(connectWork.splice(0));
     }
   };
 
-  // Install before this suite opens either socket; delegate all admission to its real owner.
+  // Install before this suite opens either socket; delegate admission to its real owner.
   beforeAll(async () => {
     const admission = await import("../process/gateway-work-admission.js");
     const beginRoot = admission.tryBeginGatewayRootWorkAdmission;

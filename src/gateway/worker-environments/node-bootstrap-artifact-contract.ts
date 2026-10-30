@@ -21,11 +21,14 @@ export type NodeBootstrapArtifact = Readonly<{
   tarballBytes: number;
   openclawVersion: string;
   buildId: string;
+  manifestSha256?: string;
+  install?: "bundle" | "npm";
   enabledPluginIds: readonly string[];
   installLock?: TransferArtifact;
 }>;
 
 export type NodeBootstrapArtifactOptions = {
+  install?: "bundle" | "npm";
   packageRoot: string;
   runningBuildId: string | null;
   plugins: readonly { id: string; root: string }[];

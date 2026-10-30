@@ -7,7 +7,7 @@ read_when:
 title: "Configuration — runtime basics"
 ---
 
-Top-level runtime keys: `worktreeRoot`, `worktreeAcceleration`, `worktreeMaxCount`, `models.*`, `discovery.*`, `update.*`, `acp.*`, and `wizard.*`.
+Top-level runtime keys: `worktreeRoot`, `worktreeAcceleration`, `worktreeMaxCount`, `repositoryBranchPrefix`, `models.*`, `discovery.*`, `update.*`, `acp.*`, and `wizard.*`.
 
 For the full key index and the other top-level config domains, see [Configuration reference](/gateway/configuration-reference).
 
@@ -24,6 +24,12 @@ Optional global root directory for [managed worktree](/concepts/managed-worktree
 Use an absolute Gateway-host path, `~` for the Gateway user's home directory, or `~/` followed by a folder inside it; relative paths are rejected. OpenClaw creates checkouts at `<worktreeRoot>/<repo-fingerprint>/<name>`. This setting applies to all agents and all managed-worktree owners, with no per-agent override. The shared state database and allocation limits remain under the existing state directory.
 
 Changes affect new allocations only. Registered worktrees retain their original paths for reuse, cleanup, and snapshot restore; existing checkouts are not moved automatically. Keep their original storage available while those records are still needed.
+
+## `repositoryBranchPrefix`
+
+Sets the prefix for new remote repository session branches, including forks. The default is `openclaw`; branches use `<prefix>/<workspace GUID>`. For example, `repositoryBranchPrefix: "clawson"` creates `clawson/<workspace GUID>`.
+
+The prefix must be one ASCII component of 1–64 characters: start with a letter or digit, then use letters, digits, underscores, or hyphens. Changing it leaves existing saved branches unchanged. This root setting does not change local worktree branch names.
 
 ## `worktreeAcceleration`
 
