@@ -261,6 +261,49 @@ describe("searchMessagesMSTeams", () => {
     expectReadPath(`${chatPath}/messages?$top=50`);
   });
 
+  it("matches message text across Unicode normalization forms", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [
+        searchMessage("msg-nfd", "café résumé".normalize("NFD")),
+        searchMessage("msg-plain", "unrelated"),
+      ],
+    });
+
+    const result = await graph.searchMessagesMSTeams({ ...target, query: "café" });
+
+    expect(result.messages.map((message) => message.id)).toEqual(["msg-nfd"]);
+  });
+
+  it("matches NFC message text from an NFD query", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [searchMessage("msg-nfc", "café résumé")],
+    });
+
+    const result = await graph.searchMessagesMSTeams({
+      ...target,
+      query: "café".normalize("NFD"),
+    });
+
+    expect(result.messages.map((message) => message.id)).toEqual(["msg-nfc"]);
+  });
+
+  it("normalizes HTML-stripped content before matching", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [
+        searchMessage(
+          "msg-html",
+          `<p>meeting ${"café".normalize("NFD")} notes</p>`,
+          undefined,
+          "html",
+        ),
+      ],
+    });
+
+    const result = await graph.searchMessagesMSTeams({ ...target, query: "café" });
+
+    expect(result.messages.map((message) => message.id)).toEqual(["msg-html"]);
+  });
+
   it("keeps channel search scoped to the selected channel", async () => {
     mockState.fetchGraphJson.mockResolvedValue({
       value: [searchMessage("msg-2", "Sprint review")],
