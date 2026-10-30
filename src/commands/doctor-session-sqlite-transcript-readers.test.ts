@@ -11,30 +11,53 @@ beforeEach(() => {
 afterEach(() => database.close());
 function tables(table = "transcript_events", extraColumns = "") {
   database.exec(`
-        CREATE TABLE ${table} (
-          session_id TEXT, seq INTEGER, created_at INTEGER, event_json TEXT ${extraColumns}
-        );
+        CREATE TABLE ${table} (session_id TEXT, seq INTEGER, created_at INTEGER, event_json TEXT ${extraColumns});
         CREATE TABLE session_windows (session_id TEXT${table === "source_rows" ? " PRIMARY KEY" : ""}, session_key TEXT);
       `);
 }
-function seed(sessionId: string, events: string[], table = "transcript_events") {
+function seed(sessionId: string, events: (string | null)[], table = "transcript_events") {
   database
     .prepare("INSERT INTO session_windows VALUES (?, ?)")
     .run(sessionId, `agent:main:${sessionId}`);
   const insert = database.prepare(`INSERT INTO ${table} VALUES (?, ?, ?, ?)`);
   events.forEach((eventJson, seq) => insert.run(sessionId, seq, 20 + seq, eventJson));
 }
-function snapshot(events: string[], headerSession?: string) {
+function snapshot(events: string[], headerSession?: string, firstSeq = 0) {
   return {
     ok: true,
     rows: events.map((eventJson, seq) => ({
       eventJson,
-      seq,
+      seq: seq + firstSeq,
       ...(headerSession ? { createdAt: 20 + seq } : {}),
     })),
     ...(headerSession ? { sessionKey: `agent:main:${headerSession}` } : {}),
   };
 }
+
+it("selects legacy headerless sessions by first sequence and full JSON semantics", () => {
+  tables();
+  const event = '{"type":"message"}';
+  for (const [id, events] of [
+    ["candidate", [event]],
+    ["\uE000", ['{"type":"session","type":"message"}']],
+    ["healthy", ['{"type":"message","type":"session"}']],
+    ["invalid", [null]],
+    ["malformed", ["{", event]],
+    ["\u{10000}", [event]],
+  ] as const) {
+    seed(id, [...events]);
+  }
+  database.exec("UPDATE transcript_events SET seq = seq + 7");
+  const reader = new ReadOnlySqliteTranscriptReader(database);
+  expect(reader.headerlessSessionIds(() => {})).toEqual([
+    "candidate",
+    "invalid",
+    "\uE000",
+    "\u{10000}",
+  ]);
+  expect(reader.headerlessSnapshot("invalid", accept)).toMatchObject({ ok: false });
+  expect(reader.headerlessSnapshot("candidate", accept)).toEqual(snapshot([event], "candidate", 7));
+});
 
 it("preserves exact compressed payloads in label and header repair snapshots", () => {
   tables("transcript_events", ", event_zstd BLOB, event_utf8_bytes INTEGER, navigation_json TEXT");
@@ -56,6 +79,7 @@ it("preserves exact compressed payloads in label and header repair snapshots", (
     insert.run("compressed", seq, 20 + seq, event_zstd, event_utf8_bytes, navigation_json);
   }
   const reader = new ReadOnlySqliteTranscriptReader(database);
+  expect(reader.headerlessSessionIds(() => {})).toEqual(["compressed"]);
   expect(reader.labelRepairSnapshot("compressed", accept, accept)).toEqual(snapshot(originals));
   expect(reader.headerlessSnapshot("compressed", accept)).toEqual(
     snapshot(originals, "compressed"),
@@ -64,6 +88,12 @@ it("preserves exact compressed payloads in label and header repair snapshots", (
     .prepare("UPDATE transcript_events SET event_zstd = ? WHERE session_id = ? AND seq = 2")
     .run(new Uint8Array([0]), "compressed");
   expect(reader.labelRepairSnapshot("compressed", accept, accept)).toMatchObject({ ok: false });
+  database
+    .prepare("UPDATE transcript_events SET event_zstd = ? WHERE seq = 0")
+    .run(new Uint8Array([0]));
+  const errors: string[] = [];
+  expect(reader.headerlessSessionIds((id) => errors.push(id))).toEqual([]);
+  expect(errors).toEqual(["compressed"]);
 });
 
 it("closes a rejected header snapshot before the next database operation", () => {
@@ -79,7 +109,6 @@ it.each([
   { stage: "label detection", header: false, failingSeq: 0 },
   { stage: "nested label snapshot", header: false, failingSeq: 1 },
   { stage: "header snapshot", header: true, failingSeq: 1 },
-  { stage: "first header row", header: true, failingSeq: 0 },
 ])("isolates a $stage step failure from the next session", ({ header, failingSeq }) => {
   // json() fails during native stepping. The primary key lets the first row
   // reach detection before a later row fails in the complete snapshot.
