@@ -119,12 +119,13 @@ const nodeRequiredFiles = new Set([
   "ui/src/pages/chat/session-snapshot-store.test.ts",
   "ui/src/pages/usage/usage-page-retention.test.ts",
 ]);
-// Real Code Mode workers exercise both host runtimes independently of their
-// Node/QuickJS guest choice. Keep Bun coverage while qualifying Node workers.
+// Real worker lifecycle proofs exercise both host runtimes. Keep Bun coverage
+// while qualifying Node workers independently of any guest runtime choice.
 const bothHostFiles = new Set([
   "src/agents/code-mode.bridge.lifecycle.test.ts",
   "src/agents/code-mode-engine-parity.test.ts",
   "src/agents/code-mode.failure-phase.test.ts",
+  "src/state/openclaw-agent-db-maintenance.schema-renewal.test.ts",
 ]);
 const knownConfigs = new Set([
   "ui/vitest.config.ts",
