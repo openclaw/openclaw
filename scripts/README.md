@@ -231,7 +231,10 @@ and complete-ready wall/CPU metrics are separate. If Usage is still being summar
 successful `chat.metadata.changed` publications trigger coalesced re-reads, matching
 the page's session refresh path; no timed session polling occurs. All reads and
 publication waits share the same 60-second deadline from the first request. Startup
-backfill stays enabled, and each Gateway fully drains before the next role starts. The
+backfill stays enabled, and each Gateway fully drains before the next role starts. A
+deadline abort remains a failed, censored observation without complete-ready metrics;
+the runner drains that Gateway and continues the remaining roles and pairs. Any
+failed observation makes the invocation exit nonzero; other errors stop the run. The
 client must run with `TZ=UTC`; it asserts the resolved timezone and offset before
 starting Gateways. The canonical helper then emits the browser fixture's exact
 date parameters (`mode: "specific"`, `timeZone: "UTC"`, `utcOffset: "UTC+0"`),

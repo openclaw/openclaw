@@ -17,6 +17,7 @@ import {
   type Page,
 } from "playwright";
 import { acquireGatewayE2ePortBlock } from "../src/gateway/test-helpers.listener.ts";
+import { isAbortError } from "../src/infra/abort-signal.ts";
 import { createRedactingStreamWriter } from "../src/logging/redacting-stream.ts";
 import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../src/shared/control-ui-storage.js";
 import {
@@ -1098,6 +1099,7 @@ async function prepareUsageBackend(owner: Owner, mode: "cold" | "warm", coldPair
   if (mode === "warm") {
     preparations.push(sample);
   }
+  let coldDeadline: AbortSignal | undefined;
   try {
     peer.start();
     await connected.promise;
@@ -1119,6 +1121,7 @@ async function prepareUsageBackend(owner: Owner, mode: "cold" | "warm", coldPair
       mode === "cold" ? 60_000 : Math.max(0, Math.floor(owner.deadlineAtMs - performance.now())),
     );
     if (mode === "cold") {
+      coldDeadline = signal;
       samples.push(sample);
     }
     let usedCommit = committedAt;
@@ -1222,7 +1225,14 @@ async function prepareUsageBackend(owner: Owner, mode: "cold" | "warm", coldPair
       dispatchStart = dispatches.length;
     }
   } catch (error) {
-    sample.error = errorText(error);
+    const message = errorText(error);
+    sample.error = message;
+    if (coldDeadline?.aborted && (isAbortError(error) || error === coldDeadline.reason)) {
+      // Keep the failed observation; the caller drains this Gateway before continuing.
+      sample.censored = { reason: "deadline", budgetMs: 60_000 };
+      failures.push(`${owner.role} cold pair ${coldPair ?? 1}: ${message}`);
+      return;
+    }
     throw error;
   } finally {
     clearTimeout(connectionTimer);
