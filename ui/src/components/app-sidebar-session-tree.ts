@@ -29,6 +29,9 @@ function summarizeChildren(
   const unreadHiddenRuns: SidebarRecentSession[] = [];
   for (const child of children) {
     if (onlySubagents && !isSubagentSessionKey(child.key)) {
+      // Persistent children keep their own activity, but their hidden runs still fold upward.
+      runningChildCount += child.subagentSummary?.runningChildCount ?? 0;
+      queuedChildCount += child.subagentSummary?.queuedChildCount ?? 0;
       continue;
     }
     const descendants = onlySubagents ? child.subagentSummary : child;
