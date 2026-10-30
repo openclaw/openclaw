@@ -8,7 +8,7 @@
  * Prepared rows use the canonical memory-state shape; this measures the production projection
  * owner, not actor mutation, transport or a Gateway. Seeding/warmup are excluded; phase timestamps
  * go to stderr. Older/newer/around-id fitting pages share the workload.
- * A 20-second measurement deadline bounds each run. If completedOperations differs, rerun
+ * A 60-second measurement deadline bounds each run. If completedOperations differs, rerun
  * both arms with --iterations set to the smaller count before comparing CPU/allocation per op.
  * Report ordinary-path overhead, not a speedup: oversized-page correctness lives in tests.
  */
@@ -133,7 +133,7 @@ const started = performance.now();
 let completedOperations = 0;
 let returnedMessages = 0;
 for (; completedOperations < iterations; completedOperations++) {
-  if (performance.now() - started >= 20_000) {
+  if (performance.now() - started >= 60_000) {
     break;
   }
   returnedMessages += read(completedOperations).messages.length;
