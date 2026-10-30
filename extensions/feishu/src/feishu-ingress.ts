@@ -9,9 +9,11 @@ import {
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { getFeishuRuntime } from "./runtime.js";
 
 const FEISHU_INGRESS_PAYLOAD_VERSION = 1;
@@ -317,14 +319,30 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
         ),
     },
     deliver: async (rawEnvelope, lifecycle, claim) => {
+      const handoff = createDeferred();
       // The message debounce owner releases its logical claim before transport abandonment.
       const wrappedLifecycle: FeishuIngressLifecycle = {
         ...lifecycle,
+        onDeferred: () => {
+          lifecycle.onDeferred();
+          handoff.resolve();
+        },
+        onAdopted: async () => {
+          try {
+            await lifecycle.onAdopted();
+          } finally {
+            handoff.resolve();
+          }
+        },
         onAbandoned: async () => {
-          await Promise.resolve()
-            .then(() => wrappedLifecycle.onBeforeAbandon?.())
-            .catch(() => undefined);
-          await lifecycle.onAbandoned();
+          try {
+            await Promise.resolve()
+              .then(() => wrappedLifecycle.onBeforeAbandon?.())
+              .catch(() => undefined);
+            await lifecycle.onAbandoned();
+          } finally {
+            handoff.resolve();
+          }
         },
       };
       activeLifecycles.set(claim.id, wrappedLifecycle);
@@ -336,6 +354,14 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
           return undefined;
         }
         if (result.kind === "deferred") {
+          // Buffering is not reply-lane admission. Keep its chat lane until the
+          // real lifecycle handoff; queued followups then release only the lane.
+          try {
+            await racePromiseWithAbortSignal(handoff.promise, lifecycle.abortSignal);
+          } catch (error) {
+            await wrappedLifecycle.onAbandoned();
+            throw error;
+          }
           return { kind: "deferred" };
         }
         if (result.kind === "completed") {
@@ -358,6 +384,7 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
     pollIntervalMs: options.pollIntervalMs ?? FEISHU_INGRESS_POLL_INTERVAL_MS,
     retention: "standard",
     drain: {
+      deferredLaneOccupancy: "release",
       adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
       resolveNonRetryableFailure: resolveFeishuIngressNonRetryableFailure,
       onLog: (message) => options.runtime.error?.(`feishu ingress: ${message}`),

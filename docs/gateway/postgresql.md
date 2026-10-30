@@ -195,31 +195,56 @@ When present, the local credential store is captured as a fixed-local resource,
 outside the engine families. User backups apply its credential sanitization;
 updater recovery captures it exactly.
 
-Existing-state reads, one-shot writes, and read-only agent database opens such
-as session loads reuse up to four idle PostgreSQL connections per worker.
-Writable agent database owners and maintenance opens keep dedicated connections.
-Each caller has exclusive use until close; an open transaction is never returned to
-the cache. Connection settings and the store
-namespace separate cache entries. Session setup runs when a backend connects,
-and an idle connection lost by the server is replaced at the next open. Workers
-close their cached connections after three minutes idle or on shutdown. Taking a
-connection from the cache cancels its idle timeout; checked-out connections are
-not expired by this cache.
+Read-only agent scopes retain their store identity and schema admission between
+reads, but return their PostgreSQL transport after the last borrower finishes.
+Each worker isolate caches **at most two returned transports across all stores**,
+keyed by connection and timeout settings. Reusing one for a different store changes
+its `search_path` before the next query. Same-store reuse needs no extra query.
+An open transaction is never returned to the cache; checked-out connections remain
+exclusive. Returned transports expire after three minutes idle or on worker shutdown.
+SQLite handle retention is unchanged.
+
+Budget PostgreSQL backends as the sum of each isolate's **checked-out connections
+plus up to two returned transports**, approximately `isolates × (active + 2)`.
+Here, active means a checked-out connection, including dedicated writable and
+maintenance handles, even when PostgreSQL reports it as idle. This is a retention
+bound, not a process-wide connection limit; concurrent work still needs headroom.
+
+A PostgreSQL 17 synthetic workload (four sessions per agent, startup through six
+idle minutes, then 130 history reads and a usage refresh) measured:
+
+| Agent stores | Earlier unbounded peak (role limit 200) | Bounded-retention peak (role limit 40) | Backends after six idle minutes |
+| ------------ | --------------------------------------- | -------------------------------------- | ------------------------------- |
+| 1            | 19                                      | 18                                     | 8                               |
+| 4            | 43                                      | 18                                     | 11                              |
+| 13           | 101                                     | 24                                     | 12                              |
+
+The final retirement policy was replayed at 1 and 13 stores; the 4-store row is
+from the preceding candidate. All bounded runs completed without connection-limit
+errors. The 13-store read burst peaked at 16 backends after the idle window.
+These are workload measurements, not universal limits.
+
+For one Gateway with this 1–13-store workload, use a runtime role limit of at least
+40 and server `max_connections` of at least 100, leaving room for administration
+and other clients. For multiple Gateways, budget each role separately and add their
+peak budgets, other clients, and PostgreSQL's reserved slots to `max_connections`.
+More concurrent work or plugin workers can require a larger budget even at the
+same agent count; check `pg_stat_activity` during startup and representative bursts.
 
 Gateway workers share four PostgreSQL I/O services per process. The Gateway
 starts them when it selects PostgreSQL, overlapping their initialization with
 config and plugin preparation. Replies wake only their own connection; blocked
 callers check for service failure at intervals of at most 50 milliseconds.
-This changes where connections run, not their exclusive ownership or idle retention. An
+These services multiplex connections; four services do not mean four backends. An
 externally constructed SDK or plugin worker without inherited pool endpoints
 starts its own four services on first PostgreSQL use. It emits a once-per-thread
 warning and `openclaw.postgres.pool.self-root` diagnostic with the worker label
 and thread ID. Worker diagnostics count these roots separately from physical
 I/O services, so unexpected worker creation remains visible.
 
-Usage reports retain their reader in the existing history worker between requests.
-Each report still uses a fresh read snapshot; database maintenance and worker
-shutdown close the retained connection before releasing custody.
+Usage reports retain their logical reader in the existing history worker between
+requests and return its idle transport. Each report still uses a fresh read snapshot;
+database maintenance and worker shutdown close the reader before releasing custody.
 
 ## Requirements
 

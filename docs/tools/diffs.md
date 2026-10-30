@@ -79,7 +79,7 @@ To keep the tool but drop its system-prompt guidance, set `plugins.entries.diffs
 }
 ```
 
-This blocks the plugin's `before_prompt_build` hook while keeping the tool and skill available. To disable both guidance and the tool, disable the plugin instead.
+This drops the system-prompt guidance registered with the `diffs` tool while keeping the tool and skill available. To disable both guidance and the tool, disable the plugin instead.
 
 ## Tool input reference
 
