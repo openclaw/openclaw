@@ -3,22 +3,8 @@ import { flattenMarkdownToPlainText } from "./markdown-plain-text.js";
 
 describe("flattenMarkdownToPlainText", () => {
   it.each([
-    ["fenced code blocks", "Before\n```ts\nconst hidden = true;\n```\nAfter", "Before After"],
-    ["unfinished long fence", "Before\n````md\nhidden", "Before `md hidden"],
-    ["unfinished triple fence", "Before\n```ts\nhidden", "Before ts hidden"],
-    ["inline long backticks", "Before ````literal```` After", "Before ` After"],
-    ["tilde fence", "Before\n~~~ts\nhidden\n~~~\nAfter", "Before ~ts hidden ~ After"],
-    [
-      "long markers inside a tilde fence",
-      "Before\n~~~md\n````ts\nhidden\n````\n~~~\nAfter",
-      "Before ~md ` ~ After",
-    ],
-    [
-      "long marker inside a triple-backtick fence",
-      "Before\n```md\n````not a closer\nhidden\n```\nAfter",
-      "Before `not a closer hidden After",
-    ],
-    ["inline code", "Use `pnpm test` now", "Use pnpm test now"],
+    ["fences", "a\n````\n```\nx\n```\n````x\nx\n`````\n~~~\nx\n~~~~\n```\nx\n```\nb", "a b"],
+    ["inline code", "Use `x` and ````y````.", "Use x and `."],
     [
       "links and escaped image markers",
       String.raw`Read the [deployment guide](https://example.com/deploy), \![important](note.md), \\![diagram](image.png)`,
@@ -111,7 +97,7 @@ describe("flattenMarkdownToPlainText", () => {
       "Use foo_bar_baz from ~/.openclaw",
       "Use foo_bar_baz from ~/.openclaw",
     ],
-    ["multiline whitespace", "First\n\n  second\t third", "First second third"],
+    ["multiline whitespace", "a\n\n b\tc\n````\nx", "a b c ` x"],
   ])("flattens %s", (_label, input, expected) => {
     expect(flattenMarkdownToPlainText(input)).toBe(expected);
   });

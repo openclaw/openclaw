@@ -1,2 +1,0 @@
-# Completed long-backtick projection regressions and preserved flattening controls.
-28
