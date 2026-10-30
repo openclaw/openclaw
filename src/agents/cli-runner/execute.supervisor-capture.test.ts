@@ -89,6 +89,17 @@ function messageUse(id: string, input: Record<string, unknown>) {
   return toolUse(id, "mcp__openclaw__message", input);
 }
 
+function streamDelta(delta: unknown, index?: number) {
+  return jsonl({
+    type: "stream_event",
+    event: {
+      type: "content_block_delta",
+      ...(index === undefined ? {} : { index }),
+      delta,
+    },
+  });
+}
+
 function toolResult(
   tool_use_id: string,
   content: unknown,
@@ -114,10 +125,52 @@ function expectToolEvents(
   expect(events).toEqual(unordered ? expect.arrayContaining(expected) : expected);
 }
 
+function captureAgentEvents(streams?: string[]) {
+  const events: Array<{
+    stream: string;
+    phase?: string;
+    text?: string;
+    delta?: string;
+    isReasoningSnapshot?: true;
+  }> = [];
+  onTestFinished(
+    onAgentEvent(({ stream, data }) => {
+      if (streams && !streams.includes(stream)) {
+        return;
+      }
+      events.push({
+        stream,
+        ...(streams ? {} : { phase: typeof data.phase === "string" ? data.phase : undefined }),
+        text: typeof data.text === "string" ? data.text : undefined,
+        delta: typeof data.delta === "string" ? data.delta : undefined,
+        ...(data.isReasoningSnapshot === true ? { isReasoningSnapshot: true } : {}),
+      });
+    }),
+  );
+  return events;
+}
+
 function captureToolEvents() {
   const events: TrustedToolExecutionEvent[] = [];
   onTestFinished(onTrustedToolExecutionEvent((event) => events.push(event)));
   return events;
+}
+
+function mockOutput(
+  chunks: readonly string[],
+  exit: Partial<ReturnType<typeof createSuccessfulProcessExit>> = {},
+  captured = false,
+) {
+  supervisorSpawnMock.mockImplementationOnce(async (input) => {
+    for (const chunk of chunks) {
+      input.onStdout?.(chunk);
+    }
+    return createManagedRun({
+      ...createSuccessfulProcessExit(),
+      ...exit,
+      ...(captured ? { stdout: input.captureOutput === false ? "" : chunks.join("") } : {}),
+    });
+  });
 }
 
 function mockCaptureSpawn(
@@ -180,79 +233,6 @@ function captureContext(provider = "claude-cli", output: "text" | "jsonl" = "jso
   return context;
 }
 
-beforeEach(() => {
-  vi.unstubAllEnvs();
-  resetAgentEventsForTest();
-  resetDiagnosticEventsForTest();
-  supervisorSpawnMock.mockReset(); // These contexts bypass preparation, which normally loads the provider owner.
-  // Unknown CLI errors must not materialize bundled plugins inside this fixture.
-  const registry = createEmptyPluginRegistry();
-  registry.providers.push({
-    pluginId: "fixture-cli-provider",
-    provider: {
-      id: "fixture-cli-provider",
-      label: "Fixture CLI provider",
-      hookAliases: ["claude-cli", "codex-cli", "google-gemini-cli"],
-      auth: [],
-    },
-    source: "test",
-  });
-  setActivePluginRegistry(registry);
-});
-
-function streamDelta(delta: unknown, index?: number) {
-  return jsonl({
-    type: "stream_event",
-    event: {
-      type: "content_block_delta",
-      ...(index === undefined ? {} : { index }),
-      delta,
-    },
-  });
-}
-
-function captureAgentEvents(streams?: string[]) {
-  const events: Array<{
-    stream: string;
-    phase?: string;
-    text?: string;
-    delta?: string;
-    isReasoningSnapshot?: true;
-  }> = [];
-  onTestFinished(
-    onAgentEvent(({ stream, data }) => {
-      if (streams && !streams.includes(stream)) {
-        return;
-      }
-      events.push({
-        stream,
-        ...(streams ? {} : { phase: typeof data.phase === "string" ? data.phase : undefined }),
-        text: typeof data.text === "string" ? data.text : undefined,
-        delta: typeof data.delta === "string" ? data.delta : undefined,
-        ...(data.isReasoningSnapshot === true ? { isReasoningSnapshot: true } : {}),
-      });
-    }),
-  );
-  return events;
-}
-
-function mockOutput(
-  chunks: readonly string[],
-  exit: Partial<ReturnType<typeof createSuccessfulProcessExit>> = {},
-  captured = false,
-) {
-  supervisorSpawnMock.mockImplementationOnce(async (input) => {
-    for (const chunk of chunks) {
-      input.onStdout?.(chunk);
-    }
-    return createManagedRun({
-      ...createSuccessfulProcessExit(),
-      ...exit,
-      ...(captured ? { stdout: input.captureOutput === false ? "" : chunks.join("") } : {}),
-    });
-  });
-}
-
 function settledResult(
   context: PreparedCliRunContext,
   output: Awaited<ReturnType<typeof executePreparedCliRun>>,
@@ -287,6 +267,26 @@ function requireSupervisorSpawnInput(index = 0): SupervisorSpawnInput {
   assert.isDefined(input, "Expected supervisor spawn");
   return input;
 }
+beforeEach(() => {
+  vi.unstubAllEnvs();
+  resetAgentEventsForTest();
+  resetDiagnosticEventsForTest();
+  supervisorSpawnMock.mockReset(); // These contexts bypass preparation, which normally loads the provider owner.
+  // Unknown CLI errors must not materialize bundled plugins inside this fixture.
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({
+    pluginId: "fixture-cli-provider",
+    provider: {
+      id: "fixture-cli-provider",
+      label: "Fixture CLI provider",
+      hookAliases: ["claude-cli", "codex-cli", "google-gemini-cli"],
+      auth: [],
+    },
+    source: "test",
+  });
+  setActivePluginRegistry(registry);
+});
+
 function createDiagnosticFixture() {
   const time = { now: 1_000_000 };
   const clock = vi.spyOn(Date, "now").mockImplementation(() => time.now);
