@@ -3,6 +3,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { isPathInside } from "../infra/path-guards.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { resolveAgentDatabaseIdleHandleTtlMs } from "../infra/sqlite-handle-lifecycle.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import {
@@ -30,6 +31,7 @@ import {
 import { assertAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-maintenance-authority.js";
 import {
   drainAgentDatabaseResources,
+  hasOpenClawAgentDatabaseAsyncResources,
   matchesAgentDatabaseClose,
   revokeAgentDatabaseResources,
   withAgentDatabaseCloseFence,
@@ -229,6 +231,10 @@ export function refreshAgentDatabaseIdleTimer(database: OpenClawAgentDatabase): 
     }
     // Maintenance closes its handles with schema custody; this detached timer has none.
     if (getOpenClawDatabaseMaintenanceResourceScope(database.db)) {
+      return;
+    }
+    // The ordered drain closes readers first; closing their last writer here strands the WAL.
+    if (cleanupSignal.aborted && hasOpenClawAgentDatabaseAsyncResources({ path: database.path })) {
       return;
     }
     // Awaiting operations own the exact connection; final release rearms eviction.
@@ -434,9 +440,10 @@ export function closeOpenClawAgentDatabases(rootPath?: string): void {
 
 /** Latch integrity refusals so later opens fail without rescanning. */
 export function recordOpenClawAgentDatabaseOpenFailure(pathname: string, error: Error): void {
-  cache.terminal.record(pathname, error);
   // Quarantine revokes this process's trust because doctor may replace the file.
   invalidateOpenClawAgentDatabaseValidation(pathname);
+  revokeSqliteDatabaseAdmissionsForPath(pathname);
+  cache.terminal.record(pathname, error);
 }
 
 /** Release fixture handles and pathname trust before a test root is recreated. */

@@ -47,9 +47,15 @@ const resources = resolveGlobalSingleton(
   }),
 );
 
-/** CLI cleanup can skip loading native database owners when no Worker was admitted. */
-export function hasOpenClawAgentDatabaseAsyncResources(): boolean {
-  return resources.active.size > 0 || resources.closing.size > 0;
+/** Query existing close custody without admitting or revoking another resource. */
+export function hasOpenClawAgentDatabaseAsyncResources(
+  selection?: AgentDatabaseCloseSelection,
+): boolean {
+  return selection
+    ? [...resources.active, ...resources.closing.keys()].some((resource) =>
+        matchesAgentDatabaseClose(selection, resource),
+      )
+    : resources.active.size > 0 || resources.closing.size > 0;
 }
 
 /** Observe a full close without admitting a reader into its retiring lifetime. */

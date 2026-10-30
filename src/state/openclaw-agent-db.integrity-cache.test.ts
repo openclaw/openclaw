@@ -25,7 +25,11 @@ import {
   invalidateOpenClawAgentDatabaseIntegrityBeforeMutation,
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
-import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
+import {
+  closeCachedOpenClawAgentDatabase,
+  closeOpenClawAgentDatabaseByPathAsync,
+} from "./openclaw-agent-db-lifecycle.js";
+import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import * as schema from "./openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -66,12 +70,18 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
-it("certifies idle handles after grace and borrowed handles only after their final release", async () => {
+it("certifies shutdown handles after dependent readers and final borrowers release", async () => {
   vi.useFakeTimers();
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-cleanup-idle-") };
   const options = { agentId: "idle", env };
   const heldOptions = { agentId: "held", env };
   const idle = openOpenClawAgentDatabase(options);
+  const reader = openOpenClawAgentDatabaseReadOnly(options, { lifecycle: "agent" });
+  if (!reader.found) {
+    throw new Error("Missing synthetic agent reader");
+  }
+  reader.database.db.prepare("SELECT state_key FROM auth_profile_state").all();
+  idle.db.exec("INSERT INTO auth_profile_state VALUES ('shutdown-proof', '{}', 1)");
   const held = openOpenClawAgentDatabase(heldOptions);
   const entered = createDeferredCore();
   const release = createDeferredCore();
@@ -87,6 +97,8 @@ it("certifies idle handles after grace and borrowed handles only after their fin
     expect(idle.db.isOpen).toBe(true);
     beginGatewayShutdownCleanup();
     await vi.advanceTimersByTimeAsync(0);
+    await closeOpenClawAgentDatabaseByPathAsync(idle.path);
+    expect(reader.database.db.isOpen).toBe(false);
     expect(idle.db.isOpen).toBe(false);
     expect(readSqliteDatabaseCleanClose(idle.path)).toBe(true);
     expect(logger.info).toHaveBeenCalledWith(
