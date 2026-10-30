@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parse as parseToml } from "smol-toml";
 import type {
-  CodexAppServerCommandSource,
   CodexAppServerHomeScope,
   CodexAppServerRuntimeOptions,
   CodexAppServerStartOptions,
@@ -35,7 +34,7 @@ import {
   DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME,
   DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME,
   DEFAULT_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS,
-  assertCodexAppServerCommandHasNoInlineArgs,
+  resolveCodexAppServerCommand,
 } from "./config-parsing.js";
 import { parseCodexRequirementsPolicy, readCodexRequirementsToml } from "./config-requirements.js";
 import {
@@ -118,17 +117,7 @@ export function createCodexAppServerConfig({
         "plugins.entries.codex.config.sessionCatalog.homes requires appServer.transport=stdio",
       );
     }
-    const configCommand = readNonEmptyString(config.command);
-    const envCommand = readNonEmptyString(env.OPENCLAW_CODEX_APP_SERVER_BIN);
-    const command = configCommand ?? envCommand ?? "codex";
-    const commandSource: CodexAppServerCommandSource = configCommand
-      ? "config"
-      : envCommand
-        ? "env"
-        : "managed";
-    if (commandSource === "config" || commandSource === "env") {
-      assertCodexAppServerCommandHasNoInlineArgs({ command, source: commandSource });
-    }
+    const { command, commandSource } = resolveCodexAppServerCommand(config.command, env);
     const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
     const headers = normalizeHeaders(config.headers);
     const clearEnv = normalizeTrimmedStringList(config.clearEnv);

@@ -1,6 +1,9 @@
 import { createPluginConfigParser } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNullableRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
 import {
@@ -266,6 +269,21 @@ export function isCodexPairedNodeRemoteExecPlacementSandbox(sandbox: unknown): b
     typeof sandbox.placementNodeId === "string" &&
     sandbox.placementNodeId.length > 0
   );
+}
+
+/** One command-source decision for harness admission and startup. */
+export function resolveCodexAppServerCommand(
+  configured: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): { command: string; commandSource: CodexAppServerCommandSource } {
+  const configCommand = normalizeOptionalString(configured);
+  const envCommand = normalizeOptionalString(env.OPENCLAW_CODEX_APP_SERVER_BIN);
+  const command = configCommand ?? envCommand ?? "codex";
+  const commandSource = configCommand ? "config" : envCommand ? "env" : "managed";
+  if (commandSource !== "managed") {
+    assertCodexAppServerCommandHasNoInlineArgs({ command, source: commandSource });
+  }
+  return { command, commandSource };
 }
 
 export function assertCodexAppServerCommandHasNoInlineArgs(params: {
