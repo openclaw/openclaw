@@ -19,7 +19,7 @@ import {
 import type { RuntimeMsgContext } from "../templating.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { ReplyToolAuthorityOverlay } from "./reply-run-registry.contracts.js";
-import type { ReplyToolAuthorityInput } from "./reply-tool-authority.js";
+import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
 export type AuthorizedCrossSurfaceContinuation = {
   kind: "verified-profile" | "shared-owner";
