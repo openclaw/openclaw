@@ -76,7 +76,7 @@ describe("memory session actor", () => {
     const old = actor.snapshot(authority)!;
     const result = await actor.patch(activityCommand(10), authority, {
       committed(value) {
-        value.receipt.afterVersion.sequence = 100;
+        Object.assign(value.receipt.afterVersion, { sequence: 100 });
         value.receipt.postimage.entry!.updatedAt = 100;
         value.receipt.transcript.after.rawSeq = 100;
       },
