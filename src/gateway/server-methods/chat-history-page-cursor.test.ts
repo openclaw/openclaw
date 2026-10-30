@@ -8,6 +8,7 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { decodeChatHistoryPageCursor } from "../chat-history-page-cursor.js";
 import { serializeGatewayFrame } from "../serialized-json.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
 import {
@@ -193,6 +194,35 @@ it.each(["anchor", "tail", "offset"] as const)(
   },
 );
 
+it.each([undefined, 0])("pages across a dense silent gap from offset %s", async (offset) => {
+  await withHistoryState(async () => {
+    const { read } = await seedHistory([
+      makeMessage("Older question", { role: "user" }),
+      makeMessage("Older answer"),
+      ...Array.from({ length: 80 }, () => makeMessage("NO_REPLY")),
+      makeMessage("Latest answer"),
+    ]);
+    const first = await read({ limit: 1, offset, maxChars: 100 });
+    expect(messageIds(first)).toEqual(["message-82"]);
+    expect(first.hasMore).toBe(true);
+    expect(first.nextOffset).toBe(1);
+    expect(typeof first.olderCursor).toBe("string");
+    expect(decodeChatHistoryPageCursor(String(first.olderCursor))).toMatchObject({
+      messageId: "message-80",
+      direction: "older",
+    });
+    expect(
+      await walkPages(first, "olderCursor", read, { limit: 100, maxChars: 100 }, 3),
+    ).toMatchObject({
+      ids: ["message-0", "message-1"],
+    });
+    const older = await read({ limit: 2, offset: first.nextOffset, maxChars: 100 });
+    expect(messageIds(older)).toEqual(["message-0", "message-1"]);
+    expect(older.hasMore).toBe(false);
+    expect(older.nextOffset).toBeUndefined();
+  });
+});
+
 it.each([false, true])("terminates a hidden prefix with tool-only tail=%s", async (toolOnly) => {
   await withHistoryState(async () => {
     const { read } = await seedHistory([
@@ -283,7 +313,7 @@ it.each([
       });
       expect(messageIds(page)).toEqual([older ? "message-3" : "message-0"]);
       expect(await walkPages(page, direction, read, { limit: 1 }, 5)).toEqual({
-        emptyPages: 2,
+        emptyPages: ordinary && older ? 0 : 2,
         ids: [older ? "message-0" : "message-3"],
       });
     });

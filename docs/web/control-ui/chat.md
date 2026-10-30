@@ -30,6 +30,10 @@ Hidden panes, background tabs, and programmatic or maintenance scrolling do not
 trigger automatic loading. An incomplete history page does not show the new-chat welcome
 screen.
 
+Hidden history rows do not end pagination while older source rows remain. The
+Gateway continues from the consumed source boundary, including hidden rows, and
+stops offering earlier history when that source is exhausted.
+
 Enable **Settings → Labs → Speech bubbles** to try the experimental view (off by default).
 While enabled, Home uses bubbles by default. The session menu’s **View → Speech bubbles**
 option changes only that conversation. Explicit choices stay in this browser for this
