@@ -74,7 +74,9 @@ extension CanvasWindowController {
         if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled { return }
         canvasWindowLogger.error(
             "canvas load failed domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public)")
-        self.showLoadFailure("Canvas couldn't show this page (\(nsError.domain) \(nsError.code)).")
+        self.showLoadFailure(
+            "Canvas couldn't show this page (\(nsError.domain) \(nsError.code)). "
+                + "Check the file or URL, then present it again.")
     }
 
     func webViewWebContentProcessDidTerminate(_: WKWebView) {

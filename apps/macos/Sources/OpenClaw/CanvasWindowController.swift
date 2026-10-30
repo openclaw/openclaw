@@ -22,7 +22,12 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
 
     var onVisibilityChanged: ((Bool) -> Void)?
 
-    init(sessionKey: String, root: URL, anchorProvider: @escaping () -> NSRect?) throws {
+    init(
+        sessionKey: String,
+        root: URL,
+        anchorProvider: @escaping () -> NSRect?,
+        websiteDataStore: WKWebsiteDataStore = .default()) throws
+    {
         self.sessionKey = sessionKey
         self.anchorProvider = anchorProvider
 
@@ -37,6 +42,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         config.preferences.isElementFullscreenEnabled = true
         config.preferences.tabFocusesLinks = true
         config.setURLSchemeHandler(self.schemeHandler, forURLScheme: CanvasScheme.scheme)
+        config.websiteDataStore = websiteDataStore
 
         self.webView = WKWebView(frame: .zero, configuration: config)
         // Presented documents render against an opaque surface.

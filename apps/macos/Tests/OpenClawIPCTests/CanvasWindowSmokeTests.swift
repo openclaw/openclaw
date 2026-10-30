@@ -89,7 +89,8 @@ struct CanvasWindowSmokeTests {
         let controller = try CanvasWindowController(
             sessionKey: "main",
             root: root,
-            anchorProvider: { NSRect(x: 200, y: 400, width: 40, height: 40) })
+            anchorProvider: { NSRect(x: 200, y: 400, width: 40, height: 40) },
+            websiteDataStore: .nonPersistent())
         defer { controller.close() }
         let dir = URL(fileURLWithPath: controller.directoryPath)
         try "# Canvas note marker".write(to: dir.appendingPathComponent("note.md"), atomically: true, encoding: .utf8)
