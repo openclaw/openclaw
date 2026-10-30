@@ -208,14 +208,6 @@ function pruneAfterInsert(
   auditEventRetention.set(db, { ...retention, nextSequence });
 }
 
-function parseInsertedAuditSequence(value: string): number {
-  const sequence = Number(value);
-  if (!Number.isSafeInteger(sequence) || sequence < 1) {
-    throw new Error("audit event sequence is outside the supported integer range");
-  }
-  return sequence;
-}
-
 /** Persist one projected event idempotently and prune fixed retention bounds. */
 export function recordAuditEventInDatabase(
   input: AuditEventInput,
@@ -296,6 +288,14 @@ export function recordAuditEventInDatabase(
     clearAuditIdentityKeyCacheForDatabase(db);
     throw error;
   }
+}
+
+function parseInsertedAuditSequence(value: string): number {
+  const sequence = Number(value);
+  if (!Number.isSafeInteger(sequence) || sequence < 1) {
+    throw new Error("audit event sequence is outside the supported integer range");
+  }
+  return sequence;
 }
 
 /** Persist a completed run as one replay-safe insert and one retention pass. */
