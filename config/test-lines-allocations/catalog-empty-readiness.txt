@@ -1,2 +1,0 @@
-# Empty catalog readiness regression and catalog admission in the existing FIFO test.
-13
