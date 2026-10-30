@@ -531,6 +531,7 @@ it.each([
             configuredCatalogEntries: [],
             pluginRegistry: generation.pluginRegistry,
           },
+          run: <T>(run: () => T): T => run(),
           [Symbol.asyncDispose]: async () => {},
         });
         await setHostToolFactoryForTest({ runId: "native-btw-core" }, (options) => {

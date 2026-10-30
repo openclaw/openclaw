@@ -86,15 +86,12 @@ describe("check-deadcode-exports", () => {
       "config/knip.scripts-exports.config.ts!",
       "scripts/generate-runtime-script-assets.mjs!",
       "scripts/generate-static-validators.mts!",
+      "scripts/perf/agent-exec-cgroup-proof.ts!",
+      "scripts/perf/backup-verify-fixture.mjs!",
+      "scripts/perf/backup-verify-measure.mjs!",
       "scripts/perf/cron-delivery-gateway-entry.ts!",
-      "scripts/perf/doctor-retirement-measure.mts!",
-      "scripts/perf/github-readiness-state-bench.ts!",
-      "scripts/perf/plugin-policy-read-measure.mjs!",
-      "scripts/perf/prompt-cache-observation-measure.ts!",
-      "scripts/perf/reconnect-read-wave-measure.ts!",
-      "scripts/perf/session-actor-retention-measure.ts!",
-      "scripts/perf/session-row-churn-probe.ts!",
       "tsdown.config.ts!",
+      "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
     ]);
     expect(knipConfig.workspaces["."].project).toContain("config/**/*.{ts,mts,cts}!");
     expectEntries(fullRootWorkspace.entry, [
@@ -109,6 +106,9 @@ describe("check-deadcode-exports", () => {
       "test/scripts/service-relay-artifact.test-support.mjs!",
     );
     for (const extension of ["js", "mjs", "cjs", "ts", "tsx", "mts", "cts"]) {
+      expect(isEntry(knipConfig.workspaces["."].entry, `scripts/perf/x.${extension}`)).toBe(
+        extension !== "tsx",
+      );
       for (const directory of ["src", "scripts", "test"]) {
         expect(isEntry(fullRootWorkspace.entry, `${directory}/x.test.${extension}`)).toBe(true);
       }
@@ -336,21 +336,7 @@ const catalog = module.loadControlUiSourceCatalog();`;
     );
   });
 
-  it("roots benchmark parents and follows only their live computed child launches", () => {
-    const entries = knipConfig.workspaces["."].entry;
-    for (const parent of [
-      "scripts/perf/archive-worker-churn-measure.ts!",
-      "scripts/perf/session-create-measure.ts!",
-      "scripts/perf/session-create-repository-measure.ts!",
-    ]) {
-      expect(
-        entries.filter((entry) => entry === parent),
-        parent,
-      ).toHaveLength(1);
-    }
-    expect(entries).not.toContain("scripts/perf/archive-worker-churn-preload.mjs!");
-    expect(entries).not.toContain("scripts/perf/session-create-measure-loader.mjs!");
-
+  it("follows only live computed benchmark child launches", () => {
     const archivePath = path.resolve("scripts/perf/archive-worker-churn-measure.ts");
     const sessionCreatePath = path.resolve("scripts/perf/session-create-measure.ts");
     const archiveSource = fs.readFileSync(archivePath, "utf8");
@@ -416,8 +402,8 @@ const unrelatedArgs = [
 
   it("models exact generated and module-hook named consumers", () => {
     expect(knipConfig.workspaces["."].project).toContain("config/knip-dynamic-consumers.mjs!");
-    const compile = knipConfig.compilers.mjs;
-    const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    const compile = createDynamicConsumerCompiler();
+    const compiled = compile();
     for (const imported of [
       'import { runtimeProcessDeployManifest as __dynamic0_0, runtimeProcessHelperManifest as __dynamic0_1, runtimeProcessWorkerDependencies as __dynamic0_2 } from "../src/infra/runtime-process-manifest.ts";',
       'import { gatewayBenchTaskOperation as __dynamic1_0 } from "../scripts/lib/gateway-bench-worker-messages.ts";',
@@ -433,61 +419,37 @@ const unrelatedArgs = [
       /import \{ recordTrajectoryFlush as __dynamic\d+_0 \} from "\.\.\/scripts\/perf\/trajectory-flush-preload\.mts";/u,
     );
 
-    const readFileSync = fs.readFileSync.bind(fs);
     const doctorConsumerPath = path.resolve("src/commands/config-preflight-snapshot.ts");
+    const doctorSource = fs.readFileSync(doctorConsumerPath, "utf8");
     const directDoctorConsumer = `const addIssues = (
   await import("./doctor/shared/legacy-config-issues.js")
 ).addDoctorLegacyIssues;`;
-    const readFile = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
-      const source = readFileSync(file, options);
-      return path.resolve(String(file)) === doctorConsumerPath ? directDoctorConsumer : source;
-    });
-    expect(compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs")).toContain(
+    expect(compile(new Map([[doctorConsumerPath, directDoctorConsumer]]))).toContain(
       'import { addDoctorLegacyIssues as __dynamic3_0 } from "../src/commands/doctor/shared/legacy-config-issues.js";',
     );
-
-    readFile.mockImplementation((file, options) => {
-      const source = readFileSync(file, options);
-      if (path.resolve(String(file)) === path.resolve("tsdown.config.ts")) {
-        return String(source).replace(
-          `import {
+    const removed = new Map(
+      Object.entries({
+        "tsdown.config.ts": `import {
   runtimeProcessDeployManifest,
   runtimeProcessHelperManifest,
   runtimeProcessWorkerDependencies,
 } from "./src/infra/runtime-process-manifest.ts";`,
-          "",
-        );
-      }
-      if (
-        path.resolve(String(file)) === path.resolve("scripts/lib/gateway-bench-worker-messages.ts")
-      ) {
-        return String(source).replace(
+        "scripts/lib/gateway-bench-worker-messages.ts":
           "import { gatewayBenchTaskOperation as benchmarkTaskOperation } from ${JSON.stringify(import.meta.url)};",
-          "",
-        );
-      }
-      if (
-        path.resolve(String(file)) === path.resolve("extensions/team-reports/src/sources/http.ts")
-      ) {
-        return String(source).replace(
+        "extensions/team-reports/src/sources/http.ts":
           'import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";',
-          "",
-        );
-      }
-      if (
-        path.resolve(String(file)) === path.resolve("scripts/perf/trajectory-flush-preload.mts")
-      ) {
-        return String(source).replace(
+        "scripts/perf/trajectory-flush-preload.mts":
           "import { recordTrajectoryFlush as __recordTrajectoryFlush } from ${JSON.stringify(import.meta.url)};",
-          "",
-        );
-      }
-      if (path.resolve(String(file)) === doctorConsumerPath) {
-        return String(source).replaceAll(").addDoctorLegacyIssues", ").consumeLegacyIssues");
-      }
-      return source;
-    });
-    const withoutConsumers = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+      }).map(([file, consumer]) => [
+        path.resolve(file),
+        fs.readFileSync(file, "utf8").replaceAll(consumer, ""),
+      ]),
+    );
+    removed.set(
+      doctorConsumerPath,
+      doctorSource.replaceAll(").addDoctorLegacyIssues", ").consumeLegacyIssues"),
+    );
+    const withoutConsumers = compile(removed);
     expect(withoutConsumers).not.toContain("runtimeProcessDeployManifest");
     expect(withoutConsumers).not.toContain("runtimeProcessHelperManifest");
     expect(withoutConsumers).not.toContain("runtimeProcessWorkerDependencies");
@@ -605,6 +567,20 @@ const unrelatedArgs = [
       expect(project(replaceFixture(source, from, to))).toBe("");
     }
     expect(compiled).not.toContain("prepareTtsRequest as");
+  });
+
+  it("models telemetry only through live source imports", () => {
+    const compile = createDynamicConsumerCompiler();
+    for (const [relative, name] of [
+      ["scripts/perf/transcript-broadcast-measure.ts", "installTeamStressTelemetryIpc"],
+      ["test/scripts/team-shape-stress.test.ts", "startTeamStressTelemetry"],
+    ] as const) {
+      const file = path.resolve(relative);
+      const source = fs.readFileSync(file, "utf8");
+      expect(compile()).toContain(`${name} as __dynamic`);
+      const removed = replaceFixture(source, name, "");
+      expect(compile(new Map([[file, removed]]))).not.toContain(`${name} as __dynamic`);
+    }
   });
 
   it("models optional anchor imports only through their bound runtime calls", () => {

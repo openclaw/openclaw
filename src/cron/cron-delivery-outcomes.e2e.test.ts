@@ -360,7 +360,12 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             expect(enqueueSystemEvent).not.toHaveBeenCalled();
             expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
               expect.stringContaining('Automation "fallback owner" failed 1 times'),
-              { agentId: "work", sessionKey, contextKey: `cron:${job.id}:failure-alert` },
+              {
+                agentId: "work",
+                sessionKey,
+                contextKey: `cron:${job.id}:failure-alert`,
+                jobId: job.id,
+              },
             );
             await expectState(storePath, job.id, {
               lastFailureNotificationDelivered: false,
