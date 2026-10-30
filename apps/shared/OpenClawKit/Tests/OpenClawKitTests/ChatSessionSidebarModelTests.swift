@@ -384,8 +384,8 @@ struct ChatSessionSidebarModelTests {
         let sections = ChatSessionSidebarModel.sections(
             sessions: [
                 self.entry(key: "pinned", pinned: true),
-                self.entry(key: "parent", category: "Projects", childSessions: ["child"]),
-                self.entry(key: "child", category: "Projects", parentSessionKey: "parent"),
+                self.entry(key: "parent", updatedAt: 200, category: "Projects", childSessions: ["child"]),
+                self.entry(key: "child", updatedAt: 100, category: "Projects", parentSessionKey: "parent"),
                 self.entry(key: "recent"),
             ],
             currentSessionKey: "recent",
@@ -395,6 +395,117 @@ struct ChatSessionSidebarModelTests {
         #expect(sections.map(\.id) == ["pinned", "group:Projects", "recent"])
         #expect(sections[1].nodes.map(\.id) == ["parent"])
         #expect(sections[1].nodes[0].children.map(\.id) == ["child"])
+    }
+
+    @Test func `pinned parent keeps a run summary from another section`() {
+        // Pinning places the parent's own tree first; the run it spawned still lands
+        // on that row instead of becoming a top-level recent chat.
+        let sections = ChatSessionSidebarModel.foldingSubagentRuns(ChatSessionSidebarModel.sections(
+            sessions: [
+                self.entry(
+                    key: "agent:main:parent",
+                    updatedAt: 300,
+                    pinned: true,
+                    childSessions: ["agent:main:child", "agent:main:subagent:run"]),
+                self.entry(key: "agent:main:child", updatedAt: 200, parentSessionKey: "agent:main:parent"),
+                self.entry(
+                    key: "agent:main:subagent:run",
+                    updatedAt: 100,
+                    spawnedBy: "agent:main:parent",
+                    status: "running"),
+                self.entry(key: "agent:main:other", updatedAt: 50),
+            ],
+            currentSessionKey: "agent:main:parent",
+            query: ""))
+
+        #expect(sections.map(\.id) == ["pinned", "recent"])
+        #expect(sections[0].nodes.map(\.id) == ["agent:main:parent"])
+        #expect(sections[0].nodes[0].foldedSessions.map(\.key) == ["agent:main:subagent:run"])
+        #expect(sections[0].nodes[0].badges.runningCount == 1)
+        #expect(sections[1].nodes.map(\.id) == ["agent:main:child", "agent:main:other"])
+    }
+
+    @Test(arguments: [true, false])
+    func `folded runs carry failure and unread outcomes to the parent row once`(parentListsRun: Bool) {
+        // Without the parent's child link the tree leaves the run as a separate root, so
+        // nothing has counted it yet; with the link the parent's tree already has.
+        let sections = ChatSessionSidebarModel.foldingSubagentRuns(ChatSessionSidebarModel.sections(
+            sessions: [
+                self.entry(
+                    key: "agent:main:parent",
+                    childSessions: parentListsRun ? ["agent:main:subagent:run"] : nil),
+                self.entry(
+                    key: "agent:main:subagent:run",
+                    label: "Research",
+                    unread: true,
+                    spawnedBy: "agent:main:parent",
+                    status: "failed",
+                    lastRunError: "Timed out"),
+            ],
+            currentSessionKey: "agent:main:parent",
+            query: ""))
+
+        let nodes = sections.flatMap(\.nodes)
+
+        #expect(nodes.map(\.id) == ["agent:main:parent"])
+        #expect(nodes[0].badges.failedCount == 1)
+        #expect(nodes[0].badges.hasUnread)
+        #expect(nodes[0].failedDescendantSummary == "Child session Research failed: Timed out")
+    }
+
+    @Test func `runs never become rows and hand over the conversations they start`() {
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: [
+                self.entry(
+                    key: "agent:main:parent",
+                    childSessions: ["agent:main:subagent:run", "agent:main:child"]),
+                self.entry(
+                    key: "agent:main:subagent:run",
+                    spawnedBy: "agent:main:parent",
+                    childSessions: ["agent:main:grandchild"],
+                    status: "running"),
+                self.entry(key: "agent:main:child", parentSessionKey: "agent:main:parent"),
+                self.entry(key: "agent:main:grandchild", parentSessionKey: "agent:main:subagent:run"),
+                self.entry(key: "subagent:home-run", childSessions: ["agent:main:promoted"]),
+                self.entry(key: "agent:main:promoted", spawnedBy: "subagent:home-run"),
+                self.entry(key: "agent:main:subagent:orphan-run"),
+            ],
+            currentSessionKey: "agent:main:parent",
+            query: "")
+
+        let nodes = ChatSessionSidebarModel.foldingSubagentRuns(sections).flatMap(\.nodes)
+        #expect(nodes.map(\.id) == ["agent:main:parent", "agent:main:promoted"])
+        #expect(Set(nodes[0].children.map(\.id)) == ["agent:main:child", "agent:main:grandchild"])
+        #expect(nodes[0].foldedSessions.map(\.key) == ["agent:main:subagent:run"])
+        #expect(nodes[0].badges.runningCount == 1)
+        #expect(ChatSessionSidebarModel.foldingSubagentRuns(ChatSessionSidebarModel.sections(
+            sessions: [self.entry(key: "agent:main:subagent:only")],
+            currentSessionKey: "",
+            query: "")).isEmpty)
+    }
+
+    @Test func `folded runs belong to Home without claiming a listed child's runs`() {
+        let roster = [
+            self.entry(
+                key: "agent:main:main",
+                childSessions: ["agent:main:subagent:home-run", "agent:main:child"]),
+            self.entry(
+                key: "agent:main:subagent:home-run",
+                spawnedBy: "agent:main:main",
+                childSessions: ["agent:main:subagent:nested-run"]),
+            self.entry(key: "agent:main:subagent:nested-run"),
+            self.entry(key: "agent:main:child", childSessions: ["agent:main:subagent:child-run"]),
+            self.entry(key: "agent:main:subagent:child-run"),
+            // Home's child window is freshness-filtered; the runs' own backrefs still name their owner.
+            self.entry(key: "agent:main:subagent:backref-run", spawnedBy: "agent:main:main"),
+            self.entry(key: "agent:main:subagent:child-backref-run", spawnedBy: "agent:main:child"),
+        ]
+
+        #expect(ChatSessionSidebarModel.foldedRuns(in: roster, under: "agent:main:main").map(\.key) == [
+            "agent:main:subagent:home-run",
+            "agent:main:subagent:nested-run",
+            "agent:main:subagent:backref-run",
+        ])
     }
 
     @Test func `group placement uses exact gateway category names`() {

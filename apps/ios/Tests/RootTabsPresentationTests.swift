@@ -626,6 +626,65 @@ struct RootTabsPresentationTests {
         #expect(keys.contains("agent:main:cron:daily") == showsAutomation)
     }
 
+    @Test func `drawer folds subagent runs into their parent session`() throws {
+        let nodes = try RootSidebarModel.sections(
+            sessions: Self.nestedSessions(),
+            query: "",
+            currentSessionKey: "agent:main:main",
+            mainSessionKey: "agent:main:main",
+            activeAgentID: "main",
+            groups: []).flatMap(\.nodes)
+
+        #expect(nodes.map(\.id) == ["agent:main:dashboard:parent", "agent:main:dashboard:other"])
+        #expect(nodes.first?.children.map(\.id) == ["agent:main:dashboard:child"])
+    }
+
+    @Test func `drawer row says its folded run is waiting for a slot`() throws {
+        let sessions = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data("""
+        [
+          {"key":"agent:main:main","updatedAt":900},
+          {"key":"agent:main:dashboard:idle","updatedAt":700,"status":"idle"},
+          {"key":"agent:main:subagent:queued","updatedAt":600,"spawnedBy":"agent:main:dashboard:idle",
+           "status":"queued"}
+        ]
+        """.utf8))
+        let nodes = RootSidebarModel.sections(
+            sessions: sessions,
+            query: "",
+            currentSessionKey: "agent:main:main",
+            mainSessionKey: "agent:main:main",
+            activeAgentID: "main",
+            groups: []).flatMap(\.nodes)
+
+        #expect(nodes.map(\.id) == ["agent:main:dashboard:idle"])
+        #expect(nodes.first?.badges.queuedCount == 1)
+        #expect(nodes.first.flatMap { RootSidebar.sessionSubtitle(for: $0) } == "Waiting for a concurrency slot")
+    }
+
+    @Test func `drawer rows keep child sessions collapsed until one is open or toggled`() throws {
+        let sessions = try Self.nestedSessions()
+        func rows(selected: String, expansion: [String: Bool] = [:]) -> [String] {
+            let layout = RootSidebar.sessionLayout(RootSidebarModel.sections(
+                sessions: sessions,
+                query: "",
+                currentSessionKey: selected,
+                mainSessionKey: "agent:main:main",
+                activeAgentID: "main",
+                groups: []))
+            return layout.sections.flatMap {
+                RootSidebar.sessionTreeRows($0.nodes, selectedSessionKey: selected, expansion: expansion)
+            }.map { String(repeating: "  ", count: $0.depth) + $0.node.id }
+        }
+        let parent = "agent:main:dashboard:parent"
+        let collapsed = [parent, "agent:main:dashboard:other"]
+        let expanded = [parent, "  agent:main:dashboard:child", "agent:main:dashboard:other"]
+
+        #expect(rows(selected: "agent:main:main") == collapsed)
+        #expect(rows(selected: "agent:main:dashboard:child") == expanded)
+        #expect(rows(selected: "agent:main:main", expansion: [parent: true]) == expanded)
+        #expect(rows(selected: "agent:main:dashboard:child", expansion: [parent: false]) == collapsed)
+    }
+
     @Test func `sidebar agent badges use canonical identity fallback`() {
         #expect(RootSidebar.agentBadge(
             name: "Research Agent",
@@ -907,6 +966,23 @@ struct RootTabsPresentationTests {
             RootTabs.shouldShowSidebarRevealInDestinationHeader(
                 isSidebarVisible: true,
                 layoutMode: .split))
+    }
+
+    /// Home and a dashboard parent each spawn a subagent run; the parent also has a visible child.
+    private static func nestedSessions() throws -> [OpenClawChatSessionEntry] {
+        try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data("""
+        [
+          {"key":"agent:main:main","updatedAt":900,"childSessions":["agent:main:subagent:home-run"]},
+          {"key":"agent:main:subagent:home-run","updatedAt":800,"spawnedBy":"agent:main:main","status":"running"},
+          {"key":"agent:main:dashboard:parent","updatedAt":700,
+           "childSessions":["agent:main:subagent:research","agent:main:dashboard:child"]},
+          {"key":"agent:main:subagent:research","updatedAt":600,"spawnedBy":"agent:main:dashboard:parent",
+           "status":"running"},
+          {"key":"agent:main:dashboard:child","updatedAt":500,"parentSessionKey":"agent:main:dashboard:parent"},
+          {"key":"agent:main:dashboard:other","updatedAt":400},
+          {"key":"agent:main:dashboard:old","updatedAt":300,"archived":true}
+        ]
+        """.utf8))
     }
 
     private static func sessionEntry(

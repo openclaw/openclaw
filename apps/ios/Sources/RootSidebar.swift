@@ -11,6 +11,7 @@ struct RootSidebar: View {
     @State private var isSearchActive = false
     @State private var showsPagesEditor = false
     @State private var presentedAttention: OpenClawChatAttentionPresentation?
+    @State private var childExpansion: [String: Bool] = [:]
     @FocusState private var isSearchFocused: Bool
     @AppStorage("sidebar.pinnedPages") private var pinnedPagesStorage: String = ""
 
@@ -402,10 +403,10 @@ struct RootSidebar: View {
                         self.sectionTitle(title)
                         Spacer(minLength: 0)
                         self.attentionBadges(
-                            for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
+                            for: section.nodes.flatMap(\.previewSessions), targetID: "section:\(section.id)")
                     }
-                    ForEach(self.sessionNodes(for: section)) { node in
-                        self.sessionButton(node, rowPass: rowPass)
+                    ForEach(self.sessionRows(for: section, rowPass: rowPass)) { row in
+                        self.sessionButton(row, rowPass: rowPass)
                     }
                 }
             }
@@ -450,8 +451,8 @@ struct RootSidebar: View {
                 .accessibilityLabel(String(localized: "Edit Pages"))
             }
             self.homeRow
-            ForEach(pinnedSessionNodes) { node in
-                self.sessionButton(node, rowPass: rowPass)
+            ForEach(self.sessionRows(pinnedSessionNodes, rowPass: rowPass)) { row in
+                self.sessionButton(row, rowPass: rowPass)
             }
             ForEach(self.pinnedPages) { destination in
                 self.destinationButton(destination)
@@ -466,6 +467,10 @@ struct RootSidebar: View {
         let isSelected = self.selectedDestination == .chat &&
             self.resolvedSelectedSessionKey.caseInsensitiveCompare(mainKey) == .orderedSame
         let mainSession = self.mainSessionEntry
+        // Runs Home started have no row of their own; their work, outcome, and attention belong here.
+        let homeRuns = self.homeRunSessions
+        let homeSessions = (mainSession.map { [$0] } ?? []) + homeRuns
+        let failedRun = ChatSessionSidebarModel.failedSessionSummary(in: homeRuns)
         return HStack(spacing: 0) {
             Button {
                 self.appModel.openChat(sessionKey: mainKey)
@@ -475,15 +480,29 @@ struct RootSidebar: View {
                     Image(systemName: "house")
                         .font(OpenClawType.subheadSemiBold)
                         .frame(width: 18)
-                    Text(String(localized: "Home"))
-                        .font(OpenClawType.subheadSemiBold)
-                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(String(localized: "Home"))
+                            .font(OpenClawType.subheadSemiBold)
+                            .lineLimit(1)
+                        if let failedRun {
+                            Text(verbatim: failedRun)
+                                .font(OpenClawType.caption2Medium)
+                                .foregroundStyle(OpenClawSidebarPalette.muted)
+                                .lineLimit(1)
+                        }
+                    }
                     Spacer(minLength: 4)
-                    if mainSession?.hasActiveRun == true {
+                    if failedRun != nil {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(OpenClawType.caption2Medium)
+                            .foregroundStyle(OpenClawBrand.warn)
+                            .accessibilityLabel(String(localized: "Thread failed"))
+                    }
+                    if homeSessions.contains(where: { $0.hasActiveRun == true || $0.hasActiveSubagentRun == true }) {
                         ProgressView()
                             .controlSize(.mini)
                             .tint(OpenClawSidebarPalette.accent)
-                    } else if mainSession?.unread == true {
+                    } else if homeSessions.contains(where: { $0.unread == true }) {
                         Circle()
                             .fill(OpenClawSidebarPalette.accent)
                             .frame(width: 7, height: 7)
@@ -503,8 +522,8 @@ struct RootSidebar: View {
             .overlay(alignment: .leading) {
                 OpenClawSessionColorStripe(color: mainSession?.color)
             }
-            .accessibilityValue(mainSession?.unread == true ? String(localized: "Unread") : "")
-            self.attentionBadges(for: mainSession.map { [$0] } ?? [], targetID: "home")
+            .accessibilityValue(homeSessions.contains { $0.unread == true } ? String(localized: "Unread") : "")
+            self.attentionBadges(for: homeSessions, targetID: "home")
         }
     }
 
@@ -538,6 +557,10 @@ struct RootSidebar: View {
     /// ("agent:<id>:main"), so raw comparison would drop Home's badges.
     private var mainSessionEntry: OpenClawChatSessionEntry? {
         self.model.sessions.first { $0.key == self.resolvedMainSessionKey }
+    }
+
+    private var homeRunSessions: [OpenClawChatSessionEntry] {
+        ChatSessionSidebarModel.foldedRuns(in: self.model.sessions, under: self.resolvedMainSessionKey)
     }
 
     private var resolvedMainSessionKey: String {
@@ -581,25 +604,29 @@ struct RootSidebar: View {
         }
         var remainingSections = sections
         let pinnedSection = remainingSections.remove(at: pinnedIndex)
-        return SessionLayout(
-            pinnedNodes: self.flattened(pinnedSection.nodes),
-            sections: remainingSections)
+        return SessionLayout(pinnedNodes: pinnedSection.nodes, sections: remainingSections)
     }
 
     private var sessionCategories: [String] {
         CommandSessionGrouping.categories(from: self.model.sessions, knownGroups: SessionGroupStore.load())
     }
 
-    private static func flattened(_ nodes: [ChatSessionSidebarModel.Node]) -> [ChatSessionSidebarModel.Node] {
-        nodes.flatMap { [$0] + self.flattened($0.children) }
+    private func sessionRows(
+        _ nodes: [ChatSessionSidebarModel.Node],
+        rowPass: SessionRowPass) -> [SessionTreeRow]
+    {
+        Self.sessionTreeRows(nodes, selectedSessionKey: rowPass.selectedSessionKey, expansion: self.childExpansion)
     }
 
-    private func sessionNodes(for section: ChatSessionSidebarModel.Section) -> [ChatSessionSidebarModel.Node] {
-        let nodes = Self.flattened(section.nodes)
+    private func sessionRows(
+        for section: ChatSessionSidebarModel.Section,
+        rowPass: SessionRowPass) -> [SessionTreeRow]
+    {
+        // The cap counts top-level conversations; expanding one never pushes another out.
         guard section.id == "recent", let limit = Self.recentSessionCap(searchText: self.searchText) else {
-            return nodes
+            return self.sessionRows(section.nodes, rowPass: rowPass)
         }
-        return Array(nodes.prefix(limit))
+        return self.sessionRows(Array(section.nodes.prefix(limit)), rowPass: rowPass)
     }
 
     static func recentSessionCap(searchText: String) -> Int? {
@@ -614,9 +641,10 @@ struct RootSidebar: View {
     }
 
     private func sessionButton(
-        _ node: ChatSessionSidebarModel.Node,
+        _ row: SessionTreeRow,
         rowPass: SessionRowPass) -> some View
     {
+        let node = row.node
         let session = node.session
         let isSelected = session.key == rowPass.selectedSessionKey
         return HStack(spacing: 0) {
@@ -629,6 +657,11 @@ struct RootSidebar: View {
                             ProgressView()
                                 .controlSize(.mini)
                                 .tint(OpenClawSidebarPalette.accent)
+                        } else if node.badges.queuedCount > 0 {
+                            Image(systemName: "clock")
+                                .font(OpenClawType.captionSemiBold)
+                                .foregroundStyle(OpenClawSidebarPalette.muted)
+                                .accessibilityLabel(String(localized: "Queued"))
                         } else {
                             Image(systemName: "bubble.left")
                                 .font(OpenClawType.captionSemiBold)
@@ -646,12 +679,7 @@ struct RootSidebar: View {
                                 ? OpenClawSidebarPalette.accent
                                 : OpenClawSidebarPalette.textStrong)
                             .lineLimit(1)
-                        // Web-parity subtitle: the work line (repo/branch) names the
-                        // session; recency moves to the trailing metadata slot.
-                        if let subtitle = ChatSessionSidebarModel.subtitle(
-                            for: session,
-                            workSubtitle: ChatSessionSidebarModel.workSubtitle(for: session))
-                        {
+                        if let subtitle = Self.sessionSubtitle(for: node) {
                             Text(verbatim: subtitle)
                                 .font(OpenClawType.caption2Medium)
                                 .foregroundStyle(OpenClawSidebarPalette.muted)
@@ -666,11 +694,17 @@ struct RootSidebar: View {
                             .foregroundStyle(OpenClawSidebarPalette.accent)
                             .accessibilityHidden(true)
                     }
+                    if node.badges.failedCount > 0 {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(OpenClawType.caption2Medium)
+                            .foregroundStyle(OpenClawBrand.warn)
+                            .accessibilityLabel(String(localized: "Thread failed"))
+                    }
                     Text(verbatim: CommandCenterTab.sessionDetail(session))
                         .font(OpenClawType.caption2Medium)
                         .foregroundStyle(OpenClawSidebarPalette.muted)
                         .lineLimit(1)
-                    if session.unread == true {
+                    if node.badges.hasUnread {
                         Circle()
                             .fill(OpenClawSidebarPalette.accent)
                             .frame(width: 7, height: 7)
@@ -703,9 +737,36 @@ struct RootSidebar: View {
                 fork: { self.forkSession(session) })
             .accessibilityValue(Self.sessionAccessibilityValue(
                 isPinned: session.pinned == true,
-                isUnread: session.unread == true))
-            self.attentionBadges(for: Self.flattened([node]).map(\.session), targetID: "session:\(session.key)")
+                isUnread: node.badges.hasUnread))
+            if !node.children.isEmpty {
+                self.childToggle(row)
+            }
+            self.attentionBadges(for: node.previewSessions, targetID: "session:\(session.key)")
         }
+        // Cap the indent so deep chains keep room for their titles.
+        .padding(.leading, CGFloat(min(row.depth, 3)) * 14)
+    }
+
+    private func childToggle(_ row: SessionTreeRow) -> some View {
+        Button {
+            self.childExpansion[row.id] = !row.isExpanded
+        } label: {
+            HStack(spacing: 2) {
+                Image(systemName: row.isExpanded ? "chevron.down" : "chevron.right")
+                    .font(OpenClawType.caption2Bold)
+                Text(row.node.children.count, format: .number)
+                    .font(OpenClawType.caption2Medium)
+                    .monospacedDigit()
+            }
+            .frame(minWidth: 36, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(OpenClawSidebarPalette.muted)
+        .accessibilityLabel(row.isExpanded
+            ? String(localized: "Collapse child sessions")
+            : String(localized: "Expand child sessions"))
+        .accessibilityValue(Text(row.node.children.count, format: .number))
     }
 
     private func attentionBadges(for sessions: [OpenClawChatSessionEntry], targetID: String) -> some View {
@@ -857,6 +918,53 @@ struct RootSidebar: View {
     private func dismissSidebar() {
         self.isSearchFocused = false
         self.hideSidebar()
+    }
+}
+
+extension RootSidebar {
+    struct SessionTreeRow: Identifiable, Equatable {
+        let node: ChatSessionSidebarModel.Node
+        let depth: Int
+        let isExpanded: Bool
+
+        var id: String {
+            self.node.id
+        }
+    }
+
+    /// Web-parity subtitle: the work line (repo/branch) names the session; recency moves to
+    /// the trailing metadata slot. A collapsed child or folded run keeps its outcome here
+    /// instead of losing the row that used to carry it: a failure first, then queued work in
+    /// place of the work line.
+    static func sessionSubtitle(for node: ChatSessionSidebarModel.Node) -> String? {
+        node.failedDescendantSummary ?? ChatSessionSidebarModel.subtitle(
+            for: node.session,
+            workSubtitle: node.badges.queuedCount > 0
+                ? String(localized: "Waiting for a concurrency slot")
+                : ChatSessionSidebarModel.workSubtitle(for: node.session))
+    }
+
+    /// Like the Control UI sidebar, child sessions start collapsed unless one of them is open;
+    /// after an explicit toggle, that choice wins.
+    static func sessionTreeRows(
+        _ nodes: [ChatSessionSidebarModel.Node],
+        selectedSessionKey: String,
+        expansion: [String: Bool],
+        depth: Int = 0) -> [SessionTreeRow]
+    {
+        func containsSelection(_ nodes: [ChatSessionSidebarModel.Node]) -> Bool {
+            nodes.contains { $0.id == selectedSessionKey || containsSelection($0.children) }
+        }
+        return nodes.flatMap { node -> [SessionTreeRow] in
+            let isExpanded = !node.children.isEmpty && (expansion[node.id] ?? containsSelection(node.children))
+            let row = SessionTreeRow(node: node, depth: depth, isExpanded: isExpanded)
+            guard isExpanded else { return [row] }
+            return [row] + self.sessionTreeRows(
+                node.children,
+                selectedSessionKey: selectedSessionKey,
+                expansion: expansion,
+                depth: depth + 1)
+        }
     }
 }
 
