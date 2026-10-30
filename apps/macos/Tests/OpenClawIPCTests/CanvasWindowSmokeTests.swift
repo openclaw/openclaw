@@ -46,6 +46,53 @@ struct CanvasWindowSmokeTests {
         controller.close()
     }
 
+    @Test func `repeated present applies and remembers its own placement`() throws {
+        // Without a screen (headless runner) the panel keeps the requested frame unconstrained.
+        let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        try #require(visible.width >= 700 && visible.height >= 600)
+
+        let sessionKey = "canvas-placement-\(UUID().uuidString)"
+        let manager = CanvasManager.shared
+        let previousAnchor = manager.defaultAnchorProvider
+        manager.defaultAnchorProvider = { NSRect(x: visible.midX, y: visible.midY, width: 1, height: 1) }
+        var sessionDirectory: String?
+        defer {
+            manager.hide(sessionKey: sessionKey)
+            manager.defaultAnchorProvider = previousAnchor
+            AppDefaults.standard.removeObject(
+                forKey: CanvasWindowController.storedFrameDefaultsKey(sessionKey: sessionKey))
+            if let sessionDirectory { try? FileManager().removeItem(atPath: sessionDirectory) }
+        }
+
+        func present(_ frame: NSRect?) throws -> (shown: NSRect?, remembered: NSRect?) {
+            sessionDirectory = try manager.show(sessionKey: sessionKey, placement: frame.map {
+                CanvasPlacement(x: $0.minX, y: $0.minY, width: $0.width, height: $0.height)
+            })
+            let panel = NSApplication.shared.windows.first {
+                ($0.delegate as? CanvasWindowController)?.sessionKey == sessionKey
+            }
+            return (panel?.frame, CanvasWindowController.loadRestoredFrame(sessionKey: sessionKey))
+        }
+
+        let first = NSRect(x: visible.minX + 40, y: visible.minY + 40, width: 400, height: 400)
+        let second = NSRect(x: visible.minX + 120, y: visible.minY + 80, width: 520, height: 480)
+
+        let created = try present(first)
+        #expect(created.shown == first)
+        #expect(created.remembered == first)
+
+        // The panel already exists: this present must move it now, not on the next present.
+        let reused = try present(second)
+        #expect(reused.shown == second)
+        #expect(reused.remembered == second)
+
+        // A present without placement keeps the remembered frame.
+        let plain = try present(nil)
+        #expect(plain.shown == second)
+        #expect(plain.remembered == second)
+    }
+
     @Test func `hosted Canvas URL resolver keeps capability scope`() throws {
         let surface = "https://gateway.example/root/__openclaw__/cap/token%20value"
         let canvas = try #require(CanvasHostedURLResolver.resolve(
