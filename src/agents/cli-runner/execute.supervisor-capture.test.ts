@@ -218,9 +218,7 @@ function buildPreparedCliRunContext(params: {
     { provider, model: "model", runId, agentId: "main", sessionKey: "agent:main:main" },
     { id: provider, config: backend, bundleMcp: false, parseJsonlEvent: params.parseJsonlEvent },
   );
-  if (params.beforeExecution) {
-    context.preparedBackend.beforeExecution = params.beforeExecution;
-  }
+  context.preparedBackend.beforeExecution = params.beforeExecution;
   return context;
 }
 
@@ -1033,42 +1031,44 @@ it("correlates parallel same-name loopback calls by arguments instead of admissi
 });
 
 it("keeps identical parallel outcomes unknown with first tool finishes before second CLI identity", async () => {
-  const recordedResults: Array<Record<string, unknown> | undefined> = [];
+  const toolEvents = captureToolEvents();
+  const recordEvent = vi.fn();
   mockCaptureSpawn((input, captureKey) => {
     const toolArgs = { action: "react", emoji: "same" };
-    const emitToolStarts = (...ids: string[]) =>
-      input.onStdout?.(assistant(...ids.map((id) => messageUse(id, toolArgs))));
-    const recordOutcome = (outcome: "completed" | "failed") =>
-      recordToolOutcome(captureKey, "message", toolArgs, outcome);
-    const emitToolResults = (...ids: string[]) =>
-      input.onStdout?.(user(...ids.map((id) => toolResult(id, "ok"))));
-    emitToolStarts("call-identical-a");
-    recordOutcome("failed");
-    recordOutcome("completed");
-    emitToolResults("call-identical-a");
-    emitToolStarts("call-identical-b");
-    emitToolResults("call-identical-b");
-    emitToolStarts("call-identical-later");
-    recordOutcome("completed");
+    input.onStdout?.(assistant(messageUse("call-identical-a", toolArgs)));
+    recordToolOutcome(captureKey, "message", toolArgs, "failed");
+    recordToolOutcome(captureKey, "message", toolArgs, "completed");
+    input.onStdout?.(user(toolResult("call-identical-a", "ok")));
+    input.onStdout?.(assistant(messageUse("call-identical-b", toolArgs)));
+    input.onStdout?.(user(toolResult("call-identical-b", "ok")));
+    input.onStdout?.(assistant(messageUse("call-identical-later", toolArgs)));
+    recordToolOutcome(captureKey, "message", toolArgs, "completed");
     input.onStdout?.(`${user(toolResult("call-identical-later", "ok"))}${terminal()}`);
   });
   const context = captureContext();
-  context.trajectoryRecorder = {
-    recordEvent(type, data) {
-      if (type === "tool.result") {
-        recordedResults.push(data);
-      }
-    },
-  };
+  context.trajectoryRecorder = { recordEvent };
 
   await executePreparedCliRun(context);
-
-  const outcomes = recordedResults.map((row) => [row?.toolCallId, row?.status, row?.success]);
+  const results = recordEvent.mock.calls.filter(([type]) => type === "tool.result");
+  const outcomes = results.map(([, row]) => [row?.toolCallId, row?.status, row?.success]);
   expect(outcomes).toEqual([
     ["call-identical-a", "unknown", undefined],
     ["call-identical-b", "unknown", undefined],
     ["call-identical-later", "completed", true],
   ]);
+  expect(toolEvents).toHaveLength(6);
+  expectToolEvents(
+    toolEvents,
+    [
+      ["started", "call-identical-a"],
+      ["started", "call-identical-b"],
+      ["error", "call-identical-a", { errorCode: "tool_outcome_unknown" }],
+      ["error", "call-identical-b", { errorCode: "tool_outcome_unknown" }],
+      ["started", "call-identical-later"],
+      ["completed", "call-identical-later"],
+    ],
+    true,
+  );
 });
 
 it("uses a loopback outcome that settles during the post-process drain", async () => {
