@@ -1,3 +1,4 @@
+import type { RichTextBlock } from "@slack/types";
 import { eastAsianWidthType } from "get-east-asian-width";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
@@ -10,6 +11,7 @@ import {
   renderMarkdownIRChunksWithinLimit,
   renderMarkdownWithMarkers,
 } from "openclaw/plugin-sdk/text-chunking";
+import { buildSlackListBlock } from "./list-blocks.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
 const SLACK_ANGLE_TOKEN_RE = /<[^>\n]+>/g;
@@ -507,6 +509,25 @@ export function markdownToSlackMrkdwnChunks(
   limit: number,
   options: SlackMarkdownOptions = {},
 ): string[] {
+  return renderSlackMarkdownChunks(markdown, limit, options).map(({ rendered }) => rendered);
+}
+
+export function markdownToSlackMessageChunks(
+  markdown: string,
+  limit: number,
+  options: SlackMarkdownOptions = {},
+): Array<{ text: string; blocks?: RichTextBlock[] }> {
+  return renderSlackMarkdownChunks(markdown, limit, options).map(({ source, rendered }) => {
+    // Chunk boundaries can reveal a role header that was not annotated in the
+    // original IR. Keep the protective prefix visible through the mrkdwn path.
+    const block = rendered.startsWith(SLACK_ASSISTANT_TRANSCRIPT_PREFIX)
+      ? undefined
+      : buildSlackListBlock(source);
+    return block ? { text: rendered, blocks: [block] } : { text: rendered };
+  });
+}
+
+function renderSlackMarkdownChunks(markdown: string, limit: number, options: SlackMarkdownOptions) {
   const ir = prepareSlackMarkdownIR(markdown, options);
   const renderOptions = buildSlackRenderOptions();
   const normalizedLimit =
@@ -522,10 +543,12 @@ export function markdownToSlackMrkdwnChunks(
         : protectSlackAssistantTranscriptRoleHeaders(rendered);
     },
     measureRendered: (rendered) => rendered.length,
-  }).map(({ rendered }) =>
-    // Unsplittable safety fallbacks still need protection before leaving Slack.
-    rendered.length > normalizedLimit
-      ? protectSlackAssistantTranscriptRoleHeaders(rendered)
-      : rendered,
-  );
+  }).map((chunk) => ({
+    source: chunk.source,
+    rendered:
+      // Unsplittable safety fallbacks still need protection before leaving Slack.
+      chunk.rendered.length > normalizedLimit
+        ? protectSlackAssistantTranscriptRoleHeaders(chunk.rendered)
+        : chunk.rendered,
+  }));
 }

@@ -39,6 +39,8 @@ In a channel with `requireMention: true`, a captionless audio clip can satisfy t
     - file sends use Slack upload APIs and can include thread replies (`thread_ts`)
     - long file captions use the first Slack-safe text chunk as the upload comment and send remaining chunks as follow-up messages
     - text and context blocks preserve code formatting and literal backslashes across section boundaries
+    - final text messages render flat Markdown bullet lists as native Slack lists, including emphasis and HTTP(S) links; notification text is generated from the same message
+    - nested, ordered, task, and multiline list items retain mrkdwn rendering, as do messages with unsupported formatting or Slack mention tokens; media captions, explicit Block Kit payloads, and streaming previews keep their existing rendering
     - outbound media cap follows `channels.slack.mediaMaxMb` when configured; otherwise channel sends use MIME-kind defaults from media pipeline
 
     Native Block Kit sections retain all fields even when their combined accessibility text exceeds the preferred text chunk size. Slack's block limits and the 40,000-character message text hard limit still apply.

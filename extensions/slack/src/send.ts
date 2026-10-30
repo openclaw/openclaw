@@ -45,7 +45,11 @@ import {
 } from "./client.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { getSlackWebApiErrorData } from "./errors.js";
-import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
+import {
+  chunkSlackMrkdwnText,
+  markdownToSlackMessageChunks,
+  markdownToSlackMrkdwnChunks,
+} from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "./limits.js";
 import type { SlackEventScope } from "./monitor/event-scope.js";
 import { hasSlackNativeDataBlock, isSlackInvalidBlocksError } from "./native-data-blocks.js";
@@ -1025,6 +1029,7 @@ export async function sendMessageSlack(
         messages = pendingBlockFallback.fallbackMessages;
       } else {
         let resolvedChunks: string[];
+        let nativeMessages: ReturnType<typeof markdownToSlackMessageChunks> | undefined;
         if (opts.textIsSlackPlainText) {
           resolvedChunks = trimmedMessage
             ? chunkTextForOutbound(trimmedMessage, textChunkLimit, { preserveWhitespace: true })
@@ -1045,9 +1050,18 @@ export async function sendMessageSlack(
             chunkMode === "newline"
               ? chunkMarkdownTextWithMode(trimmedMessage, textChunkLimit, chunkMode)
               : [trimmedMessage];
-          const chunks = markdownChunks.flatMap((markdown) =>
-            markdownToSlackMrkdwnChunks(markdown, textChunkLimit, { tableMode }),
-          );
+          // Compile ordinary text once. Its mrkdwn is the accessibility fallback,
+          // not an additional authored section beside the native list.
+          nativeMessages = opts.mediaUrl
+            ? undefined
+            : markdownChunks.flatMap((markdown) =>
+                markdownToSlackMessageChunks(markdown, textChunkLimit, { tableMode }),
+              );
+          const chunks = nativeMessages
+            ? nativeMessages.map(({ text }) => text)
+            : markdownChunks.flatMap((markdown) =>
+                markdownToSlackMrkdwnChunks(markdown, textChunkLimit, { tableMode }),
+              );
           resolvedChunks = resolveTextChunksWithFallback(trimmedMessage, chunks);
         }
         const mediaMaxBytes =
@@ -1089,9 +1103,11 @@ export async function sendMessageSlack(
         } else {
           chunksToPost = resolvedChunks.length ? resolvedChunks : [""];
         }
-        messages = chunksToPost.map((text) =>
-          opts.textIsSlackPlainText ? { text, mrkdwn: false } : { text },
-        );
+        messages = nativeMessages?.length
+          ? nativeMessages
+          : chunksToPost.map((text) =>
+              opts.textIsSlackPlainText ? { text, mrkdwn: false } : { text },
+            );
       }
 
       let questionDelivery: SlackSendResult | undefined;

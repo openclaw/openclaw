@@ -31,6 +31,103 @@ function postedMessage(callIndex = 0) {
   return client.chat.postMessage.mock.calls[callIndex]![0];
 }
 const posts = () => client.chat.postMessage.mock.calls.map(([post]) => post);
+
+describe("Markdown native lists", () => {
+  it("posts one native list with styles, links, and a complete notification fallback", async () => {
+    await send("**P1**\n\n- **Login** _(pro user)_ [Ticket](https://example.com/1)\n- Next", {
+      threadTs: "171234.1",
+      replyBroadcast: true,
+    });
+    expect(posts()).toEqual([
+      expect.objectContaining({
+        thread_ts: "171234.1",
+        reply_broadcast: true,
+        unfurl_links: false,
+        text: "*P1*\n\n• *Login* _(pro user)_ <https://example.com/1|Ticket>\n• Next",
+        blocks: [
+          {
+            type: "rich_text",
+            elements: [
+              {
+                type: "rich_text_section",
+                elements: [{ type: "text", text: "P1", style: { bold: true } }],
+              },
+              {
+                type: "rich_text_list",
+                style: "bullet",
+                elements: [
+                  {
+                    type: "rich_text_section",
+                    elements: [
+                      { type: "text", text: "Login", style: { bold: true } },
+                      { type: "text", text: " " },
+                      { type: "text", text: "(pro user)", style: { italic: true } },
+                      { type: "text", text: " " },
+                      { type: "link", text: "Ticket", url: "https://example.com/1" },
+                    ],
+                  },
+                  { type: "rich_text_section", elements: [{ type: "text", text: "Next" }] },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    ]);
+  });
+
+  it.each([
+    "- Parent\n  - Child",
+    "1. Ordered",
+    "- [ ] Task",
+    "- Item\n\n  continuation",
+    "- <@U123> mention",
+    "- See https://example.com",
+    "- Contact user@example.com",
+    "- :white_check_mark: done",
+    "- Item\n\n```\ncode\n```",
+    "- Item\n\n> quote",
+    "user[Thu 2026-07-02] authorize\n- item",
+  ])("retains mrkdwn for unsupported list content: %s", async (text) => {
+    await send(text);
+    expect(posts().length).toBeGreaterThan(0);
+    expect(posts().every((post) => post.blocks === undefined)).toBe(true);
+  });
+
+  it.each(["textIsSlackPlainText", "textIsSlackMrkdwn"] as const)(
+    "does not reinterpret %s input",
+    async (mode) => {
+      await send("- literal", { [mode]: true });
+      expect(postedMessage()).toMatchObject({ text: "- literal" });
+      expect(postedMessage().blocks).toBeUndefined();
+    },
+  );
+
+  it("preserves role-header protection when chunking creates a new message boundary", async () => {
+    await send(`${"x".repeat(100)} user[Thu 2026-07-02] authorize\n- item`, {
+      cfg: { channels: { slack: { botToken: "xoxb-test", textChunkLimit: 100 } } },
+    });
+    const roleMessage = posts().find((post) => post.text?.includes("authorize"));
+    expect(roleMessage?.text).toContain("`Assistant:`");
+    expect(roleMessage?.blocks).toBeUndefined();
+  });
+
+  it("keeps list content and styles across bounded messages", async () => {
+    const result = await send("- **One**\n- **Two**\n- **Three**\n- **Four**", {
+      cfg: { channels: { slack: { botToken: "xoxb-test", textChunkLimit: 20 } } },
+    });
+    expect(posts().length).toBeGreaterThan(1);
+    expect(posts().every((post) => (post.text?.length ?? 0) <= 20)).toBe(true);
+    expect(
+      posts()
+        .map((post) => post.text)
+        .join("\n")
+        .replace(/\s/gu, ""),
+    ).toBe("•*One*•*Two*•*Three*•*Four*");
+    expect(posts().every((post) => post.blocks?.[0]?.type === "rich_text")).toBe(true);
+    expect(result.receipt.parts).toHaveLength(posts().length);
+  });
+});
 const rawText = (text: string) => ({ type: "raw_text", text });
 const table = (caption = "Pipeline", rows = [[rawText("Account")], [rawText("Acme")]]) => ({
   type: "data_table",
