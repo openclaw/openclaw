@@ -30,14 +30,20 @@ suite.define(() => {
       await boot.click();
       await expect
         .poll(() =>
-          boot.evaluate((textarea) => {
-            const splash = textarea.closest(".connect-splash");
-            const status = splash?.querySelector(".connect-splash__status");
-            const frame = textarea.closest(".loading-skeleton__composer");
-            if (!status || !frame) {
-              return false;
-            }
-            return status.getBoundingClientRect().bottom <= frame.getBoundingClientRect().top;
+          page.evaluate(() => {
+            const status = document
+              .querySelector(".connect-splash__status")
+              ?.getBoundingClientRect();
+            const frame = document
+              .querySelector(".loading-skeleton__composer")
+              ?.getBoundingClientRect();
+            return Boolean(
+              status &&
+              frame &&
+              status.height > 0 &&
+              frame.height > 0 &&
+              status.bottom <= frame.top,
+            );
           }),
         )
         .toBe(true);
