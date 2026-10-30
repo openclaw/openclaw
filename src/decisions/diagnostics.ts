@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { createFixedWindowBudget } from "../infra/fixed-window-rate-limit.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { DecisionOutcome, DecisionRuntimeV1 } from "./types.js";
+import type { DecisionRuntimeV1 } from "./runtime-types.js";
+import type { DecisionOutcome } from "./types.js";
 
 const log = createSubsystemLogger("decisions");
 const warnings = createFixedWindowBudget({ maxRequests: 1, windowMs: 60_000 });

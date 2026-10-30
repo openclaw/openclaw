@@ -24,8 +24,9 @@ import { finalizePluginModelUsage } from "../plugins/runtime/runtime-model-usage
 import { modelKey } from "../shared/model-key.js";
 import { logDecisionEvaluation } from "./diagnostics.js";
 import type { DecisionProviderHost, PreparedDecisionBilling } from "./provider-host.js";
-import type { DecisionBatchV2, DecisionEvaluateOptionsV2, DecisionOutcomeV2 } from "./types-v2.js";
-import type { DecisionBatch, DecisionOutcome, DecisionRuntimeV1 } from "./types.js";
+import type { DecisionEvaluateOptionsV2, DecisionRuntimeV1 } from "./runtime-types.js";
+import type { DecisionBatchV2, DecisionOutcomeV2 } from "./types-v2.js";
+import type { DecisionBatch, DecisionOutcome } from "./types.js";
 import { validateDecisionBatchV2 } from "./validation-v2.js";
 import { DecisionContractError, validateDecisionBatch } from "./validation.js";
 

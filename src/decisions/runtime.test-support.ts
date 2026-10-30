@@ -3,13 +3,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createDecisionRegistry } from "./contract.test-support.js";
+import type { DecisionProviderV1 } from "./provider-types.js";
+import type { DecisionRuntimeV1 } from "./runtime-types.js";
 import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
-import type {
-  DecisionBatch,
-  DecisionProviderV1,
-  DecisionRuntimeV1,
-  ProviderDecisionOutcome,
-} from "./types.js";
+import type { DecisionBatch, ProviderDecisionOutcome } from "./types.js";
 
 export const batch: DecisionBatch = {
   state: { evidence: "synthetic" },

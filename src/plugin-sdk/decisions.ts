@@ -12,9 +12,13 @@ export type {
   UnavailableReason,
   ProviderDecisionOutcome,
   DecisionOutcome,
-  DecisionProviderV1,
-  DecisionRuntimeV1,
 } from "../decisions/types.js";
+export type { DecisionProviderV1, DecisionProviderV2 } from "../decisions/provider-types.js";
+export type {
+  DecisionRuntimeV1,
+  DecisionEvaluateOptionsV2,
+  DecisionRuntimeV2,
+} from "../decisions/runtime-types.js";
 
 export type {
   DecisionContentV2,
@@ -24,9 +28,6 @@ export type {
   DecisionBatchResultV2,
   ProviderDecisionOutcomeV2,
   DecisionOutcomeV2,
-  DecisionEvaluateOptionsV2,
-  DecisionProviderV2,
-  DecisionRuntimeV2,
 } from "../decisions/types-v2.js";
 export {
   decisionBatchV1ToV2,

@@ -24,16 +24,12 @@ import {
   logDecisionEvaluation,
   type DecisionEvaluationFacts,
 } from "./diagnostics.js";
-import type {
-  DecisionBatchV2,
-  DecisionEvaluateOptionsV2,
-  DecisionOutcomeV2,
-  DecisionProviderV2,
-} from "./types-v2.js";
+import type { DecisionProviderV2, DecisionProviderV1 } from "./provider-types.js";
+import type { DecisionEvaluateOptionsV2 } from "./runtime-types.js";
+import type { DecisionBatchV2, DecisionOutcomeV2 } from "./types-v2.js";
 import type {
   DecisionBatch,
   DecisionOutcome,
-  DecisionProviderV1,
   ProviderFailureReason,
   UnavailableReason,
 } from "./types.js";
