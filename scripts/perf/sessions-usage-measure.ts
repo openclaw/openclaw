@@ -146,8 +146,10 @@ if (values["seed-usage"]) {
   rmSync(temporaryRoot, { recursive: true });
   process.exit(0);
 }
-const ownerTimings: Array<{ owner: string; kind?: string; elapsedMs: number }> = [];
+let ownerTimings: Array<{ owner: string; kind?: string; elapsedMs: number }> = [];
 Reflect.set(globalThis, Symbol.for("usage-measure-timings"), ownerTimings);
+const enteredOwners = new Set<string>();
+Reflect.set(globalThis, Symbol.for("usage-measure-entered"), enteredOwners);
 // Preserve source URLs and apply the same baseline to every database worker.
 const preload = `${values.output}.preload.mjs`;
 writeFileSync(
@@ -189,7 +191,7 @@ registerHooks({ load(url, context, nextLoad) {
     source = source.replace(declaration, "async function " + original + "(");
     if (owner === "executeUsageCostWorker") {
       source += "\nexport async function executeUsageCostWorker(...args) { const profiler = new (await import('node:inspector/promises')).Session(); if (" + allocations + ") { profiler.connect(); await profiler.post('HeapProfiler.startSampling', {samplingInterval:32768, includeObjectsCollectedByMajorGC:true, includeObjectsCollectedByMinorGC:true}); } const cpu = process.threadCpuUsage(); const startedAt = Date.now(); const started = performance.now(); try { return await measured_executeUsageCostWorker(...args); } finally { const elapsedMs = performance.now() - started; const used = process.threadCpuUsage(cpu); let allocatedBytes; if (" + allocations + ") { const {profile} = await profiler.post('HeapProfiler.stopSampling'); const sum = node => node.selfSize + node.children.reduce((n, child) => n + sum(child), 0); allocatedBytes = sum(profile.head); profiler.disconnect(); } const fs = await import('node:fs'); fs.appendFileSync(" + JSON.stringify(workerMetrics) + ", JSON.stringify({startedAt, kind:args[0].operation.kind, elapsedMs, cpuMs:(used.user+used.system)/1000, allocatedBytes}) + String.fromCharCode(10)); } }";
-    } else source += "\nexport async function " + owner + "(...args) { const started = performance.now(); try { return await " + original + "(...args); } finally { globalThis[Symbol.for('usage-measure-timings')]?.push({owner: '" + owner + "', kind: args[1]?.kind, elapsedMs: performance.now() - started}); } }";
+    } else source += "\nexport async function " + owner + "(...args) { const timings = globalThis[Symbol.for('usage-measure-timings')]; globalThis[Symbol.for('usage-measure-entered')]?.add('" + owner + "'); const started = performance.now(); try { return await " + original + "(...args); } finally { timings?.push({owner: '" + owner + "', kind: args[1]?.kind, elapsedMs: performance.now() - started}); } }";
   }
   return { format: "module", source: transformSync(source, { loader: "ts", format: "esm", target: "esnext", sourcefile: fileURLToPath(url) }).code, shortCircuit: true };
 }});
@@ -315,7 +317,9 @@ try {
         includeObjectsCollectedByMinorGC: true,
       });
     }
-    ownerTimings.length = 0;
+    ownerTimings = [];
+    Reflect.set(globalThis, Symbol.for("usage-measure-timings"), ownerTimings);
+    enteredOwners.clear();
     const memory = process.memoryUsage();
     const cpu = process.cpuUsage();
     const threadCpu = process.threadCpuUsage();
@@ -333,10 +337,7 @@ try {
     const elapsedMs = performance.now() - started;
     lastResult = result;
     if (!values["same-query"]) {
-      assert(
-        ownerTimings.some((timing) => timing.owner === "selectUsageSessions"),
-        "sample reused the outer report cache",
-      );
+      assert(enteredOwners.has("selectUsageSessions"), "sample reused the outer report cache");
     }
     if (complete()) {
       assertTotals(result);
@@ -353,6 +354,7 @@ try {
     const sample = {
       round,
       startedAt,
+      enteredOwners: [...enteredOwners],
       ownerTimings: [...ownerTimings],
       elapsedMs,
       processCpuMs: (used.user + used.system) / 1000,
