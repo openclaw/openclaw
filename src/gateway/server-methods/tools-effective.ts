@@ -18,6 +18,7 @@ import { prepareConversationCapabilityProfile } from "../../agents/conversation-
 import { resolveConversationToolPolicies } from "../../agents/conversation-tool-policy-pipeline.js";
 import { applyFinalEffectiveToolPolicy } from "../../agents/embedded-agent-runner/effective-tool-policy.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
+import { listCoreToolSections } from "../../agents/tool-catalog.js";
 import { readToolAllowlistIntersection } from "../../agents/tool-policy-shared.js";
 import type { ToolPolicyLike } from "../../agents/tool-policy.js";
 import { buildEffectiveToolInventoryGroups } from "../../agents/tools-effective-inventory-groups.js";
@@ -47,11 +48,13 @@ import {
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
 import { getConnectedNodePluginToolsVersion } from "../node-plugin-tool-snapshot.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import { resolveSessionModelRef, type GatewaySessionEntryRead } from "../session-utils.js";
 import { respondError } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
+import { retainSessionScopedRead } from "./session-scoped-read.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -65,6 +68,49 @@ const TOOLS_EFFECTIVE_SLOW_LOG_MS = 250;
 const TOOLS_EFFECTIVE_CACHE_LIMIT = 128;
 const MCP_CONFIG_SUMMARY_CACHE_LIMIT = 128;
 const BUNDLE_MCP_PLUGIN_ID = "bundle-mcp";
+
+// Static presentation only: the effective inventory still owns tool selection.
+const coreToolDescriptions = new Map(
+  listCoreToolSections({ swarmEnabled: true, personalInstructionsEnabled: true }).flatMap(
+    (section) => section.tools.map((tool) => [tool.id, tool.description] as const),
+  ),
+);
+
+function projectSessionToolPreview(
+  inventory: EffectiveToolInventoryResult,
+): EffectiveToolInventoryResult {
+  return {
+    agentId: inventory.agentId,
+    profile: inventory.profile,
+    groups: inventory.groups.map((group) => ({
+      id: group.id,
+      label: group.label,
+      source: group.source,
+      tools: group.tools.map((tool) => {
+        // Runtime descriptions and notices can contain MCP launch details or host paths.
+        const description =
+          tool.source !== "core"
+            ? ""
+            : tool.id === "github_publish"
+              ? tool.rawDescription // Its owner renders only the policy-filtered action names.
+              : (coreToolDescriptions.get(tool.id) ?? "");
+        return {
+          id: tool.id,
+          label: tool.id,
+          source: tool.source,
+          description,
+          rawDescription: description,
+          ...(tool.pluginId ? { pluginId: tool.pluginId } : {}),
+          ...(tool.channelId ? { channelId: tool.channelId } : {}),
+          ...(tool.source === "mcp"
+            ? { mcpServer: tool.mcpServer, mcpToolName: tool.mcpToolName }
+            : {}),
+          ...(tool.deniedBySession ? { deniedBySession: true as const } : {}),
+        };
+      }),
+    })),
+  };
+}
 
 type ToolsEffectiveCacheEntry = {
   value: EffectiveToolInventoryResult;
@@ -567,6 +613,7 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
         return;
       }
       const authority = readGatewayRequestMutationAuthority(options);
+      const sessionOnly = authority.sessionScope === "operator.sessions.read";
       const consume = async (
         loaded: Pick<GatewaySessionEntryRead, "entry" | "canonicalKey" | "cfg">,
         assertSourceCurrent: () => void,
@@ -585,9 +632,20 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
         const inventory = await resolveReadOnlyToolsEffectiveInventory(trustedContext);
         authority.assertCurrent();
         assertSourceCurrent();
-        respond(true, inventory, undefined);
+        respond(true, sessionOnly ? projectSessionToolPreview(inventory) : inventory, undefined);
       };
+      let scopedRead: Awaited<ReturnType<typeof retainSessionScopedRead>>;
       try {
+        scopedRead = await retainSessionScopedRead(
+          options,
+          params.sessionKey,
+          sessionOwner.agentId,
+          { requireMaterialized: true },
+        );
+        if (scopedRead) {
+          await consume(scopedRead.prepared, scopedRead.assertCurrent);
+          return;
+        }
         const memory = captureSessionEntryMetadataRead(
           {
             agentId: sessionOwner.agentId,
@@ -618,7 +676,22 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
           );
         }
       } catch (err) {
-        respondError(respond, ErrorCodes.UNAVAILABLE, `tools.effective failed: ${String(err)}`);
+        if (err instanceof SessionMutationAuthorizationChangedError) {
+          respond(false, undefined, err.error);
+          return;
+        }
+        if (sessionOnly) {
+          logWarn(`tools-effective: preview failed: ${String(err)}`);
+        }
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          sessionOnly
+            ? "Tool preview is unavailable. Retry the request."
+            : `tools.effective failed: ${String(err)}`,
+        );
+      } finally {
+        scopedRead?.release();
       }
     },
   ),

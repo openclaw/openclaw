@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { GatewayRestartPreparationError } from "../../infra/restart-intent-error.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { expectNoCalls, expectPartialCall } from "./lifecycle-assertions.test-support.js";
 import {
@@ -20,6 +21,7 @@ const clearGatewayRestartIntentSync = vi.fn();
 const appendGatewayLifecycleAudit = vi.fn();
 const MISSING_SERVICE_PROGRAM = "/openclaw-test-missing-runtime/node";
 const scheduledMessage = "restart scheduled, gateway will restart momentarily";
+const interruptReason = new DOMException("Command interrupted by SIGINT.", "AbortError");
 function makeTokenConfig() {
   return { gateway: { auth: { token: "config-token" } } };
 }
@@ -756,3 +758,48 @@ it.each([
   expect(lifecycleTestRuntime.error).toHaveBeenCalledWith(error);
   expect(lifecycleRuntimeLogs).toContain(`Tip: ${failureHint}`);
 });
+
+it.each([
+  [
+    "start readiness",
+    (scope: AsyncWorkScope) =>
+      start({
+        postStartCheck: async () => {
+          scope.beginClose(interruptReason);
+          throw interruptReason;
+        },
+      }),
+    undefined,
+  ],
+  [
+    "restart readiness",
+    (scope: AsyncWorkScope) =>
+      restart({
+        postRestartCheck: async () => {
+          scope.beginClose(interruptReason);
+          throw interruptReason;
+        },
+      }),
+    false,
+  ],
+  [
+    "owned-process restart",
+    (scope: AsyncWorkScope) =>
+      restart({
+        restartOwnedProcess: async () => {
+          scope.beginClose(interruptReason);
+          throw interruptReason;
+        },
+      }),
+    false,
+  ],
+] as const)(
+  "never reports %s as a lifecycle failure after an accepted interrupt",
+  async (_route, run, expected) => {
+    const scope = new AsyncWorkScope();
+
+    await expect(scope.run(() => run(scope))).resolves.toBe(expected);
+    expectNoCalls(lifecycleTestRuntime.error, lifecycleTestRuntime.exit);
+    expect(lifecycleRuntimeLogs).toEqual([]);
+  },
+);

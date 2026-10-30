@@ -83,6 +83,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "lastRunId",
   "activeWriterRunId",
   "resumeAfterRestart",
+  "mainRestartRecovery",
   "pluginOwnerId",
   "systemSent",
   "abortedLastRun",
@@ -212,7 +213,6 @@ const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<SessionEntryReservedSlotSetValu
 );
 const RETIRED_SESSION_SLOT_KEYS = new Set<string>([
   // Retired fields remain reserved so plugins cannot reinterpret historical core state.
-  "mainRestartRecovery",
   "pendingExecNotifications",
   "restartRecoveryOperatorSource",
   "restartRecoveryRequesterSource",

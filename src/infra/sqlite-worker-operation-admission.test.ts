@@ -596,6 +596,7 @@ it.each(
     const { admission, owner, write, rows } = ownerContext.run("publication owner", () =>
       receiptFixture(captured),
     );
+    admission.requestClass = captured ? "session.actor.completeTurn" : undefined;
     const failure = new Error("Synthetic publication failed");
     const events: string[] = [];
     const publish = vi.fn((committed: { facts: unknown }) => {
@@ -662,6 +663,13 @@ it.each(
       direction: "from_worker",
       messages: (before?.messages ?? 0) + (receipt === "failed commit delivery" ? 1 : 2),
       payloadBytes: (before?.payloadBytes ?? 0) + payloadBytes,
+      payloadBytesByRequestClass: {
+        ...before?.payloadBytesByRequestClass,
+        [captured ? "session.actor.completeTurn" : "other"]:
+          (before?.payloadBytesByRequestClass?.[
+            captured ? "session.actor.completeTurn" : "other"
+          ] ?? 0) + payloadBytes,
+      },
       unmeasuredMessages: before?.unmeasuredMessages ?? 0,
     });
     expect(readSqliteWorkerRequestCustody(job.custody.descriptor)).toBe(false);

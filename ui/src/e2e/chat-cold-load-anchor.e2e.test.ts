@@ -65,6 +65,7 @@ suite.define(() => {
                 sessionId: "uncached",
                 hasMore: true,
                 nextOffset: 40,
+                olderCursor: "older-cold-load",
                 totalMessages: 2040,
               },
             },
@@ -142,7 +143,9 @@ suite.define(() => {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         }
         await page.waitForFunction(() => (window.coldLoadSamples?.length ?? 0) >= 24);
-        expect(await gateway.getRequests("chat.history", { offset: 40 })).toHaveLength(0);
+        expect(
+          await gateway.getRequests("chat.history", { cursor: "older-cold-load" }),
+        ).toHaveLength(0);
         const frames = await page.evaluate(() => window.coldLoadSamples!);
         expect(frames[0]!.max).toBeGreaterThan(1000);
         expect(

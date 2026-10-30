@@ -113,7 +113,7 @@ function readPackageActivationContinuation(installKey: string, dryRun?: boolean)
     }
     return undefined;
   }
-  const journal = openPackageActivationJournal(anchor);
+  const journal = openPackageActivationSettlementJournal(anchor);
   const record = journal.readForAdmission(installKey, dryRun);
   if (
     isPackageActivationComplete(anchor, record) ||
@@ -272,8 +272,10 @@ export async function settlePendingPackageActivation(
     assertNoPendingPackageActivation(installKey);
     return undefined;
   }
+  const linkedCompleted = fs.lstatSync(resolvePackageActivationJournalPath(anchor)).nlink > 1;
   const journal = openPackageActivationSettlementJournal(anchor);
-  const admission = options?.dryRun ? undefined : await journal.readForRecovery();
+  const admission =
+    options?.dryRun || linkedCompleted ? undefined : await journal.readForRecovery();
   const initial = admission?.record ?? journal.read();
   if (options?.operationId) {
     assertPackageActivationOperation(initial, options.operationId);
@@ -303,15 +305,22 @@ export async function settlePendingPackageActivation(
           reason: priorSettlement?.kind ?? "publication-retired",
           retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
           detail: priorSettlement?.detail,
+          ...(linkedCompleted
+            ? {
+                warning:
+                  "Archived multiply linked completed package recovery evidence; active recovery still requires nlink=1.",
+              }
+            : {}),
         }
       : undefined;
-  if (options?.automatic && complete) {
+  if (options?.automatic && complete && (!linkedCompleted || options.dryRun)) {
     return options.dryRun ? receipt : undefined;
   }
   const originalAuthority = initial.descriptor.authority;
   const replacementIdentity = packageActivationIdentity(installKey, true);
   if (
     options?.automatic &&
+    !complete &&
     !replacedInstallation &&
     ![initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
       replacementIdentity,
@@ -356,6 +365,7 @@ export async function settlePendingPackageActivation(
   // republishing files beneath a running Gateway, even when the lease is intact.
   if (
     options?.automatic &&
+    !complete &&
     !replacedInstallation &&
     !leaseIdentityChanged &&
     !externalPublication &&
@@ -418,7 +428,7 @@ export async function settlePendingPackageActivation(
       const fence = await executor.enter(installKey);
       const assertCurrent = retainMutationAuthority(fence.assertCurrent);
       assertManagedUpdateLeaseDatabaseIdentity(currentDatabase);
-      admission!.admit(assertCurrent);
+      admission?.admit(assertCurrent);
       journal.assertCurrent(initial);
       let assertReplacement = () => {
         assertCurrent();
@@ -437,12 +447,9 @@ export async function settlePendingPackageActivation(
         // outcome. Archival then removes history from old readers' admission path.
         onSettled?.(settled);
         if (archive && settled.retained) {
-          settled.warning = archivePackageActivationCustody(
-            anchor,
-            journal,
-            journal.read(),
-            assertCurrent,
-          );
+          settled.warning =
+            archivePackageActivationCustody(anchor, journal, journal.read(), assertCurrent) ??
+            settled.warning;
         }
         return settled;
       };

@@ -379,6 +379,34 @@ it("reports a set from a failure that never activated as stale and directs it to
   });
   expect((await inspect()).recoverySets[0].status).toBe("unresolved");
 });
+it.each(["committed", "restored", "never-activated"] as const)(
+  "does not let a %s capture obscure one failed recovery source",
+  async (outcome) => {
+    const failed = await capture();
+    const older = await capture(secondId);
+    const olderRun = await run(older);
+    if (outcome === "never-activated") {
+      olderRun.steps = [
+        { step: "requested", status: "completed" },
+        { step: "original-state-capture", status: "completed" },
+        { step: "validating", status: "failed" },
+      ];
+    } else {
+      await terminal(older, outcome);
+    }
+    const failedRun = await run(failed);
+    mocks.readRun.mockImplementation(async (id) => (id === firstId ? failedRun : olderRun));
+    const sets = (await inspect()).recoverySets;
+    expect(sets.find((set: { runId: string }) => set.runId === firstId)).toMatchObject({
+      status: "unresolved",
+      nextAction: expect.stringContaining(failed.manifestPath),
+      message: expect.stringContaining("Retained original state requires manual inspection"),
+    });
+    expect(sets.find((set: { runId: string }) => set.runId === secondId).status).toBe("stale");
+    expect(await text(failed.manifestPath)).toBe(failed.raw);
+    expect(await text(older.manifestPath)).toBe(older.raw);
+  },
+);
 it("validates forward resolution against retained generations without writing", async () => {
   const c = await capture();
   const row = await run(c);

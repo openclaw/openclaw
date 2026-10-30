@@ -2,7 +2,6 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
 import type {
@@ -15,6 +14,7 @@ import {
 } from "./session-transcript-anchor-read.js";
 import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
+import { readSessionTranscriptCohort } from "./session-transcript-read-cohort.js";
 import {
   resolveSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
@@ -230,39 +230,27 @@ export function readSessionTranscriptModelContextAsync<T>(
         capturedLimits &&
         getOwnedSessionTranscriptReader(captured);
       if (selected) {
-        const { captureSessionEntryNativeMutationWitness } =
-          await import("./session-entry-read-ordered.js");
-        assertCurrent();
-        const database = selected.database;
-        return runOpenClawAgentWriteAdmission(
-          database,
-          async (_identity, assertOwner) => {
-            assertCurrent();
-            const assertNative = captureSessionEntryNativeMutationWitness([database]);
-            const context = await readSessionTranscriptModelContextInWorker(
+        return readSessionTranscriptCohort(
+          selected.database,
+          () =>
+            readSessionTranscriptModelContextInWorker(
               captured,
               capturedAdmission,
               signal,
               capturedThrough,
               capturedLimits,
               expectedIdentity,
-            );
-            signal?.throwIfAborted();
-            assertOwner();
-            assertCurrent();
-            assertNative();
+            ),
+          (context) => {
             const value = consume(context);
             if (isPromiseLike(value)) {
               void Promise.resolve(value).catch(() => {});
               throw new Error("Prepared model-context consumers must remain synchronous");
             }
-            assertOwner();
             assertCurrent();
-            assertNative();
             return value;
           },
-          true,
-          undefined,
+          assertCurrent,
           signal,
           "history.model-context",
         );

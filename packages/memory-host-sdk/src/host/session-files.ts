@@ -7,7 +7,6 @@ import { normalizeComparablePath, readRegularFile, statRegularFile } from "./fs-
 import { createSubsystemLogger } from "./openclaw-runtime-io.js";
 import { isCronRunSessionKey } from "./openclaw-runtime-paths.js";
 import {
-  assertBoundIncognitoMemorySyncAccess,
   captureIncognitoMemoryReader,
   isDreamingNarrativeSessionStoreKey,
   extractAgentIdFromSessionPath,
@@ -40,6 +39,7 @@ import {
   sqliteSessionFileState,
 } from "./session-entry-render.js";
 import { resolveBuildSessionSqliteIdentity } from "./session-entry-source.js";
+import { assertBoundIncognitoMemorySyncAccess } from "./session-memory-authority.js";
 import {
   listSessionTranscriptCorpusEntriesForAgent,
   type SessionTranscriptCorpusEntry,
@@ -55,10 +55,8 @@ export {
   type SessionTranscriptCorpusEntry,
   type SessionTranscriptCorpusOptions,
 } from "./session-transcript-corpus.js";
-export {
-  readTranscriptStatsBatchReadOnlyAsync,
-  readTranscriptStatsBatchReadOnlySync,
-} from "./openclaw-runtime-session.js";
+export { readTranscriptStatsBatchReadOnlyAsync } from "./openclaw-runtime-session.js";
+export { readTranscriptStatsBatchReadOnlySync } from "./session-transcript-stats-read.js";
 
 export type SessionFileEntry = {
   path: string;

@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.10.8",
+  "version": "2026.10.9",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "databaseEngines": [
@@ -496,7 +496,8 @@
     "!dist/plugin-sdk/node-crypto-runtime.d.ts",
     "!dist/plugin-sdk/path-existence-runtime.d.ts",
     "!dist/plugin-sdk/provider-auth-markers.d.ts",
-    "!dist/plugin-sdk/terminal-safe-text.d.ts"
+    "!dist/plugin-sdk/terminal-safe-text.d.ts",
+    "!dist/plugin-sdk/memory-core-host-transcript-stats.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -673,6 +674,10 @@
     },
     "./plugin-sdk/cron-store-runtime": {
       "default": "./dist/plugin-sdk/cron-store-runtime.js"
+    },
+    "./plugin-sdk/cron-tool-defaults": {
+      "types": "./dist/plugin-sdk/cron-tool-defaults.d.ts",
+      "default": "./dist/plugin-sdk/cron-tool-defaults.js"
     },
     "./plugin-sdk/json-schema-runtime": {
       "default": "./dist/plugin-sdk/json-schema-runtime.js"
@@ -1475,6 +1480,9 @@
     "./plugin-sdk/memory-core-host-status": {
       "default": "./dist/plugin-sdk/memory-core-host-status.js"
     },
+    "./plugin-sdk/memory-core-host-transcript-stats": {
+      "default": "./dist/plugin-sdk/memory-core-host-transcript-stats.js"
+    },
     "./plugin-sdk/memory-core-host-runtime-cli": {
       "default": "./dist/plugin-sdk/memory-core-host-runtime-cli.js"
     },
@@ -1792,6 +1800,7 @@
     "build:plugin-sdk:dts": "node --import ./scripts/tsx.mjs scripts/write-plugin-sdk-entry-dts.ts",
     "build:plugin-sdk:strict-smoke": "node --import ./scripts/tsx.mjs scripts/build-all.mts pluginSdkStrictSmoke",
     "build:strict-smoke": "node --import ./scripts/tsx.mjs scripts/build-all.mts strictSmoke",
+    "catalog:compare-released": "node scripts/catalog-compare-released.mts",
     "channels:catalog:check": "node scripts/write-official-channel-catalog.mjs --check",
     "channels:catalog:gen": "node scripts/write-official-channel-catalog.mjs --write",
     "changed:lanes": "node scripts/changed-lanes.mjs",
@@ -2242,6 +2251,7 @@
     "test:live": "node --import ./scripts/tsx.mjs scripts/test-live.mts",
     "test:live:cache": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import ./scripts/tsx.mjs scripts/test-live.mts src/agents/live-cache-regression.live.test.ts",
     "test:live:codex-harness": "node --import ./scripts/tsx.mjs scripts/test-live.mts --codex-harness -- src/gateway/gateway-codex-harness.live.test.ts",
+    "test:live:thinking-probe": "node --import ./scripts/tsx.mjs scripts/test-live-thinking-probe.mts",
     "test:live:system-agent-rescue-channel": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL=1 -- node --import ./scripts/tsx.mjs scripts/test-live.mts -- src/system-agent/rescue-channel.live.test.ts",
     "test:live:gateway-profiles": "node --import ./scripts/tsx.mjs scripts/test-live.mts -- src/gateway/gateway-models.profiles.live.test.ts",
     "test:live:media": "node --import ./scripts/tsx.mjs test/e2e/qa-lab/media/hosted-media-provider-live.ts",

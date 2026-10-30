@@ -60,6 +60,13 @@ keeps its own current-source and commit-authority checks.
 
 ## Choose the execution owner
 
+Shared-state worker contexts carry installed-service migration restrictions only
+for the admitted database. An unrelated older global installation does not change
+an isolated Gateway's actor policy during cron startup or configuration reload.
+The admission owner supplies known path aliases without repeated filesystem reads;
+matching-service restrictions and refusal to replace an actor with active work
+remain in effect.
+
 Actor-backed session managers serialize append preparation and committed view
 adoption on their manager queue. Only each actor storage command reserves the
 agent database writer, so unrelated sessions can write between commands. Native
@@ -1063,6 +1070,14 @@ Capture preserves metadata written since the recorder's admission and returns th
 stored projection for identical captures. Arbitrary transcript rewrite callbacks retain host preparation because
 their work is not serializable; the closed model-prompt projection needs no host
 prepare round trip.
+
+On a terminal sandbox provisioning failure before first dispatch, the built-in
+attempt can retain its already-prepared media input through this same recorder
+while the original admission remains current. Original user content and media
+identities stay unchanged; later turns consume the captured projection without
+rescanning historical attachments. Write-hook replacements take precedence over
+prepared text from the earlier input; the native recorder retains that source
+comparison only for its own lifetime.
 
 Gateway run-lifecycle events use the deterministic entry reducer in the same
 worker commit. Goal pauses and recovery updates derive from the current stored
@@ -2920,6 +2935,13 @@ rewrite, and branch preparation use the existing reserved target-discovery lane
 so error cleanup cannot drain independent readers while holding FIFO admission.
 That lane preserves its reentrant host-write contract. Ordinary manager opens and
 independent retargets keep their foreground history-reader concurrency.
+Bounded hydration and prepared model-context reads reserve the writer only to
+capture a mutation witness and to accept their result. They wait for the history
+worker outside that reservation, so a slow or failed read cannot block later
+transcript writes. Acceptance checks the physical source, current authority,
+committed-write receipt and native mutation witness before synchronous consumption.
+One intervening mutation retries the read once; continued mutation refuses stale
+consumption. A caller already holding the writer retains its existing custody.
 These scheduling changes require no schema, stored-data, configuration, or update
 migration.
 
@@ -7304,6 +7326,14 @@ the existing worker handler. Cold, oversized, or unknown cases retain the whole
 SQL snapshot path. Write-capable operations keep their transaction-local SQL
 view. Synchronous compatibility writes publish committed facts to the same owner;
 transaction-local synchronous reads never use a committed resident view.
+
+Plugin-state write receipts reference the command's immutable submitted JSON when
+it matches the committed postimage. The host resolves that admission-local
+reference before validating and installing the row; timestamps, expiry, and
+eviction tombstones still come from the worker. Settlement recovery uses the same
+reference. Worker-generated values retain full postimages. This changes only
+process-lifetime receipt transport, not the Plugin SDK, stored rows, transactions,
+or write ordering.
 
 Runtime-health cleanup selects from that same complete view. An empty selection
 skips the worker request; positive clears retain their ordered worker operation

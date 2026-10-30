@@ -63,8 +63,13 @@ it("preserves the public advisory builder for HTTP 200 with no rows", async () =
   await expect(buildKilocodeProviderWithDiscovery()).resolves.toEqual(buildKilocodeProvider());
 });
 
-it("parses gateway models with correct pricing conversion", async () => {
-  const models = await discoverModels([autoModel, chatModel]);
+it("parses gateway model pricing and advertised tool capability", async () => {
+  const models = await discoverModels([
+    autoModel,
+    chatModel,
+    { ...chatModel, id: "tools", supported_parameters: ["tools", "tool_choice"] },
+    { ...chatModel, id: "unadvertised", supported_parameters: undefined },
+  ]);
 
   expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -75,7 +80,7 @@ it("parses gateway models with correct pricing conversion", async () => {
   const timeoutMs = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.timeoutMs;
   expect(timeoutMs).toBeGreaterThan(0);
   expect(timeoutMs).toBeLessThanOrEqual(5000);
-  expect(models).toHaveLength(2);
+  expect(models).toHaveLength(4);
 
   expect(modelById(models, "chat")).toMatchObject({
     cost: cost(expect.closeTo(3), expect.closeTo(15), expect.closeTo(0.3), expect.closeTo(3.75)),
@@ -84,6 +89,9 @@ it("parses gateway models with correct pricing conversion", async () => {
     contextWindow: 200000,
     maxTokens: 8192,
   });
+  expect(modelById(models, "chat").compat).toEqual({ supportsTools: false });
+  expect(modelById(models, "tools").compat).toEqual({ supportsTools: true });
+  expect(modelById(models, "unadvertised").compat).toBeUndefined();
 });
 
 it("preserves known default-model pricing for unknown routing rates with valid cache prices", async () => {
@@ -130,7 +138,11 @@ it("detects text-only models without image modality", async () => {
   const models = await discoverModels([
     { ...chatModel, architecture: { input_modalities: ["text"] }, supported_parameters: [] },
   ]);
-  expect(modelById(models, "chat")).toMatchObject({ input: ["text"], reasoning: false });
+  expect(modelById(models, "chat")).toMatchObject({
+    input: ["text"],
+    reasoning: false,
+    compat: { supportsTools: false },
+  });
 });
 
 it("excludes image-output models while retaining chat and static routing entries", async () => {

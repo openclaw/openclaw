@@ -1,12 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { npmLockPackageDirsForChangedPaths } from "./lib/npm-lock-package-selection.mjs";
 
 const harnessRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-// This is a conservative no-op proof, not a replacement for the lock generator's
-// package selection. Unknown source contracts and Git failures retain execution.
+// Canonical empty selection is necessary but not sufficient: changed import
+// owners, unknown source contracts, and Git failures retain execution.
 export function canSkipNpmLockSetup({ cwd = process.cwd(), base = "", historical = false } = {}) {
   if (
     !base ||
@@ -31,19 +32,13 @@ export function canSkipNpmLockSetup({ cwd = process.cwd(), base = "", historical
       "scripts/generate-npm-package-lock.mts",
       "scripts/changed-lanes.mts",
       "scripts/lib/merge-head-diff-base.mjs",
+      "scripts/lib/npm-lock-package-selection.mjs",
+      "scripts/lib/npm-lock-package-selection.d.mts",
+      "scripts/lib/record-shared.mjs",
+      "scripts/lib/record-shared.d.mts",
     ]) {
       if (!readFileSync(path.join(cwd, file)).equals(readFileSync(path.join(harnessRoot, file)))) {
         return false;
-      }
-    }
-    // The generator enumerates manifests even when no package is selected.
-    // Preserve its failure path for an unreadable or malformed package inventory.
-    for (const parent of ["extensions", "packages"]) {
-      for (const entry of readdirSync(path.join(cwd, parent), { withFileTypes: true })) {
-        const manifestPath = path.join(cwd, parent, entry.name, "package.json");
-        if (entry.isDirectory() && existsSync(manifestPath)) {
-          JSON.parse(readFileSync(manifestPath, "utf8"));
-        }
       }
     }
     const git = (args) =>
@@ -82,12 +77,20 @@ export function canSkipNpmLockSetup({ cwd = process.cwd(), base = "", historical
       .join("\0")
       .split("\0")
       .filter(Boolean);
-    return !paths.some(
-      (file) =>
-        /(^|\/)(package\.json|package-lock\.json)$/.test(file) ||
-        /^(pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc)$/.test(file) ||
-        /^(scripts|packages|\.github|patches)\//.test(file) ||
-        file.endsWith(".tgz"),
+    // New generator/shim root-script imports must join this smoke guard.
+    // Unrelated root scripts can skip; nested scripts, packages, and workflows stay conservative.
+    return (
+      npmLockPackageDirsForChangedPaths(paths, cwd).length === 0 &&
+      !paths.some(
+        (file) =>
+          /(^|\/)(package\.json|package-lock\.json)$/.test(file) ||
+          /^(pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc)$/.test(file) ||
+          /^(packages|\.github|patches|scripts\/[^/]+)\//.test(file) ||
+          /^scripts\/(?:generate-npm-package-lock[./]|(?:ci-npm-lock-admission\.mjs|changed-lanes\.mts|npm-runner\.mts|windows-cmd-helpers\.mjs|tsx\.mjs)$)/.test(
+            file,
+          ) ||
+          file.endsWith(".tgz"),
+      )
     );
   } catch {
     return false;

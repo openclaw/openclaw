@@ -608,6 +608,7 @@ export const gatewayMethodsTestExclude = [
 export const gatewayServerIsolatedTestFiles = [
   // Real provider and subagent lifecycle registrations must survive the whole scenario.
   "src/gateway/gateway.prompt-cache.test.ts",
+  "src/gateway/server.subagent-prompt-recent.gateway.test.ts",
   // Native provider imports must not retain a previous file's retired shared-state owner.
   "src/gateway/setup-inference.first-signin.integration.test.ts",
   // Sibling threads can fork and retain listener sockets until exec on Linux.
@@ -627,6 +628,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server-close.voice-session.test.ts",
   "src/gateway/server-close.channel-pairing.test.ts",
   "src/gateway/server.chat.canonical-publication.test.ts",
+  "src/gateway/server.chat-attachment-recovery.product.test.ts",
   "src/gateway/server.chat-membership-authority.product.test.ts",
   "src/gateway/server.chat-workspace-readiness.product.test.ts",
   "src/gateway/server.chat-queued-followup-operator-authority.product.test.ts",

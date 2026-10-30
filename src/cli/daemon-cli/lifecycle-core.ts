@@ -24,6 +24,7 @@ import { GatewayRestartPreparationError } from "../../infra/restart-intent-error
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigRecoveryHint } from "../config-recovery-hints.js";
 import { resolveGatewayTokenForDriftCheck } from "./gateway-token-drift.js";
@@ -118,6 +119,15 @@ async function resolveServiceLoadedOrFail(
   return (
     loadState.status === "loaded" ||
     (Boolean(opts.acceptInstalledDefinition) && (await hasInstalledDefinition()))
+  );
+}
+
+/** Only observer cancellation belongs to the root; concurrent service failures still report. */
+export function commandInterrupted(error: unknown): boolean {
+  const signal = getAsyncWorkSignal();
+  return (
+    signal?.aborted === true &&
+    (error === signal.reason || (error instanceof Error && error.cause === signal.reason))
   );
 }
 
@@ -276,6 +286,9 @@ export async function runServiceStart(params: {
       if (postCheckFailed || err instanceof ExitError) {
         throw err;
       }
+      if (commandInterrupted(err)) {
+        return;
+      }
       fail(`${params.serviceNoun} start failed: ${String(err)}`, params.renderStartHints());
       return;
     }
@@ -347,6 +360,9 @@ export async function runServiceStart(params: {
         if (postCheckFailed || err instanceof ExitError) {
           throw err;
         }
+        if (commandInterrupted(err)) {
+          return;
+        }
         fail(`${params.serviceNoun} repair failed: ${String(err)}`, params.renderStartHints());
         return;
       }
@@ -361,6 +377,9 @@ export async function runServiceStart(params: {
   } catch (err) {
     if (postCheckFailed || err instanceof ExitError) {
       throw err;
+    }
+    if (commandInterrupted(err)) {
+      return;
     }
     fail(`${params.serviceNoun} start failed: ${String(err)}`, params.renderStartHints());
   }
@@ -522,6 +541,9 @@ export async function runServiceRestart(params: {
       if (err instanceof ExitError) {
         throw err;
       }
+      if (commandInterrupted(err)) {
+        return false;
+      }
       fail(`${params.serviceNoun} restart failed: ${String(err)}`);
       return false;
     }
@@ -539,6 +561,9 @@ export async function runServiceRestart(params: {
     } catch (err) {
       if (err instanceof ExitError) {
         throw err;
+      }
+      if (commandInterrupted(err)) {
+        return false;
       }
       fail(`${params.serviceNoun} restart failed: ${String(err)}`);
       return false;
@@ -588,6 +613,9 @@ export async function runServiceRestart(params: {
       clearPreparedRestartIntent();
       if (err instanceof ExitError) {
         throw err;
+      }
+      if (commandInterrupted(err)) {
+        return false;
       }
       const hints = renderRestartFailureHints(err);
       fail(`${params.serviceNoun} repair failed: ${String(err)}`, hints);
@@ -701,6 +729,9 @@ export async function runServiceRestart(params: {
     // A non-exiting runtime unwinds after emission; never replace that result.
     if (postCheckFailed || err instanceof ExitError) {
       throw err;
+    }
+    if (commandInterrupted(err)) {
+      return false;
     }
     const hints = renderRestartFailureHints(err);
     fail(`${params.serviceNoun} restart failed: ${String(err)}`, hints);

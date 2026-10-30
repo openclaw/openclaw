@@ -184,9 +184,14 @@ describe("chat tool icon ownership", () => {
             groups: [
               {
                 ...catalog.groups[0]!,
-                tools: ["browser", "canvas", "web_search", "mcp__notes__browser"].map((id) =>
-                  Object.assign({}, catalog.groups[0]!.tools[0]!, { id }),
-                ),
+                tools: [
+                  "browser",
+                  "canvas",
+                  "web_search",
+                  "mcp__notes__browser",
+                  "search",
+                  "structured_output",
+                ].map((id) => Object.assign({}, catalog.groups[0]!.tools[0]!, { id })),
               },
             ],
           },
@@ -195,7 +200,9 @@ describe("chat tool icon ownership", () => {
       await vi.waitFor(() => expect(icon(name)?.url).toBe("blob:plugin-icon"));
       expect(icon(name)?.branding).toBe(false);
     }
-    await vi.waitFor(() => expect(icon("mcp__notes__browser")?.url).toBe("blob:brand"));
+    for (const name of ["mcp__notes__browser", "search", "structured_output"]) {
+      await vi.waitFor(() => expect(icon(name)?.url).toBe("blob:brand"));
+    }
     expect(logo).toHaveBeenCalledOnce();
     expect(fetch).toHaveBeenCalledOnce();
   });

@@ -63,6 +63,7 @@ export async function runUpdateCandidateAdmission(params: {
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
   admission?: "auto" | "installed";
+  assertCurrent?: () => void;
 }): Promise<UpdateCandidateAdmissionResult> {
   const sourceEnv = params.env ?? process.env;
   if (params.admission === "installed") {
@@ -142,6 +143,7 @@ export async function runUpdateCandidateAdmission(params: {
         const deadline = Date.now() + budget;
         const cleanupBudget = Math.min(2_000, Math.floor(budget / 10));
         const running = launchCanary({
+          assertCurrent: params.assertCurrent,
           target: { kind: "cli", entryPath: entry },
           args: ["update", "admit", "--context", contextPath],
           root: params.candidateRoot,

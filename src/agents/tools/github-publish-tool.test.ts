@@ -198,9 +198,6 @@ it.each<{
     }
     expect(tool.description.includes(action), action).toBe(offered);
   }
-  if (!refresh) {
-    expect(tool.description).not.toMatch(/refresh/i);
-  }
   expect(Value.Check(tool.parameters, {})).toBe(true);
   expect(
     Value.Check(tool.parameters, {
@@ -208,7 +205,7 @@ it.each<{
       pullRequestUrl: "https://github.com/example/repository/pull/1",
     }),
   ).toBe(true);
-  for (const action of ["publish", "edit", "ready", "request_review"]) {
+  for (const action of ["readiness", "publish", "edit", "ready", "request_review"]) {
     expect(Value.Check(tool.parameters, { action }), action).toBe(true);
   }
   for (const action of ["inspect", "merge", "close"]) {

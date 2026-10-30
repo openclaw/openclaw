@@ -293,7 +293,11 @@ export function ApprovalContent(props: {
             {(decision) => (
               <button
                 type="button"
-                class={["btn approval-page__action", `approval-page__action--${decision()}`]}
+                class={[
+                  "btn approval-page__action",
+                  `approval-page__action--${decision()}`,
+                  { primary: decision() === "allow-once" },
+                ]}
                 data-decision={decision()}
                 disabled={
                   props.page.resolvingDecision() !== null ||

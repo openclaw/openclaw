@@ -10,7 +10,6 @@ import {
   lstatSync,
   realpathSync,
   readFileSync,
-  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -26,6 +25,10 @@ import { parse as parseYaml } from "yaml";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { resolveRuntimeToolingEntrypointUrl } from "../src/infra/runtime-process-manifest.ts";
 import { listChangedPathsFromGit, listStagedChangedPaths } from "./changed-lanes.mts";
+import {
+  listManagedNpmLockPackageDirs as listManagedPackageDirs,
+  npmLockPackageDirsForChangedPaths as selectChangedPackageDirs,
+} from "./lib/npm-lock-package-selection.mjs";
 import { pnpmLockfileDocuments, resolveSnapshot } from "./lib/pnpm-lockfile-documents.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 
@@ -1977,64 +1980,11 @@ function packageLabel(packageDir: string) {
 }
 
 export function listManagedNpmLockPackageDirs(rootDir = ROOT_DIR) {
-  // npm locks are generated on demand for every publishable package, but never committed.
-  return ["extensions", "packages"]
-    .flatMap((parentDir) =>
-      readdirSync(path.join(rootDir, parentDir), { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => path.posix.join(parentDir, entry.name)),
-    )
-    .filter((packageDir) => {
-      const packageJsonPath = path.join(rootDir, packageDir, "package.json");
-      if (!existsSync(packageJsonPath)) {
-        return false;
-      }
-      const packageJson: unknown = JSON.parse(readFileSync(packageJsonPath, "utf8"));
-      return recordAt(recordAt(packageJson, "openclaw"), "release")?.publishToNpm === true;
-    })
-    .toSorted((left, right) => left.localeCompare(right));
+  return listManagedPackageDirs(rootDir);
 }
 
 function npmLockPackageDirsForChangedPaths(changedPaths: string[]) {
-  const packageDirs = new Set<string>();
-  const managedNpmLockPackageDirs = new Set(listManagedNpmLockPackageDirs());
-  let hasAmbiguousDependencyPolicyChange = false;
-  let hasLockfileChange = false;
-
-  for (const changedPath of changedPaths) {
-    if (!changedPath) {
-      continue;
-    }
-    if (changedPath === "package.json") {
-      packageDirs.add(ROOT_DIR);
-      continue;
-    }
-    const workspacePackageMatch = changedPath.match(
-      /^((?:extensions|packages)\/[^/]+)(?:\/.*)?\/package\.json$/u,
-    );
-    const workspacePackageDir = workspacePackageMatch?.[1];
-    if (workspacePackageDir && managedNpmLockPackageDirs.has(workspacePackageDir)) {
-      packageDirs.add(path.resolve(ROOT_DIR, workspacePackageDir));
-      continue;
-    }
-    if (changedPath === "pnpm-lock.yaml") {
-      hasLockfileChange = true;
-      continue;
-    }
-    if (
-      changedPath === "pnpm-workspace.yaml" ||
-      changedPath === "scripts/generate-npm-package-lock.mts"
-    ) {
-      hasAmbiguousDependencyPolicyChange = true;
-    }
-  }
-
-  if (hasAmbiguousDependencyPolicyChange || hasLockfileChange) {
-    return [ROOT_DIR, ...listManagedNpmLockPackageDirs().map((dir) => path.resolve(ROOT_DIR, dir))];
-  }
-  return [...packageDirs].toSorted((left, right) =>
-    packageLabel(left).localeCompare(packageLabel(right)),
-  );
+  return selectChangedPackageDirs(changedPaths, ROOT_DIR);
 }
 
 /** @internal Directly tested script implementation detail. */

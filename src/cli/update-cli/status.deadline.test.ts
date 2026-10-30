@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-
 const mocks = {
   check: vi.fn(),
   run: vi.fn(),
@@ -9,6 +8,9 @@ const mocks = {
 const overrides = {
   "../../runtime.js": { defaultRuntime: mocks },
   "./shared.js": { resolveUpdateRoot: async () => "/fixture/openclaw" },
+  "./update-command-database-engine.js": {
+    withUpdateDatabaseEngine: async (_env: NodeJS.ProcessEnv, run: () => Promise<unknown>) => run(),
+  },
   "../../config/config.js": {
     readSourceConfigBestEffort: async () => ({ gateway: { mode: "remote" } }),
   },
@@ -45,12 +47,10 @@ vi.doMock("../../state/openclaw-state-db-readonly.js", async (original) => ({
   ...(await import("../../state/artifact-preserving-state-reads.js")),
 }));
 const { updateStatusCommand } = await import("./status.js");
-
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
 });
-
 const lastRun = { runId: "completed-run", status: "succeeded" };
 const delayed = <T>(value: T, ms: number) =>
   new Promise<T>((resolve) => {
