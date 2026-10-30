@@ -1,6 +1,6 @@
 export const SESSION_WATCHDOG_WARNING_MS = 120_000;
 export const SESSION_WATCHDOG_ABORT_FLOOR_MS = 5 * 60_000;
-export const SESSION_WATCHDOG_QUIET_TOOL_MS = 3 * 60_000;
+export const SESSION_WATCHDOG_QUIET_TOOL_MS = 15 * 60_000;
 export const SESSION_WATCHDOG_CLEANUP_MS = 60_000;
 
 export type SessionWatchdogWaitKind =
@@ -79,9 +79,10 @@ export function decideSessionWatchdog(
   if (wait) {
     return { action: "observe", reason: wait.kind, deadlineAtMs: wait.deadlineAtMs };
   }
-  const deadlineAtMs = snapshot.tools.length
-    ? Math.min(...snapshot.tools.map((tool) => tool.deadlineAtMs))
-    : snapshot.semanticDeadlineAtMs;
+  const deadlineAtMs = Math.max(
+    snapshot.semanticDeadlineAtMs,
+    ...snapshot.tools.map((tool) => tool.deadlineAtMs),
+  );
   if (now >= deadlineAtMs) {
     return { action: "stop", reason: "semantic_stall", deadlineAtMs };
   }

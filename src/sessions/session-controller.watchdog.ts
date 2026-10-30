@@ -625,7 +625,7 @@ export function createSessionControllerWatchdog(params: {
               return tool.deadlineAtMs;
             },
             get deadlineAtMs() {
-              return tool.deadlineAtMs ?? lastProgressAtMs + SESSION_WATCHDOG_QUIET_TOOL_MS;
+              return (tool.deadlineAtMs ?? lastProgressAtMs) + SESSION_WATCHDOG_QUIET_TOOL_MS;
             },
           };
           tools.add(record);
