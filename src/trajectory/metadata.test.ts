@@ -278,7 +278,7 @@ describe("trajectory metadata", () => {
       createPluginRecord({
         id: "demo-plugin",
         imported: true,
-        toolNames: ["demo_tool"],
+        toolNames: [" demo_tool ", "demo_tool", "demo_tool"],
       }),
     );
     setActivePluginRegistry(registry, "trajectory-metadata-test");
@@ -304,9 +304,15 @@ describe("trajectory metadata", () => {
 
     expect(captured).toMatchObject({
       config: { redacted: { providers: { openai: { apiKey: REDACTED_SENTINEL } } } },
-      plugins: { source: "active-registry", entries: [{ id: "demo-plugin" }] },
+      plugins: {
+        source: "active-registry",
+        entries: [{ id: "demo-plugin", toolNames: ["demo_tool", "demo_tool"] }],
+      },
       skills: { entries: [{ id: "weather", filePath: "/tmp/workspace/skills/weather/SKILL.md" }] },
     });
+    const plugins = captured.plugins as { entries: Record<string, unknown>[] };
+    // Empty capabilities are not persisted and need no recorder projection work.
+    expect(plugins.entries[0]).not.toHaveProperty("cliBackendIds");
   });
 
   it.each([

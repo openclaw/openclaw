@@ -1387,6 +1387,8 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "test/scripts/pr-merge-completion.test.ts",
     "test/scripts/pr-merge-hosted.test.ts",
     "test/scripts/pr-merge-legacy-recovery.test.ts",
+    "test/scripts/pr-merge-prior-ci-artifact-build.test.ts",
+    "test/scripts/pr-merge-prior-ci.test.ts",
     "test/scripts/pr-merge-qualified-refusal.test.ts",
     "test/scripts/pr-publication.test.ts",
     "test/scripts/pr-wrappers.test.ts",

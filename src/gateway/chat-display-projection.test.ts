@@ -13,6 +13,7 @@ import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.ca
 import {
   projectChatDisplayMessage,
   projectChatDisplayMessages,
+  projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
 
@@ -560,7 +561,7 @@ const terminal = (runId = "run-a") => ({
 const projectedIds = (messages: unknown[]) =>
   projectChatDisplayMessages(messages).map((message) => message["__openclaw"]);
 
-it.each(["length", "stop"])("hides empty %s attempts when no recovery is pending", (stopReason) => {
+it.each(["length", "stop"])("hides empty %s attempts", (stopReason) => {
   const empty = assistant([text("")], { stopReason, __openclaw: { runId: "run-empty" } });
   const thinking = { ...empty, content: [text(""), { type: "thinking", thinking: "" }] };
   const toolMessage = assistant([tool], { stopReason });
@@ -569,7 +570,7 @@ it.each(["length", "stop"])("hides empty %s attempts when no recovery is pending
     toolMessage,
     answer,
   ]);
-  expect(projectStable([empty], { assistantErrorPending: true })).toEqual([empty]);
+  expect(projectStable([empty], { assistantErrorPending: true })).toEqual([]);
 });
 
 it.each(["length", "stop"])("retains keyed commentary from a %s attempt", (stopReason) => {
@@ -628,6 +629,64 @@ it.each([
     ).toEqual(expected);
   }
 });
+
+it("drops invisible assistant attempts without pending recovery", () => {
+  const emptyAttempt = (id: string, stopReason: "length" | "stop") =>
+    assistant([text(""), { type: "thinking", thinking: "" }], {
+      stopReason,
+      __openclaw: { id, runId: "run-empty" },
+    });
+  expect(
+    projectStable([
+      user,
+      emptyAttempt("empty-primary", "length"),
+      emptyAttempt("empty-fallback", "stop"),
+      assistant([text("model-only")], { stopReason: "stop", openclawDisplayContent: [] }),
+    ]),
+  ).toEqual([user]);
+});
+
+it.each([false, true])(
+  "retains completed material without settling pending recovery (earlier page=%s)",
+  (assistantErrorPending) => {
+    const reasoning = assistant([{ type: "thinking", thinking: "Compare the evidence." }], {
+      stopReason: "stop",
+      __openclaw: { id: "reasoning", runId: "run-a" },
+    });
+    const progress = "Checking the evidence.";
+    const commentary = assistant([phasedText(progress, "commentary")], {
+      stopReason: "length",
+      __openclaw: { id: "commentary", runId: "run-a" },
+    });
+    const input = [
+      ...(assistantErrorPending ? [] : [failed]),
+      reasoning,
+      commentary,
+      ...["stop", "length"].map((stopReason) =>
+        assistant([text(" "), { type: "thinking", thinking: "" }], { stopReason }),
+      ),
+    ];
+    const original = structuredClone(input);
+    const projected = projectChatDisplayMessagesWithState(input, {
+      assistantErrorPending,
+      includeCommentaryFallbacks: true,
+    });
+    expect(projected).toMatchObject({
+      messages: [
+        reasoning,
+        {
+          content: [text(progress)],
+          __openclaw: commentary["__openclaw"],
+          openclawStreamFallback: { source: "segment", itemId: "commentary" },
+        },
+      ],
+      assistantErrorPending: true,
+      assistantErrorRecoveryObserved: false,
+    });
+    expect(projectChatDisplayMessages(projected.messages)).toEqual(projected.messages);
+    expect(input).toEqual(original);
+  },
+);
 
 const legacyGuidance = "The provider stopped this request as a safety precaution (misalignment).";
 it.each([

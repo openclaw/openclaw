@@ -15,6 +15,8 @@ const GATEWAY_DISPATCH_SHELL_ENV_EXPECTED_KEYS = [
 
 const GATEWAY_DISPATCH_TOP_LEVEL_KEYS = [
   "agents",
+  // Store-backed credential refs read the configured state engine.
+  "database",
   "env",
   "gateway",
   "plugins",

@@ -11,6 +11,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import {
+  buildMediaUnderstandingRegistry,
+  getMediaUnderstandingProvider,
+} from "../../media-understanding/provider-registry.js";
 import type {
   ImageDescriptionRequest,
   ImagesDescriptionRequest,
@@ -55,6 +59,9 @@ import {
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
 import { createPdfTool } from "./pdf-tool.js";
 
+const buildProviderRegistry = buildMediaUnderstandingRegistry;
+const readProvider = getMediaUnderstandingProvider;
+
 const publicSurfaceLoaderMocks = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleFromCandidatesSync: vi.fn(() => null),
   loadBundledPluginPublicArtifactModuleSync: vi.fn(
@@ -84,31 +91,6 @@ const publicSurfaceLoaderMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../plugins/public-surface-loader.js", () => publicSurfaceLoaderMocks);
-
-const imageProviderHarness = vi.hoisted(() => {
-  let providers = new Map<string, MediaUnderstandingProvider>();
-  return {
-    setProviders(next: MediaUnderstandingProvider[]) {
-      providers = new Map(next.map((provider) => [provider.id.toLowerCase(), provider]));
-    },
-    reset() {
-      providers = new Map();
-    },
-    buildProviderRegistry(overrides?: Record<string, MediaUnderstandingProvider>) {
-      const registry = new Map(providers);
-      for (const [id, provider] of Object.entries(overrides ?? {})) {
-        registry.set(id.toLowerCase(), provider);
-      }
-      return registry;
-    },
-    getMediaUnderstandingProvider(
-      id: string,
-      registry: Map<string, MediaUnderstandingProvider>,
-    ): MediaUnderstandingProvider | undefined {
-      return registry.get(id.toLowerCase()) ?? providers.get(id.toLowerCase());
-    },
-  };
-});
 
 // Keep image-tool tests focused on root propagation; media-tool-shared
 // and channel-inbound tests cover the real bundled contract loader.
@@ -490,7 +472,7 @@ function installImageUnderstandingProviderDeps(
     >["resolveDefaultMediaModel"];
   },
 ) {
-  imageProviderHarness.setProviders(providers);
+  const providerRegistry = buildProviderRegistry(undefined, undefined, providers);
   const defaultImageModels = new Map<string, string>([
     ["anthropic", "claude-opus-4-6"],
     ["minimax", "MiniMax-VL-01"],
@@ -504,12 +486,8 @@ function installImageUnderstandingProviderDeps(
     ["zai", "glm-4.6v"],
   ]);
   testing.setProviderDepsForTest({
-    buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
-      imageProviderHarness.buildProviderRegistry(overrides),
-    getMediaUnderstandingProvider: (
-      id: string,
-      registry: Map<string, MediaUnderstandingProvider>,
-    ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+    buildProviderRegistry: (overrides, cfg, preparedProviders) =>
+      buildProviderRegistry(overrides, cfg, preparedProviders ?? providers),
     describeImageWithModel: options?.describeImageWithModel ?? describeGenericImageWithModel,
     describeImagesWithModel: options?.describeImagesWithModel ?? describeGenericImagesWithModel,
     resolveAutoMediaKeyProviders:
@@ -520,10 +498,7 @@ function installImageUnderstandingProviderDeps(
       (({ providerId, capability }) =>
         capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined),
     resolveRegisteredMediaUnderstandingProvider: ({ providerId }) =>
-      imageProviderHarness.getMediaUnderstandingProvider(
-        providerId,
-        imageProviderHarness.buildProviderRegistry(),
-      ),
+      readProvider(providerId, providerRegistry),
     ...(options?.useDefaultResolveModelAsync
       ? {}
       : { resolveModelAsync: options?.resolveModelAsync ?? resolveConfiguredImageModelForTest }),
@@ -702,7 +677,6 @@ describe("image tool implicit imageModel config", () => {
   });
 
   afterEach(() => {
-    imageProviderHarness.reset();
     testing.setProviderDepsForTest();
   });
 
@@ -779,12 +753,6 @@ describe("image tool implicit imageModel config", () => {
       const resolveDefaultMediaModelSpy = vi.fn(() => "gpt-5.4-mini");
       const resolveAutoMediaKeyProvidersSpy = vi.fn(() => ["openai"]);
       testing.setProviderDepsForTest({
-        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
-          imageProviderHarness.buildProviderRegistry(overrides),
-        getMediaUnderstandingProvider: (
-          id: string,
-          registry: Map<string, MediaUnderstandingProvider>,
-        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
         describeImageWithModel: describeGenericImageWithModel,
         describeImagesWithModel: describeGenericImagesWithModel,
         resolveDefaultMediaModel: resolveDefaultMediaModelSpy,
@@ -1515,7 +1483,6 @@ describe("image tool MiniMax VLM routing", () => {
 
   afterEach(async () => {
     global.fetch = priorFetch;
-    imageProviderHarness.reset();
     testing.setProviderDepsForTest();
     await state.cleanup();
   });
@@ -1698,7 +1665,6 @@ describe("image compression policy", () => {
   });
 
   afterEach(() => {
-    imageProviderHarness.reset();
     testing.setProviderDepsForTest();
   });
 

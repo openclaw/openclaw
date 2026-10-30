@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { githubRepositoryUrl } from "../agents/github-host.js";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
@@ -10,6 +11,7 @@ import { gitNullConfigPath, gitReadOnlyEnvironment } from "../infra/git-exec.js"
 import { appendGitConfig, gitMaintenanceEnvironment } from "../infra/git-maintenance-env.js";
 import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-network-retry.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { createCommandError } from "../process/command-error.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
@@ -31,6 +33,9 @@ type GitCommandOptions = {
   maxOutputBytes?: number;
   beforeRun?: () => void;
   operation?: GitProcessOperation;
+  timeoutMs?: number;
+  noOutputTimeoutMs?: number;
+  discardOutput?: { stdout?: boolean };
 };
 type GitCommandResult = { code: number | null; stdout: Buffer };
 
@@ -55,7 +60,7 @@ export async function runPublicationCommand(argv: string[], options: GitCommandO
   return await withGitProcessOperation(options.operation ?? "publication", () =>
     withGitNetworkRetry(
       argv[0] === "git" ? retryableGitNetworkOperation(argv.slice(1)) : undefined,
-      { timeoutMs: 60_000, beforeRun: options.beforeRun },
+      { timeoutMs: options.timeoutMs ?? 60_000, beforeRun: options.beforeRun },
       (timeoutMs) =>
         runCommandBuffered(argv, {
           ...(options.cwd ? { cwd: options.cwd } : {}),
@@ -72,6 +77,8 @@ export async function runPublicationCommand(argv: string[], options: GitCommandO
             ? { input: typeof options.input === "function" ? options.input() : options.input }
             : {}),
           timeoutMs,
+          noOutputTimeoutMs: options.noOutputTimeoutMs,
+          discardOutput: options.discardOutput,
           maxOutputBytes: options.maxOutputBytes ?? 256 * 1024,
         }),
     ),
@@ -83,8 +90,12 @@ export async function requirePublicationCommand(
   options: GitCommandOptions = {},
 ): Promise<string> {
   const result = await runPublicationCommand(argv, options);
-  if (result.code !== 0) {
-    throw new Error(`${argv[0]} command failed`);
+  if (result.code !== 0 || result.error) {
+    throw createCommandError(
+      argv[0] ?? "command",
+      { ...result, stdout: Buffer.alloc(0) },
+      { timeoutMs: options.timeoutMs ?? 60_000 },
+    );
   }
   return result.stdout.toString("utf8").trim();
 }
@@ -570,7 +581,31 @@ export async function captureSettledGitHubPublicationWorkspaceSnapshot(
     await step(() => fs.utimes(env.GIT_INDEX_FILE, indexTimestamp, indexTimestamp));
     const sourceIndexTree = await git(["write-tree"], env);
     // Ordinary staging preserves unchanged blobs; renormalization would rewrite unrelated CRLF files.
-    await git(["-c", `core.attributesFile=${os.devNull}`, "add", "-A"], env);
+    try {
+      // Allow quiet scans and buffered file progress; a hard bound stops endless progress.
+      const args = ["-c", `core.attributesFile=${os.devNull}`, "add", "-A", "--verbose"];
+      const options = {
+        cwd: params.cwd,
+        env,
+        timeoutMs: 600_000,
+        noOutputTimeoutMs: 180_000,
+        discardOutput: { stdout: true },
+        beforeRun: params.assertCurrent,
+      };
+      const result = await step(() =>
+        policy
+          ? policy.worker.buffered(params.cwd, args, options)
+          : runPublicationCommand(["git", "-c", "core.fsmonitor=false", ...args], options),
+      );
+      if (result.code !== 0 || result.error) {
+        throw createCommandError("git add", result, options);
+      }
+    } catch (cause) {
+      throw new Error(
+        `GitHub publication snapshot staging failed before submission: ${formatErrorMessage(cause, { includeCode: true })}. The source index is unchanged; inspect Git locks, disk space and host load, then retry publication.`,
+        { cause },
+      );
+    }
     let workspaceTree = await git(["write-tree"], env);
     if (admittedPaths) {
       // Staging must not turn guest-edited ignore rules into host admission.

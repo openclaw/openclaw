@@ -68,10 +68,15 @@ result on stdout.
 ## PostgreSQL stores
 
 `openclaw backup create` routes each managed database through its physical engine,
-including activated plugins' declared backup resources. If any selected store
-uses PostgreSQL, stop the Gateway through its service owner first. A running
-Gateway causes a refusal: “stop through the service owner, then rerun.” Backup
-never stops it automatically. The requirement also applies to `create --to`.
+including activated plugins' declared backup resources. It runs while the
+Gateway serves requests, including `create --to`. Each PostgreSQL store is
+exported from one `REPEATABLE READ READ ONLY` snapshot, the same per-store
+consistency as the live SQLite snapshots in the archive; separate stores are
+captured one after another, not at one shared instant. Rows committed after a
+store's snapshot belong to the next backup. With the Gateway stopped, the command
+holds offline custody instead. Restore, Git backups, and generic local snapshots
+that select PostgreSQL still require the Gateway stopped and refuse while it is
+running: “stop through the service owner, then rerun.”
 
 Mixed-engine installations use the same commands and archive format. Each
 store's physical engine and selected shared connection determine its capture;

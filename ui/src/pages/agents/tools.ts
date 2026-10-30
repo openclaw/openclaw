@@ -43,6 +43,7 @@ function agentEffectiveToolsEventInvalidates(
 }
 
 type ReadOptions = {
+  canRead: () => boolean;
   scope: () => {
     client: GatewayBrowserClient | null;
     connected: boolean;
@@ -63,7 +64,9 @@ export function createAgentToolsCatalog(options: ReadOptions) {
     result: Promise<ToolsCatalogResult | null>;
   } | null>(null);
   const isCurrent = (current: CatalogRequest) =>
-    target === current && options.isCurrent(current.client, current.generation, current.agentId);
+    target === current &&
+    options.canRead() &&
+    options.isCurrent(current.client, current.generation, current.agentId);
   const read: () => ToolsCatalogResult | null = createMemo(async () => request()?.result ?? null);
   async function load(current: CatalogRequest) {
     try {
@@ -93,6 +96,10 @@ export function createAgentToolsCatalog(options: ReadOptions) {
     read,
     request,
     ensure(agentId: string) {
+      if (!options.canRead()) {
+        reset();
+        return;
+      }
       const { client, connected, requestGeneration: generation } = options.scope();
       if (!client || !connected) {
         return;
@@ -143,7 +150,9 @@ export function createAgentEffectiveTools(
     result: Promise<ToolsEffectiveResult | null>;
   } | null>(null);
   const isCurrent = (current: EffectiveRequest) =>
-    target === current && options.isCurrent(current.client, current.generation, current.agentId);
+    target === current &&
+    options.canRead() &&
+    options.isCurrent(current.client, current.generation, current.agentId);
   const read: () => ToolsEffectiveResult | null = createMemo(async () => request()?.result ?? null);
   async function load(current: EffectiveRequest) {
     try {
@@ -168,6 +177,10 @@ export function createAgentEffectiveTools(
     }
   }
   function ensure(refresh = false) {
+    if (!options.canRead()) {
+      reset();
+      return;
+    }
     const {
       client,
       connected,
