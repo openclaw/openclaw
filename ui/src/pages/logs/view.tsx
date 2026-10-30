@@ -206,6 +206,16 @@ export function LogsView(props: LogsProps) {
     },
     { targets: () => [stream], changeTiming: "sync", fonts: true },
   );
+  const windowHeight = createMemo(() => window().height);
+  createLayoutMeasurement(
+    windowHeight,
+    () => {
+      // Retry compensation only after Solid commits the measured spacer height.
+      const { _willUpdate: updateVirtualizer } = virtualizer;
+      updateVirtualizer();
+    },
+    { targets: () => [stream] },
+  );
   const rendered = createMemo(() =>
     window().items.flatMap((item) => {
       // A filter/trim can settle before its next measured range. Keep surviving keys only.

@@ -64,7 +64,23 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}logs`);
-        await page.getByText(/Data log 001999 routine:/).waitFor();
+        await page
+          .getByText(/Data log 001999 routine:/)
+          .waitFor()
+          .catch(async (cause: unknown) => {
+            const state = await page.locator(".log-stream").evaluate((element) => ({
+              top: element.scrollTop,
+              height: element.scrollHeight,
+              viewport: element.clientHeight,
+              first: element.querySelector(".log-row")?.textContent,
+              last: element.querySelector(".log-row:last-child")?.textContent,
+              retained: element.querySelector(".log-row")?.getAttribute("aria-setsize"),
+            }));
+            throw new Error(
+              `Initial log window: ${JSON.stringify({ state, errors, reads: (await gateway.getRequests("logs.tail")).length })}`,
+              { cause },
+            );
+          });
         const stream = page.getByRole("region", { name: "Logs", exact: true });
         await stream.scrollIntoViewIfNeeded();
         if (action === "refresh") {
