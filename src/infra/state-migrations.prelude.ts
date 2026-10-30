@@ -215,12 +215,13 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
   };
   let preparedRepairTargets: readonly AgentDatabaseMigrationTarget[] | undefined =
     params.mode === "doctor" ? [] : undefined;
+  let inspectedEntryStatePaths = new Set<string>();
   let mediaEntryStatePreparationError: Error | undefined;
   const versionMigrationPaths = new Set(
     params.agentDatabaseMigrationDiscovery?.versionMigrations?.map((migration) => migration.path),
   );
   // Preflight already inspected these targets; version-migrated targets keep their repair path.
-  const inspectedEntryStatePaths = new Set(
+  inspectedEntryStatePaths = new Set(
     params.inspectedSessionEntryPaths?.filter((pathname) => !versionMigrationPaths.has(pathname)),
   );
   const steps: LegacyStateMigrationStep[] = [];

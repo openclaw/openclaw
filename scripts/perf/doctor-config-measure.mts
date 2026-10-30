@@ -240,10 +240,7 @@ if (mode === "run" && !values.execute) {
       await load("src/config/sessions/session-accessor.sqlite-transcript-store.ts");
     const now = Date.now();
     const timestamp = new Date(now).toISOString();
-    const databases = agents.map((agentId) => ({
-      agentId,
-      ...openOpenClawAgentDatabase({ agentId }),
-    }));
+    const databases = agents.map((agentId) => openOpenClawAgentDatabase({ agentId }));
     for (const agentId of agents) {
       for (let offset = 0; offset < sessionsPerAgent; offset += 128) {
         runOpenClawAgentWriteTransaction(
@@ -501,9 +498,11 @@ if (mode === "run" && !values.execute) {
         phase("verification");
         const ledger = getUpdateRun(runId);
         assert.ok(
-          ledger?.steps.some(
-            (step) => step.step === "finalize:doctor:model-retirement" && step.status === "skipped",
-          ),
+          ledger &&
+            ledger.steps.some(
+              (step) =>
+                step.step === "finalize:doctor:model-retirement" && step.status === "skipped",
+            ),
           "Doctor must record a genuine deferred retirement receipt",
         );
         result.ledgerSteps = ledger.steps;

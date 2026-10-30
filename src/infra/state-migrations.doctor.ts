@@ -83,6 +83,7 @@ import {
   prepareDoctorAgentDatabaseDiscovery,
   resolveConcreteBindingAccountId,
 } from "./state-migrations.doctor-discovery.js";
+import type { AutoMigrateLegacyStateParams } from "./state-migrations.doctor.types.js";
 import {
   detectLegacyExecApprovals,
   migrateLegacyExecApprovals,
@@ -185,7 +186,6 @@ import {
   migrateLegacyTuiLastSessions,
 } from "./state-migrations.tui-last-session.js";
 import type {
-  AutoMigrateLegacyStateParams,
   LegacyStateDetection,
   LegacyStateMigrationEndpoint,
   LegacyStateMigrationInvocationPurpose,
