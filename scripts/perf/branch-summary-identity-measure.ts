@@ -14,11 +14,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Session, type HeapProfiler } from "node:inspector/promises";
-import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -48,20 +47,7 @@ const ownerUrl = new URL(
   "../../src/config/sessions/session-accessor.sqlite-branches.worker.ts",
   import.meta.url,
 ).href;
-let replaced = false;
-if (values.owner) {
-  const replacement = pathToFileURL(path.resolve(values.owner)).href;
-  registerHooks({
-    load(url, context, nextLoad) {
-      if (url !== ownerUrl) {
-        return nextLoad(url, context);
-      }
-      replaced = true;
-      const result = nextLoad(replacement, context);
-      return { format: result.format, source: result.source, shortCircuit: true };
-    },
-  });
-}
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl, values.owner);
 const { readSessionBranchSnapshot } =
   await import("../../src/config/sessions/session-accessor.sqlite-branches.worker.js");
 const { openOpenClawAgentDatabaseReadOnly } =
@@ -69,7 +55,7 @@ const { openOpenClawAgentDatabaseReadOnly } =
 const { executeSqliteQuerySync } = await import("../../src/infra/kysely-sync.js");
 const { getSessionKysely } =
   await import("../../src/config/sessions/session-accessor.sqlite-scope-helpers.js");
-assert(!values.owner || replaced, "Requested baseline source was not loaded");
+assert(!values.owner || wasOwnerReplaced(), "Requested baseline source was not loaded");
 const opened = openOpenClawAgentDatabaseReadOnly({ agentId: "main", env: process.env });
 assert(opened.found, "Synthetic agent database is missing");
 const database = opened.database;

@@ -12,12 +12,13 @@ import {
   normalizeArchiveRoot,
   resolvePortableArchivePathKey,
   type BackupSymbolicLink,
+  buildBackupArchivePath,
 } from "../infra/backup-archive-path-policy.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { UpdateRunDriverSchema } from "../infra/update-run-driver-schema.js";
-import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
+import { BACKUP_MAX_DECOMPRESSION_RATIO } from "./backup-shared.js";
 
 const recoveryPath = z
   .string()

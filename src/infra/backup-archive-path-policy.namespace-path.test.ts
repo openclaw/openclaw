@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildBackupArchivePath } from "./backup-shared.js";
+import { buildBackupArchivePath } from "./backup-archive-path-policy.js";
 
 describe("Windows namespace backup archive paths", () => {
   const agent =

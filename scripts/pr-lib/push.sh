@@ -296,8 +296,12 @@ push_prep_head_once() {
       return 1
     fi
   fi
+  local merge_commit
+  merge_commit=$(pr_git rev-list --min-parents=2 --max-count=1 "$lease_sha..$prep_head_sha") || return 1
   local push_mode="${OPENCLAW_PR_PUSH_MODE:-auto}"
-  if [ "$push_mode" = "auto" ] && verify_prep_commit_range_signed "$lease_sha" "$prep_head_sha" "$publication_baseline"; then
+  # GraphQL cannot preserve merge parents; the Git gate below owns unsigned permission.
+  if [ "$push_mode" = "auto" ] && { [ -n "$merge_commit" ] ||
+    verify_prep_commit_range_signed "$lease_sha" "$prep_head_sha" "$publication_baseline"; }; then
     push_mode="git"
   elif [ "$push_mode" = "auto" ]; then
     push_mode="graphql"
@@ -327,7 +331,7 @@ push_prep_head_once() {
     printf '%s\n' "$push_output" >&2
     # Only an actual Git permission failure may change transports. GraphQL
     # failures and uncertain Git outcomes never authorize another publication.
-    if printf '%s' "$push_output" | grep -qiE '(permission|denied|403|forbidden)' &&
+    if [ -z "$merge_commit" ] && printf '%s' "$push_output" | grep -qiE '(permission|denied|403|forbidden)' &&
       [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
       echo "Permission denied on git push; trying GraphQL with the same lease." >&2
       graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$pr_head" "$lease_sha" "$pr" "$observation" "$prep_head_sha"

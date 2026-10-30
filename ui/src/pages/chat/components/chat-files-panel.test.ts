@@ -381,7 +381,6 @@ describe("workspace file tabs", () => {
     "validates a document link before reusing a dirty target (%s)",
     async (scope) => {
       const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
-      await toast.updateComplete;
       const { state, response, getFile, workspace } = fileFixture(
         "reports/evidence.md",
         "Disk evidence",
@@ -463,6 +462,7 @@ describe("workspace file tabs", () => {
       await openSessionWorkspaceFile(state, { path: "evidence.md", relativeTo: source }, "preview");
       expect(workspace.activePreviewId).toBe(sourcePreview.id);
       expect(workspace.error).toContain(scope === "denied" ? "Access denied" : "workspace changed");
+      await vi.dynamicImportSettled();
       await waitForSolid(() => expect(toast.textContent).toContain(workspace.error));
       expect(retained.content).toBe(original);
       expect(readFileDraft(original)?.content).toBe("Unsaved evidence");
@@ -476,7 +476,6 @@ describe("workspace file tabs", () => {
     "keeps rootless document target $link explicit and native-authorized",
     async ({ path, link, request }) => {
       const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
-      await toast.updateComplete;
       const { state, response, getFile, workspace } = fileFixture(path, "# Report", true);
       response.root = undefined;
       const preview = await openSessionWorkspaceFile(state, { path });
@@ -496,6 +495,7 @@ describe("workspace file tabs", () => {
       expect(state.sessions.listFiles).not.toHaveBeenCalled();
       expect(workspace.activePreviewId).toBe(preview.id);
       expect(workspace.previews).toEqual([preview]);
+      await vi.dynamicImportSettled();
       await waitForSolid(() => expect(toast.textContent).toContain("session file not found"));
     },
   );

@@ -18,7 +18,10 @@ import {
   resolveGitInstallDir,
   type UpdateCommandOptions,
 } from "./shared.js";
-import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
+import {
+  reportPreMutationUpdateResult,
+  withUpdateAdmissionReporting,
+} from "./update-command-admission-report.js";
 import { runAdmittedUpdate } from "./update-command-admitted.js";
 import { withUpdateCandidateAdmission } from "./update-command-candidate-admission.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
@@ -32,10 +35,7 @@ import type { InitializedUpdate } from "./update-command-initialization.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
-import {
-  UpdateCommandPendingRecoveryFailure,
-  withUpdateAdmissionReporting,
-} from "./update-command-result.js";
+import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import {
   createUpdateRunProgress,
   prepareUpdateCommand,
@@ -102,73 +102,88 @@ async function updateCommandWithRuntime(
       ),
     );
   }
-  return await withUpdateAdmissionReporting(inputOpts, async () => {
-    const root = prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot;
-    const serviceRoot = prepared.servicePlan?.serviceRoot;
-    const env = await resolveUpdateCommandAdmissionEnv({
-      opts: inputOpts,
-      root: resolveUpdateCommandAdmissionRoot(prepared),
-      invocationCwd,
-      pkgOwnership: prepared.pkgOwnership,
-      expectedForeground:
-        prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
-    });
-    return await withUpdateDatabaseEngine(
-      env,
-      async (configReadable) => {
-        if (inputOpts.dryRun && resolveDebugProxySettings(env).enabled) {
-          defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
-        }
-        const { updateStateNeedsInitialization } =
-          await import("./update-command-initialization.js");
-        assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
-        // Unreadable previews reach diagnostics before any writable state inspection.
-        const needsInitialization = !configReadable || (await updateStateNeedsInitialization(env));
-        const captureOriginal =
-          !inputOpts.dryRun &&
-          !inputOpts.run &&
-          !inputOpts.recovery &&
-          !executorOptions &&
-          !env[UPDATE_RUN_ID_ENV]?.trim() &&
-          env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1";
-        const execute = (initialization?: InitializedUpdate) =>
-          runAdmittedUpdate(
-            inputOpts,
-            prepared,
-            recoveryState,
-            invocationCwd,
-            (opts, presentation, executor) =>
-              updateCommandInternal(
-                opts,
-                recoveryState,
-                invocationCwd,
-                prepared,
-                presentation,
-                executor,
-                retainRuntime,
-                initialization,
-              ),
-            initialization,
-            executorOptions,
-          );
-        if (needsInitialization || captureOriginal) {
-          const { initializeAndRunUpdate } = await import("./update-command-initialization-run.js");
-          return await initializeAndRunUpdate(
-            inputOpts,
-            prepared,
-            recoveryState,
-            invocationCwd,
-            env,
-            execute,
-            { needsInitialization, captureOriginal },
-            executorOptions,
-          );
-        }
-        return await execute();
-      },
-      inputOpts,
-    );
-  });
+  const reportHints: NonNullable<Parameters<typeof withUpdateAdmissionReporting>[3]> = {};
+  return await withUpdateAdmissionReporting(
+    inputOpts,
+    async () => {
+      const root = prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot;
+      const serviceRoot = prepared.servicePlan?.serviceRoot;
+      const env = await resolveUpdateCommandAdmissionEnv({
+        opts: inputOpts,
+        root: resolveUpdateCommandAdmissionRoot(prepared),
+        invocationCwd,
+        pkgOwnership: prepared.pkgOwnership,
+        expectedForeground:
+          prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" ||
+          undefined,
+      });
+      return await withUpdateDatabaseEngine(
+        env,
+        async (configReadable, malformedConfig) => {
+          // Late admission refusals retain the captured malformed-source report decision.
+          reportHints.writeArtifacts = !malformedConfig;
+          if (inputOpts.dryRun && resolveDebugProxySettings(env).enabled) {
+            defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
+          }
+          const { updateStateNeedsInitialization } =
+            await import("./update-command-initialization.js");
+          assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
+          // Unreadable previews reach diagnostics before any writable state inspection.
+          const needsInitialization =
+            !configReadable || (await updateStateNeedsInitialization(env));
+          const captureOriginal =
+            !inputOpts.dryRun &&
+            !inputOpts.run &&
+            !inputOpts.recovery &&
+            !executorOptions &&
+            !env[UPDATE_RUN_ID_ENV]?.trim() &&
+            env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1";
+          const execute = (initialization?: InitializedUpdate) =>
+            runAdmittedUpdate(
+              inputOpts,
+              prepared,
+              recoveryState,
+              invocationCwd,
+              (opts, presentation, executor) =>
+                updateCommandInternal(
+                  opts,
+                  recoveryState,
+                  invocationCwd,
+                  prepared,
+                  presentation,
+                  executor,
+                  retainRuntime,
+                  initialization,
+                ),
+              initialization,
+              executorOptions,
+            );
+          if (needsInitialization || captureOriginal) {
+            const { initializeAndRunUpdate } =
+              await import("./update-command-initialization-run.js");
+            return await initializeAndRunUpdate(
+              inputOpts,
+              prepared,
+              recoveryState,
+              invocationCwd,
+              env,
+              execute,
+              {
+                needsInitialization,
+                captureOriginal,
+                malformedConfig,
+              },
+              executorOptions,
+            );
+          }
+          return await execute();
+        },
+        inputOpts,
+      );
+    },
+    "unknown",
+    reportHints,
+  );
 }
 
 async function updateCommandInternal(

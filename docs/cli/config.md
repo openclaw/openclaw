@@ -458,6 +458,10 @@ openclaw config patch --file ./openclaw.patch.json5
 
 Patch files are limited to 8 MiB. Piped `--stdin` patches are limited to 1 MiB.
 
+While `--stdin` is waiting for input, Ctrl-C or SIGTERM stops the read and exits
+with status 130 or 143 without applying the pending patch. A write already
+admitted after input preparation keeps its existing completion and cleanup path.
+
 Pipe a patch over stdin for remote setup scripts:
 
 ```bash

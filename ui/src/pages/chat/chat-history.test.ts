@@ -98,7 +98,9 @@ it("preserves prepared quiet activity through older pages and prefetched snapsho
     activity: [{ messageId: "wait-result", items: [] }],
   });
   const expected = [{ ...result, activity: [] }];
-  expect((await loadOlderChatHistoryPage(state, 1))?.messages).toEqual(expected);
+  expect((await loadOlderChatHistoryPage(state, { cursor: "older-1" }))?.messages).toEqual(
+    expected,
+  );
   expect(
     await requestChatSessionSnapshot(state.client!, state.sessionKey, state, () => true),
   ).toMatchObject({ kind: "snapshot", snapshot: { messages: expected } });

@@ -315,7 +315,7 @@ export async function prepareBoundGitHubPublication(params: {
   const refresh = async () => {
     const inspected = await inspectOwnGitHubPullRequest({
       pullRequestUrl: binding.url,
-      agentId: row.agent_id,
+      session: { agentId: row.agent_id, sessionKey: row.session_key, sessionId: row.session_id },
       requester: params.requester,
       assertCurrent: params.assertCurrent,
     }).catch(() => {

@@ -5,17 +5,9 @@ import path from "node:path";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
+import { parseQaArtifactBase } from "./script-options.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/remote-log-tailing-runtime.ts";
-
-function artifactBase(argv: readonly string[]): string {
-  const index = argv.indexOf("--artifact-base");
-  const value = index >= 0 ? argv[index + 1] : undefined;
-  if (!value) {
-    throw new Error("--artifact-base is required");
-  }
-  return path.resolve(value);
-}
 
 function logLine(message: string): string {
   return `${JSON.stringify({
@@ -207,7 +199,7 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
 
 async function main() {
   const repoRoot = process.cwd();
-  const outputRoot = artifactBase(process.argv.slice(2));
+  const outputRoot = parseQaArtifactBase(process.argv.slice(2));
   const startedAt = Date.now();
   const writer = createQaScriptEvidenceWriter({
     artifactBase: outputRoot,
