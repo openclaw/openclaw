@@ -1,5 +1,3 @@
-@import "./composer-context-strip.css";
-
 .session-progress-card--composer,
 .session-progress-card__summary {
   border-radius: calc(20px * var(--openclaw-corner-radius-scale));
