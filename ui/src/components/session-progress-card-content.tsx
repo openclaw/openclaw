@@ -160,14 +160,15 @@ export function ProgressRuntime(props: {
       return t("sessionProgressCard.runtime.unknown");
     }
     const parts = runtime.children
-      ? (["running", "queued", "waiting", "failed", "stopped"] as const).flatMap((state) =>
-          runtime.children?.[state]
-            ? [
-                t(`sessionProgressCard.runtime.${state}`, {
-                  count: String(runtime.children[state]),
-                }),
-              ]
-            : [],
+      ? (["running", "queued", "waiting", "paused", "failed", "stopped"] as const).flatMap(
+          (state) =>
+            runtime.children?.[state]
+              ? [
+                  t(`sessionProgressCard.runtime.${state}`, {
+                    count: String(runtime.children[state]),
+                  }),
+                ]
+              : [],
         )
       : [];
     if (parts.length) {

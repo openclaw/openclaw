@@ -33,6 +33,7 @@ const enSessionProgress = {
       running: "{count} running",
       queued: "{count} queued",
       waiting: "{count} waiting",
+      paused: "{count} paused",
       failed: "{count} failed",
       stopped: "{count} stopped",
       delegated: "Waiting for delegated work",

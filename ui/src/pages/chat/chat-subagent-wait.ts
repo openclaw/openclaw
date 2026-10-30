@@ -303,7 +303,7 @@ export function projectProgressCardRuntime(
   let childError: string | undefined;
   const children =
     session && roster.subagentSessionsHydrated && !roster.subagentSessionsPending
-      ? { running: 0, queued: 0, waiting: 0, failed: 0, stopped: 0 }
+      ? { running: 0, queued: 0, waiting: 0, paused: 0, failed: 0, stopped: 0 }
       : undefined;
   if (session && children) {
     for (const row of directChildren(session, roster)) {
@@ -313,6 +313,10 @@ export function projectProgressCardRuntime(
         children.running++;
       } else if (row.hasActiveSubagentRun) {
         children.waiting++;
+      } else if (isPausedChild(row)) {
+        // Still owes its task however long ago it yielded, but nothing runs:
+        // it never makes the parent's delegated work active.
+        children.paused++;
       } else if (row.endedAt !== undefined && row.endedAt >= updatedAt) {
         // A newer authored snapshot has already had a chance to reconcile this
         // outcome. Never carry failures from an older task into a new card.
