@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 90819,
-  "reason": "Current-main Board admission candidate measures 90819 B gzip, 19 B below the matched 90838 B base, with unchanged three JS requests and one CSS request.",
+  "startupJsGzipBytes": 88897,
+  "reason": "Board report containment preserves startup loading: matched builds measured 88897 B gzip against 88900 B on base, with three JS requests and one CSS request; ratchet to the measured head.",
   "updatedAt": "2026-10-30"
 }
