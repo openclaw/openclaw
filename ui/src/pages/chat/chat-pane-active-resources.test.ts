@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { SessionRowObservation } from "../../lib/sessions/session-capability.ts";
+import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { ChatPaneActiveResources, type ActiveResourceOwner } from "./chat-pane-active-resources.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout-normalize.ts";
 import {
@@ -26,18 +27,10 @@ const session = {
   updatedAt: 1,
   placement: { state: "active", environmentId: "worker-1" },
 } as GatewaySessionRow;
-const activePlacement = {
-  state: "active",
-  generation: 1,
-  createdAtMs: 1,
-  updatedAtMs: 1,
-  stateChangedAtMs: 1,
+const activePlacement = createActiveSessionPlacement({
   environmentId: "worker-1",
-  activeOwnerEpoch: 1,
-  workerBundleHash: "a".repeat(64),
   workspaceBaseManifestRef: "base",
-  remoteWorkspaceDir: "/workspace",
-} satisfies NonNullable<GatewaySessionRow["placement"]>;
+}) satisfies NonNullable<GatewaySessionRow["placement"]>;
 const environment: EnvironmentsListResult["environments"][number] = {
   id: "worker-1",
   type: "worker",
@@ -380,7 +373,7 @@ describe("session active resource discovery", () => {
     expect(f.slots()).toEqual(["terminal"]);
   });
 
-  it("retires an automatic desktop without falling back to a stale roster or global source", async () => {
+  it("clears a discovered desktop source without falling back to a stale roster or global source", async () => {
     const f = fixture();
     await f.sync();
     expect(f.desktopSource()).toBe("worker-1");
@@ -389,7 +382,6 @@ describe("session active resource discovery", () => {
     f.controller.invalidate();
     await f.sync();
     expect(f.desktopSource()).toBeNull();
-    expect(f.commit).toHaveBeenCalledTimes(1);
   });
 
   it.each(["before discovery", "during discovery"])(

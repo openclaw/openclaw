@@ -1,4 +1,3 @@
-// Qa Lab tests bound the evidence checkout ref git probe.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,23 +9,12 @@ const tempDirs = createTempDirHarness();
 const execFileSyncMock = vi.hoisted(() => vi.fn());
 const execFileMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  // Node's execFile promisify contract returns both streams, not just stdout.
-  Object.defineProperty(execFileMock, Symbol.for("nodejs.util.promisify.custom"), {
-    value: (...args: unknown[]) =>
-      new Promise((resolve, reject) => {
-        execFileMock(...args, (error: Error | null, stdout: string, stderr: string) =>
-          error ? reject(error) : resolve({ stdout, stderr }),
-        );
-      }),
-  });
-  return {
-    ...actual,
-    execFile: execFileMock,
-    execFileSync: execFileSyncMock,
-  };
-});
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  // Production consumes execFile's promisified, two-stream result.
+  execFile: Object.assign(vi.fn(), { [Symbol.for("nodejs.util.promisify.custom")]: execFileMock }),
+  execFileSync: execFileSyncMock,
+}));
 
 import {
   captureQaEvidenceLaunchIdentity,
@@ -42,9 +30,10 @@ afterEach(async () => {
 });
 
 function mockGit(state: Record<string, string>) {
-  execFileMock.mockImplementation((_command, args, _options, callback) =>
-    callback(null, state[args[0]] ?? "actual-head\n", ""),
-  );
+  execFileMock.mockImplementation(async (_command, args) => ({
+    stdout: state[args[0]] ?? "actual-head\n",
+    stderr: "",
+  }));
 }
 
 describe("captured evidence source identity", () => {
@@ -97,20 +86,14 @@ describe("captured evidence source identity", () => {
     mockGit({ diff: "", "ls-files": "" });
     const identity = {
       runtime: { id: "bun", version: "1.3.14" },
-      package: null,
-      protocol: null,
-      accountRef: null,
-      proofClass: null,
     };
-    expect(await captureQaEvidenceLaunchIdentity("fixture-checkout")).toEqual({
+    expect(await captureQaEvidenceLaunchIdentity("fixture-checkout")).toMatchObject({
       ...identity,
       source: { ref: "actual-head", integrity: "git:actual-head" },
     });
 
-    execFileMock.mockImplementation((_command, _args, _options, callback) =>
-      callback(new Error("source unavailable"), "", ""),
-    );
-    expect(await captureQaEvidenceLaunchIdentity("unavailable-checkout")).toEqual({
+    execFileMock.mockRejectedValue(new Error("source unavailable"));
+    expect(await captureQaEvidenceLaunchIdentity("unavailable-checkout")).toMatchObject({
       source: { ref: null, integrity: null },
       ...identity,
     });

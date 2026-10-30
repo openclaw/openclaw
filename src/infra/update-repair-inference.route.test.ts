@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginSetupRegistry } from "../plugins/setup-registry.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "../system-agent/inference-route.js";
 import { selectUpdateRepairInference } from "./update-repair-inference.js";
 
@@ -46,13 +47,7 @@ const config: OpenClawConfig = {
 beforeEach(() => {
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupCliBackend: () => undefined,
-    resolvePluginSetupRegistry: () => ({
-      providers: [],
-      cliBackends: [],
-      configMigrations: [],
-      autoEnableProbes: [],
-      diagnostics: [],
-    }),
+    resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
   });
   probe.mockReset().mockResolvedValue({ ok: true, latencyMs: 1, text: "OK", auth: {} });
 });

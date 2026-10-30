@@ -30,7 +30,7 @@ import { pluginTabKey } from "./route.tsx";
  * Navigation uses normal session selection and Gateway authorization; it grants
  * no session access.
  */
-export type ControlUiPluginSessionOpenMessage = {
+type ControlUiPluginSessionOpenMessage = {
   type: "openclaw-plugin-session-open";
   sessionKey: string;
   agentId?: string;

@@ -28,6 +28,7 @@ export const SESSION_TRANSCRIPT_WORKER_LIMITS = {
 export function createSessionTranscriptHistoryPool(
   maxWorkers = resolveWorkerPoolSize("singleton"),
   onRotationComplete?: () => void,
+  options: { prewarmHistory?: true } = {},
 ) {
   let canCloseNativeResources: boolean | undefined;
   const pool = createOwnedWorkerTaskPool<
@@ -50,7 +51,12 @@ export function createSessionTranscriptHistoryPool(
         canCloseNativeResources =
           captureSqliteWorkerClosePolicy() && (canCloseNativeResources ?? true);
         return {
-          options: { workerData: { databaseEngineSelection: getDatabaseEngineSelection() } },
+          options: {
+            workerData: {
+              databaseEngineSelection: getDatabaseEngineSelection(),
+              ...options,
+            },
+          },
         };
       },
     },
@@ -95,4 +101,12 @@ export type SessionDatabaseWorkerLane = {
   pending: number;
   idleTimer?: NodeJS.Timeout;
   rotation?: Promise<void>;
+};
+
+export type SessionCostWorkerLane = SessionDatabaseWorkerLane & {
+  pool: WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>;
+};
+
+export type SessionHistoryWorkerLane = SessionDatabaseWorkerLane & {
+  pool: ReturnType<typeof createSessionTranscriptHistoryPool>;
 };

@@ -28,7 +28,7 @@ Setup-generated dependencies and build output survive into the session. Session 
 
 An empty committed workspace uses the profile's shared runtime image instead of a repository snapshot. With no prepared project, capture happens at eligible worker teardown. A failed detected dependency install skips capture and lets the session start cold; a failed declared recipe stops dispatch. Explicitly skipped setup has a separate snapshot identity.
 
-Environment status reports `stopping` while teardown is pending. A warm-image capture may finish after the lease reports `destroyed`; if the Gateway exits mid-capture, Crabbox's idle timeout or TTL reaps the lease.
+Environment status reports `stopping` while teardown is pending. Stop cloud worker can finish after session shutdown and a claimed warm-image capture, while the environment remains `destroying`. Capture and confirmed lease release continue under the environment lifecycle owner; only confirmed release changes the environment to `destroyed`. Failures remain visible and retryable. If the Gateway exits mid-capture, Crabbox's idle timeout or TTL can reap the lease, and the next Gateway reconciles the retained cleanup request.
 
 ### Later sessions and refresh
 
@@ -58,7 +58,7 @@ Set the plugin-wide policy under `plugins.entries.crabbox.config.warmImages`, or
 use **Advanced → Snapshot retention** under **Cloud environments**. These controls
 apply to all repositories. Saving reloads the Crabbox plugin without restarting
 the Gateway. Worker lease lifetimes and the 128-profile capacity limit stay
-unchanged. Unused, unpinned images expire after `retainUnused`; images held by allocations wait for those workers to stop. Replaced snapshots retire after allocations release them unless retained as a previous generation or pinned. Failed deletion stays pending and retries during maintenance.
+unchanged. Unused, unpinned images expire after `retainUnused`; images held by allocations wait for those workers to stop. Replaced snapshots retire after allocations release them unless retained as a previous generation or pinned. Failed deletion stays pending and retries during the Gateway's periodic maintenance (every 60 seconds by default). Pending retirements run before capture reconciliation so a slow capture cannot block their retries. Each failed deletion attempt logs the provider error in the Gateway log; successful deletion clears the pending retirement. Maintenance checks allocation leases that hold a pending retirement and releases their holds only after confirming the lease is gone. Live dispatches keep their holds even before the provider creates the lease. Live or unconfirmed holding leases remain protected and are named in the Gateway log and Doctor finding.
 
 | Key            | Default | Accepted values                                                   |
 | -------------- | ------- | ----------------------------------------------------------------- |
@@ -142,13 +142,31 @@ Status identifies the capture selector, source lease, checkpoint references, and
 
 A paused capture does not prevent source-lease cleanup, but enrollment on its uncertain source remains blocked until recovery clears the reservation.
 
-Before recovery, stop the owning Gateway, any original capture processes, and the recovered worker. Use the source lease and capture time to reconcile the uncertain operation in Crabbox's checkpoint catalog, and resolve any untracked provider artifact. Only after those steps, copy the exact capture selector from status:
+Gateway warm-image maintenance runs at startup and during the periodic worker
+environment sweep (every minute by default), including when the prepared pool is
+disabled and no worker sessions are active. Maintenance follows the configured
+provider's plugin activation policy. It retries uncertain captures until
+their source lease is absent, stopped, released, or expired. Released and expired
+leases cannot start another checkpoint; lease teardown still owns physical resource
+cleanup. Maintenance matches the exact recorded lease ID in Crabbox's checkpoint
+catalog. If no checkpoint exists, it
+clears the capture reservation. If exactly one exists, it deletes that unvalidated
+checkpoint before clearing the reservation, and logs the outcome. It never adopts
+an interrupted capture's snapshot.
+
+Multiple matching checkpoints, checkpoints already referenced by a published image
+or allocation, failed lookups or deletions, unexpected responses,
+and sources that are still running or unconfirmed keep the capture paused for
+manual recovery. Doctor and warm-image inspection include the candidate checkpoint
+IDs discovered during maintenance; warnings explain why automatic recovery stopped.
+
+Before manual recovery, stop the owning Gateway, any original capture processes, and the recovered worker. Inspect the reported candidate checkpoint IDs, or use the source lease and capture time to reconcile the uncertain operation in Crabbox's checkpoint catalog, and resolve any untracked provider artifact. Only after those steps, copy the exact capture selector from status:
 
 ```bash
 openclaw crabbox warm-images --recover <capture-selector> --acknowledge-provider-cleanup
 ```
 
-The acknowledgement attests that the original capture and worker are stopped and untracked artifacts are resolved; elapsed time alone does not establish those facts. Recovery clears only that capture reservation, preserves known checkpoint references and allocation choices, and rejects a replaced selector. It does not stop processes, run provider commands, delete snapshots, or allocate a worker. Restart the Gateway afterward; the next eligible worker can capture again. Failed checkpoint retirements retry during periodic maintenance or that profile's later capture or warm-image-enabled worker teardown after provider deletion errors are resolved; they do not use capture recovery.
+The acknowledgement attests that the original capture and worker are stopped and untracked artifacts are resolved; elapsed time alone does not establish those facts. Recovery clears that capture reservation and its source lease's allocation, preserves known checkpoint references and all other allocation choices, and rejects a replaced selector. It does not stop processes, run provider commands, delete snapshots, or allocate a worker. Restart the Gateway afterward; the next eligible worker can capture again. Failed checkpoint retirements retry during periodic maintenance or that profile's later capture or warm-image-enabled worker teardown after provider deletion errors are resolved; they do not use capture recovery.
 
 ### Upgrade warm-image state
 

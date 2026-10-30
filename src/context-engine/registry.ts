@@ -1,6 +1,7 @@
 // Context-engine registry owns engine registration, resolution, compatibility, and quarantine.
 import type { OpenClawConfig } from "../config/types.js";
 import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
+import { isPluginReloadingError } from "../plugins/plugin-replacement-retry.js";
 import type {
   ContextEngineFactory,
   ContextEngineFactoryContext,
@@ -696,7 +697,13 @@ export async function resolveContextEngine(
         preparation,
       );
     } catch (error) {
-      if (isDefaultEngine || !operation || isContextEngineAbortRejection(error, abortSignal)) {
+      // A reload refusing admission is not an engine defect; its caller may wait it out.
+      if (
+        isDefaultEngine ||
+        !operation ||
+        isContextEngineAbortRejection(error, abortSignal) ||
+        isPluginReloadingError(error)
+      ) {
         throw error;
       }
       const recording = recordContextEngineQuarantine({

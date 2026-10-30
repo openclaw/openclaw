@@ -2,7 +2,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockClaudeManagedSettings } from "../../test/helpers/claude-managed-settings.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   attestClaudeNativeLoginOwner,
@@ -10,6 +11,10 @@ import {
 } from "./provider-auth-claude-compat.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const writeJson = (file: string, value: unknown) =>
+  fs.writeFileSync(file, JSON.stringify(value), "utf8");
+const writeCredentials = (dir: string, value: Record<string, unknown> = credentials()) =>
+  writeJson(path.join(dir, ".credentials.json"), { claudeAiOauth: value });
 
 function makeHome(files: {
   account?: Record<string, unknown>;
@@ -17,13 +22,11 @@ function makeHome(files: {
 }): string {
   const home = tempDirs.make("openclaw-claude-owner-");
   fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
-  const write = (file: string, value: unknown) =>
-    fs.writeFileSync(path.join(home, file), JSON.stringify(value), "utf8");
   if (files.account) {
-    write(".claude.json", { oauthAccount: files.account });
+    writeJson(path.join(home, ".claude.json"), { oauthAccount: files.account });
   }
   if (files.credentials) {
-    write(path.join(".claude", ".credentials.json"), { claudeAiOauth: files.credentials });
+    writeCredentials(path.join(home, ".claude"), files.credentials);
   }
   return home;
 }
@@ -43,10 +46,7 @@ function profileFetch() {
     const bearer = new Headers(init?.headers).get("authorization") ?? "";
     const match = /^Bearer token-(.+)-[0-9a-f-]{36}$/u.exec(bearer);
     return match
-      ? Response.json({
-          account: { uuid: match[1], email: `${match[1]}@example.com` },
-          organization: { uuid: "org-1" },
-        })
+      ? Response.json({ account: { uuid: match[1] } })
       : new Response("{}", { status: 401 });
   });
 }
@@ -58,6 +58,15 @@ async function attest(
 ) {
   return (await attestClaudeNativeLoginOwner({ fetchFn, ...options })).owner;
 }
+
+const { realpathSync } = fs;
+let managedSettingsDir: string;
+let managedFixturePath: ReturnType<typeof mockClaudeManagedSettings>;
+
+beforeEach(() => {
+  managedSettingsDir = tempDirs.make("openclaw-claude-managed-");
+  managedFixturePath = mockClaudeManagedSettings(managedSettingsDir);
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -121,14 +130,10 @@ describe("attestClaudeNativeLoginOwner", () => {
       expect(readClaudeNativeLoginOwner({ homeDir, platform: "linux" })).toBeUndefined();
       expect(await attest({ homeDir, platform: "linux" }, fetchFn as never)).toBe("uuid:uuid-a");
       expect(readClaudeNativeLoginOwner({ homeDir, platform: "linux" })).toBe("uuid:uuid-a");
-      // A second attestation of the same token needs no request.
       expect(await attest({ homeDir, platform: "linux" }, fetchFn as never)).toBe("uuid:uuid-a");
       expect(fetchFn).toHaveBeenCalledTimes(1);
       // A rotated token has no owner until it is attested itself.
-      fs.writeFileSync(
-        path.join(homeDir, ".claude", ".credentials.json"),
-        JSON.stringify({ claudeAiOauth: credentials() }),
-      );
+      writeCredentials(path.join(homeDir, ".claude"));
       expect(readClaudeNativeLoginOwner({ homeDir, platform: "linux" })).toBeUndefined();
       expect(fetchFn).toHaveBeenCalledTimes(1);
     });
@@ -144,10 +149,7 @@ describe("attestClaudeNativeLoginOwner", () => {
       expect(fetchFn).not.toHaveBeenCalled();
       // The same token, attested while it was still valid, keeps its owner after expiry.
       const write = (expiresAt: number) =>
-        fs.writeFileSync(
-          path.join(homeDir, ".claude", ".credentials.json"),
-          JSON.stringify({ claudeAiOauth: { accessToken: token, expiresAt } }),
-        );
+        writeCredentials(path.join(homeDir, ".claude"), { accessToken: token, expiresAt });
       write(Date.parse("2030-01-01T00:00:00Z"));
       expect(await attest({ homeDir, platform: "linux" }, fetchFn as never)).toBe("uuid:uuid-a");
       write(expired);
@@ -166,10 +168,7 @@ describe("attestClaudeNativeLoginOwner", () => {
       await attest({ homeDir, platform: "linux" }, fetchFn as never);
       const first = fs.readFileSync(path.join(homeDir, ".claude", ".credentials.json"), "utf8");
       for (let index = 0; index < 64; index += 1) {
-        fs.writeFileSync(
-          path.join(homeDir, ".claude", ".credentials.json"),
-          JSON.stringify({ claudeAiOauth: credentials() }),
-        );
+        writeCredentials(path.join(homeDir, ".claude"));
         await attest({ homeDir, platform: "linux" }, fetchFn as never);
       }
       fs.writeFileSync(path.join(homeDir, ".claude", ".credentials.json"), first);
@@ -186,14 +185,13 @@ describe("attestClaudeNativeLoginOwner", () => {
 
   describe("supplied environment", () => {
     const loginIn = (dir: string, accountUuid: string) => {
-      fs.writeFileSync(
-        path.join(dir, ".claude.json"),
-        JSON.stringify({ oauthAccount: { accountUuid } }),
-      );
-      fs.writeFileSync(
-        path.join(dir, ".credentials.json"),
-        JSON.stringify({ claudeAiOauth: credentials({ accessToken: tokenFor(accountUuid) }) }),
-      );
+      writeJson(path.join(dir, ".claude.json"), { oauthAccount: { accountUuid } });
+      writeCredentials(dir, credentials({ accessToken: tokenFor(accountUuid) }));
+    };
+    const configLogin = () => {
+      const configDir = tempDirs.make("openclaw-claude-config-");
+      loginIn(configDir, "uuid-a");
+      return { configDir, env: { CLAUDE_CONFIG_DIR: configDir } };
     };
 
     it("reads the config dir the child receives, not the process one", async () => {
@@ -217,14 +215,9 @@ describe("attestClaudeNativeLoginOwner", () => {
     });
 
     it("reads the child's API key helper and secure-storage split", async () => {
-      const configDir = tempDirs.make("openclaw-claude-config-");
-      loginIn(configDir, "uuid-a");
-      const env = { CLAUDE_CONFIG_DIR: configDir };
+      const { configDir, env } = configLogin();
       expect(await attest({ platform: "linux", env })).toBe("uuid:uuid-a");
-      fs.writeFileSync(
-        path.join(configDir, "settings.json"),
-        JSON.stringify({ apiKeyHelper: "echo synthetic" }),
-      );
+      writeJson(path.join(configDir, "settings.json"), { apiKeyHelper: "echo synthetic" });
       expect(await attest({ platform: "linux", env })).toBeUndefined();
       fs.rmSync(path.join(configDir, "settings.json"));
       const secureDir = tempDirs.make("openclaw-claude-secure-");
@@ -238,19 +231,47 @@ describe("attestClaudeNativeLoginOwner", () => {
     });
 
     it("has no owner when the user settings env block selects another login", async () => {
-      const configDir = tempDirs.make("openclaw-claude-config-");
-      loginIn(configDir, "uuid-a");
-      const env = { CLAUDE_CONFIG_DIR: configDir };
-      fs.writeFileSync(
-        path.join(configDir, "settings.json"),
-        JSON.stringify({ env: { UNRELATED: "1" } }),
-      );
+      const { configDir, env } = configLogin();
+      writeJson(path.join(configDir, "settings.json"), { env: { UNRELATED: "1" } });
       expect(await attest({ platform: "linux", env })).toBe("uuid:uuid-a");
-      fs.writeFileSync(
-        path.join(configDir, "settings.json"),
-        JSON.stringify({ env: { CLAUDE_CODE_USE_BEDROCK: "synthetic" } }),
-      );
+      writeJson(path.join(configDir, "settings.json"), {
+        env: { CLAUDE_CODE_USE_BEDROCK: "synthetic" },
+      });
       expect(await attest({ platform: "linux", env })).toBeUndefined();
+    });
+
+    it("has no owner when Claude's managed settings or a drop-in select another login", async () => {
+      const { env } = configLogin();
+      const options = { platform: "linux" as const, env };
+      const writeManaged = (file: string, value: unknown) => {
+        fs.mkdirSync(path.dirname(path.join(managedSettingsDir, file)), { recursive: true });
+        writeJson(path.join(managedSettingsDir, file), value);
+      };
+      // Claude skips hidden and non-JSON drop-ins.
+      writeManaged("managed-settings.json", { env: { DISABLE_TELEMETRY: "1" } });
+      writeManaged("managed-settings.d/.10-auth.json", { apiKeyHelper: "echo synthetic" });
+      writeManaged("managed-settings.d/10-auth.txt", { env: { ANTHROPIC_API_KEY: "synthetic" } });
+      expect(await attest(options)).toBe("uuid:uuid-a");
+      writeManaged("managed-settings.json", { apiKeyHelper: "echo synthetic" });
+      expect(readClaudeNativeLoginOwner(options)).toBeUndefined();
+      expect(await attest(options)).toBeUndefined();
+      writeManaged("managed-settings.json", {});
+      writeManaged("managed-settings.d/20-auth.json", { env: { ANTHROPIC_API_KEY: "synthetic" } });
+      expect(await attest(options)).toBeUndefined();
+    });
+
+    it("keeps the owner when a managed settings file cannot be resolved", async () => {
+      const { env } = configLogin();
+      const options = { platform: "linux" as const, env };
+      expect(await attest(options)).toBe("uuid:uuid-a");
+      vi.mocked(fs.realpathSync).mockImplementation(((target: fs.PathLike) => {
+        if (managedFixturePath(target)) {
+          throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+        }
+        return realpathSync(target);
+      }) as typeof fs.realpathSync);
+      expect(readClaudeNativeLoginOwner(options)).toBe("uuid:uuid-a");
+      expect(await attest(options)).toBe("uuid:uuid-a");
     });
 
     it.each([
@@ -260,19 +281,12 @@ describe("attestClaudeNativeLoginOwner", () => {
       "CLAUDE_CODE_USE_BEDROCK",
       "CLAUDE_CODE_USE_VERTEX",
     ])("has no owner when the child selects %s instead of the stored login", async (key) => {
-      const configDir = tempDirs.make("openclaw-claude-config-");
-      loginIn(configDir, "uuid-a");
-      expect(
-        await attest({
-          platform: "linux",
-          env: { CLAUDE_CONFIG_DIR: configDir, [key]: "1" },
-        }),
-      ).toBeUndefined();
+      const { env } = configLogin();
+      expect(await attest({ platform: "linux", env: { ...env, [key]: "1" } })).toBeUndefined();
     });
 
     it("has no owner for a relative config root the child would resolve against its own cwd", async () => {
-      const configDir = tempDirs.make("openclaw-claude-config-");
-      loginIn(configDir, "uuid-a");
+      const { configDir } = configLogin();
       const relative = path.relative(process.cwd(), configDir);
       expect(path.isAbsolute(relative)).toBe(false);
       expect(
@@ -281,8 +295,7 @@ describe("attestClaudeNativeLoginOwner", () => {
     });
 
     it("derives the Keychain service and account from the child's environment", async () => {
-      const configDir = tempDirs.make("openclaw-claude-config-");
-      loginIn(configDir, "uuid-a");
+      const { env } = configLogin();
       const commands: string[] = [];
       const execSync = vi.fn((command: string) => {
         commands.push(command);
@@ -291,7 +304,7 @@ describe("attestClaudeNativeLoginOwner", () => {
       await attest({
         platform: "darwin",
         execSync,
-        env: { CLAUDE_CONFIG_DIR: configDir, USER: "child-user" },
+        env: { ...env, USER: "child-user" },
       });
       expect(commands.length).toBeGreaterThan(0);
       for (const command of commands) {
@@ -302,84 +315,41 @@ describe("attestClaudeNativeLoginOwner", () => {
   });
 
   describe("macOS Keychain", () => {
-    // The Keychain and the file beside it hold different accounts' tokens.
     const keychainPayload = JSON.stringify({
       claudeAiOauth: credentials({ accessToken: tokenFor("uuid-keychain") }),
     });
-    // `security` exits 44 (errSecItemNotFound) only when the item does not exist.
-    const notFound = () =>
-      Object.assign(new Error("The specified item could not be found in the keychain."), {
-        status: 44,
-      });
-
-    it("reads the Keychain login without trusting the file beside it", async () => {
-      const homeDir = makeHome({ account: { accountUuid: "uuid-a" }, credentials: credentials() });
-      const execSync = vi.fn(() => keychainPayload) as never;
-      expect(await attest({ homeDir, platform: "darwin", execSync })).toBe("uuid:uuid-keychain");
+    const absent = Object.assign(new Error("Item not found"), { status: 44 });
+    const timeout = Object.assign(new Error("security ETIMEDOUT"), {
+      code: "ETIMEDOUT",
+      status: null,
     });
-
-    it("fails closed when the Keychain item exists but cannot be read", async () => {
-      const homeDir = makeHome({
-        account: { accountUuid: "uuid-a" },
-        credentials: credentials(),
-      });
-      // `-w` reads fail (locked or access denied) while the metadata-only lookup succeeds.
-      const execSync = vi.fn((command: string) => {
-        if (command.includes(" -w ")) {
-          throw new Error("denied");
-        }
-        return "";
-      }) as never;
-      expect(await attest({ homeDir, platform: "darwin", execSync })).toBeUndefined();
-    });
-
-    describe("ambiguous lookups with a stale credentials file", () => {
-      const stale = () =>
-        makeHome({ account: { accountUuid: "uuid-a" }, credentials: credentials() });
-      const calls = (execSync: unknown) =>
-        (execSync as { mock: { calls: unknown[][] } }).mock.calls;
-      const timeout = () =>
-        Object.assign(new Error("spawnSync /usr/bin/security ETIMEDOUT"), {
-          code: "ETIMEDOUT",
-          status: null,
+    const locked = Object.assign(new Error("locked"), { status: 36 });
+    it.each([
+      ["readable Keychain", keychainPayload, "", "uuid:uuid-keychain"],
+      ["denied password with existing metadata", new Error("denied"), "", undefined],
+      ["timed out lookups", timeout, timeout, undefined],
+      ["locked lookups", locked, locked, undefined],
+      ["unusable Keychain payload", JSON.stringify({ claudeAiOauth: {} }), "", undefined],
+      ["absent password", absent, "", "uuid:uuid-a"],
+      ["absent metadata after failed password", timeout, absent, "uuid:uuid-a"],
+    ] as const)(
+      "resolves %s without trusting a stale credentials file",
+      async (_label, password, metadata, owner) => {
+        const homeDir = makeHome({
+          account: { accountUuid: "uuid-a" },
+          credentials: credentials(),
         });
-
-      it("refuses when both lookups fail for a reason other than absence", async () => {
-        for (const failure of [timeout, () => Object.assign(new Error("locked"), { status: 36 })]) {
-          const execSync = vi.fn(() => {
-            throw failure();
-          }) as never;
-          expect(await attest({ homeDir: stale(), platform: "darwin", execSync })).toBeUndefined();
-          expect(calls(execSync)).toHaveLength(2);
-        }
-      });
-
-      it("refuses an unusable Keychain payload without consulting the file", async () => {
-        const execSync = vi.fn(() => JSON.stringify({ claudeAiOauth: {} })) as never;
-        expect(await attest({ homeDir: stale(), platform: "darwin", execSync })).toBeUndefined();
-      });
-
-      it("lets the file stand on a confirmed absence from the password lookup alone", async () => {
-        const execSync = vi.fn(() => {
-          throw notFound();
-        }) as never;
-        expect(await attest({ homeDir: stale(), platform: "darwin", execSync })).toBe(
-          "uuid:uuid-a",
-        );
-        expect(calls(execSync)).toHaveLength(1);
-      });
-
-      it("lets the file stand when a failed password lookup is followed by a confirmed absence", async () => {
         const execSync = vi.fn((command: string) => {
-          if (command.includes(" -w ")) {
-            throw timeout();
+          const result = command.includes(" -w ") ? password : metadata;
+          if (result instanceof Error) {
+            throw result;
           }
-          throw notFound();
-        }) as never;
-        expect(await attest({ homeDir: stale(), platform: "darwin", execSync })).toBe(
-          "uuid:uuid-a",
+          return result;
+        });
+        expect(await attest({ homeDir, platform: "darwin", execSync: execSync as never })).toBe(
+          owner,
         );
-      });
-    });
+      },
+    );
   });
 });

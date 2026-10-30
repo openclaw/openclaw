@@ -59,6 +59,7 @@ async function fixture(initializeRegistry = true) {
 }
 
 const assertCurrent = () => {};
+const refused = (current: SandboxPersistentExecRecord) => ({ ok: false, current });
 
 async function confirmStopped(
   store: ReturnType<typeof createSandboxPersistentExecStore>,
@@ -100,7 +101,7 @@ it("serializes reservation, rejects stale effects and releases only durably conf
   const other = first.ok ? competing : store;
   const reserved = accepted(first.ok ? first : second);
   const activeReceipt = { ...receipt, attemptId: reserved.attemptId };
-  expect(first.ok ? second : first).toEqual({ ok: false, current: reserved });
+  expect(first.ok ? second : first).toEqual(refused(reserved));
   await writer.list();
   requireNodeSqlite();
   const hostSql = observeMainThreadSql();
@@ -108,11 +109,10 @@ it("serializes reservation, rejects stale effects and releases only durably conf
   const prepared = await advance(reserved, "prepared", activeReceipt);
   expect(
     await writer.transition({ ...expected(reserved), phase: "running" }, assertCurrent),
-  ).toEqual({ ok: false, current: prepared });
-  expect(await other.transition({ ...expected(prepared), phase: "stopping" })).toEqual({
-    ok: false,
-    current: prepared,
-  });
+  ).toEqual(refused(prepared));
+  expect(await other.transition({ ...expected(prepared), phase: "stopping" })).toEqual(
+    refused(prepared),
+  );
   await expect(
     writer.transition(
       {
@@ -134,10 +134,9 @@ it("serializes reservation, rejects stale effects and releases only durably conf
   await expect(writer.removeConfirmed(expected(uncertain))).rejects.toThrow(
     "cleanup has not been confirmed",
   );
-  expect(await writer.reserve(reservationFor(3, "new-source"), assertCurrent)).toEqual({
-    ok: false,
-    current: uncertain,
-  });
+  expect(await writer.reserve(reservationFor(3, "new-source"), assertCurrent)).toEqual(
+    refused(uncertain),
+  );
   await expect(writer.transition({ ...expected(uncertain), phase: "stopped" })).rejects.toThrow(
     "Invalid persistent sandbox custody transition",
   );
@@ -151,10 +150,7 @@ it("serializes reservation, rejects stale effects and releases only durably conf
   await expect(writer.assertCustodyCurrent(prepared)).rejects.toThrow("workspace custody changed");
   const successor = accepted(await writer.reserve(reservationFor(4), assertCurrent));
   await expect(writer.assertCustodyCurrent(prepared)).rejects.toThrow("workspace custody changed");
-  expect(await writer.removeConfirmed(expected(stopped))).toEqual({
-    ok: false,
-    current: successor,
-  });
+  expect(await writer.removeConfirmed(expected(stopped))).toEqual(refused(successor));
   expect(hostSql.count()).toBe(0);
 });
 
@@ -249,10 +245,7 @@ it.each([
     recovery.confirmContainerExtinction(expected(prepared), unrelated.extinction),
   ).rejects.toThrow("differs from the retained container generation");
   expect(await recovery.list()).toEqual([prepared]);
-  expect(await recovery.claimRecovery(expected(prepared))).toEqual({
-    ok: false,
-    current: prepared,
-  });
+  expect(await recovery.claimRecovery(expected(prepared))).toEqual(refused(prepared));
   expect(prepared.owner.namespace).toBeTruthy();
   expect(prepared.owner.startedAt).not.toBeNull();
   const stale = { ...prepared.owner, startedAt: prepared.owner.startedAt! + 1 };

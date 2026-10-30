@@ -817,7 +817,7 @@ describe("resolveNodeCommandAllowlist", () => {
       },
     );
 
-    expectDenied(allow, ["canvas.present", "canvas.a2ui.pushJSONL"]);
+    expectDenied(allow, ["canvas.present"]);
     expectAllowed(allow, [
       "camera.list",
       "location.get",

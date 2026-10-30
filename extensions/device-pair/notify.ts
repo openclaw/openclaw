@@ -6,7 +6,6 @@ import type {
   PluginCommandContext,
   PluginServiceSchedulerV1,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   normalizeOptionalString,
   normalizeTrimmedStringList,
@@ -79,16 +78,6 @@ function openNotifySubscriberStore(api: OpenClawPluginApi) {
   });
 }
 
-function openNotifySeenRequestStore(
-  api: OpenClawPluginApi,
-): PluginStateKeyedStore<NotifySeenRequest> {
-  return api.runtime.state.openKeyedStore<NotifySeenRequest>({
-    namespace: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_NAMESPACE,
-    maxEntries: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_MAX_ENTRIES,
-    defaultTtlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
-  });
-}
-
 type NotifyTarget = Pick<NotifySubscription, "to" | "accountId" | "messageThreadId">;
 
 function resolveNotifyTarget(ctx: NotifyCommandContext): NotifyTarget | null {
@@ -107,18 +96,6 @@ function resolveNotifyTarget(ctx: NotifyCommandContext): NotifyTarget | null {
   };
 }
 
-function nextNotifySubscription(
-  target: NotifyTarget,
-  mode: NotifySubscription["mode"],
-): NotifySubscription {
-  return {
-    ...target,
-    mode,
-    addedAtMs: Date.now(),
-    armId: randomUUID(),
-  };
-}
-
 async function registerNotifySubscriber(params: {
   api: OpenClawPluginApi;
   target: NotifyTarget;
@@ -134,30 +111,13 @@ async function registerNotifySubscriber(params: {
     return false;
   }
   await writeNotifyState(() =>
-    store.register(key, nextNotifySubscription(params.target, params.mode), { assertCurrent }),
+    store.register(
+      key,
+      { ...params.target, mode: params.mode, addedAtMs: Date.now(), armId: randomUUID() },
+      { assertCurrent },
+    ),
   );
   return true;
-}
-
-function buildPairingRequestNotificationText(request: PendingPairingRequest): string {
-  const label = normalizeOptionalString(request.displayName) || request.deviceId;
-  const platform = normalizeOptionalString(request.platform);
-  const ip = normalizeOptionalString(request.remoteIp);
-  const role = formatRoleList(request);
-  const scopes = formatStringList(request.scopes);
-  const lines = [
-    "📲 New device pairing request",
-    `ID: ${request.requestId}`,
-    `Name: ${label}`,
-    ...(platform ? [`Platform: ${platform}`] : []),
-    `Role: ${role}`,
-    `Scopes: ${scopes}`,
-    ...(ip ? [`IP: ${ip}`] : []),
-    "",
-    `Approve: /pair approve ${request.requestId}`,
-    "List pending: /pair pending",
-  ];
-  return lines.join("\n");
 }
 
 function requestTimestampMs(request: PendingPairingRequest): number | null {
@@ -185,7 +145,11 @@ function shouldNotifySubscriberForRequest(
 
 async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }): Promise<boolean> {
   const subscriberStore = openNotifySubscriberStore(params.api);
-  const seenRequestStore = openNotifySeenRequestStore(params.api);
+  const seenRequestStore = params.api.runtime.state.openKeyedStore<NotifySeenRequest>({
+    namespace: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_NAMESPACE,
+    maxEntries: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_MAX_ENTRIES,
+    defaultTtlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
+  });
   const [subscriberEntries, seenRequestEntries] = await Promise.all([
     subscriberStore.entries(),
     seenRequestStore.entries(),
@@ -223,7 +187,24 @@ async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }):
         continue;
       }
 
-      const text = buildPairingRequestNotificationText(request);
+      const label = normalizeOptionalString(request.displayName) || request.deviceId;
+      const platform = normalizeOptionalString(request.platform);
+      const ip = normalizeOptionalString(request.remoteIp);
+      const role = formatRoleList(request);
+      const scopes = formatStringList(request.scopes);
+      const lines = [
+        "📲 New device pairing request",
+        `ID: ${request.requestId}`,
+        `Name: ${label}`,
+        ...(platform ? [`Platform: ${platform}`] : []),
+        `Role: ${role}`,
+        `Scopes: ${scopes}`,
+        ...(ip ? [`IP: ${ip}`] : []),
+        "",
+        `Approve: /pair approve ${request.requestId}`,
+        "List pending: /pair pending",
+      ];
+      const text = lines.join("\n");
       let delivered = false;
       for (const entry of subscribers) {
         if (deliveredOneShots.has(entry.key)) {

@@ -1,4 +1,4 @@
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 
 type SessionTitleTarget = {

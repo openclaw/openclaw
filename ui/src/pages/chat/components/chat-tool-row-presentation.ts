@@ -19,24 +19,17 @@ const MUTATION_VERB_KEYS = {
   write: ["writing", "wrote", "write"],
 } as const;
 
-function resolveMutationVerbKind(
-  view: Pick<ToolCallView, "kind" | "fileOperations">,
-): keyof typeof MUTATION_VERB_KEYS | undefined {
-  if (view.kind === "write") {
-    return "write";
-  }
-  if (view.kind !== "edit") {
-    return undefined;
-  }
-  const operations = new Set(view.fileOperations?.map(({ operation }) => operation));
-  return operations.size > 1 ? "mixed" : (operations.values().next().value ?? "update");
-}
-
 export function resolveToolRowVerb(
   view: Pick<ToolCallView, "kind" | "fileOperations">,
   outcome: ToolCardOutcome,
 ): string | undefined {
-  const mutation = resolveMutationVerbKind(view);
+  let mutation: keyof typeof MUTATION_VERB_KEYS | undefined;
+  if (view.kind === "write") {
+    mutation = "write";
+  } else if (view.kind === "edit") {
+    const operations = new Set(view.fileOperations?.map(({ operation }) => operation));
+    mutation = operations.size > 1 ? "mixed" : (operations.values().next().value ?? "update");
+  }
   if (mutation) {
     const [running, succeeded, fallback] = MUTATION_VERB_KEYS[mutation];
     return t(

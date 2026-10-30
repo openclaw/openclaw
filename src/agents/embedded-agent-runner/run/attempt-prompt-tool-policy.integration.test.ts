@@ -3,10 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import {
+  createAssistant,
+  createAssistantResultStream,
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
+  streamMocks,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { createClientToolDefinition, createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import {
   applyToolSearchCatalog,
   clearToolSearchCatalog,
@@ -51,17 +54,17 @@ describe("prompt tool policy with the session registry", () => {
           toolSearchCatalogRef: catalogRef,
           toolSearchRuntimeConfig: config,
           uncompactedEffectiveTools: native,
-          clientTools: [
-            {
-              type: "function",
-              function: {
-                name: "acme_lookup",
-                parameters: { type: "object", properties: {} },
-              },
-            },
-          ],
+          clientTools: [createClientToolDefinition("acme_lookup")],
         });
         const { session } = await createTestSession({ customTools: clients.allCustomTools });
+        session.setActiveToolsByName(clients.sessionToolAllowlist);
+        const offeredNames = session.getActiveToolNames();
+        const prefixes: string[] = [];
+        streamMocks.streamSimple.mockImplementation((model, context) => {
+          prefixes.push(JSON.stringify(context.tools));
+          return createAssistantResultStream(createAssistant(model, "done"));
+        });
+        await session.prompt("First turn");
         expect(session.getToolDefinition("acme_lookup")).toBe(clients.clientToolDefs[0]);
         const policy = createPromptBuildToolPolicy({
           session,
@@ -73,22 +76,32 @@ describe("prompt tool policy with the session registry", () => {
         });
 
         const restricted = policy.apply(["acme"]);
+        await session.prompt("Restricted turn");
+        expect(prefixes[1]).toBe(prefixes[0]);
         const unauthorizedWinner = session.agent.state.tools.find(
           (tool) => tool.name === "acme_lookup",
         );
-        await unauthorizedWinner?.execute("denied-client", {});
+        await expect(unauthorizedWinner?.execute("denied-client", {})).resolves.toMatchObject({
+          details: { gated: true },
+        });
         expect(clients.clientToolCallSlots).toEqual([]);
-        expect(session.getActiveToolNames()).toEqual(["acme_status"]);
-        expect(restricted.effectiveTools.map((tool) => tool.name)).toEqual(["acme_status"]);
+        expect(session.getActiveToolNames()).toEqual(offeredNames);
+        expect(restricted.effectiveTools).toEqual(effectiveTools);
+        expect(restricted.callableToolNames).toEqual(["acme_status"]);
         expect(restricted.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual([
           "acme_status",
         ]);
-        const status = expectDefined(session.agent.state.tools[0], "authorized plugin tool");
+        const status = expectDefined(
+          session.agent.state.tools.find((tool) => tool.name === "acme_status"),
+          "authorized plugin tool",
+        );
         await expect(status.execute("plugin-call", {})).resolves.toMatchObject({
           details: { owner: "acme" },
         });
 
         policy.apply(undefined);
+        await session.prompt("Restored turn");
+        expect(prefixes[2]).toBe(prefixes[0]);
         const client = expectDefined(
           session.agent.state.tools.find((tool) => tool.name === "acme_lookup"),
           "restored client winner",
@@ -98,13 +111,15 @@ describe("prompt tool policy with the session registry", () => {
           { toolCallId: "restored-client", name: "acme_lookup", completed: true },
         ]);
         policy.apply(["acme_lookup"]);
-        expect(session.getActiveToolNames()).toEqual(["acme_lookup"]);
+        expect(policy.current.callableToolNames).toEqual(["acme_lookup"]);
+        expect(session.getActiveToolNames()).toEqual(offeredNames);
 
         policy.apply(["acme"]);
         clients.refreshTools();
         session.replaceCustomTools(clients.allCustomTools, clients.sessionToolAllowlist);
         policy.refresh();
-        expect(session.getActiveToolNames()).toEqual(["acme_status"]);
+        expect(session.getActiveToolNames()).toEqual(offeredNames);
+        expect(policy.current.callableToolNames).toEqual(["acme_status"]);
         expect(clients.clientToolCallSlots).toHaveLength(1);
         expect(native[0]?.execute).not.toHaveBeenCalled();
       } finally {

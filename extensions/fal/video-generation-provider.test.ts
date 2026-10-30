@@ -1,6 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
-import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { generateVideo as generateRuntimeVideo } from "openclaw/plugin-sdk/video-generation-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -97,13 +96,6 @@ describe("fal video generation provider", () => {
       source: "env",
       mode: "api-key",
     });
-    vi.spyOn(providerHttp, "resolveProviderHttpRequestConfig").mockReturnValue({
-      baseUrl: "https://fal.run",
-      allowPrivateNetwork: false,
-      headers: new Headers({ Authorization: "Key fal-key", "Content-Type": "application/json" }),
-      dispatcherPolicy: undefined,
-    });
-    vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
   }
 
   function releasedJson(value: unknown) {
@@ -236,14 +228,14 @@ describe("fal video generation provider", () => {
 
   it("caps oversized fal queue operation deadlines", async () => {
     mockFalProviderRuntime();
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(MAX_TIMER_TIMEOUT_MS + 1);
+    let monotonicMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
     fetchGuardMock
       .mockResolvedValueOnce(releasedJson(queueSubmission))
-      .mockResolvedValueOnce(releasedJson({ status: "IN_PROGRESS" }));
+      .mockImplementationOnce(async () => {
+        monotonicMs = MAX_TIMER_TIMEOUT_MS + 1;
+        return releasedJson({ status: "IN_PROGRESS" });
+      });
 
     await expectRejected(
       { timeoutMs: Number.MAX_SAFE_INTEGER },

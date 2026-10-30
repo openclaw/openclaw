@@ -34,6 +34,9 @@ openclaw channels dead-letters list --channel telegram --account default
 
 `channels list` shows chat channels only: configured accounts by default, with `installed`, `configured`, and `enabled` status tags per account (`--json` for machine output). Pass `--all` to also surface bundled channels that have no configured account yet and installable catalog channels that are not yet on disk. Provider auth and model usage live elsewhere: `openclaw models auth list` for provider auth profiles, `openclaw status` or `openclaw models list` for usage/quota.
 
+Human-readable catalog labels neutralize terminal control sequences and display
+embedded tabs and line breaks as visible escapes. JSON preserves the original labels.
+
 `--json` returns a local account inventory from plugin metadata without contacting the Gateway or executing channel setup/runtime code. Configured accounts remain visible even when their plugin has a setup entry. Use `channels status --probe` for live checks.
 
 Disabling a plugin does not uninstall it. Its channels remain `installed: true` in the inventory; with `--all`, an installed channel without configured accounts has `origin: "available"` even when its plugin is disabled.
@@ -60,6 +63,9 @@ did not name.
 With `--json`, every channel entry includes `label` alongside its accounts, install state, and origin. Entries also include `docsPath` when verified official channel metadata provides a validated root-relative docs path. Automation can join this path with `https://docs.openclaw.ai` without trusting plugin-supplied URLs. Untracked or inconsistent installed-plugin provenance omits `docsPath`; repair verified legacy provenance with `openclaw doctor --fix` or reinstall the official package.
 
 ## Status / capabilities / resolve / logs
+
+Human-readable capability probe and diagnostic lines neutralize terminal control
+sequences. `--json` preserves the original values.
 
 `capabilities` and `resolve` reject explicitly empty or whitespace-only `--account`
 values. Omit the option to keep each command's default or broader account scope;
@@ -122,6 +128,8 @@ openclaw channels dead-letters resubmit <event-id> --channel telegram --account 
 Run these commands on the Gateway host so they access the same shared state database as the channel runtime. Resubmission preserves the payload, metadata, and lane, but resets the attempt counter and queue age. It atomically replaces that event's failed marker, so repeating the command while the event is pending or claimed refuses instead of creating a second dispatch. The running channel picks it up on its next ingress drain. Completed events remain terminal and cannot be resubmitted. Failed rows created before payload retention was added can still appear in the list, but resubmission refuses them because their payload is unavailable.
 
 `openclaw health` reports dead-letter counts and oldest failure age per channel account. `openclaw doctor` names affected accounts and points back to the inspection command.
+
+Resubmission writes directly to the queue without waking the channel. A running channel picks it up on its next recovery sweep, within five minutes by default plus scheduling and execution time (longer if its plugin configures a larger interval). A stopped channel sweeps immediately when it starts.
 
 Do not use `openclaw sessions`, Gateway `sessions.list`, or the agent
 `sessions_list` tool as a channel socket-health signal. Those surfaces report

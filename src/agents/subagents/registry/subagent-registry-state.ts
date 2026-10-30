@@ -7,7 +7,10 @@ import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db
 import { prepareOpenClawStateReadSource } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
-import { projectSubagentRunForMaintenance } from "./subagent-delivery-state.js";
+import {
+  projectSubagentRunForMaintenance,
+  shouldPreserveSubagentForMaintenance,
+} from "./subagent-delivery-state.js";
 import {
   getSubagentRunsForChildSession,
   getSubagentSessionReadLookup,
@@ -58,7 +61,10 @@ const persistedSubagentSessionListRunsReadCache: SubagentRunsCache<SubagentRunRe
 };
 const persistedSubagentMaintenanceReadCache: SubagentRunsCache<SubagentRunMaintenanceRecord> = {
   state: {},
-  copy: projectSubagentRunForMaintenance,
+  copy: (entry) =>
+    shouldPreserveSubagentForMaintenance(entry)
+      ? projectSubagentRunForMaintenance(entry)
+      : undefined,
   project: projectSubagentRunForMaintenance,
 };
 

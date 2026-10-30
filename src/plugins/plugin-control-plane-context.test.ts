@@ -2,21 +2,16 @@ import { expect, it } from "vitest";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "./manifest-registry-installed.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import { createIndexFixture } from "./test-helpers/installed-plugin-index-fixture.js";
 
 function createIndex(
   pluginId: string,
   plugin: Partial<InstalledPluginIndex["plugins"][number]> = {},
   generatedAtMs = 1,
 ): InstalledPluginIndex {
-  return {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
+  return createIndexFixture({
     policyHash: "policy",
     generatedAtMs,
-    installRecords: {},
-    diagnostics: [],
     plugins: [
       {
         pluginId,
@@ -31,7 +26,7 @@ function createIndex(
         ...plugin,
       },
     ],
-  };
+  });
 }
 
 it("includes policy, inventory, and activation in one control-plane fingerprint", () => {

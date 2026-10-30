@@ -26,7 +26,7 @@ import { reloadPlanNeedsRecovery } from "./config-reload-recovery.js";
 import type { GatewayHotReloadApplication } from "./config-reload-status.types.js";
 import { commitHookTransformMappingReload } from "./hooks-mapping.js";
 import { resolveHooksConfig } from "./hooks.js";
-import type { GatewayCronExitWatcherHandoff } from "./server-cron.js";
+import type { GatewayCronExitWatcherHandoff } from "./server-cron-contract.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import { reviveAgentDatabasesAfterConfigCommit } from "./server-reload-agent-databases.js";
@@ -268,8 +268,8 @@ export function createGatewayReloadHandlers(
         // Plugin publication can reject its prepared registry. Keep config and
         // secret rollback available until that selection succeeds.
         publication?.assertInvokerOwned?.();
-        runtime?.publish();
         if (runtime) {
+          runtime.publish();
           params.setState(nextState);
           runtimeCommitted = true;
         }

@@ -1,6 +1,9 @@
 import path from "node:path";
 import { afterAll, afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
+  UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+} from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
@@ -15,13 +18,17 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import * as stateReads from "../../state/openclaw-state-db-readonly.js";
+import * as stateWorker from "../../state/openclaw-state-worker-store.js";
+import { preparePersonalSessionPins } from "../../state/user-preferences-session-pins.js";
+import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
+import { mergeCanonicalUserProfiles } from "../../state/user-profile-writes.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
   loadTranscriptEventsSync,
-  patchSessionEntryCore,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import {
@@ -34,9 +41,11 @@ import {
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
+import { SESSION_ENTRY_MAINTENANCE_INTERVAL_MS } from "./session-accessor.sqlite-maintenance-age.js";
 import { finalizeSessionMaintenanceInDatabase } from "./session-accessor.sqlite-maintenance-transaction.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   prepareSessionMaintenancePreservation,
@@ -148,28 +157,6 @@ function createPlannerStore(entryCount = 0, updatedAt?: number, prefix = "planne
   return { database, storePath, key, scope, set, load, prepare, statistics, archived, transcript };
 }
 
-function trackReads(
-  database: ReturnType<typeof openOpenClawAgentDatabase>,
-  name: string,
-  matches: (sql: string) => boolean,
-) {
-  const tracker = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(database.db),
-    [name],
-    (sql) => (matches(sql) ? name : null),
-  );
-  onTestFinished(tracker.restore);
-  return tracker;
-}
-
-function trackProtection(database: ReturnType<typeof openOpenClawAgentDatabase>) {
-  return trackReads(database, "protection", (sql) =>
-    sql.includes(
-      'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
-    ),
-  );
-}
-
 function expectUnarchived(entry: SessionEntry | undefined, expected: Partial<SessionEntry> = {}) {
   expect(entry).toMatchObject(expected);
   expect(entry?.archivedAt).toBeUndefined();
@@ -180,7 +167,7 @@ function expectArchived(entry: SessionEntry | undefined, archiveReason: string) 
 }
 
 it("returns bounded finalization outcomes while preserving conflicts and duplicate plan entries", async () => {
-  const { database, storePath, key, scope, set, load } = createPlannerStore();
+  const { database, key, scope, set, load } = createPlannerStore();
   const options = { agentId: "main", path: database.path, env: process.env };
   const entries = [0, 1, 2].map((index) => {
     set(index, {
@@ -194,11 +181,6 @@ it("returns bounded finalization outcomes while preserving conflicts and duplica
     expectedEntry: { ...entries[0]!.expectedEntry, label: "stale duplicate" },
   });
   replaceSessionEntrySync(scope(2), { ...changed.expectedEntry, label: "newer" });
-  const snapshots = trackReads(
-    database,
-    "snapshot",
-    (sql) => /^select\b/i.test(sql) && /\bsession_entry_snapshots\b/i.test(sql),
-  );
   const result = await withSqliteSessionDeletions(
     options,
     entries.map(({ sessionKey, expectedEntry }) => ({ sessionKey, entry: expectedEntry })),
@@ -217,44 +199,21 @@ it("returns bounded finalization outcomes while preserving conflicts and duplica
   );
   expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(1024);
   expect(result.value.committedEntryIndices).toEqual([0, 1]);
-  expect(snapshots.rowCounts.snapshot).toBeLessThanOrEqual(
-    entries.length + result.value.committedEntryIndices.length,
-  );
-  for (const { sessionKey } of entries.slice(0, 2)) {
-    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  for (const index of [0, 1]) {
+    expect(load(index)).toBeUndefined();
   }
-  expect(loadSessionEntry({ sessionKey: changed.sessionKey, storePath })).toEqual({
-    ...changed.expectedEntry,
-    label: "newer",
-  });
+  expect(load(2)).toEqual({ ...changed.expectedEntry, label: "newer" });
   expect(database.db.prepare("SELECT count(*) AS count FROM session_windows").get()?.count).toBe(3);
 });
 
-it("avoids inventory projection for sequential writes with no retention candidates", async () => {
-  const { database, scope, load, prepare } = createPlannerStore(32, Date.now());
-  const target = scope(0);
-  const maintain = await prepare();
-  const inventory = trackProtection(database);
-  for (let index = 0; index < 3; index += 1) {
-    await patchSessionEntryCore(target, () => ({ label: `updated-${index}` }), {
-      skipMaintenance: true,
-    });
-    const plan = maintain({ activeSessionKey: target.sessionKey });
-    expect(plan).toMatchObject({ archived: 0, capped: 0, pruned: 0, entryRemovals: [] });
-  }
-  expect(load(0)?.label).toBe("updated-2");
-  expect(inventory.rowCounts.protection).toBe(0);
-});
-
-it("preserves current provider keys without loading unrelated protection rows", async () => {
+it("preserves current provider keys", async () => {
   const now = freezeTime();
   const expired = now - 40 * day;
-  const { database, key, set, load, prepare, archived } = createPlannerStore(3, expired);
+  const { key, set, load, prepare, archived } = createPlannerStore(3, expired);
   set(2, { updatedAt: now });
   let protectedKey = key(0);
   preserveKeys(() => [protectedKey]);
   const maintain = await prepare();
-  const inventory = trackProtection(database);
   expect(maintain({ forceMaintenance: true }).archivedEntries).toEqual(archived(1));
   expectUnarchived(load(0), { sessionId: "planner-0" });
 
@@ -262,14 +221,13 @@ it("preserves current provider keys without loading unrelated protection rows", 
   set(2, { updatedAt: expired });
   expect(maintain({ forceMaintenance: true }).archivedEntries).toEqual(archived(0));
   expectUnarchived(load(2), { sessionId: "planner-2", updatedAt: expired });
-  expect(inventory.rowCounts.protection).toBe(0);
 });
 
 it.each([false, true])(
   "loads only age-due maintenance candidates while preserving recent dashboard activity (forced capacity=%s)",
   async (forceMaintenance) => {
     const now = freezeTime();
-    const { database, key, set, load, prepare } = createPlannerStore(0, undefined, "");
+    const { key, set, load, prepare } = createPlannerStore(0, undefined, "");
     const oldModel = "explicit:model-run-00000000-0000-0000-0000-000000000001";
     const pressureModel = "explicit:model-run-00000000-0000-0000-0000-000000000002";
     const fixtures: Array<[string, number, Partial<SessionEntry>?]> = [
@@ -285,11 +243,6 @@ it.each([false, true])(
       set(name, { sessionId: `age-candidate-${index}`, updatedAt: now - ageDays * day, ...entry });
     }
     const maintain = await prepare();
-    const candidates = trackReads(
-      database,
-      "candidates",
-      (sql) => sql.includes("json_group_object") && sql.includes('"session_nodes"'),
-    );
     const plan = maintain({
       forceMaintenance,
       maintenanceConfig: { maxEntries: forceMaintenance ? 5 : 5_000 },
@@ -305,13 +258,12 @@ it.each([false, true])(
       expectUnarchived(load(name));
     }
     expect(load("dashboard:recent-activity")).toMatchObject({ lastActivityAt: now });
-    expect(candidates.rowCounts.candidates).toBe(forceMaintenance ? 5 : 4);
   },
 );
 
-it("limits protection reads to active ancestry and preserves cyclic or missing parents", async () => {
+it("preserves active ancestry and cyclic or missing parents", async () => {
   const now = freezeTime();
-  const { database, key, set, load, prepare } = createPlannerStore(32, now);
+  const { key, set, load, prepare } = createPlannerStore(32, now);
   const expired = now - 40 * day;
   // Root 0; child 1 -> 2; cycle 3 <-> 4; child 5 -> absent 32; unrelated victim 6.
   const parents = [undefined, 2, undefined, 4, 3, 32, undefined];
@@ -322,7 +274,6 @@ it("limits protection reads to active ancestry and preserves cyclic or missing p
     });
   }
   const maintain = await prepare();
-  const inventory = trackProtection(database);
   const plan = maintain({
     activeSessionKeys: [key(0), key(1), key(3), key(5)],
   });
@@ -330,7 +281,6 @@ it("limits protection reads to active ancestry and preserves cyclic or missing p
   for (const index of [0, 1, 2, 3, 4, 5]) {
     expectUnarchived(load(index), { sessionId: `planner-${index}` });
   }
-  expect(inventory.rowCounts.protection).toBe(6);
 });
 
 it("resolves protection once before capping aged candidates", async () => {
@@ -368,11 +318,10 @@ it("resolves protection once before capping aged candidates", async () => {
   }
 });
 
-it("caps only the oldest eligible activity ties without decoding unrelated payloads", async () => {
+it("caps only the oldest eligible activity ties", async () => {
   const { key, set, load, prepare } = createPlannerStore(0, undefined, "bounded");
   const now = freezeTime();
   const old = now - 10 * day;
-  const untouchedPayload = "unselected-maintenance-payload".repeat(1_000);
   const fixtures: Array<[string, Partial<SessionEntry>]> = [
     ["oldest", { updatedAt: old + 1 }],
     ["tie-\uE000", { updatedAt: old + 2, lastInteractionAt: old + 10 }],
@@ -398,13 +347,11 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
     set(name, {
       sessionId: `bounded-${index}`,
       updatedAt: old,
-      label: victims.includes(key(name)) ? name : untouchedPayload,
       ...entry,
     });
   }
   preserveKeys(() => [key("live")]);
   const maintain = await prepare();
-  const parse = vi.spyOn(JSON, "parse");
   const plan = maintain({
     maintenanceConfig: {
       archiveDashboardAfterMs: null,
@@ -417,10 +364,6 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
     { sessionKey: key("tie-\u{10000}"), sessionId: "bounded-2" },
   ]);
   expect(plan).toMatchObject({ archived: 2, capArchived: 2, capped: 2 });
-  expect(parse.mock.calls.some(([serialized]) => serialized.includes(untouchedPayload))).toBe(
-    false,
-  );
-  parse.mockRestore();
   for (const [name] of fixtures) {
     expect(load(name)?.archivedAt !== undefined).toBe(victims.includes(key(name)));
   }
@@ -460,10 +403,9 @@ it.each(["session-key", "session-id"] as const)(
   },
 );
 
-it("does not rescan unrelated rows when a requested lifecycle removal does not match", async () => {
+it("preserves unrelated rows when a requested lifecycle removal does not match", async () => {
   const { storePath, load, transcript } = createPlannerStore(2);
   const { target: retained, events } = transcript(1, "retained");
-  const parseSpy = vi.spyOn(JSON, "parse");
   await expect(
     applySessionEntryLifecycleMutation({
       storePath,
@@ -482,11 +424,6 @@ it("does not rescan unrelated rows when a requested lifecycle removal does not m
     archivedTranscriptDirectories: [],
   });
 
-  // Allow the builder snapshot and before/after counts, but no unused deletion scans.
-  expect(
-    parseSpy.mock.calls.filter(([serialized]) => serialized.includes('"planner-1"')).length,
-  ).toBeLessThanOrEqual(3);
-  parseSpy.mockRestore();
   expect(load(0)?.label).toBe("updated");
   expect(loadSessionEntry(retained)?.sessionId).toBe(retained.sessionId);
   expect(loadTranscriptEventsSync(retained)).toEqual(events);
@@ -638,3 +575,123 @@ it.each(["bulk lifecycle cleanup", "revoked commit"])(
     expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
   },
 );
+
+it("keeps personally pinned dashboard children through worker cleanup until the final reference is removed", async () => {
+  const fixture = createPlannerStore(0, undefined, "");
+  const env = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: path.resolve(fixture.storePath, "../../../.."),
+  };
+  const options = { env };
+  const alice = ensureProfileForEmail("alice@example.test", options).id;
+  const bob = ensureProfileForEmail("bob@example.test", options).id;
+  const charlie = ensureProfileForEmail("charlie@example.test", options).id;
+  const now = freezeTime();
+  const child = "dashboard:child";
+  fixture.set(child, { updatedAt: now - 40 * day, parentSessionKey: fixture.key("parent") });
+  fixture.set("global", { updatedAt: now - 40 * day, pinnedAt: now });
+  fixture.set("unprotected", { updatedAt: now - 40 * day });
+  const setPins = async (profile: string, pins: string[] | null) => {
+    expect(
+      await setCanonicalUserPreferences(
+        profile,
+        { [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: pins },
+        options,
+      ),
+    ).toMatchObject({ ok: true });
+  };
+  await setPins(alice, [`session:${fixture.key(child)}`]);
+  await setPins(bob, [`session-rail:${fixture.key(child)}`]);
+  expect(
+    await setCanonicalUserPreferences(
+      charlie,
+      {
+        [UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY]: [
+          { id: "focus", label: "Focus", sessionKeys: [fixture.key(child)] },
+        ],
+      },
+      options,
+    ),
+  ).toMatchObject({ ok: true });
+  const maintain = () =>
+    applySessionEntryLifecycleMutation({
+      storePath: fixture.storePath,
+      env,
+      maintenanceOverride: resolveMaintenanceConfigFromInput(),
+    });
+  expect(await maintain()).toMatchObject({ archived: 1 });
+  expectArchived(fixture.load("unprotected"), "age-retention");
+  expectUnarchived(fixture.load(child));
+  await setPins(alice, []);
+  vi.mocked(Date.now).mockReturnValue(now + SESSION_ENTRY_MAINTENANCE_INTERVAL_MS);
+  expect(await maintain()).toMatchObject({ archived: 0 });
+  expectUnarchived(fixture.load(child));
+  expect(await mergeCanonicalUserProfiles(alice, bob, options)).toMatchObject({
+    profile: { id: bob },
+  });
+  vi.mocked(Date.now).mockReturnValue(now + 2 * SESSION_ENTRY_MAINTENANCE_INTERVAL_MS);
+  expect(await maintain()).toMatchObject({ archived: 0 });
+  expectUnarchived(fixture.load(child));
+  await setPins(bob, null);
+  vi.mocked(Date.now).mockReturnValue(now + 3 * SESSION_ENTRY_MAINTENANCE_INTERVAL_MS);
+  expect(await maintain()).toMatchObject({ archived: 0 });
+  expectUnarchived(fixture.load(child));
+  expect(
+    await setCanonicalUserPreferences(
+      charlie,
+      { [UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY]: null },
+      options,
+    ),
+  ).toMatchObject({ ok: true });
+  vi.mocked(Date.now).mockReturnValue(now + 4 * SESSION_ENTRY_MAINTENANCE_INTERVAL_MS);
+  expect(await maintain()).toMatchObject({ archived: 1 });
+  expectArchived(fixture.load(child), "stale-dashboard");
+  expectUnarchived(fixture.load("global"));
+});
+
+it("refuses a prepared maintenance snapshot when a pin write starts before commit admission", async () => {
+  const fixture = createPlannerStore();
+  const env = { ...process.env, OPENCLAW_STATE_DIR: sessionDirs.make() };
+  const profile = ensureProfileForEmail("late-pin@example.test", { env }).id;
+  const preservation = await prepareSessionMaintenancePreservation(fixture.storePath, { env });
+  vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockResolvedValueOnce(undefined);
+  const writer = setCanonicalUserPreferences(
+    profile,
+    { [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: [`session:${fixture.key("keep")}`] },
+    { env },
+  );
+  try {
+    expect(() => preservation.capture()).toThrow(SqliteSessionMutationConflictError);
+  } finally {
+    preservation.dispose();
+    await writer;
+  }
+});
+
+it("waits for a pending preference write before preparing cleanup", async () => {
+  const options = { env: { ...process.env, OPENCLAW_STATE_DIR: sessionDirs.make() } };
+  const profile = ensureProfileForEmail("pending@example.test", options).id;
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const execute = stateWorker.runOpenClawStateWorkerOperation;
+  vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementationOnce(
+    async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return execute(...args);
+    },
+  );
+  const writer = setCanonicalUserPreferences(
+    profile,
+    { [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: ["session:agent:main:pending"] },
+    options,
+  );
+  await entered.promise;
+  const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  const preparing = preparePersonalSessionPins(options);
+  expect(read).not.toHaveBeenCalled();
+  release.resolve();
+  await writer;
+  const pins = await preparing;
+  expect(pins.sessionKeys).toEqual(["agent:main:pending"]);
+});

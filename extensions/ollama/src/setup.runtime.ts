@@ -54,11 +54,6 @@ type OllamaSetupOptions = {
   customModelId?: string;
 };
 
-type OllamaSetupResult = {
-  config: OpenClawConfig;
-  defaultModel?: string;
-};
-
 // Hosted ollama.com access is the separate `ollama-cloud` auth choice.
 type OllamaInteractiveMode = "cloud-local" | "local-only";
 
@@ -176,7 +171,7 @@ export async function promptAndConfigureOllama(params: {
   env?: NodeJS.ProcessEnv;
   prompter: WizardPrompter;
   signal?: AbortSignal;
-}): Promise<OllamaSetupResult> {
+}) {
   const mode = (await params.prompter.select({
     message: "Ollama mode",
     options: [

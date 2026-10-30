@@ -24,16 +24,18 @@ import {
   type parseCheckpointAvailability,
 } from "./crabbox-worker-warm-image-checkpoint.js";
 import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
+import {
+  crabboxWarmImageRecoveryHint,
+  withoutCrabboxWarmImageOperation,
+  type WarmProfileRecord,
+} from "./crabbox-worker-warm-image-records.js";
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
 import {
   clearCrabboxWarmImageCapture,
   crabboxCaptureUnsupportedSentence,
-  crabboxWarmImageRecoveryHint,
   isCrabboxCaptureRefusalRetained,
   sameCrabboxWarmImageGeneration,
-  withoutCrabboxWarmImageOperation,
   type openCrabboxWarmImageStore,
-  type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
 
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;

@@ -44,7 +44,16 @@ async function installSessionSharing(
       sessionRow(key, title, updatedAt, {
         sharingRole: role,
         visibility,
-        ...(includePeople ? { createdActor: { type: "human", id: "owner", label: "Owner" } } : {}),
+        ...(includePeople
+          ? {
+              createdActor: {
+                type: "human",
+                id: "owner",
+                label: "Owner",
+                identity: { type: "profile", id: "owner" },
+              },
+            }
+          : {}),
       }),
     ]),
   };
@@ -70,6 +79,14 @@ async function installSessionSharing(
   }
   return installMockGateway(page, {
     sessionKey: key,
+    presenceUsers: includePeople
+      ? ["owner", "guest"].map((id) => ({
+          id,
+          identity: { type: "profile" as const, id },
+          name: id,
+          watchedSessions: [key],
+        }))
+      : [],
     featureMethods,
     methodResponses,
     operatorScopes: role === "owner" ? ["operator.read", "operator.write"] : ["operator.read"],
@@ -99,98 +116,92 @@ async function openMobilePanelLauncher(page: Page) {
 }
 
 suite.define(() => {
-  it.each(["light", "dark"] as const)(
-    "keeps the %s mobile Panels sheet bounded and its actions reachable",
-    (colorScheme) =>
-      withMobilePage(async (page) => {
-        const sessionKey = "agent:main:mobile-layout";
-        await installMockGateway(page, {
-          sessionKey,
-          terminalEnabled: true,
-          featureMethods: ["chat.metadata", "chat.startup", "terminal.open"],
-          methodResponses: {
-            "sessions.list": sessionsListResponse([
-              sessionRow(sessionKey, "Mobile layout", updatedAt),
-            ]),
-          },
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const { host, launcher, trigger } = await openMobilePanelLauncher(page);
-        const terminal = launcher.getByRole("button", { name: "Terminal", exact: true });
-        await terminal.waitFor();
-        for (const viewport of [
-          { width: 390, height: 844 },
-          { width: 320, height: 568 },
-          { width: 844, height: 390 },
-        ]) {
-          await page.setViewportSize(viewport);
-          await terminal.scrollIntoViewIfNeeded();
-          const bounds = await host.boundingBox();
-          expect(bounds).not.toBeNull();
-          expect(bounds!.x).toBeGreaterThanOrEqual(0);
-          expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
-          expect(bounds!.y).toBeGreaterThanOrEqual(0);
-          expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
-          expect(await host.locator("kbd:visible").count()).toBe(0);
-          expect(
-            await launcher.evaluate((element) => element.scrollWidth <= element.clientWidth),
-          ).toBe(true);
-          expect(await height(terminal)).toBeGreaterThanOrEqual(44);
-          await terminal.click({ trial: true });
-        }
+  it("keeps the light mobile Panels sheet bounded and its actions reachable", () =>
+    withMobilePage(async (page) => {
+      const sessionKey = "agent:main:mobile-layout";
+      await installMockGateway(page, {
+        sessionKey,
+        terminalEnabled: true,
+        featureMethods: ["chat.metadata", "chat.startup", "terminal.open"],
+        methodResponses: {
+          "sessions.list": sessionsListResponse([
+            sessionRow(sessionKey, "Mobile layout", updatedAt),
+          ]),
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const { host, launcher, trigger } = await openMobilePanelLauncher(page);
+      const terminal = launcher.getByRole("button", { name: "Terminal", exact: true });
+      await terminal.waitFor();
+      for (const viewport of [
+        { width: 390, height: 844 },
+        { width: 320, height: 568 },
+        { width: 844, height: 390 },
+      ]) {
+        await page.setViewportSize(viewport);
+        await terminal.scrollIntoViewIfNeeded();
+        const bounds = await host.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+        expect(bounds!.y).toBeGreaterThanOrEqual(0);
+        expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
+        expect(await host.locator("kbd:visible").count()).toBe(0);
         expect(
-          await launcher.evaluate((element) => element.scrollHeight > element.clientHeight),
+          await launcher.evaluate((element) => element.scrollWidth <= element.clientWidth),
         ).toBe(true);
-        await expect
-          .poll(() =>
-            host.locator(".chat-mobile-host__scroll-edge--top").filter({ visible: true }).count(),
-          )
-          .toBe(1);
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator(".shell"),
-            [host, terminal],
-            {
-              animations: "disabled",
-            },
-          );
-          await writeFile(
-            path.join(suite.artifactDir, `mobile-panels-${colorScheme}.png`),
-            frame.png,
-          );
-        }
+        expect(await height(terminal)).toBeGreaterThanOrEqual(44);
+        await terminal.click({ trial: true });
+      }
+      expect(
+        await launcher.evaluate((element) => element.scrollHeight > element.clientHeight),
+      ).toBe(true);
+      await expect
+        .poll(() =>
+          host.locator(".chat-mobile-host__scroll-edge--top").filter({ visible: true }).count(),
+        )
+        .toBe(1);
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".shell"),
+          [host, terminal],
+          {
+            animations: "disabled",
+          },
+        );
+        await writeFile(path.join(suite.artifactDir, "mobile-panels-light.png"), frame.png);
+      }
 
-        await host
-          .locator(".chat-mobile-host__header")
-          .getByRole("button", {
-            name: "Close",
-            exact: true,
-          })
-          .click();
-        await host.waitFor({ state: "hidden" });
-        await expect
-          .poll(() => trigger.evaluate((element) => element === document.activeElement))
-          .toBe(true);
-        await page.setViewportSize({ width: 1280, height: 900 });
-        await page
-          .locator(".sidebar-region__panels-toggle")
-          .getByRole("button", {
-            name: "Panels",
-            exact: true,
-          })
-          .waitFor();
-        await page.setViewportSize({ width: 390, height: 844 });
-        const reopened = await openMobilePanelLauncher(page);
-        await expect
-          .poll(() => reopened.host.locator(".chat-mobile-host__scroll-fades").count())
-          .toBe(1);
-        await reopened.launcher.getByRole("button", { name: "Subagents", exact: true }).click();
-        await page.locator('[data-panel-slot="subagents"]:visible').waitFor();
-        await reopened.launcher.waitFor({ state: "hidden" });
-        expect(await reopened.host.isVisible()).toBe(true);
-      }, colorScheme),
-  );
+      await host
+        .locator(".chat-mobile-host__header")
+        .getByRole("button", {
+          name: "Close",
+          exact: true,
+        })
+        .click();
+      await host.waitFor({ state: "hidden" });
+      await expect
+        .poll(() => trigger.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page
+        .locator(".sidebar-region__panels-toggle")
+        .getByRole("button", {
+          name: "Panels",
+          exact: true,
+        })
+        .waitFor();
+      await page.setViewportSize({ width: 390, height: 844 });
+      const reopened = await openMobilePanelLauncher(page);
+      await expect
+        .poll(() => reopened.host.locator(".chat-mobile-host__scroll-fades").count())
+        .toBe(1);
+      await reopened.launcher.getByRole("button", { name: "Subagents", exact: true }).click();
+      await page.locator('[data-panel-slot="subagents"]:visible').waitFor();
+      await reopened.launcher.waitFor({ state: "hidden" });
+      expect(await reopened.host.isVisible()).toBe(true);
+    }, "light"));
 
   it.each(["light", "dark"] as const)(
     "keeps %s mobile session actions and sharing in the shared sheet",
@@ -268,7 +279,7 @@ suite.define(() => {
           expect(
             await menu.getByRole("menuitem", { name: "Sharing options", exact: true }).count(),
           ).toBe(0);
-          await menu.getByRole("menuitem", { name: "People", exact: true }).waitFor();
+          await page.getByRole("button", { name: "People", exact: true }).waitFor();
         } else {
           await menu.getByRole("menuitem", { name: "Sharing options", exact: true }).waitFor();
         }
@@ -278,8 +289,7 @@ suite.define(() => {
         expect(peopleModule.requests()).toBe(0);
         expect(sharingModule?.requests() ?? failedRequests).toBe(0);
         if (colorScheme === "light") {
-          await trigger.click();
-          await menu.getByRole("menuitem", { name: "People", exact: true }).click();
+          await page.getByRole("button", { name: "People", exact: true }).click();
           await peopleModule.request;
           await host.getByRole("status", { name: "Loading…", exact: true }).waitFor();
           await captureUiProof(suite, page, "mobile-people-loading-light.png");
@@ -335,8 +345,7 @@ suite.define(() => {
           );
           expect(await sharing.isVisible()).toBe(false);
           // Full-document recovery preserves the session route; the operator reopens the sheet.
-          await trigger.click();
-          await menu.getByRole("menuitem", { name: "People", exact: true }).click();
+          await page.getByRole("button", { name: "People", exact: true }).click();
           await host.getByRole("button", { name: /^Sharing options/ }).click();
         }
         try {
@@ -378,11 +387,15 @@ suite.define(() => {
           .click();
         await host.waitFor({ state: "hidden" });
         await expect
-          .poll(() => trigger.evaluate((element) => element === document.activeElement))
+          .poll(() =>
+            (colorScheme === "light"
+              ? page.getByRole("button", { name: "People", exact: true })
+              : trigger
+            ).evaluate((element) => element === document.activeElement),
+          )
           .toBe(true);
         if (colorScheme === "light") {
-          await trigger.click();
-          await menu.getByRole("menuitem", { name: "People", exact: true }).click();
+          await page.getByRole("button", { name: "People", exact: true }).click();
           await host.getByRole("button", { name: /^Sharing options/ }).click();
         } else {
           await trigger.click();

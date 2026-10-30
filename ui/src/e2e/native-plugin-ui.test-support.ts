@@ -1,143 +1,30 @@
-import { writeFileSync } from "node:fs";
-import path from "node:path";
-import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  captureControlUiE2eFailureDiagnostics,
+  installControlUiE2ePageDiagnosticRing,
+} from "../test-helpers/control-ui-e2e-diagnostics.ts";
 
-function traceNativeWorkspaceLitErrors() {
-  const scope = window as NativePluginWindow;
-  const trace = { errors: [] as unknown[] };
-  scope.nativeWorkspaceLitTrace = trace;
-  const prototypes = new WeakSet<object>();
-  const discover = (node: Node) => {
-    if (!(node instanceof Comment) || node.data !== "lit-content") {
-      return;
-    }
-    const cached: unknown = Reflect.get(node, "_$litPart$");
-    if (!cached || typeof cached !== "object") {
-      return;
-    }
-    // Lit's DEV runtime caches the RootPart on this renderBefore comment.
-    const prototype: object = Object.getPrototypeOf(cached);
-    const original: unknown = Reflect.get(prototype, "_$setValue");
-    // The bundled production runtime renames this method; this probe targets Lit DEV.
-    if (prototypes.has(prototype) || typeof original !== "function") {
-      return;
-    }
-    prototypes.add(prototype);
-    Reflect.set(prototype, "_$setValue", function (this: object, ...args: unknown[]) {
-      try {
-        return Reflect.apply(original, this, args);
-      } catch (error) {
-        if (trace.errors.length < 3) {
-          trace.errors.push({
-            message: error instanceof Error ? error.message.slice(0, 1_600) : "Non-Error throw",
-            stack: error instanceof Error ? error.stack?.slice(0, 1_600) : undefined,
-          });
-        }
-        throw error;
-      }
-    });
-  };
-  const scan = (node: Node) => {
-    discover(node);
-    const comments = document.createTreeWalker(node, NodeFilter.SHOW_COMMENT);
-    for (let comment = comments.nextNode(); comment; comment = comments.nextNode()) {
-      discover(comment);
-    }
-  };
-  const observer = new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-      for (const node of [...mutation.addedNodes, ...mutation.removedNodes]) {
-        scan(node);
-      }
-    }
-  });
-  // The auth:none fixture's withPage context owns this observer and patched realm.
-  observer.observe(document, { childList: true, subtree: true });
-  scan(document);
+// Existing fixture hook; native rendering no longer has Lit RootParts to instrument.
+export function installNativeWorkspaceLitErrorTrace(page: Page): Promise<void> {
+  installControlUiE2ePageDiagnosticRing(page);
+  return Promise.resolve();
 }
 
-export async function installNativeWorkspaceLitErrorTrace(page: Page): Promise<void> {
-  await page.addInitScript({
-    content: `;(() => { const __name = (target) => target; (${traceNativeWorkspaceLitErrors.toString()})(); })();`,
-  });
-}
-
-/** Supplement the suite's DOM/screenshot diagnostics with plugin ownership. */
 export async function captureNativeWorkspaceFailure(page: Page): Promise<void> {
-  const readBrowserState = page.evaluate(() => {
-    const hosts = [...document.querySelectorAll("openclaw-plugin-view")];
-    const app = document.querySelector("openclaw-app");
-    const target =
-      hosts.find((host) => host.surface === "workspace") ??
-      document.querySelector("openclaw-app-shell") ??
-      app?.firstElementChild;
-    let owner: unknown = null;
-    target?.dispatchEvent(
-      Object.assign(new Event("context-request", { bubbles: true, composed: true }), {
-        context: "openclaw.application",
-        contextTarget: target,
-        subscribe: false,
-        callback(context: ApplicationContext) {
-          owner = {
-            registryStatus: context.plugins.registryStatus,
-            selected: (["workspace", "composer", "transcript"] as const).map((surface) => {
-              const selected = context.plugins.selectedReplacement(surface);
-              return {
-                surface,
-                key: selected?.key ?? null,
-                aborted: selected?.signal.aborted ?? null,
-              };
-            }),
-            errorCount: context.plugins.errors.length,
-          };
-        },
-      }),
-    );
-    return {
-      owner,
-      bridgeRegistered: Boolean(customElements.get("openclaw-plugin-view")),
-      hosts: hosts.map((host) => ({
-        kind: host.kind,
-        surface: host.surface,
-        presented: host.presented,
-        connected: host.isConnected,
-        rect: host.getBoundingClientRect().toJSON(),
-        display: getComputedStyle(host).display,
-        visibility: getComputedStyle(host).visibility,
-        roots: host.querySelectorAll("[data-plugin-view-root]").length,
-      })),
-      litErrors: (window as NativePluginWindow).nativeWorkspaceLitTrace ?? null,
-    };
+  await captureControlUiE2eFailureDiagnostics(page, {
+    label: "native workspace",
+    error: new Error("Custom workspace did not become visible"),
   });
-  const observation = await withTimeout(readBrowserState, 5_000, "native workspace diagnostics");
-  const directory = createControlUiE2eArtifactDir(
-    "failure",
-    process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR?.trim() || undefined,
-  );
-  writeFileSync(
-    path.join(directory, "failure.public.json"),
-    `${JSON.stringify({ schemaVersion: 1, nativeWorkspace: observation }, null, 2)}\n`,
-  );
-}
-
-export async function captureNativePluginUiProof(
-  owner: { readonly artifactDir: string },
-  page: Page,
-  name: string,
-  options: { fullPage?: boolean } = {},
-): Promise<void> {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-    await page.screenshot({ ...options, path: path.join(owner.artifactDir, name) });
-  }
 }
 
 export type NativePluginWindow = Window & {
-  nativeWorkspaceLitTrace?: { errors: unknown[] };
-  nativePluginProof?: { release?: () => void };
+  nativePluginProof?: {
+    release?: () => void;
+    open?: (view: string) => void;
+    mounts?: number;
+    view?: string;
+  };
   nativeActionProof?: {
     runs: number;
     current?: {
@@ -184,6 +71,7 @@ export function pluginModule(revision: string, replacements = true) {
       }
       proof.host = host;
       host.ui.registerPage({id:"proof", label:"UI fixture", mount(container, context) {
+        proof.mounts = (proof.mounts ?? 0) + 1; proof.open = view => context.host.navigation.openPage({id:"proof", params:{view}});
         const title = document.createElement("h1"); title.textContent = "Fixture revision ${revision}";
         const output = document.createElement("output"); output.setAttribute("aria-label", "Fixture outcome");
         const button = (label, action) => { const element = document.createElement("button"); element.textContent = label; element.onclick = async () => { try { await action(); output.textContent = "completed"; } catch(error) { output.textContent = error.message; } }; return element; };
@@ -195,6 +83,7 @@ export function pluginModule(revision: string, replacements = true) {
           button("Call retired composer", () => proof.composer.setDraft("retired draft")),
           button("Call previous activation", () => previous.request("fixture.stale")),
           button("Release pending initializer", () => { proof.release(); throw new Error("released"); }));
+        return { update(next) { proof.view = next.props.view; } };
       }});
       host.ui.registerNavigation({id:"proof", label:"UI fixture", page:{id:"proof"}});
       host.ui.registerAccessory({id:"session", placement:"session-header", mount(container, context) {
@@ -254,51 +143,44 @@ export function pluginModule(revision: string, replacements = true) {
 export async function expectComposerFooterLayout(page: Page, composer: Locator, variant: string) {
   for (const width of [1280, 640]) {
     await page.setViewportSize({ width, height: 900 });
-    // TranscriptLayoutOwner commits the scrollport size in ResizeObserver,
-    // after the browser viewport changes. Measure only that committed layout.
+    // Wait for the ResizeObserver-owned scrollport and its settled plugin layout together.
     await expect
-      .poll(() =>
-        composer.evaluate((element) => {
-          const thread = element.closest(".chat-main__conversation")?.querySelector(".chat-thread");
-          const slot = thread?.parentElement;
-          return (
-            thread instanceof HTMLElement &&
-            Boolean(slot) &&
-            thread.offsetWidth === slot?.offsetWidth &&
-            thread.offsetHeight === slot?.offsetHeight
-          );
-        }),
+      .poll(
+        () =>
+          composer.evaluate((element) => {
+            const footer = element.closest(".chat-footer");
+            const thread = element
+              .closest(".chat-main__conversation")
+              ?.querySelector(".chat-thread");
+            if (!(thread instanceof HTMLElement) || !thread.parentElement || !footer) {
+              throw new Error("Expected the composer in the footer beside the transcript.");
+            }
+            const shellBounds = element.getBoundingClientRect();
+            const footerBounds = footer.getBoundingClientRect();
+            const input = element.querySelector(".agent-chat__input");
+            const style = getComputedStyle(footer, "::before");
+            return {
+              committed:
+                thread.offsetWidth === thread.parentElement.offsetWidth &&
+                thread.offsetHeight === thread.parentElement.offsetHeight,
+              separated: thread.getBoundingClientRect().bottom <= footerBounds.top,
+              contained:
+                shellBounds.top >= footerBounds.top && shellBounds.bottom <= footerBounds.bottom,
+              inputOutsideContext: Boolean(input) && !input?.closest(".chat-footer__context"),
+              content: style.content,
+              background: style.backgroundImage,
+            };
+          }),
+        { message: `${variant} at ${width}px` },
       )
-      .toBe(true);
-    const geometry = await composer.evaluate((element) => {
-      const footer = element.closest(".chat-footer");
-      const thread = element.closest(".chat-main__conversation")?.querySelector(".chat-thread");
-      if (!thread || !footer) {
-        throw new Error("Expected the composer in the footer beside the transcript.");
-      }
-      const shellBounds = element.getBoundingClientRect();
-      const footerBounds = footer.getBoundingClientRect();
-      const threadBounds = thread.getBoundingClientRect();
-      const style = getComputedStyle(footer, "::before");
-      const input = element.querySelector(".agent-chat__input");
-      return {
-        inputOutsideContext: Boolean(input) && !input?.closest(".chat-footer__context"),
-        composerTop: shellBounds.top,
-        composerBottom: shellBounds.bottom,
-        footerTop: footerBounds.top,
-        footerBottom: footerBounds.bottom,
-        transcriptBottom: threadBounds.bottom,
-        content: style.content,
-        background: style.backgroundImage,
-      };
-    });
-    const description = `${variant} at ${width}px`;
-    expect.soft(geometry.transcriptBottom, description).toBeLessThanOrEqual(geometry.footerTop);
-    expect.soft(geometry.composerTop, description).toBeGreaterThanOrEqual(geometry.footerTop);
-    expect.soft(geometry.composerBottom, description).toBeLessThanOrEqual(geometry.footerBottom);
-    expect.soft(geometry.inputOutsideContext, description).toBe(true);
-    expect.soft(geometry.content, description).toBe("none");
-    expect.soft(geometry.background, description).toBe("none");
+      .toEqual({
+        committed: true,
+        separated: true,
+        contained: true,
+        inputOutsideContext: true,
+        content: "none",
+        background: "none",
+      });
   }
   await page.setViewportSize({ width: 1280, height: 900 });
 }

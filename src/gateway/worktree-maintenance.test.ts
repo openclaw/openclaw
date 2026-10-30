@@ -21,6 +21,11 @@ import {
   startWorktreeMaintenance,
 } from "./worktree-maintenance.js";
 
+// mock-isolation: Scheduler fixtures have no shared-state broker; CAS sweep behavior has worker tests.
+vi.mock("./worker-environments/local-workspace-gc.js", () => ({
+  sweepLocalWorkspaceManifests: vi.fn(async () => {}),
+}));
+
 function completedResult(): ManagedWorktreeGcResult {
   return { ...new WorktreeGcProgress().result, limitsSatisfied: true };
 }
@@ -51,8 +56,8 @@ function maintenanceFixture(config: OpenClawConfig = {}) {
       pending.push(running);
       return running;
     },
-    hold(repeat = false) {
-      const held = holdGc(repeat);
+    hold(repeat = false, onRun = () => {}) {
+      const held = holdGc(repeat, onRun);
       release = () => held.release.resolve(completedResult());
       return held;
     },
@@ -77,10 +82,11 @@ function maintenanceFixture(config: OpenClawConfig = {}) {
   };
 }
 
-function holdGc(repeat = false) {
+function holdGc(repeat = false, onRun = () => {}) {
   const entered = createDeferred<NonNullable<Parameters<typeof managedWorktrees.gc>[0]>>();
   const release = createDeferred<ManagedWorktreeGcResult>();
   const implementation = (params: NonNullable<Parameters<typeof managedWorktrees.gc>[0]> = {}) => {
+    onRun();
     entered.resolve(params);
     return release.promise;
   };
@@ -103,14 +109,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("coalesces archive notifications into cleanup under the maintenance context", async () => {
+it("coalesces archives in the maintenance context and sweeps again after in-flight commits", async () => {
   await using fixture = maintenanceFixture();
   const { clock, getRuntimeConfig, start } = fixture;
   const context = new AsyncLocalStorage<string>();
   const observed: Array<string | undefined> = [];
-  const gc = vi.spyOn(managedWorktrees, "gc").mockImplementation(async () => {
+  const { entered, release, gc } = fixture.hold(false, () => {
     observed.push(context.getStore());
-    return completedResult();
   });
   context.run("maintenance", start);
   context.run("archive-request", () => {
@@ -118,18 +123,9 @@ it("coalesces archive notifications into cleanup under the maintenance context",
     notifyGatewayWorktreeArchive(getRuntimeConfig);
   });
   expect(gc).not.toHaveBeenCalled();
-  await context.run("host-wake", () => clock.advanceBy(0));
-  expect(observed).toEqual(["maintenance"]);
-});
-
-it("sweeps again after archive commits during cleanup without overlapping passes", async () => {
-  await using fixture = maintenanceFixture();
-  const { clock, getRuntimeConfig, start } = fixture;
-  const { entered, release, gc } = fixture.hold();
-  start();
-  notifyGatewayWorktreeArchive(getRuntimeConfig);
-  const running = fixture.run();
+  const running = context.run("host-wake", () => fixture.run());
   await awaitCleanup(entered.promise, running);
+  expect(observed).toEqual(["maintenance"]);
   notifyGatewayWorktreeArchive(getRuntimeConfig);
   notifyGatewayWorktreeArchive(getRuntimeConfig);
   await clock.advanceBy(0);

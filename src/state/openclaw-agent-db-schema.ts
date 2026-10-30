@@ -44,7 +44,9 @@ import {
   adoptCanonicalSessionValidationSchema,
   canonicalSessionValidationSchemaSql,
 } from "./openclaw-agent-canonical-validation-schema.js";
+import { AGENT_COLD_ARCHIVE_CHUNKS_SQL } from "./openclaw-agent-cold-archive-chunks-schema.js";
 import {
+  AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION,
   AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
   AGENT_MEDIA_SCHEMA_VERSION,
   AGENT_MEMORY_REVISION_SCHEMA_VERSION,
@@ -397,6 +399,9 @@ function ensureAgentSchema(
         }
         if (crossesVersion(AGENT_MEMORY_REVISION_SCHEMA_VERSION)) {
           db.exec(AGENT_MEMORY_REVISION_SQL);
+        }
+        if (crossesVersion(AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION)) {
+          db.exec(AGENT_COLD_ARCHIVE_CHUNKS_SQL);
         }
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.

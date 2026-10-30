@@ -1,5 +1,6 @@
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createEnteredGate } from "../../agents/entered-gate.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { callInProcessGatewayTool } from "../../agents/tools/in-process-gateway.js";
 import type { CliDeps } from "../../cli/deps.types.js";
@@ -52,16 +53,8 @@ function gatewayScope() {
   return { ...scope, context: scope.context };
 }
 function createGate() {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  return {
-    entered: entered.promise,
-    open: release.resolve,
-    wait: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
+  const { entered, release: open, wait } = createEnteredGate();
+  return { entered, open, wait };
 }
 function lazyDeletion(prepare: () => Promise<void>) {
   const deletion = vi.fn(sessionDeleteHandlers["sessions.delete"]!);

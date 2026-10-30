@@ -1,11 +1,15 @@
 import { onTestFinished, vi } from "vitest";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import type { SqliteWorkerCommand } from "../../../infra/sqlite-worker-contract.js";
+import type { OpenClawStateWorkerOperations } from "../../../state/openclaw-state-worker-contract.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import type { DomainScope } from "../../../state/openclaw-state-worker-store.types.js";
+import {
+  acknowledgeMockSubagentRegistryWrite,
+  createSubagentRunRecord,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import * as subagentMemory from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { createSubagentRegistrySweeper } from "./subagent-registry-sweeper.js";
-import type { SubagentRegistryWrite } from "./subagent-registry.store.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
@@ -43,7 +47,6 @@ export function createArchivedSubagentSweeperRun(
 }
 
 export function createSubagentSweeperHarness(
-  runtime: { current?: GatewayRecoveryRuntime },
   entry = createSubagentSweeperRun(),
   runs = new Map<string, SubagentRunRecord>(),
 ) {
@@ -54,44 +57,43 @@ export function createSubagentSweeperHarness(
     .mockImplementation(async (owner, run, options) => {
       options?.assertCurrent?.();
       return run({
-        execute: async (command, executeOptions) => {
-          if (command.type !== "subagents.persistChanges") {
-            return execute(owner, (scope) => scope.execute(command, executeOptions), options);
-          }
-          // Scheduling tests exercise publication through the real owner; native CAS has worker coverage.
-          const write = command.input as SubagentRegistryWrite;
-          return { writeId: write.writeId, notices: [] } as never;
-        },
+        execute: vi
+          .fn()
+          .mockImplementation(
+            async (
+              command: SqliteWorkerCommand<OpenClawStateWorkerOperations>,
+              executeOptions: Parameters<DomainScope["execute"]>[1],
+            ) => {
+              if (command.type !== "subagents.persistChanges") {
+                return execute(owner, (scope) => scope.execute(command, executeOptions), options);
+              }
+              // Scheduling tests exercise publication through the real owner; native CAS has worker coverage.
+              acknowledgeMockSubagentRegistryWrite(options?.createAdmission, command.input.writeId);
+            },
+          ),
       });
     });
-  const completeCleanupBookkeeping = vi.fn<SweeperOptions["completeCleanupBookkeeping"]>(
-    async (params) => {
-      if (params.isCurrent && !params.isCurrent()) {
-        return;
-      }
-      await mutateSubagentRuns(
-        [params.runId],
-        (rows) => {
-          const current = rows.get(params.runId);
-          if (
-            !current ||
-            !isSameSubagentRunOwner(current, params.entry) ||
-            params.isCurrent?.() === false
-          ) {
-            return { value: undefined };
-          }
-          const draft = structuredClone(current);
-          params.finalizeDelivery?.(draft);
-          return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
-        },
-        { runs },
-      );
-    },
-  );
   const callbacks = {
-    completeCleanupBookkeeping,
-    finalizeInterruptedSubagentRun: vi.fn<SweeperOptions["finalizeInterruptedSubagentRun"]>(
-      async () => 0,
+    sweepPendingLifecycle: vi.fn(),
+    completeCleanupBookkeeping: vi.fn<SweeperOptions["completeCleanupBookkeeping"]>(
+      async ({ runId, entry: expectedEntry, isCurrent = () => true, finalizeDelivery }) => {
+        if (!isCurrent()) {
+          return;
+        }
+        await mutateSubagentRuns(
+          [runId],
+          (rows) => {
+            const current = rows.get(runId);
+            if (!current || !isSameSubagentRunOwner(current, expectedEntry) || !isCurrent()) {
+              return { value: undefined };
+            }
+            const draft = structuredClone(current);
+            finalizeDelivery?.(draft);
+            return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
+          },
+          { runs },
+        );
+      },
     ),
     completeSubagentRunWithRecovery: vi.fn(),
     discardTerminalDelivery: vi.fn<SweeperOptions["discardTerminalDelivery"]>(),
@@ -104,16 +106,16 @@ export function createSubagentSweeperHarness(
     resumeRequesterSettleWake: vi.fn(),
   };
   const childLookup = mockSubagentSweeperChildLookup(runs);
-  const collectorLookup = vi
-    .spyOn(subagentMemory, "getSubagentRunsForCollectorGroup")
-    .mockImplementation((requesterSessionKey, groupId) =>
-      [...runs].filter(
-        ([, candidate]) =>
-          candidate.collect &&
-          candidate.groupId === groupId &&
-          (candidate.swarmRequesterSessionKey ?? candidate.requesterSessionKey) ===
-            requesterSessionKey,
-      ),
+  const collectorLookup: SweeperOptions["getRunsForCollectorGroup"] = (
+    requesterSessionKey,
+    groupId,
+  ) =>
+    [...runs].filter(
+      ([, candidate]) =>
+        candidate.collect &&
+        candidate.groupId === groupId &&
+        (candidate.swarmRequesterSessionKey ?? candidate.requesterSessionKey) ===
+          requesterSessionKey,
     );
   const sweeper = createSubagentRegistrySweeper({
     ...callbacks,
@@ -121,8 +123,6 @@ export function createSubagentSweeperHarness(
     resumedRuns: new Set(),
     clearPendingLifecycleError: vi.fn(),
     clearPendingLifecycleTimeout: vi.fn(),
-    sweepPendingLifecycle: vi.fn(),
-    getGatewayRecoveryRuntime: () => runtime.current,
     resumePendingRequesterSettlements: () => false,
     isCleanupOwnerCurrent: (selected) =>
       isSameSubagentRunOwner(runs.get(selected.runId), selected) || !runs.has(selected.runId),
@@ -140,7 +140,6 @@ export function createSubagentSweeperHarness(
   onTestFinished(async () => {
     await sweeper.reset();
     childLookup.mockRestore();
-    collectorLookup.mockRestore();
     worker.mockRestore();
   });
   return { ...callbacks, entry, runs, sweeper };

@@ -19,6 +19,19 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { mountAppearanceCatalogPage as mount } from "./config-page-catalog.test-support.ts";
 import { publishConfigSource } from "./config-page.test-support.ts";
 
+const theme = (name: string): ThemeCatalogSnapshot["themes"][number] => ({
+  id: `synthetic/${name.toLowerCase()}`,
+  name,
+  description: `${name} palette`,
+  source: "plugin",
+  modes: ["dark"],
+  pluginId: "synthetic",
+});
+const emptyClient = () =>
+  createTestGatewayClient(
+    vi.fn(async (method: string) => (method === "models.list" ? { models: [] } : {})),
+  );
+
 describe("ConfigPage model catalog lifecycle", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
@@ -35,11 +48,7 @@ describe("ConfigPage model catalog lifecycle", () => {
 
   describe("Appearance catalogs", () => {
     it("recovers theme discovery without replacing the available theme controls", async () => {
-      const { view, context } = await mount(
-        createTestGatewayClient(
-          vi.fn(async (method: string) => (method === "models.list" ? { models: [] } : {})),
-        ),
-      );
+      const { view, context } = await mount(emptyClient());
       const scope = {};
       const first = deferred<ThemeCatalogSnapshot | undefined>();
       const second = deferred<ThemeCatalogSnapshot | undefined>();
@@ -70,17 +79,7 @@ describe("ConfigPage model catalog lifecycle", () => {
       retryButton.click();
       expect(retry).toHaveBeenCalledOnce();
       const recovered: ThemeCatalogSnapshot = {
-        themes: [
-          ...BUILTIN_THEMES,
-          {
-            id: "synthetic/nebula",
-            name: "Nebula",
-            description: "Synthetic palette",
-            source: "plugin",
-            modes: ["dark"],
-            pluginId: "synthetic",
-          },
-        ],
+        themes: [...BUILTIN_THEMES, theme("Nebula")],
         error: null,
       };
       Object.assign(context.theme, {
@@ -99,11 +98,7 @@ describe("ConfigPage model catalog lifecycle", () => {
     });
 
     it("does not expose a retired profile's theme catalog", async () => {
-      const { view, context } = await mount(
-        createTestGatewayClient(
-          vi.fn(async (method: string) => (method === "models.list" ? { models: [] } : {})),
-        ),
-      );
+      const { view, context } = await mount(emptyClient());
       const first = deferred<ThemeCatalogSnapshot | undefined>();
       const second = deferred<ThemeCatalogSnapshot | undefined>();
       Object.assign(context.theme, {
@@ -117,16 +112,7 @@ describe("ConfigPage model catalog lifecycle", () => {
       });
       publishConfigSource(context.theme);
       const current: ThemeCatalogSnapshot = {
-        themes: [
-          {
-            id: "synthetic/current",
-            name: "Current",
-            description: "Current profile palette",
-            source: "plugin",
-            modes: ["dark"],
-            pluginId: "synthetic",
-          },
-        ],
+        themes: [theme("Current")],
         error: null,
       };
       Object.assign(context.theme, {
@@ -138,16 +124,7 @@ describe("ConfigPage model catalog lifecycle", () => {
         expect(view.page.querySelector('[data-theme-id="synthetic/current"]')).not.toBeNull(),
       );
       first.resolve({
-        themes: [
-          {
-            id: "synthetic/retired",
-            name: "Retired",
-            description: "Retired profile palette",
-            source: "plugin",
-            modes: ["dark"],
-            pluginId: "synthetic",
-          },
-        ],
+        themes: [theme("Retired")],
         error: null,
       });
       await first.promise;

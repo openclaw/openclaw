@@ -1,13 +1,26 @@
-import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createCronExecutionId } from "../../cron/run-id.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
-import { readExecRequestOwners } from "../../infra/exec-request-context.js";
+import {
+  readExecRequestOwners,
+  withExecRequestOwners,
+  type ExecRequestOwner,
+} from "../../infra/exec-request-context.js";
+import {
+  resolveSystemEventQueueKey,
+  withSystemEventOwner,
+} from "../../infra/system-event-ownership.js";
+import {
+  claimSystemEventTurn,
+  enqueueRequiredSystemEventEntry,
+} from "../../infra/system-events.js";
 import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
+import { normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { CRON_EXECUTION_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
@@ -15,8 +28,10 @@ import type { MsgContext } from "../templating.js";
 import type { SessionEventOptions, SessionEventTarget } from "./session-event-contract.js";
 import {
   getSessionEventRuntimeConfig,
+  readSessionEventTargetCommandOwner,
   readSessionEventTargetEnvironment,
   readSessionEventTargetOperatorAuthority,
+  readSessionEventTargetOwnerContinuation,
   resolveSessionEventKey,
 } from "./session-event-target.js";
 import { setChannelSourceTurnId } from "./source-turn-id.js";
@@ -42,7 +57,81 @@ export function prepareSessionEventInput(text: string, options: SessionEventOpti
   const storePath =
     options.expectedTarget?.storePath ??
     resolveSessionStorePathCore(cfg.session?.store, { agentId, env });
+  if (
+    options.expectedTarget &&
+    ((options.expectedTarget.agentId && options.expectedTarget.agentId !== agentId) ||
+      (options.expectedTarget.sessionKey && options.expectedTarget.sessionKey !== sessionKey))
+  ) {
+    throw new Error(
+      "Session event destination was reset or replaced while its producer was running",
+    );
+  }
   return { cfg, configPublication, agentId, sessionKey, env, storePath, operatorAuthority };
+}
+
+/** Validate and claim producer input; execution consumes this occurrence custody. */
+export function claimSessionEventOccurrenceInput(params: {
+  text: string;
+  options: SessionEventOptions;
+  sessionKey: string;
+  agentId: string;
+  route?: DeliveryContext;
+  execRequestOwners?: readonly ExecRequestOwner[];
+  cancel: () => void;
+}) {
+  const { text, options, sessionKey, agentId, route, execRequestOwners, cancel } = params;
+  if (options.preserveOccurrenceOnRejection && !options.occurrences?.length) {
+    throw new Error("Preserving a rejected event requires its original queued occurrence");
+  }
+  if (
+    options.occurrences &&
+    options.occurrences.map((event) => event.text).join("\n") !== text.trim()
+  ) {
+    throw new Error("Session event occurrence text changed before admission");
+  }
+  const freshOccurrence = options.occurrences
+    ? undefined
+    : enqueueRequiredSystemEventEntry(
+        text,
+        withExecRequestOwners(
+          withSystemEventOwner(
+            {
+              sessionKey,
+              contextKey: options.contextKey,
+              deliveryContext: route,
+            },
+            agentId,
+          ),
+          execRequestOwners,
+        ),
+        // Refuse matching keyed plugin and tool-handoff retries; unkeyed and host occurrences stay distinct.
+        {
+          allowDuplicate:
+            (options.source !== "plugin" && options.source !== "tool_handoff") ||
+            !options.contextKey?.trim(),
+        },
+      );
+  const occurrences = options.occurrences
+    ? [...options.occurrences]
+    : freshOccurrence
+      ? [freshOccurrence]
+      : [];
+  const occurrence = occurrences[0];
+  if (!occurrence?.id || occurrences.some((event) => !event.id)) {
+    throw new Error("Session event was not enqueued: an identical occurrence is already pending");
+  }
+  const occurrenceId = occurrence.id;
+  const eventText = occurrences.map((event) => event.text).join("\n");
+  const ownership = claimSystemEventTurn(
+    resolveSystemEventQueueKey(sessionKey, agentId),
+    occurrences,
+    cancel,
+    agentId,
+  );
+  if (!ownership) {
+    throw new Error("Session event occurrence no longer available for admission");
+  }
+  return { occurrence, occurrences, occurrenceId, eventText, ownership };
 }
 
 export function resolveSessionEventExecRequestOwners(
@@ -67,8 +156,9 @@ export function buildSessionEventContext(params: {
   text: string;
   options: Pick<
     SessionEventOptions,
-    "source" | "sourceTurnId" | "sourceRunId" | "readmissionAttempt" | "scheduledAutomation"
+    "source" | "sourceTurnId" | "sourceRunId" | "scheduledAutomation"
   >;
+  readmissionAttempt?: number;
   occurrenceId: string;
   deliveryContext?: DeliveryContext;
   target: SessionEventTarget;
@@ -88,7 +178,7 @@ export function buildSessionEventContext(params: {
     CommandAuthorized: false,
     InputProvenance: {
       kind: "internal_system",
-      sourceTool: options.source,
+      sourceTool: automation ? CRON_EXECUTION_SOURCE_TOOL : options.source,
       ...(automation && automation.job.state.runningAtMs !== undefined
         ? {
             jobId: automation.job.id,
@@ -112,8 +202,8 @@ export function buildSessionEventContext(params: {
     AccountId: deliveryContext?.accountId,
     MessageThreadId: deliveryContext?.threadId,
     // Inbound dedupe retains an adopted attempt's id; a policy re-admission is a new dispatch.
-    MessageSid: options.readmissionAttempt
-      ? `${occurrenceId}:readmission-${options.readmissionAttempt}`
+    MessageSid: params.readmissionAttempt
+      ? `${occurrenceId}:readmission-${params.readmissionAttempt}`
       : occurrenceId,
   };
   if (automation && !target.sessionId) {
@@ -127,22 +217,65 @@ export function buildSessionEventContext(params: {
   }
   const operatorAuthority = automation?.controlUiAdmin
     ? automation.operatorAuthority
-    : options.source === "plugin"
+    : options.source === "plugin" ||
+        options.source === "tool_handoff" ||
+        options.source === "restart"
       ? readSessionEventTargetOperatorAuthority(target)
       : undefined;
   if (
     operatorAuthority &&
-    (automation?.controlUiAdmin || operatorAuthority.profileId === GATEWAY_OWNER_PROFILE_ID)
+    (automation?.controlUiAdmin ||
+      (options.source === "restart"
+        ? operatorAuthority.scopes.includes("operator.admin")
+        : readSessionEventTargetOwnerContinuation(target)))
   ) {
-    // Plugin handoffs continue their captured owner capability while retaining
-    // internal provenance and the event text's existing command authorization.
+    // A tool handoff resumes the yielded turn: it continues that turn's own owner decision
+    // under the same live operator source, retaining internal provenance and the event
+    // text's existing command authorization. Non-owner and system turns never gain it.
     bindCommandOwnerAuthority(ctx, {
       operatorAuthority,
       isCurrent: () => {
         params.assertCurrent();
         return true;
       },
+      // Work that outlives this occurrence keeps only the live operator source.
+      successor: {
+        operatorAuthority,
+        isCurrent: () => {
+          operatorAuthority.assertCurrent();
+          return true;
+        },
+      },
     });
+  } else {
+    const commandOwner = readSessionEventTargetCommandOwner(target);
+    if (commandOwner) {
+      const { authority, requester } = commandOwner;
+      // A continuation of the requester's own work keeps their owner tools only while
+      // they are still an owner under the current config.
+      bindCommandOwnerAuthority(ctx, {
+        recoveryReference: authority.recoveryReference,
+        isCurrent: () => {
+          params.assertCurrent();
+          return authority.isCurrent(getSessionEventRuntimeConfig());
+        },
+        // Work that outlives this occurrence keeps only the requester's live owner check.
+        successor: {
+          recoveryReference: authority.recoveryReference,
+          isCurrent: () => authority.isCurrent(getSessionEventRuntimeConfig()),
+        },
+      });
+      // Owner-checked effects (for example Gateway maintenance) recheck this sender at
+      // use. Project it only on the requester's own channel account, never across
+      // channels where the same raw ID can name someone else.
+      if (
+        deliveryContext?.channel === requester.channel &&
+        normalizeAccountId(deliveryContext.accountId) === normalizeAccountId(requester.accountId)
+      ) {
+        ctx.SenderId = requester.senderId;
+        ctx.SenderE164 = requester.senderE164;
+      }
+    }
   }
   setChannelSourceTurnId(ctx, options.sourceTurnId);
   return ctx;

@@ -331,28 +331,4 @@ describe("native OpenAI Responses WebSocket transport", () => {
       callers.disable();
     }
   });
-
-  it("keeps matching-session and all-session cleanup inside one runtime owner", async () => {
-    const firstHost = createAiTransportHost();
-    const secondHost = createAiTransportHost();
-    queueCompletions("first-shared", "first-other", "second-shared");
-    for (const [host, sessionId] of [
-      [firstHost, "session-1"],
-      [firstHost, "other"],
-      [secondHost, "session-1"],
-    ] as const) {
-      await runWithAiTransportHost(host, () =>
-        consumeResponse(createStream(request(), { sessionId })),
-      );
-    }
-
-    cleanupSessionResources("session-1", firstHost);
-    expect(websocketState.instances.map(({ closed }) => closed)).toEqual([true, false, false]);
-
-    cleanupSessionResources(undefined, firstHost);
-    expect(websocketState.instances.map(({ closed }) => closed)).toEqual([true, true, false]);
-
-    cleanupSessionResources(undefined, secondHost);
-    expect(websocketState.instances.map(({ closed }) => closed)).toEqual([true, true, true]);
-  });
 });

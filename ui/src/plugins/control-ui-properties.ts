@@ -15,13 +15,15 @@ export function observeSolidBridgeProperties<P extends object>(
       return;
     }
     queued = true;
-    // Foreign mount notifications may run under a root this update retires.
-    runWithOwner(null, () => {
-      onSettled(() => {
-        queued = false;
-        if (active) {
-          settled();
-        }
+    // Leave the caller's render lane before settling: a retired lane drops its callbacks.
+    queueMicrotask(() => {
+      runWithOwner(null, () => {
+        onSettled(() => {
+          queued = false;
+          if (active) {
+            settled();
+          }
+        });
       });
     });
   };

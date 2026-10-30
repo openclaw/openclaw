@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { readFileRangeAsync } from "../config/sessions/file-range.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isExternalUserText,
   type SessionUpstreamActivity,
@@ -8,6 +9,7 @@ import {
 } from "./session-catalog.js";
 
 const MAX_UPSTREAM_SCAN_BYTES = 1024 * 1024;
+const log = createSubsystemLogger("plugins/session-catalog");
 
 /** Read one bounded append window; each catalog owns its row and timestamp semantics. */
 export async function readSessionCatalogJsonlActivity(params: {
@@ -25,9 +27,15 @@ export async function readSessionCatalogJsonlActivity(params: {
   try {
     handle = await fs.open(filePath, "r");
   } catch (error) {
-    return hasErrnoCode(error, "ENOENT")
-      ? { kind: "missing", sessionKey: probe.sessionKey }
-      : undefined;
+    if (hasErrnoCode(error, "ENOENT")) {
+      return { kind: "missing", sessionKey: probe.sessionKey };
+    }
+    // An inaccessible transcript must remain retryable without silently hiding the failure.
+    log.warn(
+      `failed to read session catalog transcript ${filePath}: ${String(error)}. ` +
+        "Check that the transcript path exists and the Gateway can read it; the probe will retry automatically.",
+    );
+    return undefined;
   }
   try {
     const stat = await handle.stat();

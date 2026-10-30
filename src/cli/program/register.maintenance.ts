@@ -42,7 +42,7 @@ export function registerMaintenanceCommands(
     .addHelpText("after", () => formatDocsHelp("/cli/doctor"))
     .option("--no-workspace-suggestions", "Disable workspace memory system suggestions", true)
     .option("--yes", "Accept defaults without prompting", false)
-    .option("--repair", "Apply recommended repairs without prompting", false)
+    .option("--repair", "Apply recommended repairs", false)
     .option("--fix", "Apply recommended repairs (alias for --repair)", false)
     .option(
       "--force",
@@ -60,6 +60,12 @@ export function registerMaintenanceCommands(
       "--allow-exec",
       "Allow doctor to execute exec SecretRefs while verifying configured secrets",
       false,
+    )
+    .option(
+      "--replace-model <json>",
+      "With --fix: explicitly replace model refs using {from,to,accessProgram} (repeatable)",
+      collectOption,
+      [],
     )
     .option("--deep", "Scan system services for extra gateway installs", false)
     .option("--full-integrity-check", "Run full database integrity checks during migrations", false)
@@ -208,11 +214,25 @@ export function registerMaintenanceCommands(
           opts.json === true,
         );
       }
+      if (opts.replaceModel.length > 0 && !(opts.fix || opts.repair)) {
+        return exitDoctorError(
+          "--replace-model requires --fix or --repair; run --lint first to preview affected references.",
+          opts.json === true,
+        );
+      }
       try {
+        const modelReplacements = opts.replaceModel.length
+          ? (
+              await import("../../commands/doctor/shared/model-replacement.js")
+            ).parseDoctorModelReplacements(opts.replaceModel)
+          : [];
         if (opts.clientCredentials === true) {
           const { prepareStartupClientCredentials } =
             await import("../../commands/startup-client-credentials.js");
-          await prepareStartupClientCredentials({ env: process.env, runtime: defaultRuntime });
+          await prepareStartupClientCredentials({
+            env: process.env,
+            runtime: defaultRuntime,
+          });
           if (opts.json === true) {
             defaultRuntime.writeJson({ ok: true });
           }
@@ -236,6 +256,7 @@ export function registerMaintenanceCommands(
           await doctorCommand(
             defaultRuntime,
             {
+              ...(modelReplacements.length ? { modelReplacements } : {}),
               workspaceSuggestions: opts.workspaceSuggestions,
               yes: Boolean(opts.yes),
               repair: Boolean(opts.repair) || Boolean(opts.fix),

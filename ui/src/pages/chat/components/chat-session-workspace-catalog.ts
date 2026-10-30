@@ -52,7 +52,7 @@ function mergeActivity(
 /** Projection of actual listed/touched paths. It never scans or fetches a tree. */
 export function projectWorkspaceCatalog(
   list: SessionWorkspaceListResult | null,
-  directories: Readonly<Record<string, SessionWorkspaceDirectory>> = {},
+  directories: Readonly<Record<string, Pick<SessionWorkspaceDirectory, "browser">>> = {},
 ) {
   const project = new Map<string, WorkspaceCatalogRow>();
   const session = new Map<string, WorkspaceCatalogFile>();
@@ -165,7 +165,7 @@ export function workspaceCatalogFilters(
 }
 
 export function workspaceCatalogChildren(
-  catalog: ReturnType<typeof projectWorkspaceCatalog>,
+  catalog: { project: ReadonlyMap<string, WorkspaceCatalogRow> },
   filter: SessionWorkspaceFilter,
 ): ReadonlyMap<string, readonly WorkspaceCatalogRow[]> {
   const children = new Map<string, WorkspaceCatalogRow[]>();
@@ -206,13 +206,15 @@ export function workspaceCatalogSearch(
   if (!search) {
     return [];
   }
+  // Canonically equivalent names may arrive in either Unicode form; compare on NFC.
+  const normalizedSearch = search.normalize("NFC");
   const catalog = projectWorkspaceCatalog(list);
   const results = new Map<string, WorkspaceCatalogFile>();
   for (const entry of [...catalog.session, ...catalog.project.values()]) {
     if (
       !("directory" in entry && entry.directory) &&
       [entry.name, entry.workspacePath, entry.path].some((value) =>
-        value?.toLowerCase().includes(search),
+        value?.toLowerCase().normalize("NFC").includes(normalizedSearch),
       )
     ) {
       results.set(entry.key, entry);

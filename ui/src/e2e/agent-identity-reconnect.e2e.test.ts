@@ -1,15 +1,15 @@
 import { expect, it } from "vitest";
-import { cronJobsListResponse } from "../lib/cron/cron.test-support.ts";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
   pauseVirtualClock,
   reconnectMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { cronJobsListResponse } from "../test-helpers/cron.ts";
 import { expectText } from "./activity-assertions.test-support.ts";
 import { captureUiProof } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Agent identity save reconnect" });
 
@@ -81,7 +81,7 @@ suite.define(() => {
             featureMethods: [...defaultControlUiFeatureMethods, "agents.update"],
             methodResponses: {
               "agents.update": { ok: true },
-              "config.get": configSnapshot(config, "identity-fixture"),
+              "config.get": sourceConfigSnapshot(config, "identity-fixture"),
             },
           });
           await page.goto(`${suite.server.baseUrl}chat#token=test-token`);

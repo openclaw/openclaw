@@ -1,5 +1,5 @@
 import path from "node:path";
-import { tempWorkspaceSync, withTempWorkspace } from "@openclaw/fs-safe/temp";
+import { tempWorkspace, withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -28,16 +28,6 @@ function normalizeOutputFileName(value?: string): string {
   return DEFAULT_OUTPUT_FILE_NAME;
 }
 
-function resolveMaxDurationSeconds(value?: number): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error("maxDurationSeconds must be a positive finite number");
-  }
-  return value;
-}
-
 /** Transcodes arbitrary audio input into mono Opus using a scoped temp workspace. */
 export async function transcodeAudioBufferToOpus(params: {
   audioBuffer: Buffer;
@@ -52,7 +42,13 @@ export async function transcodeAudioBufferToOpus(params: {
   /** Maximum output duration passed to ffmpeg's `-t` option. */
   maxDurationSeconds?: number;
 }): Promise<Buffer> {
-  const maxDurationSeconds = resolveMaxDurationSeconds(params.maxDurationSeconds);
+  const maxDurationSeconds = params.maxDurationSeconds;
+  if (
+    maxDurationSeconds !== undefined &&
+    (!Number.isFinite(maxDurationSeconds) || maxDurationSeconds <= 0)
+  ) {
+    throw new Error("maxDurationSeconds must be a positive finite number");
+  }
   return await withTempWorkspace(
     {
       rootDir: resolvePreferredOpenClawTmpDir(),
@@ -67,7 +63,9 @@ export async function transcodeAudioBufferToOpus(params: {
         : path.extname(params.inputFileName ?? "");
       const normalized = candidate.toLowerCase();
       const inputExtension = /^\.[a-z0-9]{1,12}$/.test(normalized) ? normalized : ".audio";
-      const inputPath = await workspace.write(`input${inputExtension}`, params.audioBuffer);
+      const inputPath = await workspace.store.write(`input${inputExtension}`, params.audioBuffer, {
+        durable: false,
+      });
       const outputFileName = normalizeOutputFileName(params.outputFileName);
       await writeExternalFileWithinRoot({
         rootDir: workspace.dir,
@@ -143,12 +141,12 @@ export async function transcodeAudioBuffer(params: {
   }
 
   // afconvert is macOS-only and writes native Messages-compatible voice containers.
-  const tmp = tempWorkspaceSync({
+  const tmp = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "tts-transcode-",
   });
   try {
-    const inPath = tmp.write(`in.${source}`, params.audioBuffer);
+    const inPath = await tmp.store.write(`in.${source}`, params.audioBuffer, { durable: false });
     const outPath = tmp.path(`out.${target}`);
     const failure = await runAfconvert(
       // Opus-in-CAF matches native Messages voice memo attachments.
@@ -158,11 +156,11 @@ export async function transcodeAudioBuffer(params: {
     if (failure !== undefined) {
       return { ok: false, reason: "transcoder-failed", detail: failure };
     }
-    return { ok: true, buffer: tmp.read(`out.${target}`) };
+    return { ok: true, buffer: await tmp.read(`out.${target}`) };
   } catch (err) {
     return { ok: false, reason: "transcoder-failed", detail: (err as Error).message };
   } finally {
-    tmp.cleanup();
+    await tmp.cleanup();
   }
 }
 

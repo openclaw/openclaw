@@ -1,6 +1,7 @@
 // Benchmark-only instrumentation; never loaded by a normal Gateway.
 import { createHook } from "node:async_hooks";
-import { createRequire, syncBuiltinESMExports } from "node:module";
+import { readFileSync } from "node:fs";
+import { createRequire, registerHooks, syncBuiltinESMExports } from "node:module";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { BroadcastChannel, isMainThread, threadId } from "node:worker_threads";
@@ -13,6 +14,37 @@ const bus = new BroadcastChannel(channelName);
 bus.unref();
 const workers = createRequire(import.meta.url)("node:worker_threads");
 const NativeWorker = workers.Worker;
+const watchWorkers = new Set();
+let watchNotifications = 0;
+if (isMainThread && process.env.OPENCLAW_IDLE_MEASURE_WATCHER_FAILURE === "1") {
+  const owner = new URL("../../src/config/source-file.ts", import.meta.url).href;
+  const notification = Symbol.for("openclaw.bench.config-notification");
+  globalThis[notification] = (notify) => () => {
+    watchNotifications++;
+    notify();
+  };
+  registerHooks({
+    load(url, context, nextLoad) {
+      const loaded = nextLoad(url, context);
+      if (url !== owner) {
+        return loaded;
+      }
+      const source = readFileSync(new URL(url), "utf8");
+      const anchor = "  type Watcher = {";
+      if (source.split(anchor).length !== 2) {
+        throw new Error("Config watcher instrumentation anchor changed");
+      }
+      return {
+        ...loaded,
+        format: "module-typescript",
+        source: source.replace(
+          anchor,
+          `  opts.onChange = globalThis[Symbol.for("openclaw.bench.config-notification")](opts.onChange);\n${anchor}`,
+        ),
+      };
+    },
+  });
+}
 const profileArgs = process.execArgv.filter(
   (arg) =>
     arg === "--cpu-prof" ||
@@ -40,6 +72,10 @@ workers.Worker = class extends NativeWorker {
         fileURLToPath(import.meta.url),
       ],
     });
+    if (isMainThread && String(filename).endsWith("/watch-io-worker.js")) {
+      watchWorkers.add(this);
+      this.once("exit", () => watchWorkers.delete(this));
+    }
   }
 };
 syncBuiltinESMExports();
@@ -139,6 +175,20 @@ if (isMainThread) {
     if (message.action === "sample") {
       process.send?.({ channel: channelName, id: message.id, row: snapshot() });
       broadcast({ action: "sample", id: message.id });
+    }
+    if (message.action === "watcher-count") {
+      process.send?.({ channel: channelName, id: message.id, watchNotifications });
+    }
+    if (message.action === "watcher-fail") {
+      const worker = [...watchWorkers][0];
+      if (!worker) {
+        process.send?.({ channel: channelName, id: message.id, error: "No watch worker" });
+        return;
+      }
+      watchNotifications = 0;
+      void worker.terminate().then(() => {
+        process.send?.({ channel: channelName, id: message.id, terminated: true });
+      });
     }
   });
   bus.addEventListener("message", ({ data }) => {

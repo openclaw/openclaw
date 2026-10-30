@@ -1,8 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  scopedAgentParamsForSession,
-  type SessionScopeHostWithKey,
-} from "../../../lib/sessions/index.ts";
+import type { SessionScopeHostWithKey } from "../../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../../lib/sessions/navigation.ts";
 import {
   normalizeAgentId,
   resolveAgentIdFromSessionKey,

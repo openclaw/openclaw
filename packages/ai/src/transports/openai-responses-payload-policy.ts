@@ -22,6 +22,7 @@ type OpenAIResponsesPayloadModel = {
   contextTokens?: unknown;
   contextWindow?: unknown;
   compat?: unknown;
+  thinkingLevelMap?: unknown;
 };
 
 type OpenAIResponsesPayloadPolicy = {
@@ -300,10 +301,12 @@ function stripInputItemStatuses(input: unknown): void {
   if (!Array.isArray(input)) {
     return;
   }
-  for (const item of input) {
-    if (item && typeof item === "object" && !Array.isArray(item)) {
-      // Only item-level status is provider metadata. Nested values may be user or tool payloads.
-      delete (item as Record<string, unknown>).status;
+  for (let index = 0; index < input.length; index++) {
+    const item = input[index];
+    if (item && typeof item === "object" && !Array.isArray(item) && "status" in item) {
+      // Converted history can be shared; strip metadata on the request's own item.
+      const { status: _, ...rest } = item;
+      input[index] = rest;
     }
   }
 }
@@ -339,7 +342,9 @@ export function resolveOpenAIResponsesPayloadPolicy(
     isResponsesApi &&
     // Custom endpoints need an explicit capability; model-name hints describe native routes.
     !supportsOpenAIReasoningEffort(
-      capabilities.usesKnownNativeOpenAIRoute ? model : { compat: model.compat },
+      capabilities.usesKnownNativeOpenAIRoute
+        ? model
+        : { compat: model.compat, thinkingLevelMap: model.thinkingLevelMap },
       "none",
     );
   // Strict OpenAI-compatible Responses endpoints reject output-only fields

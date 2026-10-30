@@ -27,6 +27,7 @@ import {
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
 import type { OpenClawSkillMetadata, SkillEligibilityContext } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
+import { captureWarningLogger } from "./loading.test-support.js";
 import {
   loadVisibleSkills,
   loadWorkspaceSkills,
@@ -259,18 +260,6 @@ async function createTempWorkspaceDir() {
   const workspaceDir = path.join(tempRoot, `workspace-${++workspaceCaseIndex}`);
   await fs.mkdir(workspaceDir, { recursive: true });
   return workspaceDir;
-}
-
-function captureWarningLogger() {
-  setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-  const warn = vi.fn();
-  loggingState.rawConsole = {
-    log: vi.fn(),
-    info: vi.fn(),
-    warn,
-    error: vi.fn(),
-  };
-  return warn;
 }
 
 function loadTestWorkspaceSkills(

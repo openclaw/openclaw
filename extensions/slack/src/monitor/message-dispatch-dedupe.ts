@@ -28,10 +28,6 @@ export class SlackMessageDispatchRetryError extends Error {
   }
 }
 
-type SlackMessageDispatchClaimResult =
-  | { kind: "claimed"; handle: SlackMessageDispatchReplayClaim }
-  | { kind: "duplicate" };
-
 export function buildSlackMessageDispatchReplayKey(params: {
   accountId: string;
   channelId: string | undefined;
@@ -75,7 +71,7 @@ export async function claimSlackMessageDispatchReplay(params: {
   guard: SlackMessageDispatchReplayGuard;
   key: string;
   onWaiting: () => void;
-}): Promise<SlackMessageDispatchClaimResult> {
+}): Promise<{ kind: "claimed"; handle: SlackMessageDispatchReplayClaim } | { kind: "duplicate" }> {
   const claim = await runClaimableDedupeClaimLoop(
     async () => {
       const next = await params.guard.claim({ keys: [params.key] });

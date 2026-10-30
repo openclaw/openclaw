@@ -6,6 +6,7 @@ import type {
 } from "../registry/subagent-registry.types.js";
 import { isSubagentObligationRetired } from "../registry/subagent-requester-settle-identity.js";
 import { isSameSubagentRun, isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
+import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
 import { finalizeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
@@ -14,13 +15,16 @@ export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "reti
 export const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 
-export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean {
-  // Earlier delivery cannot discharge reconciliation of restart-interrupted work.
+export function isRequesterSettleMemberReady(entry: SubagentRunRecord): boolean {
   return (
-    entry.delivery?.status !== "delivered" ||
-    (entry.execution.interruptionReason === "gateway-restart" &&
-      (entry.delivery.deliveredAt ?? 0) < (entry.execution.endedAt ?? Infinity))
+    entry.execution.status !== "running" &&
+    entry.pauseReason !== "sessions_yield" &&
+    hasSubagentRunEnded(entry)
   );
+}
+
+export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean {
+  return entry.delivery?.status !== "delivered";
 }
 
 /**
@@ -107,6 +111,7 @@ export type RequesterSettleWakeParams = RequesterSettleWakeBatchCallbacks & {
   requesterOrigin?: DeliveryContext;
   settledEntry: SubagentRunRecord;
   signal?: AbortSignal;
+  onAccepted?: () => void;
   isSourceCurrent: () => boolean;
   onDescendantsPending?: (deadline?: number) => void;
 };
@@ -135,7 +140,6 @@ export function readSharedBatchState(
     status: source?.status ?? "pending",
     attemptCount: Math.max(0, ...states.map((state) => state.attemptCount ?? 0)),
     ...(source?.privateInput ? { privateInput: source.privateInput } : {}),
-    ...(source?.replayCount !== undefined ? { replayCount: source.replayCount } : {}),
     ...(source?.nextAttemptAt !== undefined ? { nextAttemptAt: source.nextAttemptAt } : {}),
     ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
     ...(source?.progressOperationId ? { progressOperationId: source.progressOperationId } : {}),

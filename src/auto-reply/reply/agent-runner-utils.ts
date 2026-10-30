@@ -332,8 +332,9 @@ export function mintReplyMessageActionTurnCapability(
   turn: Pick<AgentTurnParams, "followupRun" | "sessionCtx" | "opts" | "runtimePolicySessionKey">,
   runId: string,
 ): string | undefined {
-  // An event's captured delivery route is not a new trusted channel turn.
-  if (turn.followupRun.run.internalEventExecution) {
+  // An event's captured delivery route is not a new trusted channel turn, including
+  // for successors detached from the event occurrence.
+  if (turn.followupRun.run.internalEventExecution || turn.followupRun.run.sessionEventOrigin) {
     return undefined;
   }
   const channelIngress = isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider);
@@ -479,6 +480,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
     providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
     permissionMode: params.run.permissionMode,
     sessionRoot: params.run.sessionRoot,
+    blindPrompt: params.run.blindPrompt,
     agentDir: params.run.agentDir,
     config,
     trustedInternalHandoff: params.run.trustedInternalHandoff,
@@ -508,6 +510,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
     ...authProfile,
     thinkLevel: params.run.thinkLevel,
     thinkingExplicit: params.run.thinkingExplicit,
+    cyberAccessProgram: params.run.cyberAccessProgram,
     fastMode: params.run.fastMode,
     fastModeAutoOnSeconds: params.run.fastModeAutoOnSeconds,
     verboseLevel: params.run.verboseLevel,

@@ -40,6 +40,8 @@ export const ChannelAvatar = defineSolidBridge<ChannelAvatarProps>(
               src={url()}
               alt=""
               aria-hidden="true"
+              width="20"
+              height="20"
               decoding="async"
               onError={() => setUndecodableRouteUrl(props.routeUrl ?? null)}
             />

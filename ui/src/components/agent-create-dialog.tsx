@@ -27,15 +27,14 @@ import {
   type GeneratedAvatar,
 } from "../pages/agents/avatar-picker.tsx";
 import "../styles/agent-create-dialog.css";
+import { ModalDialog } from "./modal-dialog.tsx";
 
 registerAgentCreationEnglish();
-
-export type AgentCreateIdentity = { name: string; avatar: string | null };
 
 export function AgentCreateDialog(props: {
   context: ApplicationContext;
   onCancel: () => void;
-  onCreate: (identity: AgentCreateIdentity) => void;
+  onCreate: (identity: { name: string; avatar: string | null }) => void;
 }) {
   const [name, setName] = createSignal("");
   const [avatar, setAvatar] = createSignal<string | null>(null);
@@ -116,7 +115,11 @@ export function AgentCreateDialog(props: {
   }
 
   return (
-    <openclaw-modal-dialog label={dialogTitle()} onModal-cancel={() => props.onCancel()}>
+    <ModalDialog
+      class="agent-create-modal"
+      label={dialogTitle()}
+      onModal-cancel={() => props.onCancel()}
+    >
       <form
         class="agent-create-dialog"
         onSubmit={(event) => {
@@ -228,6 +231,6 @@ export function AgentCreateDialog(props: {
           </button>
         </openclaw-modal-actions>
       </form>
-    </openclaw-modal-dialog>
+    </ModalDialog>
   );
 }

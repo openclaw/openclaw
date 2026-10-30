@@ -90,6 +90,7 @@ export type MemorySemanticProviderGeneration = Extract<
 
 export type MemoryReindexProgress = {
   memoryComplete: boolean;
+  cachePrunePending?: boolean;
   memoryPlan?: MemorySourceSyncPlan;
   completedSessionFiles: Set<string>;
   changedSessionFiles: Set<string>;
@@ -256,7 +257,7 @@ export abstract class MemoryManagerSyncBase {
     message: string,
   ): Promise<T>;
   protected abstract getIndexConcurrency(): number;
-  protected abstract pruneEmbeddingCacheIfNeeded(): Promise<void>;
+  protected abstract pruneEmbeddingCacheIfNeeded(recount?: boolean): Promise<void>;
   protected abstract resetProviderInitializationForRetry(): void;
   protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
   protected abstract indexFile(entry: MemoryIndexEntry, source: MemorySource): Promise<void>;
@@ -360,7 +361,7 @@ export abstract class MemoryManagerSyncBase {
         2 ** Math.min(this.fullReindexRetryBackoff.attempts - 1, 30),
       FULL_REINDEX_RETRY_MAX_DELAY_MS,
     );
-    this.fullReindexRetryBackoff.retryAt = Date.now() + delay;
+    this.fullReindexRetryBackoff.retryAt = performance.now() + delay;
   }
 
   protected clearFullReindexRetryBackoff(): void {
@@ -541,6 +542,7 @@ export abstract class MemoryManagerSyncBase {
           provider: configuredIndexIdentity.provider,
           cacheKeyData: configuredIndexIdentity.cacheKeyData,
           aliases: configuredIndexIdentity.aliases,
+          documentPrefix: this.settings.inputFormat?.document,
         })
       : [];
     const providerIdentities =

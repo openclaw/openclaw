@@ -27,7 +27,7 @@ import {
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import type { SlackConversationInfo } from "./channel-type.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
-import { buildSlackChannelIdCandidates } from "./group-policy.js";
+import { buildSlackChannelIdCandidates, hasPotentialSlackNamedPolicy } from "./group-policy.js";
 import { getSlackInstallationKind } from "./installation-identity-state.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { resolveSlackChannelConfig } from "./monitor/channel-config.js";
@@ -77,6 +77,7 @@ export const slackActionRuntime = {
   deleteSlackMessage: bindSlackAction((runtime) => runtime.deleteSlackMessage),
   downloadSlackFile: bindSlackAction((runtime) => runtime.downloadSlackFile),
   editSlackMessage: bindSlackAction((runtime) => runtime.editSlackMessage),
+  editSlackRenderedMessage: bindSlackAction((runtime) => runtime.editSlackRenderedMessage),
   getSlackMemberInfo: bindSlackAction((runtime) => runtime.getSlackMemberInfo),
   listSlackEmojis: bindSlackAction((runtime) => runtime.listSlackEmojis),
   listSlackPins: bindSlackAction((runtime) => runtime.listSlackPins),
@@ -96,24 +97,6 @@ export const slackActionRuntime = {
 };
 
 export type { SlackActionContext } from "./action-context.js";
-
-function hasPotentialSlackNamedPolicy(params: {
-  channels: ResolvedSlackAccount["config"]["channels"];
-  allowNameMatching?: boolean;
-  decision: "allow" | "deny";
-}): boolean {
-  if (params.allowNameMatching !== true) {
-    return false;
-  }
-  return Object.entries(params.channels ?? {}).some(([key, entry]) => {
-    if (entry == null || key === "*") {
-      return false;
-    }
-    const named = !/^(?:channel:)?[CDG][A-Z0-9]+$/i.test(key);
-    const entryAllows = entry.enabled !== false;
-    return named && (params.decision === "allow" ? entryAllows : !entryAllows);
-  });
-}
 
 function resolveSlackDmReadAllowed(account: ResolvedSlackAccount): boolean {
   const dmPolicy = account.config.dmPolicy ?? "pairing";
@@ -770,7 +753,11 @@ export async function handleSlackAction(
         }
         await assertReadTargetAllowed(target);
         const writeOpts = buildActionOpts("write", target.teamId);
-        await slackActionRuntime.editSlackMessage(channelId, messageId, content ?? "", {
+        const edit =
+          context?.preparedEditText === undefined
+            ? slackActionRuntime.editSlackMessage
+            : slackActionRuntime.editSlackRenderedMessage;
+        await edit(channelId, messageId, context?.preparedEditText ?? content ?? "", {
           ...writeOpts,
           blocks,
         });

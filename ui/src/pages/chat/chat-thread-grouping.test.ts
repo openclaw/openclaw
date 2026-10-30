@@ -2,7 +2,6 @@
 import { beforeEach, expect, it } from "vitest";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
 import type { ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
-import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "./chat-assistant-reply.ts";
 import {
   groupsOf,
@@ -40,9 +39,7 @@ function collapse(messages: unknown[]) {
   return collapseCompletedTurnWork(cachedGroups(messages), { sessionKey, runWorking: false });
 }
 function projected(messages: unknown[]) {
-  return coalesceAgentRunFrames(coalesceActivityRuns(collapse(messages))).flatMap((item) =>
-    item.kind === "agent-run-frame" ? item.parts : [item],
-  );
+  return coalesceActivityRuns(collapse(messages));
 }
 function visible(items: ReturnType<typeof projected>) {
   return messagesOf(groupsOf(items));
@@ -65,9 +62,6 @@ function tool(id: string, timestamp: number, extra: object = {}) {
 function expectProvenance(messages: unknown[]) {
   const groups = cachedGroups(messages);
   expect(groups.map((group) => group.messages.map((source) => source.message))).toEqual([messages]);
-  expect(groups.flatMap((group) => group.messages).map((entry) => entry.duplicateCount)).toEqual(
-    messages.map(() => undefined),
-  );
   return groups;
 }
 function expectHistory(messages: unknown[], shown: number[], folded: number[]) {
@@ -78,9 +72,6 @@ function expectHistory(messages: unknown[], shown: number[], folded: number[]) {
       folded: folded.map((index) => messages[index]),
     });
     expect(items.filter((item) => item.kind === "work-group")).toHaveLength(folded.length ? 1 : 0);
-    if (folded.length) {
-      expect(items[1]?.kind).toBe("work-group");
-    }
   }
 }
 beforeEach(() => resetChatThreadState());
@@ -198,11 +189,17 @@ it.each([
     message("assistant", [thinking, outcome], 3000),
   ];
   const groups = groupHistory(messages, true);
-  expect(collapseCompletedTurnWork(groups, { sessionKey, runWorking: false })).toMatchObject([
-    { kind: "group", role: "user" },
-    { kind: "work-group", groups: [{ messages: [{ message: messages[1] }] }] },
-    { kind: "group", messages: [{ message: messages[2] }] },
-  ]);
+  const output = collapseCompletedTurnWork(groups, { sessionKey, runWorking: false });
+  expect(output.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
+  const foldedWork = output[1];
+  expect(
+    foldedWork?.kind === "work-group" &&
+      foldedWork.groups.flatMap((group) => group.messages).length,
+  ).toBe(2);
+  const visibleOutput = output[2];
+  expect(visibleOutput?.kind === "group" && visibleOutput.messages[0]?.message).toMatchObject({
+    content: [outcome],
+  });
   const reasoning = groups[1];
   expect(reasoning?.kind).toBe("group");
   if (reasoning?.kind === "group") {
@@ -219,7 +216,7 @@ it("preserves malformed user content", () => {
   }
 });
 
-it("keeps media visible and folds commentary after replacement", () => {
+it("keeps media and replacement commentary in place", () => {
   const preview = message(
     "assistant",
     [{ type: "image", url: "https://example.com/diagram.png" }],
@@ -233,8 +230,8 @@ it("keeps media visible and folds commentary after replacement", () => {
   ];
   expect(collapse(messages)).toMatchObject([
     { kind: "group", role: "user" },
-    { kind: "work-group", groups: [{ role: "tool" }] },
     { kind: "group", role: "assistant", messages: [{ message: preview }] },
+    { kind: "work-group", groups: [{ role: "tool" }] },
     { kind: "group", role: "assistant" },
   ]);
   const replacement = { ...preview, content: [{ type: "text", text: "Preparing a diagram" }] };
@@ -242,10 +239,8 @@ it("keeps media visible and folds commentary after replacement", () => {
     collapse(messages.map((entry) => (entry === preview ? replacement : entry))),
   ).toMatchObject([
     { kind: "group", role: "user" },
-    {
-      kind: "work-group",
-      groups: [{ role: "assistant", messages: [{ message: replacement }] }, { role: "tool" }],
-    },
+    { kind: "group", role: "assistant", messages: [{ message: replacement }] },
+    { kind: "work-group", groups: [{ role: "tool" }] },
     { kind: "group", role: "assistant" },
   ]);
 });
@@ -269,12 +264,11 @@ it.each([true, false])(
     const items = collapseCompletedTurnWork(groupHistory(ordered), {
       sessionKey,
       runWorking,
-      session: { key: sessionKey, lastRunId: runId, status: "done", runtimeMs: 321 },
     });
     expect(visible(items)).toEqual(runWorking ? ordered : [prompt, answer, queuedMessage, steer]);
     expect(work(items)).toEqual(runWorking ? [] : [evidence]);
     if (!runWorking) {
-      expect(items[1]).toMatchObject({ kind: "work-group", replyRunId: runId, durationMs: 321 });
+      expect(items[1]).toMatchObject({ kind: "work-group", replyRunId: runId, durationMs: null });
     }
   },
 );
@@ -284,7 +278,7 @@ it.each<[string, object, boolean, boolean?]>([
   ["explicit commentary", { phase: "commentary" }, false],
   ["interrupted text", { openclawAbort: { aborted: true } }, false],
   ["legacy unphased reply", {}, false, true],
-])("preserves %s through history reload", (_name, extra, preserved, legacy) => {
+])("preserves %s through history reload", (_name, extra, _preserved, legacy) => {
   const run = { runId: "completed-run" };
   const messages = [
     nativeMessage("user", "Inspect the file", 1, run),
@@ -304,11 +298,11 @@ it.each<[string, object, boolean, boolean?]>([
       stopReason: "stop",
     }),
   ];
-  expectHistory(messages, preserved ? [0, 2, 3] : [0, 3], preserved ? [1] : [1, 2]);
+  expectHistory(messages, [0, 2, 3], [1]);
 });
 it.each<[string, boolean, number[], number[]]>([
   ["final_answer", false, [0, 1, 2], []],
-  ["commentary", true, [0, 1], [2, 3]],
+  ["commentary", true, [0, 1, 3], [2]],
 ])("preserves signed answer before %s through history reload", (phase, withTool, shown, folded) => {
   const run = { __openclaw: { runId: "run" } };
   const first = message("user", "Investigate", 1, run);
@@ -316,6 +310,15 @@ it.each<[string, boolean, number[], number[]]>([
   const evidence = withTool ? [tool("call", 3, run)] : [];
   const later = message("assistant", [signed("Later update", phase)], 4, run);
   expectHistory([first, answer, ...evidence, later], shown, folded);
+});
+
+it("keeps the earlier answer visible when a late exec completion starts the follow-up turn", () => {
+  const messages = [
+    message("user", "Review the change", 1),
+    message("assistant", "long final answer", 3),
+    message("assistant", "should I fix points 1-4?", 4, { __openclaw: { turnBoundary: true } }),
+  ];
+  expectHistory(messages, [0, 1, 2], []);
 });
 
 it("keeps independent-run trailing activity with its owner", () => {
@@ -340,14 +343,9 @@ it("keeps independent-run trailing activity with its owner", () => {
     const items = coalesceActivityRuns(
       collapseCompletedTurnWork(groupHistory(history), { sessionKey, runWorking: false }),
     );
-    expect(items.map((item) => item.kind)).toEqual([
-      "group",
-      "work-group",
-      "group",
-      "activity-run",
-    ]);
-    expect(work(items)).toEqual([messages[1]]);
-    expect(items.find((item) => item.kind === "work-group")?.durationMs).toBeNull();
+    expect(items.map((item) => item.kind)).toEqual(["group", "group", "group", "activity-run"]);
+    expect(work(items)).toEqual([]);
+    expect(visible(items)).toEqual(messages.slice(0, 3));
     expect(work(items, "activity-run")).toEqual(messages.slice(3));
   }
 });

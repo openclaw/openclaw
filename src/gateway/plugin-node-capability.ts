@@ -360,14 +360,7 @@ export function setClientPluginNodeCapability(params: {
 export function refreshClientPluginNodeCapability(params: {
   client: PluginNodeCapabilityClient;
   surface: PluginNodeCapabilitySurface;
-}):
-  | {
-      surface: string;
-      capability: string;
-      expiresAtMs: number;
-      scopedUrl: string;
-    }
-  | undefined {
+}) {
   const surface = normalizeOptionalString(params.surface.surface);
   if (!surface) {
     return undefined;

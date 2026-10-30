@@ -1,35 +1,53 @@
+import "./web-search-runtime.test-support.js";
 import { beforeEach, expect, it, vi } from "vitest";
-import type { WebSearchStatusResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createWebSearchTestProvider } from "../../test-utils/web-provider-runtime.test-helpers.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+const { preparedWebSearchCatalog: preparedCatalog, webSearchRuntimeMocks: runtimeMocks } =
+  await import("./web-search-runtime.test-support.js");
 
 const mocks = vi.hoisted(() => ({
-  prepare: vi.fn(),
+  prepareProfile: vi.fn(),
   search: vi.fn(),
   assertSecret: vi.fn(),
-  profile: vi.fn(),
   assertProfile: vi.fn(),
 }));
+// mock-isolation: Control requester revocation without opening the live identity database.
 vi.mock("./users-profile-access.js", () => ({
-  prepareAuthenticatedProfile: async () => ({
-    profileId: mocks.profile(),
-    assertCurrent: mocks.assertProfile,
-  }),
+  prepareAuthenticatedProfile: mocks.prepareProfile,
 }));
-vi.mock("./web-search-status.js", () => ({ prepareWebSearchStatus: mocks.prepare }));
-vi.mock("../../web-search/runtime.js", () => ({ runWebSearch: mocks.search }));
+// mock-isolation: Synthetic provider discovery is input to the real status projection.
+vi.mock("../../flows/search-setup.js", () => ({
+  listSearchProviderOptions: () => [exampleProvider],
+}));
+// mock-isolation: Fix provider inputs while retaining the existing search-effect spy.
+vi.mock("../../web-search/runtime.js", () => ({
+  runWebSearch: mocks.search,
+  isWebSearchProviderConfigured: () => true,
+  listConfiguredWebSearchProviders: () => [exampleProvider],
+  resolveWebSearchProviderId: () => "example",
+}));
 vi.mock("../../secrets/runtime-degraded-state.js", () => ({
   assertSecretOwnerAvailable: mocks.assertSecret,
 }));
 import { webSearchHandlers } from "./web-search.js";
 
 let config: OpenClawConfig;
-let searchStatus: WebSearchStatusResult;
+let profileId: string | undefined;
 const source = { title: "A source", url: "https://example.com/source" };
 const citation = { url: source.url, title: "Source" };
 const sourceResult = { results: [{ ...source, description: "A snippet" }] };
 const answer = { content: "A grounded answer", citations: [citation] };
-const prepared = () => ({ status: searchStatus, config, agentDir: "/synthetic/agent" });
+const exampleProvider = {
+  ...createWebSearchTestProvider({
+    id: "example",
+    pluginId: "example",
+    credentialPath: "plugins.entries.example.config.webSearch.apiKey",
+    getConfiguredCredentialValue: () => "synthetic",
+  }),
+  label: "Example Search",
+  envVars: [],
+};
 function request(
   method: "webSearch.status" | "webSearch.test",
   params: Record<string, unknown> = {},
@@ -42,12 +60,10 @@ function request(
     respond: vi.fn(),
   } as unknown as GatewayRequestHandlerOptions;
 }
-async function invoke(options: GatewayRequestHandlerOptions, expected?: unknown[]) {
+async function invoke(options: GatewayRequestHandlerOptions, expected: unknown[]) {
   await webSearchHandlers[options.req.method]!(options);
   const respond = vi.mocked(options.respond);
-  if (expected) {
-    expect(respond).toHaveBeenCalledWith(...expected);
-  }
+  expect(respond).toHaveBeenCalledWith(...expected);
   return respond;
 }
 const expectResult = (options: GatewayRequestHandlerOptions, result: unknown) =>
@@ -62,23 +78,19 @@ const expectFailure = (
 ) => invoke(options, [false, undefined, expect.objectContaining({ code })]);
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.profile.mockReturnValue(undefined);
+  profileId = undefined;
   mocks.assertProfile.mockReset();
   config = { tools: { web: { search: { provider: "example", cacheTtlMinutes: 15 } } } };
-  searchStatus = {
-    enabled: true,
-    provider: "example",
-    agentId: "main",
-    model: { provider: "local", id: "local-model", runtime: "openclaw" },
-    providers: [],
-    route: { kind: "managed", provider: "example", label: "Example Search", testable: true },
-  };
-  mocks.prepare.mockImplementation(async () => prepared());
+  mocks.prepareProfile.mockImplementation(async () => ({
+    profileId,
+    assertCurrent: mocks.assertProfile,
+  }));
+  runtimeMocks.catalog.mockImplementation(async () => preparedCatalog());
+  runtimeMocks.runtime.mockReturnValue({ id: "openclaw" });
   mocks.search.mockResolvedValue({ provider: "example", result: sourceResult });
 });
 
-it("returns settings and rejects incomplete or unknown request fields", async () => {
-  await expectResult(request("webSearch.status"), searchStatus);
+it("rejects incomplete or unknown request fields", async () => {
   for (const params of [
     { modelId: "model" },
     { modelProvider: "local", modelId: " " },
@@ -89,19 +101,10 @@ it("returns settings and rejects incomplete or unknown request fields", async ()
 });
 
 it.each([
-  {
-    kind: "sources",
-    query: " source query ",
-    result: sourceResult,
-    expected: { results: [{ ...source, snippet: "A snippet" }] },
-  },
-  {
-    kind: "answer",
-    query: "query",
-    result: { ...answer, citations: [citation, "javascript:alert(1)"] },
-    expected: answer,
-  },
-])("normalizes $kind with cache bypass", async ({ query, result, expected }) => {
+  ["sources", sourceResult, { results: [{ ...source, snippet: "A snippet" }] }],
+  ["answer", { ...answer, citations: [citation, "javascript:alert(1)"] }, answer],
+] as const)("normalizes %s with cache bypass", async (_kind, result, expected) => {
+  const query = " source query ";
   mocks.search.mockResolvedValue({ provider: "example", result });
   const resultShape = {
     provider: "example",
@@ -125,14 +128,7 @@ it.each([
 });
 
 it("probes only the configured service beside an external harness", async () => {
-  searchStatus.route = {
-    kind: "external",
-    provider: "custom-harness",
-    label: "Harness controls search",
-    testable: false,
-    reason: "Test this route in chat.",
-  };
-  searchStatus.testProvider = { id: "example", label: "Example Search" };
+  runtimeMocks.runtime.mockReturnValue({ id: "custom-harness" });
   await expectFailure(probe(), "INVALID_REQUEST");
   expect(mocks.search).not.toHaveBeenCalled();
   await expectFailure(probe({ providerId: "other" }), "INVALID_REQUEST");
@@ -144,17 +140,18 @@ it.each(["read", "profile", "admin"])("rechecks %s authority", async (authority)
   if (authority === "admin") {
     const readOnly = probe();
     readOnly.client!.connect.scopes = ["operator.read"];
-    await invoke(readOnly);
-    expect(mocks.prepare).not.toHaveBeenCalled();
+    await expectFailure(readOnly, "INVALID_REQUEST");
+    expect(runtimeMocks.catalog).not.toHaveBeenCalled();
+    expect(mocks.prepareProfile).not.toHaveBeenCalled();
   }
   if (authority === "profile") {
-    mocks.profile.mockReturnValue("original");
+    profileId = "original";
   }
   const revoked = request(
     authority === "read" ? "webSearch.status" : "webSearch.test",
     authority === "read" ? {} : { query: "query" },
   );
-  mocks.prepare.mockImplementationOnce(async () => {
+  runtimeMocks.catalog.mockImplementationOnce(async () => {
     if (authority === "profile") {
       mocks.assertProfile.mockImplementation(() => {
         throw new Error("profile authority changed");
@@ -162,7 +159,7 @@ it.each(["read", "profile", "admin"])("rechecks %s authority", async (authority)
     } else {
       revoked.client!.invalidated = true;
     }
-    return prepared();
+    return preparedCatalog();
   });
   await expectFailure(revoked, "UNAVAILABLE");
   expect(mocks.search).not.toHaveBeenCalled();
@@ -170,12 +167,13 @@ it.each(["read", "profile", "admin"])("rechecks %s authority", async (authority)
 
 it("rejects config drift before search and revocation after search", async () => {
   const original = config;
-  mocks.prepare.mockImplementationOnce(async () => {
+  runtimeMocks.catalog.mockImplementationOnce(async () => {
     config = { tools: { web: { search: { enabled: false } } } };
-    return { ...prepared(), config: original };
+    return preparedCatalog();
   });
   await expectFailure(probe(), "UNAVAILABLE");
   expect(mocks.search).not.toHaveBeenCalled();
+  config = original;
   const revoked = probe();
   mocks.search.mockImplementationOnce(async () => {
     revoked.client!.invalidated = true;

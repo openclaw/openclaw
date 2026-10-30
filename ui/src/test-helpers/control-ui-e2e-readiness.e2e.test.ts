@@ -79,10 +79,8 @@ suite.define(() => {
             const pane = document.querySelector("openclaw-chat-pane")!;
             const renderControls = (mobile: boolean) => {
               pane.innerHTML = mobile
-                ? '<div class="agent-chat__header--mobile"><openclaw-chat-header-session-menu>' +
-                  '<button class="chat-header-session-menu__trigger" aria-expanded="false">Session actions</button>' +
-                  '<div class="oc-menu" role="menu" hidden><button role="menuitem">Panels</button></div>' +
-                  '</openclaw-chat-header-session-menu></div><div class="chat-mobile-host" hidden>Panel sheet</div>'
+                ? '<div class="agent-chat__header--mobile"><button aria-expanded="false">Panels</button>' +
+                  '</div><div class="chat-mobile-host" hidden>Panel sheet</div>'
                 : '<div class="sidebar-region__header">Session</div>' +
                   '<div class="sidebar-region__panels-toggle"><button aria-expanded="false">Panels</button></div>';
               const trigger = pane.querySelector("button")!;
@@ -92,11 +90,7 @@ suite.define(() => {
                   String(Number(pane.getAttribute("data-trigger-clicks")) + 1),
                 );
                 trigger.setAttribute("aria-expanded", "true");
-                pane.querySelector(".oc-menu")?.removeAttribute("hidden");
-              });
-              pane.querySelector('[role="menuitem"]')?.addEventListener("click", () => {
-                pane.querySelector(".oc-menu")!.setAttribute("hidden", "");
-                pane.querySelector(".chat-mobile-host")!.removeAttribute("hidden");
+                pane.querySelector(".chat-mobile-host")?.removeAttribute("hidden");
               });
             };
             if (previous) {
@@ -161,19 +155,19 @@ suite.define(() => {
         await gateway.resolveDeferred("sessions.list");
         expect((await navigation)?.ok()).toBe(true);
         expect(await row.count()).toBe(1);
-        expect(
-          await page.evaluate(() => {
-            const snapshot = window.openclawControlUi?.snapshot();
-            return {
-              ready: snapshot?.ready,
-              routeReady: snapshot?.routeReady,
-              rosterReady: snapshot?.rosterReady,
-              published:
-                document.querySelector("openclaw-app")?.getAttribute("data-openclaw-ready") ===
-                String(snapshot?.generation),
-            };
-          }),
-        ).toEqual({ ready: true, routeReady: true, rosterReady: true, published: true });
+        await expect
+          .poll(() =>
+            page.evaluate(() => {
+              const snapshot = window.openclawControlUi?.snapshot();
+              return {
+                ...snapshot,
+                published:
+                  document.querySelector("openclaw-app")?.getAttribute("data-openclaw-ready") ===
+                  String(snapshot?.generation),
+              };
+            }),
+          )
+          .toMatchObject({ ready: true, routeReady: true, rosterReady: true, published: true });
       }
       expect(await page.goto("about:blank")).toBeNull();
       expect(await page.reload()).toBeNull();
@@ -225,7 +219,7 @@ suite.define(() => {
         if (offline) {
           await gateway.setOnline(false);
           await page
-            .locator(".sidebar-shell__footer .gateway-status")
+            .locator(".sidebar-shell__connection .gateway-status")
             .getByText("Reconnecting…", { exact: true })
             .waitFor();
         }

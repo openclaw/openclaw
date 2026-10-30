@@ -8,7 +8,7 @@ import {
   resolvePluginInstallSourcePlan,
 } from "./install-source-plan.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { writeTree } from "./plugin-generation-capture.test-support.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const host = vi.hoisted(() => ({ root: "" }));
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
@@ -47,54 +47,39 @@ function fixture(stagedCommit?: string) {
 }
 
 it.each([
-  ["same-commit development image", commit, "bundled"],
-  ["release image", undefined, "official"],
-  ["mismatched staged commit", "b".repeat(40), "official"],
-])("selects the expected install source for a %s", (_name, stagedCommit, expected) => {
-  const pluginRoot = fixture(stagedCommit);
-  withPluginCache(createPluginCache(), () => {
-    const request = resolveManagedPluginInstallRequest(
-      { source: "official", pluginId: "codex" },
-      [],
-      "https://clawhub.ai",
-    );
-    expect(request.source).toBe(expected);
-    expect(isBundledPluginInsideDevSourceRoot({ rootDir: pluginRoot, env: process.env })).toBe(
-      expected === "bundled",
-    );
-    if (request.source === "bundled") {
-      expect(request.bundledSource.localPath).toBe(pluginRoot);
-      expect(request.rawSpec).toBe("@openclaw/codex");
-    }
-  });
-});
-
-it("preserves explicit version and pin requests", () => {
-  fixture(commit);
-  withPluginCache(createPluginCache(), () => {
-    for (const choice of [{ version: "latest" as const }, { pin: true }]) {
-      expect(
-        resolveManagedPluginInstallRequest(
-          { source: "official", pluginId: "codex", ...choice },
-          [],
-          "https://clawhub.ai",
-        ).source,
-      ).toBe("official");
-    }
-  });
-});
+  [commit, undefined, false, "bundled"],
+  [undefined, undefined, false, "official"],
+  ["b".repeat(40), undefined, false, "official"],
+  [commit, "latest", false, "official"],
+  [commit, undefined, true, "official"],
+] as const)(
+  "selects official source with staged=%s version=%s pin=%s",
+  (stagedCommit, version, pin, expected) => {
+    const pluginRoot = fixture(stagedCommit);
+    withPluginCache(createPluginCache(), () => {
+      const request = resolveManagedPluginInstallRequest(
+        { source: "official", pluginId: "codex", version, pin },
+        [],
+        "https://clawhub.ai",
+      );
+      expect(request.source).toBe(expected);
+      if (request.source === "bundled") {
+        expect(request.bundledSource.localPath).toBe(pluginRoot);
+        expect(request.rawSpec).toBe("@openclaw/codex");
+      }
+    });
+  },
+);
 
 it.each([
-  ["explicit version", commit, "@openclaw/codex@2026.9.3", false, "clawhub"],
-  ["pinned package", commit, "@openclaw/codex", true, "clawhub"],
-  ["unqualified package", commit, "@openclaw/codex", false, "clawhub"],
-  ["explicit npm override", commit, "npm:@openclaw/codex", false, "npm"],
-  ["release package", undefined, "@openclaw/codex@2026.9.3", false, "clawhub"],
-  ["bare plugin ID", commit, "codex", false, "bundled"],
-] as const)("preserves source selection for %s", (_name, stagedCommit, raw, pin, expected) => {
-  fixture(stagedCommit);
+  ["@openclaw/codex@2026.9.3", "clawhub"],
+  ["@openclaw/codex", "clawhub"],
+  ["npm:@openclaw/codex", "npm"],
+  ["codex", "bundled"],
+] as const)("selects the source for %s", (raw, expected) => {
+  fixture(commit);
   withPluginCache(createPluginCache(), () => {
-    const plan = resolvePluginInstallSourcePlan({ raw, mode: "install", pin });
+    const plan = resolvePluginInstallSourcePlan({ raw, mode: "install" });
     expect(plan).toMatchObject({ ok: true, request: { source: expected } });
   });
 });

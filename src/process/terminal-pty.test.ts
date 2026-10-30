@@ -19,6 +19,7 @@ import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { emitChildProcessSpawnSample, withChildProcessOperation } from "./spawn-diagnostics.js";
+import { createWindowsNpmShim } from "./supervisor/adapters/child.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   signalPtySessionTree: vi.fn(),
@@ -69,22 +70,15 @@ async function spawnDirectTerminalPty(
   }
 }
 
-function createWindowsNpmShim(command: string) {
+async function createTerminalNpmShim(command: string) {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-terminal-pty-shim-"));
   tempDirs.push(binDir);
-  const entrypoint = path.join(binDir, "node_modules", "@openai", command, "bin", `${command}.js`);
-  fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
-  fs.writeFileSync(entrypoint, "", "utf8");
-  const relativeEntrypoint = path.relative(binDir, entrypoint).replaceAll(path.sep, "\\");
-  const shimPath = path.join(binDir, `${command}.cmd`);
-  fs.writeFileSync(
-    shimPath,
-    "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n" +
-      'IF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n)\r\n' +
-      `endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" "%dp0%\\${relativeEntrypoint}" %*\r\n`,
-    "utf8",
-  );
-  return { entrypoint, shimPath };
+  const { entrypoint } = await createWindowsNpmShim({
+    binDir,
+    command,
+    packagePath: ["@openai", command, "bin", `${command}.js`],
+  });
+  return { entrypoint, shimPath: path.join(binDir, `${command}.cmd`) };
 }
 
 function fakePty(pid = 4321) {
@@ -385,7 +379,7 @@ describe("terminal PTY invocation", () => {
   it.runIf(process.platform === "win32")(
     "passes arbitrary Codex initial-message text literally through an npm shim",
     async () => {
-      const { entrypoint, shimPath } = createWindowsNpmShim("codex");
+      const { entrypoint, shimPath } = await createTerminalNpmShim("codex");
       const nodePath = resolveTestNodeExecPath();
       mocks.spawn.mockReturnValueOnce(fakePty());
 
@@ -410,7 +404,7 @@ describe("terminal PTY invocation", () => {
   it.runIf(process.platform === "win32")(
     "uses PATH node.exe instead of a packaged non-Node host for an npm shim",
     async () => {
-      const { entrypoint, shimPath } = createWindowsNpmShim("codex");
+      const { entrypoint, shimPath } = await createTerminalNpmShim("codex");
       const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-terminal-pty-node-"));
       tempDirs.push(nodeDir);
       const nodePath = path.join(nodeDir, "node.exe");
@@ -437,7 +431,7 @@ describe("terminal PTY invocation", () => {
   it.runIf(process.platform === "win32")(
     "fails closed when an npm shim has no Node executable",
     async () => {
-      const { shimPath } = createWindowsNpmShim("codex");
+      const { shimPath } = await createTerminalNpmShim("codex");
       vi.spyOn(process, "execPath", "get").mockReturnValue(
         "C:\\Program Files\\OpenClaw\\openclaw.exe",
       );

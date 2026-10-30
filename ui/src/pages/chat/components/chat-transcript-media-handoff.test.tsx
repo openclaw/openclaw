@@ -212,15 +212,12 @@ async function imageFixture(
       fileName: `image-${index}.png`,
     };
   });
-  const props = {
-    ...threadProps(
-      `pane-${crypto.randomUUID()}`,
-      owner.sessionKey,
-      origin === "canonical" ? [cached] : owner.chatMessages,
-    ),
-    assistantAttachmentAuthToken: "test-auth-token",
-    connectionEpoch: 1,
-  };
+  const props = threadProps(
+    `pane-${crypto.randomUUID()}`,
+    owner.sessionKey,
+    origin === "canonical" ? [cached] : owner.chatMessages,
+    { assistantAttachmentAuthToken: "test-auth-token", connectionEpoch: 1 },
+  );
   if (origin === "queued") {
     props.queue = [
       { ...input, id: input.runId, sendRunId: input.runId, sendState: "sending", sendAttempts: 1 },

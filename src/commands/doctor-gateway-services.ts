@@ -317,15 +317,12 @@ export async function maybeRepairGatewayServiceConfig(
   const expectedGatewayToken = tokenRefConfigured ? undefined : gatewayTokenResolution.token;
   const port = resolveGatewayPort(cfg, process.env);
   const hasInstallWrapper = Boolean(serviceInstallEnv[OPENCLAW_WRAPPER_ENV_KEY]?.trim());
-  const activeRuntimePin = hasInstallWrapper ? undefined : pinSnapshot.pin?.path;
   const runtimeChoice = hasInstallWrapper
     ? "node"
-    : resolveGatewayDaemonRuntime(
-        activeRuntimePin ? [activeRuntimePin] : managedDefinition.programArguments,
-      );
+    : (pinSnapshot.pin?.runtime ?? resolveGatewayDaemonRuntime(managedDefinition.programArguments));
   const installedRuntimePath =
-    runtimeChoice === "bun"
-      ? (activeRuntimePin ?? managedDefinition.programArguments[0])
+    runtimeChoice === "bun" || runtimeChoice === "standalone"
+      ? (pinSnapshot.pin?.path ?? managedDefinition.programArguments[0])
       : undefined;
   const expectedPlan = await buildExpectedGatewayServicePlan({
     cfg,
@@ -347,16 +344,16 @@ export async function maybeRepairGatewayServiceConfig(
     !process.env.OPENCLAW_GATEWAY_PORT?.trim()
       ? (parseTcpPortFromArgs(command.programArguments) ?? port)
       : port;
-  const expectedManagedServiceEnvKeys = readManagedServiceEnvKeysFromEnvironment(
-    expectedPlan.environment,
-  );
   const audit = await auditGatewayServiceConfig({
     platform,
     env: process.env,
     command,
     expectedGatewayToken,
-    expectedManagedServiceEnvKeys,
+    expectedManagedServiceEnvKeys: readManagedServiceEnvKeysFromEnvironment(
+      expectedPlan.environment,
+    ),
     expectedServicePath: expectedPlan.environment.PATH,
+    expectedDurableEnvironment: expectedPlan.environment,
     expectedPort: repairPort,
     ...(installationDrift ? { expectedCommand: expectedPlan } : {}),
   });
@@ -375,7 +372,7 @@ export async function maybeRepairGatewayServiceConfig(
     });
   }
   const needsNodeRuntime =
-    !hasInstallWrapper && !activeRuntimePin && needsNodeRuntimeMigration(audit.issues);
+    !hasInstallWrapper && !pinSnapshot.pin && needsNodeRuntimeMigration(audit.issues);
   // Unusable runtimes and version-managed Node services migrate through a concrete system Node.
   const systemNodeInfo = needsNodeRuntime
     ? await resolveSystemNodeInfo({ env: process.env, platform })
@@ -400,25 +397,6 @@ export async function maybeRepairGatewayServiceConfig(
           runtimePath: systemNodePath,
         })
       : expectedPlan;
-  if (installationDrift && expectedRoot) {
-    note(
-      formatGatewayServiceInstallationDrift(installationDrift, serviceInstallEnv),
-      "Gateway service installation",
-    );
-    if (!serviceRepairDeferred) {
-      try {
-        await assertGatewayServiceInstallationRepairAllowed({
-          service,
-          command,
-          activeRoot: expectedRoot,
-          maintenance: options.serviceMaintenance,
-        });
-      } catch (error) {
-        note(String(error), "Gateway service installation");
-        return cfg;
-      }
-    }
-  }
   const runtimeLayout =
     repairPlan === expectedPlan ? expectedLayout : await summarizeGatewayServiceLayout(repairPlan);
   if (
@@ -428,7 +406,11 @@ export async function maybeRepairGatewayServiceConfig(
   ) {
     audit.issues.push({
       code: SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
-      message: "Gateway service entrypoint does not match the current install.",
+      message:
+        "Gateway service entrypoint does not match the current install." +
+        (installationDrift
+          ? ` ${formatGatewayServiceInstallationDrift(installationDrift, serviceInstallEnv)}`
+          : ""),
       detail: `${serviceLayout?.entrypoint} -> ${runtimeLayout?.entrypoint}`,
       level: "recommended",
     });
@@ -460,6 +442,19 @@ export async function maybeRepairGatewayServiceConfig(
     serviceLayout,
     definitionRepair,
   );
+  if (installationDrift && expectedRoot && !serviceRepairDeferred) {
+    try {
+      await assertGatewayServiceInstallationRepairAllowed({
+        service,
+        command,
+        activeRoot: expectedRoot,
+        maintenance: options.serviceMaintenance,
+      });
+    } catch (error) {
+      note(String(error), "Gateway service installation");
+      return cfg;
+    }
+  }
   audit.issues = audit.issues.filter((issue) => issue.repair !== "host");
   if (audit.issues.length === 0 && !definitionRepair) {
     return cfg;

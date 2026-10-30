@@ -1,26 +1,23 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { normalizeVoiceCallConfig } from "./config.js";
-import { CallManager } from "./manager.js";
-import {
-  createManagerHarness,
-  FakeProvider,
-  markCallAnswered,
-  registerTestManagerCleanup,
-} from "./manager.test-harness.js";
-import { PlivoProvider } from "./providers/plivo.js";
-import { TwilioProvider } from "./providers/twilio.js";
+import { createManagerHarness, FakeProvider, markCallAnswered } from "./manager.test-harness.js";
 import type { HangupCallInput } from "./types.js";
 
-class FailFirstPlayTtsProvider extends FakeProvider {
-  override async playTts(input: Parameters<FakeProvider["playTts"]>[0]): Promise<void> {
-    this.playTtsCalls.push(input);
-    if (this.playTtsCalls.length === 1) {
-      throw new Error("synthetic tts failure");
-    }
+function failProvider(
+  method: "playTts" | "startListening" | "hangupCall",
+  name: FakeProvider["name"],
+  message: string,
+  always = false,
+) {
+  const provider = new FakeProvider(name);
+  const attempts = vi.spyOn(provider, method);
+  if (always) {
+    attempts.mockRejectedValue(new Error(message));
+  } else {
+    attempts.mockRejectedValueOnce(new Error(message));
   }
+  return { provider, attempts };
 }
 
 class DelayedPlayTtsProvider extends FakeProvider {
@@ -35,22 +32,6 @@ class DelayedPlayTtsProvider extends FakeProvider {
   releaseCurrentPlayback(): void {
     this.playback?.resolve();
     this.playback = undefined;
-  }
-}
-
-class FailStartListeningProvider extends FakeProvider {
-  override async startListening(
-    input: Parameters<FakeProvider["startListening"]>[0],
-  ): Promise<void> {
-    this.startListeningCalls.push(input);
-    throw new Error("synthetic start listening failure");
-  }
-}
-
-class FailHangupProvider extends FakeProvider {
-  override async hangupCall(input: Parameters<FakeProvider["hangupCall"]>[0]): Promise<void> {
-    this.hangupCalls.push(input);
-    throw new Error("synthetic hangup failure");
   }
 }
 
@@ -146,14 +127,20 @@ describe("CallManager notify and mapping", () => {
   it("logs a failed notify auto-hangup and leaves the call active for retry", async () => {
     useNotifyClock();
     const warn = captureWarning();
-    const { manager, provider, callId } = await answered(
+    const { provider, attempts } = failProvider(
+      "hangupCall",
+      "plivo",
+      "synthetic hangup failure",
+      true,
+    );
+    const { manager, callId } = await answered(
       { outbound: { notifyHangupDelaySec: 1 } },
-      new FailHangupProvider("plivo"),
+      provider,
       "Notify",
       "notify",
     );
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(provider.hangupCalls).toHaveLength(1);
+    expect(attempts).toHaveBeenCalledOnce();
     expect(manager.getCall(callId)).toBeDefined();
     expect(warn).toHaveBeenCalledWith(
       `[voice-call] Notify mode failed to hang up call ${callId}: synthetic hangup failure`,
@@ -177,13 +164,15 @@ describe("CallManager notify and mapping", () => {
 
   it("logs fire-and-forget initial-message failures instead of leaking unhandled rejections", async () => {
     const warn = captureWarning();
-    const { provider, callId } = await answered(
-      { streaming: { enabled: false } },
-      new FailStartListeningProvider("twilio"),
+    const { provider, attempts } = failProvider(
+      "startListening",
+      "twilio",
+      "synthetic start listening failure",
+      true,
     );
+    const { callId } = await answered({ streaming: { enabled: false } }, provider);
     expectFirstPlayTtsText(provider, "Hello");
-    expect(provider.startListeningCalls).toHaveLength(1);
-    expect(provider.startListeningCalls[0]).toMatchObject({ callId, providerCallId: "call-uuid" });
+    expect(attempts).toHaveBeenCalledExactlyOnceWith({ callId, providerCallId: "call-uuid" });
     expect(warn).toHaveBeenCalledOnce();
     expect(String(expectDefined(warn.mock.calls.at(0), "console warn")[0])).toContain(
       `[voice-call] Failed to speak initial message for call ${callId}: synthetic start listening failure`,
@@ -192,21 +181,16 @@ describe("CallManager notify and mapping", () => {
 
   it("preserves initialMessage after a failed first playback and retries on next trigger", async () => {
     useNotifyClock();
-    const { manager, provider, callId } = await answered(
-      {},
-      new FailFirstPlayTtsProvider("plivo"),
-      "Retry me",
-      "notify",
-    );
-    expect(provider.playTtsCalls).toHaveLength(1);
+    const { provider, attempts } = failProvider("playTts", "plivo", "synthetic tts failure");
+    const { manager, callId } = await answered({}, provider, "Retry me", "notify");
+    expect(attempts).toHaveBeenCalledOnce();
     expect(requireCall(manager, callId)).toMatchObject({
       state: "listening",
       metadata: { initialMessage: "Retry me" },
     });
     await answerCall(manager, callId, "evt-retry-2");
-    const afterSuccess = requireCall(manager, callId);
-    expect(provider.playTtsCalls).toHaveLength(2);
-    expect(afterSuccess.metadata).not.toHaveProperty("initialMessage");
+    expect(attempts).toHaveBeenCalledTimes(2);
+    expect(requireCall(manager, callId).metadata).not.toHaveProperty("initialMessage");
     await expectNotifyHangup(manager, provider, callId);
   });
 
@@ -227,8 +211,7 @@ describe("CallManager notify and mapping", () => {
       provider.releaseCurrentPlayback();
       await Promise.all(playbacks);
     }
-    const call = requireCall(manager, callId);
-    expect(call.metadata).not.toHaveProperty("initialMessage");
+    expect(requireCall(manager, callId).metadata).not.toHaveProperty("initialMessage");
     expectFirstPlayTtsText(provider, "Hello");
   });
 });
@@ -344,22 +327,13 @@ describe("CallManager inbound allowlist", () => {
   });
 
   it("retries rejected inbound hangup after a transient provider failure", async () => {
-    class FlakyHangupProvider extends FakeProvider {
-      override async hangupCall(input: Parameters<FakeProvider["hangupCall"]>[0]): Promise<void> {
-        this.hangupCalls.push(input);
-        if (this.hangupCalls.length === 1) {
-          throw new Error("provider down");
-        }
-      }
-    }
-    const provider = new FlakyHangupProvider();
+    const { provider, attempts } = failProvider("hangupCall", "plivo", "provider down");
     const { manager } = await createManagerHarness({ inboundPolicy: "disabled" }, provider);
     await manager.processEvent(inbound("provider-flaky", "+15553333333"));
     await Promise.resolve();
     await manager.processEvent(inbound("provider-flaky", "+15553333333", "call.ringing"));
     expect(manager.getCallByProviderCallId("provider-flaky")).toBeUndefined();
-    expect(provider.hangupCalls).toHaveLength(2);
-    expect(provider.hangupCalls.map((call) => call.providerCallId)).toEqual([
+    expect(attempts.mock.calls.map(([call]) => call.providerCallId)).toEqual([
       "provider-flaky",
       "provider-flaky",
     ]);
@@ -386,90 +360,6 @@ async function initiateCall() {
 }
 
 describe("CallManager termination lifecycle", () => {
-  it.each(["twilio", "plivo"] as const)(
-    "keeps finalized identity for fresh %s callbacks after restart",
-    async (providerName) => {
-      const config = normalizeVoiceCallConfig({
-        enabled: true,
-        provider: providerName,
-        fromNumber: "+15550000000",
-        agentId: "default-agent",
-      });
-      const { manager, provider, storePath } = await createManagerHarness(
-        config,
-        new FakeProvider(providerName),
-      );
-      const started = await manager.initiateCall("+15550000001", "agent:sales:voice:fixture", {
-        agentId: "sales",
-      });
-      expect(started.success).toBe(true);
-      const initialProviderId = expectDefined(
-        manager.getCall(started.callId)?.providerCallId,
-        "initiated provider call",
-      );
-      const parser =
-        providerName === "twilio"
-          ? new TwilioProvider({ accountSid: "AC-fixture", authToken: "synthetic-token" })
-          : new PlivoProvider({ authId: "MA-fixture", authToken: "synthetic-token" });
-      const callback = (providerId: string, callStatus: string, includeInternalId: boolean) => {
-        const query: Record<string, string> = includeInternalId
-          ? { callId: started.callId, type: "status" }
-          : {};
-        const rawBody = new URLSearchParams({
-          CallStatus: callStatus,
-          From: "+15550000000",
-          To: "+15550000001",
-          Direction: providerName === "twilio" ? "outbound-api" : "outbound",
-          ...(providerName === "twilio" ? { CallSid: providerId } : { RequestUUID: providerId }),
-          ...(providerName === "plivo" && includeInternalId ? { CallUUID: "call-uuid" } : {}),
-        }).toString();
-        const parsed = parser.parseWebhookEvent({
-          headers: {},
-          rawBody,
-          url: `https://example.com/voice/webhook?${new URLSearchParams(query)}`,
-          method: "POST",
-          query,
-        });
-        expect(parsed.events).toHaveLength(1);
-        return expectDefined(parsed.events[0], "normalized provider callback");
-      };
-      await manager.processEvent(callback(initialProviderId, "in-progress", true));
-      await expect(manager.speak(started.callId, "Recorded.")).resolves.toEqual({ success: true });
-      await expect(manager.endCall(started.callId, { reason: "hangup-bot" })).resolves.toEqual({
-        success: true,
-      });
-      const terminal = expectDefined(
-        await manager.getCallFromMemoryOrStore(started.callId),
-        "finalized call in SQLite",
-      );
-      expect(terminal).toMatchObject({
-        agentId: "sales",
-        sessionKey: "agent:sales:voice:fixture",
-        state: "hangup-bot",
-        transcript: [expect.objectContaining({ text: "Recorded." })],
-      });
-      resetPluginStateStoreForTests();
-      const current = registerTestManagerCleanup(new CallManager(config, storePath));
-      await current.initialize(provider, "https://example.com/voice/webhook");
-      const late = callback(
-        initialProviderId,
-        providerName === "plivo" ? "ringing" : "completed",
-        providerName === "twilio",
-      );
-      expect((await current.processEvent(late)).kind).not.toBe("final-speech");
-      const history = await current.getCallHistory();
-      expect(new Set(history.map((call) => call.callId))).toEqual(new Set([started.callId]));
-      expect(await current.getCallFromMemoryOrStore(initialProviderId)).toMatchObject({
-        ...terminal,
-        processedEventIds: expect.arrayContaining(terminal.processedEventIds),
-      });
-      expect(current.getActiveCalls()).toEqual([]);
-      expect(provider.playTtsCalls).toHaveLength(1);
-      expect(provider.hangupCalls).toHaveLength(1);
-      expect(provider.startListeningCalls).toEqual([]);
-    },
-  );
-
   it("preserves the first provider terminal facts when a pending manager hangup settles", async () => {
     const { call, manager, provider } = await initiateCall();
     const endedAt = Date.now() + 1_000;

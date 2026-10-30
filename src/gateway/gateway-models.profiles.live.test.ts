@@ -12,6 +12,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  listenLoopback,
+  closeHttpServer,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { installTestEnv } from "../../test/test-env.js";
 import { discoverAuthStorageFacts, discoverModelsAsync } from "../agents/agent-model-discovery.js";
@@ -47,6 +51,7 @@ import {
   isAudioOnlyModelErrorMessage,
   isUnsupportedThinkingToggleErrorMessage,
 } from "../agents/live-test-provider-drift.test-support.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { getApiKeyForModelCore, type ResolvedProviderAuth } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveBuiltInModelSuppressionFromManifest } from "../agents/model-suppression.js";
@@ -125,7 +130,12 @@ import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
-import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
+import {
+  captureEnv,
+  deleteTestEnvValue,
+  setTestEnvValue,
+  withEnvAsync,
+} from "../test-utils/env.js";
 import { getFreePort, isPortFree } from "../test-utils/ports.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -1224,18 +1234,11 @@ describe("resolveGatewayLiveMaxModels", () => {
   const originalGatewayModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS;
   const originalGatewayMax = process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS;
   const originalSharedMax = process.env.OPENCLAW_LIVE_MAX_MODELS;
-  function restoreEnvValue(name: string, value: string | undefined): void {
-    if (value === undefined) {
-      deleteTestEnvValue(name);
-    } else {
-      setTestEnvValue(name, value);
-    }
-  }
 
   afterEach(() => {
-    restoreEnvValue("OPENCLAW_LIVE_GATEWAY_MODELS", originalGatewayModels);
-    restoreEnvValue("OPENCLAW_LIVE_GATEWAY_MAX_MODELS", originalGatewayMax);
-    restoreEnvValue("OPENCLAW_LIVE_MAX_MODELS", originalSharedMax);
+    restoreOptionalEnv("OPENCLAW_LIVE_GATEWAY_MODELS", originalGatewayModels);
+    restoreOptionalEnv("OPENCLAW_LIVE_GATEWAY_MAX_MODELS", originalGatewayMax);
+    restoreOptionalEnv("OPENCLAW_LIVE_MAX_MODELS", originalSharedMax);
   });
 
   it("defaults modern gateway sweeps to the curated high-signal cap", () => {
@@ -1322,6 +1325,15 @@ describe("resolveGatewayLiveCandidatePoolLimit", () => {
     ).toBe(false);
   });
 });
+
+const GATEWAY_LIVE_AWS_ENV_KEYS = [
+  "AWS_REGION",
+  "AWS_DEFAULT_REGION",
+  "AWS_PROFILE",
+  "AWS_CONFIG_FILE",
+  "AWS_SHARED_CREDENTIALS_FILE",
+  "HOME",
+];
 
 const DEFAULT_BEDROCK_LIVE_REGION = "us-east-1";
 
@@ -2015,15 +2027,11 @@ describe("buildLiveGatewayConfig", () => {
               api: "google-generative-ai",
               baseUrl: "https://generativelanguage.googleapis.com",
               models: [
-                {
-                  id: "gemini-3-flash-preview",
-                  name: "gemini-3-flash-preview",
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                modelDefinition("gemini-3-flash-preview", {
                   contextWindow: 1_000,
                   maxTokens: 100,
                   reasoning: false,
-                },
+                }),
               ],
             },
           },
@@ -2062,14 +2070,7 @@ describe("buildLiveGatewayConfig", () => {
   });
 
   it("writes valid AWS SDK provider config for explicit Bedrock fallback models", () => {
-    const previous = {
-      awsRegion: process.env.AWS_REGION,
-      awsDefaultRegion: process.env.AWS_DEFAULT_REGION,
-      awsProfile: process.env.AWS_PROFILE,
-      awsConfigFile: process.env.AWS_CONFIG_FILE,
-      awsSharedCredentialsFile: process.env.AWS_SHARED_CREDENTIALS_FILE,
-      home: process.env.HOME,
-    };
+    const previous = captureEnv(GATEWAY_LIVE_AWS_ENV_KEYS);
     try {
       deleteTestEnvValue("AWS_REGION");
       deleteTestEnvValue("AWS_DEFAULT_REGION");
@@ -2099,24 +2100,12 @@ describe("buildLiveGatewayConfig", () => {
         ],
       });
     } finally {
-      restoreOptionalEnv("AWS_REGION", previous.awsRegion);
-      restoreOptionalEnv("AWS_DEFAULT_REGION", previous.awsDefaultRegion);
-      restoreOptionalEnv("AWS_PROFILE", previous.awsProfile);
-      restoreOptionalEnv("AWS_CONFIG_FILE", previous.awsConfigFile);
-      restoreOptionalEnv("AWS_SHARED_CREDENTIALS_FILE", previous.awsSharedCredentialsFile);
-      restoreOptionalEnv("HOME", previous.home);
+      previous.restore();
     }
   });
 
   it("uses AWS_REGION for explicit Bedrock fallback provider config", () => {
-    const previous = {
-      awsRegion: process.env.AWS_REGION,
-      awsDefaultRegion: process.env.AWS_DEFAULT_REGION,
-      awsProfile: process.env.AWS_PROFILE,
-      awsConfigFile: process.env.AWS_CONFIG_FILE,
-      awsSharedCredentialsFile: process.env.AWS_SHARED_CREDENTIALS_FILE,
-      home: process.env.HOME,
-    };
+    const previous = captureEnv(GATEWAY_LIVE_AWS_ENV_KEYS);
     try {
       setTestEnvValue("AWS_REGION", "eu-west-1");
       deleteTestEnvValue("AWS_DEFAULT_REGION");
@@ -2138,12 +2127,7 @@ describe("buildLiveGatewayConfig", () => {
         "https://bedrock-runtime.eu-west-1.amazonaws.com",
       );
     } finally {
-      restoreOptionalEnv("AWS_REGION", previous.awsRegion);
-      restoreOptionalEnv("AWS_DEFAULT_REGION", previous.awsDefaultRegion);
-      restoreOptionalEnv("AWS_PROFILE", previous.awsProfile);
-      restoreOptionalEnv("AWS_CONFIG_FILE", previous.awsConfigFile);
-      restoreOptionalEnv("AWS_SHARED_CREDENTIALS_FILE", previous.awsSharedCredentialsFile);
-      restoreOptionalEnv("HOME", previous.home);
+      previous.restore();
     }
   });
 
@@ -2240,111 +2224,51 @@ describe("buildLiveGatewayConfig", () => {
     }
   });
 
-  it("uses selected AWS profile region for explicit Bedrock fallback provider config", async () => {
-    const previous = {
-      awsRegion: process.env.AWS_REGION,
-      awsDefaultRegion: process.env.AWS_DEFAULT_REGION,
-      awsProfile: process.env.AWS_PROFILE,
-      awsConfigFile: process.env.AWS_CONFIG_FILE,
-      awsSharedCredentialsFile: process.env.AWS_SHARED_CREDENTIALS_FILE,
-      home: process.env.HOME,
-    };
-    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bedrock-aws-home-"));
-    try {
-      const awsDir = path.join(tempHome, ".aws");
-      await fs.mkdir(awsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(awsDir, "config"),
-        "[profile bedrock-live]\nregion = ap-southeast-2\n",
-        "utf8",
-      );
-      deleteTestEnvValue("AWS_REGION");
-      deleteTestEnvValue("AWS_DEFAULT_REGION");
-      setTestEnvValue("AWS_PROFILE", "bedrock-live");
-      deleteTestEnvValue("AWS_CONFIG_FILE");
-      deleteTestEnvValue("AWS_SHARED_CREDENTIALS_FILE");
-      setTestEnvValue("HOME", tempHome);
+  for (const [name, profileConfig, expectedBaseUrl] of [
+    [
+      "uses selected AWS profile region for explicit Bedrock fallback provider config",
+      "[profile bedrock-live]\nregion = ap-southeast-2\n",
+      "https://bedrock-runtime.ap-southeast-2.amazonaws.com",
+    ],
+    [
+      "strips AWS profile region inline comments for explicit Bedrock fallback config",
+      '[profile "bedrock-live"] # live smoke\nregion = eu-central-1 # live smoke\n',
+      "https://bedrock-runtime.eu-central-1.amazonaws.com",
+    ],
+  ] as const) {
+    it(name, async () => {
+      const previous = captureEnv(GATEWAY_LIVE_AWS_ENV_KEYS);
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bedrock-aws-home-"));
+      try {
+        const awsDir = path.join(tempHome, ".aws");
+        await fs.mkdir(awsDir, { recursive: true });
+        await fs.writeFile(path.join(awsDir, "config"), profileConfig, "utf8");
+        deleteTestEnvValue("AWS_REGION");
+        deleteTestEnvValue("AWS_DEFAULT_REGION");
+        setTestEnvValue("AWS_PROFILE", "bedrock-live");
+        deleteTestEnvValue("AWS_CONFIG_FILE");
+        deleteTestEnvValue("AWS_SHARED_CREDENTIALS_FILE");
+        setTestEnvValue("HOME", tempHome);
 
-      const cfg = buildLiveGatewayConfig({
-        cfg: {},
-        candidates: [
-          createExplicitLiveFallbackModel("amazon-bedrock", "global.anthropic.claude-sonnet-4-6"),
-        ],
-        liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
-        liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
-      });
+        const cfg = buildLiveGatewayConfig({
+          cfg: {},
+          candidates: [
+            createExplicitLiveFallbackModel("amazon-bedrock", "global.anthropic.claude-sonnet-4-6"),
+          ],
+          liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
+          liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
+        });
 
-      expect(cfg.models?.providers?.["amazon-bedrock"]?.baseUrl).toBe(
-        "https://bedrock-runtime.ap-southeast-2.amazonaws.com",
-      );
-    } finally {
-      restoreOptionalEnv("AWS_REGION", previous.awsRegion);
-      restoreOptionalEnv("AWS_DEFAULT_REGION", previous.awsDefaultRegion);
-      restoreOptionalEnv("AWS_PROFILE", previous.awsProfile);
-      restoreOptionalEnv("AWS_CONFIG_FILE", previous.awsConfigFile);
-      restoreOptionalEnv("AWS_SHARED_CREDENTIALS_FILE", previous.awsSharedCredentialsFile);
-      restoreOptionalEnv("HOME", previous.home);
-      await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-    }
-  });
-
-  it("strips AWS profile region inline comments for explicit Bedrock fallback config", async () => {
-    const previous = {
-      awsRegion: process.env.AWS_REGION,
-      awsDefaultRegion: process.env.AWS_DEFAULT_REGION,
-      awsProfile: process.env.AWS_PROFILE,
-      awsConfigFile: process.env.AWS_CONFIG_FILE,
-      awsSharedCredentialsFile: process.env.AWS_SHARED_CREDENTIALS_FILE,
-      home: process.env.HOME,
-    };
-    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bedrock-aws-home-"));
-    try {
-      const awsDir = path.join(tempHome, ".aws");
-      await fs.mkdir(awsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(awsDir, "config"),
-        '[profile "bedrock-live"] # live smoke\nregion = eu-central-1 # live smoke\n',
-        "utf8",
-      );
-      deleteTestEnvValue("AWS_REGION");
-      deleteTestEnvValue("AWS_DEFAULT_REGION");
-      setTestEnvValue("AWS_PROFILE", "bedrock-live");
-      deleteTestEnvValue("AWS_CONFIG_FILE");
-      deleteTestEnvValue("AWS_SHARED_CREDENTIALS_FILE");
-      setTestEnvValue("HOME", tempHome);
-
-      const cfg = buildLiveGatewayConfig({
-        cfg: {},
-        candidates: [
-          createExplicitLiveFallbackModel("amazon-bedrock", "global.anthropic.claude-sonnet-4-6"),
-        ],
-        liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
-        liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
-      });
-
-      expect(cfg.models?.providers?.["amazon-bedrock"]?.baseUrl).toBe(
-        "https://bedrock-runtime.eu-central-1.amazonaws.com",
-      );
-    } finally {
-      restoreOptionalEnv("AWS_REGION", previous.awsRegion);
-      restoreOptionalEnv("AWS_DEFAULT_REGION", previous.awsDefaultRegion);
-      restoreOptionalEnv("AWS_PROFILE", previous.awsProfile);
-      restoreOptionalEnv("AWS_CONFIG_FILE", previous.awsConfigFile);
-      restoreOptionalEnv("AWS_SHARED_CREDENTIALS_FILE", previous.awsSharedCredentialsFile);
-      restoreOptionalEnv("HOME", previous.home);
-      await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-    }
-  });
+        expect(cfg.models?.providers?.["amazon-bedrock"]?.baseUrl).toBe(expectedBaseUrl);
+      } finally {
+        previous.restore();
+        await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      }
+    });
+  }
 
   it("prefers AWS credentials profile regions over config profile regions", async () => {
-    const previous = {
-      awsRegion: process.env.AWS_REGION,
-      awsDefaultRegion: process.env.AWS_DEFAULT_REGION,
-      awsProfile: process.env.AWS_PROFILE,
-      awsConfigFile: process.env.AWS_CONFIG_FILE,
-      awsSharedCredentialsFile: process.env.AWS_SHARED_CREDENTIALS_FILE,
-      home: process.env.HOME,
-    };
+    const previous = captureEnv(GATEWAY_LIVE_AWS_ENV_KEYS);
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bedrock-aws-home-"));
     try {
       const awsDir = path.join(tempHome, ".aws");
@@ -2379,12 +2303,7 @@ describe("buildLiveGatewayConfig", () => {
         "https://bedrock-runtime.ca-central-1.amazonaws.com",
       );
     } finally {
-      restoreOptionalEnv("AWS_REGION", previous.awsRegion);
-      restoreOptionalEnv("AWS_DEFAULT_REGION", previous.awsDefaultRegion);
-      restoreOptionalEnv("AWS_PROFILE", previous.awsProfile);
-      restoreOptionalEnv("AWS_CONFIG_FILE", previous.awsConfigFile);
-      restoreOptionalEnv("AWS_SHARED_CREDENTIALS_FILE", previous.awsSharedCredentialsFile);
-      restoreOptionalEnv("HOME", previous.home);
+      previous.restore();
       await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
@@ -4262,24 +4181,7 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
 async function listenOnLoopbackForUltraWireTest(
   server: ReturnType<typeof createHttpServer>,
 ): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("failed to start Ultra wire test server");
-  }
-  return `http://127.0.0.1:${address.port}/v1`;
-}
-
-async function closeUltraWireTestServer(
-  server: ReturnType<typeof createHttpServer>,
-): Promise<void> {
-  server.closeAllConnections();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
+  return `${await listenLoopback(server)}/v1`;
 }
 
 function createOpenAIUltraTestRun(purpose: string) {
@@ -4661,7 +4563,7 @@ describe("OpenAI Ultra wire capture", () => {
     } finally {
       controller.abort();
       capture.close();
-      await closeUltraWireTestServer(upstream);
+      await closeHttpServer(upstream);
     }
   });
 
@@ -4878,15 +4780,11 @@ describe("loadAuthBackedLiveModelRegistry", () => {
                   api: "openai-completions",
                   baseUrl: "https://example.test/v1",
                   models: [
-                    {
-                      id: "configured-model",
+                    modelDefinition("configured-model", {
                       name: "Configured Model",
                       reasoning: false,
-                      input: ["text"],
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                       contextWindow: 128000,
-                      maxTokens: 8192,
-                    },
+                    }),
                   ],
                 },
               },

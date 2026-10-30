@@ -1,17 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { userFacingTextFilters } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
-import { assistantVisibleTextFilters } from "./assistant-visible-text.js";
 import {
-  applyTextFilters,
-  createTextProjection,
-  trimTextFilter,
-  type TextFilter,
-} from "./text-projection.js";
+  createAssistantVisibleStreamText,
+  sanitizeAssistantVisibleStreamText,
+} from "../../agents/embedded-agent-utils.js";
+import { expectPrefixParity } from "./streaming.test-support.js";
+import { createTextProjection, trimTextPreservingCode } from "./text-projection.js";
 import { toolCallXmlTextFilter } from "./tool-call-xml.js";
 
 const call = '<tool_call>{"name":"read","arguments":{"path":"a.md"}}</tool_call>';
 const nestedCall =
   '<function_calls><invoke name="read"><parameter name="path">a.md</parameter></invoke></function_calls>';
+const imageReference = 'See ![`x: <invoke name="x">{"a":1}</invoke>`][ref] now.\n\nNext.\n\n';
 
 const documents = [
   ["complete call", `Before.\n${call}\nAfter.\n`],
@@ -38,85 +37,47 @@ const documents = [
   ],
   ["fenced code", `\`\`\`xml\n${nestedCall}\n\`\`\`\nAfter.\n`],
   ["mixed model marker", `<|assistant|>Before.\n${call}\nAfter.\n`],
+  ["HTML", "<details><summary>Result</summary><p>ordinary text</p></details>"],
+  ["JSX", "<div>{items.length < 3 ? <b>Few</b> : <i>Many</i>}</div>"],
+  ["literal comparison", "a < b and x > y; the identifier is <tool_."],
+  ["resynchronization", "<\n\na\n\n<"],
+  ["resynchronization before a fence", "<`</f\n\n<```"],
+  ["adjacent partial tags", "<p<p"],
+  ["hidden reasoning before HTML", "<think>synthetic private reasoning</think><p>visible</p>"],
+  [
+    "stripped memories before a partial tag",
+    "<relevant-memories>synthetic private memory</relevant-memories>\n<p",
+  ],
+  ["tool call after a partial tag", `<p${call}`],
+  ["partial tag after a tool call", `${call}<p`],
+  ["fenced call followed by HTML", `\`\`\`xml\n${call}\n\`\`\`\n\n<p>visible</p>`],
+  ["inline call followed by HTML", `Example \`${call}\`; <p>visible</p>`],
+  ["indented partial tag", "Before.\n\n    <p"],
+  ["quoted partial tag", "> Before.\n> <p"],
+  ["late image ownership", `![example \`x\n${call}\nx\`][id]\n\n[id]: /url\n`],
+  ["CRLF fence", `\`\`\`xml\r\n${call}\r\n\`\`\`\r\n<p`],
 ] as const;
 
 // Retain the contributor's append boundaries: later bytes can change an earlier
 // XML payload or grant Markdown ownership without introducing another tag.
 const transitions = [
+  ["empty append after suppressed XML", ["<\n\na", "", "\n\n<"]],
   ["XML removal exposes a partial parameter", ["<para<tool_call/>", "meter/>"]],
+  ["exposed generic closer", ["<div><parameter>x</parameter></<tool_call/>", "div>"]],
   [
-    "XML removal exposes an incomplete generic closer",
-    ["<div><parameter>x</parameter></<tool_call/>", "div>"],
-  ],
-  [
-    "XML removal exposes an image and a reference definition",
+    "exposed image/reference",
     ["!<tool_call/>[example `<parameter>x</parameter>`][ref]\n\n<tool_call/>[re", "f]: /u"],
   ],
-  [
-    "XML removal exposes a link title",
-    ['[a]<tool_call>{}</tool_call>(/ "title `<parameter/>` tail', '")'],
-  ],
+  ["exposed link title", ['[a]<tool_call>{}</tool_call>(/ "title `<parameter/>` tail', '")']],
   ["late code closer", ["Use `<parameter/>x", "`."]],
   ["partial JSON attributes", ["<tool_call> name=", '"exec" {"command":"ls"}']],
   ["partial bracket attributes", ['<function_calls> name="read_file" ', '[{"path":"a.md"}]']],
   ["quoted greater-than", ['Before </invoke note="a>b', '">After']],
-  [
-    "late image reference",
-    ['See ![`x: <invoke name="x">{"a":1}</invoke>`][ref] now.\n\nNext.\n\n', "[ref]: /u\n"],
-  ],
-  [
-    "split image reference",
-    ['See ![`x: <invoke name="x">{"a":1}</invoke>`][ref] now.\n\nNext.\n\n', "[re", "f]: /u\n"],
-  ],
+  ["late image reference", [imageReference, "[ref]: /u\n"]],
+  ["split image reference", [imageReference, "[re", "f]: /u\n"]],
 ] as const;
 
-const configurations: Array<{ name: string; filters: readonly TextFilter[] }> = [
-  {
-    name: "streaming XML",
-    filters: [toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true)],
-  },
-  {
-    name: "user-facing XML",
-    filters: [toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true })],
-  },
-  {
-    name: "delivery composition",
-    filters: [
-      ...assistantVisibleTextFilters("final-answer-delivery", true),
-      ...userFacingTextFilters(false, true),
-      trimTextFilter("both", { preserveCodeIndentation: true }),
-    ],
-  },
-];
-
-function expectCanonicalPrefixes(chunks: readonly string[], filters: readonly TextFilter[]) {
-  const stream = createTextProjection(filters);
-  let source = "";
-  let delivered = "";
-  for (const chunk of chunks) {
-    source += chunk;
-    const result = stream.append(chunk);
-    delivered = result.delta === null ? result.text : delivered + result.delta;
-    const expected = applyTextFilters(source, filters);
-    expect(result.text, `source: ${JSON.stringify(source)}`).toBe(expected);
-    expect(delivered, `replayed source: ${JSON.stringify(source)}`).toBe(expected);
-  }
-}
-
-describe.each(configurations)("$name", ({ filters }) => {
-  it.each(documents)("matches canonical output at every prefix: %s", (_name, source) => {
-    for (const size of [1, 4]) {
-      const chunks = Array.from({ length: Math.ceil(source.length / size) }, (_, index) =>
-        source.slice(index * size, (index + 1) * size),
-      );
-      expectCanonicalPrefixes(chunks, filters);
-    }
-  });
-
-  it.each(transitions)("re-evaluates the reported %s transition", (_name, chunks) => {
-    expectCanonicalPrefixes(chunks, filters);
-  });
-});
+const configurations = ["streaming XML", "user-facing XML", "delivery composition"] as const;
 
 it.each([
   ["<tool_call> a=b{", ""],
@@ -127,4 +88,43 @@ it.each([
   for (const streaming of [false, true]) {
     expect(toolCallXmlTextFilter({}, streaming).transform(source)).toBe(expected);
   }
+});
+
+describe.each(configurations)("%s", (name) => {
+  const filter =
+    name === "streaming XML"
+      ? toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true)
+      : toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true });
+  const create = () =>
+    name === "delivery composition"
+      ? createAssistantVisibleStreamText("final_answer")
+      : createTextProjection([filter]);
+  const transform = (source: string) =>
+    name === "delivery composition"
+      ? trimTextPreservingCode(sanitizeAssistantVisibleStreamText(source, "final_answer"))
+      : filter.transform(source);
+  it.each(documents)("matches canonical output at every split: %s", (_name, source) => {
+    expectPrefixParity(source, create, transform);
+  });
+  it.each(transitions)("re-evaluates the reported %s transition", (_name, chunks) => {
+    expectPrefixParity(chunks.join(""), create, transform, chunks);
+  });
+  it.each([
+    ["<script>    <", "b"],
+    ["After <a", ' href="/x">link</a>'],
+    ["<\n\na\n\n<", "p>visible</p>"],
+  ])("preserves full delivery parity after a replacement ending in %j", (prefix, tail) => {
+    const stream = create();
+    stream.append("Discarded draft.");
+    const replaced = stream.replace(prefix);
+    expect(replaced.text).toBe(transform(prefix));
+    if (name === "streaming XML" && prefix !== "<\n\na\n\n<") {
+      expect(replaced.text).toBe(prefix.slice(0, prefix.lastIndexOf("<")));
+    }
+    const appended = stream.append(tail);
+    const delivered = appended.delta === null ? appended.text : replaced.text + appended.delta;
+    const expected = transform(prefix + tail);
+    expect(appended.text).toBe(expected);
+    expect(delivered).toBe(expected);
+  });
 });

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createSignal } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { CronCompactJob, CronJobsListResult } from "../../../api/types.ts";
 import { createApplicationGateway } from "../../../test-helpers/application-context.ts";
@@ -10,7 +10,9 @@ import {
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createMobileRootContentFixture as rootContent } from "../chat-mobile-host.test-support.ts";
 import { SessionAutomationMobileList } from "./chat-automation-mobile.tsx";
 import { ChatDetailsMobileContent } from "./chat-details-mobile-content.tsx";
 import {
@@ -53,21 +55,71 @@ function sequence(...pages: (Page | Promise<Page>)[]) {
   pages.forEach((response) => request.mockResolvedValueOnce(response));
   return request;
 }
-function source(request = sequence(page([job()])), offline = false, scopes = ["operator.read"]) {
+const jobsRequest = (...jobs: CronCompactJob[]) => sequence(page(jobs));
+const hello = (scopes: string[]) => ({
+  type: "hello-ok" as const,
+  protocol: 4,
+  auth: { role: "operator" as const, scopes },
+});
+const eventJob = (updatedAtMs: number, state: Record<string, unknown>) => ({
+  id: "summary-job",
+  name: "Check the task",
+  agentId: "ops",
+  enabled: true,
+  updatedAtMs,
+  state,
+});
+async function advance(ms = 0) {
+  await vi.advanceTimersByTimeAsync(ms);
+  flush();
+}
+function source(request = jobsRequest(job()), offline = false, scopes = ["operator.read"]) {
   return {
     request,
     ...createApplicationGateway({
       ...createApplicationGateway().gateway.snapshot,
       client: createTestGatewayClient(request),
       phase: offline ? "offline" : "connected",
-      hello: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes } },
+      hello: hello(scopes),
       assistantAgentId: "ops",
       sessionKey: "agent:ops:task",
     }),
   };
 }
+
+function mobile(request: ReturnType<typeof sequence>) {
+  const current = source(request);
+  const view = mountSolid(() => {
+    let host!: HTMLElement;
+    const props = { gateway: current.gateway, sessionKey: "agent:ops:task", presented: true };
+    const inventory = createSessionAutomationInventory(props, () => host);
+    return (
+      <section ref={(element) => (host = element)}>
+        {inventory.lifecycle}
+        <SessionAutomationMobileList inventory={inventory} basePath="" onOpenAutomation={vi.fn()} />
+        <ChatDetailsMobileContent
+          details={{
+            sessionKey: props.sessionKey,
+            selectedSession: { key: props.sessionKey, kind: "direct" },
+            currentAgentId: "ops",
+            messages: [],
+          }}
+          presented
+          page={{
+            kind: "root",
+            content: {
+              ...rootContent(),
+              automations: { inventory, summary: { label: "Automations" } },
+            },
+          }}
+        />
+      </section>
+    );
+  });
+  return { ...current, ...view };
+}
 function component(
-  request = sequence(page([job()])),
+  request = jobsRequest(job()),
   presented = true,
   offline = false,
   scopes = ["operator.read"],
@@ -104,6 +156,45 @@ function component(
 }
 
 afterEach(() => document.body.replaceChildren());
+
+it("keeps cached continuation inert through an inventory failure until recovery", async () => {
+  vi.useFakeTimers();
+  const request = createGatewayRequestMock();
+  request.mockRejectedValueOnce(new Error("Temporary inventory failure"));
+  request.mockResolvedValue(
+    page(Array.from({ length: 11 }, (_, index) => job({ id: `job-${index}` }))),
+  );
+  const current = component(request);
+  try {
+    current.update({
+      desktop: { expanded: true, onExpandedChange: vi.fn() },
+      cached: {
+        more: true,
+        rows: [{ id: "job-0", name: "Check the task", running: false, state: "", result: {} }],
+      },
+    });
+    await advance();
+    const more = current.find<HTMLButtonElement>(".chat-summary__automation-more")!;
+    expect(more.disabled).toBe(false);
+    expect(more.getAttribute("aria-disabled")).toBe("true");
+    more.click();
+    expect(request).toHaveBeenCalledOnce();
+    current.cron();
+    await advance();
+    expect(more.hasAttribute("aria-disabled")).toBe(false);
+    more.click();
+    flush();
+    expect(current.element.querySelectorAll(".chat-summary__automation")).toHaveLength(11);
+    expect(request).toHaveBeenCalledTimes(2);
+    request.mockResolvedValueOnce(page());
+    current.cron();
+    await advance();
+    await current.empty();
+  } finally {
+    current.unmount();
+    vi.useRealTimers();
+  }
+});
 
 it.each([false, true])("coalesces hidden refreshes: %s", async (hiddenEvents) => {
   const pending = createDeferred<Page>();
@@ -176,29 +267,53 @@ it.each([false, true])(
 it("updates a held automation's runtime state without rereading its inventory", async () => {
   const current = component(sequence(page([job()])).mockResolvedValue(page([job()])));
   await current.ready();
-  const eventJob = {
-    id: "summary-job",
-    name: "Check the task",
-    agentId: "ops",
-    enabled: true,
-  };
   current.cron("started", {
     jobId: "summary-job",
-    job: { ...eventJob, updatedAtMs: 2, state: { runningAtMs: 2 } },
+    job: eventJob(2, { runningAtMs: 2 }),
   });
   await current.ready("Running");
   expect(current.request).toHaveBeenCalledTimes(1);
 
   current.cron("finished", {
     jobId: "summary-job",
-    job: {
-      ...eventJob,
-      updatedAtMs: 3,
-      state: { lastRunAtMs: 3, lastRunStatus: "ok", nextRunAtMs: 600_003 },
-    },
+    job: eventJob(3, { lastRunAtMs: 3, lastRunStatus: "ok", nextRunAtMs: 600_003 }),
   });
   await current.ready("Every 10 minutes");
   expect(current.element.textContent).not.toContain("Running");
+  expect(current.request).toHaveBeenCalledTimes(1);
+  current.unmount();
+});
+
+it("keeps the last meaningful result while a quiet check advances freshness", async () => {
+  const checkedAt = Date.now() - 120_000;
+  const result = {
+    outcome: "blocked" as const,
+    summary: "Waiting for Windows CI",
+    atMs: checkedAt,
+  };
+  const current = component(
+    jobsRequest(job({ lastMeaningfulResult: result, lastRunAtMs: checkedAt, lastDurationMs: 500 })),
+  );
+  await current.ready("Waiting for Windows CI");
+  const before = current.find("time")?.getAttribute("datetime");
+  current.cron("finished", {
+    jobId: "summary-job",
+    durationMs: 1_000,
+    job: eventJob(checkedAt + 60_000, {
+      lastRunAtMs: checkedAt + 60_000,
+      lastDurationMs: 1_000,
+      lastRunStatus: "ok",
+      lastMeaningfulResult: result,
+    }),
+  });
+  await current.ready("Checked");
+  await waitForSolid(() => {
+    expect(current.find("time")?.getAttribute("datetime")).toBe(
+      new Date(checkedAt + 61_000).toISOString(),
+    );
+  });
+  expect(current.find("time")?.getAttribute("datetime")).not.toBe(before);
+  expect(current.element.textContent).toContain("Waiting for Windows CI");
   expect(current.request).toHaveBeenCalledTimes(1);
   current.unmount();
 });
@@ -288,12 +403,10 @@ it.each([false, true])(
     request.mockRejectedValueOnce(new Error("Temporary inventory failure"));
     const current = component(request);
     try {
-      await vi.advanceTimersByTimeAsync(0);
-      flush();
+      await advance();
       if (loaded) {
         current.cron();
-        await vi.advanceTimersByTimeAsync(0);
-        flush();
+        await advance();
         expect(current.element.textContent).toContain("Paused");
       }
       expect(current.find(".chat-summary__automation-retry")).toBeNull();
@@ -302,8 +415,7 @@ it.each([false, true])(
       current.publish({ ...current.gateway.snapshot });
       await vi.advanceTimersByTimeAsync(29_999);
       expect(request).toHaveBeenCalledTimes(count);
-      await vi.advanceTimersByTimeAsync(1);
-      flush();
+      await advance(1);
       expect(current.element.textContent).toContain("Recovered automation");
       expect(current.element.textContent).toContain("Paused");
       expect(current.find(".chat-summary__automation-retry")).toBeNull();
@@ -325,15 +437,13 @@ it.each(["retry", "event", "reconnect"] as const)(
     );
     const current = component(request);
     try {
-      await vi.advanceTimersByTimeAsync(0);
-      flush();
+      await advance();
       expect(current.element.textContent).toContain("Check the task");
       request.mockRejectedValue(
         new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Read authority revoked" }),
       );
       current.cron();
-      await vi.advanceTimersByTimeAsync(0);
-      flush();
+      await advance();
       expect(current.element.textContent).not.toContain("Check the task");
       expect(current.find(".chat-summary__automation-more")).toBeNull();
       current.publish({ ...current.gateway.snapshot });
@@ -350,8 +460,7 @@ it.each(["retry", "event", "reconnect"] as const)(
         current.publish({ ...snapshot, phase: "reconnecting" });
         current.publish(snapshot);
       }
-      await vi.advanceTimersByTimeAsync(0);
-      flush();
+      await advance();
       expect(current.element.textContent).toContain("Authorized automation");
       expect(current.element.textContent).toContain("Paused");
       expect(request).toHaveBeenCalledTimes(3);
@@ -371,8 +480,7 @@ it.each(["hidden", "offline", "denied", "unmounted"] as const)(
       createGatewayRequestMock().mockRejectedValue(new Error("Temporary failure")),
     );
     try {
-      await vi.advanceTimersByTimeAsync(0);
-      flush();
+      await advance();
       if (boundary === "hidden") {
         current.update({ presented: false });
       } else if (boundary === "offline") {
@@ -380,14 +488,13 @@ it.each(["hidden", "offline", "denied", "unmounted"] as const)(
       } else if (boundary === "denied") {
         current.publish({
           ...current.gateway.snapshot,
-          hello: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: [] } },
+          hello: hello([]),
         });
       } else {
         current.unmount();
       }
       const count = current.request.mock.calls.length;
-      await vi.advanceTimersByTimeAsync(60_000);
-      flush();
+      await advance(60_000);
       expect(current.request).toHaveBeenCalledTimes(count);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
@@ -543,11 +650,7 @@ it.each([false, true])("retires automation access and late pages: loaded=%s", as
   const authorized = current.gateway.snapshot;
   current.publish({
     ...authorized,
-    hello: {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: ["operator.sessions.read"] },
-    },
+    hello: hello(["operator.sessions.read"]),
   });
   await current.empty();
   pending.resolve(page([job({ name: "Retired automation" })]));
@@ -562,89 +665,13 @@ it.each([false, true])("retires automation access and late pages: loaded=%s", as
   expect(current.element.textContent).not.toContain("Retired automation");
 });
 
-it("shares the mobile session inventory with consumers without starting another catalog", async () => {
-  const current = source(createGatewayRequestMock(async () => page([job()])));
-  const view = mountSolid(() => {
-    let host!: HTMLElement;
-    const props = { gateway: current.gateway, sessionKey: "agent:ops:task", presented: true };
-    const inventory = createSessionAutomationInventory(props, () => host);
-    return (
-      <section ref={(element) => (host = element)}>
-        {inventory.lifecycle}
-        <output>{inventory.loaded() ? inventory.total() : "unknown"}</output>
-        <SessionAutomationMobileList inventory={inventory} basePath="" onOpenAutomation={vi.fn()} />
-      </section>
-    );
-  });
-  await waitForSolid(() => {
-    expect(view.container.textContent).toContain("Check the task");
-    expect(view.container.querySelector('[aria-busy="false"]')).not.toBeNull();
-  });
-  expect(view.container.querySelector("output")?.textContent).toBe("1");
-  expect(current.request).toHaveBeenCalledTimes(1);
-  current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
-  await waitForSolid(() => {
-    expect(view.container.textContent).toContain("Check the task");
-    expect(view.container.querySelector('[aria-busy="false"]')).not.toBeNull();
-  });
-  expect(current.request).toHaveBeenCalledTimes(2);
-  view.unmount();
-});
-
-it("shares pending reads and failed refresh recovery between the mobile list and overview", async () => {
+it("shares pending reads, retained results, and failed refresh recovery between the mobile list and overview", async () => {
+  const checkedAt = Date.now() - 30_000;
   const first = createDeferred<Page>();
   const refresh = createDeferred<Page>();
   const recovery = createDeferred<Page>();
-  const current = source(sequence(first.promise, refresh.promise, recovery.promise));
-  const view = mountSolid(() => {
-    let host!: HTMLElement;
-    const props = { gateway: current.gateway, sessionKey: "agent:ops:task", presented: true };
-    const inventory = createSessionAutomationInventory(props, () => host);
-    return (
-      <section ref={(element) => (host = element)}>
-        {inventory.lifecycle}
-        <SessionAutomationMobileList inventory={inventory} basePath="" onOpenAutomation={vi.fn()} />
-        <ChatDetailsMobileContent
-          details={{
-            sessionKey: "agent:ops:task",
-            selectedSession: { key: "agent:ops:task", kind: "direct" },
-            currentAgentId: "ops",
-            messages: [],
-          }}
-          presented
-          page={{
-            kind: "root",
-            content: {
-              entries: {
-                labels: {
-                  people: "People",
-                  taskProgress: "Task progress",
-                  subagents: "Subagents",
-                  processes: "Processes",
-                  environment: "Environment",
-                  context: "Context",
-                  pullRequests: "Pull requests",
-                  automations: "Automations",
-                  generatedFiles: "Generated files",
-                  session: "Session",
-                },
-                people: { label: "People" },
-                versions: { label: "Versions", metadata: 1 },
-                onNavigate: vi.fn(),
-              },
-              processes: undefined,
-              subagents: {
-                workingLabel: "Working",
-                onOpenSubagent: vi.fn(),
-                onOpenSubagents: vi.fn(),
-              },
-              automations: { inventory, summary: { label: "Automations" } },
-            },
-          }}
-        />
-      </section>
-    );
-  });
+  const current = mobile(sequence(first.promise, refresh.promise, recovery.promise));
+  const view = current;
   await waitForSolid(() => {
     expect(view.container.textContent).toContain("Loading automations…");
     expect(current.request).toHaveBeenCalledTimes(1);
@@ -652,10 +679,36 @@ it("shares pending reads and failed refresh recovery between the mobile list and
       view.container.querySelector('.chat-details-mobile-root [data-details-group="automations"]'),
     ).toBeNull();
   });
-  first.resolve(page([job()]));
+  first.resolve(
+    page([
+      job({
+        lastMeaningfulResult: {
+          outcome: "blocked",
+          summary: "Waiting for mobile review",
+          atMs: checkedAt - 60_000,
+        },
+        lastRunStatus: "error",
+        lastRunAtMs: checkedAt - 60_000,
+        lastTriggerEvalAtMs: checkedAt,
+      }),
+    ]),
+  );
   const rows = () => view.container.querySelectorAll<HTMLAnchorElement>("a");
   await waitForSolid(() => expect(rows()).toHaveLength(1));
+  const overview = view.container.querySelector(
+    '.chat-details-mobile-root [data-details-destination="automation"]',
+  );
+  expect(overview?.textContent).toContain("Waiting for mobile review");
+  expect(overview?.textContent).toContain("Check failed");
+  expect(overview?.querySelector("time")?.getAttribute("datetime")).toBe(
+    new Date(checkedAt).toISOString(),
+  );
   const retainedRows = [...rows()];
+  expect(retainedRows[0]?.textContent).toContain("Waiting for mobile review");
+  expect(retainedRows[0]?.textContent).toContain("Check failed");
+  expect(retainedRows[0]?.querySelector("time")?.getAttribute("datetime")).toBe(
+    new Date(checkedAt).toISOString(),
+  );
   retainedRows[0]!.focus();
   current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
   await waitForSolid(() =>
@@ -688,77 +741,79 @@ it("shares pending reads and failed refresh recovery between the mobile list and
 });
 
 it("expands 25 retained jobs in tens independently of RPC pagination and resets on reentry", async () => {
-  const pending = createDeferred<CronJobsListResult<CronCompactJob>>();
+  const animate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
+  Object.defineProperty(Element.prototype, "animate", {
+    configurable: true,
+    value: () => ({ cancel() {} }),
+  });
+  onTestFinished(() => restorePropertyDescriptor(Element.prototype, "animate", animate));
   const jobs = Array.from({ length: 25 }, (_, index) =>
     job({ id: `job-${index}`, name: `Automation ${index + 1}` }),
   );
-  const current = component(
-    createGatewayRequestMock()
-      .mockResolvedValueOnce(page(jobs))
-      .mockImplementationOnce(() => pending.promise),
-  );
-  const view = current;
+  const current = component(sequence(page(jobs), page(jobs), page()));
+  const remember =
+    vi.fn<NonNullable<Parameters<typeof ChatSummaryAutomations>[0]["onDetailsSnapshot"]>>();
+  const desktop = { expanded: true, onExpandedChange: vi.fn() };
   const { element } = current;
-  await waitForSolid(() => {
-    expect(element.textContent).toContain("Automation 1");
-    expect(element.querySelector('[aria-busy="false"]')).not.toBeNull();
-  });
+  await current.ready("Automation 1");
+  current.update({ desktop, onDetailsSnapshot: remember });
+  await waitForSolid(() =>
+    expect(element.querySelector("summary")?.getAttribute("aria-expanded")).toBe("true"),
+  );
   const rows = () => element.querySelectorAll<HTMLAnchorElement>(".chat-summary__automation");
   expect(rows()).toHaveLength(10);
   const more = element.querySelector<HTMLButtonElement>(".chat-summary__automation-more")!;
-  more.focus();
-  more.click();
-  flush();
-  expect(rows()).toHaveLength(20);
-  expect(document.activeElement).toBe(rows()[10]);
-  more.focus();
-  more.click();
-  flush();
-  expect(rows()).toHaveLength(25);
-  expect(document.activeElement).toBe(rows()[20]);
+  for (const [index, count] of [20, 25].entries()) {
+    more.focus();
+    more.click();
+    flush();
+    expect(rows()).toHaveLength(count);
+    expect(document.activeElement).toBe(rows()[(index + 1) * 10]);
+  }
   expect(element.querySelector(".chat-summary__automation-more")).toBeNull();
   expect(current.request).toHaveBeenCalledTimes(1);
-  view.update({ onNavigate: vi.fn() });
-  flush();
+  current.update({ onNavigate: vi.fn() });
   expect(rows()).toHaveLength(25);
-  view.update({ presented: false });
-  flush();
-  view.update({ presented: true });
-  flush();
+  current.update({ presented: false });
+  current.update({ presented: true });
+  await current.ready("Automation 1");
   expect(rows()).toHaveLength(10);
   expect(current.request).toHaveBeenCalledTimes(2);
-  pending.reject(new Error("refresh failed"));
-  await waitForSolid(() => {
-    expect(element.textContent).not.toContain("Couldn't update automations.");
-    expect(element.querySelector('[aria-busy="false"]')).not.toBeNull();
+  remember.mockClear();
+  current.update({ desktop: { ...desktop, expanded: false } });
+  await waitForSolid(() => expect(remember.mock.lastCall?.[0].automations?.rows).toHaveLength(10));
+  expect(remember.mock.lastCall?.[0].automations?.rows[0]).toMatchObject({
+    id: "job-0",
+    name: "Automation 1",
   });
-  expect(rows()).toHaveLength(10);
+  expect(rows()).toHaveLength(0);
+  current.update({ desktop });
+  await waitForSolid(() => expect(rows()).toHaveLength(10));
   expect(element.querySelector("summary")?.textContent?.trim()).toBe("Automations");
+  current.cron();
+  await waitForSolid(() =>
+    expect(remember.mock.lastCall?.[0].automations).toMatchObject({ rows: [], more: false }),
+  );
+  expect(rows()).toHaveLength(0);
+  expect(current.request).toHaveBeenCalledTimes(3);
 });
 
 it("retains reconnect facts and distinguishes auto-disabled from paused and stale running", async () => {
-  const pending = createDeferred<CronJobsListResult<CronCompactJob>>();
+  const pending = createDeferred<Page>();
   const current = component(
-    createGatewayRequestMock()
-      .mockResolvedValueOnce(
-        page([
-          job({
-            id: "attention",
-            name: "Needs attention",
-            enabled: false,
-            autoDisabled: { reason: "consecutive-failures", atMs: 1, consecutiveErrors: 3 },
-          }),
-          job({ id: "paused", name: "User paused", enabled: false }),
-          job({ id: "running", name: "In progress", runningAtMs: 42 }),
-        ]),
-      )
-      .mockImplementationOnce(() => pending.promise),
+    jobsRequest(
+      job({
+        id: "attention",
+        name: "Needs attention",
+        enabled: false,
+        autoDisabled: { reason: "consecutive-failures", atMs: 1, consecutiveErrors: 3 },
+      }),
+      job({ id: "paused", name: "User paused", enabled: false }),
+      job({ id: "running", name: "In progress", runningAtMs: 42 }),
+    ).mockImplementationOnce(() => pending.promise),
   );
   const { element } = current;
-  await waitForSolid(() => {
-    expect(element.textContent).toContain("Needs attention");
-    expect(element.querySelector('[aria-busy="false"]')).not.toBeNull();
-  });
+  await current.ready("Needs attention");
   const attention = element.querySelector<HTMLAnchorElement>('[href$="job=attention"]')!;
   expect(attention.textContent).not.toContain("Paused");
   expect(attention.querySelector(".chat-summary__automation-attention")).not.toBeNull();
@@ -779,29 +834,34 @@ it("retains reconnect facts and distinguishes auto-disabled from paused and stal
 
 it("describes cron weekdays and non-uniform minute steps without inventing a fixed interval", async () => {
   const current = component(
-    sequence(
-      page([
-        job({
-          id: "weekdays",
-          name: "Weekday review",
-          scheduleKind: "cron",
-          schedule: { kind: "cron", expr: "0 9 * * MON-FRI", tz: "UTC" },
-        }),
-        job({
-          id: "minute-grid",
-          name: "Minute grid",
-          scheduleKind: "cron",
-          schedule: { kind: "cron", expr: "*/7 * * * *", tz: "UTC" },
-        }),
-      ]),
+    jobsRequest(
+      job({
+        id: "weekdays",
+        name: "Weekday review",
+        scheduleKind: "cron",
+        schedule: { kind: "cron", expr: "0 9 * * MON-FRI", tz: "UTC" },
+      }),
+      job({
+        id: "minute-grid",
+        name: "Minute grid",
+        scheduleKind: "cron",
+        schedule: { kind: "cron", expr: "*/7 * * * *", tz: "UTC" },
+      }),
     ),
   );
   await current.ready("Weekday review");
+  await vi.dynamicImportSettled();
   const weekday = current.element.querySelector<HTMLAnchorElement>('a[href$="job=weekdays"]')!;
   const minutes = current.element.querySelector<HTMLAnchorElement>('a[href$="job=minute-grid"]')!;
-  expect(weekday.textContent).toContain("Weekdays at 9:00 AM");
-  expect(minutes.textContent).toContain(
-    "At minutes 0, 7, 14, 21, 28, 35, 42, 49, and 56 of every hour",
+  // Inventory readiness does not include the first lazy cron formatter import.
+  await waitForSolid(
+    () => {
+      expect(weekday.textContent).toContain("Weekdays at 9:00 AM");
+      expect(minutes.textContent).toContain(
+        "At minutes 0, 7, 14, 21, 28, 35, 42, 49, and 56 of every hour",
+      );
+    },
+    { timeout: 5_000 },
   );
   expect(minutes.textContent).not.toContain("Every 7 minutes");
 });

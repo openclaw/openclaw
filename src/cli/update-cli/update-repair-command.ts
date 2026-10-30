@@ -1,9 +1,12 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import { resolveGatewayPort } from "../../config/paths.js";
+import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { settlePendingPackageActivation } from "../../infra/package-update-activation.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
@@ -16,6 +19,7 @@ import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js"
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { prepareManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import { resolveLegacyGatewayManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-legacy-store.js";
 import { ManagedHandoffCustodyRetainedError } from "../../infra/update-managed-service-handoff-reclamation.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import {
@@ -23,7 +27,9 @@ import {
   inspectNewerRecoveryHistory,
   needsPostCoreRepair,
   isFreshUnacknowledgedAbandonedUpdateRun,
+  recordedUpdateRunDrivers,
 } from "../../infra/update-run-activity.js";
+import { inspectUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   acknowledgeAbandonedUpdateRun,
   createUpdateRun,
@@ -59,6 +65,8 @@ import {
   resolveTargetVersion,
   type UpdateFinalizeOptions,
 } from "./shared.js";
+import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { updateFinalizeCommand, type UpdateCoreCompletion } from "./update-command-finalize.js";
 import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
@@ -69,7 +77,8 @@ import {
 } from "./update-retained-custody.js";
 
 export function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> {
-  return repairUpdate(opts).catch((error: unknown) => {
+  const env = resolveServiceRefreshEnv(process.env, tryProcessCwd());
+  return withUpdateDatabaseEngine(env, () => repairUpdate(opts)).catch((error: unknown) => {
     throw updateMaintenanceError(error);
   });
 }
@@ -89,9 +98,45 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     env,
     recoverOrphanedSidecars: false,
   });
-  const activeRuns = listUpdateRuns({ active: true, limit: 100 }, options);
+  let activeRuns = listUpdateRuns({ active: true, limit: 100 }, options);
   const inheritedRunId = env[UPDATE_RUN_ID_ENV];
-  const admission = inspectUpdateRepairDriverAdmission(activeRuns, inheritedRunId);
+  let admission = inspectUpdateRepairDriverAdmission(activeRuns, inheritedRunId);
+  if (
+    admission.kind === "conflict" &&
+    !inheritedRunId &&
+    activeRuns.some((run) =>
+      recordedUpdateRunDrivers(run).some((driver) => inspectUpdateRunDriver(driver) === "unknown"),
+    )
+  ) {
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const repairOwnership = await executor
+        .enter(resolveUpdateInstallRoot(discoveredRoot))
+        .catch((error: unknown) => {
+          throw new Error(
+            `Repair could not acquire exclusive update ownership. Wait for the update or stop it through its owning host or supervisor, then retry openclaw update repair. ${String(error)}`,
+            { cause: error },
+          );
+        });
+      // Settle independently: an unresolved sibling must not discard proven progress.
+      for (const run of activeRuns) {
+        const reconciled = await reconcileAbandonedUpdateRunsAsync(
+          { explicit: true, runIds: [run.runId] },
+          { ...options, repairOwnership },
+        );
+        for (const retired of reconciled) {
+          const hosts = recordedUpdateRunDrivers(retired)
+            .map((driver) => driver.host)
+            .join(", ");
+          const age = Math.max(0, Math.floor((Date.now() - retired.createdAtMs) / 1_000));
+          defaultRuntime.error(
+            `Warning: abandoned update ${retired.runId} on ${hosts || "an unrecorded host"} (age ${age}s); retired under exclusive update and state ownership.`,
+          );
+        }
+      }
+    });
+    activeRuns = listUpdateRuns({ active: true, limit: 100 }, options);
+    admission = inspectUpdateRepairDriverAdmission(activeRuns, inheritedRunId);
+  }
   if (admission.kind === "conflict") {
     throw new Error(admission.message);
   }
@@ -130,14 +175,22 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   }
   let retained: RetainedUpdateCustodyReport | undefined;
   const prepareHandoffRepair = async () => {
-    const store = await prepareManagedHandoffLeaseStore();
+    // Admission keys custody by the canonical installation, not a lexical slot.
+    const root = resolveUpdateInstallRoot(await resolveUpdateRoot());
     try {
-      // Admission keys custody by the canonical installation, not a lexical slot.
-      return await store.prepareRepair(
-        resolveUpdateInstallRoot(await resolveUpdateRoot()),
-        env,
-        timeoutMs,
-      );
+      const repair = await (
+        await prepareManagedHandoffLeaseStore()
+      ).prepareRepair(root, env, timeoutMs);
+      const legacy = resolveLegacyGatewayManagedUpdateLeaseDatabasePath();
+      if (repair || !legacy || !fs.existsSync(legacy)) {
+        return repair;
+      }
+      // An earlier macOS Gateway's handoff stays in its own store until repaired.
+      const store = await prepareManagedHandoffLeaseStore({
+        databasePath: legacy,
+        serviceManagerEnv: resolveServiceManagerEnv(),
+      });
+      return await store.prepareRepair(root, env, timeoutMs);
     } catch (error) {
       if (!(error instanceof ManagedHandoffCustodyRetainedError)) {
         throw error;

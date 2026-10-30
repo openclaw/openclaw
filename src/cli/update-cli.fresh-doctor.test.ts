@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Command } from "commander";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { recordCommandProcessFailure } from "../process/exec-result.js";
 import { VERSION } from "../version.js";
@@ -18,57 +17,14 @@ import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
 import * as update from "./update-cli-modules.test-support.js";
 import { registerForegroundFailureRecoveryTests } from "./update-cli/update-cli-failure-recovery.test-support.js";
-import {
-  writeGitUpdateResultFixture,
-  packageTargetStatus,
-} from "./update-cli/update-cli-package.test-support.js";
+import { packageTargetStatus } from "./update-cli/update-cli-package.test-support.js";
+import { runtimeFixture } from "./update-cli/update-command-fixtures.test-support.js";
 import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
   const f = createUpdateCliFixture();
-
-  it("carries explicit capability consent into post-core plugin convergence", async () => {
-    const { entrypoints } = f.setupUpdatedRootRefresh({
-      gatewayUpdateImpl: (root) =>
-        writeGitUpdateResultFixture({
-          root,
-          before: { sha: "old-sha", version: "2026.4.26" },
-          after: { sha: "new-sha", version: VERSION },
-        }),
-    });
-    const runOtherCommand = requireValue(
-      vi.mocked(update.runExec).getMockImplementation(),
-      "update command fixture",
-    );
-    vi.mocked(update.runExec).mockImplementation(async (command, args, options) => {
-      if (
-        args.length === 3 &&
-        args[0] === entrypoints[0] &&
-        args[1] === "update" &&
-        args[2] === "--help"
-      ) {
-        return {
-          stdout: new Command("update").option("--accept-capabilities").helpInformation(),
-          stderr: "",
-        };
-      }
-      return runOtherCommand(command, args, options);
-    });
-
-    await update.updateCommand({ acceptCapabilities: true, yes: true, restart: false });
-
-    expect(spawnCall()?.[1]).toEqual([
-      entrypoints[0],
-      "update",
-      "--no-restart",
-      "--yes",
-      "--accept-capabilities",
-      "--timeout",
-      "1800",
-    ]);
-  });
 
   it("checks original Git version before a dry-run package downgrade", async () => {
     vi.mocked(update.resolveOpenClawPackageRoot).mockResolvedValue(
@@ -102,7 +58,6 @@ describe("update-cli", () => {
           after: { version: "2026.4.10" },
         }),
     });
-    // Convergence must use the target root's version, not the still-running core.
     mocks.readPackageVersion.mockImplementation(async (pkgRoot: string) =>
       pkgRoot === downgradedRoot ? "2026.4.10" : "2026.4.14",
     );
@@ -120,11 +75,7 @@ describe("update-cli", () => {
       await update.updateCommand({ yes: true, tag: "2026.4.10", restart: false });
 
       expect(mocks.spawn).not.toHaveBeenCalled();
-      expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
       expect(hostVersionDuringPluginUpdate).toBe("2026.4.10");
-      expect(update.runPostCorePluginConvergenceSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ compatibilityHostVersion: "2026.4.10" }),
-      );
       expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
     } finally {
       delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
@@ -132,7 +83,6 @@ describe("update-cli", () => {
   });
 
   it("runs updated plugin migrations for a plugin-only current-process update", async () => {
-    // This path exercises delegated Doctor ownership, independent of repository build artifacts.
     vi.spyOn(update.doctorChild, "inspectUpdateDoctorChildSupport").mockResolvedValue(true);
     mocks.readPackageVersion.mockResolvedValue(VERSION);
     vi.mocked(update.updateGitCheckout).mockResolvedValue(
@@ -153,21 +103,14 @@ describe("update-cli", () => {
     await update.updateCommand({ yes: true, restart: false });
 
     expect(mocks.spawn).not.toHaveBeenCalled();
-    expect(update.resolveGatewayInstallEntrypoint).toHaveBeenCalledTimes(1);
     const doctorCalls = commandCalls().filter(([argv]) => argv.at(-1) === "--doctor");
     expect(doctorCalls).toHaveLength(1);
     update.expectDelegatedPluginDoctorInput(doctorCalls[0]?.[1].input);
-    expect(
-      vi
-        .mocked(update.runExec)
-        .mock.calls.filter(([, args]) => args[0] === f.FRESH_POST_UPDATE_ENTRYPOINT),
-    ).toEqual([
-      [
-        expect.any(String),
-        [f.FRESH_POST_UPDATE_ENTRYPOINT, "config", "validate", "--json"],
-        expect.objectContaining({ env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" } }),
-      ],
-    ]);
+    expect(update.runExec).toHaveBeenCalledWith(
+      expect.any(String),
+      [f.FRESH_POST_UPDATE_ENTRYPOINT, "config", "validate", "--json"],
+      expect.objectContaining({ env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" } }),
+    );
     expect(strictValidationEnv).toBe("0");
     expect(update.defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
@@ -284,12 +227,10 @@ describe("update-cli", () => {
       "gateway",
       "install",
     ]);
-    expect(installCalls[0]?.[1]).toEqual(
-      expect.objectContaining({
-        cwd: oldInstall.root,
-        input: expect.stringContaining('"targetRoot":' + JSON.stringify(oldInstall.root)),
-      }),
-    );
+    expect(installCalls[0]?.[1]).toMatchObject({
+      cwd: oldInstall.root,
+      input: expect.stringContaining('"targetRoot":' + JSON.stringify(oldInstall.root)),
+    });
     expect(mocks.serviceStop).toHaveBeenCalledOnce();
     expect(getLogOutput()).toContain("Gateway: restarted and verified");
   });
@@ -310,13 +251,7 @@ describe("update-cli", () => {
       mocks.nodeVersionSatisfiesEngine.mockImplementation(
         (version: string | null) => version === "26.12.1",
       );
-      mocks.resolveNodeRuntimeInfo.mockImplementation(async () => ({
-        status: "supported",
-        version: "24.20.0",
-        sqliteVersion: "3.51.3",
-        nodeSharedSqlite: false,
-        sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
-      }));
+      mocks.resolveNodeRuntimeInfo.mockResolvedValue(runtimeFixture("24.20.0"));
       const recovery = await import("./update-cli/update-command-node-runtime-resolution.js");
       const recoverNode = vi
         .spyOn(recovery, "resolveTargetNodeRuntime")

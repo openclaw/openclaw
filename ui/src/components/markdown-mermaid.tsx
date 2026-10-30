@@ -18,6 +18,7 @@ import {
 import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import { registerCodeBlocksEnglish } from "../i18n/locales/en-code-blocks.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
+import { observeDocumentRootAttributes } from "../lib/reactive/document-root-attributes.ts";
 import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { resolveThemeColor } from "../lib/theme-color.ts";
@@ -160,14 +161,14 @@ function MermaidContent(props: MermaidProps, host: MermaidElement) {
   });
 
   onSettled(() => {
-    const themeObserver = new MutationObserver(() => setThemeRevision((value) => value + 1));
-    themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["data-theme", "data-theme-mode", "style"],
-    });
+    const stopTheme = observeDocumentRootAttributes(
+      document,
+      ["data-theme", "data-theme-mode", "style"],
+      () => setThemeRevision((value) => value + 1),
+    );
     return () => {
       disposed = true;
-      themeObserver.disconnect();
+      stopTheme();
       copyAttempt += 1;
     };
   });

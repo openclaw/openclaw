@@ -4,7 +4,6 @@ import { jsonArrayElements } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
-  iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import {
   readRecentSessionTranscriptMessageEventsFromProjection,
@@ -20,7 +19,6 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   getActiveTranscriptKysely,
-  selectActiveTranscriptIdentityRows,
   getMessageRangeReaders,
   parseActiveTranscriptMessageRow,
   selectMessageMetadata,
@@ -53,12 +51,6 @@ import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
-import {
-  transcriptEventNavigationSql,
-  transcriptEventRunIdSql,
-  transcriptPredicateSql,
-} from "./transcript-payload.js";
-import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 export { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 export {
   isSessionTranscriptProjectionUnavailableError,
@@ -99,76 +91,6 @@ export function readLatestSessionTranscriptMessageEvent(
   );
 }
 
-/** Checks user control facts from an exact input on one active-path snapshot, without loading bodies. */
-export function everySessionTranscriptUserInputFrom(
-  scope: SessionTranscriptReadScope,
-  idempotencyKey: string,
-  accept: (message: unknown) => boolean,
-  preparedProjection?: CurrentTranscriptProjection,
-): boolean {
-  const read = (projection: CurrentTranscriptProjection) => {
-    const fence = resolveSqliteSessionTranscriptReadFence({
-      database: projection.database,
-      ...projection.resolved,
-    });
-    const end = fence?.beforeActiveMessagePosition ?? projection.state.activeMessageCount;
-    const anchor = executeSqliteQueryTakeFirstSync(
-      projection.database.db,
-      selectActiveTranscriptIdentityRows(projection.database)
-        .select("active.message_position")
-        .where("identity.session_id", "=", projection.resolved.sessionId)
-        .where("identity.message_idempotency_key", "=", idempotencyKey)
-        .where("active.message_position", "is not", null)
-        .where("active.message_position", "<", end)
-        .limit(1),
-    );
-    if (anchor?.message_position == null) {
-      return false;
-    }
-    const window = resolveTranscriptBoundaryWindow(projection, "history", fence?.beforeRawSeq);
-    const postStart = window?.postBoundaryMessagePosition ?? 0;
-    // Kept-tail messages remain display history, not execution authority after
-    // a reset preceding this read fence.
-    if (anchor.message_position < postStart) {
-      return false;
-    }
-    const query = selectMessageRows(projection.database, projection.resolved.sessionId, {
-      start: anchor.message_position,
-      endExclusive: end,
-    })
-      .select(
-        /* kysely-allow-raw: Stream only admission control facts, never message bodies, across the exact active input range. */
-        sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.role'),
-          'idempotencyKey', json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.idempotencyKey'),
-          '__openclaw', json_object('runId', ${transcriptEventRunIdSql(projection.database.db, "event")}),
-          'provenance', json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.provenance'))`.as(
-          "message_json",
-        ),
-      )
-      .select(
-        transcriptPredicateSql(projection.database.db, "navigation_valid", "event").as(
-          "navigation_valid",
-        ),
-      )
-      .where((eb) =>
-        eb.or([
-          eb(transcriptPredicateSql(projection.database.db, "message_role", "event"), "=", "user"),
-          eb(transcriptPredicateSql(projection.database.db, "navigation_valid", "event"), "=", 0),
-        ]),
-      );
-    let seen = false;
-    for (const row of iterateSqliteQuerySync(projection.database.db, query)) {
-      assertTranscriptNavigationValid(row.navigation_valid);
-      seen = true;
-      if (!accept(JSON.parse(row.message_json))) {
-        return false;
-      }
-    }
-    return seen;
-  };
-  return preparedProjection ? read(preparedProjection) : withCurrentProjectionSnapshot(scope, read);
-}
-
 /** Classifies one entry against the authoritative active path and leaf. */
 export function readSessionTranscriptActivePathEntryRelation(
   scope: SessionTranscriptReadScope,
@@ -194,7 +116,8 @@ export function readRecentSessionTranscriptActiveEvents(
       withRecentSessionTranscriptActiveEventsInSnapshot(projection, maxEvents, (visit) => {
         const events: TranscriptEvent[] = [];
         visit((event) => events.push(event));
-        return events.toReversed();
+        // oxlint-disable-next-line unicorn/no-array-reverse -- The visitor array is owned by this read.
+        return events.reverse();
       }),
     options,
   );

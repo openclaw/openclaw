@@ -4,6 +4,11 @@
   min-height: 0;
 }
 
+/* Embedded transcripts must fit panels narrower than the main conversation. */
+.chat-subagent-detail .chat-main {
+  min-width: 0;
+}
+
 .chat-subagents__list {
   display: flex;
   flex: 1;
@@ -61,12 +66,6 @@
   flex-shrink: 0;
   width: 12px;
   height: 12px;
-}
-
-.chat-subagents__empty {
-  padding: 14px 11px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
 }
 
 .chat-subagents__error {

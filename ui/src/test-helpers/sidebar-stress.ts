@@ -110,8 +110,8 @@ function fixtures(): GatewaySessionRow[] {
   for (const state of ["open", "draft", "merged", "closed"] as const) {
     add("pr-" + state);
   }
-  // Agent-declared attention keeps this row two-line even with previews off; pending
-  // approvals render single-line, where the trailing endcap intentionally takes title space.
+  // Previews off keeps this row single-line, where the trailing endcap intentionally
+  // takes title space as viewers join while the title's logical start stays anchored.
   add("crowded", {
     agentStatus: { note: "Needs a decision", attention: "key", expiresAt: Date.now() + 600000 },
     incognito: true,

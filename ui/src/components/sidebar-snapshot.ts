@@ -15,7 +15,7 @@ import {
 import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
-type SidebarSnapshotHost = {
+export function createSidebarSnapshot(host: {
   sidebarSnapshot: SidebarSnapshotModel | null;
   readonly sessionDataContext?: {
     gateway: ApplicationGateway;
@@ -28,9 +28,7 @@ type SidebarSnapshotHost = {
   restoreSidebarSnapshot(model: SidebarSnapshotModel): void;
   releaseSidebarSnapshot(): void;
   clearSidebarSnapshot(): void;
-};
-
-export function createSidebarSnapshot(host: SidebarSnapshotHost) {
+}) {
   let publish: (() => void) | undefined;
   let pending = false;
   let saved = false;

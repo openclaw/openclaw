@@ -2,6 +2,7 @@ export type SidebarSlotId =
   | "browser"
   | "link-reader"
   | "companion"
+  | "context"
   | "conversation"
   | "dashboard"
   | "desktop"

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -36,6 +37,9 @@ import {
 } from "./session-upstream-marker.js";
 
 const CODEX_SUPERVISION_SESSION_KEY_PREFIX = "harness:codex:supervision:";
+const loadSessionHistoryImport = createLazyRuntimeModule(
+  () => import("./app-server/session-history-import.js"),
+);
 type ContinuedCodexSession = {
   sessionKey: string;
   disposition: CodexSessionDisposition;
@@ -299,7 +303,7 @@ async function continueLocalCodexSessionInner(
         sourceThreadId: sourceThread.id,
         ...(params.sourceHomeId ? { sourceHomeId: params.sourceHomeId } : {}),
       };
-      const { createImportedCodexSession } = await import("./app-server/session-history-import.js");
+      const { createImportedCodexSession } = await loadSessionHistoryImport();
       const created = await createImportedCodexSession({
         runtime: params.api.runtime,
         bindingStore: params.bindingStore,

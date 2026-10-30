@@ -26,6 +26,8 @@ type SessionMetaSource = Pick<
 >;
 
 export type PreparedSessionMetaPatch = {
+  /** Undefined for internal turns; an empty declaration clears the previous client. */
+  clientCapabilities?: string[];
   group: {
     resolution: GroupKeyResolution;
     nextSubject: string | undefined;
@@ -171,8 +173,10 @@ export function projectSessionMetaPatch(params: {
     params.existing,
     params.sessionKey,
   );
+  const clientCapabilities = params.prepared.clientCapabilities;
+  const clientPatch = clientCapabilities !== undefined ? { clientCapabilities } : null;
   if (!groupPatch && !origin) {
-    return null;
+    return clientPatch;
   }
   const existingOrigin = sessionDeliveryOrigin(params.existing);
   const nextProvider = origin?.provider;
@@ -203,11 +207,14 @@ export function projectSessionMetaPatch(params: {
       !nextOwnsExternalRoute ||
       (existingContext && deliveryContextKey(nextContext) === deliveryContextKey(existingContext))
     ) {
-      return null;
+      return clientPatch;
     }
   }
 
-  const patch: Partial<SessionEntry> = groupPatch ? { ...groupPatch } : {};
+  const patch: Partial<SessionEntry> = {
+    ...groupPatch,
+    ...clientPatch,
+  };
   if (params.prepared.privateTelegramTopicName) {
     // Use the same canonical topicName consumed by native group-topic display.
     patch.topicName = params.prepared.privateTelegramTopicName;

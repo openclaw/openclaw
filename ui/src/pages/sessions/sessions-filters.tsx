@@ -3,6 +3,7 @@ import { hasMenuSurface } from "../../components/menu-surface.ts";
 import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -122,7 +123,34 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
             placeholder={t("sessionsView.searchPlaceholder")}
             value={props.searchQuery}
             onInput={(event) => props.onSearchChange(event.currentTarget.value)}
-            onKeyDown={(event: KeyboardEvent) => handleSessionsSearchKeydown(event, props)}
+            onKeyDown={(event: KeyboardEvent) => {
+              // SAFETY: This listener is bound directly to the search input.
+              const input = event.currentTarget as HTMLInputElement;
+              const document = input.ownerDocument;
+              if (
+                event.key !== "Escape" ||
+                event.defaultPrevented ||
+                event.isComposing ||
+                event.keyCode === 229 ||
+                event.altKey ||
+                event.ctrlKey ||
+                event.metaKey ||
+                event.shiftKey ||
+                document.activeElement !== input ||
+                !input.value ||
+                props.sessionMenu ||
+                hasModalSurface(document) ||
+                registryFor(document).stack.some(
+                  (overlay) => overlay.open && overlay.id !== "sessions-filter-popover",
+                ) ||
+                hasMenuSurface(document)
+              ) {
+                return;
+              }
+              event.preventDefault();
+              event.stopPropagation();
+              props.onSearchChange("");
+            }}
           />
           <button
             type="button"
@@ -224,24 +252,16 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
         </div>
         <label class="session-groupby">
           <span class="session-groupby__label">{t("sessionsView.groupBy")}</span>
-          <select
+          <SettingsSelect
             class="session-groupby__select"
+            value={props.groupBy}
+            options={SESSION_GROUP_MODES.filter(
+              (mode) => mode !== "person" || props.personGroupingAvailable,
+            ).map((mode) => ({ value: mode, label: t(SESSION_GROUP_MODE_LABELS[mode]) }))}
             onChange={(event) =>
               props.onGroupByChange(normalizeSessionsGroupBy(event.currentTarget.value))
             }
-          >
-            <For
-              each={SESSION_GROUP_MODES.filter(
-                (mode) => mode !== "person" || props.personGroupingAvailable,
-              )}
-            >
-              {(mode) => (
-                <option value={mode} selected={props.groupBy === mode}>
-                  {t(SESSION_GROUP_MODE_LABELS[mode])}
-                </option>
-              )}
-            </For>
-          </select>
+          />
         </label>
         {props.groupBy === "category" ? (
           <button
@@ -270,41 +290,6 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
       </div>
     </Popover>
   );
-}
-
-function handleSessionsSearchKeydown(
-  event: KeyboardEvent,
-  props: {
-    sessionMenu: { key: string } | null;
-    onSearchChange: (query: string) => void;
-  },
-) {
-  // SAFETY: This listener is bound directly to the search input.
-  const input = event.currentTarget as HTMLInputElement;
-  const document = input.ownerDocument;
-  if (
-    event.key !== "Escape" ||
-    event.defaultPrevented ||
-    event.isComposing ||
-    event.keyCode === 229 ||
-    event.altKey ||
-    event.ctrlKey ||
-    event.metaKey ||
-    event.shiftKey ||
-    document.activeElement !== input ||
-    !input.value ||
-    props.sessionMenu ||
-    hasModalSurface(document) ||
-    registryFor(document).stack.some(
-      (overlay) => overlay.open && overlay.id !== "sessions-filter-popover",
-    ) ||
-    hasMenuSurface(document)
-  ) {
-    return;
-  }
-  event.preventDefault();
-  event.stopPropagation();
-  props.onSearchChange("");
 }
 
 // Drag-over highlighting toggles a class directly on the target row instead of

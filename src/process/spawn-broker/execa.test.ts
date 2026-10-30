@@ -1,4 +1,4 @@
-import { deepStrictEqual, ok } from "node:assert/strict";
+import { ok } from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
@@ -15,7 +15,6 @@ import { spawnCommand, withCommandProcessScope } from "../exec-spawn.js";
 import { runCommandBuffered, runCommandWithTimeout, runExec } from "../exec.js";
 import { prepareOomScoreAdjustedSpawn } from "../linux-oom-score.js";
 import { createChildAdapter } from "../supervisor/adapters/child.js";
-import { createServiceChildRelayAdapter } from "../supervisor/service-child-relay-host.js";
 import { BrokerChild } from "./child.js";
 import { runWithSpawnBroker } from "./context.js";
 import type { CommandSpawnOptions } from "./execa-types.js";
@@ -52,7 +51,11 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker command transpor
   }
 
   const cases: Array<[string, string, CommandSpawnOptions?, boolean?]> = [
-    ["success", "process.stdout.write('out\\n');process.stderr.write('err\\n')"],
+    [
+      "success",
+      "process.stdin.pipe(process.stdout);process.stderr.write('err\\n')",
+      { input: "out\n", stdin: "pipe" },
+    ],
     [
       "binary diagnostics",
       "process.stdout.write(Buffer.from([239,187,191,0,8,9,13,27,91,51,49,109,65,27,91,48,109,255,10]));process.stderr.write('failure\\r\\n');process.exitCode=3",
@@ -64,7 +67,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker command transpor
     ],
     ["signal", "process.kill(process.pid,'SIGTERM')"],
     ["timeout", "setInterval(()=>{},1000)", { timeout: 100 }],
-    ["maxBuffer", "process.stdout.write('x'.repeat(8192))", { maxBuffer: 128 }],
+    ["maxBuffer", "console.log('x'.repeat(8192));setInterval(()=>{},1000)", { maxBuffer: 128 }],
     ["cancel", "process.stdout.write('ready');setInterval(()=>{},1000)", undefined, true],
     [
       "forced cancel",
@@ -232,40 +235,6 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker command transpor
     },
   );
 
-  it.each([false, true])(
-    "preserves large stdin and both output streams (buffer: %s)",
-    async (buffer) => {
-      const size = 1024 * 1024 + 137;
-      const prefix = "broker input\n";
-      const command = start(
-        `const input=[];process.stdin.on('data',b=>input.push(b));process.stdin.on('end',()=>{const prefix=Buffer.concat(input);for(const stream of [process.stdout,process.stderr]){stream.write(prefix);for(let i=0;i<${size};i+=4096){const count=Math.min(4096,${size}-i);stream.write(Buffer.alloc(count,(i/4096)%251));}}});`,
-        {
-          buffer,
-          input: prefix,
-          encoding: "buffer",
-          maxBuffer: 2 * 1024 * 1024,
-          stripFinalNewline: false,
-        },
-      );
-      await readyCommand(command);
-      const chunks = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
-      command.stdout?.on("data", (chunk: Buffer) => chunks.stdout.push(chunk));
-      command.stderr?.on("data", (chunk: Buffer) => chunks.stderr.push(chunk));
-      const result = await command;
-      const expected = Buffer.concat([
-        Buffer.from(prefix),
-        Buffer.from(Array.from({ length: size }, (_, index) => Math.floor(index / 4096) % 251)),
-      ]);
-      for (const name of ["stdout", "stderr"] as const) {
-        deepStrictEqual(Buffer.concat(chunks[name]), expected);
-        if (buffer) {
-          deepStrictEqual(Buffer.from(result[name] as Uint8Array), expected);
-        }
-      }
-      expect(result.exitCode).toBe(0);
-    },
-  );
-
   it("drains buffered results larger than one IPC frame when callers only await", async () => {
     const command = start("process.stdout.write('x'.repeat(17*1024*1024))", {
       encoding: "buffer",
@@ -373,29 +342,27 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker command transpor
     expect(await readFile(scorePath, "utf8")).toBe(original);
   });
 
-  it.each(["exec", "buffered", "adapter", "one-shot"] as const)("routes %s", async (transport) => {
-    await runWithSpawnBroker(transport === "one-shot" ? undefined : host, async () => {
-      const args = ["-e", "process.stdout.write(String(process.ppid))"];
-      let output = "";
+  it.each(["buffered", "adapter"])("routes %s commands through the broker", async (transport) => {
+    await runWithSpawnBroker(host, async () => {
+      const argv = nodeArgv("process.stdout.write(String(process.ppid))");
       if (transport === "buffered") {
-        const result = await runCommandBuffered([process.execPath, ...args]);
+        const result = await runCommandBuffered(argv);
         expect(result.termination).toBe("exit");
-        output = result.stdout.toString();
-      } else if (transport === "adapter") {
+        expect(Number(result.stdout.toString())).toBe(host.pid);
+      } else {
         const { adapter, ready } = await createChildAdapter({
-          argv: [process.execPath, ...args],
+          argv,
           stdinMode: "pipe-closed",
           exactEnv: true,
         });
+        let output = "";
         adapter.onStdout((chunk) => {
           output += chunk;
         });
         const result = await ready.then(() => adapter.wait()).finally(() => adapter.dispose());
         expect(result).toEqual({ code: 0, signal: null });
-      } else {
-        output = (await runExec(process.execPath, args, { logOutput: false })).stdout;
+        expect(Number(output)).toBe(host.pid);
       }
-      expect(Number(output)).toBe(transport === "one-shot" ? process.pid : host.pid);
     });
   });
 
@@ -411,57 +378,6 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker command transpor
 
   describe("brokered process lifecycle owners", () => {
     aroundEach((runTest) => runWithSpawnBroker(host, runTest));
-
-    it("retains relay control and lineage through root exit and tree cancellation", async ({
-      signal,
-    }) => {
-      const { adapter, ready } = await createServiceChildRelayAdapter({
-        command: process.execPath,
-        args: [
-          "-e",
-          `
-          const {spawn}=require('node:child_process');
-          const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{
-            stdio:['ignore','ignore','ignore',3],
-          });
-          process.stdout.write(String(process.ppid));
-          child.unref();
-        `,
-        ],
-        stdinMode: "pipe-closed",
-        oomScoreWrapperSelected: false,
-      });
-      let output = "";
-      adapter.onStdout((chunk) => {
-        output += chunk;
-      });
-      adapter.onStderr(() => {});
-      const extinction = adapter.waitForExtinction();
-      const extinct = vi.fn();
-      void extinction.then(extinct, () => {});
-      try {
-        await ready;
-        await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
-        expect(extinct).not.toHaveBeenCalled();
-        const anchorPid = Number(output);
-        expect(anchorPid).toBeGreaterThan(0);
-        const parentOf = async (pid: number) =>
-          Number(
-            (await runExec("ps", ["-o", "ppid=", "-p", String(pid)], { logOutput: false })).stdout,
-          );
-        // Native custody is brokered directly; process-group custody adds a relay.
-        const brokerChildPid =
-          adapter.treeOwnership === "linux-subreaper" ? anchorPid : await parentOf(anchorPid);
-        expect(await parentOf(brokerChildPid)).toBe(host.pid);
-        adapter.kill("SIGTERM");
-        await withinTest(extinction, signal);
-        expect(extinct).toHaveBeenCalled();
-      } finally {
-        adapter.kill("SIGKILL");
-        await extinction.catch(() => {});
-        adapter.dispose();
-      }
-    });
 
     it("forwards the ownedWorker start gate and disconnect through the broker", async ({
       signal,

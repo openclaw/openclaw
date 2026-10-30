@@ -5,7 +5,7 @@ import { getAiTransportHost, type AssistantMessage, type Model } from "@openclaw
 import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../../config/validation-core.js";
@@ -697,7 +697,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                 }
               }
               const result = pendingPreparation
-                ? await withTestTimeout(operation, 5_000, "Tool preparation did not settle")
+                ? await withinTest(operation, signal)
                 : await operation;
               const cancelled =
                 mode === "reload-abort-before-commit" || mode === "abort-after-commit";
@@ -742,7 +742,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                 if (mode !== "cleanup-tail") {
                   expect(current.tools.every((tool) => tool.database.isOpen)).toBe(true);
                 }
-                const owner = captured?.work ?? parent;
+                const owner = captured?.active.work ?? parent;
                 expect(owner.hasPendingWork).toBe(true);
                 let finished = false;
                 drained = owner.drain().then(() => {
@@ -784,7 +784,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
               current.finish.resolve();
               await Promise.allSettled([operation, ...current.pending]);
               await (drained ?? parent.drain());
-              await captured?.work.drain();
+              await captured?.active.work.drain();
               await captured?.release();
               await previousLease?.[Symbol.asyncDispose]();
               await resetPreparedModelRuntimeSnapshotsForTest();

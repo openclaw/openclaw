@@ -181,9 +181,10 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
       }
       groups.push(
         ...Array.from(pluginGroups.values(), (group) => {
-          group.tools = group.tools.toSorted((a, b) => a.id.localeCompare(b.id));
+          group.tools.sort((a, b) => a.id.localeCompare(b.id));
           return group;
-        }).toSorted((a, b) => a.label.localeCompare(b.label)),
+          // oxlint-disable-next-line unicorn/no-array-sort -- Array.from creates a fresh, private array.
+        }).sort((a, b) => a.label.localeCompare(b.label)),
       );
     }
     respond(

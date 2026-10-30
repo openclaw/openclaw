@@ -5,31 +5,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 
-// The sheet is modal: Tab and Shift+Tab wrap between its first and last tabbable controls.
-function keepSheetFocus(panel: HTMLElement, targets: readonly HTMLElement[], event: KeyboardEvent) {
-  const tabbable = targets
-    .filter(
-      (candidate) =>
-        panel.contains(candidate) &&
-        candidate.tabIndex >= 0 &&
-        !candidate.matches(":disabled") &&
-        !candidate.closest("[hidden]") &&
-        candidate.checkVisibility(),
-    )
-    .toSorted((left, right) =>
-      left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
-    );
-  const boundary = event.shiftKey ? tabbable[0] : tabbable.at(-1);
-  const target = event.shiftKey ? tabbable.at(-1) : tabbable[0];
-  // A closing picker page may have handed focus back to its trigger.
-  const active = panel.ownerDocument.activeElement;
-  if (!target || active === panel || active === boundary) {
-    event.preventDefault();
-    target?.focus({ preventScroll: true });
-  }
-}
-
-type SidebarSessionFilterPopoverProps = {
+export function SidebarSessionFilterPopover(props: {
   class?: string;
   anchor: HTMLElement | null;
   label: string;
@@ -37,16 +13,36 @@ type SidebarSessionFilterPopoverProps = {
   focusTargets: () => readonly HTMLElement[];
   content: JSX.Element;
   onClose: (restoreFocus: boolean) => void;
-};
-
-export function SidebarSessionFilterPopover(props: SidebarSessionFilterPopoverProps) {
+}) {
   let host!: HTMLElement;
   let handle: PopoverHandle | undefined;
   let disconnectKeydown: (() => void) | undefined;
   let focused = false;
   const handleKeydown = (event: KeyboardEvent) => {
     if (event.key === "Tab" && !event.defaultPrevented && isMobileNavLayout() && handle) {
-      keepSheetFocus(handle.overlay.surface, props.focusTargets(), event);
+      // The sheet is modal: Tab and Shift+Tab wrap between its first and last tabbable controls.
+      const panel = handle.overlay.surface;
+      const targets = props.focusTargets();
+      const tabbable = targets
+        .filter(
+          (candidate) =>
+            panel.contains(candidate) &&
+            candidate.tabIndex >= 0 &&
+            !candidate.matches(":disabled") &&
+            !candidate.closest("[hidden]") &&
+            candidate.checkVisibility(),
+        )
+        .toSorted((left, right) =>
+          left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+        );
+      const boundary = event.shiftKey ? tabbable[0] : tabbable.at(-1);
+      const target = event.shiftKey ? tabbable.at(-1) : tabbable[0];
+      // A closing picker page may have handed focus back to its trigger.
+      const active = panel.ownerDocument.activeElement;
+      if (!target || active === panel || active === boundary) {
+        event.preventDefault();
+        target?.focus({ preventScroll: true });
+      }
     }
   };
   onSettled(() => () => disconnectKeydown?.());

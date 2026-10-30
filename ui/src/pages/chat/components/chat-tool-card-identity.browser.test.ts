@@ -133,8 +133,13 @@ it
         [false, true],
       ]);
     });
-    expect(
-      bubbles.map((bubble) => panel(bubble, "raw").querySelector("code")!.textContent),
-    ).toEqual(rows.map((row) => row.output));
+    expect(panel(bubbles[0]!, "raw").querySelector("code")!.textContent).toBe(rows[0]!.output);
+    bubbles[1]!.querySelector<HTMLButtonElement>('[role="tab"][data-tab-value="raw"]')!.click();
+    await waitForSolid(() => {
+      expect(bubbles.map((bubble) => panel(bubble, "raw").hidden)).toEqual([false, false]);
+      expect(
+        bubbles.map((bubble) => panel(bubble, "raw").querySelector("code")!.textContent),
+      ).toEqual(rows.map((row) => row.output));
+    });
   },
 );

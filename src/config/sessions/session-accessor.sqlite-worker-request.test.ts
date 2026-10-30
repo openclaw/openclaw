@@ -1,11 +1,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runSqliteMutationWorkerRequest } from "./session-accessor.sqlite-worker-request.js";
 
-const createWorker = (script: string) => new Worker(script, { eval: true, execArgv: [] });
+const createWorker = (script: string) => {
+  const worker = new Worker(script, { eval: true, execArgv: [] });
+  onTestFinished(async () => {
+    await worker.terminate();
+  });
+  return worker;
+};
 
 test("runs reused Worker request callbacks in the requesting operation context", async () => {
   const worker = createWorker(
@@ -15,27 +21,23 @@ test("runs reused Worker request callbacks in the requesting operation context",
   );
   const owner = new AsyncLocalStorage<string>();
   const observed: Array<{ event: string; owner: string | undefined }> = [];
-  try {
-    const result = await owner.run("request-7", () =>
-      runSqliteMutationWorkerRequest({
-        transport: { kind: "dedicated", channel: worker },
-        operationId: 7,
-        completion: "exit",
-        onCommitRequest: () => observed.push({ event: "message", owner: owner.getStore() }),
-        onExit: () => observed.push({ event: "exit", owner: owner.getStore() }),
-        withWriteAdmission: async () => {
-          throw new Error("Synthetic Worker must not request write admission");
-        },
-      }),
-    );
-    expect(result).toBe("done");
-    expect(observed).toEqual([
-      { event: "message", owner: "request-7" },
-      { event: "exit", owner: "request-7" },
-    ]);
-  } finally {
-    await worker.terminate();
-  }
+  const result = await owner.run("request-7", () =>
+    runSqliteMutationWorkerRequest({
+      transport: { kind: "dedicated", channel: worker },
+      operationId: 7,
+      completion: "exit",
+      onCommitRequest: () => observed.push({ event: "message", owner: owner.getStore() }),
+      onExit: () => observed.push({ event: "exit", owner: owner.getStore() }),
+      withWriteAdmission: async () => {
+        throw new Error("Synthetic Worker must not request write admission");
+      },
+    }),
+  );
+  expect(result).toBe("done");
+  expect(observed).toEqual([
+    { event: "message", owner: "request-7" },
+    { event: "exit", owner: "request-7" },
+  ]);
 });
 
 test("joins native exit before rejecting a Worker initialization error", async () => {
@@ -63,17 +65,13 @@ test("joins native exit before rejecting a Worker initialization error", async (
     events.push("rejected");
     return error;
   });
-  try {
-    const failure = await outcome;
-    expect(observedError).toMatchObject({ message: "worker module initialization failed" });
-    expect(failure).toBe(observedError);
-    expect(events).toEqual(["error", "exit", "rejected"]);
-    expect(worker.threadId).toBe(-1);
-    expect(onCommitRequest).not.toHaveBeenCalled();
-    expect(withWriteAdmission).not.toHaveBeenCalled();
-  } finally {
-    await worker.terminate();
-  }
+  const failure = await outcome;
+  expect(observedError).toMatchObject({ message: "worker module initialization failed" });
+  expect(failure).toBe(observedError);
+  expect(events).toEqual(["error", "exit", "rejected"]);
+  expect(worker.threadId).toBe(-1);
+  expect(onCommitRequest).not.toHaveBeenCalled();
+  expect(withWriteAdmission).not.toHaveBeenCalled();
 });
 
 test("joins queued admission after Worker exit without granting the dead Worker", async () => {

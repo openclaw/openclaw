@@ -1,19 +1,21 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
+import { mockDocumentVisibility } from "../test-helpers/mock-cleanup.ts";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
 import {
   handleMarkdownCodeBlockClick,
   readMarkdownCodeBlockCopyText,
 } from "./markdown-code-blocks.ts";
+import {
+  splitCodeHighlightHtml,
+  type CodeHighlightRequest,
+} from "./markdown-code-highlight-chunks.ts";
 import { parseMarkdownJson } from "./markdown-json.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
-import { htmlFragment } from "./markdown.test-support.ts";
-import {
-  toSanitizedJsonHtml,
-  toSanitizedMarkdownHtml,
-  toStreamingMarkdownParts,
-} from "./markdown.ts";
+import { htmlFragment, toStreamingMarkdownParts } from "./markdown.test-support.ts";
+import { toSanitizedJsonHtml, toSanitizedMarkdownHtml } from "./markdown.ts";
 
 function render(source: string, options?: MarkdownRenderOptions) {
   return interactiveHtml(toSanitizedMarkdownHtml(source, options));
@@ -29,12 +31,9 @@ const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execComma
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  if (originalExecCommand) {
-    Object.defineProperty(document, "execCommand", originalExecCommand);
-  } else {
-    Reflect.deleteProperty(document, "execCommand");
-  }
+  restorePropertyDescriptor(document, "execCommand", originalExecCommand);
   document.body.replaceChildren();
 });
 
@@ -78,6 +77,93 @@ async function copy(button: HTMLButtonElement, elapsed = 0) {
   button.click();
   await vi.advanceTimersByTimeAsync(elapsed);
 }
+
+it.each(["visible", "hidden"] as const)(
+  "gates direct Markdown owners on tab visibility without losing pane intent (initially %s)",
+  async (initial) => {
+    const show = mockDocumentVisibility(initial);
+    const observations: Set<Element>[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        private readonly targets = new Set<Element>();
+        constructor() {
+          observations.push(this.targets);
+        }
+        observe = (target: Element) => this.targets.add(target);
+        unobserve = (target: Element) => this.targets.delete(target);
+        disconnect = () => this.targets.clear();
+      },
+    );
+    const { section, blocks } = mountBlocks();
+    const code = section.querySelector("code")!;
+    const observed = () => observations.flatMap((targets) => Array.from(targets));
+    blocks.update(true);
+    await Promise.resolve();
+    expect(observed().includes(code)).toBe(initial === "visible");
+
+    show("hidden");
+    expect(observed()).toHaveLength(0);
+    // Custodian republishes active content; it must not restart hidden work.
+    blocks.update(true);
+    blocks.update(true);
+    await Promise.resolve();
+    expect(observed()).toHaveLength(0);
+    show("visible");
+    await Promise.resolve();
+    expect(observed()).toContain(code);
+    expect(section.querySelector("code")).toBe(code);
+
+    show("hidden");
+    blocks.update(false);
+    show("visible");
+    await Promise.resolve();
+    expect(observed()).toHaveLength(0);
+
+    blocks.update(true);
+    blocks.dispose();
+    await Promise.resolve();
+    expect(observed()).toHaveLength(0);
+    show("hidden");
+    show("visible");
+    await Promise.resolve();
+    expect(observed()).toHaveLength(0);
+  },
+);
+
+it("follows the rendering tab when a template reader is adopted after activation", async () => {
+  const show = mockDocumentVisibility("visible");
+  const observed = new Set<Element>();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe = (target: Element) => observed.add(target);
+      unobserve = (target: Element) => observed.delete(target);
+      disconnect = () => observed.clear();
+    },
+  );
+  const template = document.createElement("template");
+  template.innerHTML =
+    '<article><div class="code-block-wrapper"><pre class="code-block-viewport"><code>const answer = 42;</code></pre></div></article>';
+  const root = template.content.firstElementChild as HTMLElement;
+  expect(root.ownerDocument).not.toBe(document);
+  expect(root.ownerDocument.defaultView).toBeNull();
+  const blocks = ownBlocks(root);
+  blocks.update(true);
+  document.body.append(root);
+  await Promise.resolve();
+  const code = root.querySelector("code")!;
+  expect(observed).toContain(code);
+
+  show("hidden");
+  expect(observed.size).toBe(0);
+  show("visible");
+  await Promise.resolve();
+  expect(observed).toContain(code);
+  expect(root.querySelector("code")).toBe(code);
+  blocks.dispose();
+  expect(observed.size).toBe(0);
+});
 
 it("reobserves retained Markdown DOM while fencing scans queued before hide or disposal", async () => {
   const observed = new Set<Element>();
@@ -163,6 +249,159 @@ it("does not remeasure settled Markdown while neighboring prose streams", async 
   const viewport = wrapper.querySelector<HTMLElement>(".code-block-viewport")!;
   expect(viewport.id).not.toBe("");
   expect(expand.getAttribute("aria-controls")).toBe(viewport.id);
+});
+
+it("splits highlighted code into bounded, balanced fragments with exact source offsets", () => {
+  const source = "comment 🦞 & < > \" ' text\n".repeat(400);
+  const escaped = source
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#x27;");
+  const { chunks, previewEnd } = splitCodeHighlightHtml(
+    `<span class="hljs-comment">${escaped}</span>`,
+  );
+  expect(previewEnd).toBe("comment 🦞 & < > \" ' text\n".repeat(7).length);
+  let from = 0;
+  for (const chunk of chunks) {
+    const fragment = htmlFragment(chunk.html);
+    expect(fragment.textContent).toBe(source.slice(from, chunk.to));
+    expect(fragment.querySelector(".hljs-comment")?.textContent).toBe(fragment.textContent);
+    expect(fragment.querySelectorAll("span").length).toBeLessThanOrEqual(128);
+    expect(chunk.to - from).toBeLessThanOrEqual(2_049);
+    from = chunk.to;
+  }
+  expect(chunks.at(-1)?.to).toBe(source.length);
+});
+
+it("shares one worker for long fences and preserves complete text through reveal and retirement", async () => {
+  vi.useFakeTimers();
+  const workers: TestWorker[] = [];
+  const requests: { worker: TestWorker; data: CodeHighlightRequest }[] = [];
+  class TestWorker extends EventTarget {
+    terminate = vi.fn();
+    constructor() {
+      super();
+      workers.push(this);
+    }
+    postMessage(data: CodeHighlightRequest) {
+      requests.push({ worker: this, data });
+    }
+    deliver(data: CodeHighlightRequest) {
+      const escaped = data.source
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+      this.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            id: data.id,
+            ...splitCodeHighlightHtml(`<span class="hljs-comment">${escaped}</span>`),
+            highlighted: true,
+          },
+        }),
+      );
+    }
+  }
+  vi.stubGlobal("Worker", TestWorker);
+  const source = "source line\n".repeat(400);
+  const jsonSource = JSON.stringify(
+    Array.from({ length: 400 }, () => 'escaped \\n " < > & 🦞'),
+    null,
+    2,
+  ).replaceAll("\n", "\r\n");
+  const json = parseMarkdownJson(jsonSource);
+  if (!json) {
+    throw new Error("Invalid JSON fixture");
+  }
+  const sources = [source, jsonSource];
+  const roots = sources.map((value, index) => {
+    const root = document.body.appendChild(document.createElement("section"));
+    root.className = "chat-text";
+    root.innerHTML =
+      index === 0
+        ? toSanitizedMarkdownHtml(`\`\`\`ts\n${value}\`\`\``, {
+            codeBlockInteraction: "interactive",
+          })
+        : toSanitizedJsonHtml(json, { codeBlockInteraction: "interactive" });
+    root.addEventListener("click", handleMarkdownCodeBlockClick);
+    root.querySelector<HTMLButtonElement>('[data-json-mode="raw"]')?.click();
+    return root;
+  });
+  const owners = roots.map(ownBlocks);
+  try {
+    owners.forEach((owner) => owner.update(true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(workers).toHaveLength(1);
+    expect(requests).toHaveLength(2);
+    expect(roots[1]!.querySelector("code")?.textContent).toBe(jsonSource);
+    expect(readMarkdownCodeBlockCopyText(roots[1]!.querySelector(".code-block-copy")!)).toBe(
+      jsonSource,
+    );
+    requests.forEach(({ worker, data }) => worker.deliver(data));
+    await vi.advanceTimersByTimeAsync(2_000);
+    for (const [index, root] of roots.entries()) {
+      const value = sources[index]!;
+      const code = root.querySelector("code")!;
+      expect(code.textContent).toBe(value);
+      expect(code.querySelector(".hljs-comment")?.textContent).toBe(
+        value.split("\n").slice(0, 7).join("\n") + "\n",
+      );
+      expect(readMarkdownCodeBlockCopyText(root.querySelector(".code-block-copy")!)).toBe(
+        index === 0 ? value.slice(0, -1) : value,
+      );
+    }
+    roots[0]!.appendChild(document.createElement("p")).textContent = "Unrelated prose";
+    owners[0]!.update(true);
+    roots[0]!.querySelector<HTMLButtonElement>(".code-block-expand")!.click();
+    const code = roots[0]!.querySelector("code")!;
+    const selection = document.getSelection()!;
+    const range = document.createRange();
+    range.setStart(code.lastChild!, 100);
+    range.setEnd(code.lastChild!, 120);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    onTestFinished(() => selection.removeAllRanges());
+    const selected = selection.toString();
+    expect(selected).toHaveLength(20);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(selection.toString()).toBe(selected);
+    selection.removeAllRanges();
+    document.dispatchEvent(new Event("selectionchange"));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(roots[0]!.querySelector("code")?.textContent).toBe(source);
+    expect(
+      [...roots[0]!.querySelectorAll(".hljs-comment")].map((node) => node.textContent).join(""),
+    ).toBe(source);
+    roots[1]!.querySelector<HTMLButtonElement>(".code-block-expand")!.click();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(roots[1]!.querySelector("code")?.textContent).toBe(jsonSource);
+    expect(
+      [...roots[1]!.querySelectorAll(".hljs-comment")].map((node) => node.textContent).join(""),
+    ).toBe(jsonSource);
+    expect(readMarkdownCodeBlockCopyText(roots[1]!.querySelector(".code-block-copy")!)).toBe(
+      jsonSource,
+    );
+    expect(requests).toHaveLength(2);
+    owners.forEach((owner) => owner.update(false));
+    expect(workers[0]!.terminate).toHaveBeenCalledOnce();
+    roots[0]!.innerHTML = toSanitizedMarkdownHtml(
+      `\`\`\`ts\n${source.replaceAll("source", "new")}\`\`\``,
+      { codeBlockInteraction: "interactive" },
+    );
+    owners[0]!.update(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requests).toHaveLength(3);
+    owners[0]!.update(false);
+    const latest = requests[2]!;
+    latest.worker.deliver(latest.data);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(roots[0]!.querySelector("code")?.textContent).toBe(source.replaceAll("source", "new"));
+    expect(roots[0]!.querySelector("code span")).toBeNull();
+  } finally {
+    owners.forEach((owner) => owner.dispose());
+  }
 });
 
 function expectText(root: ParentNode, selector: string) {

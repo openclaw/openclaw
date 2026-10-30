@@ -189,7 +189,7 @@ grant destinations. Missing mappings are reported together before repository
 commands run. See [cloud environment files](/gateway/cloud-workers/environment-file).
 
 Profile setup, preparation, and post-create/start use Crabbox native `egress run`
-on the worker's owned coordinator Linux lease. Crabbox 0.77.0 or newer permits
+on the worker's owned coordinator Linux lease. Crabbox 0.79.2 or newer permits
 public destinations for ordinary HTTPS package downloads, while the Gateway
 substitutes each sentinel only at that secret's bound host. This job does not
 require `secrets.egressProxy.enabled`. Unsupported leases, unavailable helpers or

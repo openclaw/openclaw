@@ -1,10 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it as baseIt, vi } from "vitest";
+import { expect, it as baseIt, vi } from "vitest";
 import { patchConfigHealthEntryToStore } from "../config/io.health-state.js";
 import { createConfigIO } from "../config/io.js";
 import { createConfigHealthFingerprint } from "../config/io.observe-state.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
@@ -17,8 +16,6 @@ const repairOptions = {
   repairPrefixedConfig: true,
   invalidConfigNote: false,
 } satisfies DoctorConfigPreflightOptions;
-
-afterEach(closeOpenClawStateDatabaseForTest);
 
 const it = baseIt.extend<{ home: string; configPath: string }>({
   home: ({ task: _task }, use) => withDoctorConfigPreflightHome(use),
@@ -110,12 +107,9 @@ it("recovers roster ownership and the legacy default after runtime recovery refu
   configPath,
   home,
 }) => {
-  const workspace = (id: string) => ({ workspace: path.join(home, `workspace-${id}`) });
-  const entries = {
-    alpha: workspace("alpha"),
-    beta: workspace("beta"),
-    gamma: workspace("gamma"),
-  };
+  const entries = Object.fromEntries(
+    ["alpha", "beta", "gamma"].map((id) => [id, { workspace: path.join(home, `workspace-${id}`) }]),
+  );
   const bindings = [{ agentId: "beta", match: { channel: "discord" } }];
   const backup = JSON.stringify({
     gateway: { mode: "local" },

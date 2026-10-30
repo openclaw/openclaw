@@ -1,4 +1,5 @@
 import type {
+  Transport,
   RequestOptions,
   StandardSchemaV1,
   CallToolRequest,
@@ -23,8 +24,8 @@ vi.mock("../agents/mcp-transport.js", () => ({ resolveMcpTransport: resolveTrans
 
 type TransportFixture = Pick<
   NonNullable<ReturnType<typeof resolveMcpTransport>>,
-  "transport" | "transportType" | "connectionTimeoutMs" | "requestTimeoutMs" | "detachStderr"
->;
+  "transportType" | "connectionTimeoutMs" | "requestTimeoutMs" | "detachStderr"
+> & { transport: Transport };
 
 type ClientFixture = {
   onclose?: () => void;

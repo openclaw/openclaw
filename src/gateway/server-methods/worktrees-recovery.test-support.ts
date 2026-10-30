@@ -14,23 +14,18 @@ import { initializeGitFixture } from "../../agents/worktrees/git-fixture.test-su
 import { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../../infra/device-identity.js";
-import { approveDevicePairing } from "../../infra/device-pairing-approval.js";
-import { rotateDeviceToken } from "../../infra/device-pairing-tokens.js";
-import { requestDevicePairing } from "../../infra/device-pairing.js";
 import * as fsSafe from "../../infra/fs-safe.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { pairOperatorDeviceFixture } from "../paired-device.test-support.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../test-helpers.e2e.js";
+import { createAuthorityGatewayTestEnv } from "../test-helpers.env.js";
 import * as recoveryOwner from "../worker-environments/local-workspace-recovery.js";
 import { readLocalWorkspaceProjection } from "../worker-environments/local-workspace-store.test-support.js";
 
@@ -48,16 +43,7 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
     {
       label: "workspace-recovery-authority",
       scenario: "minimal",
-      env: {
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_DISABLE_BONJOUR: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
+      env: createAuthorityGatewayTestEnv(),
     },
     async (state) => {
       const lock = await acquireGatewayLock({
@@ -100,24 +86,13 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
         const expectedOwnerId = captureGatewayStateOwner(resolveOpenClawStateSqlitePath())?.ownerId;
         expect(expectedOwnerId).toBeTruthy();
         const connectDevice = async (label: string, scopes: string[]) => {
-          const identity = loadOrCreateDeviceIdentity({
-            path: state.path(label, "client", "credentials.sqlite"),
-          });
-          const pending = await requestDevicePairing({
-            deviceId: identity.deviceId,
-            publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+          const { identity, issued: token } = await pairOperatorDeviceFixture({
+            identityPath: state.path(label, "client", "credentials.sqlite"),
+            scopes,
+            tokenScopes: scopes,
             clientId: "test",
             clientMode: "backend",
-            role: "operator",
-            scopes,
-          });
-          await approveDevicePairing(pending.request.requestId, {
             callerScopes: ["operator.admin"],
-          });
-          const token = await rotateDeviceToken({
-            deviceId: identity.deviceId,
-            role: "operator",
-            scopes,
           });
           if (!token.ok) {
             throw new Error("Expected a paired device token");
@@ -140,22 +115,22 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
         );
         const sessionKey = "agent:main:dashboard:recovery-authority";
         const service = new ManagedWorktreeService({ env: state.env, getConfig: () => cfg });
-        const worktree = await service.create({
-          repoRoot: repository,
-          name: "recovery",
-          ownerKind: "session",
-          ownerId: sessionKey,
-          runSetupScript: false,
-        });
-        const replacement = await service.create({
-          repoRoot: repository,
-          name: "replacement",
-          ownerKind: "session",
-          ownerId: sessionKey + "-replacement",
-          runSetupScript: false,
-        });
-        const binding = { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot };
-        const entry = { sessionId: randomUUID(), updatedAt: Date.now(), worktree: binding };
+        const createWorktree = (name: string, ownerId: string) =>
+          service.create({
+            repoRoot: repository,
+            name,
+            ownerKind: "session",
+            ownerId,
+            runSetupScript: false,
+          });
+        const worktree = await createWorktree("recovery", sessionKey);
+        const replacement = await createWorktree("replacement", sessionKey + "-replacement");
+        const binding = ({ id, branch, repoRoot }: typeof worktree) => ({ id, branch, repoRoot });
+        const entry = {
+          sessionId: randomUUID(),
+          updatedAt: Date.now(),
+          worktree: binding(worktree),
+        };
         const session = {
           agentId: "main",
           sessionKey,
@@ -163,20 +138,20 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
             cfg.session?.store ?? state.statePath("agents", "main", "sessions", "sessions.json"),
         };
         await replaceSessionEntry(session, entry);
-        const prepare = () =>
-          prepareLocalSandboxWorkspace({
-            cfg,
-            agentId: "main",
-            sessionKey,
-            workspaceDir: worktree.path,
-            sandbox: resolveSandboxConfigForAgent(cfg, "main"),
-          });
-        const prepared = await prepare();
+        const prepared = await prepareLocalSandboxWorkspace({
+          cfg,
+          agentId: "main",
+          sessionKey,
+          workspaceDir: worktree.path,
+          sandbox: resolveSandboxConfigForAgent(cfg, "main"),
+        });
         if (!prepared) {
           throw new Error("Expected a local sandbox projection");
         }
-        const relative = ".openclaw/tmp/oversized.bin";
+        const relative = "artifacts/oversized.bin";
         const source = path.join(prepared.workspaceDir, relative);
+        const editedSource = path.join(prepared.workspaceDir, "source.txt");
+        const sourceEdit = "preserved source edit\n";
         const recoveryId = randomUUID();
         const destination = path.join(
           await fs.realpath(state.stateDir),
@@ -189,10 +164,7 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
           await fs.mkdir(path.dirname(source), { recursive: true });
           await fs.writeFile(source, "retained recovery authority proof\n");
           await fs.truncate(source, 64 * 1024 * 1024 + 1);
-          await fs.writeFile(
-            path.join(prepared.workspaceDir, "source.txt"),
-            "preserved source edit\n",
-          );
+          await fs.writeFile(editedSource, sourceEdit);
           await expect(prepared.checkpoint()).rejects.toThrow("result is too large");
         } finally {
           prepared[Symbol.dispose]();
@@ -203,17 +175,14 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
         const unchanged = async () => {
           expect(await digest(source)).toBe(originalHash);
           await expect(fs.stat(destination)).rejects.toMatchObject({ code: "ENOENT" });
-          expect(await fs.readFile(path.join(prepared.workspaceDir, "source.txt"), "utf8")).toBe(
-            "preserved source edit\n",
-          );
+          expect(await fs.readFile(editedSource, "utf8")).toBe(sourceEdit);
           expect((await readLocalWorkspaceProjection(worktree.id))!.pending_ref).toBe(pending);
         };
-        let gate:
-          | {
-              entered: ReturnType<typeof createDeferred<void>>;
-              release: ReturnType<typeof createDeferred<void>>;
-            }
-          | undefined;
+        const createGate = () => ({
+          entered: createDeferred(),
+          release: createDeferred(),
+        });
+        let gate: ReturnType<typeof createGate> | undefined;
         let moveCount = 0;
         const realRoot = fsSafe.root;
         // Pause the actual source-file open after it succeeds. All subsequent checks,
@@ -243,9 +212,6 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
         );
         await unchanged();
         expect(moveCount).toBe(0);
-        console.info(
-          "Recovery authority: write-only denied; original hash/pending edits unchanged; destination absent; moves=0",
-        );
         const revoked = await connectDevice("revoked-admin", ["operator.admin"]);
         for (const change of [
           "requester-revoked",
@@ -253,7 +219,7 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
           "worktree-rebound",
         ] as const) {
           const finished = createDeferred<unknown>();
-          gate = { entered: createDeferred(), release: createDeferred() };
+          gate = createGate();
           const selectedGate = gate;
           const recover = recoveryOwner.recoverLocalWorkspaceFile;
           const observed = vi
@@ -297,14 +263,7 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
                 session,
                 change === "session-replaced"
                   ? { ...entry, sessionId: randomUUID() }
-                  : {
-                      ...entry,
-                      worktree: {
-                        id: replacement.id,
-                        branch: replacement.branch,
-                        repoRoot: replacement.repoRoot,
-                      },
-                    },
+                  : { ...entry, worktree: binding(replacement) },
               );
             }
             selectedGate.release.resolve();
@@ -314,11 +273,6 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
             expect(await withinTest(reply, signal)).toHaveProperty("error");
             await unchanged();
             expect(moveCount).toBe(0);
-            console.info(
-              "Recovery authority: " +
-                change +
-                " during source open denied; original hash/pending edits unchanged; destination absent; moves=0",
-            );
           } finally {
             selectedGate.release.resolve();
             await withinTest(Promise.all([finished.promise, reply]), signal);
@@ -335,12 +289,7 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
         await expect(fs.stat(source)).rejects.toMatchObject({ code: "ENOENT" });
         expect(await digest(destination)).toBe(originalHash);
         expect(moveCount).toBe(1);
-        expect(await fs.readFile(path.join(prepared.workspaceDir, "source.txt"), "utf8")).toBe(
-          "preserved source edit\n",
-        );
-        console.info(
-          "Recovery authority: current administrator allowed; retained hash unchanged; source edit preserved; moves=1",
-        );
+        expect(await fs.readFile(editedSource, "utf8")).toBe(sourceEdit);
       } finally {
         vi.restoreAllMocks();
         for (const client of clients) {

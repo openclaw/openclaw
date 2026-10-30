@@ -73,26 +73,49 @@ For `ssh` and OpenShell `remote`, recreate matters more than with Docker: the re
 
 ### `openclaw sandbox recover`
 
-When a newly generated guest file exceeds the 64 MiB reconciliation limit, its
-pending checkpoint is preserved and later messages cannot prepare the workspace.
-Use explicit recovery to move that selected file out of synchronization without
-losing its bytes:
+When a guest file exceeds the 64 MiB reconciliation limit, or changed files and
+symlink targets together exceed the 768 MiB payload limit, the pending checkpoint
+is preserved and later messages cannot prepare the workspace. Aggregate errors
+report the actual byte count, limit, and largest newly created files. When a file
+is eligible for recovery, the local workspace error includes an exact recovery
+command and asks for a Gateway administrator. Use explicit recovery to move that
+selected file out of synchronization without losing its bytes:
 
 ```bash
-openclaw sandbox recover --session agent:main:dashboard:example --path .openclaw/tmp/build/archive.tgz
+openclaw sandbox recover --session agent:main:dashboard:example --path artifacts/archive.tgz
 ```
 
 The command routes to the running Gateway with administrator authorization, or
 holds exclusive state ownership when run offline. It pauses the selected local
 sandbox while moving the file and leaves other source edits and the pending
 checkpoint intact. Retry the session afterward to settle the remaining changes;
-repeat for another oversized file if needed.
+repeat for another selected file if the remaining payload still exceeds a limit.
 
-Only new retained regular files larger than 64 MiB qualify. Already-admitted source
-files, excluded caches, Git metadata, symlinks, and hardlinks are refused. This
+Recovery also works across filesystem mounts: it copies, syncs, and verifies the
+file before removing the source when a rename cannot cross the mount boundary.
+
+Only new retained regular files qualify: either larger than 64 MiB individually,
+or nonempty files contributing to a currently oversized aggregate payload. Recovery
+rechecks the live aggregate before moving a smaller file; a stale error is not
+relocation authority. Already-admitted source files, excluded caches, Git metadata,
+symlinks, and hardlinks are refused. This
 command does not increase limits, change ignore rules, delete files, or reset the
 workspace. Remote-worker workspaces and already-staged reconciliation receipts
 are not supported by this recovery operation.
+
+The checkout-root `.openclaw/tmp/` scratch directory is excluded from workspace
+synchronization, including recovery of older pending results. Toolchains and
+temporary files there stay in the runtime that created them and do not need this
+command. Save files that must synchronize outside that scratch directory.
+
+Project names and Git ignore rules are not proof that files are disposable. In
+particular, `.NET` projects may contain authored files or admitted inputs under
+`bin/` and `obj/`, and MSBuild can customize its output locations. OpenClaw does
+not automatically exclude those directories, including for guest-created projects.
+Direct disposable build output into checkout-root `.openclaw/tmp/` where possible;
+otherwise explicitly select files for recovery. Other edits and unselected guest
+files remain eligible for normal reconciliation. The existing size and inventory
+bounds are unchanged.
 
 Recovered files live under
 `<state-dir>/workspace-recovery/<worktree-id>/<recovery-id>/<original-path>`,
@@ -121,8 +144,9 @@ openclaw sandbox explain --agent work
 openclaw sandbox explain --json
 ```
 
-Unlike `recreate --session`, this accepts short session names (for example `main`) and expands them against the resolved agent.
+Unlike `recreate --session`, this accepts short session names (for example `main`) and channel-prefixed aliases (for example `telegram:slash:123`) and expands them against the resolved agent. The `main` alias uses the configured `session.mainKey`.
 An explicit `--agent` is sufficient for multi-agent fleets with no implicit owner; sandbox explanation does not require or guess a default first.
+Channel inference describes the applicable elevated-tool configuration; it does not establish sender authorization.
 
 ## Why recreate is needed
 

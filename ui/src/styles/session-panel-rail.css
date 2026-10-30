@@ -94,7 +94,7 @@
   border: 0;
   border-radius: var(--radius-full);
   background: transparent;
-  color: var(--muted-strong);
+  color: var(--control-secondary-text, var(--muted-strong));
   font: inherit;
   white-space: nowrap;
 }
@@ -108,6 +108,33 @@
   width: 18px;
   height: 18px;
   flex: none;
+}
+
+.session-panel-rail
+  .session-panel-rail__button:not(
+    .subagents-desktop__stop,
+    :hover,
+    :focus-visible,
+    [aria-expanded="true"],
+    [aria-pressed="true"]
+  )
+  svg {
+  color: var(--icon-interactive, inherit);
+}
+
+@media (hover: none) {
+  .session-panel-rail
+    .session-panel-rail__button:not(
+      .subagents-desktop__stop,
+      :focus-visible,
+      [aria-expanded="true"],
+      [aria-pressed="true"],
+      :disabled,
+      [aria-disabled="true"]
+    )
+    svg {
+    color: var(--icon-interactive, inherit);
+  }
 }
 
 /* Menu wraps its trigger content; both direct and menu icons share the target. */
@@ -144,7 +171,7 @@
 
 .session-panel-rail .session-panel-rail__button[aria-pressed="true"] > svg,
 .session-panel-rail .session-panel-rail__toggle[aria-expanded="true"] > svg {
-  color: var(--accent);
+  color: var(--icon-active, var(--accent));
 }
 
 .session-panel-rail .session-panel-rail__button:is(:disabled, [aria-disabled="true"]) {

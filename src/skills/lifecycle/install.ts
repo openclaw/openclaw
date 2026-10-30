@@ -4,28 +4,64 @@ import path from "node:path";
 import {
   getAgentWorkspaceAccess,
   WorkspaceAccessUnavailableError,
+  type AgentWorkspaceAccess,
 } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveBrewExecutable } from "../../infra/brew.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { evaluateSkillInstallPolicy } from "../../plugins/install-security-scan.js";
+import {
+  evaluateSkillInstallPolicy,
+  type SkillInstallSpecMetadata,
+} from "../../plugins/install-security-scan.js";
 import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
+import { prepareSkillBundle } from "../library/bundle.js";
 import { hasBinary, resolveSkillsInstallPreferences } from "../loading/config.js";
 import { resolveSkillKey } from "../loading/frontmatter.js";
+import type { Skill } from "../loading/skill-contract.js";
 import { resolveSkillSource } from "../loading/source.js";
 import { prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import { materializeSkillResources } from "../runtime/resources.js";
+import { resolveSkillFileHost } from "../skill-file-host.js";
 import type { SkillInstallSpec, SkillsInstallPreferences } from "../types.js";
 import { installDownloadSpec } from "./install-download.js";
 import { formatInstallFailureMessage } from "./install-output.js";
-import {
-  findInstallSpec,
-  normalizeSkillInstallSpec,
-  withSkillInstallPolicySource,
-} from "./install-policy-source.js";
 import type { SkillInstallResult, SkillInstallSkipReason } from "./install-types.js";
 import type { WorkspaceSkillLifecycle } from "./workspace-types.js";
+
+/** Gateway hooks inspect a local source tree, never a path supplied by the workspace host. */
+async function withSkillInstallPolicySource<T>(
+  skill: Skill,
+  access: AgentWorkspaceAccess | undefined,
+  inspect: (sourceDir: string) => Promise<T>,
+): Promise<T> {
+  if (!access || resolveSkillFileHost(skill) === "gateway") {
+    return await inspect(path.resolve(skill.baseDir));
+  }
+  if (!access.skillResources) {
+    throw new WorkspaceAccessUnavailableError("Remote skill policy source is unavailable");
+  }
+  const files = await access.skillResources.readSkillFiles(skill, { allowMissingRoot: false });
+  if (!files) {
+    throw new WorkspaceAccessUnavailableError("Remote skill policy source disappeared");
+  }
+  const bundle = prepareSkillBundle(files);
+  const source = await materializeSkillResources(
+    {
+      version: 1,
+      skills: [
+        { name: skill.name, description: skill.description, revision: bundle.revision, files },
+      ],
+    },
+    () => {},
+  );
+  try {
+    return await inspect(source.snapshot.resolvedSkills![0]!.baseDir);
+  } finally {
+    await source.cleanup();
+  }
+}
 
 type SkillInstallRequest = {
   workspaceDir: string;
@@ -390,10 +426,30 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     return createInstallFailure({ message: `Skill not found: ${params.skillName}` });
   }
 
-  const spec = findInstallSpec(entry, params.installId);
+  const installId = params.installId;
+  const spec = entry.metadata?.install?.find(
+    (candidate, index) => (candidate.id ?? `${candidate.kind}-${index}`).trim() === installId,
+  );
   const warnings: string[] = [];
   const skillSource = resolveSkillSource(entry.skill);
-  const normalizedSpec = spec ? normalizeSkillInstallSpec(spec) : undefined;
+  const normalizedSpec: SkillInstallSpecMetadata | undefined = spec
+    ? {
+        ...(spec.id ? { id: spec.id } : {}),
+        kind: spec.kind,
+        ...(spec.label ? { label: spec.label } : {}),
+        ...(spec.bins ? { bins: spec.bins.slice() } : {}),
+        ...(spec.os ? { os: spec.os.slice() } : {}),
+        ...(spec.formula ? { formula: spec.formula } : {}),
+        ...(spec.package ? { package: spec.package } : {}),
+        ...(spec.module ? { module: spec.module } : {}),
+        ...(spec.url ? { url: spec.url } : {}),
+        ...(spec.sha256 ? { sha256: spec.sha256 } : {}),
+        ...(spec.archive ? { archive: spec.archive } : {}),
+        ...(spec.extract !== undefined ? { extract: spec.extract } : {}),
+        ...(spec.stripComponents !== undefined ? { stripComponents: spec.stripComponents } : {}),
+        ...(spec.targetDir ? { targetDir: spec.targetDir } : {}),
+      }
+    : undefined;
   const workspaceAccess = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
   const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
   if (access && !access.installSkillDependencies) {

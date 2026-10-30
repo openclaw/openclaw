@@ -22,6 +22,8 @@ function createDarkTheme(palette: Partial<ThemePalette>) {
 function normalizeTheme(fields: Record<string, unknown>) {
   return normalizeThemeDefinition({ ...themeFixture(), ...fields });
 }
+const rejectTheme = (fields: Record<string, unknown>, message: string) =>
+  expect(() => normalizeTheme(fields)).toThrow(message);
 
 function acceptsImport(definition: unknown) {
   return Value.Check(ThemesImportParamsSchema, { id: "hat-theme", definition });
@@ -32,10 +34,7 @@ describe("portable theme definition", () => {
     const fields = { mascot: "none", critters: ["fedora", "penguin"], avatarHat: "fedora" };
     expect(
       normalizeTheme({ ...fields, workingPhrases: [" Building ", "x".repeat(24)] }),
-    ).toMatchObject({
-      ...fields,
-      workingPhrases: ["Building", "x".repeat(24)],
-    });
+    ).toMatchObject({ ...fields, workingPhrases: ["Building", "x".repeat(24)] });
   });
 
   it("accepts independent branding with no working indicator", () => {
@@ -46,9 +45,8 @@ describe("portable theme definition", () => {
       lobsterdex: false,
       communityLinks: false,
     } as const;
-    const definition = themeFixture(fields);
     expect(normalizeTheme({ ...fields, brandName: " Mission Control " })).toMatchObject(fields);
-    expect(acceptsImport(definition)).toBe(true);
+    expect(acceptsImport(themeFixture(fields))).toBe(true);
     expect(normalizeTheme({ ...fields, brandName: "a".repeat(80) }).brandName).toHaveLength(80);
   });
 
@@ -62,14 +60,12 @@ describe("portable theme definition", () => {
     expect(parseThemeDefinition(definition)).toBeNull();
   });
 
-  it.each([null])("keeps undeclared avatar hat %j out of personal definitions", (avatarHat) => {
-    const definition = { ...themeFixture(), avatarHat };
-    expect(() => normalizeThemeDefinition(definition)).toThrow(
+  it("keeps null avatar hats out of personal definitions", () => {
+    rejectTheme(
+      { avatarHat: null },
       "theme.avatarHat must be one of fedora, crown, santa, party, pumpkin",
     );
-    expect(Value.Check(ThemesImportParamsSchema, { id: "hat-theme", definition })).toBe(
-      avatarHat !== null,
-    );
+    expect(acceptsImport({ ...themeFixture(), avatarHat: null })).toBe(false);
   });
 
   it("accepts plugin artwork only from declared IDs of the corresponding kind", () => {
@@ -107,7 +103,7 @@ describe("portable theme definition", () => {
     [{ critters: Array.from({ length: 9 }, () => "penguin") }, "at most 8 entries"],
     [{ critters: ["penguin", "penguin"] }, "duplicate entries"],
   ])("rejects invalid branding %j", (fields, message) => {
-    expect(() => normalizeTheme(fields)).toThrow(message);
+    rejectTheme(fields, message);
   });
 
   it.each([
@@ -132,13 +128,13 @@ describe("portable theme definition", () => {
     expect(() => normalizeThemeDefinition({ name: "Empty", description: "No colors" })).toThrow(
       "at least one",
     );
-    expect(() => normalizeTheme({ dark: incomplete })).toThrow("background");
-    expect(() => normalizeTheme({ css: "body {}" })).toThrow("unsupported field");
+    rejectTheme({ dark: incomplete }, "background");
+    rejectTheme({ css: "body {}" }, "unsupported field");
     const longColor = `rgb(0.${"1".repeat(85)} 0 0)`;
     const palette = paletteFixture(
       Object.fromEntries(THEME_COLOR_KEYS.map((key) => [key, longColor])),
     );
-    expect(() => normalizeTheme({ light: palette, dark: palette })).toThrow("4096 bytes");
+    rejectTheme({ light: palette, dark: palette }, "4096 bytes");
   });
 
   it.each([

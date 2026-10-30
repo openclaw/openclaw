@@ -28,11 +28,3 @@ export function parseClickClackTarget(raw: string): ClickClackTarget {
 export function buildClickClackTarget(target: ClickClackTarget): string {
   return `${target.kind}:${target.id}`;
 }
-
-export function normalizeClickClackTarget(raw: string): string {
-  return buildClickClackTarget(parseClickClackTarget(raw));
-}
-
-export function looksLikeClickClackTarget(raw: string): boolean {
-  return raw.trim().length > 0;
-}

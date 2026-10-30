@@ -63,10 +63,7 @@ it("does not restore synthetic auth when the preferred credential owner is unava
       provider,
       profileId,
       agentDir,
-      cfg: {
-        plugins: { enabled: false },
-        auth: { order: { [provider]: [coldProfileId] } },
-      },
+      cfg: { plugins: { enabled: false }, auth: { order: { [provider]: [coldProfileId] } } },
       store,
     }),
   ).rejects.toMatchObject({
@@ -78,13 +75,12 @@ it("does not restore synthetic auth when the preferred credential owner is unava
 
 it("rejects prepared native login as an HTTP credential while preserving availability", async () => {
   const provider = "fixture-native";
-  const nativeAuth = {
+  vi.spyOn(providerRuntime, "prepareProviderSyntheticAuthWithPlugin").mockResolvedValue({
     apiKey: "synthetic-native-presence",
     source: "Fixture native login",
     mode: "oauth" as const,
     nativeAuth: { runtime: provider, mode: "oauth" as const },
-  };
-  vi.spyOn(providerRuntime, "prepareProviderSyntheticAuthWithPlugin").mockResolvedValue(nativeAuth);
+  });
   const params = {
     provider,
     cfg: { plugins: { enabled: false } },

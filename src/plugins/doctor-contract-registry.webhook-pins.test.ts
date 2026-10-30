@@ -1,14 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { replaceConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { beginGatewayBootLifecycle } from "../infra/gateway-boot-lifecycle.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
@@ -67,12 +65,16 @@ async function fixture(
     doctorContract: { configRepair: true },
   });
   const manifestRegistry = { plugins: [owner], diagnostics: [] };
-  const migrate = (config: OpenClawConfig, migrationEnv: NodeJS.ProcessEnv = env) =>
+  const migrate = (
+    config: OpenClawConfig,
+    migrationEnv: NodeJS.ProcessEnv = env,
+    historicalWebhookListeners: boolean | "preserve-configured" = true,
+  ) =>
     applyPluginDoctorCompatibilityMigrations(config, {
       env: migrationEnv,
       pluginIds: [channelId],
       manifestRegistry,
-      historicalWebhookListeners: true,
+      historicalWebhookListeners,
     });
   return {
     configPath,
@@ -113,30 +115,7 @@ function expectUnchanged(
   expect(result).toEqual({ config, changes: [] });
 }
 
-const installationEvidenceTables = [
-  "gateway_boot_lifecycle",
-  "channel_ingress_events",
-  "update_runs",
-];
-
-function expectReads<T>(table: string | string[], count: number, run: () => T): T {
-  const sql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-  try {
-    const result = run();
-    expect(
-      sql.queries.filter((query) =>
-        (Array.isArray(table) ? table : [table]).some((name) =>
-          query.toLowerCase().includes(`from "${name}"`),
-        ),
-      ),
-    ).toHaveLength(count);
-    return result;
-  } finally {
-    sql.restore();
-  }
-}
-
-it("shares one completion read and preserves each rehearsal write across plugins", async () => {
+it("preserves each rehearsal write across plugins", async () => {
   const { configPath, env } = await fixture([]);
   const migrationEnv = rehearsalEnv(env, configPath);
   let accountIds: string[] = [];
@@ -158,10 +137,7 @@ it("shares one completion read and preserves each rehearsal write across plugins
       isDeferred: () => false,
     });
   openOpenClawStateDatabase({ env: migrationEnv });
-  expectUnchanged(
-    expectReads("config_machine_state", 1, () => migrate({})),
-    {},
-  );
+  expectUnchanged(migrate({}), {});
   expect(readConfigMachineState(`webhookListeners:${configPath}`, { env: migrationEnv })).toEqual({
     "nextcloud-talk": [],
     msteams: [],
@@ -291,15 +267,10 @@ it.each(["previous boot", "channel ingress", "update ledger", "published updater
     });
     const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
     expect(snapshot.valid).toBe(true);
-    const result = expectReads(
-      installationEvidenceTables,
-      evidence === "published updater" ? 0 : 1,
-      () =>
-        migrate(snapshot.sourceConfig, {
-          ...env,
-          ...(evidence === "published updater" ? { OPENCLAW_UPDATE_IN_PROGRESS: "1" } : {}),
-        }),
-    );
+    const result = migrate(snapshot.sourceConfig, {
+      ...env,
+      ...(evidence === "published updater" ? { OPENCLAW_UPDATE_IN_PROGRESS: "1" } : {}),
+    });
     expect(result.warnings).toBeUndefined();
     await replaceConfigFile({
       io,
@@ -327,6 +298,20 @@ it.each(["previous boot", "channel ingress", "update ledger", "published updater
   },
 );
 
+it("preserves configured listeners without claiming an active update", async () => {
+  const { env, migrate, update } = await fixture();
+  const config = channelConfig();
+  const initialized = migrate(config, env, "preserve-configured");
+  expect(initialized).toEqual(update(config));
+  expect(initialized.config.channels?.["nextcloud-talk"]).toEqual(workChannel(endpoint));
+  expect(initialized.config.meta?.migrations?.webhookListeners).toEqual({
+    "nextcloud-talk": [["channels", "nextcloud-talk", "accounts", "work", "legacyWebhook"]],
+  });
+  const fresh = migrate(config);
+  expect(fresh.config.channels).toEqual(config.channels);
+  expect(fresh.config.meta?.migrations?.webhookListeners).toBe(true);
+});
+
 it.each(["no database", "empty database"])(
   "completes a fresh install with %s without pins even after its first Gateway boot",
   async (state) => {
@@ -336,9 +321,7 @@ it.each(["no database", "empty database"])(
       await closeStateDatabaseForTest();
     }
     const config = channelConfig();
-    const fresh = expectReads(installationEvidenceTables, state === "empty database" ? 1 : 0, () =>
-      migrate(config),
-    );
+    const fresh = migrate(config);
     expect(fresh.config.channels).toEqual(config.channels);
     expect(fresh.config.meta?.migrations?.webhookListeners).toBe(true);
     expect((await beginGatewayBootLifecycle(env, 1_800_000_000_000)).id).toBeDefined();

@@ -4,6 +4,7 @@ import type { ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, onTestFailed } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { readSessionStoreSummaryReadOnly } from "../config/sessions/session-accessor.sqlite-summary.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActiveGatewayRootWorkHolders } from "../process/gateway-work-admission.js";
@@ -41,17 +42,7 @@ type AgentResult = {
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
-  const errors: unknown[] = [];
-  for (const cleanup of cleanups.splice(0).toReversed()) {
-    try {
-      await cleanup();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  if (errors.length > 0) {
-    throw new AggregateError(errors, "sessions_send reload proof cleanup failed");
-  }
+  await runQaGatewayFixture(async () => {}, ...cleanups.splice(0).toReversed());
   resetGatewayTestState();
 });
 

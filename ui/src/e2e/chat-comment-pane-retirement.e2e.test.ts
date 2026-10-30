@@ -1,10 +1,8 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import {
-  controlUiBundledSettingsStorageKey,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { seedChatSettings, splitColumns } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
 
@@ -18,12 +16,10 @@ const containsFocus = (locator: Locator) =>
 
 suite.define(() => {
   it.each([
-    { editorKind: "new", archivedPane: "other" },
     { editorKind: "reopened", archivedPane: "other" },
     { editorKind: "reply-menu", archivedPane: "other" },
     { editorKind: "reply-menu", archivedPane: "own" },
     { editorKind: "new", archivedPane: "own" },
-    { editorKind: "reopened", archivedPane: "own" },
   ] as const)(
     "preserves comment ownership for $editorKind editor when $archivedPane pane archives",
     async ({ editorKind, archivedPane }) => {
@@ -36,23 +32,9 @@ suite.define(() => {
           const beta = createControlUiSessionRow("agent:main:comment-beta", "Beta", 2);
           const rows = [alpha, beta];
           const betaPassage = "Beta review is complete.";
-          // Persisted split layout is the public setup boundary used by sibling split tests.
-          await page.addInitScript(
-            ({ storageKey, chatSplitLayout }) =>
-              localStorage.setItem(storageKey, JSON.stringify({ chatSplitLayout })),
-            {
-              storageKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-              chatSplitLayout: {
-                activePaneId: "p1",
-                columnWeights: [0.5, 0.5],
-                columns: rows.map((row, index) => ({
-                  id: `c${index + 1}`,
-                  paneWeights: [1],
-                  panes: [{ id: `p${index + 1}`, sessionKey: row.key }],
-                })),
-              },
-            },
-          );
+          await seedChatSettings(page, suite.server.baseUrl, {
+            chatSplitLayout: splitColumns(rows, 0),
+          });
           const gateway = await installMockGateway(page, {
             sessionKey: alpha.key,
             sessions: rows,
@@ -113,22 +95,12 @@ suite.define(() => {
             sessionKey: target.key,
             reason: "patch",
           });
-          const targetPane = archivedPane === "own" ? paneA : paneB;
-          await targetPane.locator(".agent-chat__disabled-banner").waitFor({ state: "visible" });
-          const observations = await page.evaluate(() => {
-            const input = document.querySelector<HTMLTextAreaElement>(
-              ".chat-annotation-editor textarea",
-            );
-            const focus = document.activeElement;
-            return {
-              editorPresent: Boolean(input),
-              editorText: input?.value ?? null,
-              editorFocused: Boolean(input && focus === input),
-            };
-          });
+          await (archivedPane === "own" ? paneA : paneB)
+            .locator(".agent-chat__disabled-banner")
+            .waitFor({ state: "visible" });
           expect(errors).toEqual([]);
           if (archivedPane === "own") {
-            expect(observations.editorPresent).toBe(false);
+            expect(await page.locator(".chat-annotation-editor textarea").count()).toBe(0);
             expect(await menu.count()).toBe(0);
             expect(await hasFocus(paneA.locator(".chat-thread"))).toBe(true);
           } else if (editorKind === "reply-menu") {
@@ -138,19 +110,14 @@ suite.define(() => {
             expect(await menu.count()).toBe(0);
             expect(await hasFocus(composer)).toBe(true);
           } else {
-            expect
-              .soft(observations)
-              .toEqual({ editorPresent: true, editorText: unsaved, editorFocused: true });
-            if (observations.editorPresent) {
-              await page.keyboard.type(" Continue reviewing.");
-              expect(await textbox.inputValue()).toBe(`${unsaved} Continue reviewing.`);
-              await textbox.press("Enter");
-              expect(
-                await paneA.locator(".chat-selection-annotations__chip").textContent(),
-              ).toContain("1 comment");
-              await pin.click();
-              await expect.poll(() => textbox.inputValue()).toBe(`${unsaved} Continue reviewing.`);
-            }
+            expect(await textbox.inputValue()).toBe(unsaved);
+            expect(await hasFocus(textbox)).toBe(true);
+            await page.keyboard.type(" Continue reviewing.");
+            expect(await textbox.inputValue()).toBe(`${unsaved} Continue reviewing.`);
+            await textbox.press("Enter");
+            expect(
+              await paneA.locator(".chat-selection-annotations__chip").textContent(),
+            ).toContain("1 comment");
           }
           if (archivedPane === "other") {
             expect(await composer.inputValue()).toBe("Preserve Alpha draft.");

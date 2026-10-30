@@ -12,6 +12,7 @@ import {
   type Accessor,
 } from "solid-js";
 import { resolveNodeIdFromCandidates } from "../../../../src/shared/node-match.js";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsRow, SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
@@ -238,8 +239,7 @@ function BindingSelect(props: BindingState & { agent: BindingAgent | null }) {
   });
 
   return (
-    <select
-      class="settings-select"
+    <SettingsSelect
       aria-label={t(isDefault() ? "devices.binding.node" : "devices.binding.binding")}
       value={selected()}
       disabled={props.disabled || (props.nodes.length === 0 && selected() === sentinel())}
@@ -251,18 +251,18 @@ function BindingSelect(props: BindingState & { agent: BindingAgent | null }) {
           props.onBindAgent(props.agent.id, value === "__default__" ? null : value);
         }
       }}
-    >
-      <option value={sentinel()} selected={selected() === sentinel()}>
-        {t(isDefault() ? "devices.binding.anyNode" : "devices.binding.useDefault")}
-      </option>
-      <For each={options()} keyed={(node) => node.id}>
-        {(node) => (
-          <option value={node().id} selected={selected() === node().id} disabled={node().disabled}>
-            {node().label}
-          </option>
-        )}
-      </For>
-    </select>
+      options={[
+        {
+          value: sentinel(),
+          label: t(isDefault() ? "devices.binding.anyNode" : "devices.binding.useDefault"),
+        },
+        ...options().map((node) => ({
+          value: node.id,
+          label: node.label,
+          disabled: node.disabled,
+        })),
+      ]}
+    />
   );
 }
 

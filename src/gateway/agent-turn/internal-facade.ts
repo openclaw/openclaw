@@ -94,7 +94,6 @@ export function createInternalAgentTurnFacade(
         client: options.client,
         context,
         methodRegistry,
-        recoveryInput: dispatchOptions.recoveryInput,
         controllerInput: dispatchOptions.controllerInput,
         assertPreparationCurrent: dispatchOptions.assertAdmissionCurrent,
       });
@@ -279,7 +278,9 @@ export function createInternalAgentTurnFacade(
       };
       const operation = context.trackExecution(async () => {
         preparationOwnedByExecution = true;
+        let releaseExecutionSource: (() => void) | undefined;
         try {
+          releaseExecutionSource = dispatchOptions.executionSource?.retain?.();
           return await runWithGatewayRequestEnvelope(
             method,
             options.client,
@@ -353,6 +354,7 @@ export function createInternalAgentTurnFacade(
             },
           );
         } finally {
+          releaseExecutionSource?.();
           entry?.release();
         }
       });

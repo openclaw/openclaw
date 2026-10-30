@@ -41,7 +41,9 @@ export function RawOutputToggle(props: {
         </span>
       </button>
       <div class="chat-tool-card__raw-body" hidden={!open()}>
-        <ToolDataBlock text={props.text} />
+        <Show when={open()}>
+          <ToolDataBlock text={props.text} />
+        </Show>
       </div>
     </div>
   );
@@ -72,7 +74,7 @@ export function ToolOutcome(props: { outcome: ToolCardOutcome; exitCode?: number
     props.outcome === "failed" && props.exitCode !== undefined && props.exitCode !== 0
       ? t("chat.toolCards.exitCode", { code: String(props.exitCode) })
       : t(
-          `chat.toolCards.${props.outcome === "succeeded" ? "completed" : props.outcome === "unknown" ? "outcomeUnknown" : props.outcome}`,
+          `chat.toolCards.${props.outcome === "succeeded" ? "completed" : props.outcome === "unknown" ? "outcomeUnknown" : props.outcome === "unrecorded" ? "noResult" : props.outcome}`,
         );
   return <div class="chat-tool-card__outcome">{label()}</div>;
 }

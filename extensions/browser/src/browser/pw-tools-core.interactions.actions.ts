@@ -4,6 +4,7 @@ import type { Locator, Page } from "playwright-core";
 import { resolveActInteractionTimeoutMs } from "./act-policy.js";
 import type { BrowserFormField } from "./client-actions.types.js";
 import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
+import { evaluateBrowserFunction } from "./page-function-runtime.js";
 import {
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
@@ -299,44 +300,11 @@ export async function evaluateViaPlaywright(
   const abortListener = signal && addAbortListener(signal, onAbort);
 
   try {
-    const evaluatorBody = `
-        "use strict";
-        var fnSource = args.fnSource, timeoutMs = args.timeoutMs;
-        try {
-          var candidate = eval("(" + fnSource + ")");
-          if (typeof candidate !== "function") {
-            throw new Error("evaluate source did not produce a function");
-          }
-          var result = candidate(${opts.ref ? "el" : ""});
-          if (result && typeof result.then === "function") {
-            return Promise.race([
-              result,
-              new Promise(function(_, reject) {
-                setTimeout(function() { reject(new Error("evaluate timed out after " + timeoutMs + "ms")); }, timeoutMs);
-              })
-            ]);
-          }
-          return result;
-        } catch (err) {
-          throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
-        }
-      `;
     const args = { fnSource, timeoutMs: evaluateTimeout };
-    type EvaluateArgs = typeof args;
-    let action: () => Promise<unknown>;
-    if (opts.ref) {
-      const locator = refLocator(page, opts.ref);
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
-      const evaluate = new Function("el", "args", evaluatorBody) as (
-        el: Element,
-        args: EvaluateArgs,
-      ) => unknown;
-      action = async () => await locator.evaluate(evaluate, args);
-    } else {
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
-      const evaluate = new Function("args", evaluatorBody) as (args: EvaluateArgs) => unknown;
-      action = async () => await page.evaluate(evaluate, args);
-    }
+    const ref = opts.ref;
+    const action = ref
+      ? async () => await refLocator(page, ref).evaluate(evaluateBrowserFunction, args)
+      : async () => await page.evaluate(evaluateBrowserFunction, args);
     return await runGuardedPageInteraction(page, opts, action);
   } finally {
     abortListener?.[Symbol.dispose]();

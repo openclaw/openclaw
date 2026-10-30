@@ -22,6 +22,7 @@ openclaw-panel-empty-state {
     transform: translateY(-10px);
   }
 
+  .empty-state__body,
   .empty-state__icon {
     display: contents;
   }
@@ -32,7 +33,7 @@ openclaw-panel-empty-state {
     width: 32px;
     height: 32px;
     margin-bottom: 18px;
-    color: var(--muted);
+    color: var(--icon-decorative, var(--muted));
 
     stroke-width: 1.5px;
   }
@@ -64,42 +65,68 @@ openclaw-panel-empty-state {
   }
 }
 
-/* Session opt-ins only. The host owns available space and scrolling; the
-   desktop frame keeps Portal's proportional placement without moving content. */
+/* Session content starts below its controls; each present group owns one gap. */
 openclaw-panel-empty-state:has(> .empty-state[data-presentation]) {
   flex-direction: column;
   overflow: auto;
 }
 
 openclaw-panel-empty-state:has(> .empty-state[data-presentation="desktop"]) {
-  padding: 12px;
+  padding: var(--space-3);
 }
 
-openclaw-panel-empty-state .empty-state[data-presentation="desktop"] {
-  min-height: 220px;
-  max-height: 100%;
+openclaw-panel-empty-state .empty-state[data-presentation] {
+  display: flex;
+  min-height: min-content;
   flex: none;
-  aspect-ratio: 8 / 5;
-  align-content: safe center;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-7) var(--space-6);
   transform: none;
 
-  &::before,
+  &::before {
+    content: none;
+  }
+
+  .empty-state__icon {
+    display: flex;
+  }
+
   .empty-state__icon > :not([slot="action"]) {
-    margin-bottom: var(--space-3);
+    margin: 0;
+  }
+
+  .empty-state__body {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    overflow-wrap: anywhere;
+  }
+
+  .empty-state__description {
+    margin: 0;
+  }
+
+  > [slot="action"] {
+    order: 1;
+    margin: 0;
   }
 }
 
-openclaw-panel-empty-state .empty-state[data-presentation="mobile"] {
-  min-height: min-content;
-  align-content: safe center;
-  padding: 36px 24px;
-  transform: none;
+openclaw-panel-empty-state .empty-state[data-presentation="desktop"] {
+  padding-top: calc(4 * var(--space-7));
+}
 
-  &::before,
+openclaw-panel-empty-state .empty-state[data-presentation="mobile"] {
+  padding-top: calc(2 * var(--space-7));
+
   .empty-state__icon > :not([slot="action"]) {
     width: 36px;
     height: 36px;
-    margin-bottom: 24px;
     opacity: 0.8;
   }
 
@@ -110,15 +137,12 @@ openclaw-panel-empty-state .empty-state[data-presentation="mobile"] {
 
   .empty-state__description {
     max-width: 340px;
-    margin-top: 10px;
     font-size: calc(14px * var(--control-ui-text-scale, 1));
     line-height: 1.4286;
   }
 
-  .empty-state__icon > [slot="action"] {
-    display: block;
+  > [slot="action"] {
     width: 100%;
     max-width: 440px;
-    margin-top: 24px;
   }
 }

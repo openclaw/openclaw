@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import type { MemoryFlushToolRunContext } from "../../agents/agent-tools.memory-flush.types.js";
@@ -28,30 +27,6 @@ import type { FollowupRun } from "./queue.js";
 
 const log = createSubsystemLogger("auto-reply/memory-flush");
 
-// A flush-specific model is exact: it never inherits the source fallback chain.
-function resolveMemoryFlushModelFallbackOptions(
-  run: FollowupRun["run"],
-  model: string | undefined,
-  config: FollowupRun["run"]["config"],
-) {
-  const options = resolveModelFallbackOptions(run, config);
-  const override = normalizeOptionalString(model);
-  if (!override) {
-    return options;
-  }
-  const slashIdx = override.indexOf("/");
-  const overrideProvider = override.slice(0, slashIdx).trim();
-  const overrideModel = override.slice(slashIdx + 1).trim();
-  return {
-    ...options,
-    ...(slashIdx > 0 && overrideProvider && overrideModel
-      ? { provider: overrideProvider, model: overrideModel }
-      : { model: override }),
-    requestedRouteResolution: "raw" as const,
-    fallbacksOverride: [],
-  };
-}
-
 export async function prepareMemoryFlushAttempt(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
@@ -60,6 +35,7 @@ export async function prepareMemoryFlushAttempt(params: {
   runtimePolicySessionKey?: string;
   storePath?: string;
   preflightAdmission?: UserTurnTranscriptAdmissionReceipt;
+  recoveryContextTokenBudget?: number;
   flushRunId: string;
   resolution: MemoryFlushPlanForRunResolution;
   abortSignal?: AbortSignal;
@@ -140,11 +116,7 @@ export async function prepareMemoryFlushAttempt(params: {
     const systemPrompt = [followupRun.run.extraSystemPrompt, plan.systemPrompt]
       .filter(Boolean)
       .join("\n\n");
-    const selection = resolveMemoryFlushModelFallbackOptions(
-      followupRun.run,
-      plan.model,
-      params.cfg,
-    );
+    const selection = resolveModelFallbackOptions(followupRun.run, params.cfg);
     const sourcePolicySessionKey =
       params.runtimePolicySessionKey ?? followupRun.run.runtimePolicySessionKey ?? sessionKey;
     const maintenanceRun = createSessionMaintenanceFollowup({
@@ -193,7 +165,12 @@ export async function prepareMemoryFlushAttempt(params: {
       systemPrompt,
       selection,
       preparedRunAdmission,
-      memorySession,
+      memorySession: {
+        ...memorySession,
+        ...(params.recoveryContextTokenBudget !== undefined
+          ? { disableCompactionRecovery: true as const }
+          : {}),
+      },
       memoryAudience: delegated?.audience,
       memoryFlushTools,
       maintenanceRun,

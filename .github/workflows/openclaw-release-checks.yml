@@ -915,6 +915,8 @@ jobs:
       upgrade_baseline: ${{ steps.upgrade_baseline.outputs.value }}
       upgrade_survivor_baselines: ${{ steps.upgrade_survivor_profile.outputs.baselines }}
       upgrade_survivor_scenarios: ${{ steps.upgrade_survivor_profile.outputs.scenarios }}
+      windows_node_artifact_name: ${{ steps.windows_node_candidate_upload.outputs.artifact-id && format('windows-node-candidate-{0}-{1}', github.run_id, github.run_attempt) || '' }}
+      windows_node_package_sha256: ${{ steps.windows_node_candidate.outputs.sha256 }}
     steps:
       - name: Checkout trusted workflow ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1322,6 +1324,63 @@ jobs:
           fi
           echo "json=" >> "$GITHUB_OUTPUT"
 
+      - name: Download shared release package for Windows-node
+        if: needs.resolve_target.outputs.windows_node_scheduled == 'true' && needs.resolve_target.outputs.package_mode == 'artifact'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ fromJSON(needs.resolve_target.outputs.candidate_artifact_json).packageArtifactName }}
+          run-id: ${{ fromJSON(needs.resolve_target.outputs.candidate_artifact_json).packageArtifactRunId }}
+          github-token: ${{ github.token }}
+          path: .artifacts/docker-e2e-package
+
+      - name: Download shared prerelease plugin registry for Windows-node
+        if: needs.resolve_target.outputs.windows_node_scheduled == 'true' && needs.resolve_target.outputs.package_mode == 'artifact' && steps.registry_identity.outputs.json != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ fromJSON(steps.registry_identity.outputs.json).prepublishPluginRegistryArtifactName }}
+          run-id: ${{ fromJSON(steps.registry_identity.outputs.json).prepublishPluginRegistryArtifactRunId }}
+          github-token: ${{ github.token }}
+          path: .artifacts/prepublish-plugin-registry
+
+      # The Windows-node harness installs exactly one local tarball inside WSL, so
+      # unpublished core dependencies (for example @openclaw/ai) must ride inside it.
+      - name: Prepare self-contained Windows-node candidate
+        id: windows_node_candidate
+        if: needs.resolve_target.outputs.windows_node_scheduled == 'true'
+        env:
+          REGISTRY_IDENTITY_JSON: ${{ steps.registry_identity.outputs.json }}
+          SELECTED_SHA: ${{ needs.resolve_target.outputs.revision }}
+        run: |
+          set -euo pipefail
+          registry_args=()
+          if [[ -n "$REGISTRY_IDENTITY_JSON" ]]; then
+            node scripts/prepublish-plugin-registry-artifact.mjs verify \
+              --artifact-dir .artifacts/prepublish-plugin-registry \
+              --source-sha "$SELECTED_SHA" \
+              --candidate-version "$(jq -er .version .artifacts/docker-e2e-package/package-candidate.json)" \
+              --manifest-sha256 "$(jq -er .prepublishPluginRegistryManifestSha256 <<< "$REGISTRY_IDENTITY_JSON")" \
+              >/dev/null
+            registry_args=(--registry-dir .artifacts/prepublish-plugin-registry)
+          fi
+          result="$(node scripts/self-contained-candidate-package.mjs \
+            --package-dir .artifacts/docker-e2e-package \
+            --output-dir .artifacts/windows-node-candidate \
+            "${registry_args[@]}")"
+          echo "sha256=$(jq -er .sha256 <<< "$result")" >> "$GITHUB_OUTPUT"
+          echo "- Windows-node candidate bundles: \`$(jq -cr .bundled <<< "$result")\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload self-contained Windows-node candidate
+        id: windows_node_candidate_upload
+        if: steps.windows_node_candidate.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-node-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/windows-node-candidate/openclaw-current.tgz
+            .artifacts/windows-node-candidate/package-candidate.json
+          retention-days: 14
+          if-no-files-found: error
+
   resolve_windows_node_release_artifacts:
     name: Resolve Windows-node release artifacts
     needs: [resolve_target]
@@ -1565,9 +1624,9 @@ jobs:
       id-token: write
     uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@fb45902950fd4f62d20a37dbbafac27e916917f2
     with:
-      candidate_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
-      candidate_artifact_run_id: ${{ needs.prepare_release_package.outputs.artifact_run_id }}
-      candidate_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
+      candidate_artifact_name: ${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}
+      candidate_artifact_run_id: ${{ github.run_id }}
+      candidate_sha256: ${{ needs.prepare_release_package.outputs.windows_node_package_sha256 }}
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       windows_node_source: release
       windows_node_source_sha: ${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_release_sha }}
@@ -1587,9 +1646,9 @@ jobs:
       id-token: write
     uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@fb45902950fd4f62d20a37dbbafac27e916917f2
     with:
-      candidate_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
-      candidate_artifact_run_id: ${{ needs.prepare_release_package.outputs.artifact_run_id }}
-      candidate_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
+      candidate_artifact_name: ${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}
+      candidate_artifact_run_id: ${{ github.run_id }}
+      candidate_sha256: ${{ needs.prepare_release_package.outputs.windows_node_package_sha256 }}
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       windows_node_source: release
       windows_node_source_sha: ${{ needs.resolve_windows_node_release_artifacts.outputs.stable_release_sha }}
@@ -1609,9 +1668,9 @@ jobs:
       id-token: write
     uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@fb45902950fd4f62d20a37dbbafac27e916917f2
     with:
-      candidate_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
-      candidate_artifact_run_id: ${{ needs.prepare_release_package.outputs.artifact_run_id }}
-      candidate_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
+      candidate_artifact_name: ${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}
+      candidate_artifact_run_id: ${{ github.run_id }}
+      candidate_sha256: ${{ needs.prepare_release_package.outputs.windows_node_package_sha256 }}
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       windows_node_source: main
       windows_node_source_sha: ${{ needs.resolve_windows_node_main_source.outputs.main_source_sha }}
@@ -1643,6 +1702,7 @@ jobs:
       shared_image_artifact_namespace: release-live
       shared_image_policy: no-push-artifact
     secrets: &live_e2e_release_secrets
+      ABLITERATION_API_KEY: ${{ secrets.ABLITERATION_API_KEY }}
       AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
       AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
       BASETEN_API_KEY: ${{ secrets.BASETEN_API_KEY }}

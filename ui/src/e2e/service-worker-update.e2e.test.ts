@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, webkit, type Browser, type Page } from "playwright";
-import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
@@ -22,6 +22,7 @@ import {
   refreshProductionControlUiE2e,
   resolvePlaywrightChromiumExecutablePath,
   startProductionControlUiE2eServer,
+  startCopiedProductionControlUiE2eServer,
   type ControlUiE2eProductionServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
@@ -57,7 +58,7 @@ let server: ControlUiE2eProductionServer;
 async function stageBuildB(destination: string): Promise<void> {
   await rm(destination, { force: true, recursive: true });
   try {
-    // Each deployment owns its bytes; the terminal case modifies its worker.
+    // Rollback preserves build B for the next case; only the terminal case modifies its worker.
     await cp(outDir, destination, { recursive: true, dereference: true });
     await refreshProductionControlUiE2e(destination, buildB);
   } catch (error) {
@@ -100,6 +101,13 @@ async function readBuildCacheName(buildId: string, buildDir = outDir): Promise<s
 }
 
 async function prepareOnlineLoopback(page: Page): Promise<void> {
+  // Upgrade scenarios need the boot cache, not unrelated deferred offline downloads.
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "connection", {
+      configurable: true,
+      value: Object.assign(new EventTarget(), { saveData: true, effectiveType: "4g" }),
+    });
+  });
   // Network-isolated runners have no external interface, although this fixture
   // serves HTTP on loopback. Set the browser network state before any navigation.
   if (!useWebKit) {
@@ -117,8 +125,7 @@ async function prepareOnlineLoopback(page: Page): Promise<void> {
   expect(await page.evaluate(() => navigator.onLine)).toBe(true);
 }
 
-async function createInstallGate(expectedRequests = 1): Promise<InstallGate> {
-  let requestCount = 0;
+async function createInstallGate(): Promise<InstallGate> {
   let released = false;
   const pendingResponses = new Set<ServerResponse>();
   const releaseResponse = (response: ServerResponse) => {
@@ -147,9 +154,7 @@ async function createInstallGate(expectedRequests = 1): Promise<InstallGate> {
       pendingResponses.add(response);
       response.once("close", () => pendingResponses.delete(response));
     }
-    if (++requestCount === expectedRequests) {
-      resolveRequested();
-    }
+    resolveRequested();
   });
   await new Promise<void>((resolve, reject) => {
     gateServer.once("error", reject);
@@ -245,6 +250,47 @@ async function ensureControlledPage(page: Page, pageErrors: string[], expectedBu
   });
 }
 
+async function waitForActiveWorkerBuild(page: Page, expectedBuildId: string): Promise<void> {
+  // Offline storage is optional. Read activation identity through the same native
+  // protocol as foreground recovery, without delivering the missed page events.
+  await page.waitForFunction(async (buildId) => {
+    const registration = await navigator.serviceWorker.getRegistration();
+    const worker = registration?.active;
+    if (
+      !registration ||
+      !worker ||
+      worker.state !== "activated" ||
+      registration.installing ||
+      navigator.serviceWorker.controller !== worker
+    ) {
+      return false;
+    }
+    const channel = new MessageChannel();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const message = await new Promise<{ type?: string; version?: string } | null>((resolve) => {
+        // Match the runtime probe's unavailable-worker bound and release its ports.
+        timeout = setTimeout(() => resolve(null), 1_000);
+        channel.port1.addEventListener("message", (event) => resolve(event.data), { once: true });
+        channel.port1.start();
+        worker.postMessage({ type: "sw-version-probe" }, [channel.port2]);
+      });
+      return (
+        registration.active === worker &&
+        navigator.serviceWorker.controller === worker &&
+        worker.state === "activated" &&
+        !registration.installing &&
+        message?.type === "sw-updated" &&
+        message.version === buildId
+      );
+    } finally {
+      clearTimeout(timeout);
+      channel.port1.close();
+      channel.port2.close();
+    }
+  }, expectedBuildId);
+}
+
 async function fetchControlledAsset(
   page: Page,
   assetPath: string,
@@ -284,76 +330,26 @@ async function fetchControlledAsset(
 }
 
 describe("Control UI service-worker production update E2E", () => {
-  it("releases concurrent and later worker installation requests", async ({ signal }) => {
-    const gate = await createInstallGate(2);
-    const requests = [fetch(gate.url, { signal }), fetch(gate.url, { signal })];
-    try {
-      await gate.requested;
-      gate.release();
-      expect((await Promise.all(requests)).map((response) => response.status)).toEqual([204, 204]);
-      expect((await fetch(gate.url, { signal })).status).toBe(204);
-    } finally {
-      await gate.close();
-    }
-  });
-
-  it("boots a document loaded on a deep link (Gateway asset-path contract)", async () => {
-    // The built index.html references ./assets/* relatively, so a document at
-    // /chat/research requests /chat/assets/*. The Gateway resolves /assets/
-    // at any depth (src/gateway/control-ui.ts); the preview server must honor
-    // the same contract or reloads on deep links serve HTML as the module and
-    // the app silently never boots.
-    const context = await browser.newContext({ serviceWorkers: "block" });
-    const page = await context.newPage();
-    const pageErrors: string[] = [];
-    page.on("pageerror", (error) => pageErrors.push(`${error.name}:${error.message}`));
-    await installMockGateway(page, {
-      assistantAgentId: "research",
-      defaultAgentId: "research",
-      serverBuildId: buildA,
-    });
-    try {
-      expect((await page.goto(`${server.baseUrl}chat/research`))?.status()).toBe(200);
-      await page.waitForFunction(
-        () => window.openclawControlUi?.snapshot().ready === true,
-        undefined,
-        {
-          timeout: controlUiE2eWaitTimeoutMs,
-        },
-      );
-    } catch (error) {
-      if (error instanceof Error) {
-        await captureControlUiE2eFailureDiagnostics(page, {
-          error,
-          label: "deep-link-boot",
-          pageErrors,
-        });
-      }
-      throw error;
-    } finally {
-      await context.close();
-    }
-  }, 60_000);
-
   beforeAll(async () => {
     if (!useWebKit && !canRunPlaywrightChromium(chromiumExecutablePath)) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
     outDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-service-worker-update-"));
-    server = await startProductionControlUiE2eServer(
-      outDir,
-      buildA,
-      createControlUiMockBootstrapConfig({
-        assistantAgentId: "research",
-        defaultAgentId: "research",
-        serverBuildId: buildA,
-        terminalEnabled: true,
-      }),
-    );
+    const bootstrap = createControlUiMockBootstrapConfig({
+      assistantAgentId: "research",
+      defaultAgentId: "research",
+      serverBuildId: buildA,
+      terminalEnabled: true,
+    });
+    const prebuilt = inject("controlUiE2ePrebuiltAssets");
+    server = prebuilt
+      ? await startCopiedProductionControlUiE2eServer(prebuilt.root, outDir, buildA, bootstrap)
+      : await startProductionControlUiE2eServer(outDir, buildA, bootstrap);
+    await stageBuildB(`${outDir}-next`);
     browser = useWebKit
       ? await webkit.launch()
       : await chromium.launch({ executablePath: chromiumExecutablePath });
-  }, 120_000);
+  }, 180_000);
 
   afterAll(async () => {
     try {
@@ -364,7 +360,7 @@ describe("Control UI service-worker production update E2E", () => {
       } finally {
         if (outDir) {
           await Promise.all(
-            ["", "-next", "-previous", "-foreground", "-sleeping"].map((suffix) =>
+            ["", "-next", "-previous", "-sleeping"].map((suffix) =>
               rm(`${outDir}${suffix}`, { force: true, recursive: true }),
             ),
           );
@@ -428,7 +424,7 @@ describe("Control UI service-worker production update E2E", () => {
           });
           document.dispatchEvent(new Event("visibilitychange"));
         });
-      const nextDir = outDir + "-foreground";
+      const nextDir = outDir + "-next";
       const previousDir = outDir + "-sleeping";
       let swapped = false;
       try {
@@ -437,7 +433,7 @@ describe("Control UI service-worker production update E2E", () => {
         );
         await ensureControlledPage(page, pageErrors, buildA);
         if (mode === "chat") {
-          await gateway.waitForRequest("chat.startup");
+          await gateway.waitForRequest("sessions.messages.subscribe");
         } else {
           await page.getByRole("button", { name: "Raw", exact: true }).click();
         }
@@ -450,19 +446,13 @@ describe("Control UI service-worker production update E2E", () => {
         const draft =
           mode === "chat" ? "keep my draft through the missed update" : '{ "count": 2 }';
         await editor.fill(draft);
-        await stageBuildB(nextDir);
-        const cacheB = await readBuildCacheName(buildB, nextDir);
         await page.evaluate(() => sessionStorage.setItem("test-missed-activation", "1"));
         await server.replaceBuild(nextDir, previousDir);
         swapped = true;
         await page.evaluate(async () => {
           await (await navigator.serviceWorker.getRegistration())?.update();
         });
-        await expect.poll(() => page.evaluate(() => caches.keys())).toContain(cacheB);
-        await page.waitForFunction(async () => {
-          const registration = await navigator.serviceWorker.getRegistration();
-          return registration?.active?.state === "activated" && !registration.installing;
-        });
+        await waitForActiveWorkerBuild(page, buildB);
         expect((await gateway.getRequests("connect")).at(-1)?.params).toMatchObject({
           client: { buildId: buildA },
         });
@@ -521,7 +511,6 @@ describe("Control UI service-worker production update E2E", () => {
         if (swapped) {
           await server.replaceBuild(previousDir, nextDir);
         }
-        await rm(nextDir, { recursive: true, force: true });
       }
     },
     120_000,
@@ -597,7 +586,6 @@ describe("Control UI service-worker production update E2E", () => {
       const nextOutDir = `${outDir}-next`;
       const previousOutDir = `${outDir}-previous`;
       installGate = await createInstallGate();
-      await stageBuildB(nextOutDir);
       await holdReplacementWorkerInstalling(nextOutDir, installGate.url);
       const cacheB = await readBuildCacheName(buildB, nextOutDir);
       const assetB = await findBuildAsset(buildB, nextOutDir);

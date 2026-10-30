@@ -14,29 +14,107 @@ import { resolveSystemNoticeKind, type PendingInputStatus } from "./system-notic
 
 registerChatSessionEnglish();
 
+type SubmittedModel = { provider: string; model: string };
+
+function readSubmittedModel(value: unknown): SubmittedModel | undefined {
+  const model = asRecord(value);
+  return typeof model?.provider === "string" &&
+    model.provider.length > 0 &&
+    typeof model.model === "string" &&
+    model.model.length > 0
+    ? { provider: model.provider, model: model.model }
+    : undefined;
+}
+
+/** Compare committed inputs, not draft picker changes or model fallback responses. */
+export function createSubmittedModelNoticeProjector() {
+  let previous: SubmittedModel | undefined;
+  let hasConversation = false;
+  return (item: Extract<ChatItem, { kind: "message" }>): ChatItem | undefined => {
+    const raw = asRecord(item.message);
+    const metadata = asRecord(raw?.["__openclaw"]);
+    if (metadata?.kind === "reset") {
+      previous = undefined;
+      hasConversation = false;
+      return undefined;
+    }
+    if (
+      !raw ||
+      raw.display === false ||
+      raw.excludeFromContext === true ||
+      metadata?.lateMedia === true
+    ) {
+      return undefined;
+    }
+    if (raw.role === "assistant") {
+      hasConversation = true;
+      return undefined;
+    }
+    if (raw.role !== "user") {
+      return undefined;
+    }
+    const selection = asRecord(metadata?.modelSelection);
+    const selected = readSubmittedModel(selection);
+    if (!selected) {
+      hasConversation = true;
+      return undefined;
+    }
+    // A page beginning mid-queue has no preceding selection to compare safely.
+    const from =
+      previous ?? (hasConversation ? readSubmittedModel(selection?.previous) : undefined);
+    previous = selected;
+    hasConversation = true;
+    if (!from || (from.provider === selected.provider && from.model === selected.model)) {
+      return undefined;
+    }
+    const modelChange = {
+      from: `${from.provider}/${from.model}`,
+      to: `${selected.provider}/${selected.model}`,
+    };
+    return {
+      kind: "notice",
+      key: `model-selection:${item.key}`,
+      timestamp: safeNormalizeMessage(item.message)?.timestamp ?? 0,
+      icon: "brain",
+      label: t("chat.systemNotice.modelChanged", modelChange),
+      modelChange,
+      text: "",
+    };
+  };
+}
+
 /** Pending custody and persisted history share the same system-turn presentation. */
 export function projectChatSystemNotice(
   item: Extract<ChatItem, { kind: "message" }>,
   normalized?: NormalizedMessage | null,
-  pending?: { status: PendingInputStatus; key: string; timestamp: number },
+  pending?: {
+    status: PendingInputStatus;
+    key: string;
+    timestamp: number;
+    retired?: NonNullable<Extract<ChatItem, { kind: "notice" }>["retiredPendingInput"]>;
+  },
 ): ChatItem[] {
   const raw = asRecord(item.message);
-  if (raw?.role === "custom" && raw.customType === "session-send-recovery-blocked") {
-    return [
-      {
-        kind: "notice",
-        key: item.key,
-        timestamp: (normalized ?? safeNormalizeMessage(item.message))?.timestamp ?? 0,
-        icon: "cpu",
-        systemEvent: "delivery-warning",
-        text: extractTextCached(item.message) ?? "",
-      },
-    ];
+  if (raw?.role === "custom" && raw.customType === "session-model-change") {
+    const details = asRecord(raw.details);
+    if (typeof details?.from === "string" && typeof details.to === "string") {
+      return [
+        {
+          kind: "notice",
+          key: item.key,
+          timestamp: (normalized ?? safeNormalizeMessage(item.message))?.timestamp ?? 0,
+          icon: "brain",
+          label: t("chat.systemNotice.modelChanged", { from: details.from, to: details.to }),
+          modelChange: { from: details.from, to: details.to },
+          text: "",
+        },
+      ];
+    }
   }
   const provenance = asRecord(raw?.provenance);
   const agentUpdate = provenance?.kind === "inter_session";
   const pendingText =
-    pending && agentUpdate && (pending.status === "cancelled" || pending.status === "interrupted")
+    pending && agentUpdate && pending.status === "cancelled"
       ? t(`chat.pendingInputs.agentUpdate.${pending.status}`)
       : pending && pending.status !== "queued"
         ? t(`chat.pendingInputs.${pending.status}`)
@@ -49,6 +127,7 @@ export function projectChatSystemNotice(
             key: pending.key,
             timestamp: pending.timestamp,
             text: pendingText,
+            ...(pending.retired ? { retiredPendingInput: pending.retired } : {}),
           },
         ]
       : [];
@@ -109,15 +188,11 @@ export function projectChatSystemNotice(
       : typeof pluginSteering?.pluginId === "string" && pluginSteering.pluginId.trim()
         ? pluginSteering.pluginId
         : sourceTool?.slice("plugin:".length);
-  const pendingSummaryKey = pending && noticeKind?.pendingSummaryKeys?.[pending.status];
-  const summaryKey = pendingSummaryKey ?? noticeKind?.summaryKey;
-  const text =
-    summaryKey === null
-      ? ""
-      : summaryKey
-        ? t(summaryKey)
-        : (extractTextCached(item.message)?.replace(/^\[System\] /u, "") ?? "");
-  if (!text.trim() && summaryKey !== null) {
+  const summaryKey = noticeKind?.summaryKey;
+  const text = summaryKey
+    ? t(summaryKey)
+    : (extractTextCached(item.message)?.replace(/^\[System\] /u, "") ?? "");
+  if (!text.trim()) {
     return pendingItems;
   }
   return [
@@ -134,6 +209,6 @@ export function projectChatSystemNotice(
       timestamp: message.timestamp,
       ...optionalBoundaryIdentity(userTurnRunId(item.message)),
     },
-    ...(pendingSummaryKey ? [] : pendingItems),
+    ...pendingItems,
   ];
 }

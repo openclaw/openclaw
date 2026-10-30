@@ -7,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { LruCache } from "../infra/lru-cache.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
@@ -18,6 +19,7 @@ import { SqliteWorkerOpenRefusedError } from "../infra/sqlite-worker-contract.js
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   AgentDatabaseDeletionRefusedError,
@@ -60,6 +62,12 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateLeaseContext } from "./openclaw-state-lease-context.js";
 
 const log = createSubsystemLogger("state/agent-db");
+// Diagnostic state survives handle churn, but never owns leases or suppresses seal checks.
+const closeReceipts = resolveGlobalSingleton(
+  Symbol.for("openclaw.agentDatabaseCloseReceipts"),
+  () => new LruCache<{ agentId: string; receipt: string }>(128),
+  (receipts) => receipts.clear(),
+);
 
 type AgentDatabaseLeaseDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -132,6 +140,7 @@ export type OpenClawAgentIntegrityVerificationReceiver = (
   canReuseRuntimeIntegrity: boolean,
   invalidated: boolean,
   because?: string,
+  liveOwnerProvenance?: string,
 ) => void;
 
 export function claimOpenClawAgentDatabaseLease(
@@ -194,6 +203,7 @@ function claimAgentDatabaseLeaseInDatabase(
   assertAgentDeletionPathFence(database, deletionFence);
   let invalidated = false;
   let hasOtherOwner = false;
+  let liveOwnerProvenance: string | undefined;
   let processDeathRefusal: string | undefined;
   const staleReasonFor = createAgentDatabaseLeaseStaleReasonReader();
   for (const held of readAgentDatabaseLeases(database.db)) {
@@ -227,12 +237,26 @@ function claimAgentDatabaseLeaseInDatabase(
         held.owner_start_time !== owner.ownerStartTime)
     ) {
       hasOtherOwner = true;
+      // A live peer that finished admitting this same physical file already verified it; another
+      // process rescanning it adds no protection and costs a full integrity_check per open.
+      // Provenance binds boot, PID namespace, build and file inode, so a replaced path never borrows.
+      if (
+        held.path === owner.path &&
+        held.provenance !== null &&
+        held.provenance === owner.provenance &&
+        held.opened_at > 0 &&
+        held.owner_start_time !== null &&
+        getFileLockProcessStartTime(held.owner_pid) === held.owner_start_time
+      ) {
+        liveOwnerProvenance = held.provenance;
+      }
     }
   }
   onVerification?.(
     !hasOtherOwner,
     invalidated,
     processDeathRefusal ?? (hasOtherOwner ? "live-or-unknown-owner" : undefined),
+    liveOwnerProvenance,
   );
   executeSqliteQuerySync(
     database.db,
@@ -261,18 +285,25 @@ export function releaseOpenClawAgentDatabaseLease(
     const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database);
     const held = executeSqliteQueryTakeFirstSync(
       database,
-      db
-        .selectFrom("agent_database_leases")
-        .select(["path", "agent_id"])
-        .where("lease_id", "=", leaseId),
+      closeOutcome === undefined
+        ? db
+            .selectFrom("agent_database_leases")
+            .select(["path", "agent_id"])
+            .where("lease_id", "=", leaseId)
+        : db
+            .deleteFrom("agent_database_leases")
+            .where("lease_id", "=", leaseId)
+            .returning(["path", "agent_id"]),
     );
-    if (held && !closeOutcome) {
-      clearAgentDatabaseLeaseVerifications(database, held.path);
+    if (closeOutcome === undefined) {
+      if (held) {
+        clearAgentDatabaseLeaseVerifications(database, held.path);
+      }
+      executeSqliteQuerySync(
+        database,
+        db.deleteFrom("agent_database_leases").where("lease_id", "=", leaseId),
+      );
     }
-    executeSqliteQuerySync(
-      database,
-      db.deleteFrom("agent_database_leases").where("lease_id", "=", leaseId),
-    );
     let receipt: string;
     if (!held) {
       receipt = "lease-not-held";
@@ -289,7 +320,14 @@ export function releaseOpenClawAgentDatabaseLease(
       // Shared-state writer admission excludes a competing claim until this release commits.
       receipt = closeOutcome.publishSeal() ? "written" : "verification-missing";
     }
-    const publish = () =>
+    const publish = () => {
+      if (held) {
+        const previous = closeReceipts.get(held.path);
+        if (previous?.agentId === held.agent_id && previous.receipt === receipt) {
+          return;
+        }
+        closeReceipts.set(held.path, { agentId: held.agent_id, receipt });
+      }
       log.info(
         `agent database clean-close receipt: ${receipt}; agent=${held?.agent_id ?? "unknown"}`,
         {
@@ -299,6 +337,7 @@ export function releaseOpenClawAgentDatabaseLease(
           receipt,
         },
       );
+    };
     if (!deferSqlitePostCommitPublication(database, publish)) {
       publish();
     }

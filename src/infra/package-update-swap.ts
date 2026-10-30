@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { formatErrorMessage } from "./errors.js";
+import { retainMutationAuthority } from "./mutation-authority.js";
 import {
   collectPackageDistInventory,
   readPackageDistInventoryIfPresent,
@@ -20,6 +21,7 @@ import {
   PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
   packagePathEntryExists as pathEntryExists,
   removePackagePath as removePath,
+  restorePackageLauncher,
   restoreNpmPackageRoot,
 } from "./package-update-filesystem.js";
 import {
@@ -250,14 +252,17 @@ export async function swapStagedPackageInstall(
     return messages;
   };
   const readBaseline = async () => {
-    hadPackage = await (native ? pathEntryExists(targetSwapRoot) : baseline.exists(targetSwapRoot));
-    previousVersion =
-      hadPackage && native
+    if (native) {
+      hadPackage = await pathEntryExists(targetSwapRoot);
+      previousVersion = hadPackage
         ? await readPackageVersionIfPresent(params.installTarget.packageRoot)
         : null;
-    if (hadPackage && !native) {
+    } else {
       try {
-        previousRoot = await baseline.rootEntry(targetSwapRoot);
+        hadPackage = await baseline.exists(targetSwapRoot);
+        if (hadPackage) {
+          previousRoot = await baseline.rootEntry(targetSwapRoot);
+        }
       } catch (error) {
         // Preserve the scan cause if the identity fallback also fails.
         baselineError = new Error("Baseline package scan failed", { cause: error });
@@ -272,6 +277,7 @@ export async function swapStagedPackageInstall(
         if (!previousIdentity) {
           throw error;
         }
+        hadPackage = true;
         warnings.push(
           `baseline package fingerprint incomplete (${error.message}); rollback requires the retained directory identity, package version and launchers; full package contents are unverified`,
         );
@@ -558,29 +564,19 @@ export async function swapStagedPackageInstall(
           to: targetSwapRoot,
           assertBeforeRename: assertCurrent,
           assertBeforeMutation: assertCurrent,
-          onDestinationPublished: assertCurrent,
+          onDestinationPublished: () => {
+            activePackageRoot = params.installTarget.packageRoot;
+            assertCurrent();
+          },
         });
-        activePackageRoot = params.installTarget.packageRoot;
       }
     };
     const restoreShim = (shim: (typeof shims)[number]) => async (assertCurrent: () => void) => {
-      try {
-        if (shim.backup) {
-          await copyPathEntry(
-            shim.backup,
-            shim.destination,
-            assertCurrent,
-            activation?.recordRestoredLauncher.bind(activation, path.basename(shim.destination)),
-          );
-        } else {
-          await removePath(shim.destination, assertCurrent);
-        }
-      } catch (error) {
-        throw new Error(
-          `launcher ${shim.destination}${shim.backup ? ` from retained backup ${shim.backup}` : ""}: ${formatErrorMessage(error)}`,
-          { cause: error },
-        );
-      }
+      await restorePackageLauncher(
+        shim,
+        assertCurrent,
+        activation?.recordRestoredLauncher.bind(activation, path.basename(shim.destination)),
+      );
     };
     if (activation) {
       rollback.push(restorePackage, ...shims.map(restoreShim));
@@ -604,52 +600,72 @@ export async function swapStagedPackageInstall(
       activePackageRoot = targetPackageRoot;
       projectActivated = true;
     } else {
+      const assertForwardCurrent = retainMutationAuthority(params.assertCurrent ?? (() => {}));
       await rootLink?.assertLiveUnchanged();
-      if (process.platform === "freebsd") {
-        // Keep executor authority after the last asynchronous link observation.
-        params.assertCurrent?.();
-      }
+      // Link inspection and local override replay may outlive forward admission.
+      assertForwardCurrent();
       // A native refusal must still allow the unchanged Gateway to restart.
       // Mark mutation only now: a copy-fallback move can fail after partial publication,
       // and only a completed backup permits restoration.
       params.onLiveMutation?.();
       liveMutationStarted = true;
       packageRollbackVerified = false;
-      if (native || !hadPackage) {
+      if (!hadPackage) {
         activePackageRoot = null;
       }
-      if (hadPackage) {
-        if (native) {
-          await movePathWithCopyFallback({
-            from: targetSwapRoot,
-            sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
-            to: backupRoot,
-          });
-        } else if (rootLink) {
-          const acquisition = await rootLink.acquire();
-          if (!acquisition.acquired) {
-            activePackageRoot = null;
-            throw new Error(acquisition.error);
-          }
-        } else {
-          await backupNpmPackageRoot(targetSwapRoot, backupRoot, params.assertCurrent, warnings);
-        }
+      const recordPackageBackup = () => {
         activePackageRoot = null;
         packageBackedUp = true;
         packageRollbackVerified =
           native !== undefined ||
           previousRoot?.kind === "directory" ||
           previousIdentity !== undefined;
+      };
+      if (hadPackage) {
+        if (native) {
+          await movePathWithCopyFallback({
+            from: targetSwapRoot,
+            sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
+            to: backupRoot,
+            assertBeforeRename: assertForwardCurrent,
+            assertBeforeMutation: assertForwardCurrent,
+            onDestinationPublished: () => {
+              // A published copy owns compensation even if source cleanup is refused.
+              recordPackageBackup();
+              rollback.push(restorePackage);
+              assertForwardCurrent();
+            },
+          });
+        } else if (rootLink) {
+          assertForwardCurrent();
+          const acquisition = await rootLink.acquire();
+          if (!acquisition.acquired) {
+            activePackageRoot = null;
+            throw new Error(acquisition.error);
+          }
+        } else {
+          await backupNpmPackageRoot(targetSwapRoot, backupRoot, assertForwardCurrent, warnings);
+        }
+        if (!native) {
+          recordPackageBackup();
+        }
       }
-      rollback.push(restorePackage);
+      if (!native || !hadPackage) {
+        rollback.push(restorePackage);
+      }
       await replayLocalOverrides?.();
-      await activateStagedNpmPackageRoot(stagedSwapRoot, targetSwapRoot);
-      activePackageRoot = targetPackageRoot;
-      projectActivated = true;
+      await activateStagedNpmPackageRoot(stagedSwapRoot, targetSwapRoot, undefined, {
+        assertCaller: assertForwardCurrent,
+        onPublished: () => {
+          activePackageRoot = targetPackageRoot;
+          projectActivated = true;
+        },
+        warnings,
+      });
       for (const shim of shims) {
         // Register before copying: replacing an entry can fail after removing it.
         rollback.push(restoreShim(shim));
-        await copyPathEntry(shim.source, shim.destination);
+        await copyPathEntry(shim.source, shim.destination, assertForwardCurrent);
       }
     }
     activationCompleted = true;

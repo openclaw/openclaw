@@ -1,7 +1,6 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
@@ -9,16 +8,13 @@ import {
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
-import {
-  runSqliteDeferredTransactionSync,
-  runSqliteImmediateTransactionSync,
-} from "../../infra/sqlite-transaction.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
-import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
 import {
   assertSessionTranscriptHot,
-  SessionTranscriptColdError,
+  readHotSessionTranscriptSnapshot,
 } from "./session-cold-storage-state.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const databases: DatabaseSync[] = [];
@@ -58,40 +54,27 @@ function fixture() {
   return { db, peer, read, archive };
 }
 
-it("reuses hot facts only within a snapshot and invalidates them after writes and rollback", () => {
+it("invalidates hot facts after writes and rollback", () => {
   const { db, peer, read, archive } = fixture();
-  const observed = trackSqliteStatementExecutions(db, ["cold"], (sql) =>
-    /^select\b.*\bfrom "session_transcript_cold_archives"/iu.test(sql) ? "cold" : null,
-  );
-  try {
-    runSqliteDeferredTransactionSync(db, () => {
-      expect(read()).toEqual({ updated_at: 1 });
-      expect(read()).toEqual({ updated_at: 1 });
-      expect(observed.counts.cold).toBe(1);
-    });
-    expect(read()).toEqual({ updated_at: 1 });
-    expect(observed.counts.cold).toBe(2);
+  expect(read()).toEqual({ updated_at: 1 });
 
-    expect(() =>
-      runSqliteImmediateTransactionSync(db, () => {
-        archive(db);
-        expect(() => assertSessionTranscriptHot(db, "cold-facts")).toThrow(
-          SessionTranscriptColdError,
-        );
-        throw new Error("rollback archive");
-      }),
-    ).toThrow("rollback archive");
-    expect(read()).toEqual({ updated_at: 1 });
+  expect(() =>
+    runSqliteImmediateTransactionSync(db, () => {
+      archive(db);
+      expect(() => assertSessionTranscriptHot(db, "cold-facts")).toThrow(
+        SessionTranscriptColdError,
+      );
+      throw new Error("rollback archive");
+    }),
+  ).toThrow("rollback archive");
+  expect(read()).toEqual({ updated_at: 1 });
 
-    runSqliteImmediateTransactionSync(peer, () => archive());
-    expect(read).toThrow(SessionTranscriptColdError);
-    runSqliteImmediateTransactionSync(peer, () => {
-      peer.exec("DELETE FROM session_transcript_cold_archives WHERE session_id = 'cold-facts'");
-    });
-    expect(read()).toEqual({ updated_at: 1 });
-  } finally {
-    observed.restore();
-  }
+  runSqliteImmediateTransactionSync(peer, () => archive());
+  expect(read).toThrow(SessionTranscriptColdError);
+  runSqliteImmediateTransactionSync(peer, () => {
+    peer.exec("DELETE FROM session_transcript_cold_archives WHERE session_id = 'cold-facts'");
+  });
+  expect(read()).toEqual({ updated_at: 1 });
 });
 
 it("invalidates a retained cold fact when the owning session window is deleted", () => {

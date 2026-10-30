@@ -4,10 +4,13 @@ import type {
   SessionGitHubActionResult,
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
-import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
+} from "../agents/tools/gateway-caller-context.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { preparePublishingSession, pullRequestState } from "./github-publication-action-target.js";
 import {
   assertExpectedSharedGitHubPublisher,
@@ -45,6 +48,9 @@ function assertPreservedPublicationFooter(before: string, after: string) {
 export async function performSessionGitHubAction(options: Options): Promise<void> {
   const { params, context } = options;
   const caller = getGatewayToolCallerIdentity();
+  const callerOperator = caller
+    ? resolveGatewayToolOperatorSelection().operatorAuthority
+    : undefined;
   if (
     caller &&
     (params.sessionKey !== caller.sessionKey ||
@@ -94,16 +100,25 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   };
   const admitted = await prepareGitHubPublicationRequesterV2(options, session);
   resources.defer(admitted.release);
+  // The in-process bridge is System-backed; it cannot mint the tool caller's operator authority.
+  const actionScopes = caller
+    ? intersectOperatorScopes(admitted.requester.snapshot.scopes, callerOperator?.scopes ?? [])
+    : admitted.requester.snapshot.scopes;
+  const requiresOperatorWrite =
+    !ownPublicationAction &&
+    !(params.action === "ready" && params.publishingSessionKey === undefined);
   const assertRequester = () => {
     target.assertCurrent();
     admitted.requester.assertCurrent();
+    if (requiresOperatorWrite) {
+      callerOperator?.assertCurrent();
+    }
     if (
-      !ownPublicationAction &&
-      !(params.action === "ready" && params.publishingSessionKey === undefined) &&
+      requiresOperatorWrite &&
       !roleScopesAllow({
         role: "operator",
         requestedScopes: ["operator.write"],
-        allowedScopes: admitted.requester.snapshot.scopes,
+        allowedScopes: actionScopes,
       })
     ) {
       throw new Error("GitHub pull request actions require full operator write permission.");
@@ -111,13 +126,16 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   };
   assertRequester();
   const binding = entry.worktree?.githubPullRequest;
-  const receipt = binding
+  const readCurrent = () => target.selected.readCurrent();
+  let receipt = binding
     ? undefined
     : ownPublicationAction
-      ? await service.latestPublishedShared(session, () => target.selected.readCurrent())
-      : await service.latestShared(session, undefined, undefined, () =>
-          target.selected.readCurrent(),
-        );
+      ? await service.latestPublishedShared(session, readCurrent)
+      : await service.latestShared(session, undefined, undefined, readCurrent);
+  // A failed later push leaves the published PR as it was; an in-flight one still refuses.
+  if (receipt?.result.status === "failed") {
+    receipt = await service.latestPublishedShared(session, readCurrent);
+  }
   assertRequester();
   const publication = receipt?.result.status === "published" ? receipt.result : undefined;
   if (!binding && !publication) {
@@ -136,7 +154,9 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     publication &&
     ((params.action !== "inspect" && (!edit || editsMetadata) && !params.requestId) ||
       (params.requestId && params.requestId !== publication.requestId) ||
-      (params.expectedHeadCommit && params.expectedHeadCommit !== publication.headCommit))
+      (!editsMetadata &&
+        params.expectedHeadCommit &&
+        params.expectedHeadCommit !== publication.headCommit))
   ) {
     throw new Error(
       "The publication changed; inspect the current PR and review its head before retrying.",
@@ -196,7 +216,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     if (binding && !fullWrite) {
       inspection = await inspectOwnGitHubPullRequest({
         pullRequestUrl: binding.url,
-        agentId: session.agentId,
+        session,
         requester: admitted.requester,
         assertCurrent: assertIdentity,
       });

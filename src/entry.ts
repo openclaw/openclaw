@@ -2,6 +2,7 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { format } from "node:util";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { watchCliRespawnParent } from "../node-runtime-recovery.mjs";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { isRootHelpInvocation } from "./cli/argv.js";
@@ -296,7 +297,7 @@ export async function tryHandleRootHelpFastPath(argv: string[]): Promise<boolean
     await outputRootHelp(liveRootHelpOptions ?? undefined);
     return true;
   } catch (error) {
-    const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+    const detail = error instanceof Error ? formatErrorStackWithMessage(error) : String(error);
     const writeError = await prepareCliDiagnosticBlockWriter();
     await writeError(`[openclaw] Failed to display help: ${detail}\n`);
     process.exitCode = 1;

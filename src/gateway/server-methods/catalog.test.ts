@@ -21,7 +21,6 @@ vi.mock("../../skills/discovery/status.js", () => ({ prepareWorkspaceSkillStatus
 
 const registry = "https://catalog.example.test";
 const skillRequest = { kind: "skill", agentId: "main" };
-const trendingRequest = { ...skillRequest, feed: "trending" };
 const skillMetadata = { name: "same-slug", displayName: "Same", family: "skill", updatedAt: 1 };
 const config = {
   agents: {
@@ -76,22 +75,15 @@ function stubFetch(body: (url: URL) => unknown) {
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
+const searchResults = (rows: unknown[]) => ({
+  results: rows.map((entry) => ({ score: 1, package: entry })),
+});
+const requestUrl = (input: string | URL | Request) =>
+  new URL(input instanceof Request ? input.url : String(input));
 function stubRegistry(rows: unknown[], nextCursor?: string) {
   return stubFetch((url) =>
-    url.pathname.endsWith("/search")
-      ? { results: rows.map((entry) => ({ score: 1, package: entry })) }
-      : { items: rows, nextCursor },
+    url.pathname.endsWith("/search") ? searchResults(rows) : { items: rows, nextCursor },
   );
-}
-function trendingSkill(source: string, displayName: string, reference: string) {
-  return {
-    slug: "same-slug",
-    displayName,
-    source,
-    official: true,
-    publisher: { handle: "alice", ...(source === "clawhub" ? { official: true } : {}) },
-    install: { kind: source, reference },
-  };
 }
 function installedPlugin(id: string, enabled: boolean, metadata: Params) {
   return {
@@ -160,8 +152,6 @@ it.each([
   if (search) {
     expect(found.result).toMatchObject({ mode: "search", searchLimit: 2 });
     expect(found.result.nextCursor).toBeUndefined();
-    const invalid = await call("browse", { ...request, cursor: "browse-cursor" });
-    expect(invalid.error?.code).toBe("INVALID_REQUEST");
   } else {
     expect(found.result.nextCursor).toBe("page-two");
     const second = await call("browse", {
@@ -170,9 +160,7 @@ it.each([
       cursor: found.result.nextCursor,
     });
     expect(second.result.items).toHaveLength(3);
-    const input = fetchMock.mock.calls[1]![0];
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    expect(url.searchParams.get("cursor")).toBe("page-two");
+    expect(requestUrl(fetchMock.mock.calls[1]![0]).searchParams.get("cursor")).toBe("page-two");
   }
   expect(resolveCoreOperatorGatewayMethodScope("catalog.browse")).toBe("operator.read");
 });
@@ -187,36 +175,27 @@ it("keeps native publisher, registry, external source, and selected agent instal
   ]);
   const other = await call("browse", { ...skillRequest, agentId: "other" });
   expect(other.result.items.every((entry) => !entry.local.installed)).toBe(true);
-  expect(local.skills.mock.calls.map(([workspace]) => workspace)).toEqual([
-    "/tmp/catalog-main",
-    "/tmp/catalog-other",
-  ]);
   const invalid = await call("browse", { kind: "skill", agentId: "unknown" });
   expect(invalid.error?.code).toBe("INVALID_REQUEST");
 });
 
-it("qualifies trending native skills with listing flags and preserves install-only external identities", async () => {
-  stubFetch((url) => {
-    if (url.pathname.startsWith("/api/v1/packages/")) {
-      return { package: skill("alice", false) };
-    }
-    return {
-      items: [
-        trendingSkill("clawhub", "Official publisher", "alice/same-slug"),
-        trendingSkill("skills-sh", "External", "skills-sh:alice/repo/same-slug"),
-      ],
-      nextCursor: "trending-page-two",
-    };
+it("joins external trending skills by their install-only identity", async () => {
+  const reference = "skills-sh:alice/repo/same-slug";
+  stubFetch(() => ({
+    items: [
+      {
+        source: "skills-sh",
+        slug: "same-slug",
+        displayName: "External",
+        install: { kind: "skills-sh", reference },
+      },
+    ],
+  }));
+  const page = await call("browse", { ...skillRequest, feed: "trending" });
+  expect(page.result).toMatchObject({
+    mode: "trending",
+    items: [{ id: reference, installOnly: true, local: { installed: true } }],
   });
-  const general = await call("browse", trendingRequest);
-  expect(general.result.mode).toBe("trending");
-  expect(general.result.items[1]).toMatchObject({
-    id: "skills-sh:alice/repo/same-slug",
-    installOnly: true,
-    local: { installed: true },
-  });
-  const official = await call("browse", { ...trendingRequest, officialOnly: true });
-  expect(official.result).toMatchObject({ items: [], nextCursor: "trending-page-two" });
 });
 
 it("distinguishes empty results from malformed registry responses and local status failures", async () => {
@@ -242,7 +221,7 @@ it("pages the deduplicated official union without combining keywords or truncati
     const rows = url.pathname.includes("plugins")
       ? [plugin("official-plugin", true), plugin("community", false)]
       : [skill("alice", true), skill("bob", true), skill("unknown")];
-    return { results: rows.map((entry) => ({ score: 1, package: entry })) };
+    return searchResults(rows);
   });
   const request = {
     keywords: [" Calendar  ", "calendar", "   Office   tools "],
@@ -269,11 +248,7 @@ it("pages the deduplicated official union without combining keywords or truncati
   expect(all).toHaveLength(3);
   expect(new Set(all.map((entry) => `${entry.kind}:${entry.registry}:${entry.id}`)).size).toBe(3);
   expect(
-    new Set(
-      fetchMock.mock.calls.map(([input]) =>
-        new URL(input instanceof Request ? input.url : String(input)).searchParams.get("q"),
-      ),
-    ),
+    new Set(fetchMock.mock.calls.map(([input]) => requestUrl(input).searchParams.get("q"))),
   ).toEqual(new Set(["calendar", "office tools"]));
   expect(resolveCoreOperatorGatewayMethodScope("catalog.searchKeywords")).toBe("operator.read");
 });
@@ -318,7 +293,7 @@ it.each([
   ["browse", { kind: "plugin", query: "calendar", feed: "trending" }],
   ["browse", { kind: "plugin", pageSize: 101 }],
   ["browse", { kind: "plugin", pageSize: 0 }],
-  ["browse", { kind: "claw" }],
+  ["browse", { kind: "template" }],
   ["searchKeywords", { keywords: [" "] }],
   ["searchKeywords", { keywords: [] }],
   ["searchKeywords", { keywords: Array.from({ length: 101 }, () => "term") }],

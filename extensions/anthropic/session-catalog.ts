@@ -171,7 +171,9 @@ function toGenericClaudeHost(
   };
 }
 
-type ClaudeSessionCatalogRuntime = Required<
+export function createClaudeSessionCatalogRuntime(
+  api: OpenClawPluginApi,
+): Required<
   Pick<
     SessionCatalogProvider,
     | "list"
@@ -181,11 +183,7 @@ type ClaudeSessionCatalogRuntime = Required<
     | "openTerminal"
     | "checkUpstreamActivity"
   >
->;
-
-export function createClaudeSessionCatalogRuntime(
-  api: OpenClawPluginApi,
-): ClaudeSessionCatalogRuntime {
+> {
   return {
     list: async (query) => {
       const bound = listBoundClaudeSessions(api, query.agentId, query.sessionEntries);

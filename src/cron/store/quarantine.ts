@@ -3,7 +3,7 @@ import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../types-shared.js";
-import { cronStoreKey } from "./key.js";
+import { prepareMutableCronStoreKey, resolveCronStoreKeyAsync } from "./paths.js";
 import { prepareCronQuarantineRegistration } from "./quarantine.kernel.js";
 
 /** Reads quarantined cron rows without creating or migrating a state database. */
@@ -11,9 +11,12 @@ export async function loadCronQuarantinedJobs(
   storePath: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<CronQuarantinedJob[]> {
+  const context = captureOpenClawStateWorkerContext({ env });
+  const storeKey = await resolveCronStoreKeyAsync(storePath, env, context);
   const reply = await executeExistingOpenClawStateRead(
-    { env },
-    { type: "cron.quarantine", storeKey: cronStoreKey(storePath) },
+    { env: context.environment, path: context.admission.databasePath },
+    { type: "cron.quarantine", storeKey },
+    { context, current: true },
   );
   return reply?.entries ?? [];
 }
@@ -28,7 +31,9 @@ export async function saveCronQuarantinedJobs(params: {
     return;
   }
   const context = captureOpenClawStateWorkerContext();
-  const input = prepareCronQuarantineRegistration(params);
+  const captured = structuredClone(params);
+  const storeKey = await prepareMutableCronStoreKey(captured.storePath, context);
+  const input = prepareCronQuarantineRegistration({ ...captured, storePath: storeKey });
   const assertCurrent = () => {
     context.admission.assertCurrent();
     context.maintenanceScope?.assertAdmission();

@@ -21,7 +21,11 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import { logWarn } from "../../logger.js";
 import { readLocalMediaFile } from "../../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
+import {
+  applyRunHydrationSuppression,
+  readPersistedMediaFacts,
+  type MediaFact,
+} from "../../media/media-facts.js";
 import { resolveMediaReferenceLocalPath } from "../../media/media-reference.js";
 import {
   ensureStagedInputDirectory,
@@ -85,7 +89,9 @@ export async function prepareWorkerTurnMedia(params: {
     (await turn.userTurnTranscriptRecorder?.resolveMessage());
   assertCurrent();
   const recordedMedia = recorded ? readPersistedMediaFacts(recorded) : undefined;
-  const media = recordedMedia?.length ? recordedMedia : (turn.media ?? []);
+  const media = recordedMedia?.length
+    ? applyRunHydrationSuppression(recordedMedia, turn.media)
+    : (turn.media ?? []);
   const localWorkspace = params.workspace.kind === "local" ? params.workspace.path : undefined;
   const deviceFolder = params.workspace.kind === "device-folder";
   const workspaceOnly = resolveEffectiveToolFsWorkspaceOnly({

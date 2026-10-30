@@ -123,6 +123,11 @@ openclaw doctor
 The Control UI's **Logs** tab tails the same file using `logs.tail`.
 See [Control UI](/web/control-ui) for how to open it.
 
+The tab retains the latest 2,000 lines and renders a window around the current
+scroll position. Filter and Export cover the entire retained history; browser
+Find and native text selection cover the rendered window. Use Filter to find an
+older retained line, or Export to copy all matching lines.
+
 ### Channel-only logs
 
 To filter channel activity (WhatsApp/Telegram/etc), use:
@@ -307,6 +312,15 @@ bounded, redacted error details for classification, including when a large
 partial response cannot fit in the transcript. Unrecognized errors still use
 generic chat copy; inspect the Gateway logs and stored error for diagnosis.
 
+Ordinary OpenAI Responses failures log one `provider-error` warning with available code, type,
+and provider `requestId` metadata. Correlation with the originating model call
+uses `clientRequestId` when the provider supplies its own request ID. Missing
+fields and provider prose, request bodies, and response bodies are omitted.
+Same-model retry scheduling is logged at `debug`; exhausted retries produce an
+explicit error. Generic secret-egress request audit lines, including refusals,
+stay at `debug`. Structured `secret.egress` events still count every outcome,
+and certificate failures retain their actionable warning.
+
 When reply dispatch consumes a thrown error after a partial reply or an adopted
 turn, its terminal `message.dispatch.completed` and `message.processed`
 diagnostics retain the failure outcome, identifiers, and timing. The extra
@@ -420,7 +434,9 @@ but excludes streaming the response body. The targeted debug flags above promote
 start and fast successful response metadata to `info` when troubleshooting.
 
 Embedded model requests attach the raw `sessionKey`, `runId`, numbered
-`requestId`, and `requestNumber` to fetch and transport logs. String identifiers
+`requestId`, and `requestNumber` to fetch and transport logs. When a failure
+also includes a provider `requestId`, the local identifier is labeled
+`clientRequestId`. String identifiers
 use lossless JSON escaping so control characters cannot forge log lines; their
 values are not redacted. The request sequence
 continues across same-run retries. Fetch response logs include the HTTP
@@ -469,6 +485,8 @@ one second. `stage=request` ends at acknowledgement; `stage=startup` ends when
 agent execution starts. `replyInitialization` covers inbound dispatch through
 session preparation. Later prompt, skills, tool catalog, model/auth, and runtime
 preparation belong to `preparation`, before the first model request.
+Fast sends retain numeric phase timings without formatting a log message;
+enabled diagnostic phase subscribers still receive their observations.
 
 `detail.*` fields attribute those intervals using the existing reply and agent
 preparation spans, without enabling timeline file logging. They include session
@@ -479,6 +497,44 @@ their difference indicates the writer wait. Parent and child spans overlap and
 must not be summed. Unfinished spans stop at the startup boundary; later model
 and tool latency does not extend them. Structured `chat.send.detail.*` phase
 events use the same durations when diagnostics are enabled.
+
+Before acknowledgement, `detail.persist.stage.*` separates pending-input resolution,
+storage preparation, reads, authority preparation, message preparation, and durable
+commit. `detail.persist.transcript.*` covers target selection, owner authority,
+append, and transcript publication; `detail.persist.turn.*` further separates the
+append's preparation, authority, message hook, commit, and completion waits.
+`detail.session.actor.command.queue` measures the physical writer FIFO wait;
+`execute` includes the command's `commit` and `publication` intervals. Commit
+timing includes worker delivery, transaction admission, and durable settlement;
+it is not an isolated fsync measurement. `detail.persist.resolveInput` identifies
+input/media resolution, and `detail.session.inputActor.acquire` times actor acquisition.
+These nested spans use the same request-owned diagnostics without logging input
+bytes or enabling timeline files.
+
+`detail.attempt.setup.*` checkpoints separate initialization, workspace preparation,
+and finalization. Within `workspace`, `policy` and `policy_finalize` cover session
+policy admission and revalidation; `baseline_wait` records only the time setup
+blocks on the concurrently captured Git baseline. `mkdir`, `sandbox`, and `roots`
+cover directory creation, sandbox preparation, and permission-root resolution.
+The `sandbox.*` checkpoints further separate session selection, state-owner
+admission, workspace selection, GitHub identity, pruning, workspace/skills layout,
+mounts, registry reads, backend provisioning, browser setup, and finalization.
+`sandbox.layout.*` separates workspace creation, skill imports, remote connections,
+eligibility, and synchronization. These are fixed labels and monotonic elapsed
+times, including failed preparation. Read siblings as consecutive phases and
+parents as inclusive totals; do not add a parent to its children. Prompt-media
+warnings beginning `Native image:` concern image-file access, not container-image
+validation, and occur outside attempt setup.
+
+`detail.worktree.managed.*` and `detail.worktree.sandbox.*` carry the worktree
+owner's recorded phase durations, including `templatePrepare`, `templateApply`,
+`checkout`, `runtimeQuiesce`, `runtimeResume`, and `unattributed`. Runtime quiescence
+and resume include pausing and unpausing sandbox writers around synchronization.
+The top-level `worktree` interval can describe an
+earlier managed checkout; it is not the sandbox work inside `attempt.setup`.
+Use the matching `detail.worktree.sandbox` total when comparing setup with its
+nested worktree preparation. Recorded worktree summaries appear when their owner
+finishes; a preparation spanning acknowledgement is reported at completion.
 
 ### Embedded attempt preparation
 
@@ -1125,6 +1181,27 @@ no diagnostic flag. Durations include awaited work: `admission.revalidate` is
 nested inside `admission.work`, so their values must not be added together or
 treated as SQLite execution time.
 
+Admission subphases separate operator retention (`operator`), lifecycle preparation
+through the session writer barrier (`lifecycle_prepare`), ACP metadata
+(`acp_metadata`), placement preparation and refresh
+(`placement_prepare`, `placement_refresh`), and current session/retry validation
+(`current_session`). Lifecycle preparation includes agent admission checks and
+queue waits; it is not a pure SQLite lock timer. These fields use the
+`detail.admission.` prefix. Sends without restart-safe recovery skip the unused
+transcript lifecycle-header read; current session and caller checks still run.
+Restart-safe admission reuses the request's prepared session entry for ACP metadata.
+Final `current_session` validation stays ordered; a changed lifecycle causes ACP metadata to be prepared
+again before that validation repeats. Durable input custody still completes before
+acknowledgement.
+
+After acknowledgement, `runAdmission` also covers steering into an active turn.
+Its `detail.run_admission.steer_*` subphases separate authority, continuation and
+delivery preparation, ordered admission (`steer_admit`), waiting for the backend
+outcome (`steer_settlement`), and finalization (`steer_finalize`). `steer_prepare`
+encloses preparation through ordered admission. A long `stage=steer` interval
+can therefore be an intentional wait behind older input or for its transcript
+commit, rather than slow startup of a new turn. Nested totals overlap.
+
 When a reply spends a long time preparing, inspect the normal Gateway logs:
 
 ```bash
@@ -1165,12 +1242,32 @@ For shorter delays, [profiler flags](/diagnostics/flags#profiler-flags) lower th
 warning thresholds. They are not required to diagnose a multi-second startup
 stall.
 
+`main-thread stall` warnings include `stallStartMs`, `stallEndMs`, and
+`reportedAtMs` as Unix timestamps in milliseconds. Scoped callbacks have measured
+start and end times. Unattributed active-loop stalls use the observed gap between
+20 ms heartbeats; these bounds describe a blocked-loop observation, not an exact
+JavaScript callback lifetime. Idle monitoring uses the missed wake deadline and
+the resumed wake instead, without adding idle heartbeats.
+
+On supported Node runtimes, `main-thread stall profile` selects samples only
+inside the longest reported stall's saved interval. `windowStartMs` and
+`windowEndMs` identify that interval; `reportedAtMs` identifies profile emission.
+The recorder keeps its 25 ms sample interval and bounded profile buffers. Later
+work outside the interval is excluded, even when reporting is delayed. Sample
+counts include idle samples whose frames are omitted from `inclusive`, so a
+single listed stack does not mean that stack occupied the whole interval.
+
 ### Model call size and timing
 
 Model-call diagnostics record bounded request/response measurements without
 capturing raw prompt or response content:
 
-- `requestPayloadBytes`: UTF-8 byte size of the final model request payload
+- `requestPayloadBytes`: UTF-8 byte size of the final model request payload.
+  OpenAI and Anthropic Messages transports reuse the serialized body size, after
+  payload hooks and transport adjustments. Other transports measure the payload
+  exposed by their hook; this may differ from the final wire body. Injected
+  Anthropic SDK clients and SDKs without a host fetch also use the hook
+  measurement because they own encoding and network I/O.
 - `responseStreamBytes`: UTF-8 byte size of streamed model response chunk
   payloads. High-frequency text, thinking, and tool-call delta events count
   only the incremental `delta` bytes instead of full `partial` snapshots.

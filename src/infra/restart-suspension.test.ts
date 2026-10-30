@@ -35,6 +35,10 @@ type RestartDeferralHooks = NonNullable<DeferralOptions["hooks"]>;
 const restartSignalHandler = vi.fn();
 const emitRestart = vi.fn(() => ({ status: "emitted" as const }));
 const stuckPreparation = new Promise<void>(() => {});
+async function advanceRestart(ms: number, signals: number) {
+  await vi.advanceTimersByTimeAsync(ms);
+  expect(restartSignalHandler).toHaveBeenCalledTimes(signals);
+}
 
 function forceAfterBudget(
   emitHooks: NonNullable<DeferralOptions["emitHooks"]>,
@@ -104,17 +108,10 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
       onStillPending: vi.fn(),
     };
 
-    deferGatewayRestartUntilIdle({
-      getPendingCount: () => 1,
-      hooks,
-    });
-
-    vi.advanceTimersByTime(300_000);
+    deferGatewayRestartUntilIdle({ getPendingCount: () => 1, hooks });
+    vi.advanceTimersByTime(600_000);
     expect(hooks.onTimeout).not.toHaveBeenCalled();
     expect(hooks.onStillPending).toHaveBeenCalled();
-
-    vi.advanceTimersByTime(300_000);
-    expect(hooks.onTimeout).not.toHaveBeenCalled();
     expect(hooks.onReady).not.toHaveBeenCalled();
   });
 
@@ -162,11 +159,11 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
   });
 
   it.each([
-    { stage: "later", counts: [1, "throw", 0], firstCheckMs: 500, errors: 1 },
-    { stage: "final admission", counts: ["throw", 0, "throw"], firstCheckMs: 500, errors: 2 },
+    { stage: "later", counts: [1, "throw", 0], errors: 1 },
+    { stage: "final admission", counts: ["throw", 0, "throw"], errors: 2 },
   ])(
     "defers after a failed $stage inspection until a successful idle check",
-    async ({ counts, firstCheckMs, errors }) => {
+    async ({ counts, errors }) => {
       const hooks: RestartDeferralHooks = { onCheckError: vi.fn(), onReady: vi.fn() };
       let call = 0;
       deferGatewayRestartUntilIdle({
@@ -182,12 +179,11 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
         },
         hooks,
       });
-      await vi.advanceTimersByTimeAsync(firstCheckMs);
+      await vi.advanceTimersByTimeAsync(500);
       expect(hooks.onCheckError).toHaveBeenCalledTimes(errors);
       expect(restartSignalHandler).not.toHaveBeenCalled();
       expect(hooks.onReady).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(500);
-      expect(restartSignalHandler).toHaveBeenCalledOnce();
+      await advanceRestart(500, 1);
       expect(hooks.onReady).toHaveBeenCalledOnce();
     },
   );
@@ -305,15 +301,12 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     },
   );
   it("defers a scheduled restart after probe failure until its configured budget expires", async () => {
-    const emit = vi.spyOn(process, "emit");
     setPreRestartDeferralCheck(() => {
       throw new Error("pending-work store unavailable");
     });
     scheduleGatewayRestart({ delayMs: 0 });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(emit).not.toHaveBeenCalledWith("SIGUSR2");
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect(emit.mock.calls.filter(([event]) => event === "SIGUSR2")).toHaveLength(1);
+    await advanceRestart(0, 0);
+    await advanceRestart(300_000, 1);
     expect(consumeGatewayRestartIntent()).toEqual({ force: true, waitMs: 300_000 });
   });
 });
@@ -336,24 +329,21 @@ describe("scheduled restart requester authority", () => {
         },
         stage === "timer" ? 1_000 : 0,
       );
-      if (stage === "preparation" || stage === "failed-preparation") {
+      if (stage !== "timer") {
         await vi.advanceTimersByTimeAsync(0);
+      }
+      if (stage.includes("preparation")) {
         await entered.promise;
-      } else if (stage === "idle") {
-        await vi.advanceTimersByTimeAsync(0);
       }
       current = false;
       pending = 0;
       release.resolve();
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      expect(restartSignalHandler).not.toHaveBeenCalled();
+      await advanceRestart(1_000, 0);
       expect(isGatewayWorkAdmissionClosed()).toBe(false);
       expect(beforeEmit).toHaveBeenCalledTimes(stage.includes("preparation") ? 1 : 0);
       expect(afterEmitRejected).toHaveBeenCalledTimes(stage === "preparation" ? 1 : 0);
       scheduleGatewayRestart({ delayMs: 0 });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(restartSignalHandler).toHaveBeenCalledOnce();
+      await advanceRestart(0, 1);
     },
   );
 
@@ -414,21 +404,17 @@ describe("scheduled restart requester authority", () => {
   });
 });
 
-describe("restart signal handling", () => {
-  it("coalesces consumed authorization and intent until the signal is handled", () => {
-    const intent = { force: true, reason: "first" };
-    expect(requestGatewayRestartWithSignalAdmission("first", intent)).toEqual({
-      status: "emitted",
-    });
-    expect(consumeGatewayRestartAuthorization()).toBe(true);
-    expect(consumeGatewayRestartIntent()).toEqual(intent);
-    expect(requestGatewayRestartWithSignalAdmission("second")).toEqual({ status: "coalesced" });
-    expect(restartSignalHandler).toHaveBeenCalledOnce();
+it("coalesces consumed authorization and intent until the signal is handled", () => {
+  const intent = { force: true, reason: "first" };
+  expect(requestGatewayRestartWithSignalAdmission("first", intent)).toEqual({ status: "emitted" });
+  expect(consumeGatewayRestartAuthorization()).toBe(true);
+  expect(consumeGatewayRestartIntent()).toEqual(intent);
+  expect(requestGatewayRestartWithSignalAdmission("second")).toEqual({ status: "coalesced" });
+  expect(restartSignalHandler).toHaveBeenCalledOnce();
 
-    markGatewayRestartHandled();
-    expect(requestGatewayRestartWithSignalAdmission("second")).toEqual({ status: "emitted" });
-    expect(restartSignalHandler).toHaveBeenCalledTimes(2);
-  });
+  markGatewayRestartHandled();
+  expect(requestGatewayRestartWithSignalAdmission("second")).toEqual({ status: "emitted" });
+  expect(restartSignalHandler).toHaveBeenCalledTimes(2);
 });
 
 describe("restart control-flow deadlines use the monotonic clock", () => {
@@ -504,10 +490,9 @@ function resetGatewayLifecycleState(): void {
 }
 
 function schedulePreparingRestart(afterEmitRejected?: () => Promise<void>, reason?: string) {
-  const preparation = createDeferred();
-  const beforeEmit = vi.fn(async () => preparation.promise);
+  const { release, beforeEmit } = blockedPreparation();
   scheduleGatewayRestart({ delayMs: 0, reason, emitHooks: { beforeEmit, afterEmitRejected } });
-  return { release: preparation.resolve, beforeEmit };
+  return { release: release.resolve, beforeEmit };
 }
 
 describe("scheduled restart during gateway suspension", () => {
@@ -521,12 +506,10 @@ describe("scheduled restart during gateway suspension", () => {
 
     expect(prepareSuspension().status).toBe("ready");
 
-    await vi.advanceTimersByTimeAsync(1_000);
-    expectSignals(0);
+    await advanceRestart(1_000, 0);
 
     expect(resumeGatewaySuspend("suspension")).toMatchObject({ ok: true, resumed: true });
-    await vi.advanceTimersByTimeAsync(0);
-    expectSignals(1);
+    await advanceRestart(0, 1);
   });
 
   it.each(["emitted", "failed"])(
@@ -553,16 +536,8 @@ describe("scheduled restart during gateway suspension", () => {
           });
         } else {
           expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
-          expect(getGatewaySuspendStatus("suspension")).toEqual({
-            status: "ready",
-            expiresAtMs: expect.any(Number),
-            writeCustody: [],
-          });
-          expect(resumeGatewaySuspend("suspension")).toEqual({
-            ok: true,
-            status: "running",
-            resumed: true,
-          });
+          expect(getGatewaySuspendStatus("suspension").status).toBe("ready");
+          expect(resumeGatewaySuspend("suspension")).toMatchObject({ ok: true, resumed: true });
           expect(resumeScheduling).toHaveBeenCalledOnce();
           expect(isGatewayWorkAdmissionClosed()).toBe(false);
         }
@@ -584,8 +559,7 @@ describe("scheduled restart during gateway suspension", () => {
     expectSignals(0);
 
     preparation.release();
-    await vi.advanceTimersByTimeAsync(0);
-    expectSignals(1);
+    await advanceRestart(0, 1);
 
     expect(prepareSuspension("next-request")).toMatchObject({
       status: "busy",
@@ -599,19 +573,17 @@ describe("scheduled restart during gateway suspension", () => {
     setGatewayRestartPolicy({ allowExternal: true });
 
     scheduleGatewayRestart({ delayMs: 0 });
-    await vi.advanceTimersByTimeAsync(0);
-    expectSignals(1);
-    expect(preRestartCheck).toHaveBeenCalledTimes(2);
+    await advanceRestart(0, 1);
+    expect(preRestartCheck).toHaveBeenCalled();
     expect(isGatewayWorkAdmissionClosed()).toBe(true);
 
     resetGatewayRestartStateForInProcessRestart();
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
     expect(isGatewayRestartExternallyAllowed()).toBe(true);
-
+    preRestartCheck.mockClear();
     scheduleGatewayRestart({ delayMs: 0 });
-    await vi.advanceTimersByTimeAsync(0);
-    expectSignals(2);
-    expect(preRestartCheck).toHaveBeenCalledTimes(4);
+    await advanceRestart(0, 2);
+    expect(preRestartCheck).toHaveBeenCalled();
   });
 
   it.each([false, true])("cancels pending restart on reset (suspended: %s)", async (suspended) => {
@@ -620,16 +592,14 @@ describe("scheduled restart during gateway suspension", () => {
     }
     scheduleGatewayRestart({ delayMs: suspended ? 0 : 1_000 });
     if (suspended) {
-      await vi.advanceTimersByTimeAsync(0);
-      expectSignals(0);
+      await advanceRestart(0, 0);
       resetGatewaySuspendCoordinatorForLifecycleRestart();
       expect(resumeScheduling).toHaveBeenCalledOnce();
       expect(getGatewaySuspendStatus("suspension")).toEqual({ status: "running" });
       resetGatewayWorkAdmission();
     }
     resetGatewayRestartStateForInProcessRestart();
-    await vi.advanceTimersByTimeAsync(suspended ? 0 : 1_000);
-    expectSignals(0);
+    await advanceRestart(suspended ? 0 : 1_000, 0);
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
   });
 

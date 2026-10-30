@@ -1,8 +1,8 @@
 import { expect } from "playwright/test";
 import { it } from "vitest";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Packaged Memory overview" });
 const pageOptions = {
@@ -12,7 +12,7 @@ const pageOptions = {
 } as const;
 function memoryFixture(config: Record<string, unknown>, hash: string) {
   return {
-    "config.get": configSnapshot(config, hash),
+    "config.get": sourceConfigSnapshot(config, hash),
     "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
     "plugins.controlUi.list": { plugins: [], diagnostics: [], revision: "empty" },
     "doctor.memory.status": {
@@ -49,6 +49,10 @@ suite.define(() => {
       await waitForControlUiRoute(page, { routeId: "memory" });
       const overview = page.locator(".memory-overview");
       await expect(overview.getByRole("heading", { name: "Memory is awake" })).toBeVisible();
+      const overviewStyles = await page
+        .locator('link[rel="stylesheet"][href*="/assets/plugins/memory-core/"]')
+        .elementHandles();
+      expect(overviewStyles.length).toBeGreaterThan(0);
       await expect(overview).toContainText("custom-memory");
       await expect(overview.locator(".lob-reading-book")).toBeVisible();
       for (const title of ["Embeddings", "Read the dream diary", "Configure memory"]) {
@@ -74,9 +78,18 @@ suite.define(() => {
       });
       await expect(overview).toContainText("embedding probe failed");
       await page.locator("#memory-tab-settings").click();
+      await waitForControlUiRoute(page, {
+        routeId: "memory",
+        pathname: "/settings/memory/settings",
+      });
       await expect(overview).toHaveCount(0);
-      await expect(page.locator('link[href*="/assets/plugins/memory-core/"]')).toHaveCount(0);
+      await expect
+        .poll(() =>
+          Promise.all(overviewStyles.map((style) => style.evaluate((link) => link.isConnected))),
+        )
+        .toEqual(overviewStyles.map(() => false));
       await page.locator("#memory-tab-overview").click();
+      await waitForControlUiRoute(page, { routeId: "memory", pathname: "/settings/memory" });
       await expect(overview).toContainText("embedding probe failed");
       expect(await gateway.getRequests("doctor.memory.status")).toHaveLength(3);
       await gateway.setOnline(false);

@@ -38,6 +38,33 @@ async function acceptConnect(
 describe("GatewayBrowserClient shared-auth handshake", () => {
   let client: GatewayBrowserClient;
 
+  it.each([
+    { code: "PROTOCOL_MISMATCH" },
+    { minProtocol: PROTOCOL_VERSION + 1, maxProtocol: PROTOCOL_VERSION + 2 },
+    { minProtocol: 1, maxProtocol: MIN_CLIENT_PROTOCOL_VERSION - 1 },
+    { expectedProtocol: PROTOCOL_VERSION + 1 },
+  ])("does not auto-reconnect on an incompatible protocol: %j", async (details) => {
+    const { ws: ws1, connectFrame: connect } = await startConnect(
+      createClient({ token: "shared-auth-token" }),
+    );
+
+    ws1.emitMessage({
+      type: "res",
+      id: connect.id,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Versions differ",
+        details,
+      },
+    });
+    await vi.waitFor(() => expect(ws1.readyState).toBe(3), { interval: 1, timeout: 50 });
+    ws1.emitClose(4008, "connect failed");
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(wsInstances).toHaveLength(1);
+  });
+
   it("releases cached view work after connect is sent, before hello", async () => {
     client = createClient({ url: "ws://scopes.example.test" });
     client.start();
@@ -50,11 +77,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     ws.emitOpen();
     await vi.advanceTimersByTimeAsync(0);
     expect(dispatch).not.toHaveBeenCalled();
-    ws.emitMessage({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "handshake-challenge", ts: 1_800_000_000_000 },
-    });
+    ws.emitConnectChallenge({ nonce: "handshake-challenge", ts: 1_800_000_000_000 });
     await dispatched;
     expect(dispatch).toHaveBeenCalledOnce();
   });
@@ -138,6 +161,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       await vi.advanceTimersByTimeAsync(60_000);
       expect(wsInstances).toHaveLength(1);
       expect(client.needsWakeReconnect).toBe(false);
+      expect(client.needsReachabilityReconnect).toBe(false);
       expect(onClose).toHaveBeenLastCalledWith(
         expect.objectContaining({
           willRetry: false,
@@ -179,6 +203,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
+      GATEWAY_CLIENT_CAPS.CHAT_QUEUE_STATUS,
       GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND,
       GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY,
       GATEWAY_CLIENT_CAPS.HELLO_PRESENCE_SELF,
@@ -253,6 +278,8 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     });
     expect(onReconnectScheduled).toHaveBeenCalledExactlyOnceWith(delayMs);
     expect(wsInstances).toHaveLength(1);
+    expect(client.needsWakeReconnect).toBe(false);
+    expect(client.needsReachabilityReconnect).toBe(false);
     await vi.advanceTimersByTimeAsync(delayMs - 1);
     expect(wsInstances).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);

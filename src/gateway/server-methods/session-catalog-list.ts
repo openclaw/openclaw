@@ -2,7 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
-  errorShape,
   type SessionCatalog,
   validateSessionsCatalogListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -10,6 +9,7 @@ import { prepareShellPathFromLoginShell } from "../../infra/shell-env.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
+import { respondError } from "./response.js";
 import {
   createSessionCatalogRequestEntrySnapshot,
   type SessionCatalogInstances,
@@ -51,10 +51,10 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
   async ({ params, respond, context, client, signal }) => {
     const request = params;
     if (request.cursors !== undefined && request.catalogId === undefined) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "catalogId is required when cursors are provided"),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "catalogId is required when cursors are provided",
       );
       return;
     }
@@ -63,10 +63,10 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
       ? catalogRegistrations.providers.find((candidate) => candidate.id === request.catalogId)
       : undefined;
     if (request.catalogId && !requestedProvider) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${request.catalogId}`),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        `unknown session catalog: ${request.catalogId}`,
       );
       return;
     }

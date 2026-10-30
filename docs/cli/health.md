@@ -34,6 +34,8 @@ openclaw health --debug
 
 - Local readiness recognizes wildcard listeners that serve loopback, including on macOS where a separate loopback bind can succeed on the same port.
 
+- On Windows, read-only diagnostics can verify a running service whose listener command line is unavailable through a successful Gateway handshake and health response. This does not establish process ownership for restart or termination.
+
 - Without `--verbose`, the Gateway can return a cached snapshot and refresh it in the background for the next caller. A cached snapshot is fresh for up to 60 seconds and unchanged from live channel runtime state.
 - `--verbose` forces a live check of each channel account. It also prints Gateway connection details. It expands human-readable output across all configured accounts and agents, instead of just the default agent.
 - An unconfigured or disabled preferred account does not hide check results from other active accounts. Ordinary output still follows the default agent's account bindings. `--verbose` includes all accounts.

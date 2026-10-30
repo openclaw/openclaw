@@ -8,6 +8,7 @@
 .sidebar-region.sidebar-region--mobile-host:not(.sidebar-region--expanded):not(
     .sidebar-region--expanded-side
   ) {
+  --chat-surface: var(--bg);
   --mobile-safe-top: env(safe-area-inset-top, 0px);
   --mobile-sheet-radius: 26px;
   --mobile-content-inset: 16px;
@@ -297,8 +298,8 @@
 }
 
 /* Keyboard activation remains immediate; pointer openings reveal the sheet. */
-.sidebar-region--mobile-host:has(button:focus-visible, [role="button"]:focus-visible)
-  > .chat-mobile-host {
+.sidebar-region--mobile-host:has(:where(button, [role="button"]):focus-visible)
+  > .chat-mobile-host:not([hidden]) {
   transition: none;
   @starting-style {
     opacity: 1;
@@ -371,7 +372,17 @@
     [data-details-page="versions"],
     [data-details-page="publication"]
   )
-  > .chat-mobile-details-page__body {
+  > .chat-mobile-details-page__body:not(
+    :has(
+      > :is(
+          .chat-outputs--mobile,
+          .chat-session-versions-mobile--empty,
+          .chat-pr-mobile--empty,
+          .task-progress-details--mobile
+        )
+        > openclaw-panel-empty-state
+    )
+  ) {
   padding: var(--mobile-content-inset) var(--mobile-content-inset) 24px;
   scroll-padding-block: 12px 24px;
 }
@@ -465,7 +476,6 @@
     .chat-processes__list,
     .chat-processes__output,
     .session-diff-mobile__scroll,
-    .session-automation-mobile__task,
     .sidebar-file-view .cm-scroller,
     .sidebar-file-view__markdown-scroll,
     .sidebar-file-view__markdown,

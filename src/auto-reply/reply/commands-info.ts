@@ -2,7 +2,10 @@ import {
   resolveEffectiveToolInventory,
   acquireEffectiveToolInventoryRuntimeModelContext,
 } from "../../agents/tools-effective-inventory.js";
+import { resolveSessionToolPreviewSandboxPolicy } from "../../agents/tools-effective-sandbox-policy.js";
+import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { getInProcessGatewayRequestContext } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   prepareSkillCommandsForAgents,
   resolveSkillCommandInvocation,
@@ -132,11 +135,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
   }
 
   try {
-    const effectiveAccountId = resolveChannelAccountId({
-      cfg: params.cfg,
-      ctx: params.ctx,
-      command: params.command,
-    });
+    const effectiveAccountId = resolveChannelAccountId(params);
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
     const sessionBound = Boolean(params.sessionKey);
     const threadingContext = buildThreadingToolContext({
@@ -155,9 +154,19 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
     await using acquired =
       await acquireEffectiveToolInventoryRuntimeModelContext(inventoryModelContext());
     return await acquired.run(async (runtimeModelContext) => {
+      const gateway = getInProcessGatewayRequestContext(
+        readChannelContextGatewayContextResolver(params.rootCtx ?? params.ctx),
+      );
       const result = await resolveEffectiveToolInventory({
         ...inventoryModelContext(),
         sessionKey: params.sessionKey,
+        sandboxToolPolicy: await resolveSessionToolPreviewSandboxPolicy({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          sessionEntry: targetSessionEntry,
+          context: gateway,
+        }),
         modelApi: runtimeModelContext.modelApi,
         runtimeModel: runtimeModelContext.runtimeModel,
         messageProvider: params.command.channel,
@@ -204,11 +213,7 @@ export const handleStatusCommand: CommandHandler = defineAuthorizedTextCommand(
   },
   async (params, normalizedStatusCommand) => {
     if (normalizedStatusCommand === "/status plugins") {
-      const reply = await buildStatusPluginsReply({
-        cfg: params.cfg,
-        command: params.command,
-        workspaceDir: params.workspaceDir,
-      });
+      const reply = await buildStatusPluginsReply(params);
       return commandReply(reply);
     }
     if (normalizedStatusCommand.startsWith("/status ")) {

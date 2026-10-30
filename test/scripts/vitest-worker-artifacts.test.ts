@@ -88,6 +88,71 @@ function heldWorkerBorrowingProbe(directory: string) {
 }
 
 describe.concurrent("fresh compiled subprocess invocation", () => {
+  it("keeps source-host SDK imports native in maintenance workers", ({ workerArtifacts }) =>
+    workerArtifacts.fixtureLifetime.run(async () => {
+      const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
+      const owner = workerArtifacts.createWorkerRun();
+      const fixture = workerArtifacts.fixtureDirectory();
+      try {
+        await prepareWorkers(owner);
+        const probe = writeFixture(
+          fixture,
+          "native-sdk-worker.mjs",
+          `
+          import assert from 'node:assert/strict';
+          import {parentPort,workerData} from 'node:worker_threads';
+          await import(workerData.entry);
+          const {tryNativeRequireModule}=await import(workerData.nativeRequire);
+          const native=tryNativeRequireModule(workerData.sdk);
+          assert(native.ok,'source-host SDK must load natively');
+          const imported=await import(workerData.sdk);
+          assert.equal(native.moduleExport,imported,'source SDK must retain one module identity');
+          parentPort.postMessage('native-sdk-ready');
+          parentPort.close();
+          `,
+        );
+        const result = await node(
+          [
+            "--input-type=module",
+            "--eval",
+            `
+            import assert from 'node:assert/strict';
+            import path from 'node:path';
+            import {pathToFileURL} from 'node:url';
+            import {Worker} from 'node:worker_threads';
+            const [probe,directory,root]=process.argv.slice(1);
+            for(const entry of ['commands/doctor-database-engine-inspection.worker.js','snapshot/database-backup.worker.js','infra/database-engine/port-command.entry.worker.js']) {
+              const worker=new Worker(pathToFileURL(probe),{
+                execArgv:[],
+                env:{...process.env,NODE_OPTIONS:'',TSX_TSCONFIG_PATH:path.join(root,'tsconfig.json')},
+                workerData:{
+                  entry:pathToFileURL(path.join(directory,'dist',entry)).href,
+                  nativeRequire:pathToFileURL(path.join(root,'src/plugins/native-module-require.ts')).href,
+                  sdk:pathToFileURL(path.join(root,'src/plugin-sdk/sqlite-worker-runtime.ts')).href,
+                },
+              });
+              try {
+                const ready=await new Promise((resolve,reject)=>{
+                  worker.once('message',resolve);
+                  worker.once('error',reject);
+                  worker.once('exit',code=>reject(new Error('worker exited before SDK proof: '+code)));
+                });
+                assert.equal(ready,'native-sdk-ready');
+              } finally {await worker.terminate();}
+            }
+            `,
+            probe,
+            owner.descriptor.directory,
+            root,
+          ],
+          root,
+        );
+        expect(result.code, result.stderr + result.stdout).toBe(0);
+      } finally {
+        await owner.dispose();
+      }
+    }));
+
   it("uses installed fs-safe packages from compiled subprocesses", ({ workerArtifacts }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
       const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();

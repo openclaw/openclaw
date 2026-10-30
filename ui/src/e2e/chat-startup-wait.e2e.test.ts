@@ -1,10 +1,53 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI queued startup wait" });
 
 suite.define(() => {
+  it("presents a slow send immediately without routine delivery status", async () => {
+    await suite.withPage({ viewport: { height: 800, width: 1200 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, { historyMessages: [] });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+      await gateway.waitForRequest("sessions.messages.subscribe");
+      await gateway.deferNext("chat.send");
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("Check the workspace and summarize the results.");
+      await composer.press("Enter");
+      const send = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(send.params);
+      const runId = requireString(params.idempotencyKey, "send run id");
+      const sessionKey = requireString(params.sessionKey, "send session key");
+      const prompt = page.locator(".chat-group.user");
+      const working = page.locator(".chat-working-indicator");
+      await prompt.waitFor();
+      await working.waitFor();
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const artifacts = createControlUiE2eArtifactDir("smooth-prompt-send");
+        await writeFile(
+          path.join(artifacts, "pending.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [prompt, working]),
+        );
+      }
+      expect(await prompt.locator(".chat-send-status").count()).toBe(0);
+      await expect.poll(() => prompt.locator("time").count()).toBe(1);
+      await gateway.resolveDeferred("chat.send", { status: "started", runId });
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      expect(await prompt.locator(".chat-send-status").count()).toBe(0);
+      expect(await working.textContent()).not.toContain("Waiting for turn to start");
+      await gateway.emitChatFinal({ runId, sessionKey, text: "The workspace checks passed." });
+      await page
+        .locator(".chat-text")
+        .getByText("The workspace checks passed.", { exact: true })
+        .waitFor();
+      expect(await prompt.count()).toBe(1);
+    });
+  });
   it.each(["first accepted message", "restored queued run"])(
     "waits for startup progress: %s",
     async (scenario) => {
@@ -66,9 +109,10 @@ suite.define(() => {
         } else {
           const statusText = status.locator(".chat-working-indicator__status > span:first-child");
           await stop.waitFor();
-          await statusText.waitFor();
+          await statusText.waitFor({ state: "attached" });
           await page.getByText(message, { exact: true }).waitFor();
-          expect(await statusText.textContent()).toBe("Waiting for turn to start…");
+          expect(await statusText.textContent()).toBe("Working…");
+          expect(await statusText.getAttribute("class")).toContain("sr-only");
           await gateway.emitGatewayEvent("chat", {
             sessionKey,
             runId,

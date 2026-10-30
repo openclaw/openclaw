@@ -68,7 +68,13 @@ describe("legacy main session migration", () => {
       const realpath = vi.spyOn(fs.realpathSync, "native");
       try {
         const result = await migrate(fixture);
-        expect(result).toMatchObject({ complete: true, outcomes: [{ kind: "no-legacy-rows" }] });
+        expect(result).toMatchObject({
+          armed: false,
+          complete: true,
+          ledgerComplete: false,
+          outcomes: [{ kind: "no-legacy-rows", detail: "no configured owner" }],
+          warnings: [],
+        });
         const inspected = realpath.mock.calls
           .map(([pathname]) => String(pathname))
           .filter((pathname) => paths.has(pathname));
@@ -213,41 +219,21 @@ describe("legacy main session migration", () => {
   );
 
   it("uses an explicit migration owner when the multi-agent roster is unambiguous", async () => {
-    const resolved = createFixture({
-      agents: { ...explicitAgents, defaults: { sessionStore: { agentId: "ops" } } },
-      session: { store: path.join(tempDirs.make("fixed-store-owner-"), "sessions.sqlite") },
-    });
     const unresolved = createFixture({ agents: explicitAgents });
     seedClaim(claim("main", databasePath(unresolved.stateDir, "main")));
     const perAgentPinned = createFixture({
       agents: { ...explicitAgents, defaults: { sessionStore: { agentId: "ops" } } },
     });
 
-    const armed = await migrate(resolved);
     const notArmed = await migrate(unresolved);
     const perAgentArmed = await migrate(perAgentPinned);
 
-    expect(armed).toMatchObject({ armed: true, ownerAgentId: "ops" });
     expect(notArmed).toMatchObject({
       armed: false,
       outcomes: [{ kind: "not-armed", detail: "owner-unresolved" }],
     });
     expect(perAgentArmed).toMatchObject({ armed: true, ownerAgentId: "ops" });
     expect(notArmed.warnings[0]).toContain("agents.defaults.sessionStore.agentId");
-  });
-
-  it("proves an unresolved-owner store clean when it has no legacy rows", async () => {
-    const fixture = createFixture({ agents: explicitAgents });
-
-    const result = await migrate(fixture);
-
-    expect(result).toMatchObject({
-      armed: false,
-      complete: true,
-      ledgerComplete: false,
-      outcomes: [{ kind: "no-legacy-rows", detail: "no configured owner" }],
-      warnings: [],
-    });
   });
 
   it("keeps unresolved ownership advisory when a candidate store is unreadable", async () => {
@@ -266,16 +252,13 @@ describe("legacy main session migration", () => {
     expect(result.warnings[0]).toContain("agents.defaults.sessionStore.agentId");
   });
 
-  it("keeps detection non-throwing for unreadable stores and treats ENOENT as absence", async () => {
-    const absent = createFixture();
+  it("keeps detection non-throwing for unreadable stores", async () => {
     const unreadablePath = path.join(tempDirs.make("detect-unreadable-"), "sessions.sqlite");
     fs.symlinkSync(`${unreadablePath}.missing`, unreadablePath);
     const unreadable = storeFixture(unreadablePath);
 
-    const absentResult = await migrate(absent);
     const unreadableResult = await migrate(unreadable);
 
-    expect(absentResult).toMatchObject({ complete: true, outcomes: [{ kind: "no-legacy-rows" }] });
     expect(outcomeKinds(unreadableResult)).toContain("store-unreadable");
     expect(unreadableResult.warnings.join("\n")).toContain(unreadablePath);
     await expect(migrate(unreadable, "doctor-fix")).rejects.toThrow(
@@ -403,12 +386,30 @@ it("reports legacy session repairs without rewriting stored claims at startup", 
     const beforeWorktree = loadSessionEntry(worktree);
     const log = { info: vi.fn(), warn: vi.fn() };
     const handoffDatabase = vi.fn(async () => {});
+    const captureReader = vi.spyOn(retirement, "captureSessionRetirementReader");
     await runSessionStartupMigration({ cfg, env, log, handoffDatabase });
     expect.soft(loadSessionEntry(legacy)).toEqual(beforeLegacy);
     expect.soft(loadSessionEntry(canonical)).toBeUndefined();
     expect.soft(loadSessionEntry(worktree)).toEqual(beforeWorktree);
     expect(handoffDatabase).toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+    expect(captureReader).toHaveBeenCalled();
+
+    // Deferred preparation owns one agent; the boot pass already reported legacy history.
+    captureReader.mockClear();
+    handoffDatabase.mockClear();
+    await runSessionStartupMigration({
+      cfg,
+      env,
+      log,
+      handoffDatabase,
+      agentIds: new Set(["ops"]),
+    });
+    expect(handoffDatabase).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ agentId: "ops" }),
+    );
+    expect(captureReader).not.toHaveBeenCalled();
+    expect(loadSessionEntry(legacy)).toEqual(beforeLegacy);
   });
 });
 

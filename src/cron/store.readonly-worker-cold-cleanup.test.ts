@@ -1,9 +1,10 @@
-import fs from "node:fs/promises";
 import { expect, it, vi } from "vitest";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import * as workers from "../infra/worker-cpu.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { installCronSnapshotFaults } from "./store.readonly-worker-faults.test-support.js";
 import { withCronStore } from "./store.worker.test-support.js";
+import { resolveCronStoreKeyAsync } from "./store/paths.js";
 
 it.each(["read", "copy"] as const)(
   "retains the worker %s failure and cold snapshot cleanup custody",
@@ -14,6 +15,8 @@ it.each(["read", "copy"] as const)(
         const cacheRoot = state.statePath("snapshot-cache");
         process.env.XDG_CACHE_HOME = cacheRoot;
         await state.createDatabase();
+        // Selection uses another worker; keep the cron reader cold for these faults.
+        await resolveCronStoreKeyAsync(state.storePath, state.env);
         const originalBytes = await state.bytes();
         const fault = await installCronSnapshotFaults(state, failureStage);
         const originalFailure =
@@ -39,9 +42,9 @@ it.each(["read", "copy"] as const)(
           message: expect.stringContaining(originalFailure),
         });
         const remaining = async () =>
-          (await fs.readdir(cacheRoot, { recursive: true })).filter((name) =>
-            name.includes("openclaw-sqlite-readonly-"),
-          );
+          (await listDirectoryTreeStrict(cacheRoot))
+            .map((walkEntry) => walkEntry.relativePath)
+            .filter((name) => name.includes("openclaw-sqlite-readonly-"));
         try {
           await expect(state.read(true)).rejects.toMatchObject({
             errors: [

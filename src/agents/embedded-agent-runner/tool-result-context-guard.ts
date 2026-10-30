@@ -6,10 +6,12 @@ import type {
 } from "../../context-engine/types.js";
 import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
 import { mapArrayIfChanged } from "../../shared/map-array-if-changed.js";
-import { estimateTokens, type Agent, type AgentMessage } from "../runtime/index.js";
+import { resolveEffectiveCompactionReserveTokens } from "../agent-compaction-constants.js";
+import { SAFETY_MARGIN } from "../compaction-planning.js";
+import type { Agent, AgentMessage } from "../runtime/index.js";
+import { createFreshLlmBoundaryTokenEstimator } from "../sessions/context-token-pressure.js";
 import { resolveToolResultContextMaxChars } from "../tool-result-limits.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
-import { estimateRenderedLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
 import {
   TOOL_IMAGE_CHARS,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
@@ -131,6 +133,38 @@ function truncateToolResultToChars(
   return replaceToolResultContent(msg, truncatedText);
 }
 
+type RequestToolSchemas = Parameters<typeof createFreshLlmBoundaryTokenEstimator>[0]["tools"];
+
+// Budgets mid-turn history in raw token units so a view that fills it exactly
+// still passes the mid-turn precheck for the same request.
+function resolveMidTurnHistoryTokenBudget(params: {
+  tokenBudget: number;
+  reserveTokens: number;
+  systemPrompt?: string;
+  tools?: RequestToolSchemas;
+  pendingMessages: AgentMessage[];
+}): number {
+  // Mirror the precheck: its reserve cap, and one estimator pricing the system
+  // prompt, tool schemas and pending exchange with the safety margin applied.
+  // The pending exchange already carries the active prompt.
+  const promptBudget =
+    Math.max(1, Math.floor(params.tokenBudget)) -
+    resolveEffectiveCompactionReserveTokens({
+      contextTokenBudget: params.tokenBudget,
+      reserveTokens: params.reserveTokens,
+    });
+  const fixedTokens = createFreshLlmBoundaryTokenEstimator({
+    systemPrompt: params.systemPrompt,
+    tools: params.tools,
+    retainCompletionUsage: true,
+  })({
+    messages: params.pendingMessages.map((message) => projectRecordedModelPrompt(message)),
+    prompt: "",
+  });
+  // The precheck also multiplies assembled history by the margin.
+  return Math.max(1, Math.floor((promptBudget - fixedTokens) / SAFETY_MARGIN));
+}
+
 /**
  * Reassemble each tool-loop iteration for engines that own compaction.
  * Admitted turns advance through their accepted-turn owner; standalone
@@ -146,6 +180,7 @@ export function installContextEngineLoopHook(params: {
   tokenBudget?: number;
   reserveTokens?: () => number;
   getSystemPrompt?: () => string | undefined;
+  getTools?: () => RequestToolSchemas;
   modelId: string;
   repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
   getPrePromptMessageCount?: () => number;
@@ -246,17 +281,6 @@ export function installContextEngineLoopHook(params: {
         ? (params.getPrePromptMessageCount?.() ?? 0)
         : providerMessages.length;
       const pendingMessages = providerMessages.slice(historyLength);
-      const pendingTokens = pendingMessages.reduce(
-        (sum, message) => sum + estimateTokens(projectRecordedModelPrompt(message)),
-        0,
-      );
-      // The pending exchange already includes the active prompt; reserve only
-      // the system prompt here, using the same pressure estimate as turn start.
-      const systemTokens = estimateRenderedLlmBoundaryTokenPressure({
-        systemPrompt: params.getSystemPrompt?.(),
-        prompt: "",
-      });
-      const reserve = Math.max(0, Math.floor(params.reserveTokens?.() ?? 0));
       const assembled = await contextEngine.assemble({
         ...sessionIdentity,
         messages: providerMessages.slice(0, historyLength),
@@ -264,7 +288,13 @@ export function installContextEngineLoopHook(params: {
         tokenBudget:
           tokenBudget === undefined
             ? undefined
-            : Math.max(1, tokenBudget - reserve - systemTokens - pendingTokens),
+            : resolveMidTurnHistoryTokenBudget({
+                tokenBudget,
+                reserveTokens: params.reserveTokens?.() ?? 0,
+                systemPrompt: params.getSystemPrompt?.(),
+                tools: params.getTools?.(),
+                pendingMessages,
+              }),
         model: modelId,
         runtimeSettings: params.runtimeSettings,
       });

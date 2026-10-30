@@ -31,6 +31,7 @@ import {
   reclaimDeadOpenClawStateLeaseInTransaction,
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
+  readOpenClawStateLeaseLoss,
 } from "./openclaw-state-lease-store.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 
@@ -236,7 +237,11 @@ export function executeOpenClawStateLeaseCommand(
           command.input.leaseMs,
         );
         if (expiresAt === undefined) {
-          throw createOpenClawStateLeaseLostError(command.input.identity);
+          throw createOpenClawStateLeaseLostError(
+            command.input.identity,
+            undefined,
+            readOpenClawStateLeaseLoss(db, command.input.identity),
+          );
         }
         assertOpenClawStateLeaseWorkerOwnedInTransaction(
           db,

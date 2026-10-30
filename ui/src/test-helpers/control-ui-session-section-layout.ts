@@ -4,6 +4,14 @@ export async function assertSessionSectionCountAlignment(
   page: Page,
   sectionIds: readonly string[],
 ) {
+  const waitForExpanded = (sectionId: string | null, target: string) =>
+    page.waitForFunction(
+      ({ id, selector }) =>
+        document
+          .querySelector(`[data-session-section="${id}"] ${selector}`)
+          ?.getAttribute("aria-expanded") === "true",
+      { id: sectionId, selector: target },
+    );
   const sections = sectionIds.map((sectionId) =>
     page.locator(`[data-session-section="${sectionId}"]`),
   );
@@ -29,12 +37,9 @@ export async function assertSessionSectionCountAlignment(
   for (const section of sections) {
     await section.locator(".sidebar-session-group-count").click();
     const toggle = section.locator(".sidebar-session-group-toggle");
-    await page.waitForFunction(
-      (id) =>
-        document
-          .querySelector(`[data-session-section="${id}"] .sidebar-session-group-toggle`)
-          ?.getAttribute("aria-expanded") === "true",
+    await waitForExpanded(
       await section.getAttribute("data-session-section"),
+      ".sidebar-session-group-toggle",
     );
     await toggle.click();
   }
@@ -83,13 +88,7 @@ export async function assertSessionSectionCountAlignment(
     }
     const groupingAction = header.locator("[data-session-catalog-view-menu]");
     await groupingAction.click();
-    await page.waitForFunction(
-      (id) =>
-        document
-          .querySelector(`[data-session-section="${id}"] [data-session-catalog-view-menu]`)
-          ?.getAttribute("aria-expanded") === "true",
-      sectionId,
-    );
+    await waitForExpanded(sectionId, "[data-session-catalog-view-menu]");
     await page.mouse.move(0, 0);
     const persistentOpacity = await groupingAction.evaluate(
       (element) => getComputedStyle(element).opacity,

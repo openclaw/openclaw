@@ -10,6 +10,7 @@ import {
   resolveExecutablePathCandidate,
 } from "../infra/executable-path.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
+import { resolveRuntimeDependencyEntrypointUrlFromDirectory } from "../infra/runtime-process-dependency-url.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>%\r\n]/;
@@ -21,11 +22,16 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
   const basename = normalizeLowercaseStringOrEmpty(
     path.basename(expectDefined(argv[0], "argv entry at 0")),
   ).replace(/\.(cmd|exe|bat)$/, "");
-  const cliName = basename === "npx" ? "npx-cli.js" : basename === "npm" ? "npm-cli.js" : null;
-  if (!cliName) {
+  const entryName = basename === "npx" ? "npx" : basename === "npm" ? "npm" : null;
+  if (!entryName) {
     return null;
   }
-  const cliPath = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", cliName);
+  const cliPath = fileURLToPath(
+    resolveRuntimeDependencyEntrypointUrlFromDirectory(
+      entryName,
+      path.join(path.dirname(process.execPath), "node_modules", "npm", "bin"),
+    ),
+  );
   if (fs.existsSync(cliPath)) {
     return [process.execPath, cliPath, ...argv.slice(1)];
   }
@@ -203,9 +209,8 @@ export function resolveTrustedWindowsCmdExe(platform: NodeJS.Platform = process.
 export function resolveWindowsCommandShim(params: {
   command: string;
   cmdCommands: readonly string[];
-  platform?: NodeJS.Platform;
 }): string {
-  if ((params.platform ?? process.platform) !== "win32") {
+  if (process.platform !== "win32") {
     return params.command;
   }
   const basename = normalizeLowercaseStringOrEmpty(path.basename(params.command));

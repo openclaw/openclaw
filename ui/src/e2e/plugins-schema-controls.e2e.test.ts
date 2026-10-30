@@ -107,7 +107,7 @@ suite.define(() => {
         expect(JSON.parse(String(asRecord(write.params).raw))).toEqual(pluginConfig(after));
         // A captured request precedes the Gateway reply; reload only after
         // the existing writer has acknowledged and retained the saved value.
-        await page.locator(".settings-save-indicator--saved").waitFor();
+        await page.getByRole("button", { name: "Apply changes", exact: true }).waitFor();
         await page.reload();
         await search.waitFor();
         if (json) {

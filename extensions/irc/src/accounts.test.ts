@@ -6,24 +6,20 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { listIrcAccountIds, resolveDefaultIrcAccountId, resolveIrcAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
-function asConfig(value: unknown): CoreConfig {
-  return value as CoreConfig;
+function asConfig(irc: unknown): CoreConfig {
+  return { channels: { irc } } as CoreConfig;
 }
 
 describe("listIrcAccountIds", () => {
   it("keeps the implicit default account when named accounts are added to top-level connection config", () => {
     const cfg = asConfig({
-      channels: {
-        irc: {
-          host: "irc.example.com",
-          nick: "claw",
-          accounts: {
-            work: {
-              enabled: false,
-              host: "irc-work.example.com",
-              nick: "claw-work",
-            },
-          },
+      host: "irc.example.com",
+      nick: "claw",
+      accounts: {
+        work: {
+          enabled: false,
+          host: "irc-work.example.com",
+          nick: "claw-work",
         },
       },
     });
@@ -58,17 +54,13 @@ describe("resolveIrcAccount", () => {
       const ref = { source: "env", provider: "default", id: "IRC_UNAVAILABLE_EXPLICIT_SECRET" };
       const account = resolveIrcAccount({
         cfg: asConfig({
-          channels: {
-            irc: {
-              accounts: {
-                [accountId]: {
-                  host: "irc.example.com",
-                  nick: "openclaw",
-                  ...(credential === "password"
-                    ? { password: ref, passwordFile: fixturePasswordFile }
-                    : { nickserv: { password: ref, passwordFile: fixturePasswordFile } }),
-                },
-              },
+          accounts: {
+            [accountId]: {
+              host: "irc.example.com",
+              nick: "openclaw",
+              ...(credential === "password"
+                ? { password: ref, passwordFile: fixturePasswordFile }
+                : { nickserv: { password: ref, passwordFile: fixturePasswordFile } }),
             },
           },
         }),
@@ -102,17 +94,11 @@ describe("resolveIrcAccount", () => {
       };
       const account = resolveIrcAccount({
         cfg: asConfig({
-          channels: {
-            irc: {
-              accounts: {
-                [accountId]: {
-                  host: "irc.example.com",
-                  nick: "openclaw",
-                  ...(credential === "password"
-                    ? credentialConfig
-                    : { nickserv: credentialConfig }),
-                },
-              },
+          accounts: {
+            [accountId]: {
+              host: "irc.example.com",
+              nick: "openclaw",
+              ...(credential === "password" ? credentialConfig : { nickserv: credentialConfig }),
             },
           },
         }),
@@ -131,13 +117,9 @@ describe("resolveIrcAccount", () => {
     fs.symlinkSync(fixturePasswordFile, passwordLink);
 
     const cfg = asConfig({
-      channels: {
-        irc: {
-          host: "irc.example.com",
-          nick: "claw",
-          passwordFile: passwordLink,
-        },
-      },
+      host: "irc.example.com",
+      nick: "claw",
+      passwordFile: passwordLink,
     });
 
     const account = resolveIrcAccount({ cfg });
@@ -159,14 +141,10 @@ describe("resolveIrcAccount", () => {
     fs.symlinkSync(fixturePasswordFile, passwordLink);
 
     const cfg = asConfig({
-      channels: {
-        irc: {
-          host: "irc.example.com",
-          nick: "claw",
-          nickserv: {
-            passwordFile: passwordLink,
-          },
-        },
+      host: "irc.example.com",
+      nick: "claw",
+      nickserv: {
+        passwordFile: passwordLink,
       },
     });
 
@@ -187,16 +165,12 @@ describe("resolveIrcAccount", () => {
     const passwordFile = path.join(fixtureDirectory, "missing-password.txt");
     const account = resolveIrcAccount({
       cfg: asConfig({
-        channels: {
-          irc: {
-            accounts: {
-              work: {
-                host: "irc.example.com",
-                nick: "claw",
-                password: "test-password",
-                passwordFile,
-              },
-            },
+        accounts: {
+          work: {
+            host: "irc.example.com",
+            nick: "claw",
+            password: "test-password",
+            passwordFile,
           },
         },
       }),
@@ -212,19 +186,15 @@ describe("resolveIrcAccount", () => {
   it("preserves shared NickServ config when an account overrides one NickServ field", () => {
     const account = resolveIrcAccount({
       cfg: asConfig({
-        channels: {
-          irc: {
-            host: "irc.example.com",
-            nick: "claw",
+        host: "irc.example.com",
+        nick: "claw",
+        nickserv: {
+          service: "NickServ",
+        },
+        accounts: {
+          work: {
             nickserv: {
-              service: "NickServ",
-            },
-            accounts: {
-              work: {
-                nickserv: {
-                  registerEmail: "work@example.com",
-                },
-              },
+              registerEmail: "work@example.com",
             },
           },
         },

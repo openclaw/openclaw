@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
+import { createPluginManifestRecordFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { collectDoctorPreviewNotes } from "./preview-warnings.js";
 
 async function collectDoctorPreviewWarnings(
@@ -50,16 +51,10 @@ type TestManifestRecord = {
   origin?: "bundled" | "global";
 };
 
-const manifestState = vi.hoisted(
-  () =>
-    ({
-      plugins: [] as TestManifestRecord[],
-      diagnostics: [] as Array<{ level: string; message: string; source: string }>,
-    }) satisfies {
-      plugins: TestManifestRecord[];
-      diagnostics: Array<{ level: string; message: string; source: string }>;
-    },
-);
+const manifestState = vi.hoisted(() => ({
+  plugins: [] as TestManifestRecord[],
+  diagnostics: [] as Array<{ level: string; message: string; source: string }>,
+}));
 
 const staleOAuthShadowState = vi.hoisted(() => ({
   warnings: [] as string[],
@@ -135,158 +130,60 @@ vi.mock("./channel-doctor.js", () => ({
   shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: vi.fn(() => false),
 }));
 
-vi.mock("./channel-plugin-blockers.js", () => ({
-  scanConfiguredChannelPluginBlockers: (
-    cfg: {
-      channels?: Record<string, unknown>;
-      plugins?: {
-        allow?: string[];
-        enabled?: boolean;
-        entries?: Record<string, { enabled?: boolean }>;
-      };
-    },
-    env: NodeJS.ProcessEnv = process.env,
-    activationSourceConfig = cfg,
-  ) => {
-    const configuredChannels = new Set(Object.keys(cfg.channels ?? {}));
-    if (Object.keys(env).some((key) => key.startsWith("TELEGRAM_"))) {
-      configuredChannels.add("telegram");
-    }
-    if (Object.keys(env).some((key) => key.startsWith("DISCORD_"))) {
-      configuredChannels.add("discord");
-    }
-    const hits: Array<{
-      channelId: string;
-      pluginId: string;
-      reason: string;
-      channelAvailable?: boolean;
-    }> = manifestState.plugins.flatMap((plugin) => {
-      const sourcePlugins = activationSourceConfig.plugins;
-      const disabledByEntry = sourcePlugins?.entries?.[plugin.id]?.enabled === false;
-      const pluginsDisabled = sourcePlugins?.enabled === false;
-      const isExternal = plugin.origin === "global";
-      const omittedFromAllowlist =
-        isExternal &&
-        (sourcePlugins?.allow ?? []).length > 0 &&
-        !(sourcePlugins?.allow ?? []).includes(plugin.id);
-      const missingExplicitTrust =
-        isExternal &&
-        sourcePlugins?.entries?.[plugin.id]?.enabled !== true &&
-        !(sourcePlugins?.allow ?? []).includes(plugin.id);
-      if (!disabledByEntry && !pluginsDisabled && !omittedFromAllowlist && !missingExplicitTrust) {
-        return [];
-      }
-      return plugin.channels
-        .filter((channelId) => configuredChannels.has(channelId))
-        .map((channelId) => ({
-          channelId,
-          pluginId: plugin.id,
-          reason: disabledByEntry
-            ? "disabled in config"
-            : pluginsDisabled
-              ? "plugins disabled"
-              : omittedFromAllowlist
-                ? "not in allowlist"
-                : "missing explicit enablement",
-        }));
-    });
-    const blockedPluginIds = new Set(hits.map((hit) => hit.pluginId));
-    const availableChannelIds = new Set(
-      manifestState.plugins
-        .filter((plugin) => !blockedPluginIds.has(plugin.id))
-        .flatMap((plugin) =>
-          plugin.channels.filter((channelId) => configuredChannels.has(channelId)),
-        ),
-    );
-    for (const hit of hits) {
-      if (availableChannelIds.has(hit.channelId)) {
-        hit.channelAvailable = true;
-      }
-    }
-    return hits;
-  },
-  collectConfiguredChannelPluginBlockerWarnings: (
-    hits: Array<{ channelId: string; pluginId: string; reason: string }>,
-  ) =>
-    hits.map((hit) => {
-      const reason =
-        hit.reason === "disabled in config"
-          ? `plugin "${hit.pluginId}" is disabled by plugins.entries.${hit.pluginId}.enabled=false.`
-          : hit.reason === "plugins disabled"
-            ? "plugins.enabled=false blocks channel plugins globally."
-            : hit.reason === "not in allowlist"
-              ? `external plugin "${hit.pluginId}" is installed but omitted from plugins.allow. Include "${hit.pluginId}" in plugins.allow.`
-              : `external plugin "${hit.pluginId}" is installed without explicit trust. Add plugins.entries.${hit.pluginId}.enabled=true.`;
-      return `- channels.${hit.channelId}: channel is configured, but ${reason}`;
-    }),
-  isWarningBlockedByChannelPlugin: (
-    warning: string,
-    hits: Array<{ channelId: string; channelAvailable?: boolean }>,
-  ) =>
-    hits.some(
-      (hit) =>
-        !hit.channelAvailable &&
-        (warning.includes(`channels.${hit.channelId}:`) ||
-          warning.includes(`channels.${hit.channelId}.`)),
-    ),
+// Keep metadata discovery synthetic while exercising the actual blocker policy.
+vi.mock("../../../channels/plugins/bundled-ids.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../channels/plugins/bundled-ids.js")>()),
+  listBundledChannelIds: () => manifestState.plugins.flatMap((plugin) => plugin.channels),
 }));
 
-vi.mock("./stale-plugin-config.js", () => ({
+vi.mock("./channel-plugin-blockers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./channel-plugin-blockers.js")>();
+  return {
+    ...actual,
+    scanConfiguredChannelPluginBlockers: (
+      ...[cfg, env, source]: Parameters<typeof actual.scanConfiguredChannelPluginBlockers>
+    ) =>
+      actual.scanConfiguredChannelPluginBlockers(cfg, env, source, {
+        manifestRecords: manifestState.plugins.map(createPluginManifestRecordFixture),
+      }),
+  };
+});
+
+vi.mock("./stale-plugin-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./stale-plugin-config.js")>()),
   scanStalePluginConfig: (cfg: {
     plugins?: { allow?: string[]; entries?: Record<string, unknown> };
     channels?: Record<string, unknown>;
   }) => {
     const knownIds = new Set(manifestState.plugins.map((plugin) => plugin.id));
     const hits = [
-      ...(cfg.plugins?.allow ?? []).map((id) => ({ id, surface: "allow" })),
-      ...Object.keys(cfg.plugins?.entries ?? {}).map((id) => ({ id, surface: "entries" })),
-    ].filter((hit) => !knownIds.has(hit.id));
+      ...(cfg.plugins?.allow ?? []).map((pluginId) => ({
+        pluginId,
+        pathLabel: "plugins.allow",
+        surface: "allow",
+      })),
+      ...Object.keys(cfg.plugins?.entries ?? {}).map((pluginId) => ({
+        pluginId,
+        pathLabel: `plugins.entries.${pluginId}`,
+        surface: "entries",
+      })),
+    ].filter((hit) => !knownIds.has(hit.pluginId));
     if (cfg.channels?.["openclaw-weixin"]) {
-      hits.push({ id: "openclaw-weixin", surface: "channel" });
+      hits.push({
+        pluginId: "openclaw-weixin",
+        pathLabel: "channels.openclaw-weixin",
+        surface: "channel",
+      });
     }
     return hits.filter(
       (hit, index) =>
         hits.findIndex(
-          (candidate) => candidate.id === hit.id && candidate.surface === hit.surface,
+          (candidate) => candidate.pluginId === hit.pluginId && candidate.surface === hit.surface,
         ) === index,
     );
   },
   isStalePluginAutoRepairBlocked: () =>
     manifestState.diagnostics.some((diagnostic) => diagnostic.level === "error"),
-  collectStalePluginConfigWarnings: ({
-    autoRepairBlocked,
-    doctorFixCommand,
-    hits,
-    surfacePreservePluginIds,
-  }: {
-    autoRepairBlocked: boolean;
-    doctorFixCommand: string;
-    hits: Array<{ id: string; surface: string }>;
-    surfacePreservePluginIds?: Record<string, ReadonlySet<string>>;
-  }) => {
-    const actionableHits = hits.filter(
-      (hit) => !surfacePreservePluginIds?.[hit.surface]?.has(hit.id),
-    );
-    if (actionableHits.length === 0) {
-      return [];
-    }
-    const pluginIds = actionableHits
-      .filter((hit) => hit.surface !== "channel")
-      .map((hit) => hit.id)
-      .toSorted();
-    const lines = [
-      pluginIds.length > 0
-        ? `Stale plugin references (plugins.allow/deny/entries): ${pluginIds.join(", ")}.`
-        : null,
-      ...actionableHits
-        .filter((hit) => hit.surface === "channel")
-        .map((hit) => `channels.${hit.id}: dangling channel config.`),
-      autoRepairBlocked
-        ? `Auto-removal is paused; rerun "${doctorFixCommand}".`
-        : `Run "${doctorFixCommand}".`,
-    ];
-    return lines.filter((line): line is string => line !== null);
-  },
 }));
 
 // mock-isolation: Script warning output without reading host auth stores.
@@ -673,7 +570,7 @@ describe("doctor preview warnings", () => {
 
     const warning = expectSingleWarningContaining(
       warnings,
-      'channels.discord: channel is configured, but external plugin "discord" is installed but omitted from plugins.allow.',
+      'channels.discord: channel is configured, but plugin "discord" is installed but omitted from plugins.allow.',
     );
     expect(warning).toContain('Include "discord" in plugins.allow');
     expect(warning).not.toContain("first-time setup mode");

@@ -174,14 +174,17 @@ const mountPool: ControlUiView = (container, initialContext) => {
   }
 
   function GrantCard(props: { grant: Grant; pool: ClawRouterPool; index: number }) {
-    const traffic = () =>
-      props.grant.key && props.grant.provider
-        ? props.pool.usage.grants.filter(
-            (row) =>
-              row.grantKey === props.grant.key?.split("/").at(-1) &&
-              row.provider === props.grant.provider,
-          )
-        : [];
+    const traffic = createMemo(() => {
+      const key = props.grant.key;
+      const provider = props.grant.provider;
+      if (!key || !provider) {
+        return [];
+      }
+      const grantKey = key.split("/").at(-1);
+      return props.pool.usage.grants.filter(
+        (row) => row.grantKey === grantKey && row.provider === provider,
+      );
+    });
     return (
       <article class="clawrouter-pool__grant" aria-labelledby={`clawrouter-grant-${props.index}`}>
         <header class="clawrouter-pool__grant-header">

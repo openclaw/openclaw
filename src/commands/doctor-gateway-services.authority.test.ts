@@ -19,6 +19,7 @@ import {
   parseSystemdExecStart,
 } from "../daemon/systemd-unit.js";
 import { seedCompletedRuntimePinMigration } from "../daemon/test-helpers/service-audit-runtime-pin.js";
+import { createDoctorPrompterFixture as makePrompter } from "../flows/doctor-health-context.test-support.js";
 import * as packageRootResolver from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { readSecretStoreValue } from "../secrets/store/secret-store.js";
@@ -27,7 +28,6 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { makePrompter } from "./doctor-auth-flat-profiles.test-support.js";
 import { mockDoctorServicePlatform } from "./doctor-maintenance.state-owner.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
@@ -133,7 +133,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     const originalConfig = `${JSON.stringify(cfg, null, 2)}\n`;
     const packageRoot = path.join(root, "node_modules/openclaw");
     const entrypoint = path.join(packageRoot, "dist/index.js");
-    const oldNode = "/nix/store/fixture-nodejs-24.20.0/bin/node";
+    const oldNode = "/nix/store/fixture-nodejs-24.15.0/bin/node";
     const systemNode = "/usr/local/bin/node";
     if (runtimeRepair) {
       const cliNode = path.join(root, "current/bin/node");
@@ -169,8 +169,8 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       (runtimeRepair === "launcher" ? `ExecStart=\nExecStart=${programArguments.join(" ")}\n` : "");
     const operatorFile = path.join(runtimeDir, "openclaw-homeassistant.env");
     if (runtimeRepair) {
-      await fs.mkdir(path.dirname(dropInPath));
-      await fs.writeFile(dropInPath, dropIn);
+      await fs.mkdir(path.dirname(dropInPath), { mode: 0o700 });
+      await fs.writeFile(dropInPath, dropIn, { mode: 0o600 });
       await fs.writeFile(
         operatorFile,
         runtimeRepair === "PATH" ? `PATH=${environment.PATH}\n` : "HA_FIXTURE=retained\n",
@@ -292,14 +292,17 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       }
     });
     edges.runtimeProbe.mockImplementation(async (file, args) => {
-      if (args[0] !== "-e" || !args[1]?.includes("sqliteVersion")) {
+      if (
+        path.basename(args[0] ?? "") !== "daemon-runtime-probe.mjs" ||
+        !isDeepStrictEqual(args.slice(1), ["node", ""])
+      ) {
         unexpectedProcesses.push("unexpected runtime process");
         throw new Error("Unexpected fixture runtime process");
       }
       return {
         stdout: JSON.stringify({
           nodeVersion:
-            file === systemNode ? systemNodeVersion : file === oldNode ? "24.20.0" : "26.12.1",
+            file === systemNode ? systemNodeVersion : file === oldNode ? "24.15.0" : "26.12.1",
           sqliteVersion: "3.51.3",
           sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
         }),
@@ -400,7 +403,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       },
       exit: vi.fn(),
     };
-    const prompter = makePrompter(true);
+    const prompter = makePrompter(true, true);
     prompter.shouldForce = update;
     Object.assign(prompter.repairMode, {
       shouldForce: update,
@@ -565,7 +568,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
 
   it.each([
     { runtimeRepair: "secret", systemNodeVersion: undefined, selectedNode: "cli" },
-    { runtimeRepair: "secret", systemNodeVersion: "24.20.0", selectedNode: "cli" },
+    { runtimeRepair: "secret", systemNodeVersion: "24.15.0", selectedNode: "cli" },
     { runtimeRepair: "secret", systemNodeVersion: "26.12.1", selectedNode: "/usr/local/bin/node" },
     { runtimeRepair: "PATH", systemNodeVersion: undefined, selectedNode: undefined },
     { runtimeRepair: "launcher", systemNodeVersion: undefined, selectedNode: undefined },

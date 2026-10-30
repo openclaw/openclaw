@@ -39,42 +39,14 @@ beforeAll(() => {
   return () => vi.resetConfig();
 });
 
-function expectedHarnessSparseCheckoutArgs(linux: boolean) {
-  return [
-    "sparse-checkout",
-    "set",
-    "--no-cone",
-    "/.github/actions/",
-    "/scripts/lib/pnpm-lockfile-documents.mjs",
-    "/scripts/ios-screenshot-evidence.mjs",
-    "/scripts/lib/ios-test-results.mjs",
-    "/scripts/lib/direct-run.mjs",
-    "/scripts/ci-static-step.sh",
-    "/scripts/ci-collect-checks.sh",
-    "/scripts/macos-native-runtime-artifact.mjs",
-    ...(linux
-      ? [
-          "/scripts/lib/release-upgrade-baseline.mjs",
-          "/scripts/lib/release-version.mjs",
-          "/scripts/lib/canonical-json.mjs",
-          "/scripts/lib/upgrade-survivor-policy.mjs",
-          "/scripts/lib/upgrade-survivor-scenarios.json",
-          "/scripts/ci-npm-lock-admission.mjs",
-          "/scripts/generate-npm-package-lock.mjs",
-          "/scripts/generate-npm-package-lock.mts",
-          "/scripts/changed-lanes.mts",
-          "/scripts/lib/merge-head-diff-base.mjs",
-          "/scripts/ci-additional-checks.sh",
-          "/scripts/stage-openclaw-bun.sh",
-          "/scripts/lib/openclaw-bun.json",
-        ]
-      : [
-          "/scripts/lib/swift-toolchain.sh",
-          "/scripts/lib/ci-ios-smoke-plan.mjs",
-          "/scripts/ci-xcodebuild.py",
-          "/scripts/swift-build-cache-metadata.py",
-        ]),
-  ];
+function readFiles(names: string[]) {
+  return Object.fromEntries(names.map((name) => [name, readFileSync(name, "utf8")]));
+}
+
+function expectFiles(directory: string, files: Record<string, string>) {
+  for (const [name, contents] of Object.entries(files)) {
+    expect(readFileSync(path.join(directory, name), "utf8"), name).toBe(contents);
+  }
 }
 
 // Workflow consumers define the required files; the real Git fixture below
@@ -373,9 +345,6 @@ syncFixtureBuiltinExports();
           expect(fetches.at(-1)?.args).toContain(
             `+${"b".repeat(40)}:refs/remotes/origin/ci-harness`,
           );
-          expect(report.commands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual(
-            expectedHarnessSparseCheckoutArgs(linux),
-          );
           expect(report.commands.at(-1)?.args).toEqual([
             "checkout",
             "--force",
@@ -472,35 +441,21 @@ it.concurrent.for([
       "scripts/ci-collect-checks.sh": "workflow collect-checks script\n",
       "scripts/macos-native-runtime-artifact.mjs": "workflow native runtime artifact script\n",
     };
-    const nodeSetupScripts = {
-      "scripts/lib/pnpm-lockfile-documents.mjs": readFileSync(
-        "scripts/lib/pnpm-lockfile-documents.mjs",
-        "utf8",
-      ),
-    };
+    const nodeSetupScripts = readFiles(["scripts/lib/pnpm-lockfile-documents.mjs"]);
     const platformScripts = {
       "scripts/lib/swift-toolchain.sh": "workflow Swift toolchain helper\n",
       "scripts/ci-xcodebuild.py": "workflow Xcode diagnostics helper\n",
     };
-    const preflightScripts = {
-      "scripts/ci-build-manifest.mjs": readFileSync("scripts/ci-build-manifest.mjs", "utf8"),
-    };
-    const simulatorScripts = {
-      "scripts/lib/ci-ios-smoke-plan.mjs": readFileSync(
-        "scripts/lib/ci-ios-smoke-plan.mjs",
-        "utf8",
-      ),
-    };
-    const releasePolicy = Object.fromEntries(
-      [
-        "scripts/lib/release-context.mjs",
-        "scripts/lib/release-version.mjs",
-        "scripts/lib/release-upgrade-baseline.mjs",
-        "scripts/lib/canonical-json.mjs",
-        "scripts/lib/upgrade-survivor-policy.mjs",
-        "scripts/lib/upgrade-survivor-scenarios.json",
-      ].map((name) => [name, readFileSync(name, "utf8")]),
-    );
+    const preflightScripts = readFiles(["scripts/ci-build-manifest.mjs"]);
+    const simulatorScripts = readFiles(["scripts/lib/ci-ios-smoke-plan.mjs"]);
+    const releasePolicy = readFiles([
+      "scripts/lib/release-context.mjs",
+      "scripts/lib/release-version.mjs",
+      "scripts/lib/release-upgrade-baseline.mjs",
+      "scripts/lib/canonical-json.mjs",
+      "scripts/lib/upgrade-survivor-policy.mjs",
+      "scripts/lib/upgrade-survivor-scenarios.json",
+    ]);
     const references = harnessReferences.get(kind) ?? new Map<string, string>();
     const referencedFiles = Object.fromEntries(
       [...references.keys()].map((reference) => {
@@ -697,21 +652,12 @@ it.concurrent.for([
         expect(readFileSync(path.join(workspace, ".git/config"), "utf8")).not.toContain(
           "AUTHORIZATION",
         );
-        for (const [name, contents] of Object.entries(candidateFiles)) {
-          expect(readFileSync(path.join(workspace, name), "utf8")).toBe(contents);
+        expectFiles(workspace, candidateFiles);
+        for (const name of Object.keys(candidateFiles)) {
           expect(existsSync(path.join(harness, name))).toBe(false);
         }
         const workflowOwnsEvidence = kind === "platform" || kind === "linux-node";
-        for (const name of Object.keys(evidenceScripts)) {
-          expect(readFileSync(path.join(workspace, name), "utf8")).toBe(
-            candidateEvidenceScripts[name],
-          );
-        }
-        for (const name of Object.keys(platformScripts)) {
-          expect(readFileSync(path.join(workspace, name), "utf8")).toBe(
-            candidatePlatformScripts[name],
-          );
-        }
+        expectFiles(workspace, { ...candidateEvidenceScripts, ...candidatePlatformScripts });
         if (workflow === "missing-action") {
           expect(existsSync(path.join(workspace, action))).toBe(false);
           expect(existsSync(path.join(harness, action))).toBe(false);
@@ -737,9 +683,7 @@ it.concurrent.for([
         if (workflow === "same") {
           expect(existsSync(path.join(harness, ".git"))).toBe(false);
         }
-        for (const [name, contents] of Object.entries(files)) {
-          expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-        }
+        expectFiles(harness, files);
         const fingerprint = spawnSync(
           process.execPath,
           [
@@ -753,47 +697,26 @@ it.concurrent.for([
         );
         expect(fingerprint.status, fingerprint.stderr).toBe(0);
         expect(fingerprint.stdout.trim()).toMatch(/^v2-[a-f0-9]{64}$/u);
-        for (const [name, contents] of Object.entries(evidenceScripts)) {
-          expect(existsSync(path.join(harness, name))).toBe(workflowOwnsEvidence);
-          if (workflowOwnsEvidence) {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-          }
-        }
-        for (const [name, contents] of Object.entries(platformScripts)) {
-          expect(existsSync(path.join(harness, name)), name).toBe(kind === "platform");
-          if (kind === "platform") {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-          }
-        }
-        for (const [name, contents] of Object.entries(preflightScripts)) {
-          expect(existsSync(path.join(harness, name)), name).toBe(preflight);
-          if (preflight) {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-          }
-        }
-        for (const [name, contents] of Object.entries(simulatorScripts)) {
-          const ownsSimulator = preflight || kind === "platform";
-          expect(existsSync(path.join(harness, name)), name).toBe(ownsSimulator);
-          if (ownsSimulator) {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-            writeFileSync(path.join(workspace, name), "throw new Error('candidate planner');\n");
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-          }
-        }
-        for (const [name, contents] of Object.entries(releasePolicy)) {
-          const ownsPolicy = preflight
-            ? ![
-                "scripts/lib/release-upgrade-baseline.mjs",
-                "scripts/lib/canonical-json.mjs",
-                "scripts/lib/upgrade-survivor-policy.mjs",
-                "scripts/lib/upgrade-survivor-scenarios.json",
-              ].includes(name)
+        const ownsPolicy = (name: string) =>
+          preflight
+            ? ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"].includes(name)
             : kind === "linux-node" && name !== "scripts/lib/release-context.mjs";
-          expect(existsSync(path.join(harness, name))).toBe(ownsPolicy);
-          if (ownsPolicy) {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-            writeFileSync(path.join(workspace, name), "throw new Error('candidate policy');\n");
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+        for (const [scripts, owns, mutate] of [
+          [evidenceScripts, () => workflowOwnsEvidence, false],
+          [platformScripts, () => kind === "platform", false],
+          [preflightScripts, () => preflight, false],
+          [simulatorScripts, () => preflight || kind === "platform", true],
+          [releasePolicy, ownsPolicy, true],
+        ] as const) {
+          for (const [name, contents] of Object.entries(scripts)) {
+            expect(existsSync(path.join(harness, name)), name).toBe(owns(name));
+            if (owns(name)) {
+              expectFiles(harness, { [name]: contents });
+              if (mutate) {
+                writeFileSync(path.join(workspace, name), "throw new Error('candidate policy');\n");
+                expectFiles(harness, { [name]: contents });
+              }
+            }
           }
         }
         if (kind === "linux-node") {
@@ -817,11 +740,6 @@ it.concurrent.for([
           // Git tracks only executable state; checkout materialization applies the process umask.
           expect(statSync(path.join(harness, executable)).mode & 0o111).not.toBe(0);
           expect(readlinkSync(path.join(harness, link))).toBe("line\nbreak.sh");
-        }
-        if (workflow !== "same" && workflowOwnsEvidence) {
-          expect(report.commands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual(
-            expectedHarnessSparseCheckoutArgs(linux),
-          );
         }
         writeFileSync(path.join(workspace, action), "later candidate edit\n");
         expect(readFileSync(path.join(harness, action), "utf8")).toBe(files[action]);

@@ -39,4 +39,6 @@ export type SlackActionContext = Pick<
   assertDirectAdapterHandoff?: ChannelMessageActionContext["assertDirectAdapterHandoff"];
   /** Slack-private ordered delivery plan prepared after presentation normalization. */
   preparedMessages?: readonly SlackReplyDeliveryMessage[];
+  /** Slack-private once-rendered bytes; direct action edits still accept Markdown. */
+  preparedEditText?: string;
 };

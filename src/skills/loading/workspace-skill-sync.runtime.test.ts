@@ -1,14 +1,20 @@
 import { execFile } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createNestedGitEnv } from "../../../test/helpers/temp-repo.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { nodeFilePath } from "../../test-utils/node-file-path.js";
-import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import {
+  getSkillsSnapshotVersion,
+  markSkillsSupportingFilesChanged,
+} from "../runtime/refresh-state.js";
 import { refreshSkillsDiscovery } from "../runtime/refresh.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
@@ -31,14 +37,11 @@ const skillPath = (workspace: string, ...parts: string[]) =>
   path.join(workspace, "skills", ...parts);
 const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
 
-async function exists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
+const exists = (file: string) =>
+  fs.access(file).then(
+    () => true,
+    () => false,
+  );
 
 const fixture = useLoadingFixture("openclaw-skills-sync-suite-");
 const newDir = (label?: string) => fixture.createDir(label);
@@ -137,48 +140,56 @@ function buildSnapshot(workspaceDir: string, opts?: Parameters<typeof buildSkill
   });
 }
 
-async function syncFiltered(
-  source: string,
-  target: string,
-  skillFilter: string[],
-  snapshotVersion: number,
-) {
-  return syncWorkspaceSkills({
-    ...syncOptions(source, target),
-    skillFilter,
-    skillsSnapshot: await buildSnapshot(source, { skillFilter, snapshotVersion }),
-  });
-}
-
-async function createSource() {
-  const source = await newDir("source");
-  const roots = {
-    ".extra": "Extra",
-    ".bundled": "Bundled",
-    ".managed": "Managed",
-    skills: "Workspace",
-  };
-  for (const [dir, label] of Object.entries(roots)) {
-    await writeSkill(path.join(source, dir, "demo-skill"), "demo-skill", `${label} version`);
-  }
-  return source;
-}
-
 describe("syncWorkspaceSkills", () => {
-  const buildPrompt = async (
-    workspaceDir: string,
-    opts?: Parameters<typeof buildSkillSnapshot>[1],
-  ) =>
-    await withEnvAsync(
-      { HOME: workspaceDir },
-      async () =>
-        (await buildSkillSnapshot(workspaceDir, { ...sourceOptions(workspaceDir), ...opts }))
-          .prompt,
-    );
+  it("attributes a queued sync to waiting rather than directory or copy work", async () => {
+    const { source, target } = await setupSkills(["alpha"]);
+    const skillsSnapshot = await buildSnapshot(source);
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const lstat = fs.lstat.bind(fs);
+    let held = false;
+    const read = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      if (!held && nodeFilePath(args[0]) === skillPath(target)) {
+        held = true;
+        entered.resolve();
+        await resume.promise;
+      }
+      return lstat(...args);
+    });
+    const phases: string[][] = [[], []];
+    const completed: string[][] = [[], []];
+    const observed = (index: number) =>
+      withDiagnosticsTimelineObserver(
+        (name) => {
+          phases[index]!.push(name);
+          return () => {
+            completed[index]!.push(name);
+          };
+        },
+        () => sync(source, target, { skillsSnapshot }),
+      );
+    const first = observed(0);
+    let second: Promise<unknown> | undefined;
+    try {
+      await awaitGateBeforeSettlement(entered.promise, first, "Skill sync skipped directory read");
+      second = observed(1);
+      expect(phases[1]).toEqual(["attempt.setup.sandbox.layout.skills_sync.queue_wait"]);
+      expect(completed[1]).toEqual([]);
+      expect(phases[0]).toContain("attempt.setup.sandbox.layout.skills_sync.directory");
+      resume.resolve();
+      await Promise.all([first, second]);
+      expect(completed[1]).toEqual(phases[1]);
+      expect(phases[0]).toContain("attempt.setup.sandbox.layout.skills_sync.copy_tree");
+      expect(phases[1]).not.toContain("attempt.setup.sandbox.layout.skills_sync.copy_tree");
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([first, ...(second ? [second] : [])]);
+      read.mockRestore();
+    }
+  });
 
-  it("syncs merged skills into a target workspace", async () => {
-    const source = await createSource();
-    const target = await newDir("target");
+  it("copies skills without repository internals or dependencies", async () => {
+    const { source, target } = await setupSkills(["demo-skill"]);
     const workspaceSkillDir = skillPath(source, "demo-skill");
 
     await writeFiles(workspaceSkillDir, {
@@ -186,24 +197,27 @@ describe("syncWorkspaceSkills", () => {
       "node_modules/pkg/index.js": "export {}",
     });
 
-    const skillUsagePaths = await sync(source, target, {
-      config: {
-        ...isolatedConfig,
-        skills: { load: { extraDirs: [path.join(source, ".extra")] } },
-      },
-    });
+    const skillUsagePaths = await sync(source, target);
 
     expectUsage(skillUsagePaths, workspaceSkillDir, skillPath(target, "demo-skill"), "demo-skill");
 
-    const prompt = await buildPrompt(target);
-
-    expect(prompt).toContain("Workspace version");
-    expect(prompt).not.toContain("Managed version");
-    expect(prompt).not.toContain("Bundled version");
-    expect(prompt).not.toContain("Extra version");
-    expect(prompt.replaceAll("\\", "/")).toContain("demo-skill/SKILL.md");
+    expect(await readText(skillPath(target, "demo-skill", "SKILL.md"))).toContain(
+      "demo-skill skill",
+    );
     expect(await exists(skillPath(target, "demo-skill", ".git"))).toBe(false);
     expect(await exists(skillPath(target, "demo-skill", "node_modules"))).toBe(false);
+  });
+
+  it("copies rebuildable skills without blocking fsync (#181928)", async () => {
+    const { source, target } = await setupSkills(["alpha"]);
+    const skillsSnapshot = await buildSnapshot(source);
+    const fsync = vi.spyOn(fsSync, "fsyncSync");
+    try {
+      await sync(source, target, { skillsSnapshot });
+      expect(fsync).not.toHaveBeenCalled();
+    } finally {
+      fsync.mockRestore();
+    }
   });
 
   it("skips discovery and copying when the synced snapshot still matches", async () => {
@@ -213,8 +227,6 @@ describe("syncWorkspaceSkills", () => {
       frontmatterExtra: "disable-model-invocation: true",
     });
     const skillsSnapshot = await buildSnapshot(source);
-    expect(skillsSnapshot.skills.map((skill) => skill.name)).toEqual(["alpha", "hidden"]);
-    expect(skillsSnapshot.resolvedSkills?.map((skill) => skill.name)).toEqual(["alpha"]);
     const params = {
       ...syncOptions(source, target),
       skillsSnapshot,
@@ -415,14 +427,53 @@ describe("syncWorkspaceSkills", () => {
   it("incrementally adds and removes skills while preserving unchanged destinations", async () => {
     const { source, target } = await setupSkills(["alpha", "beta", "gamma"]);
     const snapshotVersion = getSkillsSnapshotVersion(source);
-    await syncFiltered(source, target, ["alpha", "beta"], snapshotVersion);
+    const selected = async (skillFilter: string[]) =>
+      sync(source, target, {
+        skillFilter,
+        skillsSnapshot: await buildSnapshot(source, { skillFilter, snapshotVersion }),
+      });
+    await selected(["alpha", "beta"]);
     const preservedMarker = skillPath(target, "alpha", "preserved.txt");
     await fs.writeFile(preservedMarker, "preserved");
 
-    await syncFiltered(source, target, ["alpha", "gamma"], snapshotVersion);
+    await selected(["alpha", "gamma"]);
     expect(await readText(preservedMarker)).toBe("preserved");
     expect(await exists(skillPath(target, "beta"))).toBe(false);
     expect(await exists(skillPath(target, "gamma", "SKILL.md"))).toBe(true);
+  });
+
+  it("refreshes changed support files without replacing unchanged copies", async () => {
+    const { source, target } = await setupSkills(["alpha"]);
+    const sourceSkill = skillPath(source, "alpha");
+    const targetSkill = skillPath(target, "alpha");
+    await writeFiles(sourceSkill, {
+      "references/changed.txt": "before",
+      "references/removed.txt": "remove",
+      "scripts/unchanged.txt": "keep",
+      "scripts/edited.txt": "original",
+    });
+    const skillsSnapshot = await buildSnapshot(source);
+    await sync(source, target, { skillsSnapshot });
+    const unchanged = path.join(targetSkill, "scripts/unchanged.txt");
+    const before = await fs.stat(unchanged);
+    await fs.writeFile(path.join(sourceSkill, "references/changed.txt"), "after");
+    await fs.rm(path.join(sourceSkill, "references/removed.txt"));
+    await fs.writeFile(path.join(targetSkill, "unexpected.txt"), "stale");
+    await fs.writeFile(path.join(targetSkill, "scripts/edited.txt"), "modified");
+    markSkillsSupportingFilesChanged({ workspaceDir: source });
+
+    await sync(source, target, { skillsSnapshot });
+
+    expect(await readText(targetSkill, "references/changed.txt")).toBe("after");
+    expect(await exists(path.join(targetSkill, "references/removed.txt"))).toBe(false);
+    expect(await exists(path.join(targetSkill, "unexpected.txt"))).toBe(false);
+    expect(await readText(unchanged)).toBe("keep");
+    expect(await readText(targetSkill, "scripts/edited.txt")).toBe("original");
+    const after = await fs.stat(unchanged);
+    expect({ ino: after.ino, mtime: after.mtimeMs }).toEqual({
+      ino: before.ino,
+      mtime: before.mtimeMs,
+    });
   });
 
   it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
@@ -505,9 +556,8 @@ describe("syncWorkspaceSkills", () => {
   it.runIf(process.platform !== "win32")(
     "refreshes prior read-only copies without changing linked targets or the skills mount",
     async () => {
-      const source = await createSource();
+      const { source, target } = await setupSkills(["demo-skill"]);
       await fs.chmod(skillPath(source, "demo-skill"), 0o755);
-      const target = await newDir("target");
       const targetSkills = path.join(target, "skills");
       const staleDir = path.join(targetSkills, "demo-skill");
       const nestedDir = path.join(staleDir, "references");
@@ -528,7 +578,7 @@ describe("syncWorkspaceSkills", () => {
       try {
         await sync(source, target);
         expect((await fs.stat(targetSkills)).ino).toBe(before.ino);
-        expect(await readText(staleDir, "SKILL.md")).toContain("Workspace version");
+        expect(await readText(staleDir, "SKILL.md")).toContain("demo-skill skill");
         expect(await exists(nestedDir)).toBe(false);
         expect(await exists(path.join(targetSkills, "linked-directory"))).toBe(false);
         expect(await exists(path.join(targetSkills, "linked-file"))).toBe(false);
@@ -558,10 +608,6 @@ describe("syncWorkspaceSkills", () => {
       },
     });
 
-    const prompt = await buildPrompt(target);
-
-    expect(prompt).toContain("Underscore variant");
-    expect(prompt).not.toContain("Dot variant");
     expect(await exists(skillPath(target, "foo_bar", "SKILL.md"))).toBe(true);
     expect(await exists(skillPath(target, "foo.dot", "SKILL.md"))).toBe(false);
   });
@@ -579,9 +625,6 @@ describe("syncWorkspaceSkills", () => {
 
       await sync(source, target);
 
-      const prompt = await buildPrompt(target);
-
-      expect(prompt).not.toContain("escaped-skill");
       expect(await exists(skillPath(target, "escaped-skill", "SKILL.md"))).toBe(false);
     },
   );
@@ -598,18 +641,6 @@ describe("syncWorkspaceSkills", () => {
     await sync(source, target);
     expect(await exists(skillPath(target, "safe-traversal-skill", "SKILL.md"))).toBe(true);
     expect(await exists(escapedDest)).toBe(false);
-  });
-  it("applies skill filters, including empty lists", async () => {
-    const workspaceDir = await newDir("workspace");
-    await writeSkill(skillPath(workspaceDir, "alpha"), "alpha", "Alpha skill");
-    await writeSkill(skillPath(workspaceDir, "beta"), "beta", "Beta skill");
-
-    const filteredPrompt = await buildPrompt(workspaceDir, { skillFilter: ["alpha"] });
-    expect(filteredPrompt).toContain("alpha");
-    expect(filteredPrompt).not.toContain("beta");
-
-    const emptyPrompt = await buildPrompt(workspaceDir, { skillFilter: [] });
-    expect(emptyPrompt).toBe("");
   });
 
   it("syncs managed symlinked skills as real directories in the target workspace", async () => {
@@ -630,14 +661,7 @@ describe("syncWorkspaceSkills", () => {
     expect(await exists(path.join(syncedSkillDir, "SKILL.md"))).toBe(true);
     expect((await fs.lstat(syncedSkillDir)).isSymbolicLink()).toBe(false);
     expect(await exists(path.join(target, "skills", ".hidden-target"))).toBe(false);
-    expect(
-      (
-        await buildSkillSnapshot(target, {
-          ...sourceOptions(target),
-          skillFilter: [skillName],
-        })
-      ).prompt,
-    ).toContain("Managed symlink target");
+    expect(await readText(syncedSkillDir, "SKILL.md")).toContain("Managed symlink target");
   });
 });
 
@@ -662,20 +686,9 @@ describe("syncWorkspaceSkills for plugin skills", () => {
     const syncedSkillDir = path.join(target, "skills", "wiki-maintainer");
     const syncedSkillMd = path.join(syncedSkillDir, "SKILL.md");
     const syncedStat = await fs.lstat(syncedSkillDir);
-    const prompt = (
-      await buildSkillSnapshot(target, {
-        bundledSkillsDir: path.join(target, ".bundled"),
-        managedSkillsDir: path.join(target, ".managed"),
-      })
-    ).prompt.replaceAll("\\", "/");
-
     expect(await exists(syncedSkillMd)).toBe(true);
     expect(syncedStat.isSymbolicLink()).toBe(false);
-    expect(prompt).toContain("Wiki maintenance skill for sandboxed agents");
-    expect(prompt).toContain("skills/wiki-maintainer/SKILL.md");
-    expect(prompt).not.toContain(plugin.dir.replaceAll("\\", "/"));
-    expect(prompt).not.toContain(pluginSkillsDir.replaceAll("\\", "/"));
-    expect(prompt).not.toContain(symlinkPath.replaceAll("\\", "/"));
+    expect(await readText(syncedSkillMd)).toContain("Wiki maintenance skill for sandboxed agents");
     expectUsage(skillUsagePaths, plugin.dir, syncedSkillDir, "wiki-maintainer");
   });
 

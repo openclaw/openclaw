@@ -23,10 +23,15 @@ const bindingFrames = (client: Client) => client.frames("Runtime.bindingCalled")
 function expectEvent(c: Client, method: string, sessionId: string, params: unknown) {
   expect(c.socket.frames()).toContainEqual({ sessionId, method, params });
 }
+function expectDetached(c: Client, parent: string, sessionId: string, targetId: string) {
+  expectEvent(c, "Target.detachedFromTarget", parent, { sessionId, targetId });
+}
 const contexts = (c: Client, root: string) =>
   contextFrames(c.socket, root).map((frame) => frame.params);
 const contextIds = (c: Client, root: string) =>
   contexts(c, root).map((params) => asOptionalRecord(asOptionalRecord(params)?.context)?.id);
+const expectContexts = (c: Client, root: string, ...ids: number[]) =>
+  expect(contexts(c, root)).toEqual(ids.map((id) => ({ context: runtimeContext(id) })));
 
 describe("relay logical Runtime subscriptions", () => {
   let f: Fixture;
@@ -36,6 +41,9 @@ describe("relay logical Runtime subscriptions", () => {
   const event = (message: unknown) => f.extension.handlers.onMessage(JSON.stringify(message));
   const created = (id: number, sessionId?: string) =>
     f.event("Runtime.executionContextCreated", { context: runtimeContext(id) }, sessionId);
+  const attach = () => attachedClient(f);
+  const binding = (c: Client, root: string, name: string, method = "Runtime.addBinding") =>
+    c.request(method, root, { name });
   async function parentWithChildren(c: Client, root: string) {
     await c.autoAttach(root);
     childEvent(f);
@@ -45,9 +53,9 @@ describe("relay logical Runtime subscriptions", () => {
     return { child, grandchild: c.child("worker", child) };
   }
   async function delayedReplay() {
-    const { client: peer, root: peerRoot } = await attachedClient(f);
+    const { client: peer, root: peerRoot } = await attach();
     await peer.request("Runtime.enable", peerRoot);
-    const { client: c, root } = await attachedClient(f);
+    const { client: c, root } = await attach();
     f.hold("Page.getFrameTree");
     c.send("Page.getFrameTree", root);
     const enable = c.send("Runtime.enable", root);
@@ -55,9 +63,9 @@ describe("relay logical Runtime subscriptions", () => {
     return { c, root, enable };
   }
   it("orders initial Runtime after all earlier frame reads without blocking peers or other commands", async () => {
-    const { client: first, root } = await attachedClient(f);
+    const { client: first, root } = await attach();
     await first.request("Runtime.enable", root);
-    const { client: late, root: lateRoot } = await attachedClient(f);
+    const { client: late, root: lateRoot } = await attach();
     f.hold("Page.getFrameTree");
     const reads = [
       late.send("Page.getFrameTree", lateRoot),
@@ -66,7 +74,6 @@ describe("relay logical Runtime subscriptions", () => {
     const enable = late.send("Runtime.enable", lateRoot);
     await flush();
     expect(f.commands("Runtime.enable")).toHaveLength(1);
-    // Keep dialog/Fetch commands live while this session waits on its frame snapshot.
     await late.request("Page.handleJavaScriptDialog", lateRoot, { accept: true });
     await late.request("Fetch.enable", lateRoot, { patterns: [{ urlPattern: "*" }] });
     f.event("Fetch.requestPaused", { requestId: "native-request" });
@@ -81,10 +88,7 @@ describe("relay logical Runtime subscriptions", () => {
     created(3);
     f.event("Runtime.executionContextDestroyed", { executionContextId: 1 });
     f.event("Runtime.consoleAPICalled", { type: "log", args: [] });
-    expect(contexts(first, root)).toEqual([
-      { context: runtimeContext(1) },
-      { context: runtimeContext(3) },
-    ]);
+    expectContexts(first, root, 1, 3);
     expect(first.socket.frames().at(-1)).toMatchObject({ method: "Runtime.consoleAPICalled" });
     expect(contextFrames(late.socket, lateRoot)).toEqual([]);
     const secondRead = f.commands("Page.getFrameTree")[1]!;
@@ -104,14 +108,11 @@ describe("relay logical Runtime subscriptions", () => {
     }
     await late.request("Runtime.enable", lateRoot);
     expect(contextFrames(late.socket, lateRoot)).toHaveLength(1);
-    // Once enabled, a later frame snapshot must not suppress live Runtime events.
     f.hold("Page.getFrameTree");
     late.send("Page.getFrameTree", lateRoot);
     await flush();
     created(4);
-    expect(contextFrames(late.socket, lateRoot).at(-1)?.params).toEqual({
-      context: runtimeContext(4),
-    });
+    expect(contexts(late, lateRoot).at(-1)).toEqual({ context: runtimeContext(4) });
     f.release();
     await flush();
   });
@@ -155,11 +156,11 @@ describe("relay logical Runtime subscriptions", () => {
 
   it("never replays retired contexts after clearing", async () => {
     const method = "Runtime.executionContextsCleared";
-    const { client: first, root } = await attachedClient(f);
+    const { client: first, root } = await attach();
     await first.request("Runtime.enable", root);
     f.event(method, { executionContextId: 1, executionContextUniqueId: "context-1" });
     created(3);
-    const { client: late, root: lateRoot } = await attachedClient(f);
+    const { client: late, root: lateRoot } = await attach();
     const response = await late.request("Runtime.enable", lateRoot);
     expectReplay(late.socket, lateRoot, response.id, [runtimeContext(3)]);
     expectEvent(first, method, root, {
@@ -168,28 +169,8 @@ describe("relay logical Runtime subscriptions", () => {
     });
   });
 
-  it("admits each concurrent enable and delivers each context once to new subscribers", async () => {
-    const first = f.client();
-    const second = f.client();
-    const root = await first.attach();
-    const secondRoot = await second.attach();
-    f.hold();
-    const a = first.send("Runtime.enable", root);
-    const b = second.send("Runtime.enable", secondRoot);
-    const repeated = first.send("Runtime.enable", root);
-    await flush();
-    expect(first.frame(a)).toBeUndefined();
-    expect(second.frame(b)).toBeUndefined();
-    expect(f.commands("Runtime.enable")).toHaveLength(3);
-    f.release();
-    await flush();
-    expectReplay(first.socket, root, a);
-    expectReplay(second.socket, secondRoot, b);
-    expect(first.frame(repeated)).toMatchObject({ result: {} });
-  });
-
   it("gives explicit page attachments independent subscriptions under a browser parent", async () => {
-    const { client: c, root } = await attachedClient(f);
+    const { client: c, root } = await attach();
     await c.request("Runtime.enable", root);
     const parent = await c.session("Target.attachToBrowserTarget");
     const alias = await c.session("Target.attachToTarget", parent, {
@@ -209,13 +190,12 @@ describe("relay logical Runtime subscriptions", () => {
     f.event("Runtime.consoleAPICalled", { type: "log", args: [] });
     expect(c.frames("Runtime.consoleAPICalled").map((frame) => frame.sessionId)).toEqual([root]);
     await c.request("Target.detachFromTarget", parent, { sessionId: alias });
-    expectEvent(c, "Target.detachedFromTarget", parent, { sessionId: alias, targetId: "target-1" });
+    expectDetached(c, parent, alias, "target-1");
     expect((await c.request("Runtime.enable", alias)).error).toBeDefined();
-    expect(f.commands("Runtime.enable")).toHaveLength(2);
   });
 
   it("routes real child contexts separately and retires child routing on detach, including pending enables", async () => {
-    const { client: c, root } = await attachedClient(f);
+    const { client: c, root } = await attach();
     await c.request("Runtime.enable", root);
     await c.autoAttach(root);
     childEvent(f);
@@ -228,14 +208,13 @@ describe("relay logical Runtime subscriptions", () => {
     f.release();
     await flush();
     expect(c.frame(pending)?.error).toBeDefined();
-    expect(contexts(c, root)).toEqual([{ context: runtimeContext(1) }]);
+    expectContexts(c, root, 1);
     expect(contextIds(c, child)).not.toContain(4);
     expect((await c.request("Runtime.enable", child)).error).toBeDefined();
-    expect(f.commands("Runtime.enable")).toHaveLength(2);
   });
 
   it("keeps child Runtime subscriptions independent and routes detach to their alias parent", async () => {
-    const { client: first, root } = await attachedClient(f);
+    const { client: first, root } = await attach();
     const second = f.client();
     const secondRoot = await second.session("Target.attachToTarget", undefined, {
       targetId: "target-1",
@@ -257,26 +236,18 @@ describe("relay logical Runtime subscriptions", () => {
     expectReplay(second.socket, secondChild, response.id, [runtimeContext(2)]);
     expect(contextFrames(first.socket, firstChild)).toHaveLength(1);
     await first.request("Target.detachFromTarget", root, { sessionId: firstChild });
-    expectEvent(first, "Target.detachedFromTarget", root, {
-      sessionId: firstChild,
-      targetId: "frame",
-    });
+    expectDetached(first, root, firstChild, "frame");
     created(4, "child");
     expect(contextFrames(first.socket, firstChild)).toHaveLength(1);
-    expect(contextFrames(second.socket, secondChild).at(-1)?.params).toEqual({
-      context: runtimeContext(4),
-    });
+    expect(contexts(second, secondChild).at(-1)).toEqual({ context: runtimeContext(4) });
     f.event("Target.detachedFromTarget", { sessionId: "child", targetId: "frame" });
-    expectEvent(second, "Target.detachedFromTarget", secondRoot, {
-      sessionId: secondChild,
-      targetId: "frame",
-    });
+    expectDetached(second, secondRoot, secondChild, "frame");
     expect((await second.request("Runtime.enable", secondChild)).error).toBeDefined();
     expect(f.commands("Target.detachFromTarget")).toEqual([]);
   });
 
   it("rejects unannounced and foreign root, alias, browser and child sessions without forwarding", async () => {
-    const { client: owner, root } = await attachedClient(f);
+    const { client: owner, root } = await attach();
     const browser = await owner.session("Target.attachToBrowserTarget");
     const alias = await owner.session("Target.attachToTarget", browser, {
       targetId: "target-1",
@@ -322,21 +293,17 @@ describe("relay logical Runtime subscriptions", () => {
     created(3);
     expect(contextFrames(live.socket, liveRoot)).toHaveLength(eventsBefore);
     await live.request("Runtime.enable", liveRoot);
-    expect(
-      contextFrames(live.socket, liveRoot)
-        .slice(eventsBefore)
-        .map((frame) => frame.params),
-    ).toEqual([{ context: runtimeContext(1) }, { context: runtimeContext(3) }]);
+    expect(contexts(live, liveRoot).slice(eventsBefore)).toEqual(
+      [1, 3].map((id) => ({ context: runtimeContext(id) })),
+    );
   });
 
   it.each(["extension loss", "native detach", "access loss", "bridge disposal"])(
     "retires every logical target identity on %s",
     async (ending) => {
-      const { client: c, root } = await attachedClient(f);
+      const { client: c, root } = await attach();
       const browser = await c.session("Target.attachToBrowserTarget");
-      const alias = await c.session("Target.attachToTarget", browser, {
-        targetId: "target-1",
-      });
+      const alias = await c.session("Target.attachToTarget", browser, { targetId: "target-1" });
       const { child, grandchild } = await parentWithChildren(c, root);
       if (ending === "extension loss") {
         f.hold();
@@ -392,13 +359,13 @@ describe("relay logical Runtime subscriptions", () => {
         expect(next).not.toBe(root);
         expect((await c.request("Runtime.enable", root)).error).toBeDefined();
         await c.request("Runtime.enable", next);
-        expect(contexts(c, next)).toEqual([]);
+        expectContexts(c, next);
       }
     },
   );
 
   it("uses owned child identities when detach carries an unrelated target", async () => {
-    const { client: c, root } = await attachedClient(f);
+    const { client: c, root } = await attach();
     await c.request("Runtime.enable", root);
     const { child, grandchild } = await parentWithChildren(c, root);
     f.event("Target.detachedFromTarget", { sessionId: "child", targetId: "unrelated-target" });
@@ -412,10 +379,10 @@ describe("relay logical Runtime subscriptions", () => {
   });
 
   it("delivers live events during admission and replays only undelivered current contexts after success", async () => {
-    const { client: first, root } = await attachedClient(f);
+    const { client: first, root } = await attach();
     await first.request("Runtime.enable", root);
     created(2);
-    const { client: late, root: lateRoot } = await attachedClient(f);
+    const { client: late, root: lateRoot } = await attach();
     f.hold();
     const pending = late.send("Runtime.enable", lateRoot);
     await flush();
@@ -424,7 +391,7 @@ describe("relay logical Runtime subscriptions", () => {
     created(3);
     f.event("Runtime.consoleAPICalled", { type: "log", args: [] });
     f.event("Runtime.executionContextDestroyed", { executionContextId: 1 });
-    expect.soft(contexts(late, lateRoot)).toEqual([{ context: runtimeContext(3) }]);
+    expectContexts(late, lateRoot, 3);
     expectEvent(late, "Runtime.consoleAPICalled", lateRoot, { type: "log", args: [] });
     f.release();
     await flush();
@@ -432,39 +399,23 @@ describe("relay logical Runtime subscriptions", () => {
     expect(contextFrames(first.socket, root)).toHaveLength(3);
   });
 
-  it("preserves native binding callbacks after Runtime disable", async () => {
-    const { client, root } = await attachedClient(f);
-    const { client: peer, root: peerRoot } = await attachedClient(f);
-    await peer.request("Runtime.enable", peerRoot);
-    expect(
-      (await client.request("Runtime.addBinding", root, { name: "relayBinding" })).error,
-    ).toBeUndefined();
-    await client.request("Runtime.enable", root);
-    await client.request("Runtime.disable", root);
-    const params = { name: "relayBinding", payload: "callback", executionContextId: 1 };
-    f.event("Runtime.bindingCalled", params);
-    expectEvent(client, "Runtime.bindingCalled", root, params);
-    expect(bindingFrames(peer)).toEqual([]);
-    await client.request("Target.detachFromTarget", undefined, { sessionId: root });
-    const before = client.socket.frames().length;
-    f.event("Runtime.bindingCalled", params);
-    expect(client.socket.frames()).toHaveLength(before);
-  });
-
   it.each(["Runtime.removeBinding", "Target.detachFromTarget"])(
-    "preserves a peer's same-name binding after %s and removes the final native registration",
+    "preserves bindings through Runtime.disable and a peer's %s, then removes the final registration",
     async (operation) => {
-      const { client: first, root: firstRoot } = await attachedClient(f);
-      const { client: second, root: secondRoot } = await attachedClient(f);
-      const { client: observer, root: observerRoot } = await attachedClient(f);
+      const { client: first, root: firstRoot } = await attach();
+      const { client: second, root: secondRoot } = await attach();
+      const { client: observer, root: observerRoot } = await attach();
       const name = "sharedBinding";
       for (const [client, root] of [
         [first, firstRoot],
         [second, secondRoot],
       ] as const) {
-        expect((await client.request("Runtime.addBinding", root, { name })).error).toBeUndefined();
+        expect((await binding(client, root, name)).error).toBeUndefined();
       }
-      await observer.request("Runtime.removeBinding", observerRoot, { name });
+      await observer.request("Runtime.enable", observerRoot);
+      await second.request("Runtime.enable", secondRoot);
+      await second.request("Runtime.disable", secondRoot);
+      await binding(observer, observerRoot, name, "Runtime.removeBinding");
       expect(f.commands("Runtime.removeBinding")).toHaveLength(0);
       if (operation === "Target.detachFromTarget") {
         await first.request(operation, undefined, { sessionId: firstRoot });
@@ -479,7 +430,7 @@ describe("relay logical Runtime subscriptions", () => {
       expect(bindingFrames(second)).toEqual([
         { sessionId: secondRoot, method: "Runtime.bindingCalled", params },
       ]);
-      await second.request("Runtime.removeBinding", secondRoot, { name });
+      await binding(second, secondRoot, name, "Runtime.removeBinding");
       expect(f.commands("Runtime.removeBinding").map((frame) => frame.params)).toEqual([{ name }]);
       f.event("Runtime.bindingCalled", params);
       expect(bindingFrames(second)).toHaveLength(1);
@@ -489,11 +440,11 @@ describe("relay logical Runtime subscriptions", () => {
   it.each([false, true])(
     "cleans up a native add admitted after logical close (peer owns same name=%s)",
     async (sameName) => {
-      const { client: first, root: firstRoot } = await attachedClient(f);
-      const { client: second, root: secondRoot } = await attachedClient(f);
+      const { client: first, root: firstRoot } = await attach();
+      const { client: second, root: secondRoot } = await attach();
       const name = "pendingBinding";
       if (sameName) {
-        await second.request("Runtime.addBinding", secondRoot, { name });
+        await binding(second, secondRoot, name);
       }
       f.hold("Runtime.addBinding");
       const pending = first.send("Runtime.addBinding", firstRoot, { name });
@@ -514,10 +465,10 @@ describe("relay logical Runtime subscriptions", () => {
   it.each(["Runtime.addBinding", "Runtime.removeBinding"])(
     "preserves acknowledged binding ownership when native %s fails",
     async (method) => {
-      const { client, root } = await attachedClient(f);
+      const { client, root } = await attach();
       const name = "failedBinding";
       if (method === "Runtime.removeBinding") {
-        await client.request("Runtime.addBinding", root, { name });
+        await binding(client, root, name);
       }
       f.hold(method);
       const pending = client.send(method, root, { name });
@@ -532,14 +483,14 @@ describe("relay logical Runtime subscriptions", () => {
       f.release();
       f.event("Runtime.bindingCalled", { name, payload: "failure", executionContextId: 1 });
       expect(bindingFrames(client)).toHaveLength(method === "Runtime.removeBinding" ? 1 : 0);
-      expect((await client.request(method, root, { name })).error).toBeUndefined();
+      expect((await binding(client, root, name, method)).error).toBeUndefined();
       f.event("Runtime.bindingCalled", { name, payload: "retry", executionContextId: 1 });
       expect(bindingFrames(client)).toHaveLength(1);
     },
   );
 
   it("keeps a replacement physical session independent of pending retired bindings", async () => {
-    const { client, root } = await attachedClient(f);
+    const { client, root } = await attach();
     const name = "retiredBinding";
     f.hold("Runtime.addBinding");
     client.send("Runtime.addBinding", root, { name });
@@ -552,7 +503,7 @@ describe("relay logical Runtime subscriptions", () => {
     const params = { name, payload: "replacement", executionContextId: 11 };
     f.event("Runtime.bindingCalled", params);
     expect(bindingFrames(client)).toEqual([]);
-    await client.request("Runtime.addBinding", next, { name });
+    await binding(client, next, name);
     f.event("Runtime.bindingCalled", params);
     expect(bindingFrames(client)).toEqual([
       { sessionId: next, method: "Runtime.bindingCalled", params },
@@ -560,12 +511,18 @@ describe("relay logical Runtime subscriptions", () => {
     expect(f.commands("Runtime.removeBinding")).toHaveLength(0);
   });
 
-  it("keeps a concurrent admission alive when another enable for the same logical owner fails", async () => {
-    const { client: c, root } = await attachedClient(f);
+  it("admits concurrent enables once per request without losing peers or repeats when one fails", async () => {
+    const { client: c, root } = await attach();
+    const { client: peer, root: peerRoot } = await attach();
     f.hold();
     const failed = c.send("Runtime.enable", root);
     const admitted = c.send("Runtime.enable", root);
+    const repeated = c.send("Runtime.enable", root);
+    const peerAdmission = peer.send("Runtime.enable", peerRoot);
     await flush();
+    expect(c.frame(admitted)).toBeUndefined();
+    expect(peer.frame(peerAdmission)).toBeUndefined();
+    expect(f.commands("Runtime.enable")).toHaveLength(4);
     event({
       type: "error",
       seq: f.commands("Runtime.enable")[0]!.seq,
@@ -577,7 +534,9 @@ describe("relay logical Runtime subscriptions", () => {
     f.release();
     await flush();
     expect(c.frame(admitted)).toMatchObject({ result: {} });
+    expect(c.frame(repeated)).toMatchObject({ result: {} });
     expectReplay(c.socket, root, admitted);
+    expectReplay(peer.socket, peerRoot, peerAdmission);
     created(3);
     expect(contextFrames(c.socket, root)).toHaveLength(2);
     expect(f.commands("Runtime.disable")).toEqual([]);

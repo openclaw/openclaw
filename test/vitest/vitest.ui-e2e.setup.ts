@@ -14,5 +14,9 @@ declare module "vitest" {
 
 const serverBaseUrl = inject("controlUiE2eServerBaseUrl");
 if (serverBaseUrl) {
-  setSharedControlUiE2eServerBaseUrl(serverBaseUrl, inject("controlUiE2eServerBuildInfo"));
+  setSharedControlUiE2eServerBaseUrl(
+    serverBaseUrl,
+    inject("controlUiE2eServerBuildInfo"),
+    inject("controlUiE2eNativePluginBuilds"),
+  );
 }

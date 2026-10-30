@@ -417,7 +417,9 @@ export async function createOllamaEmbeddingProvider(
     callOptions?: EmbeddingProviderCallOptions,
   ): Promise<number[]> => {
     const [embedding] = await embedMany(
-      applyQueryInstructionTemplate(client.model, text),
+      callOptions?.queryInstructionApplied
+        ? text
+        : applyQueryInstructionTemplate(client.model, text),
       callOptions,
     );
     if (!embedding) {

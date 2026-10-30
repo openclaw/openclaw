@@ -1,11 +1,13 @@
-import { once } from "node:events";
 import { readFile, realpath, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { Client as TeamsApiClient } from "@microsoft/teams.api";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { teamsQuotedRawTable } from "./format.test-fixtures.js";
 import {
   editMessageMSTeams,
@@ -13,6 +15,7 @@ import {
   sendMessageMSTeams,
   sendPollMSTeams,
 } from "./send.js";
+import { createMSTeamsTestConfig } from "./setup.test-support.js";
 
 const serviceUrl = "https://smba.trafficmanager.net/amer";
 const conversationId = "19:channel@thread.tacv2";
@@ -23,7 +26,6 @@ const mockState = vi.hoisted(() => ({
   requiresFileConsent: vi.fn(() => false),
   uploadAndShareSharePoint: vi.fn(),
   getDriveItemProperties: vi.fn(),
-  buildTeamsFileInfoCard: vi.fn(),
   sendMSTeamsMessages: vi.fn<(typeof import("./messenger.js"))["sendMSTeamsMessages"]>(async () => [
     "text-message-1",
   ]),
@@ -32,20 +34,6 @@ const mockState = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
-
-vi.mock("openclaw/plugin-sdk/markdown-table-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/markdown-table-runtime")>();
-  return { ...actual, resolveMarkdownTableMode: vi.fn(() => "off") };
-});
-
-vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>();
-  return {
-    ...actual,
-    convertMarkdownTables: (text: string) => text,
-  };
-});
 
 vi.mock("./send-context.js", () => ({
   resolveMSTeamsSendContext: mockState.resolveMSTeamsSendContext,
@@ -65,9 +53,6 @@ vi.mock("./graph-upload.js", async (importOriginal) => {
     getDriveItemProperties: mockState.getDriveItemProperties,
   };
 });
-
-// mock-isolation: fixture file cards must not call the Graph transport.
-vi.mock("./graph-chat.js", () => ({ buildTeamsFileInfoCard: mockState.buildTeamsFileInfoCard }));
 
 vi.mock("./messenger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./messenger.js")>()),
@@ -123,61 +108,48 @@ type TeamsSdkHttpTransport = {
   put: (destination: string, data?: unknown) => Promise<{ data: unknown }>;
 };
 
-async function withRealTeamsSdkHttp<T>(
-  run: (params: { api: TeamsApiClient; requests: CapturedRequest[] }) => Promise<T>,
-): Promise<T> {
+async function withRealTeamsSdkHttp(
+  run: (params: { api: TeamsApiClient; requests: CapturedRequest[] }) => Promise<void>,
+) {
   const requests: CapturedRequest[] = [];
-  const server = createServer((request, response) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk: Buffer | string) => {
-      chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-    });
-    request.once("end", () => {
-      requests.push({
-        method: request.method ?? "",
-        path: request.url ?? "",
-        body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
+  await withServer(
+    (request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer | string) => {
+        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
       });
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ id: "sdk-http-message-1" }));
-    });
-  });
-
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-
-  try {
-    const port = (server.address() as AddressInfo).port;
-    const api = new TeamsApiClient(serviceUrl);
-    // OpenClaw's minimal SDK ambient declaration omits the real client's public HTTP transport.
-    const transport = (api as unknown as { http: TeamsSdkHttpTransport }).http;
-    for (const method of ["post", "put"] as const) {
-      vi.spyOn(transport, method).mockImplementation(async (destination, data) => {
-        const destinationUrl = new URL(destination);
-        const response = await fetch(
-          `http://127.0.0.1:${port}${destinationUrl.pathname}${destinationUrl.search}`,
-          {
-            method: method.toUpperCase(),
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(data),
-          },
-        );
-        return { data: await response.json() };
+      request.once("end", () => {
+        requests.push({
+          method: request.method ?? "",
+          path: request.url ?? "",
+          body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
+        });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ id: "sdk-http-message-1" }));
       });
-    }
+    },
+    async (baseUrl) => {
+      const api = new TeamsApiClient(serviceUrl);
+      // OpenClaw's minimal SDK ambient declaration omits the real client's public HTTP transport.
+      const transport = (api as unknown as { http: TeamsSdkHttpTransport }).http;
+      for (const method of ["post", "put"] as const) {
+        vi.spyOn(transport, method).mockImplementation(async (destination, data) => {
+          const destinationUrl = new URL(destination);
+          const response = await fetch(
+            `${baseUrl}${destinationUrl.pathname}${destinationUrl.search}`,
+            {
+              method: method.toUpperCase(),
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(data),
+            },
+          );
+          return { data: await response.json() };
+        });
+      }
 
-    return await run({ api, requests });
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
-      });
-    });
-  }
+      await run({ api, requests });
+    },
+  );
 }
 
 function mockSharePointFileUpload(): void {
@@ -194,10 +166,6 @@ function mockSharePointFileUpload(): void {
   mockState.getDriveItemProperties.mockResolvedValue({
     eTag: '"file-guid,1"',
     webDavUrl: "https://sharepoint.example.com/dav/report.pdf",
-    name: "report.pdf",
-  });
-  mockState.buildTeamsFileInfoCard.mockReturnValue({
-    contentType: "application/vnd.microsoft.teams.card.file.info",
     name: "report.pdf",
   });
 }
@@ -392,6 +360,19 @@ describe("Microsoft Teams attachments", () => {
 });
 
 describe("Teams text preparation at the SDK HTTP boundary", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "msteams",
+          source: "test",
+          plugin: { id: "msteams", meta: { id: "msteams" } },
+        },
+      ]),
+    );
+  });
+  afterEach(resetPluginRuntimeStateForTest);
+
   const sourceName = String.raw`Alice \[Ops\]`;
   const displayName = "Alice [Ops]";
   const source = `# Deployment status\n\n${teamsQuotedRawTable}\n\n@[${sourceName}](11111111-2222-3333-4444-555555555555)`;
@@ -419,6 +400,7 @@ describe("Teams text preparation at the SDK HTTP boundary", () => {
   it.each(["edit", "file-caption"] as const)(
     "preserves normal-send text and mention semantics for %s",
     async (surface) => {
+      const cfg = createMSTeamsTestConfig({ markdown: { tables: "off" } });
       const actualMessenger =
         await vi.importActual<typeof import("./messenger.js")>("./messenger.js");
       mockState.sendMSTeamsMessages.mockImplementation(actualMessenger.sendMSTeamsMessages);
@@ -429,19 +411,19 @@ describe("Teams text preparation at the SDK HTTP boundary", () => {
           sharePointSiteId: "sharepoint-site-1",
           getAccessToken: vi.fn(),
         });
-        await sendMessageMSTeams({ cfg: {}, to: conversationId, text: source });
+        await sendMessageMSTeams({ cfg, to: conversationId, text: source });
         expectPrepared(requests[0]?.body);
 
         if (surface === "edit") {
           await editMessageMSTeams({
-            cfg: {},
+            cfg,
             to: conversationId,
             text: source,
             activityId: "sdk-http-message-1",
           });
         } else {
           await sendMessageMSTeams({
-            cfg: {},
+            cfg,
             to: conversationId,
             text: source,
             mediaUrl: "https://media.example.com/report.pdf",

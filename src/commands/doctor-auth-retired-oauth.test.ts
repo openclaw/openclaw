@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
+import { createDoctorPrompterFixture as makePrompter } from "../flows/doctor-health-context.test-support.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
@@ -11,7 +12,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { maybeMigrateAuthProfileJsonStoresToSqlite } from "./doctor-auth-flat-profiles.js";
-import { makePrompter } from "./doctor-auth-flat-profiles.test-support.js";
 
 let state: OpenClawTestState;
 const profileId = "openai-codex:legacy";
@@ -33,7 +33,11 @@ beforeEach(async () => {
 });
 
 const migrateAuthProfiles = (env = state.env) =>
-  maybeMigrateAuthProfileJsonStoresToSqlite({ cfg: {}, prompter: makePrompter(true), env });
+  maybeMigrateAuthProfileJsonStoresToSqlite({
+    cfg: {},
+    prompter: makePrompter(true, true),
+    env,
+  });
 
 const writeProfiles = (profiles: unknown) =>
   state.writeJson("agents/main/agent/auth-profiles.json", { version: 1, profiles });

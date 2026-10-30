@@ -18,6 +18,7 @@ import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-lo
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
+import type { SqliteSchemaErrorContext } from "../infra/sqlite-user-version.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import {
   assertExistingDatabaseIdentity,
@@ -47,6 +48,7 @@ import {
   admitStateSchemaFacts,
   type StateSchemaContentVersionRowReader,
 } from "./openclaw-state-db-schema-version.js";
+import { withPostgresSchemaAdmissionRetry } from "./openclaw-state-postgres-admission.js";
 import { postgresStateReadSnapshot } from "./openclaw-state-postgres-snapshot-context.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 
@@ -61,6 +63,11 @@ export type OpenClawStateReadConnection = {
   };
   close: (retain?: boolean) => boolean;
 };
+
+type StateReadSource =
+  | string
+  | PreparedSqliteReadOnlyLocation
+  | { location: string; connection: OpenClawStateReadConnection };
 
 type RetainedReader = {
   connection: OpenClawStateReadConnection;
@@ -78,6 +85,7 @@ function retireReader(reader: RetainedReader): void {
     return;
   }
   clearTimeout(reader.idleTimer);
+  reader.idleTimer = undefined;
   reader.retiring = true;
   reader.connection.close();
   retainedReaders.delete(reader.identity.key);
@@ -95,8 +103,7 @@ function scheduleReaderRetirement(reader: RetainedReader): void {
   ) {
     return;
   }
-  clearTimeout(reader.idleTimer);
-  reader.idleTimer = runInDetachedAsyncContext(() =>
+  reader.idleTimer ??= runInDetachedAsyncContext(() =>
     setTimeout(() => {
       try {
         retireReader(reader);
@@ -104,9 +111,9 @@ function scheduleReaderRetirement(reader: RetainedReader): void {
         process.emitWarning(`Idle shared-state reader cleanup failed: ${String(error)}`);
         scheduleReaderRetirement(reader);
       }
-    }, SQLITE_IDLE_HANDLE_TTL_MS),
+    }, SQLITE_IDLE_HANDLE_TTL_MS).unref(),
   );
-  reader.idleTimer.unref?.();
+  reader.idleTimer.refresh();
 }
 
 /** The host joins this receipt before allowing replacement or deletion of live state. */
@@ -167,8 +174,7 @@ function borrowStateReadConnection(
   }
   const retained = reader;
   observeOpenClawDatabaseMaintenanceResource(retained);
-  retained.borrowed = true;
-  clearTimeout(retained.idleTimer);
+  retained.borrowed = true; // Borrowing and settlement cannot yield to the idle timer.
   return {
     status: "available",
     value: {
@@ -200,19 +206,22 @@ export function assertStateReadSchema(
   database: EngineConnection,
   pathname: string,
   integrityPolicy?: OpenClawStateIntegrityPolicy,
+  context: SqliteSchemaErrorContext = "runtime",
 ): void {
   assertStateReadSchemaForPolicy(
     database,
     pathname,
     isExistingOpenClawStateSchema(pathname, database),
     integrityPolicy,
+    undefined,
+    context,
   );
 }
 
 export function withOpenClawStateReadOnlyLocation<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   pathname: string,
-  source: string | PreparedSqliteReadOnlyLocation,
+  source: StateReadSource,
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
   expectedIdentity?: string,
   snapshotRoot?: string,
@@ -239,17 +248,22 @@ export function withOpenClawStateReadOnlyLocation<T>(
 export function readOpenClawStateReadOnlyLocation<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   pathname: string,
-  source: string | PreparedSqliteReadOnlyLocation,
+  source: StateReadSource,
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
   expectedIdentity?: string,
   snapshotRoot?: string,
   retainConnection = false,
   readContentVersionRow?: StateSchemaContentVersionRowReader,
 ): OpenClawStateSettledRead<T> {
-  const opening =
-    retainConnection && source === pathname && !snapshotRoot
+  const retained =
+    typeof source !== "string" && "connection" in source ? source.connection : undefined;
+  const ownedSource =
+    typeof source !== "string" && "connection" in source ? source.location : source;
+  const opening = retained
+    ? ({ status: "available", value: retained } as const)
+    : retainConnection && ownedSource === pathname && !snapshotRoot
       ? borrowStateReadConnection(pathname, expectedIdentity)
-      : openStateReadConnectionResult(pathname, source, expectedIdentity, snapshotRoot, true);
+      : openStateReadConnectionResult(pathname, ownedSource, expectedIdentity, snapshotRoot, true);
   if (opening.status === "unavailable") {
     return opening;
   }
@@ -263,25 +277,28 @@ export function readOpenClawStateReadOnlyLocation<T>(
     }
     // Scope and path policy are authority, not ordinary schema SQL failure.
     const existingSchema = isExistingOpenClawStateSchema(pathname, opened.database.db);
+    const context = openStateSchemaReadAdmission ? "doctor-maintenance" : "runtime";
     try {
+      let operationStarted = false;
+      const snapshot = postgresStateReadSnapshot.getStore();
       const read = () =>
         runSqliteReadOperationSync(opened.database.db, () => {
-          admitStateSchemaFacts(opened.database.db, pathname);
+          admitStateSchemaFacts(opened.database.db, pathname, context);
           assertStateReadSchemaForPolicy(
             opened.database.db,
             pathname,
             existingSchema,
             undefined,
             readContentVersionRow,
+            context,
           );
+          operationStarted = true;
           return operation(opened.database);
         });
-      result = {
-        status: "available",
-        value: isPostgresSqlConnection(opened.database.db)
+      const readTransaction = () =>
+        isPostgresSqlConnection(opened.database.db)
           ? opened.database.db.runTransaction(
               () => {
-                const snapshot = postgresStateReadSnapshot.getStore();
                 if (snapshot?.path === pathname) {
                   // sqlite-allow-raw: PostgreSQL imports the retained worker's MVCC snapshot before any read.
                   opened.database.db.exec(
@@ -293,8 +310,13 @@ export function readOpenClawStateReadOnlyLocation<T>(
               undefined,
               true,
             )
-          : read(),
-      };
+          : read();
+      const value = withPostgresSchemaAdmissionRetry(
+        opened.database.db,
+        readTransaction,
+        () => !operationStarted && snapshot?.path !== pathname,
+      );
+      result = { status: "available", value };
     } catch (error) {
       if (!isPostgresSqlConnection(opened.database.db) && isSqliteCorruptionError(error)) {
         invalidateOpenClawStateRuntimeIntegrity(opened.database.db);
@@ -325,6 +347,7 @@ export function readOpenClawStateReadOnlyLocation<T>(
       result?.status === "available" &&
       !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources;
     if (
+      !retained &&
       !opened.close(
         errors.length === 0 &&
           result?.status === "available" &&

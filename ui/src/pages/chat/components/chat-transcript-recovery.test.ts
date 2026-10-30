@@ -28,17 +28,23 @@ const previewMessage = {
 function fullMessage(content: string): FullMessageResult {
   return { ok: true, message: { role: "assistant", content } };
 }
+const resolvedLoader = (body: string) =>
+  vi.fn<SidebarFullMessageLoader>().mockResolvedValue(fullMessage(body));
+const bubble = (pane: RecoveryTranscriptElement) => pane.querySelector(".chat-bubble");
+const shows = (pane: RecoveryTranscriptElement, text: string) =>
+  vi.waitFor(() => expect(pane.textContent).toContain(text));
+async function render(pane: RecoveryTranscriptElement, patch: Partial<ChatThreadProps> = {}) {
+  Object.assign(pane.props, patch);
+  pane.requestRender();
+  await pane.updateComplete;
+}
 
 class RecoveryTranscriptElement extends TranscriptTestHost {
   props: ChatThreadProps = threadProps("recovery-pane");
   resetPresentationOnDisconnect = true;
   override readonly transcript = createChatTranscript(() => this.props.paneId);
 
-  override renderTranscript = () => {
-    return renderChatThread(this.props, this.transcript, {
-      search: true,
-    });
-  };
+  override renderTranscript = () => renderChatThread(this.props, this.transcript, { search: true });
 
   override disconnectedCallback() {
     // Match the pane-specific production reset before disposing the transcript.
@@ -71,9 +77,11 @@ async function searchTranscript(pane: RecoveryTranscriptElement, query: string) 
     toggleTranscriptSearch(pane.props.paneId);
     await pane.settleUpdates();
   }
-  const input = expectDefined(
-    pane.querySelector<HTMLInputElement>(".agent-chat__search-bar input"),
-    "transcript search input",
+  const input = await waitForSolid(() =>
+    expectDefined(
+      pane.querySelector<HTMLInputElement>(".agent-chat__search-bar input"),
+      "transcript search input",
+    ),
   );
   input.value = query;
   input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -90,32 +98,74 @@ describe("chat transcript full-message recovery", () => {
     const pane = mountTranscript("recovery-active-search", load);
     await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
     await searchTranscript(pane, "lunarneedle");
-    expect(pane.querySelector(".chat-bubble")).toBeNull();
+    expect(bubble(pane)).toBeNull();
 
     pending.resolve(fullMessage("The restored exhibit is lunarneedle."));
-    await vi.waitFor(() =>
-      expect(pane.querySelector(".chat-bubble")?.textContent).toContain("lunarneedle"),
-    );
+    await vi.waitFor(() => expect(bubble(pane)?.textContent).toContain("lunarneedle"));
+    expect(load).toHaveBeenCalledOnce();
+  });
+
+  it("recovers a capped mixed envelope once without duplicating its visible text", async () => {
+    const message = (text: string) => ({
+      role: "assistant",
+      content: [
+        { type: "text", text },
+        { type: "thinking", thinking: "Recorded work" },
+        { type: "text", text: "Final finding." },
+      ],
+      runId: "mixed-run",
+      timestamp: 2_000,
+      stopReason: "stop",
+      __openclaw: {
+        id: "mixed-recovery",
+        runId: "mixed-run",
+        truncated: text === "Preview",
+        reason: "display-cap",
+      },
+    });
+    const load = vi.fn<SidebarFullMessageLoader>().mockResolvedValue({
+      ok: true,
+      message: message("Recovered finding."),
+    });
+    const pane = document.createElement("test-recovery-transcript") as RecoveryTranscriptElement;
+    pane.props = {
+      ...threadProps("recovery-mixed", "agent:work:dashboard:recovery", [
+        { role: "user", content: "Inspect the sample", timestamp: 1_000 },
+        message("Preview"),
+      ]),
+      fullMessageAgentId: "work",
+      loadFullAssistantMessage: load,
+      showToolCalls: true,
+      showThinking: true,
+      selectedSession: {
+        key: "agent:work:dashboard:recovery",
+        kind: "direct",
+        reasoningLevel: "on",
+      },
+    };
+    document.body.append(pane);
+    await shows(pane, "Recovered finding.");
+    await pane.settleUpdates();
+    expect(pane.textContent?.match(/Recovered finding\./g)).toHaveLength(1);
+    expect(pane.textContent?.match(/Final finding\./g)).toHaveLength(1);
     expect(load).toHaveBeenCalledOnce();
   });
 
   it("recovers an oversized source group with its tool cards and complete output", async () => {
     const output = "x".repeat(5_000_000) + " OUTPUT_END";
-    const full = {
-      role: "assistant",
-      __openclaw: { id: "oversized-tools" },
-      content: [
-        { type: "toolCall", id: "large-result", name: "exec", arguments: { command: "check" } },
-        { type: "toolResult", id: "large-result", name: "exec", text: output },
-      ],
-    };
     const load = vi.fn<SidebarFullMessageLoader>().mockImplementation(async ({ maxChars }) => ({
       ok: true,
       message: {
-        ...full,
+        role: "assistant",
+        __openclaw: { id: "oversized-tools" },
         content: [
-          full.content[0],
-          { ...full.content[1], text: output.slice(0, maxChars ?? 500_000) },
+          { type: "toolCall", id: "large-result", name: "exec", arguments: { command: "check" } },
+          {
+            type: "toolResult",
+            id: "large-result",
+            name: "exec",
+            text: output.slice(0, maxChars ?? 500_000),
+          },
         ],
       },
     }));
@@ -157,7 +207,7 @@ describe("chat transcript full-message recovery", () => {
   it("keeps the preview through bounded retries and recovers on manual retry", async () => {
     const load = vi.fn<SidebarFullMessageLoader>().mockRejectedValue(new Error("offline"));
     const pane = mountTranscript("recovery-unavailable", load);
-    await vi.waitFor(() => expect(pane.textContent).toContain("Could not load the full message."));
+    await shows(pane, "Could not load the full message.");
     expect(load).toHaveBeenCalledTimes(3);
     expect(pane.textContent).toContain("Preview");
     expect(pane.textContent).toContain("...(truncated)...");
@@ -168,128 +218,114 @@ describe("chat transcript full-message recovery", () => {
       pane.querySelector<HTMLButtonElement>(".chat-message-load-error__retry"),
       "full-message retry",
     ).click();
-    await vi.waitFor(() => expect(pane.textContent).toContain("Available after retry."));
+    await shows(pane, "Available after retry.");
     expect(load).toHaveBeenCalledTimes(4);
   });
 
-  it.each(["loading", "loaded"] as const)(
-    "retires %s recovery when the same controller reconnects",
-    async (phase) => {
-      const retired = createDeferred<FullMessageResult>();
-      const current = createDeferred<FullMessageResult>();
-      const load = vi
-        .fn<SidebarFullMessageLoader>()
-        .mockImplementationOnce(() => retired.promise)
-        .mockImplementationOnce(() => current.promise);
-      const pane = mountTranscript("recovery-reconnect", load);
-      await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
-      if (phase === "loaded") {
-        retired.resolve(fullMessage("Retired body."));
-        await vi.waitFor(() => expect(pane.textContent).toContain("Retired body."));
-      }
-
-      // Keep retained rows and pane state so only the controller owns invalidation.
-      pane.resetPresentationOnDisconnect = false;
-      pane.remove();
-      document.body.append(pane);
-      pane.requestRender();
-      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
-      await pane.updateComplete;
-      await flushDeferredRowPrune();
-      expect(pane.textContent).not.toContain("Retired body.");
-
-      if (phase === "loading") {
-        const updates = vi.spyOn(pane, "requestRender");
-        retired.resolve(fullMessage("Retired body."));
-        await flushDeferredRowPrune();
-        expect(updates).not.toHaveBeenCalled();
-        expect(pane.textContent).not.toContain("Retired body.");
-      }
-
-      current.resolve(fullMessage("Current body."));
-      await vi.waitFor(() => expect(pane.textContent).toContain("Current body."));
-      expect(load).toHaveBeenCalledTimes(2);
-    },
-  );
-
-  it("retires a disconnected pane's bodies without invalidating a surviving split pane", async () => {
+  it.each([
+    { phase: "loading", retirement: "reconnect" },
+    { phase: "loaded", retirement: "reconnect" },
+    { phase: "loading", retirement: "remount" },
+    { phase: "loading", retirement: "prune" },
+  ])("retires $phase recovery on $retirement", async ({ phase, retirement }) => {
+    const retired = createDeferred<FullMessageResult>();
+    const current = createDeferred<FullMessageResult>();
     const load = vi
       .fn<SidebarFullMessageLoader>()
-      .mockResolvedValue(fullMessage("Original answer."));
+      .mockImplementationOnce(() => retired.promise)
+      .mockImplementationOnce(() => current.promise);
+    let pane = mountTranscript("recovery-reconnect", load);
+    await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
+    if (phase === "loaded") {
+      retired.resolve(fullMessage("Retired body."));
+      await shows(pane, "Retired body.");
+    }
+
+    const oldPane = pane;
+    if (retirement === "prune") {
+      await render(pane, { messages: [] });
+      await render(pane, { messages: [previewMessage] });
+    } else {
+      // Reconnect retains presentation; remount also exercises the pane reset.
+      pane.resetPresentationOnDisconnect = retirement === "remount";
+      pane.remove();
+      if (retirement === "reconnect") {
+        document.body.append(pane);
+      } else {
+        pane = mountTranscript("recovery-reconnect", load);
+      }
+      await render(pane);
+    }
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    await flushDeferredRowPrune();
+    expect(pane.textContent).not.toContain("Retired body.");
+
+    if (retirement === "remount") {
+      current.resolve(fullMessage("Current body."));
+      await shows(pane, "Current body.");
+    }
+
+    if (phase === "loading") {
+      const updates = vi.spyOn(oldPane, "requestRender");
+      retired.resolve(fullMessage("Retired body."));
+      await flushDeferredRowPrune();
+      expect(updates).not.toHaveBeenCalled();
+      expect(pane.textContent).not.toContain("Retired body.");
+    }
+
+    current.resolve(fullMessage("Current body."));
+    await shows(pane, "Current body.");
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires a disconnected pane's bodies without invalidating a surviving split pane", async () => {
+    const load = resolvedLoader("Original answer.");
     const first = mountTranscript("recovery-split-first", load);
-    await vi.waitFor(() => expect(first.textContent).toContain("Original answer."));
+    await shows(first, "Original answer.");
     const sibling = mountTranscript("recovery-split-second", load);
-    await vi.waitFor(() => expect(sibling.textContent).toContain("Original answer."));
+    await shows(sibling, "Original answer.");
     const loadedRequests = load.mock.calls.length;
 
     first.remove();
-    sibling.requestRender();
-    await sibling.updateComplete;
+    await render(sibling);
     expect(sibling.textContent).toContain("Original answer.");
     expect(load).toHaveBeenCalledTimes(loadedRequests);
 
     load.mockResolvedValue(fullMessage("Recovered after remount."));
     const replacement = mountTranscript("recovery-split-first", load);
     await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(loadedRequests + 1));
-    await vi.waitFor(() => expect(replacement.textContent).toContain("Recovered after remount."));
+    await shows(replacement, "Recovered after remount.");
     expect(sibling.textContent).toContain("Original answer.");
   });
 
-  it("ignores a pending completion after pane teardown and same-identity remount", async () => {
-    const pending = createDeferred<FullMessageResult>();
-    const load = vi
-      .fn<SidebarFullMessageLoader>()
-      .mockImplementationOnce(() => pending.promise)
-      .mockResolvedValue(fullMessage("Current answer."));
-    const retired = mountTranscript("recovery-remount", load);
-    await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
-    retired.remove();
-    const current = mountTranscript("recovery-remount", load);
-    await current.updateComplete;
-    await flushDeferredRowPrune();
-    const retiredUpdates = vi.spyOn(retired, "requestRender");
-
-    pending.resolve(fullMessage("Retired answer."));
-    await flushDeferredRowPrune();
-    expect(retiredUpdates).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(current.textContent).toContain("Current answer."));
-    expect(current.textContent).not.toContain("Retired answer.");
-  });
-
   it.each(["session", "agent"] as const)("scopes recovery to the requested %s", async (scope) => {
-    const load = vi.fn<SidebarFullMessageLoader>().mockResolvedValue(fullMessage("First scope."));
+    const load = resolvedLoader("First scope.");
     const pane = mountTranscript("recovery-routing", load, "global");
-    await vi.waitFor(() => expect(pane.textContent).toContain("First scope."));
+    await shows(pane, "First scope.");
     await searchTranscript(pane, "First scope");
-    expect(pane.querySelector(".chat-bubble")?.textContent).toContain("First scope.");
+    expect(bubble(pane)?.textContent).toContain("First scope.");
 
     load.mockResolvedValue(fullMessage("Second scope."));
-    pane.props = {
-      ...pane.props,
-      ...(scope === "session"
-        ? { sessionKey: "agent:work:other" }
-        : { fullMessageAgentId: "other" }),
-    };
-    pane.requestRender();
-    await pane.updateComplete;
-    expect(pane.querySelector(".chat-bubble")).toBeNull();
+    await render(
+      pane,
+      scope === "session" ? { sessionKey: "agent:work:other" } : { fullMessageAgentId: "other" },
+    );
+    expect(bubble(pane)).toBeNull();
     toggleTranscriptSearch(pane.props.paneId);
-    await vi.waitFor(() => expect(pane.textContent).toContain("Second scope."));
+    await shows(pane, "Second scope.");
     expect(load).toHaveBeenLastCalledWith({
       sessionKey: pane.props.sessionKey,
       agentId: pane.props.fullMessageAgentId,
       messageId: "assistant-full-1",
     });
     await searchTranscript(pane, "First scope");
-    expect(pane.querySelector(".chat-bubble")).toBeNull();
+    expect(bubble(pane)).toBeNull();
     await searchTranscript(pane, "Second scope");
-    expect(pane.querySelector(".chat-bubble")?.textContent).toContain("Second scope.");
+    expect(bubble(pane)?.textContent).toContain("Second scope.");
   });
 
   it("keeps recovered pending-input text until that input leaves the source", async () => {
-    const load = vi
-      .fn<SidebarFullMessageLoader>()
-      .mockResolvedValue(fullMessage("Accepted input."));
+    const load = resolvedLoader("Accepted input.");
     const pane = mountTranscript("recovery-pending-input", load);
     const pendingInputs: ChatThreadProps["pendingInputs"] = [
       {
@@ -305,75 +341,41 @@ describe("chat transcript full-message recovery", () => {
     ];
     pane.props.messages = [];
     pane.props.pendingInputs = pendingInputs;
-    await vi.waitFor(() => expect(pane.textContent).toContain("Accepted input."));
-    pane.requestRender();
-    await pane.updateComplete;
+    await shows(pane, "Accepted input.");
+    await render(pane);
     expect(load).toHaveBeenCalledOnce();
     expect(pane.textContent).toContain("Accepted input.");
     await searchTranscript(pane, "Accepted input");
-    expect(pane.querySelector(".chat-bubble")?.textContent).toContain("Accepted input.");
+    expect(bubble(pane)?.textContent).toContain("Accepted input.");
 
-    pane.props.pendingInputs = [];
-    pane.requestRender();
-    await pane.updateComplete;
+    await render(pane, { pendingInputs: [] });
     load.mockResolvedValue(fullMessage("Revisited input."));
-    pane.props.pendingInputs = pendingInputs;
-    pane.requestRender();
-    await pane.updateComplete;
-    expect(pane.querySelector(".chat-bubble")).toBeNull();
+    await render(pane, { pendingInputs });
+    expect(bubble(pane)).toBeNull();
     toggleTranscriptSearch(pane.props.paneId);
-    await vi.waitFor(() => expect(pane.textContent).toContain("Revisited input."));
+    await shows(pane, "Revisited input.");
     expect(load).toHaveBeenCalledTimes(2);
   });
 
   it("stops searching recovered text when the source is no longer capped", async () => {
-    const load = vi
-      .fn<SidebarFullMessageLoader>()
-      .mockResolvedValue(fullMessage("Recovered body."));
+    const load = resolvedLoader("Recovered body.");
     const pane = mountTranscript("recovery-replaced-source", load);
-    await vi.waitFor(() => expect(pane.textContent).toContain("Recovered body."));
+    await shows(pane, "Recovered body.");
     await searchTranscript(pane, "Recovered body");
-    expect(pane.querySelector(".chat-bubble")?.textContent).toContain("Recovered body.");
+    expect(bubble(pane)?.textContent).toContain("Recovered body.");
 
-    pane.props.messages = [
-      {
-        ...previewMessage,
-        content: "Current source body.",
-        __openclaw: { id: "assistant-full-1" },
-      },
-    ];
-    pane.requestRender();
-    await pane.updateComplete;
-    expect(pane.querySelector(".chat-bubble")).toBeNull();
+    await render(pane, {
+      messages: [
+        {
+          ...previewMessage,
+          content: "Current source body.",
+          __openclaw: { id: "assistant-full-1" },
+        },
+      ],
+    });
+    expect(bubble(pane)).toBeNull();
     await searchTranscript(pane, "Current source body");
-    expect(pane.querySelector(".chat-bubble")?.textContent).toContain("Current source body.");
+    expect(bubble(pane)?.textContent).toContain("Current source body.");
     expect(load).toHaveBeenCalledOnce();
-  });
-
-  it("fences a pruned request when the same message starts a new recovery", async () => {
-    const first = createDeferred<FullMessageResult>();
-    const second = createDeferred<FullMessageResult>();
-    const load = vi
-      .fn<SidebarFullMessageLoader>()
-      .mockImplementationOnce(() => first.promise)
-      .mockImplementationOnce(() => second.promise);
-    const pane = mountTranscript("recovery-pending-pruning", load);
-    await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
-
-    pane.props.messages = [];
-    pane.requestRender();
-    await pane.updateComplete;
-    pane.props.messages = [previewMessage];
-    pane.requestRender();
-    await pane.updateComplete;
-    await flushDeferredRowPrune();
-    const updates = vi.spyOn(pane, "requestRender");
-    first.resolve(fullMessage("Obsolete body."));
-    await flushDeferredRowPrune();
-    expect(updates).not.toHaveBeenCalled();
-    expect(pane.textContent).not.toContain("Obsolete body.");
-
-    second.resolve(fullMessage("Replacement body."));
-    await vi.waitFor(() => expect(pane.textContent).toContain("Replacement body."));
   });
 });

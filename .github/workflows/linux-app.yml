@@ -18,6 +18,19 @@ on:
         description: "Run only Windows desktop validation and installer packaging"
         type: boolean
         default: false
+      desktop_runtime:
+        description: "Runtime for the Linux bundles; AOT requires a prebuilt standalone artifact"
+        type: choice
+        options: [jit, aot]
+        default: jit
+      aot_run_id:
+        description: "Successful same-repository push or manual workflow run containing the AOT artifact"
+        type: string
+        default: ""
+      aot_artifact_name:
+        description: "Artifact with the Linux x64 standalone manifest, executable, and runtime at its root"
+        type: string
+        default: ""
 
 concurrency:
   # Passive draft events must not cancel useful validation; conversion intentionally does.
@@ -41,6 +54,9 @@ jobs:
     runs-on: ubuntu-22.04
     # Leave room for cold source packaging and the native desktop proof afterward.
     timeout-minutes: 105
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -258,6 +274,42 @@ jobs:
             | tee "${RUNNER_TEMP}/openclaw-gstreamer-elements.tsv"
           echo "GSTREAMER_PLUGINS_DIR=$plugins" >> "$GITHUB_ENV"
 
+      - name: Validate prebuilt AOT artifact source
+        if: github.event_name == 'workflow_dispatch' && inputs.desktop_runtime == 'aot'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AOT_RUN_ID: ${{ inputs.aot_run_id }}
+          AOT_ARTIFACT_NAME: ${{ inputs.aot_artifact_name }}
+        run: |
+          set -euo pipefail
+          [[ "$AOT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "::error::aot_run_id must be a workflow run ID"
+            exit 1
+          }
+          [[ "$AOT_ARTIFACT_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {
+            echo "::error::aot_artifact_name must be a plain artifact name"
+            exit 1
+          }
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$AOT_RUN_ID" |
+            jq -e --arg repository "$GITHUB_REPOSITORY" '
+              .status == "completed" and .conclusion == "success" and
+              .head_repository.full_name == $repository and
+              (.event == "push" or .event == "workflow_dispatch")
+            ' > /dev/null || {
+              echo "::error::AOT artifacts must come from a successful push or manual workflow in this repository"
+              exit 1
+            }
+
+      - name: Download prebuilt AOT runtime
+        if: github.event_name == 'workflow_dispatch' && inputs.desktop_runtime == 'aot'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.aot_run_id }}
+          name: ${{ inputs.aot_artifact_name }}
+          path: ${{ runner.temp }}/desktop-aot
+
       - name: Prepare pinned AppImage tools
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -276,6 +328,8 @@ jobs:
           # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
           NO_STRIP: "true"
           XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
+          OPENCLAW_DESKTOP_RUNTIME: ${{ inputs.desktop_runtime || 'jit' }}
+          OPENCLAW_DESKTOP_AOT_ARTIFACT: ${{ runner.temp }}/desktop-aot
         # Validation builds have no TAURI_SIGNING_PRIVATE_KEY, and the configured updater
         # pubkey makes the bundler hard-require it. Skip updater artifacts here;
         # linux-app-release.yml builds the signed updater bundles.
@@ -446,6 +500,7 @@ jobs:
         working-directory: apps/linux/src-tauri
         run: |
           node --test ../scripts/test-stage-runtime.mjs ../scripts/test-stage-package.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo +stable test --locked --bin openclaw-desktop
 
       - name: Build Windows installer without publishing

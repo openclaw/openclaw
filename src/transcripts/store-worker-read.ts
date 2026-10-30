@@ -81,8 +81,8 @@ export const transcriptReadOperations = {
         readTranscriptSummarySnapshot(db, session, maxUtterances),
       ),
   ),
-  "transcripts.sessionEntries": readTranscript<"transcripts.sessionEntries">((db) =>
-    runSqliteReadSnapshotSync(db, () => readTranscriptSessionEntries(db)),
+  "transcripts.sessionEntries": readTranscript<"transcripts.sessionEntries">(
+    readTranscriptSessionEntries,
   ),
   "transcripts.matches": readTranscript<"transcripts.matches">((db, { value }) =>
     runSqliteReadSnapshotSync(db, () => readTranscriptSessionMatches(db, value)),

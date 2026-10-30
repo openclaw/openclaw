@@ -31,6 +31,8 @@ vi.mock("../../skills/library/selection.js", async (importOriginal) => {
 });
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+const writeGuide = (dir: string, name: string, description: string, body: string) =>
+  writeSkill({ dir, name, description, body });
 afterEach(() => {
   libraryFixture.entries = [];
   vi.unstubAllEnvs();
@@ -91,12 +93,7 @@ it("keeps Code Mode file ownership despite an unavailable same-name pin", async 
     agents: { entries: { main: { agentDir: path.join(root, "agent") } } },
   };
   const workshopDir = path.join(resolveWorkshopSkillsDir(config, "main"), "workshop");
-  await writeSkill({
-    dir: workshopDir,
-    name: "workshop",
-    description: "Workshop guide",
-    body: "Workshop body",
-  });
+  await writeGuide(workshopDir, "workshop", "Workshop guide", "Workshop body");
   const readFile = vi.fn().mockRejectedValue(new Error("Document access cannot read skills"));
   const skillResources = {
     resolveExplicitSkill: vi.fn(),
@@ -176,12 +173,12 @@ it("keeps Code Mode file ownership despite an unavailable same-name pin", async 
 
 it("preserves local Code Mode instruction reads after a document-only adapter stops", async () => {
   const workspace = temps.make("code-mode-document-only-");
-  await writeSkill({
-    dir: path.join(workspace, "skills", "guide"),
-    name: "guide",
-    description: "Local guide",
-    body: "Local instructions",
-  });
+  await writeGuide(
+    path.join(workspace, "skills", "guide"),
+    "guide",
+    "Local guide",
+    "Local instructions",
+  );
   const snapshot = await buildSkillSnapshot(workspace, {
     entries: loadWorkspaceSkills(workspace, { workspaceOnly: true }),
   });
@@ -204,21 +201,21 @@ it("keeps learned Workshop skills readable under an allowlist and calls a missin
   await isolateSkills(root);
   const workspace = path.join(root, "workspace");
   const agentDir = path.join(root, "agent");
-  await writeSkill({
-    dir: path.join(workspace, "skills", "listed"),
-    name: "listed",
-    description: "Allowlisted guide",
-    body: "Listed instructions",
-  });
-  await writeSkill({
-    dir: path.join(
+  await writeGuide(
+    path.join(workspace, "skills", "listed"),
+    "listed",
+    "Allowlisted guide",
+    "Listed instructions",
+  );
+  await writeGuide(
+    path.join(
       resolveWorkshopSkillsDir({ agents: { entries: { main: { agentDir } } } }, "main"),
       "learned",
     ),
-    name: "learned",
-    description: "Workshop guide",
-    body: "Learned instructions",
-  });
+    "learned",
+    "Workshop guide",
+    "Learned instructions",
+  );
   const allowed = async (skills: string[]) => {
     const config = {
       plugins: { enabled: false },
@@ -255,12 +252,7 @@ it.each([
     [host, "Host instructions"],
     [library, "Gateway Library instructions"],
   ] as const) {
-    await writeSkill({
-      dir: path.join(dir, "skills/guide"),
-      name: "guide",
-      description: "Guide",
-      body,
-    });
+    await writeGuide(path.join(dir, "skills/guide"), "guide", "Guide", body);
     await fs.mkdir(path.join(dir, "skills/guide/refs"));
     await fs.writeFile(path.join(dir, "skills/guide/refs/support.txt"), body + " support");
   }

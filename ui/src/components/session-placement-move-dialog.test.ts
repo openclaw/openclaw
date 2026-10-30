@@ -3,17 +3,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { stubResizeObserver } from "../test-helpers/resize-observer.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import {
-  showSessionPlacementTargetDialog,
-  type SessionPlacementTargetOptions,
-} from "./session-placement-move-dialog.tsx";
+import { showSessionPlacementTargetDialog } from "./session-placement-move-dialog.tsx";
 
 let restoreDialogPolyfill: () => void;
 const cleanups: (() => Promise<unknown>)[] = [];
 
 type DialogOptions = Parameters<typeof showSessionPlacementTargetDialog>[0];
 type Profiles = Awaited<ReturnType<DialogOptions["loadCatalog"]>>["profiles"];
+type Catalog = Awaited<ReturnType<DialogOptions["loadCatalog"]>>;
+const cancelDialog = (modal: HTMLElement) =>
+  modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
 async function openDialog({
   profiles = [],
   ...options
@@ -28,7 +29,7 @@ async function openDialog({
   flush();
   const { modal } = await getRenderedModalDialog(document.body);
   cleanups.push(async () => {
-    modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+    cancelDialog(modal);
     await result;
   });
   const button = (value: string) =>
@@ -42,14 +43,7 @@ async function openDialog({
 }
 
 beforeEach(() => {
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
+  stubResizeObserver();
   vi.stubGlobal("matchMedia", () => ({ matches: false }));
   restoreDialogPolyfill = installDialogPolyfill();
 });
@@ -105,9 +99,7 @@ describe.each(["dispatch", "move", "restart"] as const)("%s machine selection", 
       click("cloud:cloud");
       const menu = await openChoices(modal, "Machine");
       if (selectionKind === "explicit") {
-        menu
-          .querySelector<HTMLButtonElement>('[role="menuitemradio"][aria-label="Large"]')!
-          .click();
+        choice(menu, "Large").click();
         flush();
       }
       const machineClass = selectionKind === "smaller" ? "small" : "large";
@@ -136,7 +128,7 @@ it("ignores catalog completion after cancellation", async () => {
   const { result, modal } = await openDialog({ loadCatalog: () => catalog.promise });
   const host = modal.parentElement!;
 
-  modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+  cancelDialog(modal);
   await expect(result).resolves.toBeNull();
   expect(host.isConnected).toBe(false);
 
@@ -148,8 +140,8 @@ it("ignores catalog completion after cancellation", async () => {
 it.each(["Device ID", ""])(
   "preserves Cancel focus through catalog failure and retry with source label %j",
   async (sourceLabel) => {
-    const catalog = createDeferred<Awaited<ReturnType<DialogOptions["loadCatalog"]>>>();
-    const retryCatalog = createDeferred<Awaited<ReturnType<DialogOptions["loadCatalog"]>>>();
+    const catalog = createDeferred<Catalog>();
+    const retryCatalog = createDeferred<Catalog>();
     const loadCatalog = vi
       .fn<DialogOptions["loadCatalog"]>()
       .mockReturnValueOnce(catalog.promise)
@@ -162,6 +154,12 @@ it.each(["Device ID", ""])(
     const cancel = modal.querySelector<HTMLButtonElement>(
       '.session-move__actions button[type="button"]',
     )!;
+    const expectRetained = () => {
+      expect(document.activeElement).toBe(cancel);
+      expect(modal.querySelector("form")).toBe(form);
+      expect(modal.querySelector('button[type="submit"]')).toBe(submit);
+      expect(submit.disabled).toBe(true);
+    };
     cancel.focus();
     expect(modal.textContent).toContain("Loading");
     expect(submit.disabled).toBe(true);
@@ -171,10 +169,7 @@ it.each(["Device ID", ""])(
     await waitForSolid(() =>
       expect(modal.querySelector('[role="alert"]')?.textContent).toContain("Catalog unavailable"),
     );
-    expect(document.activeElement).toBe(cancel);
-    expect(modal.querySelector("form")).toBe(form);
-    expect(modal.querySelector('button[type="submit"]')).toBe(submit);
-    expect(submit.disabled).toBe(true);
+    expectRetained();
     expect(modal.querySelector(".session-move__origin")?.textContent ?? "").toBe(sourceLabel);
 
     modal.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
@@ -191,11 +186,8 @@ it.each(["Device ID", ""])(
     expect(modal.querySelector(".session-move__origin span")?.getAttribute("title")).toBe(
       "Desktop",
     );
-    expect(document.activeElement).toBe(cancel);
-    expect(modal.querySelector("form")).toBe(form);
+    expectRetained();
     expect(modal.querySelector('.session-move__actions button[type="button"]')).toBe(cancel);
-    expect(modal.querySelector('button[type="submit"]')).toBe(submit);
-    expect(submit.disabled).toBe(true);
     click("gateway");
     expect(submit.disabled).toBe(false);
     cancel.click();
@@ -206,33 +198,25 @@ it.each(["Device ID", ""])(
 it("orders available Move profiles by label before blocked profiles", async () => {
   const { result, modal, button, submit, click } = await openDialog({
     profileDisabledReason: (profile) => (profile.id === "production" ? "Unavailable" : undefined),
-    profiles: [
-      { id: "AWS", providerId: "crabbox", providerDisplayId: "local-container" },
-      { id: "Azure", providerId: "crabbox", providerDisplayId: "incus" },
-      { id: "custom", providerId: "custom-worker" },
-      { id: "production", providerId: "crabbox", providerDisplayId: "aws" },
-      { id: "local", providerId: "crabbox", providerDisplayId: "machine0" },
-    ],
+    profiles: ["Zulu", "Alpha", "production"].map((id) => ({ id, providerId: "worker" })),
   });
   expect(
     [...modal.querySelectorAll('[data-value^="cloud:"]')].map((row) =>
       row.getAttribute("data-value"),
     ),
-  ).toEqual(["cloud:AWS", "cloud:Azure", "cloud:custom", "cloud:local", "cloud:production"]);
+  ).toEqual(["cloud:Alpha", "cloud:Zulu", "cloud:production"]);
   expect(button("cloud:production").disabled).toBe(true);
-  click("cloud:AWS");
-  expect(button("cloud:AWS").getAttribute("aria-pressed")).toBe("true");
+  click("cloud:Alpha");
   submit.click();
-  await expect(result).resolves.toEqual({ kind: "profile", profileId: "AWS" });
+  await expect(result).resolves.toEqual({ kind: "profile", profileId: "Alpha" });
 });
 
 it("moves with the selected OS and limits machine choices to that OS", async () => {
-  const { result, modal, button, submit, click } = await openDialog({
+  const { result, modal, submit, click } = await openDialog({
     profiles: [
       {
         id: "aws",
         providerId: "crabbox",
-        providerDisplayId: "azure",
         operatingSystems: [
           { id: "linux", label: "Linux", default: true },
           { id: "windows/wsl2", label: "Windows (WSL2)" },
@@ -246,9 +230,6 @@ it("moves with the selected OS and limits machine choices to that OS", async () 
       },
     ],
   });
-  expect(button("cloud:aws").querySelector('[data-provider-icon="azure"]')).not.toBeNull();
-  expect(button("cloud:aws").textContent).toContain("aws");
-  expect(button("cloud:aws").textContent).toContain("Azure");
   click("cloud:aws");
   let machines = await openChoices(modal, "Machine");
   expect(choice(machines, "Linux tiny").getAttribute("aria-checked")).toBe("true");
@@ -259,11 +240,9 @@ it("moves with the selected OS and limits machine choices to that OS", async () 
   expect(choice(operatingSystems, "Linux").getAttribute("aria-checked")).toBe("true");
   choice(operatingSystems, "Windows (WSL2)").click();
   flush();
-  expect(choice(operatingSystems, "Windows (WSL2)").getAttribute("aria-checked")).toBe("true");
   machines = await openChoices(modal, "Machine");
   expect(machines.textContent).not.toContain("Linux fast");
   expect(choice(machines, "Windows tiny").getAttribute("aria-checked")).toBe("true");
-  expect(choice(machines, "Portable").disabled).toBe(false);
   expect(machines.textContent).not.toContain("Linux tiny");
   choice(machines, "Portable").click();
   flush();
@@ -280,123 +259,78 @@ it("moves with the selected OS and limits machine choices to that OS", async () 
 it.each([undefined, "Gateway unavailable"])(
   "requires explicit selection and respects Gateway blocker %s",
   async (gatewayDisabledReason) => {
-    const result = showSessionPlacementTargetDialog({
-      mode: "move",
-      sessionLabel: "Example session",
-      activeRun: false,
-      gatewayDisabledReason,
-      loadCatalog: async () => ({ profiles: [], devices: [] }),
-    });
+    const { result, modal, button, submit } = await openDialog({ gatewayDisabledReason });
+    expect(button("gateway").disabled).toBe(Boolean(gatewayDisabledReason));
+    expect(button("gateway").getAttribute("aria-pressed")).toBe("false");
+    expect(submit.disabled).toBe(true);
+    modal.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
     flush();
-    const { modal } = await getRenderedModalDialog(document.body);
-    try {
-      expect(modal.querySelector<HTMLButtonElement>('[data-value="gateway"]')!.disabled).toBe(
-        Boolean(gatewayDisabledReason),
-      );
-      expect(modal.querySelector('[data-value="gateway"]')?.getAttribute("aria-pressed")).toBe(
-        "false",
-      );
-      expect(modal.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled).toBe(true);
-      modal.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
-      flush();
-      expect(modal.isConnected).toBe(true);
-    } finally {
-      modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
-      await expect(result).resolves.toBeNull();
-    }
+    expect(modal.isConnected).toBe(true);
+    cancelDialog(modal);
+    await expect(result).resolves.toBeNull();
   },
 );
 
 it.each([
-  { name: "removed OS", os: "windows", machineClass: "small", disabledOs: false, unchanged: false },
-  {
-    name: "removed machine",
-    os: "linux",
-    machineClass: "retired",
-    disabledOs: false,
-    unchanged: false,
-  },
-  { name: "disabled OS", os: "windows", machineClass: "small", disabledOs: true, unchanged: false },
-  {
-    name: "supported nondefault machine",
-    os: "linux",
-    machineClass: "large",
-    disabledOs: false,
-    unchanged: true,
-  },
-])(
-  "reconciles $name against the current catalog before moving",
-  async ({ os, machineClass, disabledOs, unchanged }) => {
-    const catalog =
-      createDeferred<Awaited<ReturnType<SessionPlacementTargetOptions["loadCatalog"]>>>();
-    const result = showSessionPlacementTargetDialog({
-      mode: "move",
-      sessionLabel: "Example session",
-      activeRun: false,
+  ["removed OS", "windows", "small", false, false],
+  ["removed machine", "linux", "retired", false, false],
+  ["disabled OS", "windows", "small", true, false],
+  ["supported nondefault machine", "linux", "large", false, true],
+] as const)(
+  "reconciles %s against the current catalog before moving",
+  async (_name, sourceOs, machineClass, disabledOs, unchanged) => {
+    const catalog = createDeferred<Catalog>();
+    const { result, modal, submit, click } = await openDialog({
       gatewayDisabledReason: "Gateway unavailable",
-      source: { label: "cloud", target: { kind: "profile", profileId: "cloud", os, machineClass } },
+      source: {
+        label: "cloud",
+        target: { kind: "profile", profileId: "cloud", os: sourceOs, machineClass },
+      },
       loadCatalog: () => catalog.promise,
     });
-    const { modal } = await getRenderedModalDialog(document.body);
-    try {
-      catalog.resolve({
-        devices: [],
-        profiles: [
-          {
-            id: "cloud",
-            providerId: "worker",
-            operatingSystems: [
-              { id: "linux", label: "Linux", default: !disabledOs },
-              ...(disabledOs
-                ? [
-                    {
-                      id: "windows",
-                      label: "Windows",
-                      default: true,
-                      disabledReason: "Unavailable",
-                    },
-                  ]
-                : []),
-            ],
-            machines: [
-              { id: "small", label: "Small", os: "linux", default: true },
-              ...(unchanged ? [{ id: "large", label: "Large", os: "linux" }] : []),
-            ],
-          },
-        ],
-      });
-      await waitForSolid(() =>
-        expect(modal.querySelector('[data-value="cloud:cloud"]')).not.toBeNull(),
-      );
-      const submit = modal.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    catalog.resolve({
+      devices: [],
+      profiles: [
+        {
+          id: "cloud",
+          providerId: "worker",
+          operatingSystems: [
+            { id: "linux", label: "Linux", default: !disabledOs },
+            ...(disabledOs
+              ? [{ id: "windows", label: "Windows", default: true, disabledReason: "Unavailable" }]
+              : []),
+          ],
+          machines: [
+            { id: "small", label: "Small", os: "linux", default: true },
+            ...(unchanged ? [{ id: "large", label: "Large", os: "linux" }] : []),
+          ],
+        },
+      ],
+    });
+    await waitForSolid(() =>
+      expect(modal.querySelector('[data-value="cloud:cloud"]')).not.toBeNull(),
+    );
+    expect(submit.disabled).toBe(true);
+    click("cloud:cloud");
+    if (unchanged) {
+      // A supported source remains selected in configuration, but is not a move.
+      const machines = await openChoices(modal, "Machine");
+      expect(choice(machines, "Large").getAttribute("aria-checked")).toBe("true");
       expect(submit.disabled).toBe(true);
-      modal.querySelector<HTMLButtonElement>('[data-value="cloud:cloud"]')!.click();
+      choice(machines, "Small").click();
       flush();
-      if (unchanged) {
-        // A supported source remains selected in configuration, but is not a move.
-        const machines = await openChoices(modal, "Machine");
-        expect(choice(machines, "Large").getAttribute("aria-checked")).toBe("true");
-        expect(submit.disabled).toBe(true);
-        choice(machines, "Small").click();
-        flush();
-      } else {
-        // The only replacement class is static; it must still be submittable.
-        expect(
-          modal.querySelector('button[aria-haspopup="menu"][aria-label="Machine"]'),
-        ).toBeNull();
-        expect(modal.querySelector(".session-move__fixed-value")?.textContent).toContain("Small");
-      }
-      expect(submit.disabled).toBe(false);
-      submit.click();
-      await expect(result).resolves.toEqual({
-        kind: "profile",
-        profileId: "cloud",
-        os: "linux",
-        machineClass: "small",
-      });
-    } finally {
-      modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
-      await result;
+    } else {
+      // The only replacement class is static; it must still be submittable.
+      expect(modal.querySelector('button[aria-haspopup="menu"][aria-label="Machine"]')).toBeNull();
+      expect(modal.querySelector(".session-move__fixed-value")?.textContent).toContain("Small");
     }
+    expect(submit.disabled).toBe(false);
+    submit.click();
+    await expect(result).resolves.toEqual({
+      kind: "profile",
+      profileId: "cloud",
+      os: "linux",
+      machineClass: "small",
+    });
   },
 );

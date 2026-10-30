@@ -4,9 +4,9 @@ import { isComposingKeyboardEvent } from "../../../lib/ime.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
 import type { GoalComposer } from "./chat-composer-goal-mode.tsx";
-import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
-import type { SkillMenuHost } from "./chat-composer-skill-menu.tsx";
-import type { SlashMenuHost } from "./chat-composer-slash-menu.tsx";
+import type { HumanMentionMenuHost } from "./chat-composer-mention-menu-state.ts";
+import type { SkillMenuHost } from "./chat-composer-skill-menu-state.ts";
+import type { SlashMenuHost } from "./chat-composer-slash-menu-state.ts";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 

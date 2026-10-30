@@ -59,7 +59,6 @@ export function createCronAgentWatchdog(params: {
   let setupTimeoutId: NodeJS.Timeout | undefined;
   let preExecutionTimeoutId: NodeJS.Timeout | undefined;
   let activeExecution: CronAgentExecutionStarted | undefined;
-  let observedLaneWait = false;
   let waitingForLane = false;
 
   const setTimedOut = (reason: string) => {
@@ -146,14 +145,12 @@ export function createCronAgentWatchdog(params: {
     },
     noteLaneWait: () => {
       if (state === "waiting_for_runner") {
-        observedLaneWait = true;
         waitingForLane = true;
         clearSetupTimeout();
       }
     },
     noteLaneAdmitted: () => {
       if (state === "waiting_for_runner") {
-        observedLaneWait = false;
         waitingForLane = false;
         startSetupTimeout();
       }
@@ -186,7 +183,7 @@ export function createCronAgentWatchdog(params: {
       noteExecutionProgress(info);
     },
     activeExecution: () => activeExecution,
-    observedLaneWait: () => observedLaneWait,
+    observedLaneWait: () => waitingForLane,
     dispose: () => {
       state = "disposed";
       if (timeoutId) {

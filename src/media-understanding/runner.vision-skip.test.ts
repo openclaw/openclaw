@@ -13,7 +13,7 @@ import { readImageMetadataFromHeader } from "../media/media-services.js";
 import type { ImageCompressionModelPolicy } from "../media/web-media.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
-import { MediaAttachmentCache } from "./attachments.js";
+import { MediaAttachmentCache } from "./attachments.cache.js";
 import { mediaModels } from "./media-config.test-support.js";
 import { runMediaFixture } from "./runner-case.test-support.js";
 import { runProviderEntry } from "./runner.entries.js";

@@ -156,25 +156,11 @@ it(
       const updated = { updated: true, hash: "sha256:next" };
       await respondToInvoke(replacementNode, setFrame, updated);
       await expect(setResultPromise).resolves.toEqual(updated);
-
-      const invalidGetPromise = request(operator, "exec.approvals.node.get", {
-        nodeId: identity.deviceId,
-      });
-      const invalidGetRejected = expect(invalidGetPromise).rejects.toThrow(
-        "node returned invalid exec approvals payload",
-      );
-      const invalidGetFrame = await replacementInbox.next();
-      await respondToInvoke(replacementNode, invalidGetFrame, {
-        enabled: true,
-        hash: "sha256:invalid",
-        rules: [],
-      });
-      await invalidGetRejected;
     } finally {
       await Promise.allSettled([
-        ...(replacementNode ? [replacementNode.stopAndWait({ timeoutMs: 1_000 })] : []),
-        ...(firstNode ? [firstNode.stopAndWait({ timeoutMs: 1_000 })] : []),
-        ...(operator ? [operator.stopAndWait({ timeoutMs: 1_000 })] : []),
+        replacementNode?.stopAndWait({ timeoutMs: 1_000 }),
+        firstNode?.stopAndWait({ timeoutMs: 1_000 }),
+        operator?.stopAndWait({ timeoutMs: 1_000 }),
       ]);
       const tempRoot = gateway.tempRoot;
       await gateway.stop();

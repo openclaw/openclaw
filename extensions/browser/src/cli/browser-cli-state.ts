@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { inheritOptionFromParent } from "openclaw/plugin-sdk/cli-runtime";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
-import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
   filterStringRecord,
   normalizeOptionalLowercaseString,
@@ -32,9 +32,7 @@ function parseFiniteNumberOption(value: string | undefined, label: string): numb
   }
   const parsed = parseStrictFiniteNumber(value);
   if (parsed === undefined) {
-    defaultRuntime.error(danger(`Invalid ${label}: must be a finite number`));
-    defaultRuntime.exit(1);
-    return undefined;
+    throw new Error(`Invalid ${label}: must be a finite number`);
   }
   return parsed;
 }
@@ -94,9 +92,7 @@ export function registerBrowserStateCommands(
         const targetId = resolveTargetId(opts.targetId, command);
         const url = isCookies ? normalizeOptionalString(opts.url) : undefined;
         if (isCookies && !url) {
-          defaultRuntime.error(danger("Missing required --url option for cookies set"));
-          defaultRuntime.exit(1);
-          return;
+          throw new Error("Missing required --url option for cookies set");
         }
         await runBrowserCliRequest({
           parent,
@@ -149,9 +145,7 @@ export function registerBrowserStateCommands(
           parsed === undefined ||
           (typeof parsed === "string" && !choices.split("|").includes(parsed))
         ) {
-          defaultRuntime.error(danger(`Expected ${choices}`));
-          defaultRuntime.exit(1);
-          return;
+          throw new Error(`Expected ${choices}`);
         }
         await runBrowserCliRequest({
           parent,
@@ -240,13 +234,6 @@ export function registerBrowserStateCommands(
         const latitude = parseFiniteNumberOption(latitudeRaw, "latitude");
         const longitude = parseFiniteNumberOption(longitudeRaw, "longitude");
         const accuracy = parseFiniteNumberOption(opts.accuracy, "--accuracy");
-        if (
-          (latitudeRaw !== undefined && latitude === undefined) ||
-          (longitudeRaw !== undefined && longitude === undefined) ||
-          (opts.accuracy !== undefined && accuracy === undefined)
-        ) {
-          return;
-        }
         await runBrowserCliRequest({
           parent,
           path: "/set/geolocation",

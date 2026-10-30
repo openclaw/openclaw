@@ -4,6 +4,7 @@ import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSection, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
@@ -55,9 +56,7 @@ export function SessionsCard(props: {
     const totals = props.overview?.tableTotals;
     const value = (isTokenMode() ? totals?.tokens : totals?.cost) ?? 0;
     const average = count ? value / count : 0;
-    return isTokenMode()
-      ? formatUsageTokens(average, totals?.usageReport)
-      : formatAnalysisCost(average, totals?.usageReport);
+    return isTokenMode() ? formatUsageTokens(average) : formatAnalysisCost(average);
   });
   const sortDirectionLabel = () =>
     t(
@@ -100,8 +99,12 @@ export function SessionsCard(props: {
           />
           <label class="sessions-sort">
             <span>{t("usage.sessions.sort")}</span>
-            <select
-              class="settings-select"
+            <SettingsSelect
+              value={props.usage.display.sessionSort}
+              options={SESSION_SORT_OPTIONS.map(({ value, labelKey }) => ({
+                value,
+                label: t(labelKey),
+              }))}
               onChange={(event) => {
                 const selected = SESSION_SORT_OPTIONS.find(
                   (option) => option.value === event.currentTarget.value,
@@ -110,15 +113,7 @@ export function SessionsCard(props: {
                   props.usage.callbacks.display.onChange({ sessionSort: selected.value });
                 }
               }}
-            >
-              <For each={SESSION_SORT_OPTIONS}>
-                {({ value, labelKey }) => (
-                  <option value={value} selected={props.usage.display.sessionSort === value}>
-                    {t(labelKey)}
-                  </option>
-                )}
-              </For>
-            </select>
+            />
           </label>
           <openclaw-tooltip prop:content={sortDirectionLabel()}>
             <button
@@ -253,8 +248,8 @@ function SessionRows(props: {
           i18nRevision();
           const usage = session().usage;
           return props.isTokenMode
-            ? formatUsageTokens(usage?.totalTokens ?? 0, usage?.usageReport)
-            : formatAnalysisCost(usage?.totalCost ?? 0, usage?.usageReport);
+            ? formatUsageTokens(usage?.totalTokens ?? 0)
+            : formatAnalysisCost(usage?.totalCost ?? 0);
         });
         const copyIdentity = createMemo(() => ({ label: label() }), {
           equals: (previous, next) => previous.label === next.label,

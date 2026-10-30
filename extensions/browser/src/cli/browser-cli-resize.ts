@@ -1,6 +1,5 @@
 import type { Command } from "commander";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "../browser/act-policy.js";
 import {
@@ -9,7 +8,7 @@ import {
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 
-function parseBrowserViewportDimension(value: unknown, label: string): number | undefined {
+function parseBrowserViewportDimension(value: unknown, label: string): number {
   const parsed = parseStrictPositiveInteger(value);
   if (parsed !== undefined && parsed <= ACT_MAX_VIEWPORT_DIMENSION) {
     return parsed;
@@ -18,9 +17,7 @@ function parseBrowserViewportDimension(value: unknown, label: string): number | 
     parsed === undefined
       ? "must be a positive integer"
       : `maximum is ${ACT_MAX_VIEWPORT_DIMENSION}`;
-  defaultRuntime.error(danger(`Invalid ${label}: ${reason}`));
-  defaultRuntime.exit(1);
-  return undefined;
+  throw new Error(`Invalid ${label}: ${reason}`);
 }
 
 export function registerBrowserResizeCommand(
@@ -35,9 +32,6 @@ export function registerBrowserResizeCommand(
     .action(async (widthRaw: string, heightRaw: string, opts, cmd) => {
       const width = parseBrowserViewportDimension(widthRaw, "width");
       const height = parseBrowserViewportDimension(heightRaw, "height");
-      if (width === undefined || height === undefined) {
-        return;
-      }
       await runBrowserCliRequest({
         parent: parentOpts(cmd),
         path: "/act",

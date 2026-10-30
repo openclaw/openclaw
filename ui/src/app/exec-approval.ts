@@ -15,6 +15,7 @@ export type ExecApprovalRequestPayload = {
   scope?: ApprovalScope | null;
   cwd?: string | null;
   host?: string | null;
+  nodeId?: string | null;
   security?: string | null;
   ask?: string | null;
   agentId?: string | null;
@@ -191,6 +192,7 @@ function parseApprovalRequested(
             streamProposal: parseStreamProposal(request.streamProposal),
             cwd: readStringValue(request.cwd) ?? null,
             host: readStringValue(request.host) ?? null,
+            nodeId: readStringValue(request.nodeId) ?? null,
             security: readStringValue(request.security) ?? null,
             ask: readStringValue(request.ask) ?? null,
             resolvedPath: readStringValue(request.resolvedPath) ?? null,
@@ -311,27 +313,6 @@ function sortApprovalsOldestFirst(queue: ExecApprovalRequest[]): ExecApprovalReq
   return queue.toSorted((a, b) => a.createdAtMs - b.createdAtMs || a.id.localeCompare(b.id));
 }
 
-function mergeRefreshedApprovalQueue(
-  refreshed: ExecApprovalRequest[],
-  refreshStartedWith: ExecApprovalRequest[],
-  currentQueue: ExecApprovalRequest[],
-  removedDuringRefresh: ReadonlySet<string>,
-): ExecApprovalRequest[] {
-  const refreshStartIds = new Set(refreshStartedWith.map((entry) => entry.id));
-  const prunedCurrentQueue = pruneExecApprovalQueue(currentQueue);
-  const currentQueueIds = new Set(prunedCurrentQueue.map((entry) => entry.id));
-  const currentRefreshed = pruneExecApprovalQueue(refreshed).filter(
-    (entry) =>
-      !removedDuringRefresh.has(entry.id) &&
-      (!refreshStartIds.has(entry.id) || currentQueueIds.has(entry.id)),
-  );
-  const refreshedIds = new Set(currentRefreshed.map((entry) => entry.id));
-  const arrivedDuringRefresh = prunedCurrentQueue.filter(
-    (entry) => !refreshStartIds.has(entry.id) && !refreshedIds.has(entry.id),
-  );
-  return sortApprovalsOldestFirst([...currentRefreshed, ...arrivedDuringRefresh]);
-}
-
 function clearApprovalExpiryTimer(state: ExecApprovalPromptState, id: string): void {
   const timer = state.execApprovalExpiryTimers?.get(id);
   if (timer === undefined) {
@@ -412,16 +393,26 @@ export async function refreshPendingApprovalQueue(
       client.request("plugin.approval.list", {}),
       client.request("openclaw.approval.list", {}),
     ]);
-    const refreshed = mergeRefreshedApprovalQueue(
-      [
-        ...readRefreshedApprovals(execResult, "exec", state.execApprovalQueue),
-        ...readRefreshedApprovals(pluginResult, "plugin", state.execApprovalQueue),
-        ...readRefreshedApprovals(systemAgentResult, "system-agent", state.execApprovalQueue),
-      ],
-      refreshStartedWith,
-      state.execApprovalQueue,
-      refresh.removedIds,
+    const refreshedApprovals = [
+      ...readRefreshedApprovals(execResult, "exec", state.execApprovalQueue),
+      ...readRefreshedApprovals(pluginResult, "plugin", state.execApprovalQueue),
+      ...readRefreshedApprovals(systemAgentResult, "system-agent", state.execApprovalQueue),
+    ];
+    const currentQueue = state.execApprovalQueue;
+    const removedDuringRefresh = refresh.removedIds;
+    const refreshStartIds = new Set(refreshStartedWith.map((entry) => entry.id));
+    const prunedCurrentQueue = pruneExecApprovalQueue(currentQueue);
+    const currentQueueIds = new Set(prunedCurrentQueue.map((entry) => entry.id));
+    const currentRefreshed = pruneExecApprovalQueue(refreshedApprovals).filter(
+      (entry) =>
+        !removedDuringRefresh.has(entry.id) &&
+        (!refreshStartIds.has(entry.id) || currentQueueIds.has(entry.id)),
     );
+    const incomingIds = new Set(currentRefreshed.map((entry) => entry.id));
+    const arrivedDuringRefresh = prunedCurrentQueue.filter(
+      (entry) => !refreshStartIds.has(entry.id) && !incomingIds.has(entry.id),
+    );
+    const refreshed = sortApprovalsOldestFirst([...currentRefreshed, ...arrivedDuringRefresh]);
     if (options?.isCurrentClient && !options.isCurrentClient(client)) {
       return false;
     }

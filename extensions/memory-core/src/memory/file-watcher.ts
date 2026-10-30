@@ -1,3 +1,5 @@
+import { createSubsystemLogger } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import {
   watch,
   resolveFsObservationMode,
@@ -8,7 +10,6 @@ import {
   type WatchSubscription,
   type WatchScope,
 } from "openclaw/plugin-sdk/file-access-runtime";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemoryWorkspaceWatchRequest } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
@@ -524,6 +525,7 @@ export class MemoryFileWatcher {
       if (result.status !== "rejected") {
         continue;
       }
+      materializeErrorStack(result.reason);
       this.closeErrors.push(result.reason);
       if (!this.closed) {
         this.options.onUnavailable();
@@ -574,6 +576,7 @@ export class MemoryFileWatcher {
           })
           .catch((error: unknown) => {
             if (error instanceof ObservationSampleCloseError) {
+              materializeErrorStack(error.cause);
               this.closeErrors.push(error.cause);
               this.unavailable(error);
             }
@@ -615,7 +618,9 @@ export class MemoryFileWatcher {
       this.pendingPaths.clear();
       this.publishState();
       if (this.closeErrors.length) {
-        throw new AggregateError(this.closeErrors, "Memory watcher cleanup failed");
+        const failure = new AggregateError(this.closeErrors, "Memory watcher cleanup failed");
+        materializeErrorStack(failure);
+        throw failure;
       }
     });
     return this.closing;

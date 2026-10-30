@@ -271,10 +271,12 @@ async function buildCdpRoleSnapshot(params: {
       ? new Map<number, CursorInteractiveInfo>()
       : await findCursorInteractiveElements(params.send);
   for (const node of tree) {
-    if (node.backendDOMNodeId && cursorElements.has(node.backendDOMNodeId)) {
-      const cursorInfo = cursorElements.get(node.backendDOMNodeId);
+    const cursorInfo = node.backendDOMNodeId
+      ? cursorElements.get(node.backendDOMNodeId)
+      : undefined;
+    if (cursorInfo !== undefined) {
       node.cursorInfo = cursorInfo;
-      if (!node.name && cursorInfo?.text) {
+      if (!node.name && cursorInfo.text) {
         node.name = cursorInfo.text;
       }
     }
@@ -315,8 +317,9 @@ async function buildCdpRoleSnapshot(params: {
 
   const iframeFrameIds = await resolveIframeFrameIds(params.send, tree);
   for (const node of tree) {
-    if (node.backendDOMNodeId && iframeFrameIds.has(node.backendDOMNodeId)) {
-      node.frameId = iframeFrameIds.get(node.backendDOMNodeId);
+    const frameId = node.backendDOMNodeId ? iframeFrameIds.get(node.backendDOMNodeId) : undefined;
+    if (frameId !== undefined) {
+      node.frameId = frameId;
       const ref = node.ref ? refs[node.ref] : undefined;
       if (ref) {
         ref.frameId = node.frameId;
@@ -327,8 +330,9 @@ async function buildCdpRoleSnapshot(params: {
   if (params.urls) {
     const urls = await resolveLinkUrls(params.send, refs);
     for (const node of tree) {
-      if (node.backendDOMNodeId && urls.has(node.backendDOMNodeId)) {
-        node.url = urls.get(node.backendDOMNodeId);
+      const url = node.backendDOMNodeId ? urls.get(node.backendDOMNodeId) : undefined;
+      if (url !== undefined) {
+        node.url = url;
       }
     }
   }

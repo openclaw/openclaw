@@ -185,13 +185,14 @@ describe("controlRealtimeVoiceAgentRun", () => {
     },
   );
 
-  it("queues steering into the active embedded run", async () => {
+  it.each([
+    ["steer", "use the safer path"],
+    ["followup", "also check the migration"],
+  ] as const)("queues %s into the active embedded run", async (mode, text) => {
     const deps = createDeps({ activeSessionId: "session-active" });
-    await expect(
-      control({ text: "use the safer path", mode: "steer" }, deps),
-    ).resolves.toMatchObject({
+    await expect(control({ text, mode }, deps)).resolves.toMatchObject({
       ok: true,
-      mode: "steer",
+      mode,
       sessionKey: "agent:main:main",
       sessionId: "session-active",
       active: true,
@@ -199,9 +200,14 @@ describe("controlRealtimeVoiceAgentRun", () => {
       speak: true,
       suppress: false,
     });
+    const queuedText = deps.queueEmbeddedAgentMessageWithOutcomeAsync.mock.calls[0]?.[1] ?? "";
+    expect(queuedText).toContain(text);
+    if (mode === "followup") {
+      expect(queuedText).toContain("Spoken follow-up for the current voice call.");
+    }
     expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).toHaveBeenCalledWith(
       "session-active",
-      "use the safer path",
+      mode === "steer" ? text : queuedText,
       {
         steeringMode: "all",
         debounceMs: 0,
@@ -254,16 +260,6 @@ describe("controlRealtimeVoiceAgentRun", () => {
     });
     expect(result.message).toContain("cannot safely accept scoped voice steering");
     expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
-  });
-
-  it("wraps follow-up steering so the active run treats it as deferred context", async () => {
-    const deps = createDeps({ activeSessionId: "session-active" });
-    await expect(
-      control({ text: "also check the migration", mode: "followup" }, deps),
-    ).resolves.toMatchObject({ ok: true, mode: "followup", speak: true });
-    const queuedText = deps.queueEmbeddedAgentMessageWithOutcomeAsync.mock.calls[0]?.[1] ?? "";
-    expect(queuedText).toContain("Spoken follow-up for the current voice call.");
-    expect(queuedText).toContain("also check the migration");
   });
 
   it("cancels the active run without queueing a steering message", async () => {

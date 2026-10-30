@@ -1,6 +1,6 @@
 import { dynamic } from "@solidjs/web";
 import type { Component } from "solid-js";
-import { createMemo, lazy, merge, Show } from "solid-js";
+import { createMemo, createUniqueId, lazy, merge, Show } from "solid-js";
 import type { ControlUiSurfaceProps } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { createSkillFileHovercard } from "../../components/skill-file-hovercard.tsx";
@@ -22,7 +22,7 @@ import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { hasTerminalRunStatus, isChatRunWorking } from "./chat-run-working.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
-import { listSubagents } from "./chat-subagent-wait.ts";
+import { listSubagents, projectProgressCardRuntime } from "./chat-subagent-wait.ts";
 import { createChatViewFrame, type ChatProps, type ChatViewFrame } from "./chat-view-frame.ts";
 import {
   renderChatComposerNotices as ChatComposerNoticesView,
@@ -44,7 +44,6 @@ import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-ima
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import { ChatPullRequests } from "./components/chat-pull-requests.tsx";
 import { ChatSelectionAnnotations } from "./components/chat-selection-annotations.tsx";
-import { resolveChatSwarmParent } from "./components/chat-swarm-progress-parent.ts";
 import {
   getTranscriptState,
   toggleTranscriptSearch,
@@ -66,9 +65,6 @@ const ChatSessionSuggestions = lazy(
     export: "ChatSessionSuggestions",
   },
 );
-const ChatSwarmProgress = lazy(() => import("./components/chat-swarm-progress.solid.tsx"), {
-  export: "ChatSwarmProgress",
-});
 const ChatTaskSuggestionTray = lazy(() => import("./components/chat-task-suggestions.tsx"), {
   export: "ChatTaskSuggestionTray",
 });
@@ -84,28 +80,33 @@ type ChatViewInput = {
   getScrollToLatestElement: () => HTMLButtonElement | null;
 };
 
+// Must match the fixed height of .chat-pending-inputs--history.
+const SAVED_INPUT_HISTORY_HEIGHT_PX = 44;
+
 function ChatTranscript(input: ChatViewInput) {
+  const savedInputNavigation = <ChatSavedInputNavigation {...input} />;
+  const hasSavedInputNavigation = () =>
+    input.frame.pendingInputs &&
+    (input.frame.pendingInputs.page.nextBefore !== undefined ||
+      input.frame.pendingInputs.before !== undefined);
   return (
     <ChatThread
       props={input.frame.threadProps}
       transcript={input.props.transcript}
       bindViewport={input.bindTranscriptViewport}
+      historySupplement={
+        hasSavedInputNavigation()
+          ? {
+              content: savedInputNavigation,
+              height: SAVED_INPUT_HISTORY_HEIGHT_PX,
+            }
+          : undefined
+      }
     />
   );
 }
 
-function ChatFooterContent(
-  input: ChatViewInput & {
-    mobileComposition?: boolean;
-    activities?: ChatActivityPillsProps;
-  },
-) {
-  const swarm = createMemo(() => {
-    const progress = input.props.swarm;
-    return progress && resolveChatSwarmParent(progress)?.swarm?.groups.length
-      ? progress
-      : undefined;
-  });
+function ChatSavedInputNavigation(input: ChatViewInput) {
   const pendingInputs = () => input.frame.pendingInputs;
   const pendingButton = (page: "earlier" | "latest") => (
     <button
@@ -125,23 +126,25 @@ function ChatFooterContent(
     </button>
   );
   return (
+    <div class="chat-pending-inputs chat-pending-inputs--history">
+      <Show when={pendingInputs()?.page.nextBefore !== undefined}>{pendingButton("earlier")}</Show>
+      <Show when={pendingInputs()?.before !== undefined}>{pendingButton("latest")}</Show>
+    </div>
+  );
+}
+
+function ChatFooterContent(
+  input: ChatViewInput & {
+    mobileComposition?: boolean;
+    activities?: ChatActivityPillsProps;
+  },
+) {
+  const pendingInputs = () => input.frame.pendingInputs;
+  return (
     <>
-      <Show
-        when={
-          pendingInputs() &&
-          (pendingInputs()?.error ||
-            pendingInputs()?.page.nextBefore !== undefined ||
-            pendingInputs()?.before !== undefined)
-        }
-      >
+      <Show when={pendingInputs()?.error}>
         <div class="chat-pending-inputs" role="status">
-          <Show when={pendingInputs()?.error}>
-            <span>{pendingInputs()?.error}</span>
-          </Show>
-          <Show when={pendingInputs()?.page.nextBefore !== undefined}>
-            {pendingButton("earlier")}
-          </Show>
-          <Show when={pendingInputs()?.before !== undefined}>{pendingButton("latest")}</Show>
+          <span>{pendingInputs()?.error}</span>
         </div>
       </Show>
       <Show
@@ -155,6 +158,11 @@ function ChatFooterContent(
               props={{
                 approval: input.props.inlineApproval!,
                 sourceSession: input.frame.approvalSourceSession,
+                nodeDisplayName: input.props.approvalNodeNames?.get(
+                  input.props.inlineApproval!.request.nodeId ?? "",
+                ),
+                pendingCount: input.props.approvalPendingCount,
+                onOpenPending: input.props.onOpenPendingApprovals,
                 busy: input.props.approvalBusy === true,
                 connected: input.props.connected,
                 canGrant: input.props.approvalCanGrant,
@@ -199,13 +207,6 @@ function ChatFooterContent(
           />
         </ChatLazyBoundary>
       </Show>
-      <Show when={swarm()}>
-        {(progress) => (
-          <ChatLazyBoundary>
-            <ChatSwarmProgress {...progress()} />
-          </ChatLazyBoundary>
-        )}
-      </Show>
       <Show when={input.application}>
         <openclaw-plugin-contributions
           prop:kind="composer"
@@ -245,6 +246,12 @@ function ChatComposerView(input: ChatViewInput) {
               startedAt: input.props.selectedSession?.startedAt,
               endedAt: input.props.selectedSession?.endedAt,
               hasActiveRun: isChatRunWorking(input.props),
+              runtime: projectProgressCardRuntime(
+                input.props.selectedSession,
+                input.props,
+                card.updatedAt,
+                input.props.connected,
+              ),
               refresh: input.props.progressCardRefresh?.state,
               onOpen: destinations.onOpenProgress,
             }
@@ -299,6 +306,11 @@ function ChatComposerView(input: ChatViewInput) {
                 props={{
                   approval: input.props.inlineApproval!,
                   sourceSession: input.frame.approvalSourceSession,
+                  nodeDisplayName: input.props.approvalNodeNames?.get(
+                    input.props.inlineApproval!.request.nodeId ?? "",
+                  ),
+                  pendingCount: input.props.approvalPendingCount,
+                  onOpenPending: input.props.onOpenPendingApprovals,
                   busy: input.props.approvalBusy ?? false,
                   connected: input.props.connected,
                   canGrant: input.props.approvalCanGrant,
@@ -357,8 +369,9 @@ function ChatComposerCompanion(input: ChatViewInput) {
 /** Plugin mountDefault creates a separate root; restore application and conversation context here. */
 function ChatSurfaceContent(input: { view: Component<ChatViewInput>; viewProps: ChatViewInput }) {
   const View = dynamic(() => input.view);
+  const mobile = createMemo(() => input.viewProps.props.mobileComposer === true);
   return (
-    <ChatConversationMobile value={() => input.viewProps.props.mobileComposer === true}>
+    <ChatConversationMobile value={mobile}>
       <Show when={input.viewProps.application} keyed fallback={<View {...input.viewProps} />}>
         {(application) => (
           <ApplicationProvider value={application}>
@@ -427,6 +440,9 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
   const { bind: bindScrollToLatestButton, read: getScrollToLatestElement } =
     connectedElementRef<HTMLButtonElement>();
   const replacementComposer = connectedElementRef<HTMLElement>();
+  const composerTargetId = createUniqueId();
+  const { bind: bindComposerFooter, read: getComposerFooter } =
+    connectedElementRef<HTMLDivElement>();
   const application = useOptionalApplication();
   const gateway = application && projectGateway(application.gateway);
   const skillFileHovercard = createSkillFileHovercard({
@@ -456,7 +472,9 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
       (replacement) => {
         const replacementElement = replacement && replacementComposer.read();
         const target =
-          replacementElement || getChatComposerState(input.props.paneId).composerTextarea;
+          replacementElement ||
+          getChatComposerState(input.props.paneId).composerTextarea ||
+          getComposerFooter();
         target?.focus({ preventScroll: true });
       },
       // This view mounts only while its pane's question source exists.
@@ -503,6 +521,8 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
   return (
     <section
       class={["chat", { "chat--bubbles": input.props.chatBubbleMode }]}
+      // Person references resolve session-scoped people for callers without directory access.
+      data-chat-session-key={input.props.sessionKey}
       style={
         input.props.chatMessageMaxWidth
           ? {
@@ -584,6 +604,18 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                       forwardChatWheelToTranscript(event, input.props.transcript.scrollElement)
                     }
                   >
+                    <Show when={!input.props.suggestionComposer}>
+                      <a
+                        class="shell-skip-link chat-composer-skip-link"
+                        href={`#${composerTargetId}`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          frame().threadProps.onFocusComposer?.();
+                        }}
+                      >
+                        {t("chat.actions.skipToComposer")}
+                      </a>
+                    </Show>
                     <Show when={frame().historyFailed && !frame().transcriptEmpty}>
                       {historyFailure(true)}
                     </Show>
@@ -646,7 +678,12 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                         </Show>
                       </div>
                     </Show>
-                    <div class="chat-footer" ref={[elementRef(input.props.onFooterElementRef)]}>
+                    <div
+                      id={composerTargetId}
+                      class="chat-footer"
+                      tabindex={-1}
+                      ref={[bindComposerFooter, elementRef(input.props.onFooterElementRef)]}
+                    >
                       <ChatSurface
                         binding={{
                           "prop:surface": "composer",

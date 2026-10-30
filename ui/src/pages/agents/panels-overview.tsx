@@ -12,6 +12,7 @@ import { createOverlay, findOverlayParent } from "../../components/overlay-lifec
 import { failPanelRefresh } from "../../components/panel-refresh-status-state.ts";
 import "../../components/tooltip.ts";
 import { DecisionModelPicker } from "../../components/solid/decision-model-picker.tsx";
+import { useAvatarGatewayContext } from "../../components/solid/identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
@@ -66,6 +67,7 @@ export function AgentOverview(
     ? projectApplicationConfig(applicationConfig)
     : undefined;
   const uploadsEnabled = () => configProjection?.read().uploadsEnabled !== false;
+  const avatarGateway = useAvatarGatewayContext();
   const avatarLoader = createIdentityAvatars();
   onSettled(() => avatarLoader.connect());
   const avatarProjection = projectOwner(avatarLoader, (owner) => owner);
@@ -165,6 +167,7 @@ export function AgentOverview(
     identityDraft().avatar ? null : resolveAgentAvatarUrl(params.agent, params.agentIdentity),
   );
   const identityAvatarUrl = createMemo(() => {
+    avatarGateway();
     const source = persistedAvatarUrl();
     const draftAvatar = identityDraft().avatar;
     return avatarProjection

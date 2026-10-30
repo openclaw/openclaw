@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { collectErrorGraphCandidates } from "../../infra/errors.js";
@@ -18,6 +19,7 @@ import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { resolveWidgetPresenters } from "../../plugins/widget-presenters.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
 import {
@@ -47,9 +49,9 @@ it.each(["managed", "failure", "primary-failure", "rollback", "raw"] as const)(
       const donorFile = state.path("donor.sqlite");
       using donorDb = new DatabaseSync(donorFile);
       donorDb.exec("CREATE TABLE answer(value INTEGER); INSERT INTO answer VALUES(42)");
-      const callback = media.phase();
-      const primary = media.phase();
-      const rollback = media.phase();
+      const callback = createEnteredGate();
+      const primary = createEnteredGate();
+      const rollback = createEnteredGate();
       const rollbackFailure = new Error("rollback cleanup failed");
       const donorDisposal = createDeferredCore();
       const finishDonor = createDeferredCore();
@@ -98,7 +100,7 @@ module.exports = { id: '${id}', register(api) {
   const db = new DatabaseSync(file); db.exec('CREATE TABLE answer(value INTEGER); INSERT INTO answer VALUES(42)');
   const connection = { file, db, disposals: 0 }; state.connections.push(connection);
   api.lifecycle.registerRuntimeLifecycle({ id: 'primary', async dispose() {
-    connection.disposals++; await state.primary.pause();
+    connection.disposals++; await state.primary.wait();
     try {
       state.values.push(state.readDonor());
       if (state.failPrimary) throw new Error("primary cleanup failed");
@@ -143,7 +145,7 @@ module.exports = { id: '${id}', register(api) {
           target: "node_panel",
           description: "Synthetic donor",
           availability: async () => {
-            await callback.pause();
+            await callback.wait();
             values.push(bridge.readDonor());
             return { ok: true, value: { available: true } };
           },
@@ -190,7 +192,7 @@ module.exports = { id: '${id}', register(api) {
             source.register("rolled-back", {
               id: "cleanup",
               dispose: async () => {
-                await rollback.pause();
+                await rollback.wait();
                 values.push(bridge.readDonor());
                 throw rollbackFailure;
               },
@@ -214,7 +216,11 @@ module.exports = { id: '${id}', register(api) {
         const started = await tool.execute("donor-call", { prompt: "A synthetic resource proof" });
         completion = settlement.wait().then(() => {});
         expect(started.details).toMatchObject({ status: "started" });
-        await media.waitForPhase(callback.entered, completion);
+        await awaitGateBeforeSettlement(
+          callback.entered,
+          completion,
+          "Media work settled before the expected phase",
+        );
         releasingOwners = Promise.allSettled([
           construction[Symbol.asyncDispose](),
           releasePublication?.(),
@@ -231,7 +237,11 @@ module.exports = { id: '${id}', register(api) {
           /provider setup changed/,
         );
         callback.release();
-        await media.waitForPhase(primary.entered, completion);
+        await awaitGateBeforeSettlement(
+          primary.entered,
+          completion,
+          "Media work settled before the expected phase",
+        );
         expect.soft(donorDb.isOpen).toBe(true);
         primary.release();
         if (mode === "rollback") {

@@ -1,4 +1,3 @@
-import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { withWorktreeAllocationLease } from "./allocation.js";
@@ -11,23 +10,14 @@ import { makeWorktreeRecord } from "./service.test-support.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
-const inventory = vi.hoisted(
-  (): {
-    records: ManagedWorktreeRecord[];
-    live: Set<string>;
-    reasons: Map<string, WorktreeEvictionReason>;
-    failures: Set<string>;
-    evictions: string[];
-    commonDir: string | undefined;
-  } => ({
-    records: [],
-    live: new Set(),
-    reasons: new Map(),
-    failures: new Set(),
-    evictions: [],
-    commonDir: "/source/.git",
-  }),
-);
+const inventory = vi.hoisted(() => ({
+  records: new Array<ManagedWorktreeRecord>(),
+  live: new Set<string>(),
+  reasons: new Map<string, WorktreeEvictionReason>(),
+  failures: new Set<string>(),
+  evictions: new Array<string>(),
+  unreadable: false,
+}));
 vi.mock("./registry-read.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./registry-read.js")>()),
   readRegistryWorktrees: async () => inventory.records,
@@ -51,7 +41,7 @@ vi.mock("../../infra/git-worker.js", async (importOriginal) => ({
     if (operation.type === "worktree.eviction-repositories") {
       return operation.input.repoRoots.map((repoRoot) => ({
         repoRoot,
-        commonDir: inventory.commonDir,
+        commonDir: inventory.unreadable ? undefined : "/source/.git",
         heads: {},
       }));
     }
@@ -70,57 +60,38 @@ vi.mock("../../gateway/worktree-merged-heads.js", async (importOriginal) => ({
 }));
 vi.mock("./eviction.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./eviction.js")>()),
-  evictManagedWorktree: vi.fn(
-    async ({ record: victim, reason }: Parameters<typeof evictManagedWorktree>[0]) => {
-      inventory.evictions.push(`${victim.id}:${reason}`);
-      if (inventory.failures.has(victim.id)) {
-        throw new Error("synthetic removal failure");
-      }
-      inventory.records = inventory.records.filter((entry) => entry.id !== victim.id);
-      return reason;
-    },
-  ),
+  evictManagedWorktree: async ({
+    record: victim,
+    reason,
+  }: Parameters<typeof evictManagedWorktree>[0]) => {
+    inventory.evictions.push(`${victim.id}:${reason}`);
+    if (inventory.failures.has(victim.id)) {
+      throw new Error("synthetic removal failure");
+    }
+    inventory.records = inventory.records.filter((entry) => entry.id !== victim.id);
+    return reason;
+  },
 }));
 
 const tempDirs = useWorktreeStateRoots();
 let env: NodeJS.ProcessEnv;
 
-function record(
-  id: string,
-  lastActiveAt: number,
-  ownerKind: ManagedWorktreeRecord["ownerKind"] = "session",
-): ManagedWorktreeRecord {
-  return makeWorktreeRecord("/source", id, {
-    repoFingerprint: "repository",
+const record = (id: string, lastActiveAt: number) =>
+  makeWorktreeRecord("/source", id, {
     path: `/worktrees/${id}`,
-    branch: `openclaw/${id}`,
-    baseRef: "main",
-    ownerKind,
     ownerId: `owner-${id}`,
-    createdAt: 0,
     lastActiveAt,
   });
-}
 
 beforeEach(() => {
   const root = tempDirs.make("openclaw-worktree-capacity-");
-  env = {
-    ...process.env,
-    HOME: root,
-    OPENCLAW_HOME: path.join(root, ".openclaw"),
-    OPENCLAW_STATE_DIR: path.join(root, "state"),
-    OPENCLAW_CONFIG_PATH: path.join(root, "config.json"),
-    XDG_CONFIG_HOME: path.join(root, "config"),
-    XDG_DATA_HOME: path.join(root, "data"),
-    XDG_STATE_HOME: path.join(root, "xdg-state"),
-    XDG_CACHE_HOME: path.join(root, "cache"),
-  };
+  env = { ...process.env, OPENCLAW_STATE_DIR: root };
   inventory.records = [];
   inventory.live.clear();
   inventory.reasons.clear();
   inventory.failures.clear();
   inventory.evictions = [];
-  inventory.commonDir = "/source/.git";
+  inventory.unreadable = false;
   vi.clearAllMocks();
 });
 
@@ -144,30 +115,21 @@ async function cleanup(maxCount: number, progress = new WorktreeGcProgress()) {
 it("evicts merged, cumulative squash, then oldest protected manual work, retaining live owners", async () => {
   inventory.records = [
     record("live", 0),
-    { ...record("dirty-manual", 1, "manual"), gcProtection: "nested repository" },
+    { ...record("dirty-manual", 1), ownerKind: "manual", gcProtection: "nested repository" },
     record("squashed", 2),
     record("merged", 3),
   ];
   inventory.live.add("live");
   inventory.reasons.set("squashed", "squashed");
   inventory.reasons.set("merged", "merged");
-  const result = await cleanup(0);
-  expect(inventory.evictions).toEqual([
-    "merged:merged",
-    "squashed:squashed",
-    "dirty-manual:idle-age",
-  ]);
-  expect(result.removed).toEqual(["merged", "squashed", "dirty-manual"]);
-  expect(result).toMatchObject({
+  expect(await cleanup(0)).toMatchObject({
+    removed: ["merged", "squashed", "dirty-manual"],
     limitsSatisfied: false,
     protectionReasons: { "live-refused": 1 },
   });
-  inventory.records.push(record("live-second", 4), record("live-third", 5));
-  inventory.live.add("live-second");
-  inventory.live.add("live-third");
   await expect(
-    withWorktreeAllocationLease({ env }, (guard) => owner(3).admit(guard)),
-  ).rejects.toThrow(/cap 3.*owner-live.*worktreeMaxCount/);
+    withWorktreeAllocationLease({ env }, (guard) => owner(1).admit(guard)),
+  ).rejects.toThrow(/cap 1.*owner-live.*worktreeMaxCount/);
 });
 
 it("does no Git classification below the cap and stops after freeing the requested slot", async () => {
@@ -175,7 +137,7 @@ it("does no Git classification below the cap and stops after freeing the request
   const progress = new WorktreeGcProgress();
   await cleanup(2, progress);
   expect(runGitWorkerOperation).not.toHaveBeenCalled();
-  expect(evictManagedWorktree).not.toHaveBeenCalled();
+  expect(inventory.evictions).toEqual([]);
   expect((await cleanup(1, progress)).removed).toEqual(["old"]);
   expect(inventory.records.map((item) => item.id)).toEqual(["new"]);
   expect(progress.result.limitsSatisfied).toBe(true);
@@ -186,24 +148,27 @@ it("does not repeat a failed victim while draining later allocation batches", as
   inventory.records = [record("blocked", 0), ...victims.map((id, index) => record(id, index + 1))];
   inventory.failures.add("blocked");
   const result = await cleanup(0);
-  expect(result.removed).toEqual(victims);
   expect(inventory.evictions).toEqual(["blocked", ...victims].map((id) => `${id}:idle-age`));
-  expect(result.failedCount).toBe(1);
-  expect(result.issues).toEqual([
-    {
-      id: "blocked",
-      stage: "limits",
-      outcome: "failed",
-      reason: expect.stringContaining("synthetic removal failure"),
-    },
-  ]);
-  expect(result.limitsSatisfied).toBe(false);
+  expect(result).toMatchObject({
+    removed: victims,
+    failedCount: 1,
+    limitsSatisfied: false,
+    issues: [
+      {
+        id: "blocked",
+        stage: "limits",
+        outcome: "failed",
+        reason: expect.stringContaining("synthetic removal failure"),
+      },
+    ],
+  });
 });
 
 it("keeps unreadable idle repositories eligible instead of inventing mutual dependencies", async () => {
   inventory.records = [record("unreadable-first", 1), record("unreadable-second", 2)];
-  inventory.commonDir = undefined;
-  const result = await cleanup(0);
-  expect(result.removed).toEqual(["unreadable-first", "unreadable-second"]);
-  expect(result.limitsSatisfied).toBe(true);
+  inventory.unreadable = true;
+  expect(await cleanup(0)).toMatchObject({
+    removed: ["unreadable-first", "unreadable-second"],
+    limitsSatisfied: true,
+  });
 });

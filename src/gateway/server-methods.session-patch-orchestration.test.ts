@@ -36,6 +36,8 @@ async function patchMany(params: unknown) {
 
 const success = (key: string) => ({ ok: true, key });
 const failure = (key: string, error: unknown) => ({ ok: false, key, error });
+const expectOutcomes = (respond: ReturnType<typeof vi.fn>, outcomes: unknown[]) =>
+  expect(respond.mock.calls[0]).toEqual([true, { outcomes }, undefined]);
 
 async function checkAliasConflict(batch: boolean, signal: AbortSignal) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -120,7 +122,7 @@ async function checkAliasConflict(batch: boolean, signal: AbortSignal) {
     await writer;
     await request;
     if (batch) {
-      expect(respond.mock.calls[0]?.[1]?.outcomes).toEqual([
+      expectOutcomes(respond, [
         { ok: true, key: siblings[0] },
         { ok: false, key: conflictingAlias, error: unavailableError },
         { ok: true, key: siblings[1] },
@@ -165,8 +167,7 @@ describe("sessions.patchMany orchestration", () => {
         patch: { unread: false },
       });
 
-      const outcomes = respond.mock.calls[0]?.[1]?.outcomes;
-      expect(outcomes).toEqual([
+      expectOutcomes(respond, [
         success("agent:main:batch-0"),
         failure("agent:main:batch-1", {
           code: "INVALID_REQUEST",
@@ -245,16 +246,11 @@ describe("sessions.patchMany orchestration", () => {
       } else {
         expect([...checkedKeys]).toEqual(keys);
       }
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          outcomes: keys.map((key, index) =>
-            index === failedIndex
-              ? failure(key, { code: "INVALID_REQUEST", message })
-              : success(key),
-          ),
-        },
-        undefined,
+      expectOutcomes(
+        respond,
+        keys.map((key, index) =>
+          index === failedIndex ? failure(key, { code: "INVALID_REQUEST", message }) : success(key),
+        ),
       );
       for (const [index, target] of targets.entries()) {
         const entry = readEntry(target.key);
@@ -308,17 +304,11 @@ describe("sessions.patchMany orchestration", () => {
         patch: { category: "Batch" },
       });
 
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          outcomes: [
-            success("agent:main:throw-0"),
-            failure("agent:main:throw-1", unavailableError),
-            success("agent:main:throw-2"),
-          ],
-        },
-        undefined,
-      );
+      expectOutcomes(respond, [
+        success("agent:main:throw-0"),
+        failure("agent:main:throw-1", unavailableError),
+        success("agent:main:throw-2"),
+      ]);
     });
   });
 });

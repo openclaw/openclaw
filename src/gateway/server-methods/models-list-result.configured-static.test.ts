@@ -22,6 +22,8 @@ import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
   catalogEntry,
   createModelsListTestContext,
@@ -30,7 +32,6 @@ import {
   providerCatalogEntry,
   requestModelsList,
   withModelsListState,
-  WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
 
 const luna = "gpt-5.6-luna";
@@ -292,12 +293,7 @@ it("projects personal-only models for the authenticated requester without publis
                 client: { id: "cli", version: "test", platform: "test", mode: "cli" },
                 caps: [],
               },
-              authenticatedUserProfile: {
-                profileId,
-                displayName: null,
-                hasAvatar: false,
-                updatedAt: 1,
-              },
+              authenticatedUserProfile: gatewayProfile(profileId),
             }
           : null,
       );

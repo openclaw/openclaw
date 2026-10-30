@@ -2,7 +2,7 @@ import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/stri
 import { For, Show, createMemo, createSignal, merge, onSettled } from "solid-js";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import type { MultiSelectOption, MultiSelectProps } from "./multi-select-types.ts";
+import type { ModelPickerOption } from "./model-picker-options.ts";
 import { createOverlayAnchor } from "./overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
 import { Icon } from "./solid/icon.tsx";
@@ -13,7 +13,22 @@ import { ProviderBrandIcon } from "./solid/provider-icon.tsx";
 import "./solid/overlay.css";
 import "../styles/multi-select.css";
 
-type MultiSelectRow = MultiSelectOption & { custom?: boolean };
+type MultiSelectProps = {
+  options: readonly ModelPickerOption[];
+  /** Current values in display order. Controlled: the host owns them. */
+  value: readonly string[];
+  isExcluded: (value: string) => boolean;
+  /** The caller owns value identity; search remains case-insensitive. */
+  getValueKey: (value: string) => string;
+  placeholder: string;
+  accessibleLabel: string;
+  allowCustom: boolean;
+  disabled: boolean;
+  onChange: (value: string[]) => void;
+  onOpen: () => void;
+};
+
+type MultiSelectRow = ModelPickerOption & { custom?: boolean };
 let instanceCounter = 0;
 
 function providerFromValue(value: string): string | undefined {
@@ -51,7 +66,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
     const taken = new Set(props.value.map((value) => props.getValueKey(value)));
     const custom = query().trim();
     const customKey = props.getValueKey(custom);
-    const search = custom.toLowerCase();
+    const search = custom.toLowerCase().normalize("NFC");
     const result: MultiSelectRow[] = [];
     let exact: MultiSelectRow | undefined;
     for (const option of props.options) {
@@ -63,8 +78,8 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
         exact = option;
       } else if (
         !search ||
-        [option.label, option.value, option.provider, option.detail].some((text) =>
-          text?.toLowerCase().includes(search),
+        [option.label, option.value, option.provider, option.description].some((text) =>
+          text?.toLowerCase().normalize("NFC").includes(search),
         )
       ) {
         result.push(option);
@@ -291,8 +306,8 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
                       ? t("common.multiSelect.addCustom", { value: row.value })
                       : row.label}
                   </span>
-                  <Show when={row.detail}>
-                    <span class="picker-select__description">{row.detail}</span>
+                  <Show when={row.description}>
+                    <span class="picker-select__description">{row.description}</span>
                   </Show>
                 </span>
               </div>

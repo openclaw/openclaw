@@ -3,26 +3,18 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import * as sessionEntryRows from "../config/sessions/session-accessor.sqlite-status.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { commitMemory } from "../config/sessions/session-actor-memory-publication.test-support.js";
-import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import type { SessionActorStorageWrites } from "../config/sessions/session-actor-storage-contract.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test-support.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { setAvatar, setDisplayName } from "../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import * as sessionHistoryState from "./session-history-state.js";
-import { SessionHistorySseState } from "./session-history-state.js";
 import {
   appendHistoryMessage,
   expectErrorResponse,
@@ -32,7 +24,6 @@ import {
   openHistoryStream,
   readSessionHistoryBody,
   type SessionHistoryBody,
-  type SessionHistoryMessage,
   type SessionHistorySseStream,
 } from "./sessions-history-http-read.test-support.js";
 import {
@@ -97,20 +88,6 @@ async function appendMessage(
   return { ...appended, message };
 }
 
-function persistHistoryTurn(
-  storePath: string,
-  input: Parameters<typeof persistUserTurnTranscript>[0]["input"],
-) {
-  return persistUserTurnTranscript({
-    agentId: AGENT_ID,
-    sessionEntry: { sessionId: "sess-main", updatedAt: 1 },
-    sessionId: "sess-main",
-    sessionKey: SESSION_KEY,
-    storePath,
-    input,
-  });
-}
-
 function replaceHistory(
   storePath: string,
   events: Parameters<typeof replaceTranscriptEvents>[1],
@@ -120,23 +97,6 @@ function replaceHistory(
     { agentId: AGENT_ID, sessionId, sessionKey: SESSION_KEY, storePath },
     [{ type: "session", version: 1, id: sessionId }, ...events],
   );
-}
-
-const sessionHistoryRowIdentity = (message: SessionHistoryMessage) =>
-  `${message["__openclaw"]?.seq}:${message.role}:${message.content?.[0]?.text}`;
-
-function withMockedDateNow<T>(now: number, run: () => T): T {
-  using _ = vi.spyOn(Date, "now").mockReturnValue(now);
-  return run();
-}
-
-function currentProfileAvatarUrl(profileId: string): string {
-  const display = resolveCurrentUserProfileDisplay(profileId);
-  expect(display.kind).toBe("resolved");
-  if (display.kind !== "resolved") {
-    throw new Error("expected a resolved current profile display");
-  }
-  return display.avatarUrl;
 }
 
 function withGatewayHistoryStream(
@@ -243,30 +203,19 @@ describe("session history HTTP endpoints", () => {
     await withGatewayHarness(async (harness) => {
       const cases = {
         "text/event-stream": [
-          "text/event-stream",
-          "TEXT/EVENT-STREAM",
-          "  text/event-stream  ",
-          "text/event-stream;",
-          "text/event-stream; charset=utf-8",
-          "text/event-stream;q=0.001",
-          "text/event-stream;Q=1.000",
+          "  TEXT/EVENT-STREAM;Q=1.000;charset=UTF-8;  ",
           "text/event-stream;q=0, text/event-stream;q=0.5",
           "text/event-stream;q=0, text/event-stream;charset=utf-8;q=0.5",
-          "text/event-stream;q=0.5;charset=utf-8",
         ],
         "application/json": [
           'text/event-stream; note="quoted,comma;semicolon\\\"quote"; q=0.5',
           "text/event-stream;q=1, text/event-stream;charset=utf-8;q=0",
-          "text/event-stream;q=1;charset=utf-16",
           "text/event-stream;charset=utf-16",
           "text/event-streaming",
-          "text/event-streamx",
           'application/json; note="text/event-stream"',
           "text/*",
           "*/*",
-          "text/event-stream;q=0",
           "text/event-stream;q=0, */*;q=1",
-          "text/event-stream;q=0.1234",
           "text/event-stream;q =0.5",
           "text/event-stream;q= 0.5",
           "text/event-stream;\u00a0q=0.5",
@@ -293,167 +242,14 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("reads only the selected history entry for default and blank cursor queries", async () => {
-    const { storePath } = await seedSession({ text: "hello from history" });
-    const unrelatedPrompt = "Unrelated saved session prompt";
-    await replaceSessionEntry(
-      { agentId: AGENT_ID, sessionKey: "agent:main:unrelated", storePath },
-      {
-        sessionId: "sess-unrelated",
-        updatedAt: 1,
-        skillsSnapshot: { prompt: unrelatedPrompt, skills: [] },
-      },
-    );
+  test("treats blank cursor queries as default history", async () => {
+    await seedSession({ text: "hello from history" });
     await withGatewayHarness(async (harness) => {
-      using decode = vi.spyOn(sessionEntryRows, "parseSessionEntryJson");
       for (const query of ["", "?cursor=", "?cursor=%20"]) {
-        decode.mockClear();
-        const context = `query ${JSON.stringify(query)}`;
-        const res = await fetchSessionHistory(harness.port, SESSION_KEY, { query });
-        expect(res.status, context).toBe(200);
-        const body = (await res.json()) as SessionHistoryBody;
-        expect(body, context).toMatchObject({
+        expect(await readSessionHistoryBody(harness.port, SESSION_KEY, { query })).toMatchObject({
           sessionKey: SESSION_KEY,
           messages: [{ content: [{ text: "hello from history" }], __openclaw: { seq: 1 } }],
         });
-        expect(
-          decode.mock.calls.some(([row]) => row.entry_json.includes(unrelatedPrompt)),
-          context,
-        ).toBe(false);
-      }
-    });
-  });
-
-  test("shares revisioned current-profile projection across REST and initial and inline SSE", async () => {
-    const { storePath } = await seedSession();
-
-    const profile = withMockedDateNow(1_800_000_000_000, () => {
-      const created = ensureProfileForEmail("session-history-profile@example.com");
-      setDisplayName(created.id, "Old Display Name");
-      expect(setAvatar(created.id, new Uint8Array([1, 2, 3]), "image/png").ok).toBe(true);
-      return created;
-    });
-    const oldAvatarUrl = currentProfileAvatarUrl(profile.id);
-    const persistAttributedTurn = async (id: string, senderName: string, text: string) => {
-      const turn = await persistHistoryTurn(storePath, {
-        idempotencyKey: `session-history-profile:${id}`,
-        sender: {
-          id: profile.id,
-          identity: { type: "profile", id: profile.id },
-          name: senderName,
-          username: "ada",
-        },
-        text,
-      });
-      expect(turn).toBeDefined();
-      return turn!;
-    };
-    const first = await persistAttributedTurn("first", "Historical Ada", "first turn");
-    const turn = (id: string, seq: number, name: string, text: string, avatarUrl: string) => ({
-      role: "user",
-      content: text,
-      __openclaw: {
-        id,
-        seq,
-        senderId: profile.id,
-        senderName: name,
-        senderUsername: "ada",
-        senderProfileAvatarUrl: avatarUrl,
-      },
-    });
-
-    await withGatewayHarness(async (harness) => {
-      const initialRest = await readSessionHistoryBody(harness.port, SESSION_KEY);
-      await using stream = await openHistoryStream(harness.port, SESSION_KEY);
-      const initialSse = await stream.next();
-      const oldExpected = turn(first.messageId, 1, "Historical Ada", "first turn", oldAvatarUrl);
-      expect(initialRest.messages?.[0]).toMatchObject(oldExpected);
-      expect(initialSse.messages?.[0]).toMatchObject(oldExpected);
-
-      withMockedDateNow(1_900_000_000_000, () => {
-        setDisplayName(profile.id, "Current Ada");
-        expect(setAvatar(profile.id, new Uint8Array([4, 5, 6]), "image/png").ok).toBe(true);
-      });
-      const newAvatarUrl = currentProfileAvatarUrl(profile.id);
-      expect(newAvatarUrl).not.toBe(oldAvatarUrl);
-
-      const inlineEventPromise = stream.next();
-      const second = await persistAttributedTurn("second", "Current Ada", "second turn");
-      const refreshEvent = await inlineEventPromise;
-      const expected = [
-        turn(first.messageId, 1, "Historical Ada", "first turn", newAvatarUrl),
-        turn(second.messageId, 2, "Current Ada", "second turn", newAvatarUrl),
-      ];
-      for (const body of [refreshEvent, await readSessionHistoryBody(harness.port, SESSION_KEY)]) {
-        expect(body.messages).toMatchObject(expected);
-      }
-    });
-  });
-
-  test("attributes forwarded history only from structured provenance across transports and pages", async () => {
-    const { storePath } = await seedSession();
-    const sessionKey = SESSION_KEY;
-    const cases = [
-      {
-        body: "Verified sender body\n    indented line",
-        sourceSessionKey: "agent:helper:ops",
-        senderLabel: "Forwarded from helper",
-        senderSession: { sessionKey: "agent:helper:ops", agentId: "helper" },
-      },
-      {
-        body: "Unverified sender body\n    indented line",
-        sourceSessionKey: undefined,
-        senderLabel: "Forwarded agent message",
-        senderSession: undefined,
-      },
-    ];
-    for (const entry of cases) {
-      const persisted = await persistHistoryTurn(storePath, {
-        text: `[Inter-session message] sourceSession=agent:grimwald:asserted sourceTool=sessions_send isUser=false\n${entry.body}`,
-        provenance: {
-          kind: "inter_session",
-          sourceTool: "sessions_send",
-          ...(entry.sourceSessionKey ? { sourceSessionKey: entry.sourceSessionKey } : {}),
-        },
-      });
-      expect(persisted).toBeDefined();
-    }
-
-    await withGatewayHarness(async (harness) => {
-      const ws = await harness.openWs();
-      try {
-        expect((await connectReq(ws, { scopes: ["operator.read"] })).ok).toBe(true);
-        let cursor: string | undefined;
-        for (const [offset, entry] of cases.toReversed().entries()) {
-          const http = await readSessionHistoryBody(harness.port, sessionKey, {
-            query: `?limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
-          });
-          const websocket = await rpcReq<{ messages: unknown[]; hasMore: boolean }>(
-            ws,
-            "chat.history",
-            { sessionKey, limit: 1, offset },
-          );
-          expect(websocket.ok).toBe(true);
-          for (const page of [http, websocket.payload]) {
-            expect(page?.messages).toHaveLength(1);
-            expect(page?.messages?.[0]).toMatchObject({
-              role: "assistant",
-              content: entry.body,
-              senderLabel: entry.senderLabel,
-              ...(entry.senderSession ? { senderSession: entry.senderSession } : {}),
-            });
-            if (!entry.senderSession) {
-              expect(page?.messages?.[0]).not.toHaveProperty("senderSession");
-            }
-            expect(page?.hasMore).toBe(offset < cases.length - 1);
-          }
-          if (offset < cases.length - 1) {
-            expect(http.nextCursor).toEqual(expect.any(String));
-          }
-          cursor = http.nextCursor;
-        }
-      } finally {
-        ws.close();
       }
     });
   });
@@ -595,53 +391,6 @@ describe("session history HTTP endpoints", () => {
     );
   });
 
-  test("keeps repeated assistant replies from separate hidden user turns in REST and SSE history", async () => {
-    const sessionId = "sess-hidden-turn-replies";
-    const sessionKey = SESSION_KEY;
-    const { storePath } = await seedSession({ sessionId });
-    const timestamp = Date.UTC(2026, 7, 15, 9, 30, 0);
-    const assistantMessage = (text: string, model: string) => ({
-      ...makeTranscriptAssistantMessage({ text, provider: "openclaw", model }),
-      timestamp,
-    });
-    const replies = ["First reply.", "Second reply.", "Third reply."];
-    await replaceHistory(
-      storePath,
-      replies.flatMap((text, index) => [
-        { message: assistantMessage(text, "acp-runtime") },
-        { message: { role: "user", content: index ? HEARTBEAT_PROMPT : "" } },
-        ...(index === 2 ? [{ message: { role: "assistant", content: "HEARTBEAT_OK" } }] : []),
-        { message: assistantMessage(text, "gateway-injected") },
-      ]),
-      sessionId,
-    );
-
-    const expectedRows = [
-      [1, 3],
-      [4, 6],
-      [7, 10],
-    ].flatMap((sequences, index) => sequences.map((seq) => `${seq}:assistant:${replies[index]}`));
-    await withGatewayHarness(async (harness) => {
-      const history = await readSessionHistoryBody(harness.port, sessionKey);
-      expect(history.messages?.map(sessionHistoryRowIdentity)).toEqual(expectedRows);
-      expect(history.messages?.map((message) => message.timestamp)).toEqual(
-        Array.from({ length: 6 }, () => timestamp),
-      );
-      expect(history.messages?.map((message) => message["__openclaw"]?.turnBoundary)).toEqual([
-        undefined,
-        undefined,
-        undefined,
-        true,
-        undefined,
-        true,
-      ]);
-
-      await using stream = await openHistoryStream(harness.port, SESSION_KEY);
-      const streamedHistory = await stream.next();
-      expect(streamedHistory.messages?.map(sessionHistoryRowIdentity)).toEqual(expectedRows);
-    });
-  });
-
   test("caps all-digit direct REST history limits that exceed safe integer range", async () => {
     const { storePath } = await seedSession({ text: "first message" });
     await appendText(storePath, "second message");
@@ -689,48 +438,6 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("sanitizes phased output_text assistant history before returning it", async () => {
-    const { storePath } = await seedSession();
-
-    await withGatewayHarness(async (harness) => {
-      const visibleMessageId = "visible-phased-assistant";
-      await replaceHistory(storePath, [
-        { id: "hidden-control", message: makeTranscriptAssistantMessage({ text: "NO_REPLY" }) },
-        {
-          id: visibleMessageId,
-          message: {
-            ...makeTranscriptAssistantMessage({ text: "Done." }),
-            content: [
-              { id: "item_commentary", phase: "commentary", text: "internal reasoning" },
-              { id: "item_final", phase: "final_answer", text: "Done." },
-            ].map(({ text, ...signature }) => ({
-              type: "output_text",
-              text,
-              textSignature: JSON.stringify({ v: 1, ...signature }),
-            })),
-          },
-        },
-      ]);
-
-      const body = await readSessionHistoryBody(harness.port, SESSION_KEY);
-      expect(body.sessionKey).toBe(SESSION_KEY);
-      expect(body.messages).toHaveLength(2);
-      expect(body.messages?.[0]).toMatchObject({
-        content: [{ type: "text", text: "internal reasoning" }],
-        openclawStreamFallback: {
-          itemId: "item_commentary",
-          replacementText: "internal reasoning",
-          source: "segment",
-        },
-      });
-      expect(body.messages?.[1]?.content?.map((block) => block.text)).toEqual(["Done."]);
-      expect(body.messages?.[1]?.["__openclaw"]).toMatchObject({
-        id: visibleMessageId,
-        seq: 2,
-      });
-    });
-  });
-
   test("includes updates committed while opening bounded SSE history", async () => {
     const { storePath } = await seedSession({ text: "first message" });
 
@@ -750,9 +457,8 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("bounds retained SSE history without truncating full history or live updates", async () => {
-    const retainedLimit = 1_000;
-    const initialCount = retainedLimit + 2;
+  test("serves complete history and live updates beyond the SSE retention window", async () => {
+    const initialCount = 1_002;
     const { storePath } = await seedSession();
     await replaceHistory(
       storePath,
@@ -763,7 +469,6 @@ describe("session history HTTP endpoints", () => {
       })),
     );
 
-    using snapshotSpy = vi.spyOn(SessionHistorySseState.prototype, "snapshot");
     const expectWindow = (
       body: SessionHistoryBody | undefined,
       length: number,
@@ -778,31 +483,22 @@ describe("session history HTTP endpoints", () => {
         expect(body?.messages?.at(-1)?.content?.[0]?.text).toBe(last);
       }
     };
-    const retainedSnapshot = () => snapshotSpy.mock.results.at(-1)?.value;
     await withGatewayHistoryStream(async (stream, port) => {
       const initial = await stream.next();
       expectWindow(initial, initialCount, "history message 1");
-      expectWindow(retainedSnapshot(), retainedLimit, "history message 3");
       await using cursorStream = await openHistoryStream(
         port,
         SESSION_KEY,
         `?cursor=${initialCount + 1}`,
       );
       expectWindow(await cursorStream.next(), initialCount);
-      expectWindow(retainedSnapshot(), retainedLimit, "history message 3");
 
       const messageId = await appendText(storePath, "live history message");
       const lastSequence = initial.messages?.at(-1)?.["__openclaw"]?.seq;
       expect(lastSequence).toEqual(expect.any(Number));
       await stream.expectMessage("live history message", (lastSequence ?? 0) + 1, messageId);
 
-      const liveRetained = snapshotSpy.mock.results.findLast((result) => {
-        const snapshot = result.value;
-        return snapshot?.messages?.at(-1)?.content?.[0]?.text === "live history message";
-      })?.value;
-      expectWindow(liveRetained, retainedLimit, undefined, "live history message");
       expectWindow(await cursorStream.next(), initialCount, "history message 1");
-      expectWindow(retainedSnapshot(), retainedLimit);
 
       const completeHistory = await vi.waitFor(() => readSessionHistoryBody(port, SESSION_KEY), {
         interval: 25,

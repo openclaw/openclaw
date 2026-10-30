@@ -282,11 +282,9 @@ export async function readPackageDistInventoryIfPresent(
   return sortUniqueStrings(parsed.map(normalizeRelativePath));
 }
 
-type PackageDistFsRoot = Awaited<ReturnType<typeof openFsRoot>>;
-
 async function openPackageDistFsRootIfPresent(
   packageRoot: string,
-): Promise<PackageDistFsRoot | null> {
+): Promise<Awaited<ReturnType<typeof openFsRoot>> | null> {
   const packageFs = await openFsRoot(packageRoot, {
     hardlinks: "allow",
     symlinks: "reject",

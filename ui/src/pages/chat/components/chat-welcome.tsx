@@ -15,7 +15,9 @@ import {
 import {
   prepareWelcomeRecentSessions,
   resolveAssistantDisplayAvatar,
+  resolveWelcomeSuggestionKeys,
   type WelcomeRecentSession,
+  type WelcomeSuggestionAuth,
 } from "./chat-welcome.ts";
 
 registerCommandPaletteEnglish();
@@ -26,7 +28,11 @@ export type ChatWelcomeIdentityProps = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
+  /** Undefined leaves bootstrap identity in control; null records a known absence. */
+  assistantAvatarSource?: string | null;
   sessionHost?: UiSessionDefaultsHost | null;
+  /** Connected principal's grant; selects starter prompts it can act on. */
+  operatorAuth?: WelcomeSuggestionAuth;
   modelSetupRequired?: boolean;
   onModelSetup?: () => void;
   onDraftChange: (next: string) => void;
@@ -48,13 +54,6 @@ export type ChatWelcomeProps = {
   sessions?: SessionsListResult | null;
   sessionKey?: string;
 } & ChatWelcomeIdentityProps;
-
-const WELCOME_SUGGESTION_KEYS = [
-  "chat.welcome.suggestions.whatCanYouDo",
-  "chat.welcome.suggestions.summarizeRecentSessions",
-  "chat.welcome.suggestions.configureChannel",
-  "chat.welcome.suggestions.checkSystemHealth",
-];
 
 /** The start-screen welcome block, shared by the empty chat and the new-session draft. */
 export function ChatWelcome(
@@ -133,7 +132,7 @@ export function ChatWelcome(
                 when={recentSessions().length > 0}
                 fallback={
                   <div class="agent-chat__suggestions">
-                    <For each={WELCOME_SUGGESTION_KEYS}>
+                    <For each={resolveWelcomeSuggestionKeys(props.operatorAuth)}>
                       {(key) => (
                         <button
                           type="button"

@@ -3,6 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { SidebarSessionSortMode } from "../../components/app-sidebar-session-types.ts";
+import { setSessionsGrouping } from "../../components/session-organizer-menu.runtime.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import {
   createContext,
@@ -16,6 +17,7 @@ import {
   type TestSessionMenu,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
+import { sessionListResult } from "../chat-model.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import "./session-pagination.ts";
@@ -89,20 +91,20 @@ describe("AppSidebar session sort persistence", () => {
 });
 
 describe("AppSidebar session pagination", () => {
-  it("does not show pagination controls at the ten-session boundary", async () => {
+  it("does not show pagination controls at the fifteen-session boundary", async () => {
     const keys = [
       "agent:main:session-0",
-      ...Array.from({ length: 9 }, (_, index) => `agent:main:session-${index + 1}`),
+      ...Array.from({ length: 14 }, (_, index) => `agent:main:session-${index + 1}`),
     ];
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", keys));
 
-    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(10);
+    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(15);
     expect(sidebar.querySelector(".sidebar-session-pagination")).toBeNull();
   });
 
   it("keeps visible sessions when a newer session enters the created-sort page", async () => {
-    const olderKeys = Array.from({ length: 10 }, (_, index) => `agent:main:older-${index}`);
+    const olderKeys = Array.from({ length: 15 }, (_, index) => `agent:main:older-${index}`);
     const gateway = createGateway({} as GatewayBrowserClient);
     const sessions = createSessionsHarness("main", olderKeys);
     const { sidebar } = await mountSidebar(gateway, sessions.sessions);
@@ -118,35 +120,48 @@ describe("AppSidebar session pagination", () => {
         (row) => row.dataset.sessionKey,
       ),
     ).toEqual(["agent:main:external-new", ...olderKeys]);
-    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(11);
+    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(16);
     expect(sidebar.querySelector('button[aria-label="Show more"]')).toBeNull();
   });
 
-  it("reveals sessions ten at a time and offers Collapse after thirty", async () => {
-    const keys = Array.from({ length: 41 }, (_, index) => `agent:main:session-${index}`);
+  it("keeps session pages scoped to grouping and collapses to each initial window", async () => {
+    const keys = Array.from({ length: 61 }, (_, index) => `agent:main:session-${index}`);
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", keys));
     const rows = () => sidebar.querySelectorAll(".sidebar-recent-session");
     const button = (label: string) =>
       sidebar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-
-    expect(rows()).toHaveLength(10);
-    expect(button("Show more")).not.toBeNull();
-    expect(button("Collapse")).toBeNull();
-
-    for (const count of [20, 30, 40, 41]) {
-      button("Show more")?.click();
+    const click = async (label: string) => {
+      const target = button(label);
+      expect(target).not.toBeNull();
+      target!.click();
       await settleLitElement(sidebar);
-      expect(rows()).toHaveLength(count);
-      expect(button("Collapse") !== null).toBe(count >= 40);
-      if (count >= 40) {
-        expect(button("Show more") !== null).toBe(count < 41);
-      }
+    };
+
+    for (const grouping of ["none", "category", "person", "project"] as const) {
+      setSessionsGrouping(sidebar.sessionOrganizer, grouping);
+      await settleLitElement(sidebar);
+      const initial = grouping === "none" ? 30 : 15;
+      expect(rows()).toHaveLength(initial);
+      expect(button("Collapse")).toBeNull();
+      await click("Show more");
+      expect(rows()).toHaveLength(initial + 15);
+      await click("Collapse");
+      expect(rows()).toHaveLength(initial);
+      expect(button("Collapse")).toBeNull();
+      await click("Show more");
     }
 
-    button("Collapse")?.click();
+    setSessionsGrouping(sidebar.sessionOrganizer, "none");
     await settleLitElement(sidebar);
-    expect(rows()).toHaveLength(10);
+    expect(rows()).toHaveLength(45);
+    for (const count of [60, 61]) {
+      await click("Show more");
+      expect(rows()).toHaveLength(count);
+      expect(button("Show more") !== null).toBe(count < 61);
+    }
+    await click("Collapse");
+    expect(rows()).toHaveLength(30);
     expect(button("Show more")).not.toBeNull();
     expect(button("Collapse")).toBeNull();
   });
@@ -362,23 +377,17 @@ describe("AppSidebar session accessibility", () => {
     (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
     sidebar.sessionKey = key;
     harness.publishList({
-      result: {
-        ts: 2,
-        path: "",
-        count: 1,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [
-          {
-            key,
-            kind: "direct",
-            label: key,
-            displayName: key,
-            derivedTitle: "Quarterly launch plan",
-            updatedAt: Date.now(),
-            unread: true,
-          },
-        ],
-      },
+      result: sessionListResult(2, [
+        {
+          key,
+          kind: "direct",
+          label: key,
+          displayName: key,
+          derivedTitle: "Quarterly launch plan",
+          updatedAt: Date.now(),
+          unread: true,
+        },
+      ]),
       agentId: "main",
     });
     await sidebar.updateComplete;
@@ -388,7 +397,7 @@ describe("AppSidebar session accessibility", () => {
     const tree = row?.closest(".sidebar-session-tree");
     const link = row?.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link");
     expectAttributes(list, { "aria-label": "Other" });
-    expect(tree?.parentElement).toBe(list);
+    expect(tree?.closest('[role="list"]')).toBe(list);
     expectAttributes(tree, { role: "listitem" });
     expectAttributes(row, { role: null, "aria-label": null });
     expectAttributes(sidebar.querySelector(".sidebar-recent-sessions"), { "aria-label": null });

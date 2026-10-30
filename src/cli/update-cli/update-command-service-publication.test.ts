@@ -104,10 +104,9 @@ async function withRuntimePublicationFixture(
       databasePath: resolveOpenClawStateSqlitePath(env),
       publish: createPublication(root, env),
     });
-    expect(service.stop).not.toHaveBeenCalled();
-    expect(service.start).not.toHaveBeenCalled();
-    expect(service.restart).not.toHaveBeenCalled();
-    expect(service.install).not.toHaveBeenCalled();
+    for (const mutation of [service.stop, service.start, service.restart, service.install]) {
+      expect(mutation).not.toHaveBeenCalled();
+    }
   });
 }
 
@@ -130,7 +129,6 @@ it("keeps Task Scheduler timeout details in the source-build failure report", ()
       failure: { cause: error },
     });
     expect(result.reason).toBe("runtime-artifact-publication");
-    expect(service.readCommand).toHaveBeenCalled();
     expect(result.failedStep.failureFacts?.[0]?.message).toContain("timed out after 731 ms");
     expect(spawn).not.toHaveBeenCalled();
   }));
@@ -138,6 +136,11 @@ it("keeps Task Scheduler timeout details in the source-build failure report", ()
 it("preserves the serving installation and the profiled doctor command", () =>
   withRuntimePublicationFixture(async ({ root, env, service }) => {
     const profile = "stale-profile";
+    const installedProfile = "serving-profile";
+    vi.mocked(service.readCommand).mockResolvedValue({
+      programArguments: serviceCommand(root),
+      environment: { OPENCLAW_PROFILE: installedProfile },
+    });
     vi.mocked(service.readRuntime).mockResolvedValue({
       status: "running",
       pid: 23456,
@@ -161,7 +164,7 @@ it("preserves the serving installation and the profiled doctor command", () =>
     expect(
       vi
         .mocked(service.readRuntime)
-        .mock.calls.some(([observedEnv]) => observedEnv?.OPENCLAW_PROFILE === profile),
+        .mock.calls.some(([observedEnv]) => observedEnv?.OPENCLAW_PROFILE === installedProfile),
     ).toBe(true);
     expect(await fs.readFile(entry, "utf8")).toBe(before);
   }));
@@ -400,19 +403,6 @@ it("refuses changed runtime publication while another process owns Gateway prese
     }
   }));
 
-it("publishes changed artifacts for an affirmatively absent Gateway", () =>
-  withRuntimePublicationFixture(async ({ service, databasePath, publish }) => {
-    service.isAbsent = vi.fn(async () => true);
-    await expect(
-      publish(async (assertCurrent) => {
-        await Promise.resolve();
-        await assertCurrent();
-        expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
-        return "published";
-      }),
-    ).resolves.toBe("published");
-  }));
-
 it.each(["shared SDK alias", "nested shared output"])(
   "distinguishes physical runtime paths from current/releases ownership: %s",
   (scenario) =>
@@ -593,13 +583,16 @@ it.each(["repository", "existing alias parent", "missing alias parent"])(
     }),
 );
 
-it("permits its output-root replacement and new alias descendants while retaining parent identity", () =>
-  withRuntimePublicationFixture(async ({ root, publish }) => {
+it("permits an absent Gateway's output-root replacement and new alias descendants while retaining parent identity", () =>
+  withRuntimePublicationFixture(async ({ root, service, databasePath, publish }) => {
+    service.isAbsent = vi.fn(async () => true);
     const runtime = path.join(root, "dist-runtime");
     const previous = path.join(root, "previous-runtime");
     const alias = path.join(root, "dist", "extensions", "node_modules", "openclaw");
     await publish(async (assertCurrent) => {
+      await Promise.resolve();
       await assertCurrent();
+      expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
       await fs.rename(runtime, previous);
       await assertCurrent();
       await fs.mkdir(runtime);

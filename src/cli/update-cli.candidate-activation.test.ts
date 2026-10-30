@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { sanitizeTriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import * as candidateState from "../infra/update-candidate-state.js";
 import type { UpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
@@ -89,6 +90,11 @@ describe("update-cli", () => {
         { kind: "migration", message: "Enabled the configured provider plugin." },
       ];
       if (outcome === "config-change") {
+        const readGenerations = candidateState.readUpdateDatabaseGenerationsIsolated;
+        // The dummy installed package has no workers; retain real reads in the harness runtime.
+        vi.spyOn(candidateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(
+          (paths, options) => readGenerations(paths, { ...options, root: undefined }),
+        );
         const runCommand = assert.requireValue(
           vi.mocked(update.runCommandWithTimeout).getMockImplementation(),
           "configured updater commands",

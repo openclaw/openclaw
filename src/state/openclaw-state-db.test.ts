@@ -52,8 +52,10 @@ import {
 } from "./openclaw-state-db-corruption.test-support.js";
 import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-doctor-schema.js";
 import {
+  expectV2026_7_1_2CronHistoryPreserved,
   markStateDatabaseVersion,
   materializeV2026_7_1_2StateDatabase,
+  V2026_7_1_2_STATE_MIGRATION_CHANGES,
 } from "./openclaw-state-db-historical-fixtures.test-support.js";
 import { runHotRollbackJournalRecoveryProbe } from "./openclaw-state-db-hot-journal.test-support.js";
 import { prepareStateDatabaseSchemaRepair } from "./openclaw-state-db-maintenance.js";
@@ -84,7 +86,11 @@ import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v1
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   createInitialStateSchemaShape,
+  captureStateDatabaseFailure as captureFailure,
+  expectStateSchemaMigrationRequired,
+  expectStateSchemaRepair as expectRepair,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 import { createUnsafeIndexDrift } from "./sqlite-index-drift.test-support.js";
@@ -193,18 +199,6 @@ function withReadOnlyDatabase(pathname: string, read: (database: DatabaseSync) =
   withDatabase(pathname, read, { readOnly: true });
 }
 
-async function expectRepair(
-  options: NonNullable<Parameters<typeof repairOpenClawStateDatabaseSchema>[0]>,
-  changes: unknown[],
-  warnings: unknown[] = [],
-) {
-  expect(
-    await withStateMigrationBackupForTest(options, () =>
-      repairOpenClawStateDatabaseSchema(options),
-    ),
-  ).toEqual({ changes, warnings });
-}
-
 function expectMigrations(
   options: Parameters<typeof detectOpenClawStateDatabaseSchemaMigrations>[0],
   pathname: string,
@@ -259,27 +253,6 @@ function createStateFixture(
 
 function createTempStateDir(): string {
   return makeTempDir(stateDbTempDirs, "openclaw-state-db-");
-}
-
-function captureFailure(run: () => unknown) {
-  try {
-    run();
-  } catch (error) {
-    return error;
-  }
-  throw new Error("Expected operation to fail");
-}
-
-function expectStateSchemaMigrationRequired(
-  run: () => unknown,
-  expected: {
-    kind: OpenClawStateDatabaseSchemaMigrationRequiredError["kind"];
-    pathname: string;
-  },
-): void {
-  const caught = captureFailure(run);
-  expect(caught).toBeInstanceOf(OpenClawStateDatabaseSchemaMigrationRequiredError);
-  expect(caught).toMatchObject(expected);
 }
 
 const LEGACY_SESSION_WATCH_SCHEMA_VERSION = 3;
@@ -391,6 +364,7 @@ function seedLegacySessionWatchCursorSchema(stateDir: string) {
   const marker = (watcher: string) =>
     LEGACY_AMBIENT_WATCH_PREFIX + Buffer.from(watcher, "utf8").toString("hex");
   withDatabase(databasePath, (legacy) => {
+    restorePreTemplateStateIdentifiersForTest(legacy);
     addPreCutoverClientCredentialTablesForTest(legacy);
     legacy.exec(`
       PRAGMA foreign_keys = OFF;
@@ -445,6 +419,7 @@ function createLegacyAuditStateDatabase(stateDir: string): string {
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   withDatabase(databasePath, (db) => {
+    restorePreTemplateStateIdentifiersForTest(db);
     addPreCutoverClientCredentialTablesForTest(db);
     installShippedTables(db, ["schema_meta", "audit_events"]);
     db.exec(`
@@ -484,6 +459,7 @@ function materializeCurrentStateDatabase(stateDir: string): string {
 }
 
 function downgradeWorkerPlacementsToV7(db: DatabaseSync): void {
+  restorePreTemplateStateIdentifiersForTest(db);
   addPreCutoverClientCredentialTablesForTest(db);
   const row = db
     .prepare(
@@ -658,6 +634,7 @@ afterAll(async () => {
 describe("openclaw state database", () => {
   it("requires Doctor to repair the dangling Workshop review index in schema v16", async () => {
     const { options, databasePath } = createStateFixture((database) => {
+      restorePreTemplateStateIdentifiersForTest(database);
       addPreCutoverClientCredentialTablesForTest(database);
       database.exec(
         "CREATE TABLE skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT;",
@@ -908,6 +885,7 @@ describe("openclaw state database", () => {
       fs.writeFileSync(copiedInRootPath, "");
       const { DatabaseSync } = requireNodeSqlite();
       const legacy = new DatabaseSync(databasePath);
+      restorePreTemplateStateIdentifiersForTest(legacy);
       addPreCutoverClientCredentialTablesForTest(legacy);
       const insert = legacy.prepare(
         `INSERT INTO agent_databases (
@@ -942,6 +920,7 @@ describe("openclaw state database", () => {
           "Qualified historical cron creator attribution as unknown (v14)",
           "Replaced retained task indexes with ordered cron history indexes (v24)",
           "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
+          "Migrated released starter tables and provenance to canonical Template names (v36)",
         ],
         warnings: [],
       });
@@ -987,6 +966,7 @@ describe("openclaw state database", () => {
 
   it("retires v10 skill curator projections through runtime open while preserving live skill usage and proposal provenance", async () => {
     const { options, databasePath } = createStateFixture((legacy) => {
+      restorePreTemplateStateIdentifiersForTest(legacy);
       addPreCutoverClientCredentialTablesForTest(legacy);
       legacy.exec(STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL);
       legacy.exec(STATE_SCHEMA_11_TO_10_TABLES_SQL);
@@ -1061,6 +1041,7 @@ describe("openclaw state database", () => {
 
   it("folds v11 singleton state into machine-state keys through doctor repair", async () => {
     const { options, databasePath } = createStateFixture((legacy) => {
+      restorePreTemplateStateIdentifiersForTest(legacy);
       addPreCutoverClientCredentialTablesForTest(legacy);
       legacy.exec(STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL);
       legacy.exec(`
@@ -1133,6 +1114,7 @@ describe("openclaw state database", () => {
       "Qualified historical cron creator attribution as unknown (v14)",
       "Replaced retained task indexes with ordered cron history indexes (v24)",
       "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
+      "Migrated released starter tables and provenance to canonical Template names (v36)",
     ]);
 
     const migrated = openOpenClawStateDatabase(options);
@@ -1219,6 +1201,7 @@ describe("openclaw state database", () => {
   it("migrates legacy wide rows through Doctor without path aliases while preserving store provenance and hydrated jobs", async () => {
     const { stateDir, options, databasePath } = createStateFixture();
     const legacy = openNativeDatabase(databasePath);
+    restorePreTemplateStateIdentifiersForTest(legacy);
     addPreCutoverClientCredentialTablesForTest(legacy);
     legacy.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
     legacy.exec("DROP TABLE gateway_origin_device_tokens;");
@@ -1348,6 +1331,7 @@ describe("openclaw state database", () => {
       "Qualified historical cron creator attribution as unknown (v14)",
       "Replaced retained task indexes with ordered cron history indexes (v24)",
       "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
+      "Migrated released starter tables and provenance to canonical Template names (v36)",
     ]);
 
     const migrated = openOpenClawStateDatabase(options);
@@ -1487,6 +1471,7 @@ describe("openclaw state database", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const legacy = openMaterializedCurrentStateDatabase(stateDir);
+    restorePreTemplateStateIdentifiersForTest(legacy);
     addPreCutoverClientCredentialTablesForTest(legacy);
     legacy.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
     const storeKey = path.join(stateDir, "cron", "jobs.json");
@@ -1533,6 +1518,7 @@ describe("openclaw state database", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const legacy = openMaterializedCurrentStateDatabase(stateDir);
+    restorePreTemplateStateIdentifiersForTest(legacy);
     addPreCutoverClientCredentialTablesForTest(legacy);
     legacy.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
     const insert = legacy.prepare(
@@ -1642,6 +1628,8 @@ describe("openclaw state database", () => {
       { kind: "local-client-credentials-v29", path: fixture.databasePath },
       { kind: "automation-policy-fence-v30", path: fixture.databasePath },
       { kind: "local-workspace-manifests-v31", path: fixture.databasePath },
+      { kind: "local-workspace-cas-v35", path: fixture.databasePath },
+      { kind: "template-names-v36", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -1650,21 +1638,7 @@ describe("openclaw state database", () => {
       pathname: fixture.databasePath,
     });
 
-    await expectRepair(options, [
-      "Discarded retired shared-state commitments rows, table, and indexes",
-      "Retired six dead shared-state tables (v10)",
-      "Retired legacy skill curator lifecycle and proposal origin-run tables",
-      "Folded singleton state tables into config_machine_state (v12)",
-      "Migrated shared state audit event ledger → versioned message lifecycle schema",
-      "Derived meeting transcript selectors and bounded delivery retention columns (v21)",
-      "Promoted portable ACP resume keys and cursor identities (v22)",
-      "Consolidated shared state tables (v13)",
-      "Qualified historical cron creator attribution as unknown (v14)",
-      "Removed redundant conversation binding target projections (v15)",
-      "Replaced retained task indexes with ordered cron history indexes (v24)",
-      "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
-      "Migrated shared state tables to SQLite STRICT typing (46)",
-    ]);
+    await expectRepair(options, V2026_7_1_2_STATE_MIGRATION_CHANGES);
     const migrated = openOpenClawStateDatabase(options);
     const native = requireNativeSqliteDatabase(migrated.db);
     expectCurrentStateVersion(native);
@@ -1718,13 +1692,7 @@ describe("openclaw state database", () => {
       { scope: "fixture-scope", event_key: "event-b", sequence: 2 },
       { scope: "other-scope", event_key: "event-c", sequence: 1 },
     ]);
-    expectRecord(migrated.db, "task_runs WHERE runtime = 'cron' AND source_id = 'fixture-cron'", {
-      task_id: "cron-runlog-import:fixture-cron:1500:1",
-      runtime: "cron",
-      source_id: "fixture-cron",
-      status: "succeeded",
-      ended_at: 1500,
-    });
+    expectV2026_7_1_2CronHistoryPreserved(migrated.db);
     expectRow(
       migrated.db,
       `SELECT task_runs.task_id, task_runs.status, task_delivery_state.last_notified_event_at
@@ -1750,6 +1718,7 @@ describe("openclaw state database", () => {
     const reopened = openOpenClawStateDatabase(options);
     expectRows(reopened.db, "PRAGMA integrity_check").toEqual([{ integrity_check: "ok" }]);
     expectRows(reopened.db, "PRAGMA foreign_key_check").toEqual([]);
+    expectV2026_7_1_2CronHistoryPreserved(reopened.db);
   });
 
   it("refuses retirement and leaves an inbound foreign-key dependency unchanged through doctor repair", async () => {
@@ -1869,6 +1838,8 @@ describe("openclaw state database", () => {
       { kind: "local-client-credentials-v29", path: seeded.databasePath },
       { kind: "automation-policy-fence-v30", path: seeded.databasePath },
       { kind: "local-workspace-manifests-v31", path: seeded.databasePath },
+      { kind: "local-workspace-cas-v35", path: seeded.databasePath },
+      { kind: "template-names-v36", path: seeded.databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     await expectRepair(options, [
@@ -1877,6 +1848,7 @@ describe("openclaw state database", () => {
       "Qualified historical cron creator attribution as unknown (v14)",
       "Replaced retained task indexes with ordered cron history indexes (v24)",
       "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
+      "Migrated released starter tables and provenance to canonical Template names (v36)",
     ]);
 
     const migrated = openOpenClawStateDatabase(options);
@@ -1888,33 +1860,6 @@ describe("openclaw state database", () => {
     expectCurrentStateVersion(requireNativeSqliteDatabase(migrated.db));
     closeOpenClawStateDatabaseForTest();
     await expectRepair(options, []);
-  });
-
-  it("repairs same-version Claw bootstrap columns with a missing index through its admitted path", () => {
-    const { options } = createStateFixture((shippedSchema) => {
-      shippedSchema.exec(`
-        ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
-        ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
-      `);
-
-      shippedSchema.exec("DROP INDEX idx_task_runs_runtime_run;");
-
-      expectCurrentStateVersion(shippedSchema);
-    });
-
-    const reopened = openOpenClawStateDatabase(options);
-    const columns = reopened.db.prepare("PRAGMA table_info(claw_installs)").all() as Array<{
-      name: string;
-    }>;
-    expect(columns.map((column) => column.name)).toEqual(
-      expect.arrayContaining(["bootstrap_source_path", "bootstrap_content_digest"]),
-    );
-
-    expect(
-      normalizeSqliteSchemaShapeSql(
-        collectSqliteSchemaShape(requireNativeSqliteDatabase(reopened.db)),
-      ),
-    ).toEqual(normalizeSqliteSchemaShapeSql(createInitialStateSchemaShape()));
   });
 
   it("keeps GitHub publication lazy across current-schema open, first use, and reopen", async () => {
@@ -1984,7 +1929,7 @@ describe("openclaw state database", () => {
       const refusal = {
         changes: [],
         warnings: [
-          `Failed migrating shared state database schema at ${databasePath}: SqliteSchemaMismatchError: SQLite schema is incomplete or noncanonical for ${databasePath}: missing table apns_registration_tombstones; run openclaw doctor --fix to repair it.`,
+          `Failed migrating shared state database schema: SqliteSchemaMismatchError: missing table apns_registration_tombstones. Database: ${databasePath}`,
         ],
       };
       expect(
@@ -2107,6 +2052,8 @@ describe("openclaw state database", () => {
       { kind: "local-client-credentials-v29", path: databasePath },
       { kind: "automation-policy-fence-v30", path: databasePath },
       { kind: "local-workspace-manifests-v31", path: databasePath },
+      { kind: "local-workspace-cas-v35", path: databasePath },
+      { kind: "template-names-v36", path: databasePath },
     ]);
 
     await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
@@ -2582,26 +2529,26 @@ describe("openclaw state database", () => {
       }),
   );
 
-  it("adds and backfills Claw package update timestamps in existing state databases", async () => {
+  it("adds and backfills Template package update timestamps in existing state databases", async () => {
     const stateDir = createTempStateDir();
     const legacyDb = openMaterializedCurrentStateDatabase(stateDir);
-    insertRow(legacyDb, "claw_package_refs", {
+    insertRow(legacyDb, "template_package_refs", {
       agent_id: "incident",
       package_kind: "plugin",
       package_source: "clawhub",
       package_ref: "@owner/audit",
       package_version: "2.0.1",
       package_integrity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      schema_version: "openclaw.clawPackageRef.v1",
-      claw_name: "incident-claw",
+      schema_version: "openclaw.templatePackageRef.v1",
+      template_name: "incident-claw",
       package_status: "complete",
       relationship: "referenced",
-      origin: "claw-introduced",
+      origin: "template-introduced",
       independent_owner: 0,
       installed_at_ms: 1234,
       updated_at_ms: 5678,
     });
-    legacyDb.exec("ALTER TABLE claw_package_refs DROP COLUMN updated_at_ms");
+    legacyDb.exec("ALTER TABLE template_package_refs DROP COLUMN updated_at_ms");
     markStateDatabaseVersion(legacyDb, 5);
     legacyDb.close();
 
@@ -2611,7 +2558,7 @@ describe("openclaw state database", () => {
     const reopened = openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
-    expectRecord(reopened.db, "claw_package_refs", {
+    expectRecord(reopened.db, "template_package_refs", {
       installed_at_ms: 1234,
       updated_at_ms: 1234,
     });

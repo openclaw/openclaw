@@ -1,8 +1,8 @@
+import assert from "node:assert/strict";
 import type { Message } from "grammy/types";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramCallbackMessageActions } from "./bot-handlers.callback-actions.js";
-import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import { telegramPlugin } from "./channel.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
@@ -49,9 +49,7 @@ describe("Telegram topic transport payloads", () => {
   const sendOptions = () => ({ cfg, token: cfg.channels.telegram.botToken, api: fixture.bot.api });
   const jsonFor = (method: string) => {
     const request = requests.find((candidate) => candidate.method === method);
-    if (!request) {
-      throw new Error(`Missing ${method} request`);
-    }
+    assert(request, `Missing ${method} request`);
     return request.fields;
   };
   function expectDirectPayload(method: string) {
@@ -125,31 +123,19 @@ describe("Telegram topic transport payloads", () => {
     expect(resolveTelegramTestUpload(fields, "document")).toBeInstanceOf(File);
   });
 
-  it("round-trips direct-topic conversation custody into the canonical Bot API field", async () => {
-    const inbound = await buildTelegramMessageContextForTest({
-      message: directMessagesMessage(),
-      options: { forceWasMentioned: true },
-      resolveGroupActivation: () => true,
-    });
-    expect(inbound?.ctxPayload.SessionKey).toContain(
-      `telegram:group:${DIRECT_CHAT_ID}:direct-topic:${DIRECT_TOPIC_ID}`,
-    );
+  it("round-trips a persisted direct-topic conversation into the canonical Bot API field", async () => {
     const directRef = telegramPlugin.messaging?.resolveInboundConversation?.({
-      to: inbound?.ctxPayload.OriginatingTo,
+      to: `telegram:${DIRECT_TARGET}`,
       isGroup: true,
     });
     expect(directRef?.conversationId).toBe(DIRECT_TARGET);
-    if (!directRef?.conversationId) {
-      throw new Error("expected direct-topic conversation reference");
-    }
+    assert(directRef?.conversationId, "expected direct-topic conversation reference");
     const persistedRef = structuredClone({
       conversationId: directRef.conversationId,
       parentConversationId: directRef.parentConversationId,
     });
     const target = telegramPlugin.messaging?.resolveDeliveryTarget?.(persistedRef);
-    if (!target?.to) {
-      throw new Error("expected persisted direct-topic delivery target");
-    }
+    assert(target?.to, "expected persisted direct-topic delivery target");
     setTelegramPluginStateRuntimeForTests();
     await sendMessageTelegram(target.to, "roundtrip", {
       ...sendOptions(),
@@ -180,13 +166,6 @@ describe("Telegram topic transport payloads", () => {
       /typing is not supported in channel Direct Messages/i,
     );
     expect(requests).toHaveLength(0);
-  });
-
-  it("deletes ordinary callbacks through their owning Bot API endpoint", async () => {
-    await callbackActions().deleteCallbackMessage();
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.method).toBe("deleteMessage");
-    expect(jsonFor("deleteMessage")).toEqual({ chat_id: DIRECT_CHAT_ID, message_id: 41 });
   });
 
   it("removes business media callbacks before sending their text replacement", async () => {

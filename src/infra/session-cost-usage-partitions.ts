@@ -1,6 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sha256Hex } from "./crypto-digest.js";
 import {
+  encodeUsageCostQuarters,
+  type UsageCostQuarterRow,
+} from "./session-cost-usage-quarters.js";
+import {
   encodeUsageCostRollup,
   type UsageCostRollupEntry,
   type UsageCostRollupEnvelope,
@@ -21,6 +25,8 @@ export type UsageCostPartition = {
   date: string;
   valueJson: string;
   blob: Uint8Array;
+  /** Report summary committed with this partition; absent on partitions read back. */
+  quarters?: UsageCostQuarterRow;
 };
 
 export function usageCostPartitionKey(sessionFile: string, date: string): string {
@@ -156,6 +162,10 @@ export function partitionUsageCostRollup(entry: UsageCostRollupEntry): {
   return {
     valueJson: JSON.stringify(envelope),
     blob: encoded.blob,
-    partitions: [...months].map(([date, rollup]) => encodeUsageCostPartition(date, rollup)),
+    partitions: [...months].map(([date, rollup]) =>
+      Object.assign(encodeUsageCostPartition(date, rollup), {
+        quarters: encodeUsageCostQuarters(date, rollup),
+      }),
+    ),
   };
 }

@@ -18,6 +18,7 @@ import {
   createCallerModeExecutionFixture,
   createCallerModeSnapshot,
   expectBlockedTailInPlanOrder,
+  writeLegacyDoctorSources,
 } from "./state-migrations.caller-mode.test-helpers.js";
 import {
   autoMigrateLegacyState,
@@ -77,22 +78,11 @@ it("repairs readable entries before independently preparing mixed agent database
   });
   const brokenDatabasePath = path.join(
     fixture.stateDir,
-    "agents",
-    "broken",
-    "agent",
-    "openclaw-agent.sqlite",
+    "agents/broken/agent/openclaw-agent.sqlite",
   );
   fs.mkdirSync(path.dirname(brokenDatabasePath), { recursive: true });
   fs.writeFileSync(brokenDatabasePath, "not sqlite");
-  const execPath = path.join(fixture.stateDir, "exec-approvals.json");
-  fs.writeFileSync(
-    execPath,
-    `${JSON.stringify({
-      version: 1,
-      defaults: { security: "allowlist", ask: "on-miss" },
-      agents: { main: { allowlist: [{ pattern: "/usr/bin/rg" }] } },
-    })}\n`,
-  );
+  const { execPath } = writeLegacyDoctorSources(fixture.stateDir);
   const plan = await planLegacyStateMigrationsReadOnly({
     mode: "doctor",
     candidate: { root: fixture.root, version: "test" },
@@ -108,13 +98,9 @@ it("repairs readable entries before independently preparing mixed agent database
     legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
   });
 
-  expect(
-    result.stepReceipts.find((receipt) => receipt.id === "session-entry-state-preparation"),
-  ).toMatchObject({
-    outcome: "completed",
-    changes: ["Canonicalized entry state for 1 durable session row(s)."],
-  });
-  expect(result.stepReceipts.find((receipt) => receipt.id === "media-persistence")).toMatchObject({
+  const receipt = (id: string) => result.stepReceipts.find((step) => step.id === id);
+  expect(receipt("session-entry-state-preparation")?.outcome).toBe("completed");
+  expect(receipt("media-persistence")).toMatchObject({
     requiredness: "conditional",
     outcome: "refused",
     changes: [expect.stringContaining("Upgraded agent database schema")],

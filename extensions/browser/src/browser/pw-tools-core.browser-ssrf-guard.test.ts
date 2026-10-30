@@ -1,10 +1,7 @@
+import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserObservedDialogBlockedError } from "./pw-session-contracts.js";
-import {
-  heldAction,
-  withFakeTimers,
-  type NavigationGuardCall,
-} from "./pw-tools-core.guard-test-support.js";
+import { heldAction, type NavigationGuardCall } from "./pw-tools-core.guard-test-support.js";
 
 const pageState = vi.hoisted(() => ({
   page: null as Record<string, unknown> | null,
@@ -13,21 +10,15 @@ const pageState = vi.hoisted(() => ({
 
 const session = await vi.hoisted(async () => {
   const { createGuardSession } = await import("./pw-tools-core.guard-test-support.js");
+  const required = (key: keyof typeof pageState) => () => {
+    const value = pageState[key];
+    if (!value) {
+      throw new Error(`missing ${key}`);
+    }
+    return value;
+  };
   return {
-    ...createGuardSession(
-      () => {
-        if (!pageState.page) {
-          throw new Error("missing page");
-        }
-        return pageState.page;
-      },
-      () => {
-        if (!pageState.locator) {
-          throw new Error("missing locator");
-        }
-        return pageState.locator;
-      },
-    ),
+    ...createGuardSession(required("page"), required("locator")),
     closeBlockedNavigationTarget: vi.fn(async () => {}),
     gotoPageWithNavigationGuard: vi.fn(async () => null),
     storeRoleRefsForTarget: vi.fn(() => {}),
@@ -75,6 +66,12 @@ function install(
 function guardOnce(implementation: (args: NavigationGuardCall) => Promise<unknown>): void {
   session.withPageNavigationRequestGuard.mockImplementationOnce(implementation);
 }
+function denyAfterAction(blocked: Error) {
+  guardOnce(async ({ action, page }) => {
+    await action(page.url());
+    throw blocked;
+  });
+}
 
 function trackGuardSettlement() {
   const settled = vi.fn();
@@ -99,30 +96,22 @@ function expectQuarantined() {
   });
 }
 
-function documentPage<T>(waitForFunction: T, url = "https://example.com") {
+function documentPage<T>(
+  waitForFunction: T,
+  options: { url?: () => string; waitForTimeout?: () => Promise<void> } = {},
+) {
   const documentHandle = { dispose: vi.fn(async () => {}) };
   const page = {
-    url: vi.fn(() => url),
+    url: () => "https://example.com",
     evaluateHandle: vi.fn(async () => documentHandle),
     waitForFunction,
+    ...options,
   };
   install(page);
   return { page, documentHandle };
 }
-type WaitState = { document: unknown };
+type WaitState = { document: unknown; source: string };
 type WaitPredicate = (state: WaitState) => boolean;
-function pendingEvaluation(result: Promise<unknown> = new Promise(() => {})) {
-  const ctrl = new AbortController();
-  const entered = Promise.withResolvers<void>();
-  install({
-    url: () => "https://example.com/current",
-    evaluate: () => {
-      entered.resolve();
-      return result;
-    },
-  });
-  return { ctrl, entered: entered.promise };
-}
 function preservePolicyDenial(blocked: Error) {
   session.isPolicyDenyNavigationError.mockImplementation((err: unknown) => err === blocked);
   session.wasBrowserNavigationSourcePreservedAfterPolicyDenial.mockImplementation(
@@ -146,7 +135,7 @@ describe("pw-tools-core browser SSRF guards", () => {
   });
 
   it.each(["() => true", "async () => true"])(
-    "guards %s wait predicates and preserves proxy policy",
+    "guards serialized %s wait predicates without host compilation",
     async (fn) => {
       let currentUrl = "https://example.com";
       const order: string[] = [];
@@ -154,57 +143,64 @@ describe("pw-tools-core browser SSRF guards", () => {
         order.push("guard");
         return await action(page.url());
       });
-      const documentHandle = { dispose: vi.fn(async () => {}) };
       const waitForFunction = vi.fn(async (predicate: WaitPredicate, state: WaitState) => {
         order.push("predicate");
-        const browserState = { ...state, document: globalThis.document };
-        expect(predicate(browserState)).toBe(!fn.startsWith("async"));
+        const browserState = { ...state, document: {} };
+        const browser = { state: browserState, document: browserState.document };
+        const poll = () => runInNewContext(`(${predicate.toString()})(state)`, browser);
+        expect(poll()).toBe(!fn.startsWith("async"));
         if (fn.startsWith("async")) {
           await Promise.resolve();
-          expect(predicate(browserState)).toBe(true);
+          expect(poll()).toBe(true);
         }
         currentUrl = "https://93.184.216.34/target";
       });
-      install({
+      const { documentHandle } = documentPage(waitForFunction, {
         url: () => currentUrl,
-        evaluateHandle: vi.fn(async () => documentHandle),
         waitForTimeout: vi.fn(async () => {
           order.push("passive");
         }),
-        waitForFunction,
       });
-      await waitForViaPlaywright({ ...proxied, timeMs: 1, fn });
-      expect(waitForFunction).toHaveBeenCalledOnce();
-      expect(waitForFunction).toHaveBeenCalledWith(
+      const hostFunction = vi.spyOn(globalThis, "Function").mockImplementation(() => {
+        throw new EvalError("Host code generation is disabled");
+      });
+      try {
+        await waitForViaPlaywright({ ...proxied, timeMs: 1, fn });
+      } finally {
+        hostFunction.mockRestore();
+      }
+      expect(waitForFunction).toHaveBeenCalledExactlyOnceWith(
         expect.any(Function),
-        { document: documentHandle },
+        { document: documentHandle, source: fn },
         { timeout: expect.any(Number) },
       );
       expect(order).toEqual(["guard", "passive", "predicate"]);
-      expect(session.withPageNavigationRequestGuard).toHaveBeenCalledWith({
-        action: expect.any(Function),
-        onPolicyCheckStarted: expect.any(Function),
-        onPolicyDenied: expect.any(Function),
-        page: pageState.page,
-        ssrfPolicy: { allowPrivateNetwork: false },
-        browserProxyMode: "explicit-browser-proxy",
-      });
-      expect(session.assertPageNavigationCompletedSafely).toHaveBeenLastCalledWith({
-        ...proxied,
-        page: pageState.page,
-        response: null,
-      });
+      expect(session.withPageNavigationRequestGuard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ssrfPolicy: { allowPrivateNetwork: false },
+          browserProxyMode: "explicit-browser-proxy",
+        }),
+      );
       expect(session.closeBlockedNavigationTarget).not.toHaveBeenCalled();
       expect(documentHandle.dispose).toHaveBeenCalledOnce();
     },
   );
+
+  it("rejects invalid wait syntax before starting passive waits", async () => {
+    const waitForTimeout = vi.fn(async () => {});
+    install({ url: () => "https://example.com", waitForTimeout });
+    await expect(waitForViaPlaywright({ ...strict, timeMs: 1, fn: "return (" })).rejects.toThrow(
+      SyntaxError,
+    );
+    expect(waitForTimeout).not.toHaveBeenCalled();
+  });
 
   it("does not recreate a wait predicate in a replacement document", async () => {
     const { documentHandle } = documentPage(
       vi.fn(async (predicate: WaitPredicate, state: WaitState) =>
         predicate({ ...state, document: {} }),
       ),
-      "https://example.com/next",
+      { url: () => "https://example.com/next" },
     );
 
     await expect(wait(undefined, "() => document.cookie")).rejects.toThrow(
@@ -352,37 +348,13 @@ describe("pw-tools-core browser SSRF guards", () => {
     await expect(task).rejects.toBe(blocked);
   });
 
-  it("keeps the request guard for the full grace after an early safe post-check", async () => {
-    await withFakeTimers(async () => {
-      let currentUrl = "https://example.com";
-      install(
-        { url: () => currentUrl },
-        {
-          hover: vi.fn(async () => {
-            currentUrl = "https://example.org";
-          }),
-        },
-      );
-      const settled = trackGuardSettlement();
-      const task = startHover();
-      await vi.advanceTimersByTimeAsync(249);
-      expect(settled).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      await task;
-      expect(settled).toHaveBeenCalledOnce();
-    });
-  });
-
   it("quarantines a late unpreserved policy failure before returning cancellation", async () => {
     const { ctrl, hover } = pendingHover("https://example.com");
     const blocked = policyFailure("late browser navigation blocked by policy");
     session.isPolicyDenyNavigationError.mockImplementationOnce(
       (err: unknown) => err instanceof Error && err.name === "SsrFBlockedError",
     );
-    guardOnce(async ({ action, page }) => {
-      await action(page.url());
-      throw blocked;
-    });
+    denyAfterAction(blocked);
 
     const task = startHover(ctrl);
     await hover.started;
@@ -463,10 +435,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     const fill = vi.fn(async () => {});
     const blocked = policyFailure("blocked field navigation");
     install(undefined, { fill });
-    guardOnce(async ({ action, page }) => {
-      await action(page.url());
-      throw blocked;
-    });
+    denyAfterAction(blocked);
 
     await expect(
       pw.fillFormViaPlaywright({
@@ -479,51 +448,44 @@ describe("pw-tools-core browser SSRF guards", () => {
     ).rejects.toThrow("blocked field navigation");
 
     expect(fill).toHaveBeenCalledOnce();
-    expect(session.withPageNavigationRequestGuard).toHaveBeenCalledOnce();
   });
-  it("disconnects a pending page evaluation on caller cancellation", async () => {
-    const { ctrl, entered } = pendingEvaluation();
+  it.each([false, true])("settles evaluation interruption (dialog=%s)", async (dialog) => {
+    const ctrl = new AbortController();
+    const evaluation = heldAction<boolean>();
+    install({ url: () => "https://example.com/current", evaluate: evaluation.run });
     const task = pw.evaluateViaPlaywright({
-      ...strict,
-      fn: "() => 1",
+      ...(dialog ? target : strict),
+      fn: dialog ? "() => alert('x')" : "() => 1",
       signal: ctrl.signal,
     });
-    await entered;
-    ctrl.abort(new Error("aborted by test"));
-    await expect(task).rejects.toThrow("aborted by test");
-    expect(session.forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
-      ...strict,
-      page: pageState.page,
-    });
-  });
-
-  it("reconciles an observed dialog after evaluation settles without disconnecting", async () => {
-    const evaluation = Promise.withResolvers<boolean>();
-    const { ctrl, entered } = pendingEvaluation(evaluation.promise);
-    const task = pw.evaluateViaPlaywright({
-      ...target,
-      fn: "() => alert('x')",
-      signal: ctrl.signal,
-    });
-    await entered;
-    const error = new BrowserObservedDialogBlockedError({
-      dialogs: {
-        pending: [{ id: "d1", type: "alert", message: "x", openedAt: "2026-09-08T00:00:00Z" }],
-        recent: [],
-      },
-    });
+    await evaluation.started;
+    const error = dialog
+      ? new BrowserObservedDialogBlockedError({
+          dialogs: {
+            pending: [{ id: "d1", type: "alert", message: "x", openedAt: "2026-09-08T00:00:00Z" }],
+            recent: [],
+          },
+        })
+      : new Error("aborted by test");
     session.isBrowserObservedDialogBlockedError.mockImplementation(
       (err) => err instanceof BrowserObservedDialogBlockedError,
     );
     ctrl.abort(error);
     await expect(task).rejects.toBe(error);
-    expect(session.forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
-    evaluation.resolve(true);
-    await vi.waitFor(() =>
-      expect(session.markObservedDialogsHandledRemotelyForPage).toHaveBeenCalledWith(
-        pageState.page,
-        error.browserState.dialogs.pending,
-      ),
-    );
+    if (error instanceof BrowserObservedDialogBlockedError) {
+      expect(session.forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
+      evaluation.resolve(true);
+      await vi.waitFor(() =>
+        expect(session.markObservedDialogsHandledRemotelyForPage).toHaveBeenCalledWith(
+          pageState.page,
+          error.browserState.dialogs.pending,
+        ),
+      );
+    } else {
+      expect(session.forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
+        ...strict,
+        page: pageState.page,
+      });
+    }
   });
 });

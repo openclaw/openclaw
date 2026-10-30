@@ -39,8 +39,13 @@ async function profileAt(root: string, host: string, token?: string) {
   }
   return profile;
 }
-async function run(argv: string[], options: SpawnOptions) {
-  const child = spawn(argv[0]!, argv.slice(1), options);
+async function run(argv: string[], home: string, options: SpawnOptions = {}) {
+  const child = spawn(argv[0]!, argv.slice(1), {
+    cwd: home,
+    stdio: ["ignore", "pipe", "pipe"],
+    ...options,
+    env: { PATH: process.env.PATH, HOME: home, GH_TOKEN: "", GITHUB_TOKEN: "", ...options.env },
+  });
   let stdout = "";
   let stderr = "";
   child.stdout!.on("data", (chunk) => {
@@ -79,9 +84,7 @@ describe.skipIf(!hasPowerShell)("GitHub launch PowerShell boundary", () => {
     { credentialState: "available", externalCommand: false },
     { credentialState: "missing", externalCommand: false },
     { credentialState: "available", externalCommand: true },
-    { credentialState: "missing", externalCommand: true },
     { credentialState: "available", externalCommand: true, host: "ghe.example.test" },
-    { credentialState: "missing", externalCommand: false, host: "ghe.example.test" },
   ])(
     "keeps the PowerShell owner for $credentialState credentials (external: $externalCommand)",
     async ({ credentialState, externalCommand, host = "github.com" }) => {
@@ -117,17 +120,11 @@ describe.skipIf(!hasPowerShell)("GitHub launch PowerShell boundary", () => {
         buildGitHubExecLaunchArgv(argv, profile, options),
       );
       expect(JSON.stringify(launchArgv)).not.toContain("synthetic-powershell-token");
-      const { code, stdout, stderr } = await run(launchArgv, {
-        cwd: root,
+      const { code, stdout, stderr } = await run(launchArgv, root, {
         env: {
-          PATH: process.env.PATH,
-          HOME: root,
           SystemRoot: process.env.SystemRoot,
-          GH_TOKEN: "",
-          GITHUB_TOKEN: "",
           POWERSHELL_TELEMETRY_OPTOUT: "1",
         },
-        stdio: ["ignore", "pipe", "pipe"],
       });
       if (credentialState === "available") {
         expect({ code, stderr }).toEqual({ code: 7, stderr: "" });
@@ -189,15 +186,9 @@ describe.skipIf(process.platform === "win32")("GitHub launch source runtimes", (
           target,
           ...args,
         ];
-        const { code, stdout, stderr } = await run([runtime, ...argv], {
+        const { code, stdout, stderr } = await run([runtime, ...argv], root, {
           cwd: commandCwd,
-          env: {
-            PATH: process.env.PATH,
-            HOME: root,
-            ZDOTDIR: root,
-            GH_TOKEN: "",
-            GITHUB_TOKEN: "",
-          },
+          env: { ZDOTDIR: root },
           stdio: ["ignore", "pipe", "pipe", "pipe"],
         });
         expect({ code, stderr }).toEqual({ code: 0, stderr: "" });

@@ -6,15 +6,18 @@ import {
   extractErrorCode,
 } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
+import { isUpdateRehearsalReadOnlyPath } from "../infra/update-rehearsal-paths.js";
 import { shellEscape } from "../shared/shell-quote.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../state/openclaw-database-preflight.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
+import { resolveRelativeSessionStoreMigrationTargets } from "./doctor-relative-session-store-paths.js";
 
 export type DoctorDatabasePreflight = OpenClawDatabaseSchemaPreflight & {
   /** The native updater already captured these files while holding stopped-state custody. */
@@ -85,6 +88,11 @@ export async function prepareDoctorDatabasePreflight(
     preserveSourceArtifacts?: true;
   } = {},
 ): Promise<DoctorDatabasePreflight> {
+  // Delegated update Doctor enters without CLI boot's process-wide engine selection.
+  if (!getDatabaseEngineSelection()) {
+    const { readConfigSnapshotForEngineSelection } = await import("./config-preflight-snapshot.js");
+    await readConfigSnapshotForEngineSelection();
+  }
   const { scope, preserveSourceArtifacts } = options;
   const databasePreflight = await import("../state/openclaw-database-preflight.js");
   const [
@@ -118,10 +126,15 @@ export async function prepareDoctorDatabasePreflight(
       ? {
           // Custom stores go through the artifact-preserving header reader; discovery
           // must not open live SQLite files before the update guard.
-          configuredAgentDatabaseTargets: listAgentIds(cfg).map((agentId) => ({
-            agentId,
-            path: path.join(resolveAgentDir(cfg, agentId), "openclaw-agent.sqlite"),
-          })),
+          configuredAgentDatabaseTargets: (registered) => [
+            ...listAgentIds(cfg).map((agentId) => ({
+              agentId,
+              path: path.join(resolveAgentDir(cfg, agentId), "openclaw-agent.sqlite"),
+            })),
+            ...resolveRelativeSessionStoreMigrationTargets(cfg, process.env, registered).filter(
+              (target) => !isUpdateRehearsalReadOnlyPath(target.path, process.env),
+            ),
+          ],
           configuredAgentDatabaseCandidatePaths:
             targets.resolveConfiguredAgentDatabaseCandidatePaths(cfg, { env: process.env }),
           agentAdmissionConfig: cfg,

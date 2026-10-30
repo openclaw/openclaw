@@ -16,6 +16,7 @@ import { isSignalTimeoutReason } from "../../failover-error.js";
 import { runAgentEndSideEffectsAsync } from "../../harness/agent-end-side-effects.js";
 import { finalizeHarnessContextEngineTurn } from "../../harness/context-engine-lifecycle.js";
 import { bindAgentHarnessHookMessages } from "../../harness/lifecycle-hook-messages.js";
+import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import type { AgentSession, SessionMessageEntry } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import {
@@ -100,7 +101,6 @@ export function finalizeEmbeddedAttempt(
       hasAcceptedSessionSpawn(result.acceptedSessionSpawns) ||
       (result.clientToolCalls?.length ?? 0) > 0 ||
       result.yieldDetected === true ||
-      result.lastToolError !== undefined ||
       hasAsyncActivity(result.toolMetas) ||
       (stopReason !== "toolUse" &&
         (params.hasTerminalOutput ||
@@ -232,7 +232,17 @@ export async function completeEmbeddedAttemptAfterTurn(
       }
     }
     await finalizeHarnessContextEngineTurn({
-      ...attempt,
+      admittedRunContext: attempt.admittedRunContext,
+      sessionKey: attempt.sessionKey,
+      sessionTarget: attempt.sessionTarget,
+      sessionFile: attempt.sessionFile,
+      config: attempt.config,
+      modelId: attempt.modelId,
+      requestedModelId: attempt.requestedModelId,
+      modelContextWindow: attempt.modelContextWindow,
+      fallbackReason: attempt.fallbackReason,
+      degradedReason: attempt.degradedReason,
+      abortSignal: input.runAbortController.signal,
       contextEngine: activeContextEngine,
       promptError: Boolean(promptError),
       aborted: lifecycleState.aborted,
@@ -329,7 +339,12 @@ export async function completeEmbeddedAttemptAfterTurn(
   if (
     attempt.operation !== "settled-tool-finalization" &&
     attempt.sessionPersistence !== "detached" &&
-    !beforeAgentFinalizeRevisionReason
+    !beforeAgentFinalizeRevisionReason &&
+    // A refresh continues this logical turn; agent_end fires once, after its final attempt.
+    !(
+      executionState.terminal.kind === "ok" &&
+      captureAgentPluginRuntimeRefresh().continuesAfterAttempt()
+    )
   ) {
     const lifecycleForAgentEnd = projectAgentRunAttemptTerminal(executionState.terminal);
     // Abort outranks failure in terminal-outcome precedence: teardown races can
@@ -493,9 +508,7 @@ export function createEmbeddedAttemptExternalAbortController(input: {
       source: "prompt",
       error: createAttemptAbortError(signal),
     });
-    if (!input.runAbortController.signal.aborted) {
-      input.runAbortController.abort(isTimeout ? (reason ?? createTimeoutAbortReason()) : reason);
-    }
+    input.runAbortController.abort(isTimeout ? (reason ?? createTimeoutAbortReason()) : reason);
     void abortActiveSession?.(input.runAbortController.signal.reason);
   };
 
@@ -526,6 +539,11 @@ export function createEmbeddedAttemptExternalAbortController(input: {
     },
     dispose: () => {
       removeListener?.();
+      // Retained abort reasons can keep this controller after its attempt ends.
+      abortActiveSession = undefined;
+      abortRun = undefined;
+      isCompactionPendingOrRetrying = undefined;
+      isCompactionInFlight = undefined;
     },
     setActiveSessionAbort: (abort) => {
       abortActiveSession = abort;

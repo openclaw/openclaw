@@ -39,20 +39,9 @@ it("retains conversion rejection code, message and request log identity", async 
       }
     },
     async (origin) => {
-      // SAFETY: The SDK owns this Axios instance and unwraps responses to its HttpInstance contract.
-      const sdkHttp = Lark.defaultHttpInstance as Lark.HttpInstance;
-      const loopbackHttp = Object.create(sdkHttp) as Lark.HttpInstance;
-      loopbackHttp.request = (options) => {
-        const upstream = new URL(options.url ?? "");
-        return sdkHttp.request({
-          ...options,
-          url: `${origin}${upstream.pathname}${upstream.search}`,
-        });
-      };
       const client = new Lark.Client({
         ...credentials,
-        domain: Lark.Domain.Feishu,
-        httpInstance: loopbackHttp,
+        domain: origin,
         disableTokenCache: true,
         loggerLevel: Lark.LoggerLevel.error,
       });

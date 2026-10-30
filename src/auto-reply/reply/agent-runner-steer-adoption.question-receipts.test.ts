@@ -12,24 +12,15 @@ import {
   withQuestionGateway,
 } from "../../agents/harness/gateway-question.test-support.js";
 import type { GatewayQuestionCall } from "../../agents/tools/gateway-question-lifecycle.js";
-import {
-  updateSessionEntry,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import {
   captureSessionControllerSourceSettlement,
   retireSessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
-import {
-  createReplyParams,
-  createSteerParams,
-} from "./agent-runner-steer-adoption.test-support.js";
-import { MessageInjectionTargetUnavailableError } from "./message-injection-authority.js";
+import { createSteerParams } from "./agent-runner-steer-adoption.test-support.js";
 import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { clearSessionQueues } from "./queue/cleanup.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
@@ -39,8 +30,7 @@ import {
 } from "./reply-operation-run-state.js";
 import { withQuestionCreator } from "./reply-run-question.test-support.js";
 import { createQueueTestRun } from "./reply-tool-authority.test-support.js";
-import { prepareSteeringDelivery } from "./steering-delivery-preparation.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createMockTypingController, createReplyParams } from "./test-helpers.js";
 
 const text = "candidate committed answer";
 type QueueOptions = Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[2];
@@ -74,28 +64,23 @@ const legacyDispatcher: AgentQuestionDispatcher = {
     }),
 };
 
-it.each(
-  [
-    "delayed-receipt",
-    "failed-waiter",
-    "legacy-receipt",
-    "closed-adoption",
-    "confirmed-closed-adoption",
-    "late-receipt",
-  ].flatMap((mode) =>
-    (["steer", "reply"] as const)
-      .filter((entrypoint) => mode !== "late-receipt" || entrypoint === "steer")
-      .flatMap((entrypoint) =>
-        (entrypoint === "steer" &&
-        ["failed-waiter", "legacy-receipt", "confirmed-closed-adoption"].includes(mode)
-          ? [false, true]
-          : [false]
-        ).map((hidden) => ({ entrypoint, mode, hidden })),
-      ),
-  ),
-)(
-  "does not replay or abort independent work after $entrypoint/$mode (hidden=$hidden)",
-  async ({ entrypoint, mode, hidden }) => {
+it.each([
+  ["delayed-receipt", "steer", false],
+  ["delayed-receipt", "reply", false],
+  ["failed-waiter", "steer", false],
+  ["failed-waiter", "steer", true],
+  ["failed-waiter", "reply", false],
+  ["legacy-receipt", "steer", false],
+  ["legacy-receipt", "steer", true],
+  ["legacy-receipt", "reply", false],
+  ["closed-adoption", "steer", false],
+  ["closed-adoption", "reply", false],
+  ["confirmed-closed-adoption", "steer", false],
+  ["confirmed-closed-adoption", "steer", true],
+  ["confirmed-closed-adoption", "reply", false],
+] as const)(
+  "does not replay or abort independent work after %s/%s (hidden=%s)",
+  async (mode, entrypoint, hidden) => {
     const key = `agent:main:question-recovery-${entrypoint}-${mode}-${hidden}`;
     const id = `ask_recovery_${entrypoint}_${mode}_${hidden}`;
     const run = createQueueTestRun({
@@ -104,21 +89,6 @@ it.each(
     });
     await withQuestionGateway(async (fixture) =>
       withQuestionCreator(key, run, async (operation, fingerprint) => {
-        const receiptScope =
-          mode === "late-receipt"
-            ? {
-                agentId: "main",
-                sessionKey: key,
-                storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
-              }
-            : undefined;
-        if (receiptScope) {
-          run.abortSignal = operation.abortSignal;
-          await upsertSessionEntryCore(receiptScope, {
-            sessionId: run.run.sessionId,
-            updatedAt: 1,
-          });
-        }
         const hold = fixture.holdWaitAnswerResponse();
         const call = mode === "legacy-receipt" ? legacyGateway : callGatewayTool;
         const question = { header: "Answer", question: "Continue?", isOther: true, options: [] };
@@ -171,12 +141,6 @@ it.each(
           assertCurrent: () => void,
           kind: "run" | "source-bound",
         ) => {
-          if (receiptScope) {
-            assertCurrent();
-            await updateSessionEntry(receiptScope, () => ({
-              restartRecoveryDeliveryReceiptState: "terminal-pending",
-            }));
-          }
           return await steerActiveSessionWithOptionalDeliveryWait(
             { steer: nativeSteer, subscribe },
             message,
@@ -217,10 +181,8 @@ it.each(
             projectSessionMessages: false,
           });
         }
-        const confirmed = ["delayed-receipt", "confirmed-closed-adoption", "late-receipt"].includes(
-          mode,
-        );
-        if (mode !== "confirmed-closed-adoption" && mode !== "late-receipt") {
+        const confirmed = ["delayed-receipt", "confirmed-closed-adoption"].includes(mode);
+        if (mode !== "confirmed-closed-adoption") {
           fixture.dropNextResolveResponse();
         }
         const state: ReplyOperationRunState = {};
@@ -232,6 +194,7 @@ it.each(
           entrypoint === "reply"
             ? runReplyAgent(
                 createReplyParams(run, {
+                  transcriptCommandBody: run.prompt,
                   opts: {
                     [REPLY_OPERATION_RUN_STATE]: state,
                     turnAdoptionLifecycle: run.turnAdoptionLifecycle,
@@ -250,10 +213,9 @@ it.each(
             : runActiveReplySteer(
                 createSteerParams(key, run, operation, {
                   replyOperationRunState: state,
-                  restartRecoverySourceTurnId: run.messageId,
+                  sourceTurnId: run.messageId,
                   runFollowup: followup,
                   sessionCtx,
-                  storePath: receiptScope?.storePath,
                 }),
               )
         ).finally(() => {
@@ -285,24 +247,12 @@ it.each(
           const resolves = fixture.requests.filter(
             (request) => request.method === "question.resolve",
           );
-          const wait = fixture.requests.find((request) => request.method === "question.waitAnswer");
           expect(resolves).toHaveLength(1);
           const receipt = await fixture.manager.waitAnswer(id, undefined, true);
           expect(receipt).toMatchObject({
             status: "answered",
             answers: { answers: { answer: [text] } },
           });
-          if (mode === "legacy-receipt") {
-            expect(resolves[0]?.params).not.toHaveProperty("resolutionId");
-            expect(wait?.params).not.toHaveProperty("includeResolutionId");
-            expect(receipt).not.toHaveProperty("resolutionId");
-          } else {
-            const resolveParams = resolves[0]?.params as { resolutionId?: string } | undefined;
-            const resolutionId = resolveParams?.resolutionId;
-            expect(resolutionId).toMatch(/^[a-f0-9]{32}$/);
-            expect(receipt).toMatchObject({ resolutionId });
-            expect(wait?.params).toMatchObject({ includeResolutionId: true });
-          }
           expect(operation).toMatchObject({ phase: "running", result: null });
           expect(cancel).not.toHaveBeenCalled();
           if (mode === "delayed-receipt") {
@@ -331,21 +281,6 @@ it.each(
           expect.soft(adopted).toHaveBeenCalledOnce();
           expect.soft(settled).toHaveBeenCalledOnce();
           expect(nativeSteer).not.toHaveBeenCalled();
-          if (receiptScope) {
-            const delivery = prepareSteeringDelivery({
-              ...receiptScope,
-              sessionId: run.run.sessionId,
-              assertCurrent: () => operation.abortSignal.throwIfAborted(),
-            });
-            try {
-              await expect(delivery.prepareCurrent()).rejects.toBeInstanceOf(
-                MessageInjectionTargetUnavailableError,
-              );
-            } finally {
-              delivery.release();
-            }
-            expect(nativeSteer).not.toHaveBeenCalled();
-          }
           if (confirmed) {
             expect(result).toBe(entrypoint === "reply" ? undefined : "handled");
             expect(state.admission).toEqual({ status: "accepted", mode: "steer" });

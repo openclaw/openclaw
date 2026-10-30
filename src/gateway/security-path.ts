@@ -2,14 +2,6 @@
 // plugin HTTP routes even under malformed encoding.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-type SecurityPathCanonicalization = {
-  canonicalPath: string;
-  candidates: string[];
-  decodePassLimitReached: boolean;
-  malformedEncoding: boolean;
-  rawNormalizedPath: string;
-};
-
 const MAX_PATH_DECODE_PASSES = 32;
 
 function normalizePathSeparators(pathname: string): string {
@@ -25,11 +17,7 @@ function normalizePathForSecurity(pathname: string): string {
   return normalizePathSeparators(normalizeLowercaseStringOrEmpty(resolved)) || "/";
 }
 
-function buildCanonicalPathCandidates(pathname: string): {
-  candidates: string[];
-  decodePassLimitReached: boolean;
-  malformedEncoding: boolean;
-} {
+function buildCanonicalPathCandidates(pathname: string) {
   const candidates = new Set([normalizePathForSecurity(pathname)]);
 
   let decoded = pathname;
@@ -68,7 +56,7 @@ export function canonicalizePathVariant(pathname: string): string {
   return candidates[candidates.length - 1] ?? "/";
 }
 
-export function canonicalizePathForSecurity(pathname: string): SecurityPathCanonicalization {
+export function canonicalizePathForSecurity(pathname: string) {
   const { candidates, decodePassLimitReached, malformedEncoding } =
     buildCanonicalPathCandidates(pathname);
 

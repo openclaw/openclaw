@@ -14,6 +14,7 @@ import {
   type Admission,
   type ScopedWriteRevision,
 } from "./sqlite-database-admission-record.js";
+import { isPreparingSqliteNativeMutation } from "./sqlite-native-observer.js";
 import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseWriteScopes"), () => ({
@@ -40,6 +41,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   readRevision(this: void, database: DatabaseSync): number | undefined;
   writer(this: void, database: DatabaseSync): Admission | undefined;
   suspended(this: void, database: DatabaseSync): boolean;
+  hasPendingSchemaMutation(this: void, database: DatabaseSync): boolean;
   publish(this: void, record: Admission, keys: readonly string[]): void;
 }) {
   /** Local sibling writers notify maintenance after publishing their shared write revision. */
@@ -271,7 +273,10 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     record: Admission,
     keys: readonly string[],
     pending?: Set<string> | null,
+    schemaRevisionDelta = 0,
   ): string {
+    const schemaRevision =
+      (readSqliteDatabaseGeneration(record, "schemaRevision") + schemaRevisionDelta) | 0;
     const scopes: Array<[string, string, number]> = [];
     for (const key of keys) {
       const revision = record.writeScopes.get(key);
@@ -281,7 +286,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
         return JSON.stringify([
           record.identity,
           record.generationId,
-          readSqliteDatabaseGeneration(record, "schemaRevision"),
+          schemaRevision,
           "database",
           (readSqliteDatabaseGeneration(record, "writeRevision") +
             (pending !== undefined ? 1 : 0)) |
@@ -298,7 +303,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     return JSON.stringify([
       record.identity,
       record.generationId,
-      readSqliteDatabaseGeneration(record, "schemaRevision"),
+      schemaRevision,
       (readSqliteDatabaseGeneration(record, "unscopedWriteRevision") + (pending === null ? 1 : 0)) |
         0,
       scopes,
@@ -355,6 +360,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     database: DatabaseSync,
     scope: string | readonly SqliteDatabaseWriteScope[],
     pending?: Set<string> | null,
+    schemaRevisionDelta = 0,
   ): string | undefined {
     const keys = normalizedWriteScopes(scope);
     const record = owner.admission(database);
@@ -367,7 +373,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
       return undefined;
     }
     return record
-      ? scopedWriteToken(record, keys, pending)
+      ? scopedWriteToken(record, keys, pending, schemaRevisionDelta)
       : localScopedWriteToken(database, keys, pending);
   }
 
@@ -412,7 +418,14 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     scope: string | readonly SqliteDatabaseWriteScope[],
   ): string | undefined {
     const database = sqlPublicationAnchor(connection);
-    return readScopedWriteToken(database, scope, state.pendingWriteScopes.get(database));
+    // MAIN DDL publishes one schema revision at COMMIT, after this receipt is captured.
+    // Predict it with the data revisions so the receipt names the committed generation.
+    return readScopedWriteToken(
+      database,
+      scope,
+      state.pendingWriteScopes.get(database),
+      owner.hasPendingSchemaMutation(database) ? 1 : 0,
+    );
   }
 
   /** Host row caches retain a physical identity and receipt without opening SQLite. */
@@ -429,7 +442,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     const database = sqlPublicationAnchor(connection);
     if (
       !connection.isOpen ||
-      !connection.isTransaction ||
+      (!connection.isTransaction && !isPreparingSqliteNativeMutation(database)) ||
       !hasSqlitePostCommitScope(database) ||
       owner.suspended(database)
     ) {
@@ -443,6 +456,9 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   }
 
   return {
+    cancel(database: DatabaseSync) {
+      state.pendingWriteScopes.delete(database);
+    },
     begin(database: DatabaseSync, unscoped: boolean) {
       const scope = unscoped ? undefined : state.writeScopes.get(database);
       const pending = state.pendingWriteScopes.get(database);

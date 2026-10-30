@@ -30,15 +30,6 @@ import type { captureModelSetupConnection } from "./first-run-setup.ts";
 import { createModelSetupSaving } from "./model-setup-saving.ts";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
 
-type NativeModelSetupOptions = {
-  getContext: () => ApplicationContext;
-  getConnection: () => ReturnType<typeof captureModelSetupConnection> | null;
-  canUseSetup: (client: GatewayBrowserClient | null) => boolean;
-  blocked: () => boolean;
-  onSelected: () => void;
-  onChange: () => void;
-};
-
 export type NativeModelSetup = ReturnType<typeof createNativeModelSetup>;
 
 type NativeCatalogRequest = {
@@ -47,7 +38,14 @@ type NativeCatalogRequest = {
   result: Promise<ModelCatalogResult>;
 };
 
-export function createNativeModelSetup(options: NativeModelSetupOptions) {
+export function createNativeModelSetup(options: {
+  getContext: () => ApplicationContext;
+  getConnection: () => ReturnType<typeof captureModelSetupConnection> | null;
+  canUseSetup: (client: GatewayBrowserClient | null) => boolean;
+  blocked: () => boolean;
+  onSelected: () => void;
+  onChange: () => void;
+}) {
   const catalog = projectSource<NativeCatalogRequest | null, ReturnType<typeof readModelCatalog>>(
     null,
     {
@@ -238,7 +236,7 @@ export function NativeModelSetupView(props: { owner: NativeModelSetup }) {
       value: `${model.provider}/${model.id}`,
       label: model.name,
       provider: model.provider,
-      detail:
+      description:
         model.available === true
           ? providerDisplayLabel(model.provider)
           : (chatModelUnavailableMessage(model.unavailableReason) ??

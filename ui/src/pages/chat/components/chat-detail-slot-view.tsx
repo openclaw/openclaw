@@ -1,5 +1,4 @@
 import { createMemo, lazy } from "solid-js";
-import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { ChatDetailSlotProps } from "../chat-pane-embedded-types.ts";
@@ -7,15 +6,13 @@ import { selectedChatSessionRow } from "../chat-state-route.ts";
 import { openSlot } from "../sidebar-layout.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
-import {
-  getSessionWorkspace,
-  selectSessionWorkspacePreview,
-} from "./chat-session-workspace-state.ts";
+import { getSessionWorkspace } from "./chat-session-workspace-state.ts";
 import {
   openSessionWorkspaceFile,
   openSessionWorkspaceFileView,
   revealSessionWorkspaceFile,
 } from "./chat-session-workspace.ts";
+import type { WorkspaceFileLinkTarget } from "./chat-sidebar-content-types.ts";
 
 // The output formatter belongs to the selected detail, not ordinary chat boot.
 const ChatToolOutput = lazy(() => import("./chat-tool-output-view.tsx"), {
@@ -124,7 +121,7 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
             canvasPluginSurfaceUrl={props.host.canvasPluginSurfaceUrl}
             embedSandboxMode={props.host.embedSandboxMode}
             allowExternalEmbedUrls={props.host.allowExternalEmbedUrls}
-            onOpenWorkspaceFile={(target: MarkdownFileLinkTarget) => {
+            onOpenWorkspaceFile={(target: WorkspaceFileLinkTarget) => {
               void openSessionWorkspaceFile(
                 props.host,
                 target,
@@ -137,9 +134,9 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
               }
             }}
             onOpenSessionLink={props.chat.onOpenSessionLink}
+            onBrowseFiles={props.onBrowseFiles}
             onRevealInWorkspace={(path: string) => {
               revealSessionWorkspaceFile(props.host, path);
-              selectSessionWorkspacePreview(props.host, null);
               props.host.updateSidebarLayout(openSlot(props.host.sidebarLayout, "workspace"));
               props.onWorkspaceIntent?.();
             }}

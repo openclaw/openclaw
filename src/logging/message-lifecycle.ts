@@ -9,16 +9,6 @@ type MessageLifecycleRef = {
   sessionKey?: string;
 };
 
-type MessageLifecycleOutcome = "completed" | "skipped" | "error";
-
-type MessageLifecycleProcessedOptions = MessageLifecycleRef & {
-  durationMs?: number;
-  reason?: string;
-  error?: string;
-  userPrompt?: string;
-  finalResponse?: string;
-};
-
 export function createDiagnosticMessageLifecycle(
   params: MessageLifecycleRef & {
     enabled: boolean;
@@ -83,8 +73,14 @@ export function createDiagnosticMessageLifecycle(
     },
 
     markProcessed(
-      outcome: MessageLifecycleOutcome,
-      options?: MessageLifecycleProcessedOptions,
+      outcome: "completed" | "skipped" | "error",
+      options?: MessageLifecycleRef & {
+        durationMs?: number;
+        reason?: string;
+        error?: string;
+        userPrompt?: string;
+        finalResponse?: string;
+      },
     ): void {
       if (!params.enabled) {
         return;

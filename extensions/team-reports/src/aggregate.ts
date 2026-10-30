@@ -484,7 +484,7 @@ export function boundReportDocument(input: ReportDocument): ReportDocument {
       size -= Buffer.byteLength(JSON.stringify(removed)) + (entry.list.length ? 1 : 0);
     }
   }
-  if (Buffer.byteLength(JSON.stringify(report)) > MAX_REPORT_BYTES) {
+  if (size > MAX_REPORT_BYTES) {
     throw new Error(
       "Team report metadata exceeds the 2 MiB limit after removing all item evidence; reduce the configured roster or organization scope",
     );

@@ -21,13 +21,11 @@ type GatewayRestartOperation = {
   state: GatewayRestartTransactionState;
 };
 
-type GatewayRestartCoordinatorParams = Pick<
-  GatewayReloadHandlerParams,
-  "scheduler" | "assertRestartReady" | "logReload" | "requestRecoveryRestart"
->;
-
 type GatewayRestartCoordinatorOptions = {
-  params: GatewayRestartCoordinatorParams;
+  params: Pick<
+    GatewayReloadHandlerParams,
+    "scheduler" | "assertRestartReady" | "logReload" | "requestRecoveryRestart"
+  >;
   reloadSignal: AbortSignal;
   restartRecoveryAvailable: boolean;
   hasAcceptedRestart?: () => boolean;

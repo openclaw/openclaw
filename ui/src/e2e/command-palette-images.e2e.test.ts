@@ -45,10 +45,7 @@ function anchors(palette: Locator) {
         throw new Error("Missing anchor: " + selector);
       }
       const { x, y } = node.getBoundingClientRect();
-      // The explicit mode heading intentionally precedes the existing input/actions.
-      const heading =
-        element.querySelector(".cmd-palette__session-heading")?.getBoundingClientRect().height ?? 0;
-      return { selector, x, y: selector === ".cmd-palette" ? y : y - heading };
+      return { selector, x, y };
     }),
   );
 }
@@ -60,8 +57,19 @@ suite.define(() => {
       await suite.withPage(
         { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
         async ({ page }) => {
-          await installMockGateway(page, scenario());
-          const { palette, input } = await openFromForeground(page, suite.server.baseUrl);
+          const gateway = await installMockGateway(
+            page,
+            scenario({
+              "sessions.create": {
+                key: "agent:main:dashboard:palette-image-created",
+                runStarted: true,
+              },
+            }),
+          );
+          const { palette, input, composer, url } = await openFromForeground(
+            page,
+            suite.server.baseUrl,
+          );
           await page.evaluate(() => document.fonts.ready);
           const images = palette.locator(".chat-attachment-thumb img");
           const start = palette.getByRole("button", {
@@ -91,72 +99,57 @@ suite.define(() => {
             await remove.first().click();
             await expect.poll(() => images.count()).toBe(11);
             expect(await anchors(palette)).toEqual(initial);
-            for (let index = 0; index < 11; index += 1) {
-              await remove.first().click();
-            }
+            // The first pointer removal covers interaction; clear the unchecked tail together.
+            await remove.evaluateAll((buttons) => {
+              for (const button of buttons) {
+                (button as HTMLButtonElement).click();
+              }
+            });
             await expect.poll(() => images.count()).toBe(0);
             expect(await start.isEnabled()).toBe(Boolean(message));
             expect(await anchors(palette)).toEqual(initial);
+          }
+          if (width === 1280) {
+            await input.fill("");
+            const attachments = await pasteImages(input, 2);
+            await expect.poll(() => images.count()).toBe(2);
+            await expect.poll(() => start.isEnabled()).toBe(true);
+            await gateway.deferNext("sessions.create");
+            await input.press("ControlOrMeta+Enter");
+            expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
+              message: "",
+              attachments,
+            });
+            expect(await input.isEditable()).toBe(false);
+            await page.keyboard.press("ControlOrMeta+Enter");
+            expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+            await gateway.rejectDeferred("sessions.create", {
+              code: "INVALID_REQUEST",
+              message: "Could not create session",
+            });
+            await expect
+              .poll(() => palette.getByRole("alert").textContent())
+              .toContain("Could not create session");
+            expect(await images.count()).toBe(2);
+            await input.press("Escape");
+            await input.waitFor({ state: "hidden" });
+            await page.keyboard.press("ControlOrMeta+K");
+            await input.waitFor({ state: "visible" });
+            expect(await images.count()).toBe(2);
+            await expect.poll(() => start.isEnabled()).toBe(true);
+            await input.press("ControlOrMeta+Enter");
+            expect(
+              (await gateway.waitForRequest("sessions.create", { after: 1 })).params,
+            ).toMatchObject({
+              message: "",
+              attachments,
+            });
+            await input.waitFor({ state: "hidden" });
+            await expectForegroundUnchanged(page, composer, url);
+            expect(await gateway.getRequests("chat.send")).toEqual([]);
           }
         },
       );
     },
   );
-
-  it("submits an image-only prompt once and retries the same images after creation fails", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installMockGateway(
-        page,
-        scenario({
-          "sessions.create": {
-            key: "agent:main:dashboard:palette-image-created",
-            runStarted: true,
-          },
-        }),
-      );
-      const { palette, input, composer, url } = await openFromForeground(
-        page,
-        suite.server.baseUrl,
-      );
-      const attachments = await pasteImages(input, 2);
-      const images = palette.locator(".chat-attachment-thumb img");
-      const start = palette.getByRole("button", {
-        name: "Start new session in background",
-        exact: true,
-      });
-      await expect.poll(() => images.count()).toBe(2);
-      await expect.poll(() => start.isEnabled()).toBe(true);
-      await gateway.deferNext("sessions.create");
-      await input.press("ControlOrMeta+Enter");
-      expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
-        message: "",
-        attachments,
-      });
-      expect(await input.isEditable()).toBe(false);
-      await page.keyboard.press("ControlOrMeta+Enter");
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-      await gateway.rejectDeferred("sessions.create", {
-        code: "INVALID_REQUEST",
-        message: "Could not create session",
-      });
-      await expect
-        .poll(() => palette.getByRole("alert").textContent())
-        .toContain("Could not create session");
-      expect(await images.count()).toBe(2);
-      await input.press("Escape");
-      await input.waitFor({ state: "hidden" });
-      await page.keyboard.press("ControlOrMeta+K");
-      await input.waitFor({ state: "visible" });
-      expect(await images.count()).toBe(2);
-      await expect.poll(() => start.isEnabled()).toBe(true);
-      await input.press("ControlOrMeta+Enter");
-      expect((await gateway.waitForRequest("sessions.create", { after: 1 })).params).toMatchObject({
-        message: "",
-        attachments,
-      });
-      await input.waitFor({ state: "hidden" });
-      await expectForegroundUnchanged(page, composer, url);
-      expect(await gateway.getRequests("chat.send")).toEqual([]);
-    });
-  });
 });

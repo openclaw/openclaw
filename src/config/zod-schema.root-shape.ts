@@ -388,6 +388,8 @@ export const OpenClawSchemaShape = {
   cron: z
     .strictObject({
       enabled: z.boolean().optional(),
+      /** Add to new nonempty agent-tool selections before creator policy and approval. */
+      defaultTools: z.array(z.string().trim().min(1)).optional(),
       /** Skip missed recurring slots at startup; one-shot catch-up is unchanged. Default: false. */
       skipMissedJobs: z.boolean().optional(),
       triggers: z
@@ -564,8 +566,8 @@ export const OpenClawSchemaShape = {
           /** Autonomous Skill Workshop learning. */
           autonomous: z
             .strictObject({
-              /** "auto" lets agents save and update Workshop skills; "off" disables autonomous learning. */
-              mode: z.union([z.literal("off"), z.literal("auto")]).optional(),
+              /** "auto" lets background reviews change Workshop skills; "propose" saves their changes as drafts for review; "off" disables background learning. */
+              mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
               /** Post background review notices to supported channels. Default: false. */
               channelNotices: z.boolean().optional(),
             })

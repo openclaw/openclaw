@@ -20,6 +20,7 @@ import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
 import { log } from "../logger.js";
+import { describedImageUnderstanding } from "./image-description.test-support.js";
 import {
   detectAndLoadPromptImages,
   detectImageReferences,
@@ -281,14 +282,7 @@ describe("detectAndLoadPromptImages", () => {
       prompt: `[media attached: ${imagePath} (image/png)]`,
       media: buildInboundMediaNoteProjection({
         media: [{ path: imagePath, contentType: "image/png" }],
-        MediaUnderstanding: [
-          {
-            kind: "image.description",
-            attachmentIndex: 0,
-            text: "already described",
-            provider: "test",
-          },
-        ],
+        MediaUnderstanding: describedImageUnderstanding(),
       }).media,
       workspaceDir,
     });
@@ -432,7 +426,9 @@ describe("detectAndLoadPromptImages", () => {
 
     expect(result.detectedRefs).toHaveLength(1);
     expect(result).toMatchObject({ loadedCount: 0, skippedCount: 1, images: [] });
-    expect(warn.mock.calls).toEqual([["Native image: sandbox validation failed"]]);
+    expect(warn.mock.calls).toEqual([
+      ["Native image: sandbox validation failed (reason=outside-workspace, pathClass=absolute)"],
+    ]);
     expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-private-image");
   });
 

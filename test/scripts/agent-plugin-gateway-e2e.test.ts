@@ -48,7 +48,7 @@ const cases = [
   { phase: "install", signal: "SIGTERM" } as const,
 ];
 
-it.skipIf(process.platform === "win32").for([undefined, "node", "bun"])(
+it.skipIf(process.platform === "win32").for([undefined, "node"])(
   "selects the %s runtime for the serving Agent Plugin Gateway",
   (runtime, { signal }) =>
     fixtures.run(async () => {

@@ -64,16 +64,15 @@ export function createDispatchFixture(
     duplicateOnSecondPage?: boolean;
     runIdentityOverrides?: Record<string, unknown>;
     runPathStyle?: "full-ref";
-    witnessOverrides?: Record<string, unknown>;
     witnessInputs?: Record<string, unknown>;
     witnessMissing?: boolean;
     witnessMissingReads?: number;
     witnessDuplicate?: boolean;
-    ghRoute?: "path" | "explicit";
+    ghRoute?: "path";
     tokenPresent?: boolean;
     artifactMetadata?: Record<string, unknown>;
     exactArtifactMetadata?: Record<string, unknown>;
-    artifactReadError?: "metadata" | "archive";
+    artifactReadError?: "archive";
     archiveEscapeFlag?: "required" | "unsupported";
     oversizedArtifactMetadata?: boolean;
     archiveFailure?: "oversized" | "corrupt" | "digest";
@@ -90,7 +89,6 @@ export function createDispatchFixture(
       attempt?: number;
       artifactReady?: boolean;
       artifacts?: unknown;
-      metadataError?: string;
       decisionState?: string;
       decisionAttempt?: number;
     }>;
@@ -106,6 +104,11 @@ export function createDispatchFixture(
     activeConcurrencyRun?: boolean;
     completedConcurrencyHistory?: number;
     releaseNotes?: string;
+    candidateOpenPrHead?: boolean;
+    candidateWebFlowMerge?: boolean;
+    candidateSignature?: "valid" | "missing" | "invalid";
+    candidateAuthorityActor?: string;
+    candidateAuthorityRevoked?: boolean;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-release-dispatch-"));
@@ -289,7 +292,6 @@ module.exports = async () => {
     sha: process.env.MOCK_WORKFLOW_SHA,
     runId: "123", runAttempt: "1",
     inputsDigest: "sha256:" + createHash("sha256").update(canonicalInputs).digest("hex"),
-    ...${JSON.stringify(options.witnessOverrides ?? {})},
   };
   const zip = new JSZip();
   zip.file("dispatch-inputs.json", JSON.stringify(witness) + "\\n", { date: new Date("2026-01-01T00:00:00Z") });
@@ -410,9 +412,42 @@ if (args[0] === "api" && method === "GET" && !hasNoCache) {
 const admissionEndpoint = endpoint.includes("/actions/workflows/openclaw-release-prepare.yml") ||
   endpoint.endsWith("/actions/workflows/18/runs") || endpoint.includes("/actions/runs/321/") ||
   endpoint.includes("/actions/artifacts/9002") || endpoint.includes("/contents/") ||
-  endpoint.includes("/compare/") || endpoint.includes("/git/ref/") ||
-  endpoint === "repos/openclaw/openclaw/collaborators/release-operator/permission";
-if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && admissionEndpoint) {
+  endpoint.includes("/compare/") || endpoint.includes("/branches-where-head") ||
+  endpoint.includes("/git/ref/") ||
+  (endpoint.startsWith("repos/openclaw/openclaw/collaborators/") &&
+    endpoint.endsWith("/permission"));
+if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
+  const signature = ${JSON.stringify(options.candidateSignature ?? "valid")};
+  console.log(JSON.stringify({ data: { repository: { object: {
+    oid: fields.get("oid"),
+    signature: signature === "missing" ? null : {
+      isValid: signature === "valid",
+      state: signature === "valid" ? "VALID" : "INVALID",
+      signer: { login: ${JSON.stringify(options.candidateAuthorityActor ?? "release-operator")} },
+    },
+    associatedPullRequests: { nodes: ${JSON.stringify([
+      ...(options.candidateOpenPrHead
+        ? [
+            {
+              state: "OPEN",
+              headRefOid: targetSha,
+              headRepository: { nameWithOwner: "openclaw/openclaw" },
+            },
+          ]
+        : []),
+      ...(options.candidateWebFlowMerge
+        ? [
+            {
+              state: "MERGED",
+              baseRefName: "release/2026.8.1",
+              baseRepository: { nameWithOwner: "openclaw/openclaw" },
+              mergeCommit: { oid: targetSha },
+            },
+          ]
+        : []),
+    ])} },
+  } } } }));
+} else if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && admissionEndpoint) {
   import(${JSON.stringify(admissionFixturePath)}).then(({ respond }) => respond(args,
     ${JSON.stringify({ origin, checkout, publisherSha: workflowSha, targetSha, admissionCapturePath, admissionReceiptPath, options })})).catch((error) => {
       console.error(error.stack); process.exitCode = 1;
@@ -557,7 +592,7 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
   if (archive && ${JSON.stringify(options.archiveEscapeFlag ?? "")} === "required" && !args.includes("--allow-escape-sequences")) {
     fail("refusing to output binary content without --allow-escape-sequences");
   }
-  if (${JSON.stringify(options.artifactReadError ?? "")} === (archive ? "archive" : "metadata")) {
+  if (archive && ${JSON.stringify(options.artifactReadError ?? "")} === "archive") {
     fail("artifact read denied (HTTP 403)");
   }
   require(${JSON.stringify(artifactFixturePath)})().then(({ metadata, bytes }) => {
@@ -585,9 +620,6 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
 } else if (args[0] === "api" && endpoint.endsWith("/artifacts")) {
   const index = Number(fs.readFileSync(parentRunIndexPath, "utf8")) - 1;
   const state = parentRunStates[index];
-  if (state.metadataError) {
-    fail(state.metadataError);
-  }
   console.log(JSON.stringify({ artifacts: state.artifacts ?? (state.artifactReady ? [{
     name: "full-release-decision-123-" + (state.attempt ?? 1), expired: false,
   }] : []) }));
@@ -642,14 +674,8 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
     const args: string[] = [];
     if (!recoveryOnly) {
       if (options.candidateOwned) {
-        args.push(
-          "--admission-workflow-sha",
-          workflowSha,
-          "-f",
-          "provider=openai",
-          "-f",
-          "release_profile=stable",
-        );
+        args.push("--admission-workflow-sha", workflowSha);
+        args.push("-f", "provider=openai", "-f", "release_profile=stable");
       } else if (!extraArgs.includes("--trusted-workflow-ref")) {
         args.push("--trusted-workflow-ref", "main", "--workflow-sha", workflowSha);
       }

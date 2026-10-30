@@ -168,6 +168,7 @@ async function deliverPrimaryWebhook(
         status: result.status,
         error: result.error,
         summary: result.summary,
+        result: result.result,
         diagnostics: result.diagnostics,
         delivered: true,
         deliveryStatus: "delivered",
@@ -355,11 +356,9 @@ async function executeJobCoreWithTimeoutUnfinalized(
             deferUntilRunner: deferTimeoutUntilExecutionStart,
             jobTimeoutMs,
             triggerTimeout: (reason) => {
-              if (!runAbortController.signal.aborted) {
-                const timeoutError = new Error(reason);
-                timeoutError.name = "TimeoutError";
-                runAbortController.abort(timeoutError);
-              }
+              const timeoutError = new Error(reason);
+              timeoutError.name = "TimeoutError";
+              runAbortController.abort(timeoutError);
               timeout.resolve({ timeoutMs: jobTimeoutMs, reason });
             },
           });

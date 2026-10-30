@@ -208,18 +208,18 @@ export async function snapshotAriaViaPlaywright(opts: {
 }
 
 /** Navigates the target page while enforcing browser SSRF policy before and after load. */
-export async function navigateViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  assertCurrent?: InteractionTargetOptions["assertCurrent"];
-  resolveOperationTarget?: () => string | undefined | Promise<string | undefined>;
-  relayReference?: RelayOperationReference;
-  url: string;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-  ssrfPolicy?: SsrFPolicy;
-  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
-}): Promise<{ url: string; targetId?: string; download?: BrowserDownloadResult }> {
+export async function navigateViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    assertCurrent?: InteractionTargetOptions["assertCurrent"];
+    resolveOperationTarget?: () => string | undefined | Promise<string | undefined>;
+    relayReference?: RelayOperationReference;
+    url: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } & BrowserNavigationPolicyOptions,
+): Promise<{ url: string; targetId?: string; download?: BrowserDownloadResult }> {
   const isRetryableNavigateError = (err: unknown): boolean => {
     const msg =
       typeof err === "string"
@@ -239,6 +239,7 @@ export async function navigateViaPlaywright(opts: {
   }
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
+    assertNavigationCurrent: opts.assertNavigationCurrent,
   });
   await assertBrowserNavigationAllowed({
     url,
@@ -257,6 +258,7 @@ export async function navigateViaPlaywright(opts: {
       timeoutMs: timeout,
       ssrfPolicy: opts.ssrfPolicy,
       browserProxyMode: opts.browserProxyMode,
+      assertNavigationCurrent: opts.assertNavigationCurrent,
       targetId: currentTargetId,
       ...(opts.signal ? { signal: opts.signal } : {}),
       ...(opts.resolveOperationTarget
@@ -364,6 +366,7 @@ export async function navigateViaPlaywright(opts: {
         response: navigationResult.response,
         ssrfPolicy: opts.ssrfPolicy,
         browserProxyMode: opts.browserProxyMode,
+        assertNavigationCurrent: opts.assertNavigationCurrent,
         targetId: currentTargetId,
         ...(opts.signal ? { signal: opts.signal } : {}),
       });

@@ -1,25 +1,18 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPlainTextToolCallAttempt } from "../../../../packages/tool-call-repair/src/index.js";
-import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
-import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
 import { extractAssistantTranscriptSourceText } from "../../../shared/chat-message-content.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import {
-  prepareAgentRunTerminalReply,
-  sanitizeAgentRunTerminalReply,
-} from "../../agent-run-terminal-reply.js";
+import { prepareTerminalAssistantReply } from "../../assistant-terminal-reply.js";
 import type { CompletedAssistantAnswer } from "../../embedded-agent-subscribe.handlers.types.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import {
-  extractAssistantVisibleText,
-  prepareAssistantVisibleText,
-} from "../../embedded-agent-utils.js";
 import { isCloudCodeAssistFormatError } from "../../failover/classify-core.js";
 import {
   INCOMPLETE_ASSISTANT_STREAM_RE,
   TERMINATED_TRANSPORT_MESSAGE_RE,
 } from "../../failover/message-patterns.js";
+import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import type { AgentRuntimeModelAttempt } from "../../runtime-plan/types.js";
 import { markCoreTtsAttemptResult } from "../../tools/tts-tool-result-provenance.js";
@@ -139,36 +132,6 @@ function isTransientSettledTurnFailure(failure: unknown): boolean {
   );
 }
 
-function prepareTerminalAssistantReply(
-  assistant: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"],
-) {
-  const rawText = resolveRawAssistantAnswerText(assistant);
-  const reply = prepareAgentRunTerminalReply({ rawText });
-  if (assistant && reply.terminalReply.disposition !== "silent") {
-    // Preserve native part boundaries for either edge selected by the reply owner.
-    const prefixOnly = rawText.endsWith(reply.text);
-    let remainingPrefix = prefixOnly ? rawText.length - reply.text.length : 0;
-    let remainingLength = prefixOnly ? Infinity : reply.text.length;
-    let nativeSourceText = "";
-    const render = prepareAssistantVisibleText(assistant, (text) => {
-      if (!prefixOnly) {
-        nativeSourceText += text;
-      }
-      const removed = Math.min(remainingPrefix, text.length);
-      remainingPrefix -= removed;
-      const visible = text.slice(removed, removed + remainingLength);
-      remainingLength -= visible.length;
-      return visible;
-    });
-    reply.text =
-      prefixOnly || nativeSourceText === rawText
-        ? render()
-        : extractAssistantVisibleText(assistant, (_text, final) => (final ? reply.text : ""));
-    reply.terminalReply = sanitizeAgentRunTerminalReply(parseReplyDirectives(reply.text).text);
-  }
-  return reply;
-}
-
 export function completeEmbeddedAttemptResult(
   input: EmbeddedAttemptExecutionPhaseInput & { preparedStreamRuntime: PreparedStreamRuntime },
   settled: Awaited<ReturnType<typeof settleEmbeddedAttemptStream>>,
@@ -220,7 +183,9 @@ export function completeEmbeddedAttemptResult(
   if (
     attempt.operation !== "settled-tool-finalization" &&
     hookRunner?.hasHooks("llm_output") &&
-    terminal.promptErrorSource !== "hook:before_agent_run"
+    terminal.promptErrorSource !== "hook:before_agent_run" &&
+    // A refresh continues this logical turn; its final attempt reports the output.
+    !(state.terminal.kind === "ok" && captureAgentPluginRuntimeRefresh().continuesAfterAttempt())
   ) {
     const contextWindow = {
       ...(attempt.contextWindowInfo?.tokens
@@ -316,14 +281,25 @@ export function completeEmbeddedAttemptResult(
     assistant?.stopReason === "stop" &&
     !assistant.content.some(isRunnerToolCallBlock)
   ) {
-    const allowedToolNames = input.prepared.toolCatalog.toolSearchRunPlan.liveAllowedToolNames;
+    const { liveAllowedToolNames, capabilityToolNames } =
+      input.prepared.toolCatalog.toolSearchRunPlan;
+    // Deferred names need native correction too; detection never executes text.
+    const allowedToolNames = new Set([...liveAllowedToolNames, ...capabilityToolNames]);
     textToolCallAttempt =
       allowedToolNames.size > 0 &&
       isPlainTextToolCallAttempt(extractAssistantTranscriptSourceText(assistant) ?? "", (name) =>
         Boolean(resolveToolCallName(name, allowedToolNames, undefined, true)),
       );
   }
+  const accessProgram = asOptionalRecord(
+    sessionRuntime.transport.effectiveExtraParams.accessPrograms,
+  )?.cyber;
   const result: EmbeddedRunAttemptWithReceiptEvidence = {
+    ...(accessProgram === "standard" ||
+    accessProgram === "daybreak_blue" ||
+    accessProgram === "daybreak_red"
+      ? { cyberAccessProgram: accessProgram }
+      : {}),
     ...(textToolCallAttempt ? { textToolCallAttempt: true } : {}),
     ...state,
     ...evidence,

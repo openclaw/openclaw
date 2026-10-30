@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createRecordedCostUsage } from "../pages/usage/test-helpers/recorded-cost.test-support.ts";
+import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
@@ -24,13 +25,8 @@ suite.define(() => {
         sessions: fixture.sessions,
         totals: fixture.totals,
         aggregates: {
+          ...buildAggregatesFromSessions([]),
           messages: { total: 6, user: 3, assistant: 3, toolCalls: 0, toolResults: 0, errors: 0 },
-          tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-          byModel: [],
-          byProvider: [],
-          byAgent: [],
-          byChannel: [],
-          daily: [],
           costDaily: fixture.costDaily,
         },
       },

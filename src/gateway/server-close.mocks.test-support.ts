@@ -87,13 +87,3 @@ vi.mock("../agents/session-suspension.js", () => ({
 vi.mock("../acp/control-plane/manager.js", () => ({
   disposeAcpSessionManager: mocks.disposeAcpSessionManager,
 }));
-
-vi.mock("../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
-  const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) =>
-      createMockSubsystemLogger(subsystem, { info: mocks.logInfo, warn: mocks.logWarn }),
-  };
-});

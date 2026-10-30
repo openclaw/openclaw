@@ -479,7 +479,7 @@ describe("projects vitest config", () => {
     {
       file: "approval-reactions.persistence.test.ts",
       source: "approval-reactions.ts",
-      siblings: ["approval-reactions.test.ts", "approval-reaction-poller.test.ts"],
+      siblings: ["approval-reaction-poller.test.ts"],
     },
     {
       file: "send.sqlite.test.ts",

@@ -1,15 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { vi } from "vitest";
 import { fixtureReceiptWorkerClientSource } from "../../../test/helpers/fixture-receipts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { apiKey, authStore } from "../model-catalog-fixtures.test-support.js";
+import { stubCatalogEnv } from "../prepared-model-catalog-worker.shared.test-support.js";
 import {
-  EXTERNAL_AUTH_PATH_ENV,
-  REF_ONLY_API_ENV,
-  REF_ONLY_TOKEN_ENV,
   createCatalogFixture,
   PROVIDER_ID,
   writeFixtureFiles,
@@ -77,16 +74,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       });
       saveAuthProfileStore(authStore(), agentDir);
     }
-    for (const name of [
-      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-      "OPENCLAW_STATE_DIR",
-      "OPENCLAW_WORKER_CATALOG_MARKER",
-      EXTERNAL_AUTH_PATH_ENV,
-      REF_ONLY_API_ENV,
-      REF_ONLY_TOKEN_ENV,
-    ] as const) {
-      vi.stubEnv(name, env[name]);
-    }
+    stubCatalogEnv(env);
     const agentIds = ["fleet-a", "fleet-b", "fleet-c", "fleet-d"].slice(0, options.agentCount ?? 4);
     const entries: Record<string, { agentDir: string; workspace: string }> = {};
     for (const id of agentIds) {

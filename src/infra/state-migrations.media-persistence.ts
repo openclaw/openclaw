@@ -1,7 +1,4 @@
 import path from "node:path";
-import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
-import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
-import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "../config/sessions/archive-compression.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import {
@@ -58,6 +55,7 @@ import {
   enableNodeSqliteKyselyStatementCache,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { formatSchemaMigrationFailure, SCHEMA_RECOVERY } from "./schema-migration-diagnostics.js";
 import {
   backupDoctorSqliteRepair,
   repairDoctorSqliteIndexCorruption,
@@ -73,7 +71,7 @@ import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { createMigrationDatabaseHandle } from "./state-migrations.agent-database.js";
 import { formatAgentDatabaseCorruptionRepairHint } from "./state-migrations.agent-owner-guidance.js";
 import { recoverMisplacedAgentDatabaseCopies } from "./state-migrations.agent-owner-recovery.js";
-import { archiveSourceMatches } from "./state-migrations.media-persistence-archive-source.js";
+import { migrateTranscriptArchive } from "./state-migrations.media-persistence-archive-source.js";
 import {
   scanTranscriptRows,
   scanTrajectoryRows,
@@ -93,16 +91,14 @@ import {
 import { transformMediaArchiveContent } from "./state-migrations.media-persistence-transform.js";
 import { repairDoctorSessionWindowOrphans } from "./state-migrations.session-window-repair.js";
 import {
-  encodeArchiveContent,
   MEDIA_ARCHIVE_VERIFICATION_KEY,
   migrateCanonicalTranscriptArchives,
 } from "./state-migrations.transcript-directives-archives.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
-import { decodeUtf8Input, Utf8InputError } from "./utf8-input.js";
-import { resolveZstdCodec } from "./zstd-codec.js";
+import { createUpdateErrorFact } from "./update-failure-facts.js";
+import { Utf8InputError } from "./utf8-input.js";
 
 const PREVIOUS_MEDIA_SCHEMA_VERSION = AGENT_MEDIA_SCHEMA_VERSION - 1;
-const ARCHIVE_TEMP_MARKER = ".media-retirement";
 
 type MediaMigrationDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
 
@@ -442,35 +438,6 @@ async function migrateAgentDatabase(params: {
   }
 }
 
-function migrateTranscriptArchive(filePath: string): boolean {
-  const source = readRegularFileSync({ filePath });
-  const compressed = filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
-  const content = decodeUtf8Input(
-    compressed ? resolveZstdCodec().decompress(source.buffer) : source.buffer,
-    filePath,
-  );
-  const transformed = transformMediaArchiveContent(content, filePath);
-  if (!transformed.changed) {
-    return false;
-  }
-  const codec = compressed ? "zstd" : "identity";
-  const encoded = encodeArchiveContent(transformed.content, codec, filePath);
-  replaceFileAtomicSync({
-    filePath,
-    content: encoded,
-    preserveExistingMode: true,
-    syncParentDir: true,
-    syncTempFile: true,
-    tempPrefix: `${path.basename(filePath)}${ARCHIVE_TEMP_MARKER}`,
-    beforeRename: () => {
-      if (!archiveSourceMatches(filePath, source)) {
-        throw new Error(`${filePath} changed before atomic media migration replacement`);
-      }
-    },
-  });
-  return true;
-}
-
 /** Doctor-only migration from top-level Media* transcript fields to canonical facts. */
 export async function migrateLegacyMediaPersistence(
   params: {
@@ -491,6 +458,7 @@ export async function migrateLegacyMediaPersistence(
   const changes: string[] = [];
   const warnings: string[] = [];
   const notices: string[] = [];
+  let leaseLoss: MigrationMessages["leaseLoss"];
   let recoverableWarningCount = 0;
   const refusedAgentDatabasePaths: string[] = [];
   const recoveredAgentDatabasePaths = new Set<string>();
@@ -642,17 +610,17 @@ export async function migrateLegacyMediaPersistence(
         if (inspectionSignal?.aborted && error === inspectionSignal.reason) {
           throw error;
         }
-        // An unverified database may own files in this directory. Never fall
-        // back to file-only repair after its canonical archive repair refuses.
+        // An unverified database may own archive files; never fall back to file-only repair.
+        leaseLoss ??= createUpdateErrorFact("media-persistence", error, env).leaseLoss;
         refusedArchiveDirectories.add(
           resolveSqliteTranscriptArchiveDirectory({ agentId: entry.agentId, path: pathname }),
         );
-        warnings.push(`Skipped agent database migration for ${pathname}: ${String(error)}`);
+        warnings.push(
+          formatSchemaMigrationFailure("Skipped agent database migration", pathname, error),
+        );
         recoverableWarningCount += Number(error instanceof Utf8InputError);
         const repairHint = formatAgentDatabaseCorruptionRepairHint(entry.agentId, error);
-        if (repairHint) {
-          notices.push(repairHint);
-        }
+        notices.push(repairHint ?? SCHEMA_RECOVERY);
       }
     }
 
@@ -690,6 +658,7 @@ export async function migrateLegacyMediaPersistence(
               warnings.push(
                 `Skipped archived transcript media migration for ${archive}: ${String(error)}`,
               );
+              leaseLoss ??= createUpdateErrorFact("media-persistence", error, env).leaseLoss;
               recoverableWarningCount += 1;
             }
           }
@@ -701,11 +670,13 @@ export async function migrateLegacyMediaPersistence(
       throw error;
     }
     warnings.push(`Agent database maintenance deferred: ${formatErrorMessage(error)}`);
+    leaseLoss ??= createUpdateErrorFact("media-persistence", error, env).leaseLoss;
   }
   params.onPreparedRepairTargets?.(preparedRepairTargets);
   return {
     changes,
     warnings,
+    ...(leaseLoss ? { leaseLoss } : {}),
     ...(notices.length > 0 ? { notices } : {}),
     ...(recoveredAgentDatabasePaths.size > 0
       ? { recoveredAgentDatabasePaths: [...recoveredAgentDatabasePaths] }

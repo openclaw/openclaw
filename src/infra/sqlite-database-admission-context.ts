@@ -38,7 +38,7 @@ export { state as sqliteDatabaseAdmissionState };
 
 export function captureSqliteDatabaseAdmissions(
   cursor?: SqliteDatabaseAdmissionCursor,
-  scope?: { location?: string; admissions?: SqliteDatabaseAdmissions },
+  scope?: { location?: string; admissions?: readonly Pick<Admission, "identity">[] },
 ): SqliteDatabaseAdmissions {
   return state.registry.capture(cursor, scope);
 }

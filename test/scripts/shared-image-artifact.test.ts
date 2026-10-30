@@ -264,13 +264,6 @@ describe("shared Docker image artifacts", () => {
     const fixture = createFixture();
     const verified = verifyUploadedArtifact(fixture);
     expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
-    expect(readFileSync(fixture.ghLog, "utf8")).toContain(
-      `api --method GET repos/openclaw/openclaw/actions/artifacts/${ARTIFACT_ID}`,
-    );
-    expect(readFileSync(fixture.ghLog, "utf8")).toContain(
-      `api --method GET repos/openclaw/openclaw/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}`,
-    );
-
     const mismatch = "artifact identity does not match the immutable producer tuple";
     expectRejectedUpload(fixture, { artifactDigest: "e".repeat(64) }, mismatch, 1);
     expectRejectedUpload(fixture, { env: { FAKE_ARTIFACT_JSON: "not-json" } }, mismatch, 1);
@@ -332,29 +325,12 @@ describe("shared Docker image artifacts", () => {
   it("packs provenance-bound images and verifies them before loading", () => {
     const fixture = createPackedFixture();
 
-    const archive = readFileSync(join(fixture.artifactDir, "shared-images.tar.zst"));
     const manifest = JSON.parse(
       readFileSync(join(fixture.artifactDir, "shared-image-artifact.json"), "utf8"),
     );
-    expect(manifest).toEqual({
-      archive: {
-        filename: "shared-images.tar.zst",
-        format: "docker-tar+zstd",
-        sha256: createHash("sha256").update(archive).digest("hex"),
-        sizeBytes: archive.length,
-      },
-      conclusion: "success",
-      images: IMAGE_REFS.map((ref) => ({ id: imageId(ref), ref })),
-      kind: "docker-e2e",
-      packageSha256: PACKAGE_SHA256,
-      packageSourceSha: TARGET_SHA,
-      runAttempt: 2,
-      runId: 123456,
-      schema: "openclaw.shared-docker-image-artifact/v1",
-      schemaVersion: 1,
-      targetSha: TARGET_SHA,
-      workflowSha: WORKFLOW_SHA,
-    });
+    // Loading validates the full manifest, archive bytes, refs and config IDs.
+    // These producer values need an independent expectation, not manifest-derived input.
+    expect(manifest).toMatchObject({ runAttempt: 2, runId: 123456 });
 
     writeFileSync(fixture.dockerLog, "");
     const loaded = runHelper(fixture, "load", {

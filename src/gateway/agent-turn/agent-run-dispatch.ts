@@ -14,7 +14,6 @@ import {
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
-import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import type {
   FollowupCompletionOwner,
@@ -26,7 +25,11 @@ import {
 } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
-import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  validateAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import {
@@ -34,12 +37,14 @@ import {
   getRpcSourceForGateway,
   getRpcSourceIdentity,
   getRpcSourceLifecycleGeneration,
+  getRpcSourceStartedAt,
   hasRpcSource,
   isRpcSourceRegistered,
   type RpcSourceRef,
 } from "../../sessions/session-controller.rpc-sources.js";
 import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { errorShapeFromError } from "../error-shape.js";
 import type { createAssistantCommentaryMediaCustody } from "../server-methods/chat-send-commentary-media.js";
 import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
@@ -56,7 +61,6 @@ import {
   resolveGatewayAgentAbortStopReason,
   resolveResolvedAgentTimeoutStopReason,
 } from "./agent-run-dispatch-outcome.js";
-import { bindGatewayAgentTerminalProducer } from "./agent-run-terminal-producer.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 type AgentRunMediaCustody = Pick<
@@ -88,7 +92,6 @@ export function dispatchAgentRunFromGateway(params: {
   io: AgentTurnIo;
   context: AgentTurnContext;
   canonicalSkillWorkspaceDir?: string;
-  restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
   commandRuntimeContext?: PreparedAgentCommandRuntimeContext;
   /** Privacy classification carried from the resolved session entry. */
   isIncognito?: boolean;
@@ -235,13 +238,81 @@ export function dispatchAgentRunFromGateway(params: {
   if (cronCreatorAuthorityCapability && !params.cronCreatorAuthority?.boundRunScope) {
     params.cronCreatorAuthority?.bindRunScope?.(cronCreatorAuthorityCapability);
   }
-  const terminalProducer = bindGatewayAgentTerminalProducer({
-    runId: params.runId,
-    entry: registeredRunEntry,
-    controller: params.abortController,
-    ingressOpts: params.ingressOpts,
-    isOwnerReleased: () => runOwnerCleanedUp,
-  });
+  /** Binds canonical transcript settlement to the exact registered API producer. */
+  const entry = registeredRunEntry;
+  const controller = params.abortController;
+  const ingressOpts = params.ingressOpts;
+  const producerRunInstance = entry?.adapter.operationalRunInstance;
+  const producerLifecycleGeneration = entry && getRpcSourceLifecycleGeneration(entry);
+  const producerSessionKey = entry && getRpcSourceIdentity(entry).sessionKey;
+  const producerCompletion = createDeferredCore<unknown>();
+  let terminalSettlement: Promise<void> | undefined;
+  if (entry && ingressOpts.abortSignal === controller.signal) {
+    entry.adapter.resolveTerminalProducer = () => {
+      const { sessionId, sessionKey } = getRpcSourceIdentity(entry);
+      const isCurrent = () => {
+        const authority = entry.adapter.agentRunDelegatedAuthority;
+        return (
+          !runOwnerCleanedUp &&
+          !controller.signal.aborted &&
+          ingressOpts.abortSignal === controller.signal &&
+          isRpcSourceRegistered(entry) &&
+          entry.input.abortSignal === controller.signal &&
+          entry.adapter.operationalRunInstance === producerRunInstance &&
+          getRpcSourceLifecycleGeneration(entry) === producerLifecycleGeneration &&
+          getRpcSourceIdentity(entry).sessionId === sessionId &&
+          getRpcSourceIdentity(entry).sessionKey === sessionKey &&
+          sessionKey === producerSessionKey &&
+          !entry.input.retirementRequested &&
+          (!producerLifecycleGeneration ||
+            isAgentEventLifecycleGenerationCurrent(producerLifecycleGeneration)) &&
+          (getRpcSourceStartedAt(entry) === undefined || authority !== undefined) &&
+          (!authority ||
+            (authority.operationalRunInstance === producerRunInstance &&
+              validateAgentRunDelegatedAuthority(authority)))
+        );
+      };
+      if (!isCurrent()) {
+        return undefined;
+      }
+      return {
+        sessionId,
+        sessionKey,
+        handoff: (settleProducer) => {
+          if (!isCurrent()) {
+            return false;
+          }
+          const settlement = settleProducer(producerCompletion.promise);
+          terminalSettlement = terminalSettlement
+            ? Promise.all([terminalSettlement, settlement]).then(() => undefined)
+            : settlement;
+          return true;
+        },
+      };
+    };
+  }
+  const complete = async (producerError?: unknown) => {
+    producerCompletion.resolve(producerError);
+    let joined: Promise<void> | undefined;
+    do {
+      joined = terminalSettlement;
+      await joined;
+    } while (joined !== terminalSettlement);
+  };
+  const terminalProducer = {
+    complete,
+    async settle<T>(execution: Promise<T>): Promise<T> {
+      let producerError: unknown;
+      try {
+        return await execution;
+      } catch (error) {
+        producerError = error;
+        throw error;
+      } finally {
+        await complete(producerError);
+      }
+    },
+  };
   const activateAgent = (media?: AgentRunMediaCustody) => {
     assertCurrent();
     const ingressOptsWithSpawnFacts = withAgentCommandExecutionIdentitySpawnFacts(
@@ -270,7 +341,6 @@ export function dispatchAgentRunFromGateway(params: {
             : ingressOptsWithSpawnFacts,
           diagnostics.runtime,
           params.context.deps,
-          { restoreAdmittedRecovery: params.restoreAdmittedRecovery },
           params.commandRuntimeContext,
         ),
       );
@@ -309,6 +379,7 @@ export function dispatchAgentRunFromGateway(params: {
           agentId: registeredRunEntry && getRpcSourceIdentity(registeredRunEntry).agentId,
           ownerConnId: registeredRunEntry?.adapter.requester?.connectionId,
           ownerDeviceId: registeredRunEntry?.adapter.requester?.deviceId,
+          initiatingPersonalOperator: registeredRunEntry?.adapter.initiatingPersonalOperator,
           controlUiVisible: registeredRunEntry?.adapter.controlUiVisible,
           turnKind: registeredRunEntry?.adapter.turnKind,
         },
@@ -388,7 +459,9 @@ export function dispatchAgentRunFromGateway(params: {
         endedAt: terminalOutcome.endedAt ?? Date.now(),
         yielded: result?.meta?.yielded === true,
         terminalReply,
-        ...(terminalReply?.disposition === "visible" ? { replyText: terminalReply.text } : {}),
+        ...(terminalReply?.disposition === "visible"
+          ? { replyText: result?.meta?.finalAssistantVisibleText ?? terminalReply.text }
+          : {}),
         ...(receipt?.runId === params.runId && receipt.sourceReplyDelivered
           ? { sourceReplyDelivered: true as const }
           : {}),

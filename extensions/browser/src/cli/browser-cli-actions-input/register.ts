@@ -342,7 +342,7 @@ export function registerBrowserActionInputCommands(
       await runHook<{ download: { path: string } }>(parentOpts(cmd), opts, {
         path: "/wait/download",
         body: {
-          path: normalizeOptionalString(outPath),
+          path: readStringValue(outPath),
         },
         successMessage: (result) => `downloaded: ${shortenHomePath(result.download.path)}`,
       });

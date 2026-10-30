@@ -184,16 +184,12 @@ it.each([
 describe("resolveClaudeCliExecutionArgs", () => {
   it.each([
     [undefined, true],
-    [{ mode: "full" }, true],
-    [{ mode: "ask" }, false],
     [{ security: "allowlist", ask: "always" }, false],
-  ] as const)(
-    "derives permission mode from global exec policy %j for normal runs",
-    (exec, bypass) => {
-      const args = executionArgs({ config: { tools: { exec } } });
-      expect(args.includes("bypassPermissions")).toBe(bypass);
-    },
-  );
+  ] as const)("derives bypass from default or legacy exec policy %j", (exec, bypass) => {
+    expect(executionArgs({ config: { tools: { exec } } }).includes("bypassPermissions")).toBe(
+      bypass,
+    );
+  });
 
   it("keeps per-agent exec policy for normal runs and omits only the injected mode for compaction", () => {
     const forAgent = (

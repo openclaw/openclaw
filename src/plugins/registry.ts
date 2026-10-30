@@ -302,6 +302,22 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
               onConversationBindingResolved: bound.registerConversationBindingResolvedHandler,
               registerContextEngine: (id, factory) =>
                 bound.registerContextEngine(id, factory, registrationMode),
+              registerTool: (tool, options) => {
+                // Tool guidance is prompt text: the operator's prompt-injection opt-out
+                // keeps the tool and drops only its guidance.
+                if (options?.promptGuidance && !resolvePromptInjectionAllowed(params.hookPolicy)) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `tool promptGuidance blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+                  });
+                  const { promptGuidance: _blocked, ...rest } = options;
+                  bound.registerTool(tool, rest);
+                  return;
+                }
+                bound.registerTool(tool, options);
+              },
               registerAgentToolResultMiddleware: (handler, options) => {
                 bound.registerAgentToolResultMiddleware(handler, options, params.hookPolicy);
               },

@@ -1,5 +1,12 @@
+import { randomUUID } from "node:crypto";
+import { BroadcastChannel, getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import * as runtimeProcess from "../infra/runtime-process-url.js";
 import { CodeModeHeadlessAbortError, CodeModeHeadlessTimeoutError } from "./code-mode-errors.js";
 import { resolveCodeModeConfig } from "./code-mode-runtime.js";
 import { runCodeModeScriptHeadless } from "./code-mode.js";
@@ -66,14 +73,32 @@ describe("headless Code Mode cancellation", () => {
     });
   });
 
-  it("terminates an in-flight worker leg when aborted", async () => {
+  it("terminates an in-flight worker leg when aborted", async ({ signal }) => {
     const ctx = createHeadlessCodeModeHarness();
     const config = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
     const controller = new AbortController();
+    const published = createDeferred();
+    const notifications = new BroadcastChannel(randomUUID());
+    notifications.addEventListener("message", ({ data }) => {
+      if (data === 1) {
+        published.resolve();
+      }
+    });
+    const environmentKey = "openclaw.codeModeTimeoutOutputTest";
+    const previousEnvironment = getEnvironmentData(environmentKey);
+    setEnvironmentData(environmentKey, notifications.name);
+    const worker = new URL(
+      "../../test/helpers/code-mode-node.timeout.test-support.ts",
+      import.meta.url,
+    );
+    const resolveWorker = runtimeProcess.resolveRuntimeProcessEntrypointUrl;
+    using _ = vi
+      .spyOn(runtimeProcess, "resolveRuntimeProcessEntrypointUrl")
+      .mockImplementation((name) => (name === "codeModeNode" ? worker : resolveWorker(name)));
     const resultPromise = testing.runCodeModeExecutor(
       {
         kind: "exec",
-        source: "while (true) {}",
+        source: 'text("started"); while (true) {}',
         config,
         catalog: [],
         apiFiles: [],
@@ -81,13 +106,30 @@ describe("headless Code Mode cancellation", () => {
       },
       { timeoutMs: 5000, executor: config.executor, signal: controller.signal },
     );
-    setTimeout(() => controller.abort(), 100);
-
-    await expect(resultPromise).resolves.toMatchObject({
-      status: "failed",
-      code: "aborted",
-      error: "code mode execution aborted",
-    });
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          published.promise,
+          resultPromise,
+          "Execution ended before the guest published output",
+        ),
+        signal,
+      );
+      controller.abort();
+      await expect(withinTest(resultPromise, signal)).resolves.toMatchObject({
+        status: "failed",
+        code: "aborted",
+        error: "code mode execution aborted",
+      });
+    } finally {
+      controller.abort();
+      try {
+        await resultPromise;
+      } finally {
+        setEnvironmentData(environmentKey, previousEnvironment);
+        notifications.close();
+      }
+    }
   });
 
   it("classifies caller aborts before the worker leg as aborted", async () => {

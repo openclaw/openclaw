@@ -21,6 +21,17 @@ export function AccountLimits(props: { scope: AccountUsageScope; profileId: stri
       a.revision === b.revision &&
       a.profileId === b.profileId,
   });
+  // Retain rows during a refresh, but hide the previous account while its successor loads.
+  const account = createMemo(
+    () => {
+      const { client, agentId, profileId } = request();
+      return { client, agentId, profileId };
+    },
+    {
+      equals: (a, b) =>
+        a.client === b.client && a.agentId === b.agentId && a.profileId === b.profileId,
+    },
+  );
   // A newer read supersedes an older one; Solid drops the stale result.
   const result = createMemo(async () => {
     const { client, agentId, profileId } = request();
@@ -39,12 +50,13 @@ export function AccountLimits(props: { scope: AccountUsageScope; profileId: stri
   });
   return (
     <div class="model-providers__account-limits">
-      <Loading on={request()} fallback={<span>{t("common.loading")}</span>}>
+      <Loading on={account()} fallback={<span>{t("common.loading")}</span>}>
         <Show when={result().error}>
           {(error) => <span class="provider-usage__error">{error()}</span>}
         </Show>
         <For
           each={result().providers ?? []}
+          keyed={(snapshot) => snapshot.provider}
           fallback={
             <Show when={!result().error}>
               <span>{t("modelProviders.noStats")}</span>
@@ -53,14 +65,14 @@ export function AccountLimits(props: { scope: AccountUsageScope; profileId: stri
         >
           {(snapshot) => (
             <>
-              <Show when={snapshot.plan}>
-                <strong>{snapshot.plan}</strong>
+              <Show when={snapshot().plan}>
+                <strong>{snapshot().plan}</strong>
               </Show>
               <Show
-                when={hasProviderUsageDetails(snapshot)}
+                when={hasProviderUsageDetails(snapshot())}
                 fallback={<span>{t("modelProviders.noStats")}</span>}
               >
-                <ProviderUsagePanel usage={snapshot} />
+                <ProviderUsagePanel usage={snapshot()} />
               </Show>
             </>
           )}

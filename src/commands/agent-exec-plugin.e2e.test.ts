@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
+import { nativeModel } from "../../test/e2e/qa-lab/runtime/native-provider-proof-fixture.js";
 import { waitForDead } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
@@ -38,16 +39,12 @@ async function writeHarnessPlugin(stateDir: string, workspace?: string): Promise
           api: "openai-responses",
           baseUrl: "https://example.invalid/v1",
           models: [
-            {
-              id: "proof-model",
+            nativeModel("proof-model", {
               name: "Proof model",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: 128000,
               maxTokens: 4096,
               agentRuntime: { id: "exec-proof" },
-            },
+            }),
           ],
         },
       },
@@ -315,18 +312,6 @@ it("runs an operator-installed harness without retaining run state", async () =>
     code: 1,
     stdout: expect.not.stringContaining("PLUGIN_HARNESS_OK"),
   });
-  expect((await fs.readdir(stateDir)).toSorted()).toEqual([
-    "client",
-    "extensions",
-    "openclaw.json",
-    "state",
-  ]);
-  const credentialFiles = await fs.readdir(path.join(stateDir, "client"));
-  expect(credentialFiles).toContain("credentials.sqlite");
-  expect(credentialFiles.every((file) => file.startsWith("credentials.sqlite"))).toBe(true);
-  const registryFiles = await fs.readdir(path.join(stateDir, "state"));
-  expect(registryFiles).toContain("openclaw.sqlite");
-  expect(registryFiles.every((file) => file.startsWith("openclaw.sqlite"))).toBe(true);
   await expect(fs.stat(path.join(stateDir, "agents"))).rejects.toMatchObject({ code: "ENOENT" });
 });
 

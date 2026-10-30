@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
@@ -109,9 +110,11 @@ async function fetchSelfHostedDiscoveryJson(params: {
     const request = {
       url: params.url,
       init: {
-        headers: params.acceptJson
-          ? { Accept: "application/json", ...params.requestPolicy.headers }
-          : params.requestPolicy.headers,
+        headers: omitNullRequestHeaders(
+          params.acceptJson
+            ? { Accept: "application/json", ...params.requestPolicy.headers }
+            : params.requestPolicy.headers,
+        ),
       },
       policy: resolveProviderTransportSsrFPolicy({ ...params.requestPolicy, url: params.url }),
       dispatcherPolicy,

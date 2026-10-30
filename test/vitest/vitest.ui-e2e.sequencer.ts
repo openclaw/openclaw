@@ -65,7 +65,6 @@ const UI_E2E_FILE_SECONDS_HINTS = new Map<string, number>([
   ["device-token-reconnect.e2e.test.ts", 12],
   ["github-link-hovercard.e2e.test.ts", 11],
   ["initial-connect-splash.e2e.test.ts", 16],
-  ["lobster-pet-dismiss-menu-overflow.e2e.test.ts", 12],
   ["locale-offline-retry.e2e.test.ts", 13],
   ["mobile-pairing.e2e.test.ts", 12],
   ["model-providers.e2e.test.ts", 13],
@@ -107,6 +106,14 @@ const UI_E2E_FILE_SECONDS_HINTS = new Map<string, number>([
 // tests included -- keep rebalancing automatically off their source size.
 const UI_E2E_FALLBACK_SECONDS_PER_KB = 0.38;
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+// These source fixtures borrow one invocation's compiled subprocess generation.
+// New borrowers may add preparation elsewhere until this measured group is refreshed.
+const UI_E2E_SHARED_WORKER_FILES = new Set([
+  "ui/src/e2e/model-providers-profile-outcomes.e2e.test.ts",
+  "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
+  "ui/src/e2e/question-guest.e2e.test.ts",
+  "ui/src/e2e/screen-requester-routing.e2e.test.ts",
+]);
 
 function estimateFileSeconds(moduleId: string): number {
   const { fileSeconds, perFileOverheadSeconds } = readUiE2eFileTimings();
@@ -123,13 +130,7 @@ export class UiE2eSequencer extends BaseSequencer {
     // eslint-disable-next-line unicorn/no-array-sort -- BaseSequencer.sort is Vitest's ordering API.
     const ordered = await super.sort(files);
     const parallel = ordered.filter((file) => file.project.config.sequence.groupOrder === 0);
-    if (
-      parallel.some((file) =>
-        this.ctx.cache.getFileTestResults(
-          `${file.project.name}:${relative(this.ctx.config.root, file.moduleId).replaceAll("\\", "/")}`,
-        ),
-      )
-    ) {
+    if (parallel.some((file) => this.ctx.cache.getTestSpecificationResult(file))) {
       // Keep native failed-first and observed-duration ordering on warm reruns.
       return ordered;
     }
@@ -155,6 +156,10 @@ export class UiE2eSequencer extends BaseSequencer {
       files,
       this.ctx.config.shard!,
       (file) => estimateFileSeconds(file.moduleId) / effectiveProjectWorkers(file),
+      (file) =>
+        UI_E2E_SHARED_WORKER_FILES.has(relative(repoRoot, file.moduleId).replaceAll("\\", "/"))
+          ? "compiled-workers"
+          : undefined,
     );
   }
 }

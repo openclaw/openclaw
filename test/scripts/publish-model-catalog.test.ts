@@ -41,6 +41,28 @@ afterEach(() => {
 
 type FixtureModel = RemoteModelCatalogBundle["providers"][string]["models"][number];
 
+type Manifest = Parameters<typeof assembleModelCatalogBundle>[0]["manifests"][number]["manifest"];
+function manifestEntry(pluginId: string, manifest: Manifest) {
+  return { pluginId, manifestPath: `${pluginId}.json`, manifest };
+}
+function fixtureManifests(
+  providers: Record<string, unknown> = {},
+  catalog: NonNullable<Manifest["modelCatalog"]> = {},
+  owned = true,
+) {
+  const allProviders = {
+    anthropic: fixtureProvider("claude", 100),
+    openai: fixtureProvider("gpt", 100),
+    ...providers,
+  };
+  return [
+    manifestEntry("fixture", {
+      ...(owned ? { providers: Object.keys(allProviders) } : {}),
+      modelCatalog: { providers: allProviders, ...catalog },
+    }),
+  ];
+}
+
 function fixtureProvider(prefix: string, count: number): { models: FixtureModel[] } {
   return { models: Array.from({ length: count }, (_, index) => ({ id: `${prefix}-${index}` })) };
 }
@@ -126,32 +148,20 @@ function assembleFixtureBundle(
 function nativeManifests(source: "OpenCode" | "Venice" | "DeepInfra") {
   const provider = source.toLowerCase();
   const sourceId = source === "OpenCode" ? "openCode" : provider;
-  return [
-    {
-      pluginId: "fixture",
-      manifestPath: "fixture.json",
-      manifest: {
-        providers: ["anthropic", "openai", provider],
-        modelCatalog: {
-          providers: {
-            anthropic: fixtureProvider("claude", 100),
-            openai: fixtureProvider("gpt", 100),
-            [provider]: { models: [{ id: "priced-fixture", cost: { input: 99, output: 99 } }] },
-          },
-        },
-        modelPricing: {
-          providers: {
-            [provider]: {
-              external: true,
-              [sourceId]: { provider: source === "OpenCode" ? "upstream-zen" : provider },
-              openRouter: { provider },
-              liteLLM: { provider },
-            },
-          },
-        },
+  const manifests = fixtureManifests({
+    [provider]: { models: [{ id: "priced-fixture", cost: { input: 99, output: 99 } }] },
+  });
+  manifests[0]!.manifest.modelPricing = {
+    providers: {
+      [provider]: {
+        external: true,
+        [sourceId]: { provider: source === "OpenCode" ? "upstream-zen" : provider },
+        openRouter: { provider },
+        liteLLM: { provider },
       },
     },
-  ];
+  };
+  return manifests;
 }
 
 function openCodePrices(
@@ -1221,11 +1231,7 @@ describe("publish model catalog", () => {
     const url = OPENCODE_PRICING_URL;
     it("preserves zero model metadata without inventing an unavailable native price", async () => {
       const manifests = nativeManifests(source);
-      const bundle = await assembleModelCatalogBundle({
-        manifests,
-        generatedAt: Date.now(),
-        sourceCommit: "fixture",
-      });
+      const bundle = await assembleFixtureBundle(manifests);
       const model = bundle.providers[provider]!.models[0]!;
       model.cost = { input: 0, output: 0 };
       model.name = "Existing explicit model";
@@ -1292,11 +1298,7 @@ describe("publish model catalog", () => {
       "rejects %s instead of publishing unverified prices",
       async (scenario) => {
         const manifests = nativeManifests(source);
-        const bundle = await assembleModelCatalogBundle({
-          manifests,
-          generatedAt: Date.now(),
-          sourceCommit: "fixture",
-        });
+        const bundle = await assembleFixtureBundle(manifests);
         if (scenario === "invalid zero seed") {
           bundle.providers[provider]!.models[0]!.cost = { input: 0, output: 0 };
         }
@@ -1327,11 +1329,7 @@ describe("publish model catalog", () => {
   it("does not fetch Venice without an owning opt-in", async () => {
     const manifests = nativeManifests("Venice");
     manifests[0]!.manifest.providers = ["anthropic", "openai"];
-    const bundle = await assembleModelCatalogBundle({
-      manifests,
-      generatedAt: Date.now(),
-      sourceCommit: "fixture",
-    });
+    const bundle = await assembleFixtureBundle(manifests);
     const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ data: [] }));
     await enrichModelCatalogPricing({ bundle, manifests, fetchImpl });
     const urls = fetchImpl.mock.calls.map(([input]) => requestUrl(input));

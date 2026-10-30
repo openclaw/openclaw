@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { type Stats, stat, unwatchFile, watch, watchFile } from "node:fs";
+import { stat, watch } from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -419,6 +419,26 @@ export async function subscribeMcpAppHostFile(
     // Bridge rename gaps with stat polling bounded to absence and subscription lifetime.
     const filePath = path.join(file.rootDir, file.path);
     let polling = false;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    // A change-based poller's initial stat can miss the entire absence window.
+    const poll = () => {
+      stat(filePath, (error, current) => {
+        if (closed || !polling) {
+          return;
+        }
+        if (!error && current.isFile()) {
+          rearm(true);
+        } else if (error && !hasErrnoCode(error, "ENOENT")) {
+          close(error);
+        } else {
+          pollTimer = setTimeout(() => {
+            pollTimer = undefined;
+            poll();
+          }, 250);
+          pollTimer.unref();
+        }
+      });
+    };
     const arm = () =>
       watch(filePath, { persistent: false }, (event) => {
         if (event === "rename") {
@@ -427,28 +447,22 @@ export async function subscribeMcpAppHostFile(
         }
         void notify();
       }).on("error", close);
-    const rearm = (curr?: Stats) => {
-      if (closed || (curr && (!polling || !curr.isFile()))) {
+    const rearm = (recovered = false) => {
+      if (closed || (polling && !recovered)) {
         return;
       }
       polling = false;
-      unwatchFile(filePath, rearm);
+      clearTimeout(pollTimer);
+      pollTimer = undefined;
       try {
         watcher = arm();
-        if (curr) {
+        if (recovered) {
           void notify();
         }
       } catch (error) {
         if (hasErrnoCode(error, "ENOENT")) {
           polling = true;
-          watchFile(filePath, { persistent: false, interval: 250 }, rearm);
-          stat(filePath, (statError, currentStats) => {
-            if (!statError) {
-              rearm(currentStats);
-            } else if (!hasErrnoCode(statError, "ENOENT")) {
-              close(statError);
-            }
-          });
+          poll();
         } else {
           close(error);
         }
@@ -464,7 +478,8 @@ export async function subscribeMcpAppHostFile(
       );
       releaseAuthority?.();
       watcher.close();
-      unwatchFile(filePath, rearm);
+      clearTimeout(pollTimer);
+      pollTimer = undefined;
       client.connectionSignal?.removeEventListener("abort", onDisconnect);
       if (watchers.get(connId) === close) {
         watchers.delete(connId);

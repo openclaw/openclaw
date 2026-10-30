@@ -12,6 +12,7 @@ import {
   listRegisteredEmbeddingProviders,
 } from "./embedding-providers.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
+import { channelFixtureSource } from "./loader-fixture-builders.test-support.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -90,31 +91,8 @@ export function channelPluginSource(params: {
   resolveAccount?: false;
 }) {
   const channelId = params.channelId ?? params.pluginId;
-  const resolveAccount =
-    params.resolveAccount === false
-      ? "undefined"
-      : params.configured
-        ? '({ accountId: "default", token: "configured" })'
-        : '({ accountId: "default" })';
   return `module.exports = { id: ${JSON.stringify(params.pluginId)}, register(api) {
-    api.registerChannel({
-      plugin: {
-        id: ${JSON.stringify(channelId)},
-        meta: {
-          id: ${JSON.stringify(channelId)},
-          label: ${JSON.stringify(params.label)},
-          selectionLabel: ${JSON.stringify(params.label)},
-          docsPath: ${JSON.stringify(params.docsPath)},
-          blurb: ${JSON.stringify(params.blurb)},
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => ${params.configured ? '["default"]' : "[]"},
-          resolveAccount: () => ${resolveAccount},
-        },
-        outbound: { deliveryMode: "direct" },
-      },
-    });
+    api.registerChannel({ plugin: ${channelFixtureSource(channelId, params)} });
   } };`;
 }
 
@@ -604,18 +582,10 @@ function createEscapingEntryFixture(params: { id: string; sourceBody: string }) 
   const outsideEntry = path.join(outsideDir, "outside.cjs");
   const linkedEntry = path.join(pluginDir, "entry.cjs");
   fs.writeFileSync(outsideEntry, params.sourceBody, "utf-8");
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: params.id,
-        configSchema: EMPTY_PLUGIN_SCHEMA,
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
+  writeFixtureJson(pluginDir, "openclaw.plugin.json", {
+    id: params.id,
+    configSchema: EMPTY_PLUGIN_SCHEMA,
+  });
   return { pluginDir, outsideEntry, linkedEntry };
 }
 
@@ -681,10 +651,6 @@ export function createSetupEntryChannelPluginFixture(params: {
   const pluginDir = makePluginLoaderTempDir();
   const fullMarker = path.join(pluginDir, "full-loaded.txt");
   const setupMarker = path.join(pluginDir, "setup-loaded.txt");
-  const listAccountIds = params.configured ? '["default"]' : "[]";
-  const resolveAccount = params.configured
-    ? '({ accountId: "default", token: "configured" })'
-    : '({ accountId: "default" })';
 
   writeFixtureJson(pluginDir, "package.json", {
     name: params.packageName,
@@ -708,22 +674,12 @@ module.exports = {
     }`
         : ""
     }
-    return {
-      id: ${JSON.stringify(params.bundledFullEntryId ?? params.id)},
-      meta: {
-        id: ${JSON.stringify(params.bundledFullEntryId ?? params.id)},
-        label: ${JSON.stringify(params.label)},
-        selectionLabel: ${JSON.stringify(params.label)},
-        docsPath: ${JSON.stringify(`/channels/${params.bundledFullEntryId ?? params.id}`)},
-        blurb: ${JSON.stringify(params.fullBlurb)},
-      },
-      capabilities: { chatTypes: ["direct"] },
-      config: {
-        listAccountIds: () => ${listAccountIds},
-        resolveAccount: () => ${resolveAccount},
-      },
-      outbound: { deliveryMode: "direct" },
-    };
+    return ${channelFixtureSource(params.bundledFullEntryId ?? params.id, {
+      label: params.label,
+      docsPath: `/channels/${params.bundledFullEntryId ?? params.id}`,
+      blurb: params.fullBlurb,
+      configured: params.configured,
+    })};
   },
   ${
     params.bundledFullRuntimeMarker
@@ -750,22 +706,12 @@ ${channelPluginSource({
       ? `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
 module.exports = {
   kind: "bundled-channel-setup-entry",
-  loadSetupPlugin: () => ({
-    id: ${JSON.stringify(params.bundledSetupEntryId ?? params.id)},
-    meta: {
-      id: ${JSON.stringify(params.bundledSetupEntryId ?? params.id)},
-      label: ${JSON.stringify(params.label)},
-      selectionLabel: ${JSON.stringify(params.label)},
-      docsPath: ${JSON.stringify(`/channels/${params.bundledSetupEntryId ?? params.id}`)},
-      blurb: ${JSON.stringify(params.setupBlurb)},
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => ${listAccountIds},
-      resolveAccount: () => ${resolveAccount},
-    },
-    outbound: { deliveryMode: "direct" },
-  }),
+  loadSetupPlugin: () => (${channelFixtureSource(params.bundledSetupEntryId ?? params.id, {
+    label: params.label,
+    docsPath: `/channels/${params.bundledSetupEntryId ?? params.id}`,
+    blurb: params.setupBlurb,
+    configured: params.configured,
+  })}),
   ${
     params.splitBundledSetupSecrets
       ? `loadSetupSecrets: () => ({
@@ -819,22 +765,12 @@ module.exports = {
 	};`
       : `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
 module.exports = {
-  plugin: {
-    id: ${JSON.stringify(params.id)},
-    meta: {
-      id: ${JSON.stringify(params.id)},
-      label: ${JSON.stringify(params.label)},
-      selectionLabel: ${JSON.stringify(params.label)},
-      docsPath: ${JSON.stringify(`/channels/${params.id}`)},
-      blurb: ${JSON.stringify(params.setupBlurb)},
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => ${listAccountIds},
-      resolveAccount: () => ${resolveAccount},
-    },
-    outbound: { deliveryMode: "direct" },
-  },
+  plugin: ${channelFixtureSource(params.id, {
+    label: params.label,
+    docsPath: `/channels/${params.id}`,
+    blurb: params.setupBlurb,
+    configured: params.configured,
+  })},
   ${
     params.bundledSetupRuntimeMarker
       ? `setChannelRuntime: () => {

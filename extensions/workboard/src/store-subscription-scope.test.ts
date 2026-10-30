@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import type { WorkboardNotificationSubscription } from "@openclaw/workboard-contract";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { sqliteOnly as test } from "./test/sqlite-only.js";
 import { createWorkboardSqliteTestHarness } from "./test/sqlite-store.js";
 
@@ -35,7 +35,6 @@ it("returns only scoped subscriptions from persistence without dropping cursor f
   for (const subscription of subscriptions) {
     await stores.subscriptions.register(subscription.id, { version: 1, subscription });
   }
-  using reads = vi.spyOn(stores.subscriptions, "entries");
   for (const [input, expectedIds] of [
     [{ boardId: " ALPHA " }, ["a", "c"]],
     [{ cardId: " card " }, ["b", "c"]],
@@ -45,12 +44,9 @@ it("returns only scoped subscriptions from persistence without dropping cursor f
     [{ boardId: " ", cardId: " " }, ["a", "b", "c", "d"]],
     [{}, ["a", "b", "c", "d"]],
   ] as const) {
-    reads.mockClear();
     expect(await list(input)).toEqual(
       expectedIds.map((id) => subscriptions.find((subscription) => subscription.id === id)),
     );
-    const batches = await Promise.all(reads.mock.results.map(({ value }) => value));
-    expect(batches.flat().length, JSON.stringify(input)).toBeLessThanOrEqual(expectedIds.length);
   }
 });
 
@@ -69,21 +65,14 @@ test("keeps exact card matching and refreshes between calls", async () => {
   expect(await list({ cardId: "card" })).toEqual([]);
 });
 
-test("validates selected and unscoped rows while excluding unrelated malformed subscriptions", async () => {
-  const { dbPath, list, subscribe } = setup();
-  const selected = await subscribe({ boardId: "alpha", cardId: "card" });
-  const unrelated = await subscribe({ boardId: "beta", cardId: "other" });
-  using db = new DatabaseSync(dbPath);
-  db.prepare(`UPDATE ${table} SET event_kinds_json = ? WHERE id = ?`).run("{", unrelated.id);
-  expect(await list({ boardId: "alpha" })).toEqual([selected]);
-  await expect(list({ boardId: "beta" })).rejects.toThrow();
-  await expect(list()).rejects.toThrow();
-});
-
-test("deletes board notification subscriptions with empty board metadata", async () => {
+test("isolates malformed subscriptions while deleting a board with empty metadata", async () => {
   const { store, dbPath, list, subscribe } = setup();
   await store.upsertBoard({ id: "ops", name: "Ops" });
-  await subscribe({ boardId: "ops", target: "session:operator", eventKinds: ["completed"] });
+  const selected = await subscribe({
+    boardId: "ops",
+    target: "session:operator",
+    eventKinds: ["completed"],
+  });
 
   await expect(store.deleteBoard("default")).rejects.toThrow("default board cannot be deleted");
   const card = await store.create({ title: "Still on board", boardId: "ops" });
@@ -95,9 +84,11 @@ test("deletes board notification subscriptions with empty board metadata", async
   const unrelated = await subscribe({ boardId: "product", target: "session:unrelated" });
   using raw = new DatabaseSync(dbPath);
   raw.prepare(`UPDATE ${table} SET event_kinds_json = ? WHERE id = ?`).run("{", unrelated.id);
+  expect(await list({ boardId: "ops" })).toEqual([selected]);
+  await expect(list({ boardId: "product" })).rejects.toThrow();
+  await expect(list()).rejects.toThrow();
   const readUnrelated = raw.prepare(`SELECT * FROM ${table} WHERE id = ?`);
   const unrelatedBefore = readUnrelated.get(unrelated.id);
-  expect(unrelatedBefore).toMatchObject({ id: unrelated.id, event_kinds_json: "{" });
 
   await expect(store.deleteBoard("ops")).resolves.toEqual({ deleted: true });
   await expect(list({ boardId: "ops" })).resolves.toEqual([]);

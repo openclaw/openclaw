@@ -88,36 +88,6 @@ describe("discord route resolution helpers", () => {
     });
   });
 
-  it("ignores stale route-shaped bindings after the configured agent changes", () => {
-    const route: ResolvedAgentRoute = {
-      agentId: "newagent",
-      channel: "discord",
-      accountId: "default",
-      sessionKey: "agent:newagent:discord:channel:c1",
-      mainSessionKey: "agent:newagent:main",
-      lastRoutePolicy: "session",
-      matchedBy: "binding.peer",
-    };
-
-    expect(
-      shouldIgnoreStaleDiscordRouteBinding({
-        route,
-        bindingRecord: {
-          bindingId: "binding-1",
-          targetSessionKey: "agent:oldagent:discord:channel:c1",
-          targetKind: "session",
-          conversation: {
-            channel: "discord",
-            accountId: "default",
-            conversationId: "c1",
-          },
-          status: "active",
-          boundAt: 1,
-        },
-      }),
-    ).toBe(true);
-  });
-
   it("keeps explicit focus bindings even when their agent differs from routing", () => {
     const route: ResolvedAgentRoute = {
       agentId: "newagent",

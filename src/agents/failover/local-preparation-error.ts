@@ -13,9 +13,9 @@ export class ContextPreparationTimeoutError extends WorkerTaskError {
   }
 }
 
-/** A local worker-task deadline is runtime infrastructure failure, not a provider timeout. */
-export function findLocalWorkerTaskTimeout(err: unknown): WorkerTaskError | undefined {
-  let localTimeout: WorkerTaskError | undefined;
+/** Local worker deadlines and capacity refusals are infrastructure failures, not provider signals. */
+export function findLocalWorkerTaskFailure(err: unknown): WorkerTaskError | undefined {
+  let localFailure: WorkerTaskError | undefined;
   for (const candidate of collectNestedErrorCandidates(err)) {
     // Failover wrappers may synthesize HTTP-like statuses; original HTTP facts still win.
     if (isFailoverError(candidate)) {
@@ -25,9 +25,12 @@ export function findLocalWorkerTaskTimeout(err: unknown): WorkerTaskError | unde
     if (record?.status !== undefined || record?.statusCode !== undefined) {
       return undefined;
     }
-    if (candidate instanceof WorkerTaskError && candidate.code === "timeout") {
-      localTimeout ??= candidate;
+    if (
+      candidate instanceof WorkerTaskError &&
+      (candidate.code === "timeout" || candidate.code === "overloaded")
+    ) {
+      localFailure ??= candidate;
     }
   }
-  return localTimeout;
+  return localFailure;
 }

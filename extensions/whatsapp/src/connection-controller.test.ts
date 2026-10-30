@@ -109,11 +109,19 @@ function createSocketWithTransportEmitter(onEnd = () => {}) {
   };
 }
 
-const loginAuthDir = "/tmp/wa-auth";
-
-function loggedOutError() {
-  return { output: { statusCode: DisconnectReason.loggedOut } };
+function queueConnectedSocket(sock: unknown = createSocketWithTransportEmitter()) {
+  createWaSocketMock.mockResolvedValueOnce(sock as never);
+  waitForWaConnectionMock.mockResolvedValueOnce(undefined);
 }
+
+function expectLoginWaits(
+  wait: ReturnType<typeof vi.fn>,
+  ...sockets: ReturnType<typeof createSocketWithTransportEmitter>[]
+) {
+  expect(wait.mock.calls).toEqual(sockets.map((sock) => [sock, { timeout: "none" }]));
+}
+
+const loginAuthDir = "/tmp/wa-auth";
 
 function createLoginResultHarness() {
   const initialSock = createSocketWithTransportEmitter();
@@ -139,30 +147,6 @@ function createLoginResultHarness() {
         waitForConnection: opts.waitForConnection as never,
       }),
   };
-}
-
-async function runLoggedOutRecovery(opts: {
-  cleanupCleared?: boolean;
-  authDecisions?: Array<{ outcome: "stable"; exists: boolean }>;
-  secondWait?: "resolve" | "logged-out";
-}) {
-  if (opts.cleanupCleared === false) {
-    logoutWebMock.mockResolvedValueOnce(false);
-  }
-  for (const decision of opts.authDecisions ?? []) {
-    readWebAuthExistsForDecisionMock.mockResolvedValueOnce(decision);
-  }
-  const harness = createLoginResultHarness();
-  const error = loggedOutError();
-  const waitForConnection = vi.fn().mockRejectedValueOnce(error);
-  if (opts.secondWait === "resolve") {
-    waitForConnection.mockResolvedValueOnce(undefined);
-  } else if (opts.secondWait === "logged-out") {
-    waitForConnection.mockRejectedValueOnce(error);
-  }
-  const createSocket = createWaSocketMock.mockResolvedValue(harness.replacementSock as never);
-  const result = await harness.run({ waitForConnection });
-  return { createSocket, error, harness, result, waitForConnection };
 }
 
 describe("WhatsAppConnectionController", () => {
@@ -207,6 +191,9 @@ describe("WhatsAppConnectionController", () => {
     ).rejects.toThrow("handshake failed");
 
     expect(createListener).not.toHaveBeenCalled();
+    expect(waitForWaConnectionMock).toHaveBeenCalledWith(sock, {
+      timeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.connectTimeoutMs,
+    });
     expect(sock.end).toHaveBeenCalledOnce();
     const closeError = sock.end.mock.calls[0]?.[0] as Error | undefined;
     expect(closeError).toBeInstanceOf(Error);
@@ -239,89 +226,44 @@ describe("WhatsAppConnectionController", () => {
     expect(sock.ws.close).toHaveBeenCalledOnce();
   });
 
-  it("lets createWaSocket own the auth barrier before opening a socket", async () => {
-    const callOrder: string[] = [];
-    createWaSocketMock.mockImplementationOnce(async () => {
-      callOrder.push("create");
-      return createSocketWithTransportEmitter() as never;
-    });
-    waitForWaConnectionMock.mockImplementationOnce(async () => {
-      callOrder.push("wait-for-connection");
-    });
-
-    await controller.openConnection({
-      connectionId: "conn-flush-first",
-      createListener: async () => createListenerStub() as never,
-    });
-
-    expect(callOrder).toEqual(["create", "wait-for-connection"]);
-    expect(waitForWaConnectionMock).toHaveBeenCalledWith(expect.anything(), {
-      timeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.connectTimeoutMs,
-    });
-  });
-
-  it("restarts login once on status 408 and preserves replacement socket options", async () => {
-    const harness = createLoginResultHarness();
-    const waitForConnection = vi
-      .fn()
-      .mockRejectedValueOnce({ output: { statusCode: DisconnectReason.timedOut } })
-      .mockResolvedValueOnce(undefined);
-    const onQr = vi.fn();
-    const onSocketReplaced = vi.fn();
-    const createSocket = createWaSocketMock.mockImplementation(async (_printQr, _verbose, opts) => {
-      opts?.onQr?.("qr-after-timeout");
-      return harness.replacementSock as never;
-    });
-
-    const result = await harness.run({
-      verbose: true,
-      waitForConnection,
-      socketTiming: {
-        connectTimeoutMs: 10_000,
-        defaultQueryTimeoutMs: 20_000,
-        keepAliveIntervalMs: 30_000,
-      },
-      onQr,
-      onSocketReplaced,
-    });
-
-    expect(result).toEqual({
-      outcome: "connected",
-      restarted: true,
-      sock: harness.replacementSock,
-    });
-    expect(harness.initialSock.end).toHaveBeenCalledOnce();
-    expect(createSocket).toHaveBeenCalledWith(false, true, {
-      authDir: loginAuthDir,
-      connectTimeoutMs: 10_000,
-      defaultQueryTimeoutMs: 20_000,
-      keepAliveIntervalMs: 30_000,
-      onQr,
-    });
-    expect(onQr).toHaveBeenCalledWith("qr-after-timeout");
-    expect(onSocketReplaced).toHaveBeenCalledWith(harness.replacementSock);
-    expect(waitForConnection).toHaveBeenNthCalledWith(1, harness.initialSock, {
-      timeout: "none",
-    });
-    expect(waitForConnection).toHaveBeenNthCalledWith(2, harness.replacementSock, {
-      timeout: "none",
-    });
-  });
-
-  it("still honors the post-pairing 515 restart after a status 408 recovery", async () => {
+  it("preserves socket options and guards through 408 recovery then post-pairing 515 restart", async () => {
     const harness = createLoginResultHarness();
     const afterTimeoutSock = createSocketWithTransportEmitter();
     const afterPairingRestartSock = createSocketWithTransportEmitter();
+    const onQr = vi.fn();
+    const onSocketReplaced = vi.fn();
+    const beforeCredentialPersistence = vi.fn(async () => {});
+    const onCredentialPersistenceError = vi.fn();
+    const onCredentialPersistenceTask = vi.fn();
+    const waitForCredentialPersistence = vi.fn(async () => {});
+    const socketTiming = {
+      connectTimeoutMs: 10_000,
+      defaultQueryTimeoutMs: 20_000,
+      keepAliveIntervalMs: 30_000,
+    };
     const waitForConnection = vi
       .fn()
       .mockRejectedValueOnce({ output: { statusCode: DisconnectReason.timedOut } })
       .mockRejectedValueOnce({ output: { statusCode: 515 } })
       .mockResolvedValueOnce(undefined);
     const createSocket = createWaSocketMock
-      .mockResolvedValueOnce(afterTimeoutSock as never)
+      .mockImplementationOnce(async (_printQr, _verbose, opts) => {
+        opts?.onQr?.("replacement-qr");
+        return afterTimeoutSock as never;
+      })
       .mockResolvedValueOnce(afterPairingRestartSock as never);
 
-    const result = await harness.run({ waitForConnection });
+    const result = await harness.run({
+      verbose: true,
+      waitForConnection,
+      socketTiming,
+      onQr,
+      onSocketReplaced,
+      beforeCredentialPersistence,
+      onCredentialPersistenceError,
+      onCredentialPersistenceTask,
+      waitForCredentialPersistence,
+    });
 
     expect(result).toEqual({
       outcome: "connected",
@@ -329,191 +271,94 @@ describe("WhatsAppConnectionController", () => {
       sock: afterPairingRestartSock,
     });
     expect(createSocket).toHaveBeenCalledTimes(2);
-    expect(waitForConnection).toHaveBeenCalledTimes(3);
-    expect(waitForConnection).toHaveBeenNthCalledWith(1, harness.initialSock, {
-      timeout: "none",
+    expect(createSocket).toHaveBeenNthCalledWith(2, false, true, {
+      authDir: loginAuthDir,
+      ...socketTiming,
+      onQr,
+      beforeCredentialPersistence,
+      onCredentialPersistenceError,
+      onCredentialPersistenceTask,
     });
-    expect(waitForConnection).toHaveBeenNthCalledWith(2, afterTimeoutSock, { timeout: "none" });
-    expect(waitForConnection).toHaveBeenNthCalledWith(3, afterPairingRestartSock, {
-      timeout: "none",
-    });
+    expect(onQr).toHaveBeenCalledWith("replacement-qr");
+    expect(onSocketReplaced.mock.calls).toEqual([[afterTimeoutSock], [afterPairingRestartSock]]);
+    expect(waitForCredentialPersistence).toHaveBeenCalledOnce();
+    expect(logoutWebMock).not.toHaveBeenCalled();
+    expectLoginWaits(
+      waitForConnection,
+      harness.initialSock,
+      afterTimeoutSock,
+      afterPairingRestartSock,
+    );
     expect(harness.initialSock.end).toHaveBeenCalledOnce();
     expect(afterTimeoutSock.end).toHaveBeenCalledOnce();
   });
 
-  it("clears stale logged-out auth once and continues login with a fresh socket", async () => {
-    const harness = createLoginResultHarness();
-    const error = loggedOutError();
-    const waitForConnection = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(undefined);
-    const onQr = vi.fn();
-    const onSocketReplaced = vi.fn();
-    const createSocket = createWaSocketMock.mockImplementation(async (_printQr, _verbose, opts) => {
-      opts?.onQr?.("qr-after-logout");
-      return harness.replacementSock as never;
-    });
+  it.each([
+    ["uncleared auth", 401, false, true, "failed", 1],
+    ["absent auth", 401, false, false, "connected", 2],
+    ["repeated logout", 401, true, true, "logged-out", 2],
+    ["repeated timeout", 408, true, true, "failed", 2],
+  ] as const)(
+    "bounds login recovery for %s",
+    async (_name, status, cleared, exists, outcome, waits) => {
+      const harness = createLoginResultHarness();
+      const error = { output: { statusCode: status } };
+      if (status === 401) {
+        logoutWebMock.mockResolvedValueOnce(cleared);
+      }
+      if (!cleared) {
+        readWebAuthExistsForDecisionMock.mockResolvedValueOnce({ outcome: "stable", exists });
+      }
+      const waitForConnection = vi.fn().mockRejectedValueOnce(error);
+      if (outcome === "connected") {
+        waitForConnection.mockResolvedValueOnce(undefined);
+      } else {
+        waitForConnection.mockRejectedValueOnce(error);
+      }
+      createWaSocketMock.mockResolvedValue(harness.replacementSock as never);
+      const result = await harness.run({ waitForConnection });
 
-    const result = await harness.run({
-      verbose: true,
-      waitForConnection,
-      onQr,
-      onSocketReplaced,
-    });
+      expect(harness.initialSock.end).toHaveBeenCalledOnce();
+      expect(createWaSocketMock).toHaveBeenCalledTimes(waits - 1);
+      expect(waitForConnection).toHaveBeenCalledTimes(waits);
+      expect(logoutWebMock).toHaveBeenCalledTimes(status === 401 ? 1 : 0);
+      if (outcome === "connected") {
+        expect(result).toEqual({ outcome, restarted: true, sock: harness.replacementSock });
+        expectLoginWaits(waitForConnection, harness.initialSock, harness.replacementSock);
+      } else if (!cleared) {
+        expect(result).toEqual({
+          outcome,
+          message:
+            "existing auth could not be cleared. Remove or fix the configured WhatsApp auth directory, then retry login.",
+          error,
+        });
+      } else {
+        expect(result).toMatchObject({ outcome, statusCode: status, error });
+      }
+    },
+  );
 
-    expect(result).toEqual({
-      outcome: "connected",
-      restarted: true,
-      sock: harness.replacementSock,
-    });
-    expect(logoutWebMock).toHaveBeenCalledWith({
-      authDir: loginAuthDir,
-      isLegacyAuthDir: false,
-      runtime: harness.runtime,
-    });
-    expect(harness.initialSock.end).toHaveBeenCalledOnce();
-    expect(createSocket).toHaveBeenCalledWith(false, true, {
-      authDir: loginAuthDir,
-      onQr,
-    });
-    expect(onQr).toHaveBeenCalledWith("qr-after-logout");
-    expect(onSocketReplaced).toHaveBeenCalledWith(harness.replacementSock);
-    expect(waitForConnection).toHaveBeenNthCalledWith(1, harness.initialSock, {
-      timeout: "none",
-    });
-    expect(waitForConnection).toHaveBeenNthCalledWith(2, harness.replacementSock, {
-      timeout: "none",
-    });
-  });
+  it.each([{ outcome: "unstable" as const }, { outcome: "stable" as const, exists: false }])(
+    "requires durable linked auth after socket open: %j",
+    async (auth) => {
+      readWebAuthExistsForDecisionMock.mockResolvedValue(auth);
+      const waitForConnection = vi.fn().mockResolvedValueOnce(undefined);
 
-  it("does not retry logged-out login when stale auth cleanup is skipped", async () => {
-    const { createSocket, error, harness, result, waitForConnection } = await runLoggedOutRecovery({
-      cleanupCleared: false,
-      authDecisions: [{ outcome: "stable", exists: true }],
-    });
+      const result = await createLoginResultHarness().run({ waitForConnection });
 
-    expect(result).toEqual({
-      outcome: "failed",
-      message:
-        "existing auth could not be cleared. Remove or fix the configured WhatsApp auth directory, then retry login.",
-      error,
-    });
-    expect(logoutWebMock).toHaveBeenCalledWith({
-      authDir: loginAuthDir,
-      isLegacyAuthDir: false,
-      runtime: harness.runtime,
-    });
-    expect(harness.initialSock.end).toHaveBeenCalledOnce();
-    expect(createSocket).not.toHaveBeenCalled();
-    expect(waitForConnection).toHaveBeenCalledOnce();
-  });
-
-  it("retries logged-out login when cleanup is a no-op because no auth exists", async () => {
-    const { createSocket, harness, result, waitForConnection } = await runLoggedOutRecovery({
-      cleanupCleared: false,
-      authDecisions: [
-        { outcome: "stable", exists: false },
-        { outcome: "stable", exists: true },
-      ],
-      secondWait: "resolve",
-    });
-
-    expect(result).toEqual({
-      outcome: "connected",
-      restarted: true,
-      sock: harness.replacementSock,
-    });
-    expect(createSocket).toHaveBeenCalledOnce();
-    expect(waitForConnection).toHaveBeenNthCalledWith(2, harness.replacementSock, {
-      timeout: "none",
-    });
-  });
-
-  it("does not clear stale logged-out auth more than once", async () => {
-    const { createSocket, error, result, waitForConnection } = await runLoggedOutRecovery({
-      secondWait: "logged-out",
-    });
-
-    expect(result).toMatchObject({
-      outcome: "logged-out",
-      statusCode: DisconnectReason.loggedOut,
-      error,
-    });
-    expect(logoutWebMock).toHaveBeenCalledOnce();
-    expect(createSocket).toHaveBeenCalledOnce();
-    expect(waitForConnection).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not keep recreating sockets when login status 408 persists", async () => {
-    const harness = createLoginResultHarness();
-    const timeoutError = { output: { statusCode: DisconnectReason.timedOut } };
-    const waitForConnection = vi
-      .fn()
-      .mockRejectedValueOnce(timeoutError)
-      .mockRejectedValueOnce(timeoutError);
-    const createSocket = createWaSocketMock.mockResolvedValue(harness.replacementSock as never);
-
-    const result = await harness.run({ waitForConnection });
-
-    expect(result).toMatchObject({
-      outcome: "failed",
-      statusCode: DisconnectReason.timedOut,
-      error: timeoutError,
-    });
-    expect(createSocket).toHaveBeenCalledOnce();
-    expect(waitForConnection).toHaveBeenCalledTimes(2);
-  });
-
-  it("preserves credential persistence guards on a replacement login socket", async () => {
-    const harness = createLoginResultHarness();
-    const restartError = { output: { statusCode: DisconnectReason.restartRequired } };
-    const waitForConnection = vi
-      .fn()
-      .mockRejectedValueOnce(restartError)
-      .mockResolvedValueOnce(undefined);
-    const createSocket = createWaSocketMock.mockResolvedValue(harness.replacementSock as never);
-    const beforeCredentialPersistence = vi.fn(async () => {});
-    const onCredentialPersistenceError = vi.fn();
-    const onCredentialPersistenceTask = vi.fn();
-    const waitForCredentialPersistence = vi.fn(async () => {});
-
-    const result = await harness.run({
-      waitForConnection,
-      beforeCredentialPersistence,
-      onCredentialPersistenceError,
-      onCredentialPersistenceTask,
-      waitForCredentialPersistence,
-    });
-
-    expect(result.outcome).toBe("connected");
-    expect(createSocket).toHaveBeenCalledWith(false, false, {
-      authDir: loginAuthDir,
-      onQr: undefined,
-      beforeCredentialPersistence,
-      onCredentialPersistenceError,
-      onCredentialPersistenceTask,
-    });
-    expect(waitForCredentialPersistence).toHaveBeenCalledOnce();
-  });
-
-  it("returns a retryable failure when the socket opens before auth persistence settles", async () => {
-    readWebAuthExistsForDecisionMock.mockResolvedValue({ outcome: "unstable" });
-    const waitForConnection = vi.fn().mockResolvedValueOnce(undefined);
-
-    const result = await createLoginResultHarness().run({ waitForConnection });
-
-    expect(result.outcome).toBe("failed");
-    if (result.outcome === "failed") {
-      expect(result.message).toMatch(/retry/i);
-      expect((result.error as { code?: string })?.code).toBe("whatsapp-auth-unstable");
-    }
-  });
+      expect(result).toMatchObject({
+        outcome: "failed",
+        message: expect.stringMatching(/retry/i),
+        error: { code: "whatsapp-auth-unstable" },
+      });
+    },
+  );
 
   it("aborts an indefinite login wait when guarded credential persistence fails", async () => {
     const guardError = new Error("verified inference route changed");
     let persistenceFailure: { error: unknown } | null = null;
-    let resolvePersistenceFailure = (_failure: { error: unknown }) => {};
-    const persistenceFailurePromise = new Promise<{ error: unknown }>((resolve) => {
-      resolvePersistenceFailure = resolve;
-    });
+    const { promise: persistenceFailurePromise, resolve: resolvePersistenceFailure } =
+      Promise.withResolvers<{ error: unknown }>();
     const pendingResult = createLoginResultHarness().run({
       waitForConnection: vi.fn(() => new Promise<void>(() => {})),
       credentialPersistenceFailure: persistenceFailurePromise,
@@ -525,37 +370,6 @@ describe("WhatsAppConnectionController", () => {
 
     const result = await pendingResult;
     expect(result).toMatchObject({ outcome: "failed", error: guardError });
-  });
-
-  it("returns a retryable failure when auth is not linked on disk after the socket opens", async () => {
-    readWebAuthExistsForDecisionMock.mockResolvedValue({ outcome: "stable", exists: false });
-    const waitForConnection = vi.fn().mockResolvedValueOnce(undefined);
-
-    const result = await createLoginResultHarness().run({ waitForConnection });
-
-    expect(result.outcome).toBe("failed");
-    if (result.outcome === "failed") {
-      expect(result.message).toMatch(/retry/i);
-      expect((result.error as { code?: string })?.code).toBe("whatsapp-auth-unstable");
-    }
-  });
-
-  it("returns connected only after auth is confirmed durable on disk", async () => {
-    readWebAuthExistsForDecisionMock.mockResolvedValue({ outcome: "stable", exists: true });
-    const waitForConnection = vi.fn().mockResolvedValueOnce(undefined);
-    const sock = createSocketWithTransportEmitter();
-
-    const result = await waitForWhatsAppLoginResult({
-      sock: sock as never,
-      authDir: "/tmp/wa-auth",
-      isLegacyAuthDir: false,
-      verbose: false,
-      runtime: { log: vi.fn() } as never,
-      waitForConnection: waitForConnection as never,
-    });
-
-    expect(result).toEqual({ outcome: "connected", restarted: false, sock });
-    expect(readWebAuthExistsForDecisionMock).toHaveBeenCalledWith("/tmp/wa-auth");
   });
 
   it("waits for queued creds persistence so linked auth survives an auth-dir reuse", async () => {
@@ -580,13 +394,15 @@ describe("WhatsAppConnectionController", () => {
         () => {},
       );
 
-      const result = await createLoginResultHarness().run({
+      const harness = createLoginResultHarness();
+      const result = await harness.run({
         authDir,
         waitForConnection: vi.fn().mockResolvedValueOnce(undefined),
       });
 
       expect(credsSaved).toBe(true);
-      expect(result.outcome).toBe("connected");
+      expect(result).toEqual({ outcome: "connected", restarted: false, sock: harness.initialSock });
+      expect(readWebAuthExistsForDecisionMock).toHaveBeenCalledWith(authDir);
       // A fresh read of the same auth dir is what a restarted/rebuilt container does.
       await expect(actualAuthStore.webAuthExists(authDir)).resolves.toBe(true);
     } finally {
@@ -599,8 +415,7 @@ describe("WhatsAppConnectionController", () => {
     registerChannelRuntimeContextMock.mockReturnValueOnce({ dispose: disposeRuntimeContext });
     const liveController = createController();
     const liveListener = createListenerStub("live");
-    createWaSocketMock.mockResolvedValueOnce(createSocketWithTransportEmitter() as never);
-    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+    queueConnectedSocket();
     await liveController.openConnection({
       connectionId: "live-conn",
       createListener: async () => liveListener,
@@ -648,8 +463,7 @@ describe("WhatsAppConnectionController", () => {
     connectionOwnerMocks.release.mockImplementationOnce(async () => {
       order.push("owner-release");
     });
-    createWaSocketMock.mockResolvedValueOnce(sock as never);
-    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+    queueConnectedSocket(sock);
 
     await open("owned-conn");
     await controller.shutdown();
@@ -658,12 +472,10 @@ describe("WhatsAppConnectionController", () => {
   });
 
   it("joins pending ownership acquisition before shutdown returns", async () => {
-    let resolveOwner = (_lease: { release: () => Promise<void> }) => {};
-    connectionOwnerMocks.acquire.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveOwner = resolve;
-      }),
-    );
+    const { promise: ownerPromise, resolve: resolveOwner } = Promise.withResolvers<{
+      release: () => Promise<void>;
+    }>();
+    connectionOwnerMocks.acquire.mockReturnValueOnce(ownerPromise);
     const openPromise = open("pending-owner");
     const shutdownPromise = controller.shutdown();
 
@@ -696,12 +508,9 @@ describe("WhatsAppConnectionController", () => {
   it("does not publish a listener that resolves after setup is cancelled", async () => {
     const sock = createSocketWithTransportEmitter();
     const lateListener = { ...createListenerStub(), close: vi.fn(async () => {}) };
-    let resolveListener = (_listener: ReturnType<typeof createListenerStub>) => {};
-    const listenerPromise = new Promise<ReturnType<typeof createListenerStub>>((resolve) => {
-      resolveListener = resolve;
-    });
-    createWaSocketMock.mockResolvedValueOnce(sock as never);
-    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+    const { promise: listenerPromise, resolve: resolveListener } =
+      Promise.withResolvers<ReturnType<typeof createListenerStub>>();
+    queueConnectedSocket(sock);
     const openPromise = controller.openConnection({
       connectionId: "pending-listener",
       createListener: async () => await listenerPromise,
@@ -723,8 +532,7 @@ describe("WhatsAppConnectionController", () => {
     const sock = createSocketWithTransportEmitter();
     const listener = { ...createListenerStub(), close: vi.fn(async () => {}) };
     let shutdownPromise: Promise<void> | undefined;
-    createWaSocketMock.mockResolvedValueOnce(sock as never);
-    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+    queueConnectedSocket(sock);
     const openPromise = controller.openConnection({
       connectionId: "resolved-listener",
       createListener: async () => {
@@ -743,65 +551,41 @@ describe("WhatsAppConnectionController", () => {
     expect(connectionOwnerMocks.release).toHaveBeenCalledOnce();
   });
 
-  it("retains connection ownership when socket close cannot be confirmed", async () => {
-    let closed = false;
-    const sock = {
-      end: vi
-        .fn()
-        .mockRejectedValueOnce(new Error("end failed"))
-        .mockImplementationOnce(async () => {
-          closed = true;
-        }),
-      ws: {
-        close: vi.fn().mockRejectedValueOnce(new Error("websocket close failed")),
-        get isClosed() {
-          return closed;
-        },
-      },
-    };
-    createWaSocketMock.mockResolvedValueOnce(sock as never);
-    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
-    await open("uncertain-close");
-
-    await expect(controller.shutdown()).rejects.toThrow("socket close could not be confirmed");
-    expect(connectionOwnerMocks.release).not.toHaveBeenCalled();
-  });
-
-  it("retains connection ownership until queued credentials drain", async () => {
-    const sock = createSocketWithTransportEmitter();
-    createWaSocketMock.mockResolvedValueOnce(sock as never);
-    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
-    waitForCredsSaveQueueWithTimeoutMock
-      .mockResolvedValueOnce("timed_out")
-      .mockResolvedValueOnce("drained");
-    await open("pending-creds");
-
-    await expect(controller.shutdown()).rejects.toThrow("credential persistence did not drain");
-    expect(connectionOwnerMocks.release).not.toHaveBeenCalled();
-    expect(sock.end).toHaveBeenCalledOnce();
-    expect(controller.getActiveListener()).toBeNull();
-    expect(controller.getCurrentSock()).toBeNull();
-
-    await expect(controller.shutdown()).resolves.toBeUndefined();
-    expect(connectionOwnerMocks.release).toHaveBeenCalledOnce();
-  });
-
-  it("retains connection ownership until a failed release can be retried", async () => {
-    const sock = createSocketWithTransportEmitter();
-    connectionOwnerMocks.release
-      .mockRejectedValueOnce(new Error("owner release failed"))
-      .mockResolvedValueOnce(undefined);
-    createWaSocketMock.mockResolvedValueOnce(sock as never);
-    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
-    await open("release-retry");
-
-    await expect(controller.shutdown()).rejects.toThrow("owner release failed");
-    expect(controller.getActiveListener()).toBeNull();
-    expect(controller.getCurrentSock()).toBeNull();
-
-    await expect(controller.shutdown()).resolves.toBeUndefined();
-    expect(connectionOwnerMocks.release).toHaveBeenCalledTimes(2);
-  });
+  it.each([
+    ["transport", "socket close could not be confirmed", 0],
+    ["credentials", "credential persistence did not drain", 0],
+    ["release", "owner release failed", 1],
+  ] as const)(
+    "retains ownership after %s failure until cleanup can retry",
+    async (stage, message, releases) => {
+      const sock = createSocketWithTransportEmitter();
+      if (stage === "transport") {
+        sock.end.mockRejectedValueOnce(new Error("end failed"));
+        sock.ws.close.mockRejectedValueOnce(new Error("websocket close failed"));
+      } else if (stage === "credentials") {
+        waitForCredsSaveQueueWithTimeoutMock
+          .mockResolvedValueOnce("timed_out")
+          .mockResolvedValueOnce("drained");
+      } else {
+        connectionOwnerMocks.release
+          .mockRejectedValueOnce(new Error("owner release failed"))
+          .mockResolvedValueOnce(undefined);
+      }
+      queueConnectedSocket(sock);
+      await open(`cleanup-${stage}`);
+      await expect(controller.shutdown()).rejects.toThrow(message);
+      expect(connectionOwnerMocks.release).toHaveBeenCalledTimes(releases);
+      if (stage !== "transport") {
+        expect(controller.getActiveListener()).toBeNull();
+        expect(controller.getCurrentSock()).toBeNull();
+      }
+      if (stage === "credentials") {
+        expect(sock.end).toHaveBeenCalledOnce();
+      }
+      await expect(controller.shutdown()).resolves.toBeUndefined();
+      expect(connectionOwnerMocks.release).toHaveBeenCalledTimes(releases + 1);
+    },
+  );
 
   it("tracks real websocket frame activity in the connection snapshot", async () => {
     vi.useFakeTimers();
@@ -809,8 +593,7 @@ describe("WhatsAppConnectionController", () => {
 
     try {
       const sock = createSocketWithTransportEmitter();
-      createWaSocketMock.mockResolvedValueOnce(sock as never);
-      waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+      queueConnectedSocket(sock);
 
       const snapshots: Array<{ lastTransportActivityAt: number }> = [];
       await controllerValue.openConnection({
@@ -857,9 +640,7 @@ describe("WhatsAppConnectionController", () => {
     vi.useFakeTimers();
     const controllerLocal = createController({ keepAlive: true, heartbeatSeconds: 1, ...timing });
     try {
-      const sock = createSocketWithTransportEmitter();
-      createWaSocketMock.mockResolvedValueOnce(sock as never);
-      waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+      queueConnectedSocket();
       const timeouts: string[] = [];
       await controllerLocal.openConnection({
         connectionId,

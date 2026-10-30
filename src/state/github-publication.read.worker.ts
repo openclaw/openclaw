@@ -3,6 +3,10 @@ import {
   listUnreportedPersonalGitHubPublicationsInDatabase,
 } from "../gateway/github-personal-publication-store.worker.js";
 import {
+  readSharedGitHubPublicationRequestInDatabase,
+  readSharedRepositoryGitHubPublicationInDatabase,
+} from "../gateway/github-publication-shared-read.kernel.js";
+import {
   listGitHubPublicationsForClaimInDatabase,
   listSharedGitHubPublicationsInDatabase,
   readGitHubPublicationRequest,
@@ -16,6 +20,7 @@ import {
   readRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.worker.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import type { SharedGitHubPublicationReadInput } from "./github-publication-read.types.js";
 import {
   readTaskPublicationReceipts,
   type TaskPublicationRead,
@@ -24,6 +29,15 @@ import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
 
 export const publicationReadOperations = {
+  "githubPublications.sharedObservation": (
+    { session, selector, entry }: SharedGitHubPublicationReadInput,
+    db,
+  ) => ({
+    type: "githubPublications.sharedObservation" as const,
+    row:
+      readSharedRepositoryGitHubPublicationInDatabase(db, session, selector, entry) ??
+      readSharedGitHubPublicationRequestInDatabase(db, session, selector, entry),
+  }),
   "githubPublications.taskReceipts": (input: TaskPublicationRead, db) => ({
     type: "githubPublications.taskReceipts" as const,
     result: readTaskPublicationReceipts(db, input),

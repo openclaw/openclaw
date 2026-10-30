@@ -19,8 +19,11 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { upsertSessionEntryCore, withTranscriptWriteLock } from "./session-accessor.js";
 import type { SessionTranscriptRawDeltaResult } from "./session-accessor.sqlite-contract.js";
 import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
-import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
-import { readSessionTranscriptContextProjectionAsync } from "./session-transcript-context-read.js";
+import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-admitted-read.js";
+import {
+  readSessionTranscriptContextProjectionAsync,
+  readSessionTranscriptModelContextAsync,
+} from "./session-transcript-context-read.js";
 import { withSessionTranscriptDeltaReader } from "./session-transcript-delta-read.js";
 import * as transcriptReaders from "./session-transcript-execution-read.js";
 import { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
@@ -31,16 +34,129 @@ import { readSessionTranscriptWatermarkAsync } from "./session-transcript-waterm
 import { historyLane } from "./session-transcript-worker-resources.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
+function createTranscriptTarget(sessionId: string, storePath: string) {
+  return {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath,
+  };
+}
+
+it("lets writers progress and consumes fresh model context after repeated contention", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ label: "model-context-writer-progress" }, async (state) => {
+    const target = createTranscriptTarget("context-progress", state.statePath("transcript.sqlite"));
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = await SessionManager.openAsync(target);
+    await manager.appendMessageAsync({ role: "user", content: "committed", timestamp: 1 });
+    const { databaseClaim } = await loadSessionEntryForAdmission(target);
+    if (!("kind" in databaseClaim) || databaseClaim.kind !== "worker" || !databaseClaim.reader) {
+      throw new Error("Expected admitted durable session reader");
+    }
+    const gates = [0, 1].map(() => ({ entered: createDeferred(), release: createDeferred() }));
+    let reads = 0;
+    const read = contextWorker.readSessionTranscriptModelContextInWorker;
+    const delayed = vi
+      .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+      .mockImplementation(async (...args) => {
+        const value = await read(...args);
+        const gate = gates[reads++];
+        gate?.entered.resolve();
+        await gate?.release.promise;
+        return value;
+      });
+    let reading: Promise<unknown> | undefined;
+    let writer: Promise<unknown> | undefined;
+    try {
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionTarget: target,
+          sessionReader: databaseClaim.reader,
+          withTranscriptWrite: async (write) => write(),
+        },
+        async () => {
+          const consume = vi.fn((context) => JSON.stringify(context.events));
+          reading = readSessionTranscriptModelContextAsync(
+            target,
+            consume,
+            undefined,
+            undefined,
+            undefined,
+            { maxBytes: 4096, maxEvents: 10 },
+            true,
+          );
+          for (const [index, gate] of gates.entries()) {
+            await withinTest(
+              awaitGateBeforeSettlement(gate.entered.promise, reading, "Read bypassed worker"),
+              signal,
+            );
+            writer = manager.appendMessageAsync({
+              role: "user",
+              content: `later-${index}`,
+              timestamp: index + 2,
+            });
+            await withinTest(
+              awaitGateBeforeSettlement(writer, reading, "Read settled before writer finished"),
+              signal,
+            );
+            expect(consume).not.toHaveBeenCalled();
+            gate.release.resolve();
+          }
+          await expect(withinTest(reading, signal)).resolves.toContain("later-1");
+          expect(consume).toHaveBeenCalledTimes(1);
+        },
+      );
+    } finally {
+      gates.forEach((gate) => gate.release.resolve());
+      await Promise.allSettled([reading, writer]);
+      delayed.mockRestore();
+      await databaseClaim.release();
+    }
+  });
+});
+
+it("captures a caller's transcript anchor before asynchronous reading", async () => {
+  await withOpenClawTestState({ label: "context-anchor-snapshot" }, async (state) => {
+    const target = createTranscriptTarget("snapshot", state.statePath("transcript.sqlite"));
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = await SessionManager.openAsync(target);
+    const { anchor } = await manager.appendMessageWithTranscriptAnchorAsync({
+      role: "user",
+      content: "captured question",
+      timestamp: 1,
+    });
+    if (!anchor) {
+      throw new Error("Missing committed transcript anchor");
+    }
+    const through = { ...anchor };
+    const reading = readSessionTranscriptModelContextAsync(
+      target,
+      (context) => context.events,
+      undefined,
+      undefined,
+      through,
+    );
+    through.entryId = "mutated-by-caller";
+    through.rawSeq = -1;
+    through.generation = "mutated-generation";
+    await expect(reading).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({ content: "captured question" }),
+        }),
+      ]),
+    );
+  });
+});
+
 it("reads a prepared transcript snapshot while another writer owns the FIFO", async ({
   signal,
 }) => {
   await withOpenClawTestState({ label: "prepared-read-writer-fifo" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "prepared-read",
-      sessionKey: "agent:main:prepared-read",
-      storePath: state.statePath("transcript.sqlite"),
-    };
+    const target = createTranscriptTarget("prepared-read", state.statePath("transcript.sqlite"));
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(target);
     await manager.appendMessageAsync({ role: "user", content: "committed", timestamp: 1 });
@@ -74,12 +190,10 @@ it("reads a prepared transcript snapshot while another writer owns the FIFO", as
 
 it("keeps admitted delta reads with their writer when independent history cannot settle", async () => {
   await withOpenClawTestState({ label: "locked-admitted-delta" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "locked-admitted-delta",
-      sessionKey: "agent:main:locked-admitted-delta",
-      storePath: state.statePath("transcript.sqlite"),
-    };
+    const target = createTranscriptTarget(
+      "locked-admitted-delta",
+      state.statePath("transcript.sqlite"),
+    );
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(target);
     await manager.appendMessageAsync({ role: "user", content: "earlier", timestamp: 1 });
@@ -151,12 +265,7 @@ it("validates context projection inside a transcript lock and append preparation
   signal,
 }) => {
   await withOpenClawTestState({ label: "locked-context-projection" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "locked-context",
-      sessionKey: "agent:main:locked-context",
-      storePath: state.statePath("sessions.json"),
-    };
+    const target = createTranscriptTarget("locked-context", state.statePath("sessions.json"));
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(target);
     await manager.appendMessageAsync({ role: "user", content: "earlier", timestamp: 1 });
@@ -220,12 +329,10 @@ it.each([
   ["full context", "append"],
 ] as const)("validates a fenced %s after an owned %s", async (route, change) => {
   await withOpenClawTestState({ label: `context-${change}` }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "projection-admission",
-      sessionKey: "agent:main:projection-admission",
-      storePath: state.statePath("transcript.sqlite"),
-    };
+    const target = createTranscriptTarget(
+      "projection-admission",
+      state.statePath("transcript.sqlite"),
+    );
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(target);
     await manager.appendMessageAsync({ role: "user", content: "earlier", timestamp: 1 });
@@ -280,12 +387,7 @@ it.each([false, true])(
   "reads context, watermarks and message presence without caller SQL (warm=%s)",
   async (warm) => {
     await withOpenClawTestState({ label: "transcript-context-reader" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "context-reader",
-        sessionKey: "agent:main:context-reader",
-        storePath: state.statePath("transcript.sqlite"),
-      };
+      const scope = createTranscriptTarget("context-reader", state.statePath("transcript.sqlite"));
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const source = await SessionManager.openAsync(scope);
       const user = await source.appendMessageAsync({
@@ -337,12 +439,7 @@ it.each([false, true])(
 
 it("refuses a rewrite after final worker validation but before host consumption", async () => {
   await withOpenClawTestState({ label: "context-validation-reply" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "delayed-context",
-      sessionKey: "agent:main:delayed-context",
-      storePath: state.statePath("transcript.sqlite"),
-    };
+    const scope = createTranscriptTarget("delayed-context", state.statePath("transcript.sqlite"));
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const source = SessionManager.open(scope);
     source.appendMessage({ role: "user", content: "original", timestamp: 1 });
@@ -382,12 +479,7 @@ it.each(["projection", "full context"] as const)(
   "accepts a fenced %s through a store alias but rejects a copied store",
   async (route) => {
     await withOpenClawTestState({ label: "context-input-store-alias" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "alias-input",
-        sessionKey: "agent:main:alias-input",
-        storePath: state.statePath("transcript.sqlite"),
-      };
+      const target = createTranscriptTarget("alias-input", state.statePath("transcript.sqlite"));
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
       const manager = await SessionManager.openAsync(target);
       await manager.appendMessageAsync({ role: "user", content: "earlier", timestamp: 1 });
@@ -441,12 +533,7 @@ it.each(["projection", "full context"] as const)(
 
 it("rejects a read owner closed after scanning instead of accepting the detached context", async () => {
   await withOpenClawTestState({ label: "context-reader-close" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "context-close",
-      sessionKey: "agent:main:context-close",
-      storePath: state.statePath("transcript.sqlite"),
-    };
+    const scope = createTranscriptTarget("context-close", state.statePath("transcript.sqlite"));
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const source = await SessionManager.openAsync(scope);
     await source.appendMessageAsync({ role: "user", content: "original", timestamp: 1 });
@@ -484,12 +571,10 @@ it.each(["worker", "native"] as const)(
       );
       const aliasPath = path.join(aliasDirectory, path.basename(originalPath));
       for (const writeAlias of [false, true]) {
-        const target = {
-          agentId: "main",
-          sessionId: `anchor-locator-${writeAlias}`,
-          sessionKey: `agent:main:anchor-locator-${writeAlias}`,
-          storePath: writeAlias ? aliasPath : originalPath,
-        };
+        const target = createTranscriptTarget(
+          `anchor-locator-${writeAlias}`,
+          writeAlias ? aliasPath : originalPath,
+        );
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
         const manager =
           mode === "worker" ? await SessionManager.openAsync(target) : SessionManager.open(target);

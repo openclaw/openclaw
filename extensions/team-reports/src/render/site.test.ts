@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DAY_MS, describePeriod } from "../periods.js";
-import { reportDocument, reportMember } from "../reports-data.test-support.js";
+import { githubItem, reportDocument, reportMember } from "../reports-data.test-support.js";
 import { githubCounts } from "../reports.fixtures.js";
 import type { PeriodListEntry, PersonDay } from "../store.js";
 import type { Period, Person, PersonReport, ReportDocument } from "../types.js";
@@ -56,6 +56,7 @@ function entry(period: Period, key: string, total = 10): PeriodListEntry {
   };
 }
 const day = (key: string, total = 10) => entry("day", key, total);
+const partialCard = 'class="quick-card oc-card oc-card-interactive partial"';
 function document(period: Period = "day", key = "2026-09-07"): ReportDocument {
   const row = entry(period, key);
   return reportDocument([makeMember()], {
@@ -71,21 +72,18 @@ function document(period: Period = "day", key = "2026-09-07"): ReportDocument {
 function reportPage(report: ReportDocument, history: PeriodListEntry[] = []) {
   return renderReportPage(ctx, report, null, history);
 }
-function home(index: Partial<PeriodIndex>): string {
-  return renderIndexPage(
-    ctx,
-    { day: [], week: [], month: [], ...index },
-    { orgs: ["example"], health: { running: true, warnings: 0 } },
-  );
+const homeOptions = { orgs: ["example"], health: { running: true, warnings: 0 } };
+function home(
+  index: Partial<PeriodIndex>,
+  options: Parameters<typeof renderIndexPage>[2] = homeOptions,
+): string {
+  return renderIndexPage(ctx, { day: [], week: [], month: [], ...index }, options);
 }
 function personDay(login: string, dayKey: string, total: number): PersonDay {
-  return {
-    ...githubCounts(total),
-    login,
-    dayKey,
-    githubTotal: total,
-    discordMessages: total,
-  };
+  return { ...githubCounts(total), login, dayKey, githubTotal: total, discordMessages: total };
+}
+function sessions(login: string, label: string): PersonWorkSessions {
+  return { available: true, sessions: [{ key: `agent:main:${login}-work`, label }] };
 }
 
 describe("Team Reports site behavior", () => {
@@ -95,50 +93,36 @@ describe("Team Reports site behavior", () => {
       day(new Date(Date.parse("2026-09-07T00:00:00Z") - index * DAY_MS).toISOString().slice(0, 10)),
     );
     const html = home({ day: days });
-    expect(html).toContain('aria-label="Activity dateline"');
-    expect(html).toContain("400 report days");
-    expect(html).toContain('href="/reports/day/2026-09-07/"');
-    expect(html).toContain(days.at(-1)?.key);
+    contains(html, 'aria-label="Activity dateline"', "400 report days");
+    contains(html, 'href="/reports/day/2026-09-07/"', days.at(-1)!.key);
   });
 
-  it("uses UTC windows for open guidance, countdowns and intraday badges", () => {
-    const closed = day("2026-09-06");
-    const today = day("2026-09-07");
-    const html = home({ day: [today, closed] });
-    contains(
-      html,
-      "Open reporting windows",
-      "Today, as of",
-      "16:44 UTC",
-      "closes in 7h 16m (00:00 UTC)",
-      ">Intraday</span>",
-    );
-    expect(home({ day: [closed] })).not.toContain("Open reporting windows");
-    for (const row of [
-      { ...today, generatedAtMs: today.untilMs },
-      { ...closed, status: "partial" as const, generatedAtMs: closed.untilMs - 1000 },
-    ]) {
-      excludes(home({ day: [row] }), ">Intraday</span>");
+  it("uses UTC windows for open guidance and countdowns", () => {
+    const html = home({ day: [day("2026-09-07"), day("2026-09-06")] });
+    contains(html, "Open reporting windows", "Today, as of");
+    contains(html, "16:44 UTC", "closes in 7h 16m (00:00 UTC)");
+  });
+  it.each([
+    ["2026-09-07", "partial", false, "Intraday"],
+    ["2026-09-07", "partial", true, ""],
+    ["2026-09-07", "closed", false, ""],
+    ["2026-09-06", "partial", false, "Incomplete"],
+    ["2026-09-06", "closed", true, ""],
+  ] as const)("preserves completeness for %s/%s (at end: %s)", (key, status, atEnd, badge) => {
+    const row = day(key);
+    const html = home({
+      day: [{ ...row, status, generatedAtMs: atEnd ? row.untilMs : row.generatedAtMs }],
+    });
+    expect(html.includes(partialCard)).toBe(status === "partial");
+    expect(html.includes("Open reporting windows")).toBe(key === "2026-09-07");
+    for (const label of ["Intraday", "Incomplete"]) {
+      expect(html.match(new RegExp(`>${label}</span>`, "g")) ?? []).toHaveLength(
+        label === badge ? 2 : 0,
+      );
     }
-    const closedToday = home({ day: [{ ...today, status: "closed" }] });
-    excludes(
-      closedToday,
-      ">Intraday</span>",
-      'class="quick-card oc-card oc-card-interactive partial"',
-    );
-  });
-
-  it("preserves stored completeness in overview cards and history", () => {
-    const closed = entry("day", "2026-09-06");
-    const incomplete = home({ day: [{ ...closed, status: "partial" }] });
-    expect(incomplete.match(/oc-badge-warning[^>]*>Incomplete<\/span>/g)).toHaveLength(2);
-    expect(incomplete).toContain('class="quick-card oc-card oc-card-interactive partial"');
-    expect(incomplete).not.toContain(">Intraday</span>");
-    expect(incomplete).not.toContain("Open reporting windows");
-    const complete = home({ day: [closed] });
-    expect(complete).not.toContain(">Incomplete</span>");
-    expect(complete).not.toContain(">Intraday</span>");
-    expect(complete).not.toContain('class="quick-card oc-card oc-card-interactive partial"');
+    if (badge === "Incomplete") {
+      expect(html.match(/oc-badge-warning[^>]*>Incomplete<\/span>/g)).toHaveLength(2);
+    }
   });
 
   it("compares an open aggregate snapshot to elapsed prior days instead of the full period", () => {
@@ -161,42 +145,29 @@ describe("Team Reports site behavior", () => {
     );
   });
 
-  it.each<Period>(["day", "week", "month"])(
-    "offers Show all only above the visible %s history limit",
-    (period) => {
-      const count = period === "day" ? 7 : 12;
-      const entries = Array.from({ length: count + 1 }, (_, index) =>
-        entry(
-          period,
-          period === "day"
-            ? `2026-08-${String(31 - index).padStart(2, "0")}`
-            : period === "week"
-              ? `2026-W${String(34 - index).padStart(2, "0")}`
-              : `${2026 - Math.floor(index / 12)}-${String(12 - (index % 12)).padStart(2, "0")}`,
-        ),
-      );
-      expect(home({ [period]: entries.slice(0, count) })).not.toContain(`data-toggle="${period}"`);
-      const html = home({ [period]: entries });
-      expect(html).toContain(`Show all ${count + 1}`);
-      expect(html).toContain(" data-extra hidden");
-      expect(html).toContain(`href="/reports/${period}/${entries.at(-1)?.key}/"`);
-    },
-  );
+  it.each([
+    ["day", 7, (i: number) => `2026-08-${31 - i}`],
+    ["week", 12, (i: number) => `2026-W${34 - i}`],
+    [
+      "month",
+      12,
+      (i: number) => `${2026 - Math.floor(i / 12)}-${String(12 - (i % 12)).padStart(2, "0")}`,
+    ],
+  ] as const)("offers Show all only above the visible %s history limit", (period, count, key) => {
+    const entries = Array.from({ length: count + 1 }, (_, i) => entry(period, key(i)));
+    expect(home({ [period]: entries.slice(0, count) })).not.toContain(`data-toggle="${period}"`);
+    const html = home({ [period]: entries });
+    contains(html, `Show all ${count + 1}`, " data-extra hidden");
+    expect(html).toContain(`href="/reports/${period}/${key(count)}/"`);
+  });
 
-  it("renders metric deltas only against preceding periods and labels in-progress totals", () => {
-    const report = document();
-    const html = reportPage(report, [
-      day("2026-09-08", 100),
-      day("2026-09-07"),
-      day("2026-09-06", 5),
-    ]);
-    expect(html).toContain("+100% vs prev day (in progress)");
-    const closed = reportPage(document("day", "2026-09-06"), [
-      day("2026-09-06"),
-      day("2026-09-05", 5),
-    ]);
-    expect(closed).toContain("+100% vs prev day");
-    expect(closed).not.toContain("(in progress)");
+  it.each(["2026-09-07", "2026-09-06"])("compares %s only to earlier reports", (key) => {
+    const report = document("day", key);
+    const prior = new Date(report.period.sinceMs - DAY_MS).toISOString().slice(0, 10);
+    const html = reportPage(report, [day("2026-09-08", 100), day(key), day(prior, 5)]);
+    const suffix = key === "2026-09-07" ? " (in progress)" : "";
+    expect(html).toContain(`+100% vs prev day${suffix}`);
+    expect(html.includes("(in progress)")).toBe(key === "2026-09-07");
   });
 
   it("ranks member distribution by activity and exposes members after the first twelve", () => {
@@ -220,14 +191,12 @@ describe("Team Reports site behavior", () => {
   it("keeps every retained GitHub item accessible beyond the three-item preview", () => {
     const report = document();
     const member = report.members[0]!;
-    member.github.items = ["First change", "Second change", "Third change", "Fourth <change>"].map(
-      (title, index) => ({
+    member.github.items = ["First", "Second", "Third", "<Fourth>"].map((title, index) =>
+      githubItem({
         kind: "pr_opened",
         repo: `example/repo-${index}`,
         title,
         url: `https://github.com/example/repo-${index}/pull/1`,
-        atMs: report.generatedAtMs,
-        actor: member.login,
       }),
     );
     member.github.items[3]!.repo = "example/<hostile-repo>";
@@ -235,14 +204,14 @@ describe("Team Reports site behavior", () => {
     const html = reportPage(report);
     expect(html.match(/class="theme"/g)).toHaveLength(3);
     const details = html.match(/<details><summary>4 GitHub items<\/summary>(.*?)<\/details>/s)?.[1];
-    expect(details).toBeDefined();
-    contains(details, "First change", "Second change", "Third change", "Fourth &lt;change&gt;");
-    expect(details?.match(/PR opened/g)).toHaveLength(4);
+    contains(details, "First", "Second", "Third", "&lt;Fourth&gt;");
     contains(details, "example/repo-0", "example/&lt;hostile-repo&gt;");
-    expect(details).toContain(
+    contains(
+      details,
       'href="https://github.com/example/repo-0/pull/1" target="_blank" rel="noopener"',
     );
-    excludes(details, "javascript:", "<hostile-repo>", "Fourth <change>");
+    expect(details?.match(/PR opened/g)).toHaveLength(4);
+    excludes(details, "javascript:", "<hostile-repo>", "<Fourth>");
   });
 
   it("keeps source warning banners bounded and escapes hostile data on every page", () => {
@@ -266,10 +235,9 @@ describe("Team Reports site behavior", () => {
     };
     const person: Person = { github: [hostile], display: hostile, affiliation: hostile };
     const days = [personDay(hostile, "2026-09-07", 10), personDay(hostile, "2026-09-05", 5)];
-    const overview = renderIndexPage(
-      ctx,
-      { day: [day("2026-09-07")], week: [], month: [] },
-      { orgs: [hostile], latest: { report, summary }, health: { running: true, warnings: 3 } },
+    const overview = home(
+      { day: [day("2026-09-07")] },
+      { ...homeOptions, orgs: [hostile], latest: { report, summary } },
     );
     const reportHtml = renderReportPage(ctx, report, summary, []);
     for (const html of [
@@ -313,8 +281,8 @@ describe("Team Reports site behavior", () => {
     report.status = "partial";
     report.generatedAtMs = report.period.untilMs - 3_600_000;
     const html = reportPage(report);
-    expect(html).toContain("Incomplete snapshot");
-    expect(html).toContain("The window has since closed, so these totals remain incomplete.");
+    contains(html, "Incomplete snapshot");
+    contains(html, "The window has since closed, so these totals remain incomplete.");
     expect(html).not.toContain("data-day-countdown data-until=");
   });
 
@@ -343,30 +311,34 @@ describe("Team Reports site behavior", () => {
     ]);
     expect(html).toMatch(/class="day-cell[^"\n]*"[^>]*href="\/reports\/day\/2026-09-07\//);
     expect(html).not.toContain('href="/reports/day/2026-09-06/');
-    expect(html).toContain("GitHub events · left axis");
-    expect(html).toContain("Discord messages · right axis");
+    contains(html, "GitHub events · left axis", "Discord messages · right axis");
+    contains(html, "Exact daily values");
     const paths = [...html.matchAll(/class="person-activity-line[^"]*" d="([^"]*)"/g)];
     expect(paths).toHaveLength(2);
     for (const path of paths) {
       expect(path[1]?.match(/M/g)).toHaveLength(2);
     }
-    expect(html).toContain("Exact daily values");
   });
 });
 
-it("keeps quiet members' owned-session links inside their filterable section without changing counts", () => {
+it("keeps members' owned-session links in their own active or quiet section without changing counts", () => {
   const report = document();
+  report.members[0]!.login = "ALIce";
+  report.members.push(makeMember(1, { login: "bob", display: "Bob" }));
   report.members.push(makeMember(0, { login: "quiet", display: "Quiet member" }));
   const before = JSON.stringify(report);
-  const sessions: PersonWorkSessions = {
-    available: true,
-    sessions: [{ key: "agent:main:quiet-work", label: "Quiet member current work" }],
-  };
-  const html = renderReportPage(ctx, report, null, [], new Map([["quiet", sessions]]));
-  expect(html.split("data-maintainer-quiet")[1]?.split("</li>")[0]).toContain(
-    "Quiet member current work",
-  );
-  expect(html).toContain('data-work-session-key="agent:main:quiet-work"');
-  expect(html).toContain("Visible to you now, not activity from this report period.");
+  const work = new Map([
+    ["quiet", sessions("quiet", "Quiet work")],
+    ["alice", sessions("alice", "Alice work")],
+  ]);
+  const html = renderReportPage(ctx, report, null, [], work);
+  const cards = [...html.matchAll(/<article class="person oc-card".*?<\/article>/g)];
+  expect(cards).toHaveLength(2);
+  contains(cards[0]?.[0], 'data-work-session-key="agent:main:alice-work"', "Alice work");
+  expect(cards[1]?.[0]).not.toContain("person-work-sessions");
+  expect(cards[0]?.[0]).not.toContain("Quiet work");
+  expect(html.split("data-maintainer-quiet")[1]?.split("</li>")[0]).toContain("Quiet work");
+  contains(html, 'data-work-session-key="agent:main:quiet-work"');
+  contains(html, "Visible to you now, not activity from this report period.");
   expect(JSON.stringify(report)).toBe(before);
 });

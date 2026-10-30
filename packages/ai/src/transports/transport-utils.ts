@@ -1,4 +1,4 @@
-import type { Model } from "@openclaw/llm-core";
+import type { Model, ModelRequestHeaders } from "@openclaw/llm-core";
 import { consumeResponseBytes } from "@openclaw/normalization-core";
 import { raceWithTimeout } from "../../../retry/src/index.js";
 import { getAiTransportHost } from "../host.js";
@@ -24,8 +24,11 @@ export function resolveModelHeaderSentinels<TModel extends Model>(model: TModel)
   if (!model.headers) {
     return model;
   }
-  let headers: Record<string, string> | undefined;
+  let headers: ModelRequestHeaders | undefined;
   for (const [name, value] of Object.entries(model.headers)) {
+    if (value === null) {
+      continue;
+    }
     const resolved = getAiTransportHost().resolveSecretSentinel(value);
     if (resolved !== value) {
       headers ??= { ...model.headers };

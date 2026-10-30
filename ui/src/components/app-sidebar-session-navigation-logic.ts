@@ -13,6 +13,7 @@ import {
 import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { resolveSessionChannelPresentation } from "../lib/session-channel.ts";
 import {
   isSessionTitlePending,
@@ -28,7 +29,7 @@ import {
   filterVisibleSessionRows,
   resolveSessionNavigation,
   sessionMatchesVisibleSessionScope,
-} from "../lib/sessions/index.ts";
+} from "../lib/sessions/navigation.ts";
 import {
   buildAgentMainSessionKey,
   isAcpSessionKey,
@@ -302,6 +303,7 @@ export function buildSidebarSessionNavigationState(input: {
           spawnedBy: row.spawnedBy,
           forkSource: row.forkSource,
           status: row.status,
+          lastRunError: row.lastRunError,
           createdAt: row.createdAt,
           startedAt: row.startedAt,
           updatedAt: row.updatedAt,
@@ -331,29 +333,35 @@ export function buildSidebarSessionNavigationState(input: {
   };
 }
 
-export function buildReconciledSidebarZone(input: {
-  sidebarEntries: readonly string[];
-  rows: SidebarRecentSession[];
-  pluginNavigation: readonly ControlUiRegistration<ControlUiNavigationItem>[];
-  pluginTabs: readonly GatewayControlUiPluginTab[] | undefined;
-  snapshot?: { model: SidebarSnapshotModel; selectedKey: string };
-  pendingPlugins?: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null;
-}) {
-  if (input.snapshot) {
-    const { model, selectedKey } = input.snapshot;
-    const restoredRows = [...model.sessions, ...model.pinnedSessions].map((row) =>
-      restoreSnapshotSession(row, selectedKey),
-    );
-    return {
+export function restoreSnapshotNavigation(model: SidebarSnapshotModel, selectedKey: string) {
+  const sections = model.sections.map((section) => ({
+    ...section,
+    rows: section.rows.map((row) => restoreSnapshotSession(row, selectedKey)),
+  }));
+  const visibleRows = sections.flatMap((section) => section.rows);
+  const pins = model.pinnedSessions.map((row) => restoreSnapshotSession(row, selectedKey));
+  return {
+    sections,
+    visibleRows,
+    zone: {
       entries: model.entries.flatMap((entry) => {
         const parsed = parseSidebarEntry(entry);
         return parsed ? [parsed] : [];
       }),
       sidebarEntries: model.entries,
-      sessionRows: new Map(restoredRows.map((row) => [row.key, row])),
+      sessionRows: new Map([...visibleRows, ...pins].map((row) => [row.key, row])),
       pluginTabs: new Map(model.plugins.map(({ key, ...tab }) => [key, tab])),
-    };
-  }
+    },
+  };
+}
+
+export function buildReconciledSidebarZone(input: {
+  sidebarEntries: readonly string[];
+  rows: SidebarRecentSession[];
+  pluginNavigation: readonly ControlUiRegistration<ControlUiNavigationItem>[];
+  pluginTabs: readonly GatewayControlUiPluginTab[] | undefined;
+  pendingPlugins?: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null;
+}) {
   const navigation = input.pluginNavigation;
   const occupiedPlacements = new Set(SIDEBAR_NAV_ROUTES.map((route) => `route:${route}`));
   const pluginTabs = new Map(
@@ -431,6 +439,48 @@ export function buildReconciledSidebarZone(input: {
   return live;
 }
 
+/** Multiple visible placements share one batch target and live-data owner. */
+export function distinctSidebarSessionRows(
+  rows: readonly SidebarRecentSession[],
+): SidebarRecentSession[] {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    if (seen.has(row.key)) {
+      return false;
+    }
+    seen.add(row.key);
+    return true;
+  });
+}
+
+export function handleSidebarSessionRowClick(
+  event: MouseEvent,
+  session: SidebarRecentSession,
+  selection: ReturnType<typeof createSidebarSessionSelection>,
+  selectSession: (key: string) => void,
+) {
+  if (
+    session.isChild
+      ? !shouldHandleNavigationClick(event)
+      : event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey
+  ) {
+    return;
+  }
+  if (!session.isChild && event.shiftKey) {
+    event.preventDefault();
+    selection.extend(session.key, session.selectionKey);
+    return;
+  }
+  if (!session.isChild && event.altKey) {
+    event.preventDefault();
+    selection.toggle(session.key, session.selectionKey);
+    return;
+  }
+  event.preventDefault();
+  selection.clear(session.selectionKey ?? session.key);
+  selectSession(session.key);
+}
+
 /** Menus read selection synchronously; the sidebar projection owns publication and parking. */
 export function createSidebarSessionSelection(
   readRows: () => readonly SidebarRecentSession[],
@@ -442,7 +492,7 @@ export function createSidebarSessionSelection(
     get selectedKeys() {
       return selectedKeys;
     },
-    toggle(key: string) {
+    toggle(key: string, selectionKey = key) {
       const next = new Set(selectedKeys);
       if (next.has(key)) {
         next.delete(key);
@@ -450,17 +500,18 @@ export function createSidebarSessionSelection(
         next.add(key);
       }
       selectedKeys = next;
-      anchor = next.has(key) ? key : null;
+      anchor = next.has(key) ? selectionKey : null;
       publish();
     },
-    extend(key: string) {
+    extend(key: string, selectionKey = key) {
       const rows = readRows();
-      anchor ??= rows.find((row) => row.visuallyActive || row.active)?.key ?? key;
-      const anchorIndex = rows.findIndex((row) => row.key === anchor);
-      const targetIndex = rows.findIndex((row) => row.key === key);
+      const active = rows.find((row) => row.visuallyActive || row.active);
+      anchor ??= active?.selectionKey ?? active?.key ?? selectionKey;
+      const anchorIndex = rows.findIndex((row) => (row.selectionKey ?? row.key) === anchor);
+      const targetIndex = rows.findIndex((row) => (row.selectionKey ?? row.key) === selectionKey);
       if (anchorIndex === -1 || targetIndex === -1) {
         selectedKeys = new Set([key]);
-        anchor = key;
+        anchor = selectionKey;
       } else {
         const [start, end] =
           anchorIndex <= targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
@@ -468,8 +519,8 @@ export function createSidebarSessionSelection(
       }
       publish();
     },
-    clear(this: void) {
-      anchor = null;
+    clear(this: void, selectionKey: string | null = null) {
+      anchor = selectionKey;
       if (selectedKeys.size > 0) {
         selectedKeys = new Set();
         publish();
@@ -592,24 +643,31 @@ export function findSidebarSessionInTree(
   return undefined;
 }
 
-export function findProjectedSidebarSession(input: {
+export function findSidebarSessionRow(input: {
   sessionKey: string;
   navigationState: SidebarSessionNavigationState;
   sessionResultsByAgent: Readonly<Record<string, SessionsListResult>>;
-}): SidebarRecentSession | undefined {
+}): GatewaySessionRow | undefined {
   const active = input.navigationState.visibleSessionRows.find(
     (candidate) => candidate.key === input.sessionKey,
   );
   if (active) {
-    return input.navigationState.toSidebarSession(active);
+    return active;
   }
   for (const result of Object.values(input.sessionResultsByAgent)) {
     const row = result.sessions.find((candidate) => candidate.key === input.sessionKey);
     if (row) {
-      return input.navigationState.toSidebarSession(row);
+      return row;
     }
   }
   return undefined;
+}
+
+export function findProjectedSidebarSession(
+  input: Parameters<typeof findSidebarSessionRow>[0],
+): SidebarRecentSession | undefined {
+  const row = findSidebarSessionRow(input);
+  return row ? input.navigationState.toSidebarSession(row) : undefined;
 }
 
 /** Live canonical requests outlive a paginated row, but never supply its old private metadata. */

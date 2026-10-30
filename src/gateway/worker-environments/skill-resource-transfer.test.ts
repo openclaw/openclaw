@@ -117,16 +117,10 @@ const prependScript = (command: Command, script: string): Command => ({
 });
 const directoryLink = process.platform === "win32" ? "junction" : "dir";
 function placementClaim(error = new Error("placement retired")) {
-  let current = true;
+  const controller = new AbortController();
   return {
-    retire: () => {
-      current = false;
-    },
-    assertCurrent: () => {
-      if (!current) {
-        throw error;
-      }
-    },
+    retire: () => controller.abort(error),
+    assertCurrent: () => controller.signal.throwIfAborted(),
   };
 }
 
@@ -256,7 +250,12 @@ it.each(["prompt", "discovery"])(
       filePath,
       "---\ndescription: Transfer\n---\n# Resources\nRead data.bin and run scripts/check.sh.\n",
     );
-    snapshot.resolvedSkills![0]!.readContent = "Stale host cache must not be read";
+    const stale = Object.freeze({
+      ...snapshot.resolvedSkills![0]!,
+      readContent: "Stale host cache must not be read",
+    });
+    snapshot.resolvedSkills = [stale];
+    snapshot.discoverySkills = [stale];
     if (mode === "discovery") {
       snapshot.prompt = "";
       snapshot.resolvedSkills = [];
@@ -275,6 +274,8 @@ it.each(["prompt", "discovery"])(
       tunnel: carrier,
     });
     expect(resources).toBeDefined();
+    expect(stale.filePath).toBe(filePath);
+    expect(stale.readContent).toBe("Stale host cache must not be read");
     await fs.writeFile(filePath, "Changed host instructions after transfer");
     try {
       await withSessionSkillResources(resources!, async () => {

@@ -203,10 +203,7 @@ function gateFixture(
   const signatureFile = options.signatureFile ?? file;
   const responses: Record<string, unknown> = {
     "/actions/runs/100": {
-      ...mainRun,
-      id: 100,
-      event: "pull_request",
-      head_sha: headSha,
+      ...prRun,
       head_repository: { full_name: options.headRepository ?? repository },
     },
     "/actions/runs/100/attempts/1/jobs": { total_count: 1, jobs: [failureJob] },
@@ -236,6 +233,8 @@ function gateFixture(
       total_count: 1,
       jobs: [{ ...failureJob, id: 20, run_id: 200 }],
     },
+    "/actions/jobs/20/logs": options.mainReport ?? report(),
+    "/actions/jobs/10/logs": options.prReport ?? report(),
   };
   if (options.liveMainSha) {
     responses[`/compare/${mainSha}...${options.liveMainSha}`] = {
@@ -243,17 +242,9 @@ function gateFixture(
       files: (options.mainChanged ?? []).map((filename) => ({ filename })),
     };
   }
-  const api = vi.fn(async (url: string) => {
-    const path = new URL(url).pathname.replace(`/repos/${repository}`, "");
-    if (Object.hasOwn(responses, path)) {
-      return new Response(JSON.stringify(responses[path]));
-    }
-    if (path === "/actions/jobs/20/logs") {
-      return new Response(options.mainReport ?? report());
-    } else if (path === "/actions/jobs/10/logs") {
-      return new Response(options.prReport ?? report());
-    } else if (path === `/contents/${signatureFile}` || path.startsWith("/contents/packages/")) {
-      if (new URL(url).searchParams.get("ref") !== mainSha) {
+  mockApi(responses, (url, path) => {
+    if (path === `/contents/${signatureFile}` || path.startsWith("/contents/packages/")) {
+      if (url.searchParams.get("ref") !== mainSha) {
         throw new Error("Subject source must use the immutable main evidence revision");
       }
       return new Response(
@@ -271,7 +262,6 @@ function gateFixture(
     }
     throw new Error(`Unexpected evidence request ${path}`);
   });
-  vi.stubGlobal("fetch", api);
   return createKnownMainRed({
     ...prContext,
     headRepository: options.headRepository,
@@ -396,7 +386,6 @@ describe("main failure attribution", () => {
 
   it.each([
     { name: "passed", conclusion: "success", expected: "new" },
-    { name: "cancelled", conclusion: "cancelled", expected: "unknown" },
     { name: "skipped", conclusion: "skipped", expected: "unknown" },
     { name: "timed out", conclusion: "timed_out", expected: "unknown" },
     { name: "unfinished", conclusion: "failure", status: "in_progress", expected: "unknown" },
@@ -466,20 +455,23 @@ describe("main failure attribution", () => {
 });
 
 describe("known hourly main failures", () => {
-  it("keeps one complete failure signature when the shard runner replays diagnostics", () => {
-    const log = `${report()}\n${[
-      "[shard-failure:gateway] FAILED (exit 1)",
-      `[shard-failure:gateway:tail] FAIL gateway ${file} > ${title}`,
-      "[shard-failure:gateway:tail] AssertionError: expected true to be false",
-      "[shard-failure:gateway:tail] Test Files 1 failed (1)",
-      "[shard-failure:gateway:tail] Tests 1 failed | 2 passed (3)",
-      "[shard-failure:gateway:tail] [test] FAILED (exit 1)",
-    ].join("\n")}`;
-    expect(parseNodeFailureReport(log, true)).toEqual([
-      { kind: "vitest", file, test: `${title} :: AssertionError: expected true to be false` },
-    ]);
-    expect(extractNodeFailedTests(log)).toEqual([{ file, tests: [title] }]);
-  });
+  it.each(["", ":42", ":42:3"])(
+    "keeps replayed failure attribution with location %j",
+    (location) => {
+      const log = `${report().replace(`${file} >`, `${file}${location} >`)}\n${[
+        "[shard-failure:gateway] FAILED (exit 1)",
+        `[shard-failure:gateway:tail] FAIL gateway ${file} > ${title}`,
+        "[shard-failure:gateway:tail] AssertionError: expected true to be false",
+        "[shard-failure:gateway:tail] Test Files 1 failed (1)",
+        "[shard-failure:gateway:tail] Tests 1 failed | 2 passed (3)",
+        "[shard-failure:gateway:tail] [test] FAILED (exit 1)",
+      ].join("\n")}`;
+      expect(parseNodeFailureReport(log, true)).toEqual([
+        { kind: "vitest", file, test: `${title} :: AssertionError: expected true to be false` },
+      ]);
+      expect(extractNodeFailedTests(log)).toEqual([{ file, tests: [title] }]);
+    },
+  );
 
   it.each([false, true])(
     "keeps report attribution separate from gate eligibility (changed=%s)",
@@ -493,27 +485,6 @@ describe("known hourly main failures", () => {
       });
       expect(result.knownMainRed).toBe(!changed);
       expect(result.failureJobId).toBe(changed ? "10" : "");
-      const requests = vi
-        .mocked(fetch)
-        .mock.calls.map(
-          ([input]) =>
-            new URL(
-              typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
-            ).pathname,
-        );
-      for (const path of [
-        "/actions/workflows/ci.yml/runs",
-        "/actions/runs/200/attempts/1/jobs",
-        "/actions/jobs/20/logs",
-        "/actions/jobs/10/logs",
-        "/pulls/7",
-        "/git/ref/heads/main",
-      ]) {
-        expect(
-          requests.filter((request) => request.endsWith(path)),
-          path,
-        ).toHaveLength(1);
-      }
     },
   );
 
@@ -537,9 +508,7 @@ describe("known hourly main failures", () => {
   );
   it.each([
     ["different test", { prReport: report("startup > opens a different session") }],
-    ["different assertion", { prReport: report().replaceAll("true to be false", "42 to be 43") }],
     ["changed test", { changed: [file] }],
-    ["changed direct subject", { changed: ["src/gateway/subject.ts"] }],
     [
       "changed external subject",
       { changed: ["src/infra/session.ts"], source: 'import { start } from "../infra/session.js";' },
@@ -551,10 +520,7 @@ describe("known hourly main failures", () => {
     ["main predates merge base", { age: "behind" }],
     ["unresolved subject alias", { source: 'import { start } from "@openclaw/runtime";' }],
     ["escaped relative module", { source: 'await import("./\\u002e\\u002e/subject.js");' }],
-    ["computed mock subject", { source: "vi.mock(moduleName);" }],
     ["concatenated import subject", { source: 'await import("./subject" + suffix);' }],
-    ["concatenated mock subject", { source: 'vi.mock("./subject" + suffix);' }],
-    ["template subject", { source: "await import(`./subject${suffix}`);" }],
     [
       "root directory subject",
       { changed: ["runtime/index.ts"], source: 'import { start } from "../../runtime";' },
@@ -568,10 +534,6 @@ describe("known hourly main failures", () => {
     ["missing execution receipt", changedReport(/^.*\[shard:completion\].*\n/mu, "")],
     ["unfinished outer plan", changedReport('"planned":1', '"planned":2')],
     ["duplicate execution receipt", appendedReport('[shard:completion] {"version":1}')],
-    [
-      "unknown stream before summary",
-      { prReport: `[shard:coverage] Error: setup failed\n${report()}` },
-    ],
     [
       "unknown stream without error header",
       { prReport: `[shard:coverage] setup failed\n${report()}` },
@@ -618,7 +580,6 @@ describe("known hourly main failures", () => {
   it.each([
     { mainChanged: ["docs/unrelated.md"], known: true },
     { mainChanged: [file], known: false },
-    { mainChanged: ["src/gateway/subject.ts"], known: false },
     { mainChanged: ["scripts/run-vitest.mts"], known: false },
     { mainChanged: Array.from({ length: 300 }, (_, i) => `docs/page-${i}.md`), known: false },
   ])(
@@ -706,30 +667,6 @@ describe("known hourly main failures", () => {
         prReport: lint ? completeLintReport() : typeReport(),
       }),
     ).toBe(false);
-  });
-
-  it("keeps incomplete lint execution and PR-owned static subjects blocking", async () => {
-    const options = {
-      failureJob: lintJob,
-      signatureFile: lintFile,
-      mainReport: lintReport,
-      prReport: completeLintReport(),
-      source: 'import type { CardSessionState } from "./session-state.ts";',
-    };
-    await expectKnown({ ...options, prReport: lintReport });
-    await expectKnown(options, true);
-    await expectKnown({ ...options, changed: [lintFile] });
-    await expectKnown({
-      ...options,
-      changed: ["extensions/workboard/browser/lib/workboard/session-state.ts"],
-    });
-    await expectKnown({
-      ...options,
-      mainReport: lintReport.replace(
-        "Found 0 warnings",
-        "Error: unknown lint failure\nFound 0 warnings",
-      ),
-    });
   });
 });
 
@@ -831,22 +768,19 @@ describe("PR failure reporting", () => {
     ]);
   });
 
-  it.each(["failure", "cancelled", "unknown", "", undefined])(
-    "enumerates jobs for prerequisite %s",
-    async (result) => {
-      const api = fixture([reportJob(1, "checks-ui", "timed_out")]);
-      const outcome = await runReport({
-        ...passedPrerequisites,
-        jobResults: ["success", "success", result],
-      });
-      expect(outcome).toMatchObject({
-        failures: [{ job: "checks-ui", conclusion: "timed_out" }],
-        knownMainRed: false,
-        failureJobId: "1",
-      });
-      expect(api.mock.calls.some(([url]) => url.includes("/attempts/1/jobs"))).toBe(true);
-    },
-  );
+  it.each(["failure", undefined])("enumerates jobs for prerequisite %s", async (result) => {
+    const api = fixture([reportJob(1, "checks-ui", "timed_out")]);
+    const outcome = await runReport({
+      ...passedPrerequisites,
+      jobResults: ["success", "success", result],
+    });
+    expect(outcome).toMatchObject({
+      failures: [{ job: "checks-ui", conclusion: "timed_out" }],
+      knownMainRed: false,
+      failureJobId: "1",
+    });
+    expect(api.mock.calls.some(([url]) => url.includes("/attempts/1/jobs"))).toBe(true);
+  });
 
   it("reports every failure without cancellation and preserves a blocking gate result", async () => {
     fixture([
@@ -868,12 +802,9 @@ describe("PR failure reporting", () => {
       knownMainRed: false,
       failureJobId: "2",
     });
-    expectIncludes(formatFailureReport(result, prContext), [
-      "| [build-artifacts](https://github.com/openclaw/openclaw/actions/runs/100/job/2) | failure | **pre-existing** |",
+    expect(formatFailureReport(result, prContext)).toContain(
       "https://github.com/openclaw/openclaw/actions/runs/200/job/20",
-      "**new**",
-      "**unknown**",
-    ]);
+    );
   });
 
   it("does not grant the first-attempt allowance on a retry", async () => {

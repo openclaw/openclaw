@@ -9,6 +9,7 @@ import {
   type ErrorShape,
   type GatewayProtocolCloseContext,
 } from "@openclaw/gateway-client/browser";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isLoopbackHostname } from "../lib/gateway-locality.ts";
 import {
   BROWSER_WEBSOCKET_SECURITY_ERROR_CODE,
@@ -104,17 +105,28 @@ export function notifyBrowserWebSocketError(
 }
 
 function enrichProtocolMismatchDetails(message: string | undefined, details: unknown): unknown {
-  if (readConnectErrorDetailCode(details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
+  if (readConnectErrorDetailCode(details)) {
     return details;
   }
-  if (!message?.toLowerCase().includes("protocol mismatch")) {
+  const range = asOptionalRecord(details);
+  const min = range?.minProtocol ?? range?.expectedProtocol;
+  const max = range?.maxProtocol ?? range?.expectedProtocol;
+  const excludesClient =
+    typeof min === "number" &&
+    Number.isInteger(min) &&
+    min > 0 &&
+    typeof max === "number" &&
+    Number.isInteger(max) &&
+    max >= min &&
+    (min > PROTOCOL_VERSION || max < MIN_CLIENT_PROTOCOL_VERSION);
+  if (!message?.toLowerCase().includes("protocol mismatch") && !excludesClient) {
     return details;
   }
   return {
+    ...range,
     code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
     clientMinProtocol: MIN_CLIENT_PROTOCOL_VERSION,
     clientMaxProtocol: PROTOCOL_VERSION,
-    ...(details && typeof details === "object" && !Array.isArray(details) ? details : {}),
   };
 }
 

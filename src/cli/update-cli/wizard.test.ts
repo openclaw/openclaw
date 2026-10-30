@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { defaultRuntime, ExitError } from "../../runtime.js";
+import { createCliTtyMock } from "../test-runtime-capture.js";
 import { updateCommand } from "./update-command.js";
 import { updateWizardCommand } from "./wizard.js";
 
@@ -29,18 +30,14 @@ vi.mock("./shared.js", async (importOriginal) => ({
 // mock-isolation: Exercise wizard delegation without loading the updater activation, ledger, and runtime-retirement owners.
 vi.mock("./update-command.js", () => ({ updateCommand: vi.fn() }));
 
-const stdinTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const tty = createCliTtyMock([process.stdin]);
 beforeEach(() => {
-  Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+  tty.set(true);
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  if (stdinTty) {
-    Object.defineProperty(process.stdin, "isTTY", stdinTty);
-  } else {
-    Reflect.deleteProperty(process.stdin, "isTTY");
-  }
+  tty.restore();
 });
 
 it.each([0, 1, 23])("preserves an already-reported delegated exit %s", async (code) => {

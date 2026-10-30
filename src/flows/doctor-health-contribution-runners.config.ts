@@ -578,6 +578,7 @@ export async function runWriteConfigHealth(
       ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
       : {}),
     repairRetiredModelRefs: ctx.prompter.shouldRepair,
+    modelReplacements: ctx.options.modelReplacements,
     authProfileIdMap: ctx.configResult.openAICodexAuthProfileIdMap,
     ...(ctx.configResult.blockedCodexModelIdentities?.length
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
@@ -689,25 +690,5 @@ function isDirectoryPath(path: string): boolean {
     return fs.statSync(path).isDirectory();
   } catch {
     return false;
-  }
-}
-
-export async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  const { readDeferredPluginMigrationsAsync } =
-    await import("../infra/deferred-plugin-migrations.js");
-  const deferredPluginMigrations = await readDeferredPluginMigrationsAsync({
-    env: ctx.env ?? process.env,
-  });
-  const finalSnapshot = await readConfigFileSnapshot({
-    skipPluginValidation: isUpdateDoctorRun(ctx.env ?? process.env),
-    preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
-    deferredPluginMigrations,
-  });
-  if (finalSnapshot.exists && !finalSnapshot.valid) {
-    ctx.runtime.error("Invalid config:");
-    for (const issue of finalSnapshot.issues) {
-      ctx.runtime.error(`- ${issue.path || "<root>"}: ${issue.message}`);
-    }
   }
 }

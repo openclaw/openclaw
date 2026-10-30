@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
 import { createServer, type Socket } from "node:net";
-import { promisify } from "node:util";
 import { CopilotClient, RuntimeConnection } from "@github/copilot-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 
 type Request = { id: number; method: string; params: Record<string, unknown> };
 
@@ -86,13 +85,9 @@ export async function createCopilotFaultPeer() {
       }
     });
   });
-  await once(server.listen(0, "127.0.0.1"), "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected loopback TCP listener");
-  }
+  const port = await listenOnLoopback(server);
   const client = new CopilotClient({
-    connection: RuntimeConnection.forUri(`127.0.0.1:${address.port}`),
+    connection: RuntimeConnection.forUri(`127.0.0.1:${port}`),
   });
   return {
     client,
@@ -114,7 +109,7 @@ export async function createCopilotFaultPeer() {
       for (const connected of sockets) {
         connected.destroy();
       }
-      await promisify(server.close.bind(server))();
+      await server[Symbol.asyncDispose]();
     },
   };
 }

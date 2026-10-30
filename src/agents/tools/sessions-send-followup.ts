@@ -55,6 +55,7 @@ export async function startSessionsSendFollowup(
       return {
         start: {
           ...start,
+          selfHeld: undefined,
           result: jsonResult({
             ...start.result.details,
             sentBeforeError: true,
@@ -81,6 +82,7 @@ export async function dispatchSessionsSendFollowup(
   options: {
     message: string;
     ownChild: boolean;
+    persistentChildAccess?: boolean;
     nativeChild: boolean;
     watch: boolean;
     requesterSessionKey: string;
@@ -102,7 +104,7 @@ export async function dispatchSessionsSendFollowup(
   const sameRequester = replyContext.requesterSessionKey === options.requesterSessionKey;
   const isCronRequester = isCronRunSessionKey(options.requesterSessionKey);
   const requesterTurn =
-    !params.expectedSessionId &&
+    (!params.expectedSessionId || options.persistentChildAccess) &&
     options.nativeChild &&
     sameRequester &&
     (options.ownChild ||
@@ -187,6 +189,7 @@ export async function dispatchSessionsSendFollowup(
               requesterSessionKey: options.requesterSessionKey,
               requesterAgentId: options.requesterAgentId,
               requesterTurnRunId: registryTurn,
+              requesterRunInstance: instance,
               assertCurrent: assertCompletionCurrent,
             });
           }
@@ -220,6 +223,7 @@ export async function dispatchSessionsSendFollowup(
               assertCurrent: assertCompletionCurrent,
               assertPublicationCurrent: () => request?.custody.assertCurrent(),
               acceptedRunReplay: true,
+              requesterRunInstance: instance,
             },
           );
           accepted = {
@@ -271,6 +275,8 @@ export async function dispatchSessionsSendFollowup(
     return {
       start: {
         ok: false as const,
+        // Only an accepted start reaches this catch, so it is never a retainable refusal.
+        selfHeld: undefined,
         result: jsonResult({
           runId: start.ok ? start.runId : params.runId,
           status: "error",
@@ -296,7 +302,7 @@ export async function dispatchSessionsSendFollowup(
   if (
     start.ok &&
     options.watch &&
-    !params.expectedSessionId &&
+    (!params.expectedSessionId || options.persistentChildAccess) &&
     replyContext.requesterSessionKey &&
     targetSessionKey &&
     replyContext.requesterSessionKey !== targetSessionKey

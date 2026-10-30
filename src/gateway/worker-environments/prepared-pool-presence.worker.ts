@@ -1,6 +1,5 @@
 import type {
   WorkerOperationHandlers,
-  WorkerOperations,
   WorkerWriteOperationContext,
 } from "../../state/worker-operation-registry.js";
 import { writePreparedPoolPresenceDemandInDatabase } from "./prepared-pool-presence-store.worker.js";
@@ -12,7 +11,3 @@ export const preparedPoolPresenceOperations = {
       operationLabel: "prepared-pool.presence-demand.write",
     }),
 } satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;
-
-export type PreparedPoolPresenceWorkerOperations = WorkerOperations<
-  typeof preparedPoolPresenceOperations
->;

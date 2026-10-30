@@ -1,9 +1,14 @@
 import type { CDPSession } from "@vitest/browser-playwright";
 import { afterEach, describe, expect, it } from "vitest";
 import { cdp, page } from "vitest/browser";
-import "../test-helpers/load-styles.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
+import "../test-helpers/load-styles.ts";
 import { owner, other, key, mount, settled, geometry } from "../test-helpers/sidebar-stress.ts";
+import {
+  setSessionsGrouping,
+  setSessionsShowPreview,
+  setSessionsStatusFilter,
+} from "./session-organizer-menu.runtime.ts";
 setupSidebarTest();
 afterEach(async () => {
   document.documentElement.removeAttribute("data-theme-mode");
@@ -69,8 +74,8 @@ describe.runIf("__vitest_browser__" in globalThis)("full sidebar state stress", 
       const { sidebar, gateway, fixtureKeys, context } = await mount(width);
       context.theme.setMode(theme === "dark" ? "dark" : "light");
       await expect.poll(() => document.documentElement.dataset.themeMode).toBe(theme);
-      sidebar.sessionOrganizer.setSessionsGrouping(grouping);
-      sidebar.sessionOrganizer.setSessionsShowPreview(preview);
+      setSessionsGrouping(sidebar.sessionOrganizer, grouping);
+      setSessionsShowPreview(sidebar.sessionOrganizer, preview);
       sidebar.sessionOrganizer.saveCollapsedSessionSections(new Set());
       await settled(sidebar);
       await showAll(sidebar);
@@ -139,7 +144,9 @@ describe.runIf("__vitest_browser__" in globalThis)("full sidebar state stress", 
           previous &&
           row.title &&
           previous.title &&
-          Math.abs(row.title.x - previous.title.x) > 0.1
+          Math.abs(
+            rtl ? row.title.right - previous.title.right : row.title.left - previous.title.left,
+          ) > 0.1
         ) {
           issues.push(row.key + " title shifted with presence");
         }
@@ -249,8 +256,8 @@ describe.runIf("__vitest_browser__" in globalThis)("catalog and archive row stre
   it("keeps archive attribution and row actions in person grouping", async () => {
     await page.viewport(1000, 1100);
     const { sidebar } = await mount(220);
-    sidebar.sessionOrganizer.setSessionsGrouping("person");
-    sidebar.sessionOrganizer.setSessionsStatusFilter("all");
+    setSessionsGrouping(sidebar.sessionOrganizer, "person");
+    setSessionsStatusFilter(sidebar.sessionOrganizer, "all");
     await settled(sidebar);
     await showAll(sidebar);
     const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key("archived")}"]`);
@@ -271,7 +278,7 @@ describe.runIf("__vitest_browser__" in globalThis)("catalog and archive row stre
     );
     await settled(sidebar);
     expect(sidebar.querySelector(".sidebar-recent-session--selected")).not.toBeNull();
-    sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
+    setSessionsStatusFilter(sidebar.sessionOrganizer, "archived");
     await settled(sidebar);
     const archived = sidebar.querySelector<HTMLElement>(`[data-session-key="${key("archived")}"]`);
     expect(archived?.querySelector(".session-owner-chip")?.getAttribute("aria-label")).toContain(

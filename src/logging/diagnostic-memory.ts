@@ -275,6 +275,11 @@ function logMemoryPressure(pressure: MemoryPressure): void {
       pressure.memory.workerArrayBuffersBytes,
     ) +
     formatOptionalPressureMetric("workerCount", pressure.memory.workerCount) +
+    formatOptionalPressureMetric("postgresBridgeCount", pressure.memory.postgresBridgeCount) +
+    formatOptionalPressureMetric(
+      "postgresPoolSelfRootCount",
+      pressure.memory.postgresPoolSelfRootCount,
+    ) +
     formatOptionalPressureMetric("workerHeapSampledCount", pressure.memory.workerHeapSampledCount) +
     formatOptionalPressureMetric(
       "workerArrayBuffersSampledCount",
@@ -298,7 +303,7 @@ function logMemoryPressure(pressure: MemoryPressure): void {
     formatOptionalPressureMetric("usedBytes", pressure.usedBytes) +
     formatOptionalPressureMetric("workerThreadId", pressure.workerThreadId) +
     (pressure.memory.workerCount
-      ? " workerLimitScope=js-heap-only; external/ArrayBuffers are not capped; nested workers are not included."
+      ? " workerLimitScope=js-heap-only; external/ArrayBuffers are not capped; nested worker heaps are not included."
       : "") +
     ` ${nextStep}`;
   log.warn(message);

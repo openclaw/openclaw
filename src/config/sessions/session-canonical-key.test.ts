@@ -96,6 +96,24 @@ function updateRow(
   db.prepare(`UPDATE session_nodes SET ${assignments} WHERE session_key = ?`).run(...values, key);
 }
 
+it("rejects malformed numeric metadata before Doctor inventory publishes typed entries", () => {
+  const scope = createScope({ spawnDepth: 2 });
+  const database = open(scope);
+  updateRow(
+    database.db,
+    scope.sessionKey,
+    "entry_json = ?, entry_valid = 1",
+    JSON.stringify({
+      sessionId: "cold-key",
+      updatedAt: 1,
+      delivery: { kind: "none" },
+      spawnDepth: "2",
+    }),
+  );
+
+  expect(() => doctor(scope, 1)).toThrow('Session field "spawnDepth" must be a finite number');
+});
+
 it("keeps timestamp-mismatched keys without strengthening Doctor validation", () => {
   const scope = createScope({});
   const database = open(scope);

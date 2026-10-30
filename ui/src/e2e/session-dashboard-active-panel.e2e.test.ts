@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
@@ -7,6 +8,8 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
+import { board } from "./chat-layout-fixtures.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -16,12 +19,7 @@ const suite = createControlUiE2eSuite({
 });
 
 const sessionKey = "agent:main:dashboard";
-const boardSnapshot = {
-  sessionKey,
-  revision: 1,
-  tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-  widgets: [],
-};
+const boardSnapshot = board(sessionKey);
 
 suite.define(() => {
   it("uses Panels for the main Dashboard conversation without replacing its content", async () => {
@@ -64,36 +62,32 @@ suite.define(() => {
               boardPresentation: "split",
             },
           ],
-          historyMessages: Array.from({ length: 20 }, (_, index) => ({
-            role: index % 2 ? "assistant" : "user",
-            content: [
-              {
-                type: "text",
-                text:
-                  index % 2
-                    ? `Check ${index}: the release verification passed. The package and installation checks are complete. Keep the remaining documentation work visible in the dashboard.`
-                    : `Review release item ${index}. Keep the draft and dashboard note while I compare the results.`,
-              },
-            ],
-            timestamp: 1700000000000 + index,
-          })),
-          featureMethods: ["board.get", "chat.metadata", "chat.startup"],
+          historyMessages: Array.from({ length: 20 }, (_, index) =>
+            chatMessage(
+              index % 2 ? "assistant" : "user",
+              index % 2
+                ? `Check ${index}: the release verification passed. The package and installation checks are complete. Keep the remaining documentation work visible in the dashboard.`
+                : `Review release item ${index}. Keep the draft and dashboard note while I compare the results.`,
+              { timestamp: 1700000000000 + index },
+            ),
+          ),
+          featureMethods: [
+            "board.get",
+            "chat.metadata",
+            "chat.startup",
+            "sessions.companion.state",
+          ],
           methodResponses: {
             "board.get": {
               ...boardSnapshot,
               widgets: [
-                {
+                createBoardWidget({
                   name: "status",
-                  tabId: "main",
                   title: "Release overview",
-                  contentKind: "html",
                   sizeW: 12,
                   sizeH: 6,
-                  position: 0,
-                  grantState: "none",
-                  revision: 1,
                   frameUrl: widgetUrl,
-                },
+                }),
               ],
             },
           },
@@ -213,54 +207,56 @@ suite.define(() => {
     );
   });
 
-  it.each([
-    { main: "Chat", side: "Side chat", view: "split" },
-    { main: "Chat", side: "Files", view: "split" },
-    { main: "Dashboard", side: "Side chat", view: "split" },
-    { main: "Dashboard", side: "Files", view: "split" },
-    { main: "Chat", side: "Files", view: "closed side" },
-    { main: "Chat", side: "Files", view: "focused Files" },
-  ])(
-    "retains $main main and $side in $view after dashboard reload",
-    async ({ main, side, view }) => {
-      await suite.withPage({ viewport: { height: 900, width: 1440 } }, async ({ page }) => {
-        await installMockGateway(page, {
-          sessionKey,
-          sessions: [
-            {
-              key: sessionKey,
-              agentId: "main",
-              sessionId: "dashboard-active-panel",
-              kind: "direct",
-              updatedAt: 1,
-              boardFace: "dashboard",
-              boardPresentation: "split",
-            },
-          ],
-          featureMethods: ["board.get", "chat.metadata", "chat.startup"],
-          methodResponses: {
-            "board.get": boardSnapshot,
-            "sessions.companion.state": {
-              exchanges: [
-                {
-                  question: "What should I check?",
-                  answer: "Keep this side conversation visible.",
-                  ts: 1_000,
-                },
-              ],
-            },
+  it("retains main and side selections across six dashboard reloads", async () => {
+    await suite.withPage({ viewport: { height: 900, width: 1440 } }, async ({ page }) => {
+      await installMockGateway(page, {
+        sessionKey,
+        sessions: [
+          {
+            key: sessionKey,
+            agentId: "main",
+            sessionId: "dashboard-active-panel",
+            kind: "direct",
+            updatedAt: 1,
+            boardFace: "dashboard",
+            boardPresentation: "split",
           },
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
-        await page.locator(".board-session-surface").waitFor();
-        if (main === "Dashboard") {
-          await selectChatLayoutAction(page, /^Swap /);
-        }
+        ],
+        featureMethods: ["board.get", "chat.metadata", "chat.startup", "sessions.companion.state"],
+        methodResponses: {
+          "board.get": boardSnapshot,
+          "sessions.companion.state": {
+            exchanges: [
+              {
+                question: "What should I check?",
+                answer: "Keep this side conversation visible.",
+                ts: 1_000,
+              },
+            ],
+          },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
+      await page.locator(".board-session-surface").waitFor();
+      for (const { main, side, view } of [
+        { main: "Chat", side: "Side chat", view: "split" },
+        { main: "Chat", side: "Files", view: "split" },
+        { main: "Dashboard", side: "Side chat", view: "split" },
+        { main: "Dashboard", side: "Files", view: "split" },
+        { main: "Chat", side: "Files", view: "closed side" },
+        { main: "Chat", side: "Files", view: "focused Files" },
+      ]) {
         const mainPanel = page.locator(
           main === "Dashboard"
             ? '[data-panel-slot="dashboard"][data-region="main"]'
             : '.sidebar-region__primary[data-region="main"]',
         );
+        if (!(await mainPanel.isVisible())) {
+          if (main === "Dashboard") {
+            await openChatSidePanelType(page, "Dashboard");
+          }
+          await selectChatLayoutAction(page, /^Swap /);
+        }
         await mainPanel.waitFor();
         await openChatSidePanelType(page, side);
         const selectedTab = page.getByRole("tab", { name: side, exact: true });
@@ -298,9 +294,9 @@ suite.define(() => {
         if (side === "Side chat") {
           await answer.waitFor();
         }
-      });
-    },
-  );
+      }
+    });
+  });
 
   it("restores the saved main and side selection on ordinary dashboard revisits", async () => {
     await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {

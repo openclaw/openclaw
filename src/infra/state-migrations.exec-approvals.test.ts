@@ -24,12 +24,12 @@ import { loadExecApprovals } from "./exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "./exec-approvals-store.test-support.js";
 import { resolveExecApprovalsLocked } from "./exec-approvals.js";
 import { requestExecHostViaSocket } from "./exec-host.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   detectLegacyExecApprovals,
   migrateLegacyExecApprovals,
 } from "./state-migrations.exec-approvals.js";
+import { withGatewayLockHeld } from "./state-migrations.gateway-lock.test-support.js";
 import { LegacyMigrationSourceClaim } from "./state-migrations.source-snapshot.js";
 
 type MigrationDatabase = Pick<OpenClawStateKyselyDatabase, "migration_runs" | "migration_sources">;
@@ -431,22 +431,7 @@ it.each([
 
 it("requires exclusive state ownership and prints the stop-Gateway warning", async () => {
   await writeLegacy({ version: 1, agents: {} });
-  const gatewayLock = await acquireGatewayLock({
-    allowInTests: true,
-    env,
-    pollIntervalMs: 10,
-    port: 18_791,
-    timeoutMs: 100,
-  });
-  if (!gatewayLock) {
-    throw new Error("expected test Gateway lock");
-  }
-  let result: Awaited<ReturnType<typeof migrateLegacyExecApprovals>>;
-  try {
-    result = await migrate();
-  } finally {
-    await gatewayLock.release();
-  }
+  const result = await withGatewayLockHeld(env, 18_791, () => migrate());
   expect(result.warnings[0]).toContain("Stop the Gateway");
   expect(fs.existsSync(sourcePath)).toBe(true);
   expect(receipt()).toBeUndefined();

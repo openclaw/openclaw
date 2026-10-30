@@ -26,11 +26,6 @@ import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type NamedTool = { name: string };
-type PromptToolSession = Pick<
-  AgentSession,
-  "getActiveToolNames" | "getToolDefinition" | "setActiveToolsByName"
->;
-
 type PromptBuildToolPolicyBaseline = {
   activeToolNames: readonly string[];
   catalogEntries: readonly ToolSearchCatalogEntry[];
@@ -124,21 +119,16 @@ export function applyResolvedToolPromptFinalizer(params: {
   });
 }
 
-function sameToolNames(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((name, index) => name === right[index]);
-}
-
 /**
- * Applies a prompt-hook tool cap to the already-built turn surface. Filtering
- * the concrete host baseline makes the hook an intersection with every host
- * policy while allowing a later prompt build to apply a different cap.
+ * Applies a prompt-hook execution cap without changing the provider definitions.
+ * The concrete host baseline still bounds both direct and catalog execution.
  */
 export function applyPromptBuildToolsAllow<
   TEffectiveTool extends NamedTool,
   TUncompactedTool extends NamedTool,
   TTool extends NamedTool,
 >(params: {
-  session: PromptToolSession;
+  session: Pick<AgentSession, "getActiveToolNames" | "getToolDefinition" | "setActiveToolsByName">;
   toolsAllow?: string[];
   baseline: PromptBuildToolPolicyBaseline;
   effectiveTools: TEffectiveTool[];
@@ -171,23 +161,13 @@ export function applyPromptBuildToolsAllow<
       .tools.filter((tool) => callableNames.has(normalizeToolPolicyName(tool.name)));
   const allowedUncompactedTools = filterTools(params.uncompactedEffectiveTools);
   const allowedTools = filterTools(params.tools);
-  const allowedActiveNames = new Set(
-    promptPolicy.tools.map((tool) => normalizeToolPolicyName(tool.name)),
-  );
-
-  const activeToolNames = params.baseline.activeToolNames.filter((name) =>
-    allowedActiveNames.has(normalizeToolPolicyName(name)),
-  );
-  if (!sameToolNames(params.session.getActiveToolNames(), activeToolNames)) {
-    params.session.setActiveToolsByName(activeToolNames);
-  }
+  const activeToolNames = [...params.baseline.activeToolNames];
+  params.session.setActiveToolsByName(activeToolNames, promptPolicy.callableToolNames);
 
   return {
     activeToolNames,
     callableToolNames: promptPolicy.callableToolNames,
-    effectiveTools: params.effectiveTools.filter((tool) =>
-      allowedActiveNames.has(normalizeToolPolicyName(tool.name)),
-    ),
+    effectiveTools: params.effectiveTools,
     uncompactedEffectiveTools: allowedUncompactedTools,
     tools: allowedTools,
   };
@@ -214,24 +194,18 @@ type AttemptPromptObservabilityParams = Pick<
   | "trigger"
   | "workspaceDir"
 >;
-type CacheTrace = Pick<NonNullable<ReturnType<typeof createCacheTrace>>, "recordStage"> | null;
-type PromptHookRunner = Pick<HookRunner, "hasHooks" | "runLlmInput"> | null;
-type TrajectoryRecorder = Pick<
-  NonNullable<Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>>,
-  "recordEvent"
-> | null;
 type TrajectoryTool = Parameters<typeof toTrajectoryToolDefinitions>[0][number];
 
 export function observeEmbeddedAttemptPrompt(input: {
   attempt: AttemptPromptObservabilityParams;
-  cacheTrace: CacheTrace;
+  cacheTrace: Pick<NonNullable<ReturnType<typeof createCacheTrace>>, "recordStage"> | null;
   contextTokenBudget: number;
   diagnosticTrace: DiagnosticTraceContext;
   effectivePrompt: string;
   effectiveTools: readonly TrajectoryTool[];
   hookAgentId: string;
   hookMessagesForCurrentPrompt: AgentMessage[];
-  hookRunner: PromptHookRunner;
+  hookRunner: Pick<HookRunner, "hasHooks" | "runLlmInput"> | null;
   imageCount: number;
   isRawModelRun: boolean;
   llmBoundaryPromptForPrecheck: string;
@@ -245,7 +219,10 @@ export function observeEmbeddedAttemptPrompt(input: {
   systemPromptText?: string;
   toolSearchCompacted: boolean;
   tools: PluginHookLlmInputEvent["tools"];
-  trajectoryRecorder: TrajectoryRecorder;
+  trajectoryRecorder: Pick<
+    NonNullable<Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>>,
+    "recordEvent"
+  > | null;
   transcriptLeafId: string | null;
   transport: AgentSession["agent"]["transport"];
   uncompactedEffectiveTools: readonly TrajectoryTool[];

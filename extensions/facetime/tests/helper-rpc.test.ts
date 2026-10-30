@@ -87,7 +87,9 @@ async function connectHelper(bundle = "com.apple.FaceTime", processId = 1234) {
     bundle,
     processId,
   );
-  await waitFor(() => rpc.connectedHelperBundles.includes(bundle));
+  if (bundle.startsWith("com.apple.FaceTime")) {
+    await waitFor(() => rpc.connectedHelperBundles.includes(bundle));
+  }
   return client;
 }
 
@@ -129,24 +131,24 @@ it("sends set-muted actions over newline-framed JSON and resolves acknowledgemen
 it.each([
   ["answerCall", "answer-call"],
   ["leaveCall", "leave-call"],
-] as const)("fans %s out to FaceTime and Phone helpers", async (method, action) => {
-  const faceTimeClient = await connectHelper();
-  const phoneClient = await connectHelper("com.apple.mobilephone");
+] as const)(
+  "routes %s only through FaceTime when an old Phone helper connects",
+  async (method, action) => {
+    const faceTimeClient = await connectHelper();
+    const phoneClient = await connectHelper("com.apple.mobilephone");
+    const phoneReceivedAction = vi.fn();
+    phoneClient.socket.on("data", phoneReceivedAction);
+    expect(rpc.connectedSockets).toBe(1);
+    const actionPromise = rpc[method]("call-phone");
+    const faceTimePayload = await faceTimeClient.read();
+    expect(faceTimePayload).toMatchObject({ action, data: { callUUID: "call-phone" } });
+    faceTimeClient.send({ transactionId: faceTimePayload.transactionId, handled: true });
+    await expect(actionPromise).resolves.toMatchObject(receipt({ handled: true }, 1));
+    expect(phoneReceivedAction).not.toHaveBeenCalled();
+  },
+);
 
-  const payloadsPromise = Promise.all([faceTimeClient.read(), phoneClient.read()]);
-  const actionPromise = rpc[method]("call-phone");
-  const [faceTimePayload, phonePayload] = await payloadsPromise;
-  for (const payload of [faceTimePayload, phonePayload]) {
-    expect(payload).toMatchObject({ action, data: { callUUID: "call-phone" } });
-  }
-
-  faceTimeClient.send({ transactionId: faceTimePayload.transactionId, error: "call not found" });
-  phoneClient.send({ transactionId: phonePayload.transactionId, handled: true });
-
-  await expect(actionPromise).resolves.toMatchObject(receipt({ handled: true }, 2));
-});
-
-it("keeps a disconnected carrier peer in inspect-call completeness", async () => {
+it("does not treat an old Phone peer as a fallback carrier", async () => {
   const disconnected = Promise.withResolvers<string>();
   onDisconnect.mockImplementation(disconnected.resolve);
   const faceTimeClient = await connectHelper();
@@ -156,18 +158,40 @@ it("keeps a disconnected carrier peer in inspect-call completeness", async () =>
   faceTimeClient.socket.destroy();
   await faceTimeClosed;
   expect(await disconnected.promise).toBe("com.apple.FaceTime");
-  expect(rpc.connectedSockets).toBe(1);
+  expect(rpc.connectedSockets).toBe(0);
 
-  const { result } = await phoneClient.exchange(
-    () => rpc.inspectCall(["call-phone"], [1234]),
-    { action: "inspect-call", data: { callUUIDs: ["call-phone"] } },
-    { outcome: "absent", found: false },
+  const phoneReceivedAction = vi.fn();
+  phoneClient.socket.on("data", phoneReceivedAction);
+  await expect(rpc.inspectCall(["call-phone"], [1234])).rejects.toBeInstanceOf(
+    FaceTimeHelperUnavailableError,
   );
-  await expect(result).resolves.toMatchObject({
-    helpersContacted: 1,
-    topologyComplete: false,
-    helperResults: [{ found: false, helperPeer: { processId: 5678 } }],
+  expect(phoneReceivedAction).not.toHaveBeenCalled();
+});
+
+it("ignores call events from an already injected Phone helper", async () => {
+  const phoneClient = await connectHelper("com.apple.mobilephone");
+  phoneClient.send({
+    event: "ft-call-status-changed",
+    data: { call_uuid: "phone-call", call_status: 1 },
   });
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  expect(onMessage).not.toHaveBeenCalled();
+  expect(rpc.connectedHelperBundles).toEqual([]);
+});
+
+it("admits an older Phone helper inertly across native upgrades", async () => {
+  const client = new HelperClient(await connectClient());
+  await client.authenticate(undefined, "com.apple.mobilephone", 5678, "older-build", false);
+  client.send({ event: "ft-call-status-changed", data: { call_uuid: "old-phone-call" } });
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  expect(client.socket.destroyed).toBe(false);
+  expect(rpc.connectedSockets).toBe(0);
+  expect(onStale).not.toHaveBeenCalled();
+  expect(onMessage).not.toHaveBeenCalled();
 });
 
 it("distinguishes definitive helper rejection from transport failure", async () => {

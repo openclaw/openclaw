@@ -22,7 +22,6 @@ import { readSessionNodesGeneration } from "./session-accessor.sqlite-entry-revi
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import {
   deleteLegacySessionEntryRows,
-  readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { captureSessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
@@ -144,7 +143,13 @@ export function prepareSessionEntryReplacementPublication(
     : undefined;
   const changedKeys = [
     ...new Set([...result.previous.keys(), ...result.current.keys(), ...archived]),
-  ];
+  ].filter(
+    (key) =>
+      invalidated.has(key) ||
+      options?.postimages?.get(key)?.changed !== false ||
+      // A final no-op must not hide an earlier replacement of the same key.
+      !sqliteSessionEntriesEqual(result.previous.get(key), result.current.get(key)),
+  );
   const publication: SessionEntryReplacementPublication = {
     kind: "session-entry-replacements",
     conversationPublication: readStagedConversationPublications(database),
@@ -237,8 +242,16 @@ export function commitSessionEntryReplacementsInDatabase(
   const transactionRows = new Map<string, ResolvedSessionEntryRow>();
   const windows = new Map<string, SessionEntryWindowRow | null>();
   const writtenPostimages: SessionEntryWritePostimages = postimages ?? new Map();
+  let readValidation: ReturnType<typeof prepareExactSessionEntryRowReads> | undefined;
   for (const sessionKey of input.validationKeys) {
-    const transactionRow = readExactSessionEntryRow(database, sessionKey, "full", undefined, true);
+    readValidation ??= prepareExactSessionEntryRowReads(
+      database,
+      input.validationKeys,
+      "full",
+      undefined,
+      { includeWindowFacts: true, includeBoardPresence: true, includeMembership: true },
+    );
+    const transactionRow = readValidation(sessionKey);
     const expectedRow = input.expectedRows.get(sessionKey);
     if (
       transactionRow?.row.entry_json !== expectedRow?.row.entry_json ||
@@ -288,7 +301,7 @@ export function commitSessionEntryReplacementsInDatabase(
     const written = writeSessionEntry(
       database,
       replacement.sessionKey,
-      structuredClone(replacement.entry),
+      { ...replacement.entry },
       {
         ...(input.consumePendingReset ? { consumePendingReset: true } : {}),
         previousEntry: selectedBefore ?? null,
@@ -303,21 +316,25 @@ export function commitSessionEntryReplacementsInDatabase(
         publishConversationBinding: (replacement.previousSessionKeys?.length ?? 0) > 0,
       },
     );
-    deleteLegacySessionEntryRows(
-      database,
-      [...(replacement.previousSessionKeys ?? [])],
-      replacement.sessionKey,
-      {
-        rehomeMembers: selectedBefore?.sessionId === replacement.entry.sessionId,
-        validatedEntries: new Map(
-          [...transactionRows].map(([key, selected]) => [key, selected.entry]),
-        ),
-        postimages: writtenPostimages,
-      },
-    );
+    if (replacement.previousSessionKeys?.length) {
+      deleteLegacySessionEntryRows(
+        database,
+        [...replacement.previousSessionKeys],
+        replacement.sessionKey,
+        {
+          rehomeMembers: selectedBefore?.sessionId === replacement.entry.sessionId,
+          validatedEntries: new Map(
+            sourceEntries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+          ),
+          postimages: writtenPostimages,
+        },
+      );
+    }
     // Each later replacement starts from the preceding write, including shared physical windows.
     const postimage = writtenPostimages.get(replacement.sessionKey);
     if (postimage) {
+      // Repeated keys are a mutation batch even when the final write returns to its start.
+      postimage.changed ||= current.has(replacement.sessionKey);
       transactionRows.set(replacement.sessionKey, {
         entry: postimage.entry,
         row: {

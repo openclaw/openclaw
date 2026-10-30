@@ -14,6 +14,18 @@ const replaceFilter = (token: string, pattern: RegExp, replacement = ""): text.T
   activationTokens: [token],
   transform: (value) => value.replace(pattern, replacement),
 });
+const checkpointFilter = (
+  token: string,
+  transform: (value: string) => string,
+): text.TextFilter => ({
+  activationTokens: [token],
+  transform,
+  checkpoint: (value, boundary) => ({
+    text: transform(value),
+    retainStart: boundary,
+    retainedOutputStart: boundary,
+  }),
+});
 function replay(filter: text.TextFilter, chunks: string[], expected: string, strict = false) {
   const projection = project(filter);
   let delivered = "";
@@ -61,6 +73,29 @@ it("preserves an append when downstream filtering cancels an intermediate correc
   expectUpdate(projection.replace("Ready reply"), "Ready reply", null);
 });
 
+it("keeps settled equal-length rewrites when later checkpoint windows are unchanged", () => {
+  const projection = project(checkpointFilter("@", (value) => value.replaceAll("@", "!")));
+  expectUpdate(projection.append("@first\n"), "!first\n");
+  expectUpdate(projection.append("second\n"), "!first\nsecond\n", "second\n");
+  expectUpdate(projection.append("third\n"), "!first\nsecond\nthird\n", "third\n");
+  expectUpdate(projection.replace("fresh\n"), "fresh\n", null);
+  expectUpdate(projection.append("@next\n"), "fresh\n!next\n", "!next\n");
+});
+
+it("restores a transformed prefix through chained checkpoints", () => {
+  const projection = project(
+    checkpointFilter("secret", (value) => value),
+    {
+      activationTokens: ["secret"],
+      transform: (value) => (value.endsWith("!") ? value : value.replace("secret ", "")),
+    },
+    checkpointFilter("A", (value) => value.replaceAll("A", "@")),
+  );
+  expectUpdate(projection.append("secret A\n\nB\n\nC"), "@\n\nB\n\nC");
+  expectUpdate(projection.append("!"), "secret @\n\nB\n\nC!", null);
+  expectUpdate(projection.append(" tail"), "@\n\nB\n\nC! tail", null);
+});
+
 it.each(["none", "start", "both"] as const)("trims %s across whitespace boundaries", (mode) => {
   const filter = text.trimTextFilter(mode);
   const projection = project(filter);
@@ -105,9 +140,16 @@ it("removes only leading empty lines", () => {
   expectUpdate(projection.replace("\n  Reset"), "  Reset", null);
 });
 it.each([
+  ["A\n\nA\n\n```text\ninside\n\ninside\n```", "A\n\n```text\ninside\n\ninside\n```"],
+  ["A\n\nA\n\n    code\n\n    code", "A\n\n    code\n\n    code"],
   ["A\n\nA\n\n \n\nB", "A\n\n\n\nB"],
   ["\0\0\0\n\nA\n\nA\n\n`x`\0`y` `x`", "\0\0\0\n\nA\n\n`x`\0`y` `x`"],
   ["A\n\nA `x`", "A\n\nA `x`"],
+  ["A\r\n\r\nA\r\n\r\nB", "A\r\n\r\nB"],
+  ["A\r\nB\r\n\r\nA\r\nB", "A\r\nB"],
+  ["A\r\n\r\nB", "A\r\n\r\nB"],
+  ["```text\r\nA\r\n\r\nA\r\n```\r\n\r\nB\r\n\r\nB", "```text\r\nA\r\n\r\nA\r\n```\r\n\r\nB"],
+  ["A\n\nA\n\n```\n", "A\n\n```\n"],
 ])("preserves canonical separators and whitespace %#", (source, expected) => {
   expect(text.duplicateParagraphTextFilter.transform(source)).toBe(expected);
   const partitions = [

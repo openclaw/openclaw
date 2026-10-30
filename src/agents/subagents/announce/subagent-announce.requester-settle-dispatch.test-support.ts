@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { AgentTurnStartRequest } from "../../../gateway/agent-turn/agent-turn-start-request.types.js";
 import { createGatewayMethodRegistry } from "../../../gateway/methods/registry.js";
 import { createChatRunState } from "../../../gateway/server-chat-state.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
@@ -36,6 +37,18 @@ import {
 } from "./subagent-announce.requester-settle-wake.test-support.js";
 
 export { deliver, registryRead, startTurn, readDescendantFacts, loadRequester };
+
+export function finishProcessedCompletion(io: AgentTurnStartRequest["io"]) {
+  io.emitFinal([
+    true,
+    {
+      status: "ok",
+      inputProcessingCompleted: true,
+      result: { payloads: [{ text: "Completion received." }] },
+    },
+    undefined,
+  ]);
+}
 
 const readChildCompletionFindings = announceOutput.readChildCompletionFindings;
 

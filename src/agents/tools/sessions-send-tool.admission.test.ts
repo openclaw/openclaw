@@ -22,6 +22,7 @@ import {
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { readSessionSendDeliveryAdmission } from "../../gateway/session-send-delivery.js";
 import { drainSystemEvents, peekSystemEvents } from "../../infra/system-events.js";
+import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -54,11 +55,11 @@ import {
   createSessionsSendTestCaller,
   setSessionsSendTestActiveRun,
 } from "../openclaw-tools.sessions-steering.test-support.js";
+import "../test-helpers/fast-openclaw-tools-sessions.js";
 import {
   readFollowupRequest,
   SessionFollowupCompletion,
 } from "../subagents/completion/session-followup-completion.js";
-import "../test-helpers/fast-openclaw-tools-sessions.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import * as inProcessGateway from "./in-process-gateway.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
@@ -283,6 +284,99 @@ describe("sessions_send dispatch admission", () => {
     expect(consumed[0]).not.toContain("unaccepted notice");
     expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { right: "parent", ageMinutes: 0 },
+    { right: "parent", ageMinutes: 31 },
+    { right: "controller", ageMinutes: 31 },
+    { right: "scoped", ageMinutes: 31 },
+    { right: "bound-parent", ageMinutes: 31 },
+  ] as const)(
+    "keeps $right notification rights for a $ageMinutes-minute child",
+    async ({ right, ageMinutes }) => {
+      const parent = "agent:main:dashboard:notify-parent";
+      const child = "agent:main:subagent:notify-child";
+      const owner =
+        right === "parent" || right === "bound-parent"
+          ? parent
+          : "agent:main:dashboard:other-parent";
+      const sessionId = "notify-child-incarnation";
+      const cfg: OpenClawConfig = { ...config, tools: { sessions: { visibility: "tree" } } };
+      setRuntimeConfigSnapshot(cfg);
+      await putSession(parent, { sessionId: "notify-parent", updatedAt: Date.now() });
+      await putSession(child, {
+        sessionId,
+        updatedAt: Date.now() - ageMinutes * 60_000,
+        endedAt: Date.now() - ageMinutes * 60_000,
+        status: "done",
+        parentSessionKey: owner,
+        spawnedBy: owner,
+        spawnDepth: 1,
+      });
+      const callGateway = vi.fn();
+      callGateway.mockImplementation(async (request: GatewayRequest) => {
+        if (request.method === "sessions.resolve") {
+          return { key: child, agentId: "main" };
+        }
+        if (request.method === "sessions.describe") {
+          return {
+            session: {
+              key: child,
+              agentId: "main",
+              sessionId,
+              parentSessionKey: owner,
+              spawnedBy: owner,
+              childOwnerSessionKeys: [right === "controller" ? parent : owner],
+              ...(right === "controller" ? { controlOwnerSessionKey: parent } : {}),
+            },
+          };
+        }
+        return unexpectedRequest(request);
+      });
+      const tool = createTool({
+        config: cfg,
+        agentSessionKey: parent,
+        callGateway,
+        ...(right === "bound-parent" ? { expectedTargetSessionId: sessionId } : {}),
+      });
+      using _ = {
+        [Symbol.dispose]: createSessionVisibilityChecker.registerScopedAccessProvider((request) =>
+          right === "scoped" &&
+          request.requesterSessionKey === parent &&
+          request.targetSessionKey === child
+            ? { expectedSessionId: sessionId }
+            : undefined,
+        ),
+      };
+      const send = () =>
+        tool.execute("notify-lineage", {
+          sessionKey: child,
+          message: "retained child context",
+          mode: "notify",
+        });
+      const result = await send();
+      if (right === "parent") {
+        expect(result.details).toMatchObject({
+          status: "queued",
+          durability: "process",
+          runStarted: false,
+        });
+        expect(drainSystemEvents(child)).toEqual([
+          expect.stringContaining("retained child context"),
+        ]);
+      } else {
+        expect(result.details).toMatchObject({
+          status: "forbidden",
+          error: expect.stringContaining(
+            "Notifications cannot outlive an exact-session access grant",
+          ),
+        });
+        expect(peekSystemEvents(child)).toEqual([]);
+      }
+      expect(callGateway.mock.calls.some(([request]) => request.method === "agent")).toBe(false);
+      expect(registerWatch).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["send", "receive"] as const)(
     "rechecks an in-place default %s policy publication at final input admission",
@@ -603,8 +697,12 @@ describe("sessions_send dispatch admission", () => {
   });
 
   it.each([
-    { name: "numeric thread", sourceKey: requesterSessionKey, threadId: 42 },
-    { name: "legacy DM", sourceKey: "agent:main:telegram:direct:peer-1", threadId: "42" },
+    { name: "top-level Slack", sourceKey: requesterSessionKey, threadId: undefined },
+    {
+      name: "legacy DM numeric thread",
+      sourceKey: "agent:main:telegram:direct:peer-1",
+      threadId: 42,
+    },
     {
       name: "current source over fallback",
       sourceKey: requesterSessionKey,
@@ -617,9 +715,13 @@ describe("sessions_send dispatch admission", () => {
     const self = "self" in scenario;
     const fallback = "fallback" in scenario;
     const targetKey = self ? sourceKey : targetSessionKey;
+    const slack = scenario.name === "top-level Slack";
     const sourceId = self ? "self-session" : "requester-session";
     const targetId = self ? sourceId : "target-session";
     const originalRoute = { channel: "telegram", accountId: "default", to: "original-recipient" };
+    if (slack) {
+      originalRoute.channel = "slack";
+    }
     const laterRoute = { channel: "telegram", accountId: "other", to: "later-recipient" };
     const entry = { sessionId: sourceId, updatedAt: 1, lifecycleRevision: "original-generation" };
     const settled = await trackActualReplyFlow();
@@ -683,7 +785,9 @@ describe("sessions_send dispatch admission", () => {
         agentThreadId: self ? undefined : fallback ? 99 : scenario.threadId,
         currentMessagingTarget: self || fallback ? originalRoute.to : undefined,
         currentChannelId: fallback ? "native-channel-id" : undefined,
-        currentThreadTs: fallback ? "42" : undefined,
+        currentThreadTs: fallback ? "42" : slack ? "1793210000.000100" : undefined,
+        currentMessageId: slack ? "1793210000.000100" : undefined,
+        replyToMode: slack ? "off" : undefined,
         config,
         disableMessageTool: true,
         disablePluginTools: true,
@@ -701,7 +805,7 @@ describe("sessions_send dispatch admission", () => {
           expectedExistingSessionId: sourceId,
           expectedExistingSessionLifecycleRevision: entry.lifecycleRevision,
           ...originalRoute,
-          threadId: "42",
+          threadId: slack ? undefined : "42",
           deliver: false,
           sourceReplyDeliveryMode: "message_tool_only",
         });

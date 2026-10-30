@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -20,6 +21,7 @@ import {
   removePluginInstallRecordFromRecords,
   withoutPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
+import { preservePluginSourceAdmissions } from "../plugins/installed-plugin-index-source-admissions.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "../plugins/installed-plugin-index-store-path.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import type { InstalledPluginIndexStoreOptions } from "../plugins/installed-plugin-index-store.js";
@@ -34,9 +36,11 @@ import {
 } from "../plugins/managed-npm-retention.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { isExternallyDistributedPlugin } from "../plugins/official-external-plugin-catalog.js";
+import { createPluginCache, withPluginCache, retirePluginCache } from "../plugins/plugin-cache.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import type { OpenClawPeerLinkAuditIssue } from "../plugins/plugin-peer-link.js";
 import { refreshPluginRegistry } from "../plugins/plugin-registry-refresh.js";
+import { resolveControlPlaneRegistryParams } from "../plugins/plugin-registry-snapshot.js";
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import {
   listStaleLocalBundledPluginInstallRecords,
@@ -616,8 +620,9 @@ export function pluginRegistryIssueToRepairEffect(
  * current bundled source instead of an obsolete managed/local install record.
  */
 export async function maybeRepairPluginRegistryState(
-  params: PluginRegistryDoctorRepairParams,
+  input: PluginRegistryDoctorRepairParams,
 ): Promise<PluginRegistryDoctorRepairResult> {
+  const params = resolveControlPlaneRegistryParams(input);
   const readPreflight = () => {
     try {
       return preflightPluginRegistryDoctorMigration(params);
@@ -636,6 +641,35 @@ export async function maybeRepairPluginRegistryState(
   }
   if (!params.prompter.shouldRepair) {
     return await inspectOrRepairPluginRegistryState(params, initial);
+  }
+  const cache = createPluginCache();
+  try {
+    const unchanged = await withPluginCache(cache, async () => {
+      const preflight = readPreflight();
+      if (preflight?.action !== "skip-existing") {
+        return false;
+      }
+      // Rediscover the complete inventory. Even acquiring and releasing a
+      // durable plugin lease dirties SQLite, so stop before that write on a no-op.
+      const current = loadInstalledPluginIndex({
+        ...params,
+        config: withoutPluginInstallRecords(params.config),
+        installRecords: await loadRepairedPluginInstallRecords(params, []),
+      });
+      preservePluginSourceAdmissions(preflight.current, current);
+      return (
+        isDeepStrictEqual(preflight.current, {
+          ...current,
+          generatedAtMs: preflight.current.generatedAtMs,
+          refreshReason: preflight.current.refreshReason,
+        }) && (await detectPluginRegistryHealthIssues(params)).length === 0
+      );
+    });
+    if (unchanged) {
+      return { config: params.config };
+    }
+  } finally {
+    await retirePluginCache(cache);
   }
   return await withPluginLifecycleLease(
     resolveInstalledPluginIndexStateDatabaseOptions(params),

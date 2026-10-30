@@ -149,113 +149,70 @@ describe("doctor skills", () => {
     ]);
   });
 
-  it.each<{
-    name: string;
-    platform?: NodeJS.Platform;
-    env: Record<string, string>;
-    hosts?: string;
-    effective?: string;
-    alternateHome?: string;
-    checked?: string;
-  }>([
-    {
-      name: "explicit config directory",
-      env: { HOME: "/agent/home", GH_CONFIG_DIR: "/etc/openclaw/gh" },
+  const processHome = "/agent/home";
+  const serviceHome = "/var/lib/openclaw/agent";
+  const windowsHome = "C:\\Users\\agent";
+  const appData = `${windowsHome}\\AppData\\Roaming`;
+  const windowsHosts = `${appData}\\GitHub CLI\\hosts.yml`;
+  const legacyWindowsHosts = `${windowsHome}\\.config\\gh\\hosts.yml`;
+  const xdgHosts = "/agent/xdg/gh/hosts.yml";
+  type NoHintCase = [string, NodeJS.ProcessEnv, string?, NodeJS.Platform?, string?];
+
+  async function githubHint(
+    env: NodeJS.ProcessEnv,
+    hosts?: string,
+    platform: NodeJS.Platform = "linux",
+  ) {
+    Object.defineProperty(process, "platform", { value: platform });
+    for (const key of [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "GH_CONFIG_DIR",
+      "APPDATA",
+      "SUDO_USER",
+      "USER",
+      "USERPROFILE",
+    ]) {
+      vi.stubEnv(key, env[key]);
+    }
+    mocks.fileExists.mockImplementation((file) => file === hosts);
+    const calls = await runSkillDoctor([createSkill({ name: "github" })]);
+    return calls.find((call) => call[1] === "GitHub CLI")?.[0];
+  }
+
+  it.each([
+    ["sudo operator", { HOME: serviceHome, SUDO_USER: "alice" }, "/home/alice", "linux"],
+    ["login operator", { HOME: serviceHome, USER: "ops" }, "/home/ops", "linux"],
+    ["root operator", { HOME: processHome }, "/root", "linux"],
+    ["macOS sudo operator", { HOME: processHome, SUDO_USER: "alice" }, "/Users/alice", "darwin"],
+  ] as const)(
+    "discovers the GitHub CLI hint for %s",
+    async (_name, env, alternateHome, platform) => {
+      const alternate = `${alternateHome}/.config/gh`;
+      expect(await githubHint(env, `${alternate}/hosts.yml`, platform)).toBe(
+        [
+          "GitHub CLI auth was found at a different HOME than the one this OpenClaw process uses.",
+          `  Process gh config dir: ${env.HOME}/.config/gh`,
+          `  Authenticated config:  ${alternate} (contains hosts.yml)`,
+          `  Authenticated HOME:    ${alternateHome}`,
+          `  Fix: set GH_CONFIG_DIR=${alternate} on the OpenClaw service environment, then restart the gateway.`,
+        ].join("\n"),
+      );
     },
-    { name: "missing home", env: {} },
-    {
-      name: "sudo operator",
-      env: { HOME: "/var/lib/openclaw/agent", SUDO_USER: "alice" },
-      hosts: "/home/alice/.config/gh/hosts.yml",
-      effective: "/var/lib/openclaw/agent/.config/gh",
-      alternateHome: "/home/alice",
-    },
-    {
-      name: "login operator",
-      env: { HOME: "/var/lib/openclaw/agent", USER: "ops" },
-      hosts: "/home/ops/.config/gh/hosts.yml",
-      effective: "/var/lib/openclaw/agent/.config/gh",
-      alternateHome: "/home/ops",
-    },
-    {
-      name: "root operator",
-      env: { HOME: "/agent/home" },
-      hosts: "/root/.config/gh/hosts.yml",
-      effective: "/agent/home/.config/gh",
-      alternateHome: "/root",
-    },
-    {
-      name: "no known auth",
-      env: { HOME: "/agent/home" },
-      checked: "/root/.config/gh/hosts.yml",
-    },
-    {
-      name: "XDG precedence",
-      env: { HOME: "/agent/home", XDG_CONFIG_HOME: "/agent/xdg" },
-      hosts: "/agent/xdg/gh/hosts.yml",
-      checked: "/agent/xdg/gh/hosts.yml",
-    },
-    {
-      name: "Windows APPDATA",
-      platform: "win32",
-      env: { APPDATA: "C:\\Users\\agent\\AppData\\Roaming" },
-      hosts: "C:\\Users\\agent\\AppData\\Roaming\\GitHub CLI\\hosts.yml",
-      checked: "C:\\Users\\agent\\AppData\\Roaming\\GitHub CLI\\hosts.yml",
-    },
-    {
-      name: "Windows profile fallback",
-      platform: "win32",
-      env: { USERPROFILE: "C:\\Users\\agent" },
-      hosts: "C:\\Users\\agent\\AppData\\Roaming\\GitHub CLI\\hosts.yml",
-      checked: "C:\\Users\\agent\\AppData\\Roaming\\GitHub CLI\\hosts.yml",
-    },
-    {
-      name: "Windows HOME fallback",
-      platform: "win32",
-      env: { HOME: "C:\\Users\\agent" },
-      hosts: "C:\\Users\\agent\\.config\\gh\\hosts.yml",
-      checked: "C:\\Users\\agent\\.config\\gh\\hosts.yml",
-    },
-    {
-      name: "macOS sudo operator",
-      platform: "darwin",
-      env: { HOME: "/agent/home", SUDO_USER: "alice" },
-      hosts: "/Users/alice/.config/gh/hosts.yml",
-      effective: "/agent/home/.config/gh",
-      alternateHome: "/Users/alice",
-    },
+  );
+
+  it.each<NoHintCase>([
+    ["explicit config directory", { HOME: processHome, GH_CONFIG_DIR: "/etc/openclaw/gh" }],
+    ["missing home", {}],
+    ["no known auth", { HOME: processHome }, undefined, "linux", "/root/.config/gh/hosts.yml"],
+    ["XDG precedence", { HOME: processHome, XDG_CONFIG_HOME: "/agent/xdg" }, xdgHosts],
+    ["Windows APPDATA", { APPDATA: appData }, windowsHosts, "win32"],
+    ["Windows profile fallback", { USERPROFILE: windowsHome }, windowsHosts, "win32"],
+    ["Windows HOME fallback", { HOME: windowsHome }, legacyWindowsHosts, "win32"],
   ])(
-    "discovers the GitHub CLI hint for $name",
-    async ({ platform, env, hosts, effective, alternateHome, checked }) => {
-      Object.defineProperty(process, "platform", { value: platform ?? "linux" });
-      for (const key of [
-        "HOME",
-        "XDG_CONFIG_HOME",
-        "GH_CONFIG_DIR",
-        "APPDATA",
-        "SUDO_USER",
-        "USER",
-        "USERPROFILE",
-      ]) {
-        vi.stubEnv(key, env[key]);
-      }
-      mocks.fileExists.mockImplementation((file) => file === hosts);
-      const calls = await runSkillDoctor([createSkill({ name: "github" })]);
-      const output = calls.find((call) => call[1] === "GitHub CLI")?.[0];
-      if (alternateHome) {
-        const alternate = `${alternateHome}/.config/gh`;
-        expect(output).toBe(
-          [
-            "GitHub CLI auth was found at a different HOME than the one this OpenClaw process uses.",
-            `  Process gh config dir: ${effective}`,
-            `  Authenticated config:  ${alternate} (contains hosts.yml)`,
-            `  Authenticated HOME:    ${alternateHome}`,
-            `  Fix: set GH_CONFIG_DIR=${alternate} on the OpenClaw service environment, then restart the gateway.`,
-          ].join("\n"),
-        );
-      } else {
-        expect(output).toBeUndefined();
-      }
+    "does not emit a GitHub CLI hint for %s",
+    async (_name, env, hosts, platform, checked = hosts) => {
+      expect(await githubHint(env, hosts, platform)).toBeUndefined();
       if (checked) {
         expect(mocks.fileExists).toHaveBeenCalledWith(checked);
       }

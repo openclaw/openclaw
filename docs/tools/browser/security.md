@@ -42,3 +42,26 @@ Remote CDP tips:
 - Avoid embedding long-lived tokens directly in config files.
 - Keep the Gateway and any node hosts on a private network (Tailscale); avoid public exposure.
 - Treat remote CDP URLs/tokens as secrets; prefer env vars or a secrets manager.
+
+## Local preview access
+
+When `browser.ssrfPolicy` is absent, agents with unrestricted execution on the
+Gateway host can navigate to `localhost`, `127.0.0.1`, and `::1` on any port in
+OpenClaw's own live, managed local Chrome. This includes unrelated services bound
+to loopback, consistent with that agent's existing host execution access.
+For Gateway-managed execution, `tools.gatewayPolicy` must also permit `exec`;
+independently authorized native harness execution keeps its own authority.
+
+Any explicit `browser.ssrfPolicy`, including `{}`, disables this automatic
+exception. Restricted or sandboxed agents, remote browser targets, externally
+managed profiles, and browsers reached through a tunnel do not qualify. A live
+OpenClaw-owned process is required; a loopback CDP address alone is insufficient.
+
+The exception belongs to one tool invocation. OpenClaw checks its authority again
+before navigation and before continuing each intercepted redirect hop, including
+out-of-process iframe documents. It does not widen stored policy or grant private
+network access to other tools. Playwright is required for the exception; without
+it, the existing browser policy applies.
+
+A runtime config reload retires the current automatic grant. A fresh assistant
+turn prepares it again; ordinary policy-controlled browser access is unaffected.

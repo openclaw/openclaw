@@ -28,6 +28,12 @@ import { occupyWorkers, readJob, withCronGatewayState } from "./ops.gateway.test
 
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
+const sessionKey = "agent:main:native-cron-admission";
+
+function toolGeneration(signal?: AbortSignal) {
+  const released = createDeferredCore();
+  return { signal, released, cleanup: vi.fn(async () => released.resolve()) };
+}
 
 describe("native attempt queued automation admission", () => {
   beforeAll(preloadRunEmbeddedAttemptForTests);
@@ -60,36 +66,22 @@ describe("native attempt queued automation admission", () => {
         const job = createDueIsolatedJob({ id: "native-queued-run", nowMs: now, nextRunAtMs: now });
         const payloadStarted = createDeferredCore();
         const releasePayload = createDeferredCore();
-        const generationReleased = createDeferredCore();
-        const cleanup = vi.fn(async () => {
-          generationReleased.resolve();
-        });
         const requesterWork = new AsyncWorkScope();
         const controller = new AbortController();
         let current = true;
         let tool: AnyAgentTool;
         let toolSignal: AbortSignal | undefined;
-        const generations: Array<{
-          signal: AbortSignal | undefined;
-          cleanup: typeof cleanup;
-          released: typeof generationReleased;
-        }> = [];
+        const generations: ReturnType<typeof toolGeneration>[] = [];
         hoisted.createOpenClawCodingToolsMock.mockImplementation((input) => {
           const options = input as OpenClawCodingToolsOptions;
-          const released = generations.length === 0 ? generationReleased : createDeferredCore();
-          const generationCleanup =
-            generations.length === 0
-              ? cleanup
-              : vi.fn(async () => {
-                  released.resolve();
-                });
-          generations.push({ signal: options.abortSignal, cleanup: generationCleanup, released });
-          options.registerRunCleanup?.(generationCleanup);
+          const generation = toolGeneration(options.abortSignal);
+          generations.push(generation);
+          options.registerRunCleanup?.(generation.cleanup);
           toolSignal ??= options.abortSignal;
           tool = wrapToolWithAbortSignal(
             wrapToolWithGatewayCallerIdentity(createCronTool({ config: cfg }), {
               agentId: "main",
-              sessionKey: "agent:main:native-cron-admission",
+              sessionKey,
               operationalRunInstance: options.operationalRunInstance,
               receiptAuthority: () => current,
               approvalSignals: options.abortSignal ? [options.abortSignal] : [],
@@ -112,7 +104,7 @@ describe("native attempt queued automation admission", () => {
           const result = await requesterWork.run(() =>
             createContextEngineAttemptRunner({
               contextEngine: createContextEngineBootstrapAndAssemble(),
-              sessionKey: "agent:main:native-cron-admission",
+              sessionKey,
               tempPaths,
               attemptOverrides: {
                 config: cfg,
@@ -131,9 +123,7 @@ describe("native attempt queued automation admission", () => {
                       });
                       expect(ack.details).toMatchObject({ ok: true, enqueued: true });
                       if (outcome === "permission change") {
-                        const operation = getSessionControllerOperation(
-                          "agent:main:native-cron-admission",
-                        );
+                        const operation = getSessionControllerOperation(sessionKey);
                         const target =
                           operation && getSessionControllerEntryForOperation(operation).target;
                         if (!target) {
@@ -166,6 +156,11 @@ describe("native attempt queued automation admission", () => {
           expect(result.terminal.kind).toBe(
             outcome === "abort before completion" ? "aborted" : "ok",
           );
+          const firstGeneration = generations[0];
+          if (!firstGeneration) {
+            throw new Error("Native attempt did not construct a tool generation");
+          }
+          const { cleanup, released: generationReleased } = firstGeneration;
           const abortedAtCompletion = toolSignal?.aborted;
           const cleanupCallsAtCompletion = cleanup.mock.calls.length;
           const replacement = outcome === "permission change" ? generations[1] : undefined;

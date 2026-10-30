@@ -14,8 +14,11 @@ import {
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
-import { projectAgentIdentity, projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
+import {
+  sharedAgentIdentityProjection,
+  sharedAgentsProjection,
+} from "../../lib/reactive/shared-application-projections.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { personActivityLink, type PersonActivityRouting } from "../person-activity-link.ts";
 import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
@@ -259,20 +262,13 @@ export function ParticipantAvatar(props: {
     >
       {(identity) => {
         const app = useOptionalApplication();
-        const agents = app ? projectAgents(app.agents) : undefined;
-        const agentIdentity = app
-          ? projectAgentIdentity({
-              identities: app.agentIdentity,
-              get agentId() {
-                return identity().id;
-              },
-            })
-          : undefined;
+        const agents = app ? sharedAgentsProjection(app.agents) : undefined;
+        const agentIdentity = app ? sharedAgentIdentityProjection(app.agentIdentity) : undefined;
         const avatar = createMemo(() => {
           const rosterAgent = agents
             ?.read()
             .agentsList?.agents.find((entry) => entry.id === identity().id);
-          const hydrated = agentIdentity?.read();
+          const hydrated = agentIdentity?.read().get(identity().id);
           const resolved = resolveAvatar({
             identity: identity(),
             id: props.user.id,

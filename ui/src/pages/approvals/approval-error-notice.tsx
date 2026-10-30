@@ -1,6 +1,6 @@
 import { Errored } from "solid-js";
+import { RetryAction } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
-import { t } from "../../lib/reactive/i18n.ts";
 
 export function ApprovalErrorNotice(props: {
   error: string | null;
@@ -19,16 +19,13 @@ export function ApprovalErrorNotice(props: {
         <div class="callout danger" role="alert">
           {formatUiError(error())}
           {props.onRetry ? (
-            <button
-              class="btn btn--sm"
+            <RetryAction
               disabled={props.retryDisabled}
-              onClick={() => {
+              onRetry={() => {
                 props.onRetry?.();
                 reset();
               }}
-            >
-              {t("common.retry")}
-            </button>
+            />
           ) : null}
         </div>
       )}

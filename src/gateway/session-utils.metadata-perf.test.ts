@@ -107,8 +107,8 @@ function createRowThinkingFixture(runtimeRoute = false) {
 
 test.each(["missing", "identity-only", "runtime-route"] as const)(
   "preserves a stored level with a %s catalog after warming thinking facts",
-  async (kind) => {
-    await withStateDirEnv("openclaw-row-thinking-incomplete-", async () => {
+  (kind) =>
+    withStateDirEnv("openclaw-row-thinking-incomplete-", async () => {
       const fixture = createRowThinkingFixture(kind === "runtime-route");
       const warmed = fixture.read(
         undefined,
@@ -131,12 +131,11 @@ test.each(["missing", "identity-only", "runtime-route"] as const)(
         thinkingOptions: ["Off", "Deep", "Light", "ultra"],
       });
       expect(fixture.policyCalls()).toBe(warmCalls);
-    });
-  },
+    }),
 );
 
-test("rebuilds resident thinking facts on config and catalog publication", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+test("rebuilds resident thinking facts on config and catalog publication", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const fixture = createRowThinkingFixture();
     let cfg = fixture.cfg;
     let catalog = fixture.modelCatalog;
@@ -178,8 +177,7 @@ test("rebuilds resident thinking facts on config and catalog publication", async
       thinkingOptions: ["off", "ultra"],
     });
     expect(fixture.policyCalls()).toBeGreaterThan(configuredCalls);
-  });
-});
+  }));
 
 test.each([
   { search: undefined, recordedModel: true },
@@ -187,8 +185,8 @@ test.each([
   { search: "list-model", recordedModel: false },
 ])(
   "reuses prepared metadata across session rows (search=$search, recordedModel=$recordedModel)",
-  async ({ search, recordedModel }) => {
-    await withStateDirEnv("openclaw-prepared-row-auth-", async ({ stateDir }) => {
+  ({ search, recordedModel }) =>
+    withStateDirEnv("openclaw-prepared-row-auth-", async ({ stateDir }) => {
       resetPluginRuntimeStateForTest();
       const pluginRegistry = createEmptyPluginRegistry();
       setActivePluginRegistry(pluginRegistry);
@@ -247,6 +245,5 @@ test.each([
       const small = await project(16);
       const large = await project(128);
       expect(large).toBeLessThanOrEqual(small + 4);
-    });
-  },
+    }),
 );

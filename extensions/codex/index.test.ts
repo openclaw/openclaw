@@ -1,8 +1,6 @@
-// Codex tests cover index plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import {
@@ -30,6 +28,10 @@ import {
   CODEX_MANAGED_THREAD_MAX_ENTRIES,
   type StoredCodexManagedThread,
 } from "./src/app-server/managed-thread-store.js";
+import {
+  codexPluginConfig,
+  curatedPlugin,
+} from "./src/app-server/plugin-inventory.test-helpers.js";
 import {
   createCodexAppServerBindingStore,
   sessionBindingIdentity,
@@ -102,12 +104,28 @@ function createCodexTestApi(overrides: Parameters<typeof createTestPluginApi>[0]
   });
 }
 
-function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
-  return mock.mock.calls.at(index);
+function registerPlugin(overrides: Parameters<typeof createTestPluginApi>[0] = {}) {
+  const registrations = {
+    registerAgentHarness: vi.fn(),
+    registerGatewayMethod: vi.fn(),
+    registerNodeHostCommand: vi.fn(),
+    registerNodeInvokePolicy: vi.fn(),
+    registerProvider: vi.fn(),
+    registerSessionCatalog: vi.fn(),
+    registerTool: vi.fn<OpenClawPluginApi["registerTool"]>(),
+  };
+  plugin.register(createCodexTestApi({ ...registrations, ...overrides }));
+  return registrations;
 }
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0) {
-  return mockCall(mock, index)?.at(argIndex);
+  return mock.mock.calls.at(index)?.at(argIndex);
+}
+
+function pluginEntry(config: unknown, enabled?: boolean) {
+  return {
+    plugins: { entries: { codex: { config, ...(enabled === undefined ? {} : { enabled }) } } },
+  };
 }
 
 describe("codex plugin", () => {
@@ -148,21 +166,6 @@ describe("codex plugin", () => {
     const observation = observeHostDataSql();
     const sql = observation.calls;
     try {
-      const calibration = new DatabaseSync(":memory:");
-      try {
-        calibration.exec("CREATE TABLE calibration (value INTEGER)");
-        calibration.prepare("INSERT INTO calibration VALUES (?)").run(1);
-        const read = calibration.prepare("SELECT value FROM calibration");
-        read.get();
-        read.all();
-        expect([...read.iterate()]).toHaveLength(1);
-        for (const operation of sql) {
-          expect(operation).toHaveBeenCalled();
-          operation.mockClear();
-        }
-      } finally {
-        calibration.close();
-      }
       plugin.register(createTestPluginApi({ id: "codex", runtime, registerAgentHarness }));
       expect(runtime.state.openKeyedStoreV2).not.toHaveBeenCalled();
       expect(runtime.state.openSyncKeyedStore).not.toHaveBeenCalled();
@@ -247,45 +250,50 @@ describe("codex plugin", () => {
     }
   });
 
-  it("registers request-scoped surfaces with explicit multi-agent ownership", () => {
-    const registerAgentHarness = vi.fn();
-    const registerGatewayMethod = vi.fn();
-    const registerNodeHostCommand = vi.fn();
-    const registerNodeInvokePolicy = vi.fn();
-    const registerSessionCatalog = vi.fn();
-
-    expect(() =>
-      plugin.register(
-        createCodexTestApi({
-          config: explicitAgentConfig,
-          runtime: createCodexTestRuntime(() => explicitAgentConfig),
-          registerAgentHarness,
-          registerGatewayMethod,
-          registerNodeHostCommand,
-          registerNodeInvokePolicy,
-          registerSessionCatalog,
-        }),
-      ),
-    ).not.toThrow();
-
+  it.each([true, false])("registers request-scoped surfaces with catalog enabled=%s", (enabled) => {
+    const registration = registerPlugin({
+      config: explicitAgentConfig,
+      ...(!enabled ? { pluginConfig: { sessionCatalog: { enabled: false } } } : {}),
+    });
+    const {
+      registerAgentHarness,
+      registerGatewayMethod,
+      registerNodeHostCommand,
+      registerNodeInvokePolicy,
+      registerProvider,
+      registerSessionCatalog,
+    } = registration;
     expect(registerAgentHarness).toHaveBeenCalledOnce();
     expect(registerGatewayMethod).toHaveBeenCalledWith("codex.accountUsage", expect.any(Function), {
       scope: "operator.admin",
     });
-    expect(registerSessionCatalog).toHaveBeenCalledOnce();
-    expect(registerNodeHostCommand.mock.calls.map(([command]) => command.command)).toEqual(
-      expect.arrayContaining([
-        "codex.appServer.threads.list.v1",
-        "codex.appServer.thread.turns.list.v1",
-        "codex.terminal.resume.v1",
-        "codex.exec-server.stdio.v1",
-      ]),
+    expect(registerSessionCatalog).toHaveBeenCalledTimes(Number(enabled));
+    expect(registerProvider).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        id: "codex",
+        auth: [],
+        prepareSyntheticAuth: expect.any(Function),
+      }),
     );
-    const nodeExecServerCommand = registerNodeHostCommand.mock.calls
-      .map(([command]) => command)
-      .find((command) => command.command === "codex.exec-server.stdio.v1");
-    expect(nodeExecServerCommand).toMatchObject({
-      command: "codex.exec-server.stdio.v1",
+    const commands = registerNodeHostCommand.mock.calls.map(([command]) => command);
+    const names = commands.map(({ command }) => command);
+    if (enabled) {
+      expect(names).toEqual(
+        expect.arrayContaining([
+          "codex.appServer.threads.list.v1",
+          "codex.appServer.thread.turns.list.v1",
+          "codex.terminal.resume.v1",
+          "codex.exec-server.stdio.v1",
+        ]),
+      );
+    } else {
+      expect(names).toEqual([
+        "codex.cli.sessions.list",
+        "codex.cli.session.resume",
+        "codex.exec-server.stdio.v1",
+      ]);
+    }
+    expect(commands.find(({ command }) => command === "codex.exec-server.stdio.v1")).toMatchObject({
       cap: "codex.exec-server",
       dangerous: true,
       duplex: true,
@@ -297,62 +305,52 @@ describe("codex plugin", () => {
       commands: ["codex.exec-server.stdio.v1"],
       dangerous: true,
     });
-    expect(nodeExecServerPolicy.defaultPlatforms).toBeUndefined();
+    expect(nodeExecServerPolicy?.defaultPlatforms).toBeUndefined();
   });
 
-  it("lets native session discovery be disabled without disabling the Codex plugin", () => {
-    const registerAgentHarness = vi.fn();
-    const registerNodeHostCommand = vi.fn();
-    const registerProvider = vi.fn();
-    const registerSessionCatalog = vi.fn();
-    plugin.register(
-      createCodexTestApi({
-        config: explicitAgentConfig,
-        pluginConfig: { sessionCatalog: { enabled: false } },
-        registerAgentHarness,
-        registerNodeHostCommand,
-        registerProvider,
-        registerSessionCatalog,
-      }),
-    );
-
-    expect(registerAgentHarness).toHaveBeenCalledOnce();
-    expect(registerProvider).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        id: "codex",
-        auth: [],
-        prepareSyntheticAuth: expect.any(Function),
-      }),
-    );
-    const nodeCommands = registerNodeHostCommand.mock.calls.map(
-      ([command]) => (command as { command: string }).command,
-    );
-    expect(nodeCommands).toEqual([
-      "codex.cli.sessions.list",
-      "codex.cli.session.resume",
-      "codex.exec-server.stdio.v1",
-    ]);
-    expect(nodeCommands).not.toContain("codex.appServer.threads.list.v1");
-    expect(nodeCommands).not.toContain("codex.appServer.thread.turns.list.v1");
-    expect(registerSessionCatalog).not.toHaveBeenCalled();
-  });
-
-  it("registers the five shipped supervision tools only when supervision is enabled", () => {
-    const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
-    plugin.register(
-      createCodexTestApi({
-        pluginConfig: { supervision: { enabled: true } },
-        registerTool,
-      }),
-    );
+  it("declares native tools before workspace readiness across owner and completion turns", async () => {
+    const { registerTool } = registerPlugin({
+      pluginConfig: { appServer: { homeScope: "user" }, supervision: { enabled: true } },
+    });
 
     const registration = registeredCodexTools(registerTool);
-    expect(registration.options).toEqual({ names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES] });
+    expect(registration.options).toEqual({
+      names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES],
+      workspaceAccess: "execute",
+    });
     expect(registration.create({ senderIsOwner: true }).map((tool) => tool.name)).toEqual([
       ...CODEX_SUPERVISION_COMPAT_TOOL_NAMES,
     ]);
-    expect(registration.create({ senderIsOwner: false })).toEqual([]);
-    expect(registration.create()).toEqual([]);
+    for (const registered of [
+      registration,
+      registeredCodexTools(registerTool, "codex_plugins"),
+      registeredCodexTools(registerTool, "codex_threads"),
+    ]) {
+      expect(registered.options?.workspaceAccess).toBe("execute");
+      expect(() =>
+        registered.factory.create({
+          senderIsOwner: true,
+          assertInvocationCurrent() {},
+          get workspaceDir(): string {
+            throw new Error("Tool declaration must not inspect the pending workspace");
+          },
+        }),
+      ).not.toThrow();
+      const declaration = (owner?: boolean) =>
+        registered.create({ senderIsOwner: owner }).map(({ name, description, parameters }) => ({
+          name,
+          description,
+          parameters,
+        }));
+      const ownerDeclaration = declaration(true);
+      expect(ownerDeclaration).not.toEqual([]);
+      expect(declaration(false)).toEqual(ownerDeclaration);
+      expect(declaration()).toEqual(ownerDeclaration);
+      expect(declaration(true)).toEqual(ownerDeclaration);
+      for (const tool of registered.create({ senderIsOwner: false })) {
+        await expect(tool.execute("denied", {})).rejects.toThrow("owner-authorized sender");
+      }
+    }
   });
 
   it.each([
@@ -361,26 +359,14 @@ describe("codex plugin", () => {
   ] as const)(
     "keeps live user-home appServer config for an auto-enabled Codex entry when %s",
     (_label, supervision) => {
-      const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
-      plugin.register(
-        createCodexTestApi({
-          // No explicit plugins.entries.codex.enabled: core auto-enables the
-          // plugin from this config block, so the harness must keep honoring it.
-          runtime: createCodexTestRuntime(() => ({
-            plugins: {
-              entries: {
-                codex: {
-                  config: {
-                    appServer: { homeScope: "user" },
-                    ...(supervision ? { supervision } : {}),
-                  },
-                },
-              },
-            },
-          })),
-          registerTool,
-        }),
-      );
+      const { registerTool } = registerPlugin({
+        runtime: createCodexTestRuntime(() =>
+          pluginEntry({
+            appServer: { homeScope: "user" },
+            ...(supervision ? { supervision } : {}),
+          }),
+        ),
+      });
 
       const registration = registeredCodexTools(registerTool, "codex_threads");
       // codex_threads exists only while user-home scope or supervision is live,
@@ -390,22 +376,11 @@ describe("codex plugin", () => {
   );
 
   it("drops live plugin config when the Codex entry is explicitly disabled", () => {
-    const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
-    plugin.register(
-      createCodexTestApi({
-        runtime: createCodexTestRuntime(() => ({
-          plugins: {
-            entries: {
-              codex: {
-                enabled: false,
-                config: { appServer: { homeScope: "user" } },
-              },
-            },
-          },
-        })),
-        registerTool,
-      }),
-    );
+    const { registerTool } = registerPlugin({
+      runtime: createCodexTestRuntime(() =>
+        pluginEntry({ appServer: { homeScope: "user" } }, false),
+      ),
+    });
 
     const registration = registeredCodexTools(registerTool, "codex_threads");
     expect(
@@ -415,24 +390,13 @@ describe("codex plugin", () => {
 
   it.each([
     ["plugin entry is removed", { plugins: { entries: {} } }],
-    [
-      "plugin entry is disabled",
-      {
-        plugins: {
-          entries: {
-            codex: { enabled: false, config: { supervision: { enabled: true } } },
-          },
-        },
-      },
-    ],
+    ["plugin entry is disabled", pluginEntry({ supervision: { enabled: true } }, false)],
     [
       "global plugin loading is disabled",
       {
         plugins: {
           enabled: false,
-          entries: {
-            codex: { enabled: true, config: { supervision: { enabled: true } } },
-          },
+          ...pluginEntry({ supervision: { enabled: true } }, true).plugins,
         },
       },
     ],
@@ -441,9 +405,7 @@ describe("codex plugin", () => {
       {
         plugins: {
           allow: ["other-plugin"],
-          entries: {
-            codex: { enabled: true, config: { supervision: { enabled: true } } },
-          },
+          ...pluginEntry({ supervision: { enabled: true } }, true).plugins,
         },
       },
     ],
@@ -452,38 +414,17 @@ describe("codex plugin", () => {
       {
         plugins: {
           deny: ["codex"],
-          entries: {
-            codex: { enabled: true, config: { supervision: { enabled: true } } },
-          },
+          ...pluginEntry({ supervision: { enabled: true } }, true).plugins,
         },
       },
     ],
-    [
-      "supervision is explicitly disabled",
-      {
-        plugins: {
-          entries: {
-            codex: { enabled: true, config: { supervision: { enabled: false } } },
-          },
-        },
-      },
-    ],
+    ["supervision is explicitly disabled", pluginEntry({ supervision: { enabled: false } }, true)],
   ] as const)("revokes supervision live when %s", async (_label, revokedConfig) => {
-    const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
-    let liveConfig: unknown = {
-      plugins: {
-        entries: {
-          codex: { enabled: true, config: { supervision: { enabled: true } } },
-        },
-      },
-    };
-    plugin.register(
-      createCodexTestApi({
-        pluginConfig: { supervision: { enabled: true } },
-        runtime: createCodexTestRuntime(() => liveConfig),
-        registerTool,
-      }),
-    );
+    let liveConfig: unknown = pluginEntry({ supervision: { enabled: true } }, true);
+    const { registerTool } = registerPlugin({
+      pluginConfig: { supervision: { enabled: true } },
+      runtime: createCodexTestRuntime(() => liveConfig),
+    });
     const registration = registeredCodexTools(registerTool);
     const probe = registration
       .create({ senderIsOwner: true })
@@ -553,136 +494,38 @@ describe("codex plugin", () => {
       expect(bindingStore.read(retiredIdentity)).toBeUndefined();
     }
 
-    // Cross-key handoff (e.g. dashboard "New Chat"/fork): the parent's still-live
-    // binding must survive because the successor lives under a different key and
-    // owns its own Codex thread. See #106778.
-    const parent = sessionBindingIdentity({
-      agentId: "worker",
-      sessionId: "parent-1",
-      sessionKey: "agent:worker:parent-1",
-    });
-    await bindingStore.mutate(parent, {
-      kind: "set",
-      binding: { threadId: "thread-parent", cwd: "/repo" },
-    });
-    await sessionEnd(
-      {
-        sessionId: "parent-1",
-        sessionKey: "agent:worker:parent-1",
-        reason: "new",
-        nextSessionId: "child-1",
-        nextSessionKey: "agent:worker:dashboard:child-1",
-      },
-      { agentId: "worker", sessionId: "parent-1" },
-    );
-    expect(bindingStore.read(parent)).toMatchObject({ threadId: "thread-parent" });
-
-    // In-place reset cleanup is awaited before the replacement starts. Its
-    // delayed session_end event must not retire that same-id replacement.
-    const inPlace = sessionBindingIdentity({
-      agentId: "worker",
-      sessionId: "in-place-1",
-      sessionKey: "agent:worker:in-place",
-    });
-    await bindingStore.mutate(inPlace, {
-      kind: "set",
-      binding: { threadId: "thread-in-place-replacement", cwd: "/repo" },
-    });
-    await sessionEnd(
-      {
-        sessionId: "in-place-1",
-        sessionKey: "agent:worker:in-place",
-        reason: "reset",
-        nextSessionId: "in-place-1",
-      },
-      { agentId: "worker", sessionId: "in-place-1" },
-    );
-    expect(bindingStore.read(inPlace)).toMatchObject({
-      threadId: "thread-in-place-replacement",
-    });
-
-    // A same-key replacement that still names the successor id (physical rollover)
-    // has no distinct nextSessionKey, so it retires as before.
-    await sessionEnd(
-      {
-        sessionId: "parent-1",
-        sessionKey: "agent:worker:parent-1",
-        reason: "new",
-        nextSessionId: "parent-2",
-      },
-      { agentId: "worker", sessionId: "parent-1" },
-    );
-    expect(bindingStore.read(parent)).toBeUndefined();
-
-    // Unknown current key: a handoff cannot be proven, so a successor key alone
-    // must not skip cleanup — the conservative path retires as before #106778.
-    const keyless = sessionBindingIdentity({ agentId: "worker", sessionId: "keyless-1" });
-    await bindingStore.mutate(keyless, {
-      kind: "set",
-      binding: { threadId: "thread-keyless", cwd: "/repo" },
-    });
-    await sessionEnd(
-      {
-        sessionId: "keyless-1",
-        reason: "new",
-        nextSessionId: "child-2",
-        nextSessionKey: "agent:worker:dashboard:child-2",
-      },
-      { agentId: "worker", sessionId: "keyless-1" },
-    );
-    expect(bindingStore.read(keyless)).toBeUndefined();
-  });
-
-  it("enables the native hook relay for public Codex app-server attempts", async () => {
-    const harness = createCodexAppServerAgentHarness({
-      pluginConfig: { appServer: {} },
-      bindingStore: testCodexAppServerBindingStore,
-    });
-    const result = { terminal: { kind: "ok" as const } };
-    runCodexAppServerAttemptMock.mockResolvedValueOnce(result);
-
-    await expect(harness.runAttempt({ prompt: "hello" } as never)).resolves.toBe(result);
-
-    expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
-      { prompt: "hello" },
-      {
-        bindingStore: testCodexAppServerBindingStore,
-        pluginConfig: { appServer: {} },
-        nativeHookRelay: { enabled: true },
-      },
-    );
+    // Cross-key handoffs and delayed in-place reset events preserve the binding;
+    // physical rollover and an unprovable (keyless) handoff retire it (#106778).
+    for (const [sessionId, key, nextSessionId, nextKey, reason, retained] of [
+      ["parent", "parent", "child", "dashboard:child", "new", true],
+      ["in-place", "in-place", "in-place", undefined, "reset", true],
+      ["parent", "parent", "parent-2", undefined, "new", false],
+      ["keyless", undefined, "child-2", "dashboard:child-2", "new", false],
+    ] as const) {
+      const sessionKey = key && `agent:worker:${key}`;
+      const nextSessionKey = nextKey && `agent:worker:${nextKey}`;
+      const target = sessionBindingIdentity({ agentId: "worker", sessionId, sessionKey });
+      await expect(setBinding(target)).resolves.toBe(true);
+      await sessionEnd(
+        { sessionId, sessionKey, nextSessionId, nextSessionKey, reason },
+        { agentId: "worker", sessionId },
+      );
+      expect(bindingStore.read(target)).toEqual(
+        retained ? { threadId: "thread-1", cwd: "/repo" } : undefined,
+      );
+    }
   });
 
   it("passes live Codex plugin config into public Codex app-server attempts", async () => {
-    const registerAgentHarness = vi.fn();
-    const liveConfig = {
-      plugins: {
-        entries: {
-          codex: {
-            enabled: true,
-            config: {
-              codexPlugins: {
-                enabled: true,
-                plugins: {
-                  "google-calendar": {
-                    marketplaceName: "openai-curated",
-                    pluginName: "google-calendar",
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    };
+    const config = codexPluginConfig({
+      plugins: { "google-calendar": curatedPlugin("google-calendar") },
+    });
+    const liveConfig = pluginEntry(config, true);
     const runtime = createCodexTestRuntime(() => liveConfig);
-    plugin.register(
-      createCodexTestApi({
-        pluginConfig: { codexPlugins: { enabled: false } },
-        runtime,
-        registerAgentHarness,
-      }),
-    );
+    const { registerAgentHarness } = registerPlugin({
+      pluginConfig: { codexPlugins: { enabled: false } },
+      runtime,
+    });
     const harness = mockCallArg(registerAgentHarness) as ReturnType<
       typeof createCodexAppServerAgentHarness
     >;
@@ -695,7 +538,7 @@ describe("codex plugin", () => {
       { prompt: "calendar" },
       {
         bindingStore: expect.any(Object),
-        pluginConfig: liveConfig.plugins.entries.codex.config,
+        pluginConfig: config,
         runtime,
         runtimeModelId: undefined,
         nativeHookRelay: { enabled: true },

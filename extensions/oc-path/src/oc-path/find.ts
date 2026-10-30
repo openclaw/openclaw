@@ -331,7 +331,7 @@ const jsoncOps: WalkOps<JsoncValue> = {
         : { keySub: key === lookupKey ? quoteSeg(e.key) : key, child: e.value };
     }
     if (node.kind === "array") {
-      const idx = parseArrayIndexSegment(key, node.items.length);
+      const idx = parseArrayIndexSegment(unquoteSeg(key), node.items.length);
       if (idx === null) {
         return null;
       }
@@ -453,7 +453,7 @@ const yamlOps: WalkOps<Node> = {
         : { keySub: key === lookupKey ? quoteSeg(lookupKey) : key, child: pair.value as Node };
     }
     if (isSeq(node)) {
-      const idx = parseArrayIndexSegment(key, node.items.length);
+      const idx = parseArrayIndexSegment(unquoteSeg(key), node.items.length);
       if (idx === null) {
         return null;
       }
@@ -566,9 +566,20 @@ function walkMd(
     return;
   }
 
-  // Item-level field slot is terminal — descending would loop.
+  // Fields are leaves; recursive wildcards may match zero segments around the key.
   if (level.kind === "item") {
-    walkMdItemField(level.item, cur, walked, context);
+    let field: SlotSub | undefined;
+    for (let j = i; j < subs.length; j++) {
+      const sub = expectDefined(subs[j], "Markdown field index checked above");
+      if (sub.value === WILDCARD_RECURSIVE) {
+        continue;
+      }
+      if (field) {
+        return;
+      }
+      field = sub;
+    }
+    walkMdItemField(level.item, field ?? cur, walked, context);
     return;
   }
 

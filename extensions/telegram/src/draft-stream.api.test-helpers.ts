@@ -5,6 +5,9 @@ import type { TelegramInputRichMessage } from "./rich-message.js";
 
 type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];
 export type MockSentMessage = { message_id: number; message_thread_id?: number };
+export const telegramDraftCodeFixture =
+  "```ts\n  const one = 1;\n  const two = 2;\n  return one + two;\n```";
+
 type MockSendMessage = (
   chatId: string | number,
   text: string,

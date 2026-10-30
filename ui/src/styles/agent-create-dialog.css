@@ -1,6 +1,10 @@
+.agent-create-modal {
+  --openclaw-modal-width: 440px;
+}
+
 .agent-create-dialog {
   display: grid;
-  width: min(440px, calc(100vw - 48px));
+  width: 100%;
   height: min(540px, calc(100dvh - 48px));
   max-height: calc(100dvh - 48px);
   grid-template-rows: auto minmax(0, 1fr) auto;

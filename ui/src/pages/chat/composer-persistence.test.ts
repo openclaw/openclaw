@@ -80,8 +80,9 @@ function seedSession(session: Record<string, unknown>, version = 1, key = "agent
 const snapshot = (state: ComposerState, key = state.sessionKey) => load(state, key).snapshot;
 const revision = (state: ComposerState) => load(state, state.sessionKey).revisions.latestAttempt;
 
-const readStored = (state: ComposerState) =>
-  JSON.parse(sessionStorage.getItem(storageTargetForComposer(state).key)!);
+const storedText = (state: ComposerState) =>
+  sessionStorage.getItem(storageTargetForComposer(state).key);
+const readStored = (state: ComposerState) => JSON.parse(storedText(state)!);
 const storedRow = (state: ComposerState) =>
   readStored(state).sessions[`${state.sessionKey}\u0000agent:lily`];
 function quotaFailure() {
@@ -121,8 +122,7 @@ function heldItem(state: ComposerState, fields: Partial<ChatQueueItem> = {}): Ch
 }
 const privateMentions = [{ profileId: "alex", start: 0, end: 5 }];
 const privateGoal = { action: "start" as const, sessionId: "private-session" };
-const recoveredError =
-  "Recovered message. Review this destination and retry only if it did not arrive.";
+const recoveredError = "Recovered message. Review this destination and retry when ready.";
 function reviewed(state: ComposerState, item: ChatQueueItem, sendError = recoveredError) {
   return { ...item, storageScope: scopeFor(state), sendState: "failed" as const, sendError };
 }
@@ -252,7 +252,7 @@ it("reviews legacy steer rows as generic mode-bearing sends and never rewrites o
     storageScope: scopeFor(state),
     queueMode: "steer",
     sendRunId: "steer-request",
-    sendState: "unconfirmed",
+    sendState: "failed",
   });
   expect(restored).not.toHaveProperty("kind");
   expect(restored).not.toHaveProperty("steerTargetRunId");
@@ -377,8 +377,16 @@ it("keeps unresolved bare main and raw global independent until their owners res
   const mainBox = outbox(mainItem, "global", "work");
   const globalBox = outbox(globalItem, "global", "alpha");
   expect(listOutboxes(resolved)).toEqual([mainBox, globalBox]);
-  const attemptedMain = { ...mainBox.queue[0]!, sendAttempts: 1 };
-  const attemptedGlobal = { ...globalBox.queue[0]!, sendAttempts: 1 };
+  const attemptedMain = {
+    ...mainBox.queue[0]!,
+    sessionId: "resolved-main-session",
+    sendAttempts: 1,
+  };
+  const attemptedGlobal = {
+    ...globalBox.queue[0]!,
+    sessionId: "resolved-global-session",
+    sendAttempts: 1,
+  };
   expect(replaceItem(resolved, mainBox.queue[0]!, attemptedMain)).toBe(true);
   expect(replaceItem(resolved, globalBox.queue[0]!, attemptedGlobal)).toBe(true);
   expect(updateItems(resolved, "global", [{ expected: attemptedMain, next: null }])).toBe(true);
@@ -472,7 +480,7 @@ it("reviews full v1 main and global queues while consuming legacy tombstones", (
   expect(listOutboxes(state)).toEqual([]);
   const entries = readRecovery(state).entries;
   expect(entries).toHaveLength(3);
-  expect(sessionStorage.getItem(storageTargetForComposer(state).key)).toBeNull();
+  expect(storedText(state)).toBeNull();
   for (const [sessionKey, queue] of [
     ["global", globalQueue],
     [mainKey, mainQueue],
@@ -503,14 +511,18 @@ it("reviews full v1 main and global queues while consuming legacy tombstones", (
   expect(readRecovery(state).entries).toEqual([]);
   state.chatMessage = "updated draft";
   expect(persist(state)).toBe(true);
-  expect(sessionStorage.getItem(storageTargetForComposer(state).key)).not.toContain(
-    "removedQueueItemIds",
-  );
+  expect(storedText(state)).not.toContain("removedQueueItemIds");
   expect(sessionStorage.getItem(legacyKey(state.settings?.gatewayUrl))).toBeNull();
 });
 
 it.each([
   ["sending", "waiting-reconnect", undefined, undefined],
+  [
+    "executing-command",
+    "failed",
+    undefined,
+    "Command was interrupted. Review the conversation before retrying.",
+  ],
   [
     "waiting-model",
     "failed",
@@ -586,7 +598,7 @@ it("does not replay an exact-240 legacy key to a longer same-prefix gateway", ()
     const state = createState({ settings: { gatewayUrl } });
     expect(snapshot(state)).toBeNull();
     expect(listOutboxes(state)).toEqual([]);
-    expect(sessionStorage.getItem(storageTargetForComposer(state).key)).toBeNull();
+    expect(storedText(state)).toBeNull();
     expect(readRecovery(state).entries).toEqual([]);
     expect(sessionStorage.getItem(legacyKey(gatewayUrl))).toContain(item.id);
   }
@@ -855,9 +867,7 @@ it("retires a draft when its write notification reveals Incognito metadata", asy
     state.chatMessage = "private notification draft";
     persistence.schedule();
     persistence.persistNow();
-    expect(sessionStorage.getItem(storageTargetForComposer(state).key)).not.toContain(
-      "private notification draft",
-    );
+    expect(storedText(state)).not.toContain("private notification draft");
     expect(state.chatMessage).toBe("private notification draft");
     expect(
       reader

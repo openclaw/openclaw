@@ -10,20 +10,13 @@
 .chat-details-mobile-root {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  --details-group-gap: 16px;
+  gap: var(--details-group-gap);
   min-width: 0;
   padding: 12px 14px 24px;
   color: var(--text);
   font-family: var(--font-body);
   font-variant-numeric: lining-nums tabular-nums;
-}
-
-.chat-details-mobile-root__title {
-  margin: 0 12px;
-  overflow-wrap: anywhere;
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 1.35;
 }
 
 .chat-details-mobile-root__section {
@@ -171,12 +164,20 @@
 }
 
 .chat-details-mobile-processes .chat-details__process {
+  width: 100%;
+  margin-inline: 0;
   grid-template-columns: var(--mobile-list-icon) minmax(0, 1fr) auto;
   column-gap: var(--mobile-list-gap);
   font: 400 14px/20px var(--font-body);
   min-height: 44px;
   padding: 8px 12px;
   border-radius: 0;
+}
+
+.chat-details-mobile-processes > [role="list"]:first-child > :first-child,
+.chat-details-mobile-processes > [role="list"]:first-child > :first-child > .chat-details__process {
+  border-start-start-radius: inherit;
+  border-start-end-radius: inherit;
 }
 
 .chat-details-mobile-processes [role="listitem"] + [role="listitem"] {
@@ -199,27 +200,6 @@
 /* The root group owns its inset divider; the collection page keeps its own divider. */
 .chat-details-mobile-root__group > .chat-pr-mobile__row + .chat-pr-mobile__row {
   border-top: 0;
-}
-
-.chat-details-mobile-context {
-  padding: 12px 14px 24px;
-}
-
-.chat-details-mobile-context__summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.chat-details-mobile-context__summary .chat-details__meter {
-  flex: 1;
-  min-width: 0;
-}
-
-.chat-details-mobile-context > .chat-details-mobile-context__summary {
-  margin-bottom: 10px;
 }
 
 .chat-details-mobile-root__avatars {
@@ -442,15 +422,20 @@
   min-height: 36px;
   color: var(--muted);
   font: 400 12px/18px var(--font-body);
+  font-variant-numeric: tabular-nums;
 }
 
-.chat-details-mobile-processes .chat-details__process-icon {
-  width: var(--mobile-list-icon);
-  height: var(--mobile-list-icon);
-}
-
-.chat-details-mobile-processes .chat-details__process-tail,
 .chat-details-mobile-processes .chat-details__process-elapsed {
   color: var(--muted);
   font: 400 12px/18px var(--font-body);
+}
+
+.chat-details-mobile-root > .chat-details-processes__envelope:not(:first-child) {
+  margin-block-start: calc(-1 * var(--details-group-gap));
+}
+.chat-details-mobile-root
+  > .chat-details-processes__envelope:not(:first-child)
+  > .chat-details-processes__motion-content
+  > .chat-details-mobile-root__section {
+  padding-block-start: var(--details-group-gap);
 }

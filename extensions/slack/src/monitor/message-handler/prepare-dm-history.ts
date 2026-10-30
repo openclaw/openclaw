@@ -59,7 +59,8 @@ export async function resolveSlackDmHistoryContext(params: {
         return body ? [{ message, body }] : [];
       })
       .slice(0, maxMessages)
-      .toReversed();
+      // oxlint-disable-next-line unicorn/no-array-reverse -- slice creates a private array.
+      .reverse();
 
     if (messages.length === 0) {
       return { body: undefined, inboundHistory: undefined };

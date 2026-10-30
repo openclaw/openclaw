@@ -261,13 +261,18 @@ async function resolvePullRequests(api, event, eventName, repository) {
   }
   const prefix = `/repos/${repository}`;
   if (eventName === "pull_request_target" || eventName === "issue_comment") {
+    const refreshHead =
+      eventName === "issue_comment" && event.action === "created"
+        ? /^\/refresh-security-review ([a-f0-9]{40})$/u.exec(event.comment?.body?.trim() ?? "")?.[1]
+        : undefined;
     if (
       eventName === "issue_comment" &&
       (!event.issue?.pull_request ||
         !["created", "edited", "deleted"].includes(event.action) ||
         // An edit can remove the command entirely. Its previous body still
         // identifies a revocation; authorization always uses live comments.
-        (parseApprovalCommands(event.comment?.body).length === 0 &&
+        (!refreshHead &&
+          parseApprovalCommands(event.comment?.body).length === 0 &&
           (event.action !== "edited" ||
             parseApprovalCommands(event.changes?.body?.from).length === 0)))
     ) {
@@ -279,6 +284,32 @@ async function resolvePullRequests(api, event, eventName, repository) {
       throw new Error("Security review event has no valid pull request number.");
     }
     const pullRequest = await api.request(`${prefix}/pulls/${number}`);
+    if (refreshHead) {
+      const user = event.comment.user;
+      if (
+        !reviewable(pullRequest, repository, defaultBranch) ||
+        pullRequest.head.sha !== refreshHead ||
+        user?.type !== "User" ||
+        typeof user.login !== "string" ||
+        !user.login
+      ) {
+        return { selected: [], truncated: false };
+      }
+      let permission;
+      try {
+        permission = await api.request(
+          `${prefix}/collaborators/${encodeURIComponent(user.login)}/permission`,
+        );
+      } catch (error) {
+        if (error?.status === 404) {
+          return { selected: [], truncated: false };
+        }
+        throw error;
+      }
+      if (permission.role_name !== "maintain" && permission.role_name !== "admin") {
+        return { selected: [], truncated: false };
+      }
+    }
     const selected = new Map(
       reviewable(pullRequest, repository, defaultBranch)
         ? [[number, { pr: number, head: pullRequest.head.sha }]]

@@ -1,13 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { STAGED_INPUT_GITIGNORE, stagedInputDirectory } from "../../media/staged-inputs.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { readActualWorkspaceManifestImpl } from "./workspace-actual-manifest.js";
+import { prepareWorkspaceReconciliation } from "./workspace-manifest-comparison.js";
 import { sha256 as digest } from "./workspace-manifest-fixtures.test-support.js";
 import { MAX_RECONCILIATION_FILE_BYTES } from "./workspace-manifest.js";
-import { DERIVED_WORKSPACE_RSYNC_EXCLUDES } from "./workspace-path-exclusions.js";
+import {
+  DERIVED_WORKSPACE_RSYNC_EXCLUDES,
+  isDerivedWorkspacePath,
+} from "./workspace-path-exclusions.js";
 import {
   createScriptWorkspace,
   initializeScriptGitWorkspace,
@@ -38,6 +42,7 @@ async function makeWorkspace(files: Record<string, string>) {
   return { ...fixture, manifestPath, readLocal, capture };
 }
 const cacheRoots = [
+  ".openclaw/tmp",
   ".local/share/pnpm/store",
   ".cache/openclaw/bun",
   ".cache/ms-playwright",
@@ -61,7 +66,7 @@ const userFiles = {
   ".artifacts/build-all-cache/authored.txt": "original input\n",
   ".artifacts/build-cache-inputs/authored.json": "original input\n",
   ".artifacts/vitest-shard-timings.json-notes": "user notes\n",
-  ".openclaw/tmp/unit.log": "guest log\n",
+  ".openclaw/project.json": "project data\n",
   ".cache/openclaw/notes.md": "user notes\n",
   ".cache/user-data.json": "user data\n",
   ...Object.fromEntries(
@@ -106,6 +111,30 @@ it("excludes only generated runtime roots from capture and transfer", async () =
       expect(await fs.readFile(path.join(target, name), "utf8")).toBe(content);
     }
   }
+});
+
+it("excludes nested Git metadata from local and remote capture without hiding similarly named source files", async () => {
+  const retained = {
+    "source.txt": "source edit\n",
+    ".gitignore": "user ignore rules\n",
+    "cache/.git-notes": "user notes\n",
+    "cache/.gitmodules": "user submodule definitions\n",
+    [`${stagedRoot}/.gitignore`]: STAGED_INPUT_GITIGNORE,
+  };
+  const { workspace, capture } = await makeWorkspace({
+    ...retained,
+    ".git": "checkout metadata\n",
+    "cache/sdists/.git": "gitdir: elsewhere\n",
+    "fixtures/repository/.git/config": "nested repository metadata\n",
+    [`${stagedRoot}/repository/.git`]: "admitted metadata\n",
+  });
+  const { local, files } = await capture();
+  for (const entries of [local.manifest.entries, files]) {
+    expect(entries.map((entry) => entry.path).toSorted()).toEqual(Object.keys(retained).toSorted());
+  }
+  await expect(
+    fs.readFile(path.join(workspace, "fixtures/repository/.git/config"), "utf8"),
+  ).resolves.toBe("nested repository metadata\n");
 });
 
 it("omits cache-only ancestry from remote capture while retaining empty directories", async () => {
@@ -171,4 +200,155 @@ it.each([false, true])("projects historical cache receipts (report: %s)", async 
   expect(await fs.readFile(manifestPath(`sha256:${expectedDigest}`), "utf8")).toBe(
     current.rawManifest,
   );
+});
+
+it("compares workspace inventories without allocating path-segment arrays", () => {
+  const base = {
+    version: 1 as const,
+    baseCommit: null,
+    directories: ["src", "src/components"],
+    entries: [{ ...cacheEntry, path: "src/components/file.ts" }],
+  };
+  const current = { ...base, entries: [{ ...base.entries[0]!, sha256: digest("changed") }] };
+  const split = vi.spyOn(String.prototype, "split");
+  let splitCount: number;
+  let prepared: ReturnType<typeof prepareWorkspaceReconciliation>;
+  try {
+    prepared = prepareWorkspaceReconciliation(base, current);
+    splitCount = split.mock.calls.length;
+  } finally {
+    split.mockRestore();
+  }
+  expect([...prepared.changed]).toEqual(["src/components/file.ts"]);
+  expect(prepared.preflight.currentNodes.map(([entryPath]) => entryPath)).toEqual([
+    "src/components/file.ts",
+    "src",
+    "src/components",
+  ]);
+  expect(splitCount).toBe(0);
+});
+
+it("matches derived names and suffixes only at exact segment boundaries", () => {
+  const attachment = "openclaw-inbound-12345678-1234-4234-8234-123456789abc";
+  for (const segment of [
+    ".git",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "node_modules",
+    ".DS_Store",
+    ".pyc",
+    "file.pyo",
+    attachment,
+  ]) {
+    for (const prefix of ["", "src/"]) {
+      expect(isDerivedWorkspacePath(prefix + segment)).toBe(true);
+      expect(isDerivedWorkspacePath(prefix + segment + "/child")).toBe(true);
+      for (const suffix of ["-notes", "\n", "\r", "\u2028", "\u2029"]) {
+        expect(isDerivedWorkspacePath(prefix + segment + suffix)).toBe(false);
+        expect(isDerivedWorkspacePath(prefix + segment + suffix + "/child")).toBe(false);
+      }
+    }
+  }
+  for (const entryPath of [
+    "prefix-node_modules/file",
+    "xDS_Store",
+    "fileXpyc",
+    attachment.replace("4234", "1234"),
+    attachment.replace("8234", "7234"),
+  ]) {
+    expect(isDerivedWorkspacePath(entryPath)).toBe(false);
+  }
+  expect(isDerivedWorkspacePath("src/new\nname.pyc")).toBe(true);
+  expect(isDerivedWorkspacePath("src/node_modules/input", true)).toBe(false);
+});
+
+it.each(["all", "eligible"])(
+  "excludes unreadable build outputs while retaining authored inputs in %s remote capture",
+  async (mode) => {
+    const authored = ".artifacts/build-all-cache/authored.txt";
+    const selected = ".artifacts/build-cache-inputs/selected.txt";
+    const staged = ".artifacts/build-all-cache/staged.txt";
+    const transferred = ".artifacts/build-cache-inputs/transferred.txt";
+    const generated = [
+      ".artifacts/build-all-cache/generated/output.js",
+      ".artifacts/build-cache-inputs/generated/receipt.json",
+    ];
+    const fixture = await makeWorkspace({
+      "source.txt": "source\n",
+      [authored]: "original authored input\n",
+    });
+    const base = await initializeScriptGitWorkspace(fixture.workspace, ".");
+    await writeWorkspaceFiles(fixture.workspace, {
+      [transferred]: "host input absent from worker index\n",
+    });
+    const initial = await fixture.runManifest([base, "eligible"]);
+    expect(initial.code, initial.stderr).toBe(0);
+    const initialManifest = await fixture.readManifest(initial.stdout.trim());
+    expect(initialManifest.entries.map((entry) => entry.path)).toContain(transferred);
+    const removed = await runCommandWithTimeout(
+      ["git", "-C", fixture.workspace, "rm", "--cached", authored],
+      { timeoutMs: 10_000 },
+    );
+    expect(removed.code, removed.stderr).toBe(0);
+    await writeWorkspaceFiles(fixture.workspace, {
+      [authored]: "authored edit\n",
+      [selected]: "explicitly included input\n",
+      [staged]: "newly staged input\n",
+      ".gitignore": `${selected}\n`,
+      ".worktreeinclude": `${selected}\n`,
+      ".artifacts/report.md": "useful report\n",
+      ...Object.fromEntries(generated.map((name) => [name, "disposable build output\n"])),
+    });
+    const admission = await runCommandWithTimeout(["git", "-C", fixture.workspace, "add", staged], {
+      timeoutMs: 10_000,
+    });
+    expect(admission.code, admission.stderr).toBe(0);
+    if (process.platform !== "win32") {
+      for (const name of generated) {
+        const filename = path.join(fixture.workspace, name);
+        await fs.chmod(filename, 0);
+        if (process.getuid?.() !== 0) {
+          await expect(fs.readFile(filename)).rejects.toMatchObject({ code: "EACCES" });
+        }
+      }
+    }
+    const captured = await fixture.runManifest([base, mode, initial.stdout.trim().slice(7)]);
+    expect(captured.code, captured.stderr).toBe(0);
+    const manifest = await fixture.readManifest(captured.stdout.trim());
+    expect(manifest.entries.map((entry) => entry.path)).toEqual(
+      expect.arrayContaining([
+        authored,
+        transferred,
+        selected,
+        staged,
+        ".artifacts/report.md",
+        "source.txt",
+      ]),
+    );
+    expect(manifest.entries.some((entry) => generated.includes(entry.path))).toBe(false);
+    if (process.platform !== "win32" && process.getuid?.() !== 0) {
+      const report = path.join(fixture.workspace, ".artifacts/report.md");
+      await fs.chmod(report, 0);
+      try {
+        const denied = await fixture.runManifest([base, mode, captured.stdout.trim().slice(7)]);
+        expect(denied.code).not.toBe(0);
+        expect(denied.stderr).toContain("EACCES");
+      } finally {
+        await fs.chmod(report, 0o600);
+      }
+    }
+  },
+);
+
+it("retains plain-workspace inputs when staging has created Git metadata", async () => {
+  const input = ".artifacts/build-all-cache/input.txt";
+  const fixture = await makeWorkspace({ [input]: "plain workspace input\n" });
+  await initializeScriptGitWorkspace(fixture.workspace, ".");
+  const captured = await fixture.runManifest(["", "all"]);
+  expect(captured.code, captured.stderr).toBe(0);
+  const manifest = await fixture.readManifest(captured.stdout.trim());
+  expect(manifest.baseCommit).toBeNull();
+  expect(manifest.entries.map((entry) => entry.path)).toContain(input);
 });

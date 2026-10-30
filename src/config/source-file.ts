@@ -58,7 +58,6 @@ export function createConfigFileAdapter(opts: {
     new Set([opts.path, ...paths].map((entry) => nodePath.resolve(entry)));
   let watchedPaths = normalizePaths(acceptedPaths);
   let primaryTarget: string | undefined;
-  let selectionRevision = 0;
   let roots: ReturnType<typeof admitConfigObservationRoots> | undefined;
   const admittedRoots = {
     roots: new Map<string, Promise<Root>>(),
@@ -286,15 +285,18 @@ export function createConfigFileAdapter(opts: {
     }
     watcher = undefined;
     const retirement = retire(source);
-    opts.onChange();
-    void retirement.catch((failure: unknown) => {
-      status = "disabled";
-      clearTimeout(retryTimer);
-      opts.log.error(`config watcher close failed; hot-reload disabled: ${String(failure)}`);
-    });
-    if (stopped) {
-      return;
-    }
+    void retirement
+      .catch((failure: unknown) => {
+        status = "disabled";
+        clearTimeout(retryTimer);
+        opts.log.error(`config watcher close failed; hot-reload disabled: ${String(failure)}`);
+      })
+      .then(() => {
+        // Recovery notifies from its initial scan; terminal failure gets one final read.
+        if (!stopped && status === "disabled") {
+          opts.onChange();
+        }
+      });
     let backoff = WATCHER_RECREATE_BACKOFF_MS[retries];
     if (backoff === undefined) {
       // Explicit legacy overrides retain their bounded retry policy, while
@@ -333,10 +335,9 @@ export function createConfigFileAdapter(opts: {
   };
 
   const reconcilePaths = async (paths: readonly string[], changedScope = false) => {
-    const revision = ++selectionRevision;
     const nextPaths = normalizePaths(paths);
     const nextPrimary = await canonicalPathFromExistingAncestor(opts.path);
-    if (stopped || revision !== selectionRevision) {
+    if (stopped) {
       return;
     }
     const changedPrimary = nextPrimary !== primaryTarget;

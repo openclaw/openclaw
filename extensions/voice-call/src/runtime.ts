@@ -338,6 +338,8 @@ export async function createVoiceCallRuntime(params: {
             return fastContext.result;
           }
           const { provider: agentProvider, model } = resolveVoiceResponseModel({
+            cfg,
+            agentId,
             voiceConfig: effectiveConfig,
             agentRuntime,
           });

@@ -7,13 +7,8 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { parseControlUiSessionReturnPath } from "./control-ui-session-entry-path.js";
 import { resolveControlUiSessionPath } from "./control-ui-session-path-resolve.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
-import {
-  checkGatewayHttpRequestAuth,
-  resolveSharedSecretHttpOperatorScopes,
-} from "./http-auth-utils.js";
-import { sendGatewayAuthFailure } from "./http-common.js";
+import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
-import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
@@ -46,20 +41,21 @@ export async function serveControlUiSessionEntry(
     res.end("Not found");
     return true;
   }
-  const auth = await checkGatewayHttpRequestAuth({ ...params, res: undefined }, true);
-  if (!auth.ok) {
+  const canShowLogin = !probe && (params.auth.mode === "token" || params.auth.mode === "password");
+  // The handoff is a same-origin Control UI read, including verified Serve identity.
+  const requestAuth = await authorizeControlUiReadRequestOrReply({
+    ...params,
+    requiredOperatorMethod: "chat.history",
+    replyOnFailure: !canShowLogin,
+  });
+  if (!requestAuth) {
     // Token/password credentials belong to the normal browser login gate. The
     // app shell grants no data access; its existing WS/bootstrap checks still apply.
-    if (!probe && (params.auth.mode === "token" || params.auth.mode === "password")) {
+    if (canShowLogin) {
       await params.serveApp(path);
-    } else {
-      sendGatewayAuthFailure(res, auth.authResult);
     }
     return true;
   }
-  const requestAuth = auth.requestAuth;
-  const scopes =
-    requestAuth.deviceOperatorScopes ?? resolveSharedSecretHttpOperatorScopes(req, requestAuth);
   const client: GatewayClient = {
     connect: {
       minProtocol: PROTOCOL_VERSION,
@@ -71,7 +67,7 @@ export async function serveControlUiSessionEntry(
         mode: GATEWAY_CLIENT_MODES.UI,
       },
       role: "operator",
-      scopes,
+      scopes: requestAuth.operatorScopes,
     },
     authenticatedUserProfile: requestAuth.authenticatedUserProfile,
     internal: {
@@ -84,20 +80,20 @@ export async function serveControlUiSessionEntry(
   if (projection) {
     prepareGatewayRecipientProfile(client);
   }
-  const selected =
-    projection && authorizeOperatorScopesForMethod("chat.history", scopes).allowed
-      ? await resolveControlUiSessionPath({
-          target,
-          projection,
-          client,
-          isCurrent: requestAuth.hasCurrentClientAuthority,
-        })
-      : null;
+  const selected = projection
+    ? await resolveControlUiSessionPath({
+        target,
+        projection,
+        client,
+        isCurrent: requestAuth.hasCurrentClientAuthority,
+      })
+    : null;
   if (!selected || !projection || !requestAuth.hasCurrentClientAuthority()) {
     res.statusCode = 403;
     res.end(probe ? undefined : "Session unavailable. Reload the conversation or log in again.");
     return true;
   }
+  await requestAuth.revalidate();
   const isCurrent = () => requestAuth.hasCurrentClientAuthority() && selected.isCurrent();
   if (probe) {
     res.statusCode = isCurrent() ? 204 : 403;

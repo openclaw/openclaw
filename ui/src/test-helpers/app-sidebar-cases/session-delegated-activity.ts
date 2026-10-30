@@ -229,13 +229,22 @@ describe("AppSidebar delegated activity", () => {
     expect(toggle.textContent).toContain("Mark as read");
     toggle.click();
     await waitForFast(() =>
-      expect(sessions.patch).toHaveBeenCalledWith(
-        runKey,
+      expect(sessions.patchMany).toHaveBeenCalledWith(
+        [
+          {
+            key: runKey,
+            agentId: "main",
+            expectedSessionId: `session:${runKey}`,
+            expectedMarkedUnreadAt: null,
+          },
+        ],
         { unread: false },
-        expect.objectContaining({ expectedMarkedUnreadAt: null }),
       ),
     );
-    expect(sessions.patch).not.toHaveBeenCalledWith(parentKey, { unread: true }, expect.anything());
+    expect(sessions.patchMany).not.toHaveBeenCalledWith(
+      [expect.objectContaining({ key: parentKey })],
+      { unread: true },
+    );
   });
 
   it("keeps session actions out of the agent-only roster", async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as bundledDiscovery from "./bundled-discovery-state.js";
 import { createPluginRecord } from "./loader-records.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
@@ -29,7 +30,6 @@ function createOwner(
 ) {
   return createPluginRecord({
     id,
-    name: id,
     source: `/tmp/${id}/index.js`,
     origin: "global",
     enabled: true,
@@ -39,16 +39,13 @@ function createOwner(
   });
 }
 
-function expectRejected(
-  provider: WorkerProvider,
-  message: unknown,
-  declaredIds = ["static-ssh"],
-  diagnostic = {},
-) {
+function expectRejected(provider: WorkerProvider, message: unknown, declaredIds = ["static-ssh"]) {
   const { registry, registerWorkerProvider } = createTestRegistry();
   registerWorkerProvider(createOwner("owner", declaredIds), provider);
   expect(registry.workerProviders.size).toBe(0);
-  expect(registry.diagnostics).toContainEqual(expect.objectContaining({ message, ...diagnostic }));
+  expect(registry.diagnostics).toContainEqual(
+    expect.objectContaining({ message, level: "error", pluginId: "owner" }),
+  );
 }
 
 describe("worker provider registry", () => {
@@ -57,72 +54,55 @@ describe("worker provider registry", () => {
       createWorkerProvider("static-ssh"),
       "plugin must declare contracts.workerProviders for provider: static-ssh",
       [],
-      { level: "error", pluginId: "owner" },
     );
   });
 
-  it("rejects a missing resolveAllocation method", () => {
-    const provider = createWorkerProvider("static-ssh");
-    delete (provider as Partial<WorkerProvider>).resolveAllocation;
-    expectRejected(provider, "worker provider registration missing method: resolveAllocation");
-  });
-
   it.each([
-    ["renew", "later", "must be a function"],
-    ["runSetupCommand", "later", "must be a function"],
-    ["resolveSshIdentity", "later", "must be a function"],
-    ["provisionBeforeInstallation", "sometimes", "must be a boolean"],
-  ])("rejects an invalid %s declaration", (field, value, error) => {
+    ["resolveAllocation", undefined, "missing method: resolveAllocation"],
+    ["renew", "later", "renew must be a function"],
+    ["runSetupCommand", "later", "runSetupCommand must be a function"],
+    ["resolveSshIdentity", "later", "resolveSshIdentity must be a function"],
+    ["provisionBeforeInstallation", "sometimes", "provisionBeforeInstallation must be a boolean"],
+    [
+      "supportedExecutionModes",
+      ["unsupported"],
+      expect.stringContaining("worker provider registration supportedExecutionModes"),
+    ],
+    ["id", "__proto__", "missing valid id"],
+  ] as const)("rejects an invalid %s declaration", (field, value, error) => {
     const provider = createWorkerProvider("static-ssh");
-    Reflect.set(provider, field, value);
-    expectRejected(provider, `worker provider registration ${field} ${error}`);
-  });
-
-  it("rejects an unknown mode in a placement declaration", () => {
-    const provider = createWorkerProvider("static-ssh");
-    Reflect.set(provider, "supportedExecutionModes", ["unsupported"]);
+    if (value === undefined) {
+      Reflect.deleteProperty(provider, field);
+    } else {
+      Reflect.set(provider, field, value);
+    }
     expectRejected(
       provider,
-      expect.stringContaining("worker provider registration supportedExecutionModes"),
+      typeof error === "string" ? `worker provider registration ${error}` : error,
+      field === "id" ? ["__proto__"] : undefined,
     );
   });
 
   it("registers both placement modes in canonical order", () => {
-    const pluginRegistry = createTestRegistry();
+    const { registry, registerWorkerProvider: register } = createTestRegistry();
     const provider = {
       ...createWorkerProvider("static-ssh"),
       supportedExecutionModes: ["worker-turn", "remote-exec"],
     } satisfies WorkerProvider;
 
-    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+    register(createOwner("owner", ["static-ssh"]), provider);
 
-    expect(pluginRegistry.registry.workerProviders.get("static-ssh")?.provider).toBe(provider);
-    expect(pluginRegistry.registry.diagnostics).toEqual([]);
-  });
-
-  it("rejects invalid provider ids", () => {
-    expectRejected(
-      createWorkerProvider("__proto__"),
-      "worker provider registration missing valid id",
-      ["__proto__"],
-      { level: "error", pluginId: "owner" },
-    );
+    expect(registry.workerProviders.get("static-ssh")?.provider).toBe(provider);
+    expect(registry.diagnostics).toEqual([]);
   });
 
   it("rejects normalized duplicate provider ids", () => {
-    const pluginRegistry = createTestRegistry();
-    pluginRegistry.registerWorkerProvider(
-      createOwner("first", ["static-ssh"]),
-      createWorkerProvider("Static-SSH"),
-    );
+    const { registry, registerWorkerProvider: register } = createTestRegistry();
+    register(createOwner("first", ["static-ssh"]), createWorkerProvider("Static-SSH"));
+    register(createOwner("second", ["static-ssh"]), createWorkerProvider(" static-ssh "));
 
-    pluginRegistry.registerWorkerProvider(
-      createOwner("second", ["static-ssh"]),
-      createWorkerProvider(" static-ssh "),
-    );
-
-    expect(pluginRegistry.registry.workerProviders.size).toBe(1);
-    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+    expect(registry.workerProviders.size).toBe(1);
+    expect(registry.diagnostics).toContainEqual(
       expect.objectContaining({
         level: "error",
         pluginId: "second",
@@ -228,7 +208,6 @@ describe("configured worker provider maintenance", () => {
     expect(harness.profiles.second.settings).toEqual({
       nested: { location: "two" },
     });
-    expect(retained).toBeDefined();
     expect(() => retained!.assertCurrent()).toThrow("no longer current");
     expect(harness.warn).not.toHaveBeenCalled();
   });
@@ -296,6 +275,32 @@ describe("configured worker provider maintenance", () => {
       prepare(harness);
       await harness.run();
       expect(maintain).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["bundled", true, (h: ReturnType<typeof createHarness>) => h],
+    ["external", false, (h) => (h.owner.origin = "global")],
+    ["globally disabled", false, (h) => (h.config.plugins!.enabled = false)],
+    ["denylisted", false, (h) => (h.config.plugins!.deny = [h.owner.id])],
+    [
+      "explicitly disabled",
+      false,
+      (h) => (h.config.plugins!.entries = { [h.owner.id]: { enabled: false } }),
+    ],
+  ] satisfies [string, boolean, (h: ReturnType<typeof createHarness>) => unknown][])(
+    "preserves bundled compatibility policy for an %s owner",
+    async (_kind, allowed, prepare) => {
+      const harness = createHarness();
+      harness.config.plugins = { allow: ["another-owner"] };
+      const maintain = vi.fn(async () => {});
+      harness.addProvider("cloud-a", maintain);
+      prepare(harness);
+      await vi.spyOn(bundledDiscovery, "readBundledDiscoveryModeMemoized").withImplementation(
+        () => "compat",
+        () => harness.run(),
+      );
+      expect(maintain).toHaveBeenCalledTimes(allowed ? 1 : 0);
     },
   );
 

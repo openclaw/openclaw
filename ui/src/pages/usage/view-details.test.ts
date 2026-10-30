@@ -186,6 +186,28 @@ function mount(
 }
 
 it.each([
+  { label: "total-only reports", input: 0, output: 0 },
+  { label: "partially categorized reports", input: 30, output: 40 },
+])("preserves reported token totals when selecting $label", ({ input, output }) => {
+  const container = mount(
+    [1000, 2000, 3000].map((timestamp) =>
+      point({ timestamp, totalTokens: 150, input, output, cacheRead: 0, cacheWrite: 0 }),
+    ),
+    { breakdownMode: "by-type" },
+  );
+  expect(text(container, ".timeseries-summary")).toContain("450");
+  container
+    .querySelector<HTMLElement>(".chart-handle-left")!
+    .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+  flush();
+  expect(text(container, ".session-detail-stats")).toContain("300 tokens");
+  expect(text(container, ".timeseries-summary")).toContain("300");
+  expect(text(container, ".timeseries-breakdown .cost-breakdown-total")).toContain(
+    input === 0 ? "0" : "140",
+  );
+});
+
+it.each([
   { key: "ArrowLeft", start: null, end: null, expected: [1000, 3000] },
   { key: "Home", start: 2000, end: 3000, expected: [2000, 2000] },
   { key: "End", start: 2000, end: 3000, expected: [2000, 4000] },
@@ -493,17 +515,28 @@ it("keeps loaded details visible and marks them stale after refresh failures", a
   const restoreI18n = captureI18nStateForTesting();
   const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
   try {
+    await i18n.setLocale("en");
+    const container = mount([point({ timestamp: 1000 }), point({ timestamp: 2000 })], {
+      timeSeries: "timeline unavailable",
+      sessionLogs: "logs unavailable",
+      sessionLogsData: [
+        log(timestamp, "user", "retained message"),
+        log(Number.NaN, "assistant", "undated message"),
+      ],
+      stale: true,
+    });
     for (const locale of ["en", "fr", "en"] as const) {
       await i18n.setLocale(locale);
-      const container = mount([point({ timestamp: 1000 }), point({ timestamp: 2000 })], {
-        timeSeries: "timeline unavailable",
-        sessionLogs: "logs unavailable",
-        sessionLogsData: [
-          log(timestamp, "user", "retained message"),
-          log(Number.NaN, "assistant", "undated message"),
-        ],
-        stale: true,
+      flush();
+      const chartTimestamp = new Date(1000).toLocaleString(locale, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
       });
+      expect(container.querySelector(".ts-bar")?.getAttribute("aria-label")).toBe(
+        `${chartTimestamp} · 100 ${t("usage.metrics.tokens").toLowerCase()}`,
+      );
 
       expect(container.querySelectorAll(".usage-detail-error--timeline strong")).toHaveLength(1);
       expect(container.querySelectorAll(".usage-detail-error--conversation strong")).toHaveLength(

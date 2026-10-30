@@ -1,11 +1,23 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../api/types.ts";
+import {
+  createGatewayStoreTestStore,
+  stubGatewayStoreTestGlobals,
+} from "../app/gateway-store.test-support.ts";
 import { t } from "../i18n/index.ts";
-import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
+import type { SessionPatchOptions, SessionPatchRoute } from "../lib/sessions/patch.ts";
+import {
+  createTestSessionCapability,
+  sessionsResult,
+} from "../lib/sessions/session-capability.test-support.ts";
 import type { SessionRefreshOptions } from "../lib/sessions/session-capability.ts";
+import { patchReceipt } from "../lib/sessions/session-rpc.test-support.ts";
 import { showToast } from "../lib/toast.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
   createModalDialogTestFixture,
@@ -16,6 +28,7 @@ import {
   archiveConfirmedSessionsWithUndo,
   archiveSessionWithUndo,
   confirmSessionArchive,
+  captureSessionArchivePins,
 } from "./session-organizer-archive.runtime.ts";
 import {
   createHarness,
@@ -65,6 +78,21 @@ function guardedTarget(index: number) {
 }
 
 describe("session organizer nested archive choice", () => {
+  it("confirms only the selected offline parent without discovering or archiving its subtree", async () => {
+    const h = createHarness({ phase: "reconnecting" });
+    h.scope.allowDeferred = true;
+    const root = { ...sessionRow(0), hasArchiveDescendants: true };
+    const tree = prepareArchiveTree(h, [gatewayRow(0), gatewayRow(1)]);
+    const modal = createModalDialogTestFixture();
+    onTestFinished(() => modal.cleanup());
+    const pending = modal.track(confirmSessionArchive(root, h.scope, () => true));
+    const dialog = await waitForConfirmDialogActions();
+    expect(document.body.textContent).toContain("Reconnect to archive the complete subtree.");
+    answerConfirmDialog(dialog, "confirm");
+    await expect(pending).resolves.toEqual({ kind: "single" });
+    expect(tree.describeSession).not.toHaveBeenCalled();
+    expect(tree.refreshList).not.toHaveBeenCalled();
+  });
   it("includes unexpanded persistent descendants through workers but excludes independent branches", async () => {
     const modal = createModalDialogTestFixture();
     onTestFinished(() => modal.cleanup());
@@ -249,4 +277,433 @@ describe("session organizer nested archive choice", () => {
       expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
     },
   );
+});
+
+function createOfflineArchiveHarness() {
+  const h = createHarness({ phase: "reconnecting" });
+  h.scope.allowDeferred = true;
+  Object.assign(h.scope.context, { gateway: h.scope.gateway, sessions: h.scope.sessions });
+  Object.assign(h.scope.client, { recoveryScope: "archive-owner", recoveryScopeReady: true });
+  const connection = { client: h.scope.client, epoch: 1 };
+  h.scope.sessions.captureConnectionScope = () =>
+    h.scope.gateway.snapshot.phase === "connected" ? connection : null;
+  h.scope.sessions.isConnectionScopeCurrent = (candidate) =>
+    h.scope.gateway.snapshot.phase === "connected" &&
+    h.scope.gateway.snapshot.client === candidate.client;
+  return h;
+}
+
+describe("personal pin archive Undo", () => {
+  it.each(["restored", "rejected", "manual"] as const)(
+    "settles a personal pin after Undo during archive replay (%s)",
+    async (outcome) => {
+      stubGatewayStoreTestGlobals();
+      onTestFinished(() => {
+        vi.unstubAllGlobals();
+      });
+      const store = createGatewayStoreTestStore();
+      store.gateway.start();
+      const client = store.current();
+      client.testOptions.offlineRecoveryScope = "archive-owner";
+      Object.assign(client, { recoveryScope: "archive-owner", recoveryScopeReady: true });
+      const hello = {
+        ...gatewayHelloForMethods([
+          "sessions.patch",
+          "sessions.list",
+          "sessions.describe",
+          "sessions.subscribe",
+        ]),
+        auth: { role: "operator", scopes: ["operator.admin"], recoveryScope: "archive-owner" },
+      };
+      let row: GatewaySessionRow = gatewayRow(1);
+      const archiveReply = createDeferred();
+      const undoReply = createDeferred();
+      const archiveStarted = createDeferred();
+      const undoStarted = createDeferred();
+      client.request.mockImplementation(async (method, params) => {
+        if (method === "sessions.list") {
+          return sessionsResult([{ ...row }]);
+        }
+        if (method === "sessions.subscribe") {
+          return { subscribed: true };
+        }
+        if (method === "sessions.patch") {
+          const patch = params as { archived: boolean };
+          if (patch.archived) {
+            archiveStarted.resolve();
+            await archiveReply.promise;
+          } else {
+            undoStarted.resolve();
+            await undoReply.promise;
+            if (outcome === "rejected") {
+              throw new Error("Undo denied");
+            }
+          }
+          row = { ...row, archived: patch.archived, pinned: false };
+          return patchReceipt(row.key, row);
+        }
+        return {};
+      });
+      client.testOptions.onHello?.(hello);
+      const sessions = createTestSessionCapability(store.gateway);
+      onTestFinished(() => {
+        archiveReply.resolve();
+        undoReply.resolve();
+        sessions.dispose();
+        store.gateway.stop();
+      });
+      await sessions.refresh({ agentId: "main" });
+      client.testOptions.onClose?.({ code: 1006, reason: "offline", willRetry: true });
+      const h = createOfflineArchiveHarness();
+      Object.assign(h.scope, { gateway: store.gateway, client, sessions });
+      Object.assign(h.scope.context, { gateway: store.gateway, sessions });
+      const navigation = h.scope.context.navigation;
+      const pin = "session:" + row.key;
+      navigation.update({ sidebarEntries: [pin] });
+      h.host.pruneSidebarSessionEntry = (key) =>
+        navigation.update({
+          sidebarEntries: navigation.snapshot.sidebarEntries.filter(
+            (entry) => entry !== "session:" + key,
+          ),
+        });
+      await archiveSessionWithUndo(h.host, sessionRow(1), h.scope);
+      const undo = vi.mocked(showToast).mock.calls.at(-1)?.[0].onAction;
+      assert(undo);
+      client.testOptions.onHello?.(hello);
+      await archiveStarted.promise;
+      undo();
+      await waitForFast(() => expect(store.gateway.snapshot.deferredIntentCount).toBe(1));
+      archiveReply.resolve();
+      await undoStarted.promise;
+      expect(navigation.snapshot.sidebarEntries).toEqual([]);
+      if (outcome === "manual") {
+        navigation.update({ sidebarEntries: [pin] });
+        navigation.update({ sidebarEntries: [] });
+      }
+      undoReply.resolve();
+      await waitForFast(() => expect(store.gateway.snapshot.deferredIntentDraining).toBe(false));
+      expect(row.archived).toBe(outcome === "rejected");
+      expect(navigation.snapshot.sidebarEntries).toEqual(outcome === "restored" ? [pin] : []);
+    },
+  );
+
+  it.each(["same-client", "replacement-client", "recovery-scope", "manual"] as const)(
+    "settles an offline personal pin receipt after reconnect (%s)",
+    async (outcome) => {
+      const h = createOfflineArchiveHarness();
+      const key = sessionRow(1).key;
+      const pin = "session:" + key;
+      const retained = ["session-rail:" + key];
+      const navigation = h.scope.context.navigation;
+      navigation.update({ sidebarEntries: [pin, ...retained] });
+      const undoPins = captureSessionArchivePins(h.scope, [key]);
+      navigation.update({ sidebarEntries: retained });
+      h.scope.gateway.snapshot.phase = "connected";
+      if (outcome === "replacement-client") {
+        h.scope.gateway.snapshot.client = createTestGatewayClient(async () => ({}));
+      }
+      const reply = createDeferred<readonly string[]>();
+      const restore = vi.fn(() => reply.promise);
+      const operation = undoPins.restore(restore);
+      if (outcome === "recovery-scope") {
+        Object.assign(h.scope.client, { recoveryScope: "another-owner" });
+      } else if (outcome === "manual") {
+        navigation.update({ sidebarEntries: [...retained, pin] });
+        navigation.update({ sidebarEntries: retained });
+      }
+      reply.resolve([key]);
+      await operation;
+      expect(navigation.snapshot.sidebarEntries).toEqual(
+        outcome === "same-client" ? [...retained, pin] : retained,
+      );
+      expect(restore).toHaveBeenCalledTimes(outcome === "replacement-client" ? 0 : 1);
+    },
+  );
+
+  it.each(["header", "sidebar"] as const)(
+    "restores a personal pin through %s Undo after offline archive replay",
+    async (surface) => {
+      const h = createOfflineArchiveHarness();
+      const row = { ...sessionRow(1), sessionId: "archived-offline" };
+      const pin = "session:" + row.key;
+      const navigation = h.scope.context.navigation;
+      navigation.update({ sidebarEntries: [pin] });
+      h.host.pruneSidebarSessionEntry = (key) =>
+        navigation.update({
+          sidebarEntries: navigation.snapshot.sidebarEntries.filter(
+            (entry) => entry !== "session:" + key,
+          ),
+        });
+      let onConfirmed: SessionPatchOptions["onConfirmed"];
+      const patch = vi.fn<SessionPatchRoute>(async (key, fields, options) => {
+        if (fields.archived === true) {
+          onConfirmed = options?.onConfirmed;
+          return { queued: true };
+        }
+        return patchReceipt(key, { sessionId: row.sessionId });
+      });
+      h.scope.sessions.patch = patch;
+      h.scope.sessions.invalidate = vi.fn();
+      h.scope.sessions.refreshReplacement = vi.fn(async () => sessionsResult([], 1));
+
+      if (surface === "header") {
+        await archiveSessionWithUndo(h.host, row, h.scope);
+      } else {
+        await archiveConfirmedSessionsWithUndo(h.host, [row], h.scope);
+      }
+      expect(navigation.snapshot.sidebarEntries).toEqual([pin]);
+      const undo = vi.mocked(showToast).mock.calls.at(-1)?.[0].onAction;
+      assert(undo);
+      assert(onConfirmed);
+      h.scope.gateway.snapshot.phase = "connected";
+      onConfirmed(patchReceipt(row.key, { sessionId: row.sessionId }));
+      expect(navigation.snapshot.sidebarEntries).toEqual([]);
+      if (surface === "sidebar") {
+        // Reconnect retires the pane's confirmation epoch, not the admitted offline intent.
+        vi.mocked(h.host.sessionData.isSessionMutationScopeCurrent).mockReturnValue(false);
+      }
+      const repinned = createDeferred();
+      onTestFinished(
+        navigation.subscribe(({ sidebarEntries }) => {
+          if (sidebarEntries.includes(pin)) {
+            repinned.resolve();
+          }
+        }),
+      );
+      undo();
+      await repinned.promise;
+      expect(navigation.snapshot.sidebarEntries).toEqual([pin]);
+      expect(patch.mock.calls.map(([, fields]) => fields)).toEqual([
+        { archived: true },
+        { archived: false },
+      ]);
+      expect(h.publishSessionMutationError).not.toHaveBeenCalled();
+    },
+  );
+
+  it("undoes an offline bulk archive without attempting a pin write", async () => {
+    const h = createOfflineArchiveHarness();
+    h.scope.sessions.invalidate = vi.fn();
+    h.scope.sessions.refreshReplacement = vi.fn(async () => null);
+    const queuedPatch = vi.fn<SessionPatchRoute>(async () => ({ queued: true }));
+    h.scope.sessions.patch = queuedPatch;
+    onTestFinished(() => {
+      for (const call of queuedPatch.mock.calls) {
+        call[2]?.onDeferredSettled?.();
+      }
+    });
+    const rows = [sessionRow(0), sessionRow(100)];
+    await archiveConfirmedSessionsWithUndo(h.host, rows, h.scope);
+    vi.mocked(showToast).mock.calls.at(-1)![0].onAction!();
+    await waitForFast(() => expect(h.scope.sessions.patch).toHaveBeenCalledTimes(4));
+    expect(vi.mocked(h.scope.sessions.patch).mock.calls.map(([, patch]) => patch)).toEqual([
+      { archived: true },
+      { archived: true },
+      { archived: false },
+      { archived: false },
+    ]);
+    expect(h.request).not.toHaveBeenCalled();
+    expect(h.publishSessionMutationError).not.toHaveBeenCalled();
+  });
+  it.each(["success", "failure", "profile", "manual"] as const)(
+    "settles a personal pin receipt without replacing newer intent (%s)",
+    async (outcome) => {
+      const h = createHarness();
+      const key = sessionRow(1).key;
+      const pin = "session:" + key;
+      const retained = ["session-rail:" + key, "session:agent:main:other"];
+      const navigation = h.scope.context.navigation;
+      navigation.update({ sidebarEntries: [pin, ...retained] });
+      const undoPins = captureSessionArchivePins(h.scope, [key]);
+      navigation.update({ sidebarEntries: retained });
+      const reply = createDeferred<readonly string[]>();
+      const operation = undoPins.restore(() => reply.promise);
+      expect(navigation.snapshot.sidebarEntries).toEqual(retained);
+      if (outcome === "profile") {
+        h.retireScope();
+        navigation.update({ sidebarEntries: ["session:agent:main:another-profile"] });
+      } else if (outcome === "manual") {
+        navigation.update({ sidebarEntries: [...retained, pin] });
+        navigation.update({ sidebarEntries: retained });
+      } else if (outcome === "success") {
+        navigation.update({ sidebarEntries: [...retained, "route:usage"] });
+      }
+      if (outcome === "failure") {
+        reply.reject(new Error("Undo rejected"));
+        await expect(operation).rejects.toThrow("Undo rejected");
+      } else {
+        reply.resolve([key]);
+        await operation;
+      }
+      expect(navigation.snapshot.sidebarEntries).toEqual(
+        outcome === "success"
+          ? [...retained, "route:usage", pin]
+          : outcome === "profile"
+            ? ["session:agent:main:another-profile"]
+            : retained,
+      );
+    },
+  );
+
+  it("repins only originally pinned sessions whose bulk Undo succeeds", async () => {
+    const h = createHarness();
+    const rows = [sessionRow(1), sessionRow(2), sessionRow(3)];
+    const pins = rows.slice(0, 2).map((row) => "session:" + row.key);
+    const rail = "session-rail:" + rows[0]!.key;
+    const navigation = h.scope.context.navigation;
+    navigation.update({ sidebarEntries: [...pins, rail] });
+    h.host.pruneSidebarSessionEntry = (key) =>
+      navigation.update({
+        sidebarEntries: navigation.snapshot.sidebarEntries.filter(
+          (entry) => entry !== "session:" + key,
+        ),
+      });
+    h.scope.sessions.invalidate = vi.fn();
+    h.scope.sessions.refreshReplacement = vi.fn(async () => sessionsResult([], 1));
+    await archiveConfirmedSessionsWithUndo(h.host, rows, h.scope);
+    expect(navigation.snapshot.sidebarEntries).toEqual([rail]);
+    h.request.mockResolvedValueOnce({
+      outcomes: rows.map((row, index) =>
+        index === 1
+          ? {
+              key: row.key,
+              ok: false as const,
+              error: { code: "INVALID_REQUEST" as const, message: "Restore rejected" },
+            }
+          : { key: row.key, ok: true as const },
+      ),
+    });
+    vi.mocked(showToast).mock.calls.at(-1)![0].onAction!();
+    await waitForFast(() => expect(navigation.snapshot.sidebarEntries).toEqual([rail, pins[0]]));
+    expect(h.publishSessionMutationError).toHaveBeenCalledWith(
+      h.scope,
+      expect.stringContaining("Restore rejected"),
+    );
+  });
+});
+
+function withCronList(
+  harness: ReturnType<typeof createHarness>,
+  list: (params: Record<string, unknown>) => Promise<unknown>,
+) {
+  const original = harness.request.getMockImplementation()!;
+  const cronList = vi.fn(list);
+  harness.request.mockImplementation(async (method, params, options) =>
+    method === "cron.list"
+      ? cronList(params as Record<string, unknown>)
+      : original(method, params, options),
+  );
+  return cronList;
+}
+
+const cronPage = (...jobs: { id: string; name: string }[]) => ({
+  jobs,
+  total: jobs.length,
+  offset: 0,
+  limit: 10,
+  hasMore: false,
+  nextOffset: null,
+});
+
+describe("archive confirmation for bound automations", () => {
+  it.each(["cancel", "confirm"] as const)(
+    "names bound automations before archiving and records the %s",
+    async (decision) => {
+      const modal = createModalDialogTestFixture();
+      onTestFinished(() => modal.cleanup());
+      const info = vi.spyOn(console, "info").mockImplementation(() => {});
+      onTestFinished(() => info.mockRestore());
+      const harness = createHarness();
+      const cronList = withCronList(harness, async () =>
+        cronPage({ id: "job-1", name: "Nightly digest" }),
+      );
+      const row = { ...sessionRow(1), hasAutomation: true };
+      const pending = modal.track(archiveSessionWithUndo(harness.host, row, harness.scope));
+      const actions = await waitForConfirmDialogActions();
+      expect(cronList).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: row.key,
+          sessionAgentId: "main",
+          enabled: "enabled",
+          compact: true,
+        }),
+      );
+      expect(document.body.textContent).toContain('Archiving "Batch 1" pauses its automations.');
+      expect(document.body.textContent).not.toContain("openclaw automations");
+      expect(document.body.textContent).toContain("Nightly digest (job-1)");
+      expect(actions.textContent).toContain("Archive anyway");
+      answerConfirmDialog(actions, decision);
+      await pending;
+      expect(harness.patch).toHaveBeenCalledTimes(decision === "confirm" ? 1 : 0);
+      expect(info.mock.calls.map(([message]) => message)).toEqual([
+        "[session-automation-confirm] archive shown",
+        decision === "confirm"
+          ? "[session-automation-confirm] archive confirmed"
+          : "[session-automation-confirm] archive cancelled",
+      ]);
+    },
+  );
+
+  it("keeps the no-dialog archive for conversations without automations", async () => {
+    const harness = createHarness();
+    const cronList = withCronList(harness, async () => cronPage());
+    await archiveSessionWithUndo(harness.host, sessionRow(1), harness.scope);
+    expect(cronList).not.toHaveBeenCalled();
+    expect(harness.patch).toHaveBeenCalledOnce();
+    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+  });
+
+  it("still warns when automation names cannot be read", async () => {
+    const modal = createModalDialogTestFixture();
+    onTestFinished(() => modal.cleanup());
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    onTestFinished(() => info.mockRestore());
+    const harness = createHarness();
+    withCronList(harness, async () => {
+      throw new Error("cron unavailable");
+    });
+    const pending = modal.track(
+      archiveSessionWithUndo(
+        harness.host,
+        { ...sessionRow(1), hasAutomation: true },
+        harness.scope,
+      ),
+    );
+    const actions = await waitForConfirmDialogActions();
+    expect(document.body.textContent).toContain(t("sessionsView.automationPauseUnlisted"));
+    answerConfirmDialog(actions, "cancel");
+    await pending;
+    expect(harness.patch).not.toHaveBeenCalled();
+  });
+
+  it("adds bound automations to the nested archive choice", async () => {
+    const modal = createModalDialogTestFixture();
+    onTestFinished(() => modal.cleanup());
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    onTestFinished(() => info.mockRestore());
+    const harness = createHarness();
+    const root = gatewayRow(0);
+    const child = gatewayRow(1, { parentSessionKey: root.key, hasAutomation: true });
+    prepareArchiveTree(harness, [root, child]);
+    const cronList = withCronList(harness, async () =>
+      cronPage({ id: "job-2", name: "Child report" }),
+    );
+    const pending = modal.track(
+      confirmSessionArchive(
+        { ...sessionRow(0), hasArchiveDescendants: true },
+        harness.scope,
+        () => true,
+      ),
+    );
+    const actions = await waitForConfirmDialogActions();
+    expect(cronList).toHaveBeenCalledOnce();
+    expect(cronList).toHaveBeenCalledWith(expect.objectContaining({ sessionKey: child.key }));
+    expect(document.body.textContent).toContain(
+      "Automations are bound to 1 of these conversations.",
+    );
+    expect(document.body.textContent).toContain("Child report (job-2)");
+    expect(actions.textContent).toContain("Archive all (2)");
+    answerConfirmDialog(actions, "cancel");
+    await expect(pending).resolves.toBeNull();
+  });
 });

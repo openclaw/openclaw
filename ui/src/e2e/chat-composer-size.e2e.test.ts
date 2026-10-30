@@ -52,7 +52,7 @@ suite.define(() => {
       }
       expect(sendBox.x + sendBox.width).toBeLessThanOrEqual(composerBox.x + composerBox.width);
       expect(sendBox.y + sendBox.height).toBeLessThanOrEqual(composerBox.y + composerBox.height);
-      expect(await editor.evaluate((element) => getComputedStyle(element).fontSize)).toBe("16px");
+      expect(await editor.evaluate((element) => getComputedStyle(element).fontSize)).toBe("14px");
     });
   });
 });

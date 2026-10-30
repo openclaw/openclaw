@@ -5,6 +5,7 @@ import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-
 import type { ChatAttachmentSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
+import type { ImageContent } from "../llm/types.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { prepareMediaAttachment } from "../media/attachment-processor.js";
 import {
@@ -24,15 +25,17 @@ export type ChatAttachment = SchemaContract<Omit<Static<typeof ChatAttachmentSch
   origin?: MediaFact["origin"];
 };
 
-export type ChatImageContent = {
-  type: "image";
-  data: string;
-  mimeType: string;
+export type ChatImageContent = ImageContent;
+
+type InlineImageMetadata = {
   fileName?: string;
   sourceIndex: number;
   width?: number;
   height?: number;
 };
+
+// Upload metadata belongs to persistence, never the serialized model-facing image part.
+const inlineImageMetadata = new WeakMap<ChatImageContent, InlineImageMetadata>();
 
 export type OffloadedRef = {
   mediaRef: string;
@@ -88,14 +91,6 @@ export async function discardPreparedInboundMedia(
     }
   }
 }
-
-type ParsedMessageWithImages = {
-  message: string;
-  images: ChatImageContent[];
-  imageOrder: PromptImageOrderEntry[];
-  media: MediaFact[];
-  offloadedRefs: OffloadedRef[];
-};
 
 type AttachmentLog = {
   info?: (message: string) => void;
@@ -179,7 +174,8 @@ export async function persistInboundImagesForTranscript(params: {
   const entries: PersistInboundImagesResult["entries"] = [];
   let omission: PersistInboundImagesResult["omission"] = "none";
   try {
-    for (const image of params.images) {
+    for (const [imageIndex, image] of params.images.entries()) {
+      const metadata = inlineImageMetadata.get(image);
       try {
         params.assertCurrent?.();
         const saved = await saveMediaBuffer(
@@ -187,23 +183,23 @@ export async function persistInboundImagesForTranscript(params: {
           image.mimeType,
           "inbound",
           undefined,
-          image.fileName,
+          metadata?.fileName,
           undefined,
           { assertCommitAllowed: params.assertCurrent },
         );
         entries.push({
           id: saved.id,
           path: saved.path,
-          sourceIndex: image.sourceIndex,
+          sourceIndex: metadata?.sourceIndex ?? imageIndex,
           imageKind: "inline",
           fact: {
             url: `media://inbound/${saved.id}`,
             contentType: saved.contentType ?? image.mimeType,
             kind: "image",
-            ...(image.fileName ? { fileName: image.fileName } : {}),
+            ...(metadata?.fileName ? { fileName: metadata.fileName } : {}),
             sizeBytes: saved.size,
-            width: image.width,
-            height: image.height,
+            width: metadata?.width,
+            height: metadata?.height,
           },
         });
       } catch (err) {
@@ -302,7 +298,13 @@ export async function parseMessageWithAttachments(
     signal?: AbortSignal;
     assertCurrent?: () => void;
   },
-): Promise<ParsedMessageWithImages> {
+): Promise<{
+  message: string;
+  images: ChatImageContent[];
+  imageOrder: PromptImageOrderEntry[];
+  media: MediaFact[];
+  offloadedRefs: OffloadedRef[];
+}> {
   const maxBytes = opts?.maxBytes ?? DEFAULT_CHAT_ATTACHMENT_MAX_BYTES;
   const log = opts?.log;
   const supportsInlineImages = opts?.supportsInlineImages !== false;
@@ -404,15 +406,18 @@ export async function parseMessageWithAttachments(
         (opts?.imageStorage !== "inline" && sizeBytes > ATTACHMENT_OFFLOAD_THRESHOLD_BYTES);
 
       if (!shouldOffload) {
-        images.push({
+        const image: ChatImageContent = {
           type: "image",
           data: b64,
           mimeType: finalMime,
+        };
+        inlineImageMetadata.set(image, {
           ...(att.fileName ? { fileName: att.fileName } : {}),
           sourceIndex: idx,
           width: prepared.width,
           height: prepared.height,
         });
+        images.push(image);
         imageOrder.push("inline");
         continue;
       }

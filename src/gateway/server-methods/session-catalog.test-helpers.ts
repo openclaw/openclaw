@@ -4,12 +4,12 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
+import type { GatewayClient } from "./types.js";
 
 type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
   sessionCatalogs: Array<
@@ -89,19 +89,6 @@ export function setSessionCatalogEntries(
   sessionStore = next;
 }
 
-function createSessionCatalogTestContext(
-  config: OpenClawConfig = {},
-  overrides: Record<string, unknown> = {},
-) {
-  setRuntimeConfigSnapshot(config);
-  const projection = createSessionRowProjectionFixture({ cfg: config, store: sessionStore });
-  projections.add(projection);
-  return bindSessionRowProjection(
-    { getRuntimeConfig: () => config, ...overrides },
-    () => projection,
-  );
-}
-
 export async function call(...args: Parameters<typeof startCall>) {
   const { completion, respond } = startCall(...args);
   await completion;
@@ -112,16 +99,23 @@ export function startCall(
   method: keyof typeof sessionCatalogHandlers,
   params: unknown,
   config: Record<string, unknown> = {},
-  client?: { connect?: { scopes?: string[] }; connId?: string; connectionSignal?: AbortSignal },
+  client?: Pick<GatewayClient, "connect"> &
+    Partial<Pick<GatewayClient, "connId" | "connectionSignal">>,
   contextOverrides: Record<string, unknown> = {},
 ) {
+  setRuntimeConfigSnapshot(config);
+  const projection = createSessionRowProjectionFixture({ cfg: config, store: sessionStore });
+  projections.add(projection);
   const respond = vi.fn();
   const completion = Promise.resolve(
     sessionCatalogHandlers[method]?.({
       params,
       respond,
       client,
-      context: createSessionCatalogTestContext(config, contextOverrides),
+      context: bindSessionRowProjection(
+        { getRuntimeConfig: () => config, ...contextOverrides },
+        () => projection,
+      ),
     } as never),
   );
   return { completion, respond };

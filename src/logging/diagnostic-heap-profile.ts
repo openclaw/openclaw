@@ -3,6 +3,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import type { HeapSpaceInfo } from "node:v8";
 import type { DiagnosticsHeapProfileParams } from "../../packages/gateway-protocol/src/schema/diagnostics.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { observeRuntimeProfileCapability } from "../infra/runtime-capabilities.js";
 import {
   captureDiagnosticProfile,
   createInspectorProfileCapture,
@@ -262,42 +263,45 @@ export function captureDiagnosticHeapProfile(
       : 900_000;
   const requestedDurationMs = options.durationMs ?? 5_000;
   const durationMs = Math.min(maxDurationMs, Math.max(1, requestedDurationMs));
-  return captureDiagnosticProfile({
-    signal: options.signal,
-    hasAuthority: options.hasAuthority,
-    durationMs,
-    create: (inspector) =>
-      createInspectorProfileCapture(inspector, {
-        setup: (session) => session.post("HeapProfiler.enable"),
-        start: (session) =>
-          session.post("HeapProfiler.startSampling", {
-            samplingInterval: samplingIntervalBytes,
-            ...collectionOptions,
-          }),
-        stop: (session) => session.post("HeapProfiler.stopSampling"),
-        disable: (session) => session.post("HeapProfiler.disable"),
-      }),
-    sanitize: (profile, packageRoot, measurement) =>
-      // SAFETY: The native protocol includes IDs and samples omitted by Node's declarations.
-      sanitizeDiagnosticHeapProfile(profile as SamplingProfile, packageRoot, {
-        durationMs: measurement.durationMs,
-        requestedDurationMs,
-        effectiveDurationMs: durationMs,
-        actualDurationMs: measurement.durationMs,
-        durationLimitReason:
-          requestedDurationMs <= maxDurationMs
-            ? null
-            : maxDurationMs === 30_000
-              ? "collected-samples"
-              : "maximum-duration",
-        samplingIntervalBytes,
-        ...collectionOptions,
-        heapUsedBefore: measurement.before.heapUsed,
-        heapUsedAfter: measurement.after.heapUsed,
-        heapSpacesBefore: measurement.before.heapSpaces,
-        heapSpacesAfter: measurement.after.heapSpaces,
-        rssBefore: measurement.before.rss,
-        rssAfter: measurement.after.rss,
-      }),
-  });
+  return observeRuntimeProfileCapability(
+    "heapSampling",
+    captureDiagnosticProfile({
+      signal: options.signal,
+      hasAuthority: options.hasAuthority,
+      durationMs,
+      create: (inspector) =>
+        createInspectorProfileCapture(inspector, {
+          setup: (session) => session.post("HeapProfiler.enable"),
+          start: (session) =>
+            session.post("HeapProfiler.startSampling", {
+              samplingInterval: samplingIntervalBytes,
+              ...collectionOptions,
+            }),
+          stop: (session) => session.post("HeapProfiler.stopSampling"),
+          disable: (session) => session.post("HeapProfiler.disable"),
+        }),
+      sanitize: (profile, packageRoot, measurement) =>
+        // SAFETY: The native protocol includes IDs and samples omitted by Node's declarations.
+        sanitizeDiagnosticHeapProfile(profile as SamplingProfile, packageRoot, {
+          durationMs: measurement.durationMs,
+          requestedDurationMs,
+          effectiveDurationMs: durationMs,
+          actualDurationMs: measurement.durationMs,
+          durationLimitReason:
+            requestedDurationMs <= maxDurationMs
+              ? null
+              : maxDurationMs === 30_000
+                ? "collected-samples"
+                : "maximum-duration",
+          samplingIntervalBytes,
+          ...collectionOptions,
+          heapUsedBefore: measurement.before.heapUsed,
+          heapUsedAfter: measurement.after.heapUsed,
+          heapSpacesBefore: measurement.before.heapSpaces,
+          heapSpacesAfter: measurement.after.heapSpaces,
+          rssBefore: measurement.before.rss,
+          rssAfter: measurement.after.rss,
+        }),
+    }),
+  );
 }

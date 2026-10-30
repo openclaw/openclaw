@@ -96,6 +96,7 @@ function stringifyInput(input: ModelAutoReviewInput): string {
   return JSON.stringify(
     {
       command: input.command,
+      executionCommand: input.executionCommand,
       argv: input.argv,
       resolvedPath: input.resolvedPath,
       cwd: input.cwd,
@@ -174,6 +175,7 @@ function hasReviewerDirective(input: ModelAutoReviewInput): boolean {
       ? [input.name, ...(input.declared.netOrigins ?? []), ...(input.declared.tools ?? [])]
       : [
           input.command,
+          input.executionCommand ?? "",
           ...(input.argv ?? []),
           input.resolvedPath ?? "",
           input.cwd ?? "",

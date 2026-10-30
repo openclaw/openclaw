@@ -32,14 +32,6 @@ function shorten(message: string, maxLen: number): string {
   return `${truncateUtf16Safe(cleaned, Math.max(0, maxLen - 1))}…`;
 }
 
-function normalizeGwsLine(line: string): string {
-  // Remove per-request ids so repeated gateway websocket errors group into one summary.
-  return line
-    .replace(/\s+(?:runId|conn|id)=[^\s]+/g, "")
-    .replace(/\s+error=Error:.*$/g, "")
-    .trim();
-}
-
 function consumeJsonBlock(
   lines: string[],
   startIndex: number,
@@ -131,7 +123,11 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
       line.includes("errorCode=UNAVAILABLE") &&
       line.includes("OAuth token refresh failed")
     ) {
-      const normalized = normalizeGwsLine(line);
+      // Remove per-request ids so repeated gateway websocket errors group into one summary.
+      const normalized = line
+        .replace(/\s+(?:runId|conn|id)=[^\s]+/g, "")
+        .replace(/\s+error=Error:.*$/g, "")
+        .trim();
       addGroup(`gws:${normalized}`, normalized);
       continue;
     }

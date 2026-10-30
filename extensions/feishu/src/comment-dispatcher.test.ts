@@ -2,6 +2,7 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { createFeishuTestRoute } from "./bot.test-support.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
 
@@ -114,15 +115,12 @@ describe("Feishu comment event reply delivery", () => {
       config: { current: () => cfg },
       channel: {
         routing: {
-          resolveAgentRoute: () => ({
-            agentId: "main",
-            channel: "feishu",
-            accountId: "main",
-            sessionKey: "agent:main:feishu:direct:ou_sender",
-            mainSessionKey: "agent:main:main",
-            lastRoutePolicy: "session",
-            matchedBy: "binding.channel",
-          }),
+          resolveAgentRoute: () =>
+            createFeishuTestRoute({
+              accountId: "main",
+              sessionKey: "agent:main:feishu:direct:ou_sender",
+              matchedBy: "binding.channel",
+            }),
         },
         text: {
           resolveTextChunkLimit: vi.fn(() => 4000),
@@ -135,10 +133,7 @@ describe("Feishu comment event reply delivery", () => {
   });
 
   it("sends final comment text without waiting for typing cleanup", async () => {
-    let resolveCleanup: (() => void) | undefined;
-    const cleanupPromise = new Promise<void>((resolve) => {
-      resolveCleanup = resolve;
-    });
+    const { promise: cleanupPromise, resolve: resolveCleanup } = Promise.withResolvers<void>();
     const cleanup = vi.fn(() => cleanupPromise);
     createCommentTypingReactionLifecycleMock.mockReturnValue({
       start: vi.fn(async () => {}),

@@ -1,8 +1,12 @@
 import { streamSimple, type SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
-import { createOpenAIHostedWebSearchWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
+import {
+  createOpenAIHostedWebSearchWrapper,
+  mergeTransportHeaders,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { asOptionalRecord, normalizeFastMode } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { classifyOpenAIBaseUrl } from "./base-url.js";
 import { resolveNativeWebSearch } from "./native-web-search-policy.js";
 import { resolveOpenAIModelServiceTiers } from "./service-tier-policy.js";
 import { TOKEN_SHARING_AUTH_FLOW } from "./token-sharing.js";
@@ -39,6 +43,55 @@ export function wrapOpenAIResponsesStream(ctx: ProviderWrapStreamFnContext) {
       },
     };
   }
+  const configuredAccessPrograms = ctx.extraParams?.accessPrograms;
+  if (configuredAccessPrograms !== undefined) {
+    const accessPrograms = asOptionalRecord(configuredAccessPrograms);
+    const cyber = accessPrograms?.cyber;
+    if (
+      !accessPrograms ||
+      Object.keys(accessPrograms).some((key) => key !== "cyber") ||
+      (cyber !== undefined &&
+        !["standard", "daybreak_blue", "daybreak_red"].some((value) => value === cyber))
+    ) {
+      throw new Error(
+        'OpenAI params.accessPrograms must be {} or { cyber: "standard" | "daybreak_blue" | "daybreak_red" }.',
+      );
+    }
+    const underlying = streamContext.streamFn ?? streamSimple;
+    streamContext = {
+      ...streamContext,
+      streamFn: (model, context, options) => {
+        if (
+          !(
+            (model.api === "openai-responses" &&
+              classifyOpenAIBaseUrl(model.baseUrl) === "platform") ||
+            (model.api === "openai-chatgpt-responses" &&
+              classifyOpenAIBaseUrl(model.baseUrl) === "chatgpt")
+          )
+        ) {
+          // Standard is the session default, including routes without Daybreak support.
+          if (cyber === "standard") {
+            return underlying(model, context, options);
+          }
+          throw new Error(
+            "OpenAI params.accessPrograms requires an official OpenAI Platform or ChatGPT Responses endpoint.",
+          );
+        }
+        return underlying(model, context, {
+          ...options,
+          onPayload: async (payload, payloadModel) => {
+            const transformed = await options?.onPayload?.(payload, payloadModel);
+            const request = asOptionalRecord(transformed ?? payload);
+            if (!request) {
+              throw new Error("OpenAI access programs require a Responses request object.");
+            }
+            // Program selection and speed are independent; neither grants account access.
+            return { ...request, access_programs: cyber === undefined ? {} : { cyber } };
+          },
+        });
+      },
+    };
+  }
   if (ctx.auth?.mode === "oauth" && ctx.auth.authFlow === TOKEN_SHARING_AUTH_FLOW) {
     const underlying = streamContext.streamFn ?? streamSimple;
     streamContext = {
@@ -49,14 +102,14 @@ export function wrapOpenAIResponsesStream(ctx: ProviderWrapStreamFnContext) {
         responsesServerCompaction: false,
       },
       streamFn: (model, context, options) => {
-        const headers = new Headers(options?.headers);
         // Required by the OSS preview; remove when OpenAI retires this header.
-        headers.set("x-openai-chatpass-test", "codex-direct");
         // Shared provider policy can enable item references. This grant requires
         // complete-context replay before request payload transforms run.
         const sharingOptions: SimpleStreamOptions & { replayResponsesItemIds: false } = {
           ...options,
-          headers: Object.fromEntries(headers.entries()),
+          headers: mergeTransportHeaders(options?.headers, {
+            "x-openai-chatpass-test": "codex-direct",
+          }),
           transport: "sse",
           replayResponsesItemIds: false,
           onPayload: async (payload, payloadModel) => {

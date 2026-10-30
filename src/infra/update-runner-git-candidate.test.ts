@@ -9,6 +9,7 @@ import * as processExec from "../process/exec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";
+import { writeFixtureTree } from "./fixture-tree.test-support.js";
 import { verifyGitUpdateRecovery } from "./update-git-runtime.js";
 import {
   createGitUpdateFixture,
@@ -19,7 +20,6 @@ import {
   resolveCandidateNodeRuntimeForTest,
   runtimeImports,
   writeGitFixtureManifest,
-  writeFixtureTree,
   type GitUpdateFixture,
   expectHead,
   expectMissing,

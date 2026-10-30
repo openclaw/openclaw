@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createNonExitingRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { gatewayAuthTokenCommand } from "./gateway-auth-token.js";
 
 const mocks = vi.hoisted(() => ({
@@ -23,13 +24,7 @@ vi.mock("../cli/terminal-interactivity.js", async (importOriginal) => ({
 
 afterEach(() => vi.unstubAllEnvs());
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-  writeJson: vi.fn(),
-  writeStdout: vi.fn(),
-};
+const runtime = vi.mocked(createNonExitingRuntimeEnv());
 
 const tokenRef = { source: "env", provider: "default", id: "GATEWAY_TOKEN" } as const;
 const tokenConfig = { gateway: { auth: { mode: "token", token: tokenRef } } } as const;

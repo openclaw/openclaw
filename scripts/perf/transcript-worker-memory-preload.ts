@@ -1,8 +1,8 @@
 // Benchmark-only observation: never loaded by the normal Gateway launcher.
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, rmdirSync, writeFileSync } from "node:fs";
 import { registerHooks, syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { GCProfiler, getHeapStatistics } from "node:v8";
+import { GCProfiler, getHeapStatistics, writeHeapSnapshot } from "node:v8";
 import workerThreads, {
   isMainThread,
   MessagePort,
@@ -67,6 +67,10 @@ workerThreads.Worker = class extends NativeWorker {
           : {
               ...(options.env ?? process.env),
               ...(output ? { OPENCLAW_BENCH_WORKER_MEMORY_DIR: output } : {}),
+              ...(output ? { OPENCLAW_BENCH_WORKER_STARTED_AT: String(Date.now()) } : {}),
+              ...(process.env.OPENCLAW_BENCH_WORKER_SNAPSHOTS === "1"
+                ? { OPENCLAW_BENCH_WORKER_SNAPSHOTS: "1" }
+                : {}),
               ...(baselineOwners ? { OPENCLAW_BENCH_TRANSCRIPT_BASELINE_OWNERS: "1" } : {}),
             },
     });
@@ -114,6 +118,51 @@ if (
     "session-entries",
     "usage-cost",
   ]);
+  let lastKind = "";
+  let observedFirstTask = false;
+  const diagnosticStarted = Date.now();
+  if (process.env.OPENCLAW_BENCH_WORKER_SNAPSHOTS === "1") {
+    // Heap snapshots force GC and block the isolate; never use this pass for latency gates.
+    setInterval(() => {
+      if (Date.now() - diagnosticStarted < 90_000 || active || !lastKind) {
+        return;
+      }
+      const category =
+        lastKind === "usage-cost"
+          ? "usage"
+          : lastKind === "history-page"
+            ? "history"
+            : lastKind === "model-context" || lastKind === "transcript-hydration"
+              ? "context"
+              : "other";
+      const receipt = path.join(output, `snapshot-${category}.json`);
+      if (existsSync(receipt)) {
+        return;
+      }
+      // Serialize captures across isolates so synthetic proof does not burst disk writes.
+      const lock = path.join(output, ".snapshot-lock");
+      try {
+        mkdirSync(lock);
+      } catch {
+        return;
+      }
+      try {
+        if (existsSync(receipt)) {
+          return;
+        }
+        const before = sample();
+        const snapshot = writeHeapSnapshot(
+          path.join(output, `snapshot-${category}-${threadId}.heapsnapshot`),
+        );
+        writeFileSync(
+          receipt,
+          JSON.stringify({ threadId, lastKind, before, after: sample(), snapshot }),
+        );
+      } finally {
+        rmdirSync(lock);
+      }
+    }, 5_000).unref();
+  }
   let active:
     | {
         taskId: number;
@@ -172,6 +221,16 @@ if (
       ) {
         return;
       }
+      if (!observedFirstTask) {
+        observedFirstTask = true;
+        // Direct-parent pools have no ready reply; first dispatch proves the entry loaded.
+        write({
+          kind: "startup",
+          startupElapsedMs: Date.now() - Number(process.env.OPENCLAW_BENCH_WORKER_STARTED_AT),
+          firstTaskKind: input.kind,
+          memory: sample(),
+        });
+      }
       drainGc();
       const before = sample();
       active = {
@@ -214,6 +273,7 @@ if (
           majorGcCount: active.majorGcCount,
           postMajorGcOldGenerationBytes: active.postMajorGcOldGenerationBytes,
         });
+        lastKind = active.kind;
         active = undefined;
       }
       return Reflect.apply(post, undefined, args);

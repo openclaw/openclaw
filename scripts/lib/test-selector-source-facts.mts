@@ -5,13 +5,13 @@ import nodeModule from "node:module";
 import { availableParallelism } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
+import { Worker } from "node:worker_threads";
 import { resolveNodeRuntimeExecutable } from "../../src/infra/node-runtime-executable.ts";
+import { resolveRuntimeToolingEntrypointUrl } from "../../src/infra/runtime-process-manifest.ts";
 import { createSourceTermMatcher } from "./test-source-term-matcher.mts";
 
 type SourceFile = { file: string; parseImports: boolean };
-type SourceScan = { files: SourceFile[]; terms: string[]; matchingOnly: boolean };
-const SCAN_WORKER_MARKER = "openclawTestSelectorSourceScan";
+export type SourceScan = { files: SourceFile[]; terms: string[]; matchingOnly: boolean };
 const MAX_SCAN_WORKERS = 8;
 // Worker startup costs tens of milliseconds; small scans stay on one thread.
 const MIN_FILES_PER_SCAN_WORKER = 256;
@@ -1301,8 +1301,8 @@ async function scanSourceFactsInWorkers(scan: SourceScan, count: number) {
     stripes.map(
       (files) =>
         new Promise<unknown>((resolve, reject) => {
-          const worker = new Worker(new URL(import.meta.url), {
-            workerData: { [SCAN_WORKER_MARKER]: true, scan: { ...scan, files } },
+          const worker = new Worker(resolveRuntimeToolingEntrypointUrl("testSelectorSourceScan"), {
+            workerData: { scan: { ...scan, files } },
           });
           worker.once("message", resolve);
           worker.once("error", reject);
@@ -1329,7 +1329,7 @@ async function scanSourceFactsInWorkers(scan: SourceScan, count: number) {
   return scan.files.map((_file, index) => rows[index % count]![Math.floor(index / count)]);
 }
 
-async function scanSourceFacts({ files, terms, matchingOnly }: SourceScan) {
+export async function scanSourceFacts({ files, terms, matchingOnly }: SourceScan) {
   const matchTerms = createSourceTermMatcher(terms);
   const readFacts = async ({ file, parseImports }: SourceFile) => {
     let source: string;
@@ -1386,11 +1386,7 @@ async function scanSourceFacts({ files, terms, matchingOnly }: SourceScan) {
   return facts;
 }
 
-// Importers may themselves run in worker threads; only the marked scan worker answers.
-if (!isMainThread && workerData?.[SCAN_WORKER_MARKER] === true) {
-  const { scan }: { scan: SourceScan } = workerData;
-  parentPort?.postMessage(await scanSourceFacts(scan), []);
-} else if (isMainThread && import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
     await readSourceFacts();
   } catch (error) {

@@ -4,9 +4,11 @@ import { createSignal, flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import type { SkillsState } from "../../lib/skills/index.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -35,23 +37,19 @@ export function mountSkills(
   surface: "discovery" | "settings" = "discovery",
 ) {
   const client = { request } as unknown as GatewayBrowserClient;
-  const connection = createApplicationGateway({
-    client,
-    phase: "connected",
-    offlineStable: false,
-    hello: gatewayHelloForMethods(["skills.install", "skills.update"]),
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  });
-  const agentsList = {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "global" as const,
+  const connection = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client,
+      phase: "connected",
+      hello: gatewayHelloForMethods(["skills.install", "skills.update"]),
+      assistantAgentId: "main",
+      sessionKey: "main",
+    }),
+  );
+  const agentsList = makeBootRoster({
+    scope: "global",
     agents: [{ id: "main" }, { id: "research" }],
-  };
+  });
   const agents = {
     state: { agentsList, agentsLoading: false, agentsError: null },
     ensureList: vi.fn(async () => agentsList),

@@ -68,7 +68,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 it("doubles consecutive busy delays, caps them, and resets after success", async () => {
   await withRefreshFixture(
-    async ({ agentId, files: [sessionFile], refresh, hold }) => {
+    async ({ agentId, files: [sessionFile], refresh, hold, request }) => {
       const params = { config, agentId, startMs: 0, endMs: Date.now() };
       const fullRefresh = hold("refreshed");
       let queuedSubset: ReturnType<typeof loadSessions> | undefined;
@@ -82,9 +82,8 @@ it("doubles consecutive busy delays, caps them, and resets after success", async
       });
       refresh.mockResolvedValueOnce("busy");
       try {
-        expect(await loadSummary(params)).toMatchObject({
-          cacheStatus: { status: "refreshing", pendingFiles: 1 },
-        });
+        // A full refresh request starts the busy retry ladder.
+        request();
         await tick(0, 1);
         for (const [index, delayMs] of [
           50, 100, 200, 400, 800, 1_600, 3_200, 5_000, 5_000,
@@ -216,11 +215,14 @@ const test = it.extend<{ usage: ReturnType<typeof makeRefreshFixture> }>({
   usage: async ({ task: _task }, use) => withRefreshFixture(use),
 });
 
-test("refreshes each dirty session once after its own quiet gap and parks when clean", async ({
-  usage: { files, refresh, dirty },
+test("keeps per-session quiet gaps across wall-clock rollback and unrelated reads", async ({
+  signal,
+  usage: { files, refresh, dirty, read },
 }) => {
   refresh.mockResolvedValue("refreshed");
   dirty(files[0]);
+  await withinTest(read(files[1]), signal);
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() - 120_000);
   await vi.advanceTimersByTimeAsync(20_000);
   dirty(files[0]);
   dirty(files[1]);
@@ -260,18 +262,6 @@ test("preserves oldest dirty age across turns and refreshes overdue work in the 
   } finally {
     releaseAgentRunContext("usage-batch-turn", claim);
   }
-});
-
-test("does not flush unrelated dirty sessions for a keyed read", async ({
-  signal,
-  usage: { files, refresh, read, dirty },
-}) => {
-  refresh.mockResolvedValue("refreshed");
-  dirty();
-  await withinTest(read(files[1]), signal);
-  expect(refresh).not.toHaveBeenCalled();
-  await tick(30_000, 1);
-  expect(refresh.mock.calls[0]?.[0].sessionFiles).toEqual([files[0]]);
 });
 
 test("wakes a busy retry when an overlapping turn becomes idle", async ({
@@ -387,25 +377,37 @@ it.for([false, true])(
   },
 );
 
-test.for(["completes", "slow", "cancelled"] as const)(
+test.for(["completes", "slow", "cancelled", "rollback"] as const)(
   "bounds publication waiting when the request is %s without adopting background work",
-  async (phase, { usage: { files, refresh, hold, dirty, read, newScope } }) => {
+  async (phase, { usage: { agentId, files, refresh, hold, dirty, read, newScope } }) => {
     const refreshOwner = newScope();
     const requestOwner = newScope();
     const release = hold("refreshed");
     refresh.mockReturnValue(release.promise);
     const reason = new Error("usage client disconnected");
+    await expectStale({ config, agentId, startMs: 0, endMs: Date.now() });
     dirty(files[0], refreshOwner);
-    const reading = requestOwner.track(() => read(files[0], { maxPublicationWaitMs: 100 }));
+    const reading = requestOwner.track(async () =>
+      phase === "rollback"
+        ? loadSummary({ config, agentId, startMs: 0, endMs: Date.now() })
+        : read(files[0], { maxPublicationWaitMs: 100 }),
+    );
     // Observe rejection immediately; scope cancellation must not become an
     // unhandled rejection while the fake clock advances other work.
     const result = Promise.allSettled([reading]);
     await tick(0, 1);
+    if (phase === "rollback") {
+      const settled = vi.fn();
+      void reading.then(settled, settled);
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() - 90_000);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.waitFor(() => expect(settled).toHaveBeenCalled(), { timeout: 1_000 });
+    }
     if (phase === "completes") {
       release.resolve("refreshed");
     } else if (phase === "cancelled") {
       requestOwner.beginClose(reason);
-    } else {
+    } else if (phase === "slow") {
       await vi.advanceTimersByTimeAsync(100);
     }
     const [outcome] = await result;
@@ -414,7 +416,10 @@ test.for(["completes", "slow", "cancelled"] as const)(
     } else {
       expect(outcome).toMatchObject({
         status: "fulfilled",
-        value: { summaries: [null], cacheStatus: { status: "stale" } },
+        value:
+          phase === "rollback"
+            ? { totals: { totalTokens: 0 }, cacheStatus: { status: "refreshing", staleFiles: 2 } }
+            : { summaries: [null], cacheStatus: { status: "stale" } },
       });
     }
     if (phase !== "completes") {

@@ -58,13 +58,10 @@ const preparedRuntimeSnapshotState = vi.hoisted(() => ({
   useSnapshotPluginRegistry: false,
 }));
 
-vi.mock("../llm/stream.js", async () => {
-  const original = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
-  return {
-    ...original,
-    streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
-  };
-});
+vi.mock("../llm/stream.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../llm/stream.js")>()),
+  streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
+}));
 
 vi.mock("./sessions/session-manager.js", () => ({
   buildSessionContext: (...args: unknown[]) => buildSessionContextMock(...args),

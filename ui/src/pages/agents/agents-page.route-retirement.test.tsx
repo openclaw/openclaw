@@ -1,19 +1,23 @@
 /* @vitest-environment jsdom */
 
 import { createRouter, definePage } from "@openclaw/uirouter";
+import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { SkillStatusReport } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import { RouterOutlet } from "../../app/router-outlet.tsx";
 import { createAgentCapability } from "../../lib/agents/index.ts";
+import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createSkill } from "../skills/view.test-support.ts";
 import {
   agentsCapability,
   agentsList,
@@ -188,6 +192,7 @@ it("keeps Tools Save active through the real owner's roster refresh", async () =
     </ApplicationProvider>
   ));
   try {
+    await vi.dynamicImportSettled();
     const save = await waitForSolid(() =>
       mounted.getByRole<HTMLButtonElement>("button", { name: "Save" }),
     );
@@ -301,13 +306,7 @@ it("leaves Agents through RouterOutlet while its admitted default write settles 
       return { models: [] };
     }
     if (method === "config.get") {
-      return {
-        config: persisted,
-        raw: JSON.stringify(persisted),
-        hash: revision,
-        valid: true,
-        issues: [],
-      };
+      return configSnapshot(persisted, revision, JSON.stringify(persisted));
     }
     if (method === "config.set") {
       // SAFETY: This is the config.set transport boundary; its public contract requires raw JSON.
@@ -539,5 +538,102 @@ it("leaves the avatar route before its admitted generation settles", async () =>
     router.stop();
     pending.reject(new Error("Retired synthetic generation"));
     await pending.promise.catch(() => undefined);
+  }
+});
+
+it("keeps the Skills filter reactive across clearing and retained panel/agent routes", async () => {
+  const roster = {
+    ...agentsList,
+    agents: [...agentsList.agents, { id: "research", name: "Research" }],
+  };
+  const reports: Record<string, SkillStatusReport> = {
+    main: {
+      workspaceDir: "/synthetic/main",
+      managedSkillsDir: "/synthetic/skills",
+      skills: [createSkill({ name: "Main shared" }), createSkill({ name: "Main other" })],
+    },
+    research: {
+      workspaceDir: "/synthetic/research",
+      managedSkillsDir: "/synthetic/skills",
+      skills: [createSkill({ name: "Research shared" }), createSkill({ name: "Research other" })],
+    },
+  };
+  const request = vi.fn(async (method: string, params?: unknown) => {
+    if (
+      method === "skills.status" &&
+      typeof params === "object" &&
+      params !== null &&
+      "agentId" in params &&
+      typeof params.agentId === "string" &&
+      reports[params.agentId]
+    ) {
+      return reports[params.agentId];
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+  const currentGateway = gateway({
+    ...snapshot(createTestGatewayClient(request)),
+    hello: gatewayHelloForMethods(["skills.status"]),
+  });
+  const agents = agentsCapability(async () => ({ agentId: "main", workspace: "", files: [] }));
+  agents.state.agentsList = roster;
+  const context = pageContext(currentGateway, agents);
+  completeContext(context);
+  const route = (agentId: string, panel: "skills" | "files"): AgentsRouteData => ({
+    ...agentsRouteData(currentGateway, roster, agentId, context.settingsAgentSelection),
+    panel,
+  });
+  let goTo!: (agentId: string, panel: "skills" | "files") => void;
+  const mounted = mountSolid(() => {
+    const [routeData, setRouteData] = createSignal(route("main", "skills"));
+    goTo = (agentId, panel) => setRouteData(route(agentId, panel));
+    return (
+      <ApplicationProvider value={context}>
+        <AgentsPage routeData={routeData()} />
+      </ApplicationProvider>
+    );
+  });
+  const titles = () =>
+    [
+      ...mounted.container.querySelectorAll(".agent-skill-row:not([hidden]) .settings-row__title"),
+    ].map((node) => node.textContent?.trim());
+  const filter = () => mounted.getByRole<HTMLInputElement>("textbox", { name: "Filter" });
+  const enter = (value: string) => {
+    const control = filter();
+    control.focus();
+    control.value = value;
+    control.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  try {
+    await waitForSolid(() => expect(titles().toSorted()).toEqual(["Main other", "Main shared"]));
+    const retainedPage = mounted.container.querySelector("openclaw-agents-page");
+    const initialFilter = filter();
+    enter("shared");
+    await waitForSolid(() => expect(titles()).toEqual(["Main shared"]));
+    expect(filter()).toBe(initialFilter);
+    expect(filter().value).toBe("shared");
+
+    enter("");
+    await waitForSolid(() => expect(titles().toSorted()).toEqual(["Main other", "Main shared"]));
+    expect(filter()).toBe(initialFilter);
+    expect(filter().value).toBe("");
+    enter("shared");
+    await waitForSolid(() => expect(titles()).toEqual(["Main shared"]));
+
+    goTo("main", "files");
+    await waitForSolid(() => expect(mounted.queryByRole("textbox", { name: "Filter" })).toBeNull());
+    goTo("main", "skills");
+    await waitForSolid(() => expect(titles()).toEqual(["Main shared"]));
+    expect(filter().value).toBe("shared");
+
+    goTo("research", "skills");
+    await waitForSolid(() => expect(titles()).toEqual(["Research shared"]));
+    expect(filter().value).toBe("shared");
+    goTo("main", "skills");
+    await waitForSolid(() => expect(titles()).toEqual(["Main shared"]));
+    expect(filter().value).toBe("shared");
+    expect(mounted.container.querySelector("openclaw-agents-page")).toBe(retainedPage);
+  } finally {
+    mounted.unmount();
   }
 });

@@ -3,7 +3,7 @@ import { createSignal, For, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
@@ -13,9 +13,13 @@ import type { SessionDiffViewBindings } from "./session-diff-presentation.ts";
 import { SessionDiffTree } from "./session-diff-tree.tsx";
 import type { DiffValue } from "./session-diff-types.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
-function createSessionDiffResultViews(bindings: SessionDiffViewBindings) {
+export function createSessionDiffPanelFrame(
+  bindings: SessionDiffViewBindings,
+  setMotionInstant: (instant: boolean) => void,
+  awaitingDestination: () => boolean,
+) {
   const { MobileRail, MobileSummary, DesktopSummary, Summary } = createSessionDiffChrome(bindings);
   const File = createSessionDiffFileView(bindings);
   const {
@@ -256,6 +260,7 @@ function createSessionDiffResultViews(bindings: SessionDiffViewBindings) {
                       result().truncated !== true ? (
                         desktop() ? (
                           <PanelEmptyState
+                            presentation="desktop"
                             icon={<Icon name="fileDiff" />}
                             heading={t("chat.sessionDiff.emptyTitle")}
                             description={t("chat.sessionDiff.empty")}
@@ -295,15 +300,6 @@ function createSessionDiffResultViews(bindings: SessionDiffViewBindings) {
       </>
     );
   }
-  return { MobileRail, MobileResultBody, ResultBody };
-}
-
-export function createSessionDiffPanelFrame(
-  bindings: SessionDiffViewBindings,
-  setMotionInstant: (instant: boolean) => void,
-  awaitingDestination: () => boolean,
-) {
-  const { MobileRail, MobileResultBody, ResultBody } = createSessionDiffResultViews(bindings);
   function Panel(panel: { children?: JSX.Element }) {
     return (
       <div

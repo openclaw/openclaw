@@ -4,6 +4,8 @@ export type TranscriptReplacementOptions = {
   createdAtByIndex?: readonly number[];
   /** Keep maintenance rewrites at their existing recency while invalidating stale projections. */
   preserveSessionWindowRecency?: boolean;
+  /** Complete the projection before publishing this replacement. */
+  rebuildProjectionSynchronously?: true;
   scheduleProjectionReconcile?: boolean;
   onProjectionReconcileNeeded?: () => void;
   /** Capture inserted bytes only when the caller retains a replacement snapshot. */

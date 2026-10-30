@@ -30,6 +30,7 @@ export function WhatsAppCard(props: {
     field: "configured" | "linked" | "running" | "connected",
     value: boolean | null | undefined,
   ) => ({
+    key: field,
     label: t(`common.${field}`),
     value: t(value == null ? "common.na" : value ? "common.yes" : "common.no"),
     kind: value === true ? "ok" : "muted",
@@ -43,6 +44,7 @@ export function WhatsAppCard(props: {
       ...(phone
         ? [
             {
+              key: "phone",
               label: t("channels.whatsapp.phoneNumber"),
               value: props.context.formatPhoneNumber!(phone),
               kind: undefined,
@@ -52,6 +54,7 @@ export function WhatsAppCard(props: {
       booleanFact("running", value?.running === true),
       booleanFact("connected", value?.connected === true),
       {
+        key: "lastConnect",
         label: t("common.lastConnect"),
         value: value?.lastConnectedAt
           ? props.context.formatRelativeTimestamp(value.lastConnectedAt)
@@ -59,6 +62,7 @@ export function WhatsAppCard(props: {
         kind: undefined,
       },
       {
+        key: "lastMessage",
         label: t("common.lastMessage"),
         value: value?.lastMessageAt
           ? props.context.formatRelativeTimestamp(value.lastMessageAt)
@@ -66,6 +70,7 @@ export function WhatsAppCard(props: {
         kind: undefined,
       },
       {
+        key: "authAge",
         label: t("common.authAge"),
         value:
           value?.authAgeMs != null
@@ -138,16 +143,16 @@ export function WhatsAppCard(props: {
       </div>
       <div class="settings-group">
         <dl class="settings-kv">
-          <For each={facts()}>
+          <For each={facts()} keyed={(fact) => fact.key}>
             {(fact) => (
               <>
-                <dt>{fact.label}</dt>
+                <dt>{fact().label}</dt>
                 <dd>
-                  <Show when={fact.kind} fallback={fact.value}>
+                  <Show when={fact().kind} fallback={fact().value}>
                     {(kind) => (
                       <span class={["settings-status", { "settings-status--ok": kind() === "ok" }]}>
                         <span class="settings-status__dot" />
-                        <span>{fact.value}</span>
+                        <span>{fact().value}</span>
                       </span>
                     )}
                   </Show>

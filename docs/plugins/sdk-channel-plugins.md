@@ -341,6 +341,13 @@ when initialization must finish before the child runs.
 
     For channels that accept both current top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
 
+    The scoped, top-level, and hybrid config adapter builders read allowlists and
+    default targets from the account returned by `resolveAccount`. To use a
+    different, lightweight account shape for these read-only accessors, provide
+    `resolveAccessorAccount`; `resolveAllowFrom` and `resolveDefaultTo` then receive
+    that projection. A separate accessor type requires its own resolver. The
+    builders do not convert a runtime account into another account shape.
+
     For channel-specific secret activation, `createChannelSecretContract` from
     `openclaw/plugin-sdk/channel-secret-basic-runtime` combines `channelKey`,
     `account`/`channel` registry specs, and a `collect` callback. The callback receives

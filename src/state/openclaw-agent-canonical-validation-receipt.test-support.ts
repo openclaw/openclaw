@@ -88,6 +88,11 @@ await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
   const opened = openOpenClawAgentDatabaseReadOnly(options);
   assert.ok(opened.found);
   const reader = opened.database;
+  const canonicalReady = reader.db
+    .prepare("SELECT canonical_ready FROM session_key_contract WHERE id = 1")
+    .get()?.canonical_ready;
+  assert.ok(typeof canonicalReady === "string");
+  const observation = { canonicalReady };
   const prototype = requireNodeSqlite().StatementSync.prototype;
   // oxlint-disable-next-line typescript/unbound-method -- The proxy forwards the native receiver with Reflect.apply.
   const original = { get: prototype.get, all: prototype.all, iterate: prototype.iterate };
@@ -127,12 +132,15 @@ await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const readsBeforeMiss = receiptReads;
     hasReceipt(reader);
     assert.equal(receiptReads, readsBeforeMiss);
-    assert.equal(loadReceipt(reader), true);
+    assert.equal(loadReceipt(reader, observation), true);
+    assert.equal(receiptReads, readsBeforeMiss);
     assert.equal(hasReceipt(reader), true);
     const readsAfterRollback = receiptReads;
     writeTransaction(clearReceipt, options);
     assert.equal(hasReceipt(reader), false);
+    assert.equal(loadReceipt(reader, observation), false);
     writeTransaction(recordReceipt, options);
+    assert.equal(loadReceipt(reader, { canonicalReady: null }), true);
     assert.deepEqual([hasReceipt(reader), receiptReads], [true, readsAfterRollback]);
   } finally {
     Object.assign(prototype, original);

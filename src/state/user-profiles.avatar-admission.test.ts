@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
@@ -10,6 +8,7 @@ import {
   prepareUserProfileCatalog,
 } from "./user-profile-list.js";
 import { setUserProfileRole } from "./user-profile-writes.worker.js";
+import { avatarPng, avatarResponse } from "./user-profiles-fixture.test-support.js";
 import { adoptTailscaleProfileAvatar, ensureProfileForEmail } from "./user-profiles.js";
 
 it("preserves a native first-use role in avatar publication after warming a legacy worker", async () => {
@@ -32,13 +31,8 @@ it("preserves a native first-use role in avatar publication after warming a lega
     expect(tableHasColumn(db, "user_profiles", "role")).toBe(false);
     setUserProfileRole(profile.id, "reader");
     release = (await prepareUserProfileCatalog()).release;
-    const bytes = readFileSync(join(process.cwd(), "ui/public/favicon-32.png"));
-    fetchSpy.mockImplementation(
-      async () =>
-        new Response(Uint8Array.from(bytes).buffer, {
-          headers: { "content-type": "image/png" },
-        }),
-    );
+    const bytes = avatarPng();
+    fetchSpy.mockImplementation(async () => avatarResponse(bytes));
     const adopted = await adoptTailscaleProfileAvatar(profile.id, "https://avatars.example.test/p");
     expect(adopted.role).toBe("reader");
     expect(readResidentUserProfileIdentity(profile.id)?.role).toBe("reader");

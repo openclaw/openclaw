@@ -18,7 +18,7 @@ import { TSGO_CORE_TEST_SHARDS } from "../../scripts/lib/tsgo-core-test-shards.m
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { isProcessAlive } from "../helpers/process-wait.js";
+import { waitForDead } from "../helpers/process-wait.js";
 import { installDistArtifactScripts as installScripts } from "./dist-artifact-fixture.js";
 import {
   materializeNativeCompiler,
@@ -77,35 +77,6 @@ function expectOwnership(root: string, owner: boolean, unjoined: boolean) {
 
 function expectFile(root: string, name: string, expected: string | boolean) {
   expect(typeof expected === "string" ? read(root, name) : exists(root, name), name).toBe(expected);
-}
-
-function waitForForeignProcessExit(pid: number, signal: AbortSignal): Promise<void> {
-  // Crash cases deliberately remove the compiler's owner. Its checkpoint socket
-  // closes before death, so only a PID observation can certify the orphan's exit.
-  return new Promise((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (error?: Error) => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", abort);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    const abort = () => finish(new Error(`process still alive: ${pid}`, { cause: signal.reason }));
-    const check = () => {
-      if (!isProcessAlive(pid)) {
-        finish();
-      } else if (signal.aborted) {
-        abort();
-      } else {
-        timer = setTimeout(check, 5);
-      }
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    check();
-  });
 }
 
 function write(root: string, relative: string, content: string) {
@@ -233,7 +204,7 @@ async function runWithProcesses(
       // Crash cases deliberately orphan a compiler; its barrier closes before
       // process exit. Join that process too before deleting the fixture.
       const orphans = await Promise.allSettled(
-        [...checkpointPids].map((pid) => waitForForeignProcessExit(pid, signal)),
+        [...checkpointPids].map((pid) => waitForDead(pid, signal, "reject")),
       );
       for (const socket of sockets) {
         socket.destroy();
@@ -282,6 +253,8 @@ async function runWithProcesses(
         cwd: root,
         env: {
           ...process.env,
+          CI: "false",
+          OPENCLAW_LINT_TOOL: "oxlint",
           // Synthetic artifact writers do not inspect the host's installed Gateway.
           OPENCLAW_ALLOW_LIVE_DIST_BUILD: "1",
           ...(resourceOwner
@@ -1015,7 +988,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
         } finally {
           compilerGate.write("continue");
-          await waitForForeignProcessExit(compiler.pid, signal);
+          await waitForDead(compiler.pid, signal, "reject");
         }
       }, signal);
     },

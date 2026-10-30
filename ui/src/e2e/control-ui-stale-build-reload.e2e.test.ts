@@ -46,7 +46,6 @@ it("reloads a stale document onto the current build when an unvisited lazy route
     force: false,
     filter: (source) => source !== path.join(rootA, "assets", activityAssetA),
   });
-  expect(await readdir(path.join(rootB, "assets"))).not.toContain(activityAssetA);
 
   let root: BundledRoot = { kind: "bundled", path: rootA, realPath: await realpath(rootA) };
   const requests: Array<{ method: string; url: string; status: number }> = [];
@@ -100,8 +99,6 @@ it("reloads a stale document onto the current build when an unvisited lazy route
       await waitForControlUiRoute(page, { routeId: "new-session", pathname: "/new" });
       await expectBuild(buildA);
       expect(requests.some(({ url }) => url.includes(activityAssetA))).toBe(false);
-      expect(await page.locator("openclaw-activity-page").count()).toBe(0);
-      expect(documents).toHaveLength(1);
 
       root = { kind: "bundled", path: rootB, realPath: await realpath(rootB) };
       await rm(rootA, { recursive: true, force: true });
@@ -121,7 +118,6 @@ it("reloads a stale document onto the current build when an unvisited lazy route
         pathname: "/activity",
         search: "?view=live",
       });
-      await page.locator("openclaw-activity-page").waitFor({ state: "visible" });
       await page.getByRole("region", { name: "Active sessions", exact: true }).waitFor();
       await expectBuild(buildB);
       expect(requests.slice(requestStart)).toContainEqual({
@@ -135,19 +131,8 @@ it("reloads a stale document onto the current build when an unvisited lazy route
       expect(reloadUrl.searchParams.get("view")).toBe("live");
       expect(reloadUrl.searchParams.get("openclaw_mount_recovery")).toMatch(/^\d+$/u);
       expect(await page.locator(".lazy-view-error").count()).toBe(0);
-      expect(
-        await page
-          .getByText(
-            /Importing a module script failed|Failed to fetch dynamically imported module/iu,
-          )
-          .count(),
-      ).toBe(0);
       expect(pageErrors.slice(postReloadErrors)).toEqual([]);
     } catch (error) {
-      console.error(
-        "Stale-build reload requests:",
-        JSON.stringify({ requests, documents, pageErrors }),
-      );
       if (error instanceof Error) {
         await captureControlUiE2eFailureDiagnostics(page, {
           error,

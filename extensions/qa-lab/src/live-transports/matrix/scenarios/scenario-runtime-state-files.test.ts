@@ -1,5 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   createChannelIngressQueueForTests,
@@ -7,6 +6,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it } from "vitest";
 import { createMatrixQaE2eeTestContext } from "./scenario-runtime-e2ee.test-helpers.js";
 import {
@@ -16,7 +16,12 @@ import {
   waitForMatrixSyncStoreWithCursor,
 } from "./scenario-runtime-state-files.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeStores();
+    cleanup();
+  }),
+);
 const identity = { accountId: "target", userId: "@target:matrix-qa.test" };
 const context = createMatrixQaE2eeTestContext({
   sutAccountId: identity.accountId,
@@ -30,20 +35,18 @@ const openStore = (root: string, namespace: string) =>
     env: { ...process.env, OPENCLAW_STATE_DIR: root },
   });
 
-async function createStateDir() {
-  const stateDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-sync-"));
-  tempDirs.push(stateDir);
-  return stateDir;
-}
+const createStateDir = () => tempDirs.make("matrix-qa-sync-");
 
 const syncDefaults = { metadata: identity, cursor: "other-cursor" };
+async function closeStores() {
+  resetPluginStateStoreForTests();
+  await closeOpenClawStateDatabaseAsync();
+}
 async function seedSyncStore(root: string, options: Partial<typeof syncDefaults> = {}) {
   const { metadata, cursor } = { ...syncDefaults, ...options };
   await mkdir(root, { recursive: true });
   openStore(root, "storage-meta").register("current", metadata);
-  const savedSync = { nextBatch: cursor };
-  // Persist the rows read by the probe; omit metadata it never reads.
-  const data = JSON.stringify(savedSync);
+  const data = JSON.stringify({ nextBatch: cursor });
   const store = openStore(root, "sync-cache");
   store.register("current:sync:fixture:0", { kind: "sync-chunk", index: 0, data });
   store.register("current:meta", { kind: "meta", generation: "fixture", chunkCount: 1 });
@@ -58,25 +61,21 @@ const expectNoCursor = (stateDir: string) =>
     "timed out waiting for Matrix sync store cursor",
   );
 
-afterEach(async () => {
-  resetPluginStateStoreForTests();
-  await closeOpenClawStateDatabaseAsync();
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
-});
-
 it.each(["accountId", "userId"] as const)(
-  "selects the requested SQLite identity and preserves unrelated state when %s differs",
+  "ignores stale sidecar %s and selects only the requested SQLite identity",
   async (field) => {
-    const stateDir = await createStateDir();
+    const stateDir = createStateDir();
     const other = path.join(stateDir, "matrix", "accounts", "aa-other");
     const target = path.join(stateDir, "matrix", "accounts", "zz-target");
     await seedSyncStore(other, { metadata: { ...identity, [field]: "other" } });
+    await writeFile(path.join(other, "storage-meta.json"), JSON.stringify(identity));
+    await closeStores();
+    await expectNoCursor(stateDir);
     await seedSyncStore(target, { cursor: "target-cursor" });
     for (const root of [other, target]) {
       openStore(root, "idb-snapshot").register("sentinel", { preserved: root });
     }
-    resetPluginStateStoreForTests();
-    await closeOpenClawStateDatabaseAsync();
+    await closeStores();
 
     const defaults = createMatrixQaE2eeTestContext();
     const selected = await waitCursor(stateDir, { context: defaults, ...identity });
@@ -99,33 +98,17 @@ it.each(["accountId", "userId"] as const)(
   },
 );
 
-it.each(["accountId", "userId"] as const)(
-  "rejects mismatched %s despite stale sidecar identity",
-  async (field) => {
-    const stateDir = await createStateDir();
-    const root = path.join(stateDir, "matrix", "accounts", "other");
-    await seedSyncStore(root, {
-      metadata: { ...identity, [field]: "other" },
-    });
-    await writeFile(path.join(root, "storage-meta.json"), JSON.stringify(identity));
-    resetPluginStateStoreForTests();
-    await closeOpenClawStateDatabaseAsync();
-    await expectNoCursor(stateDir);
-  },
-);
-
 it("finds a boundary-depth cursor after deeper subtrees and skips linked state", async () => {
-  const stateDir = await createStateDir();
+  const stateDir = createStateDir();
   const levels = Array.from({ length: 8 }, (_, index) => `d${index}`);
   const target = path.join(stateDir, "zz-target", ...levels);
-  const linked = await createStateDir();
+  const linked = createStateDir();
   for (const root of [path.join(stateDir, "aa-too-deep", ...levels, "extra"), linked]) {
     await seedSyncStore(root, { cursor: "excluded-cursor" });
   }
   await symlink(linked, path.join(stateDir, "aa-linked"), "junction");
   await seedSyncStore(target, { cursor: "target-cursor" });
-  resetPluginStateStoreForTests();
-  await closeOpenClawStateDatabaseAsync();
+  await closeStores();
   await expect(waitCursor(stateDir)).resolves.toMatchObject({
     cursor: "target-cursor",
     pathname: path.join(target, "state/openclaw.sqlite"),
@@ -133,15 +116,13 @@ it("finds a boundary-depth cursor after deeper subtrees and skips linked state",
 });
 
 it("observes only the requested account's completed ingress event", async () => {
-  const stateDir = await createStateDir();
+  const stateDir = createStateDir();
   const eventId = "$event";
   const accountId = "sut";
-  const queue = createChannelIngressQueueForTests({ channelId: "matrix", accountId, stateDir });
-  const otherQueue = createChannelIngressQueueForTests({
-    channelId: "matrix",
-    accountId: "other",
-    stateDir,
-  });
+  const makeQueue = (id: string) =>
+    createChannelIngressQueueForTests({ channelId: "matrix", accountId: id, stateDir });
+  const queue = makeQueue(accountId);
+  const otherQueue = makeQueue("other");
   await otherQueue.complete(eventId);
   await queue.enqueue(eventId, { roomId: "!room:matrix-qa.test" });
   await expect(

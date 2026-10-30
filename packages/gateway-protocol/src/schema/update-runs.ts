@@ -274,6 +274,14 @@ export const UpdateRunRecordSchema = closedObject({
   downtimeMs: Type.Union([timestamp, Type.Null()]),
 });
 
+export const UpdateRecoveryCleanupParamsSchema = Type.Union([
+  closedObject({ runId, expectedOwnerId: Type.String({ minLength: 1 }) }),
+  closedObject({
+    dryRun: Type.Optional(Type.Boolean()),
+    expectedOwnerId: Type.String({ minLength: 1 }),
+  }),
+]);
+
 export const UpdateRunsGetParamsSchema = closedObject({ runId });
 export const UpdateRunsGetResultSchema = closedObject({
   run: Type.Union([UpdateRunRecordSchema, Type.Null()]),

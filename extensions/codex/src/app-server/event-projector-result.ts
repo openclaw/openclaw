@@ -228,7 +228,12 @@ export abstract class CodexTurnProjection {
     this.reasoningProjection = new CodexReasoningProjection(
       this.settlement.params,
       (event) => this.emitAgentEvent(event),
-      options.onNativePlanUpdate,
+      {
+        turnId,
+        nextTimestamp: this.transcriptCheckpoint.nextTimestamp,
+        checkpointMessage: this.transcriptCheckpoint.enqueue,
+        onNativePlanUpdate: options.onNativePlanUpdate,
+      },
     );
   }
 
@@ -356,7 +361,7 @@ export abstract class CodexTurnProjection {
       runParams,
       turnId,
       upstreamUserText,
-      reasoningText,
+      reasoningMessages: this.reasoningProjection.collectMessages(),
       asyncMessages,
       commentaryMessages,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,

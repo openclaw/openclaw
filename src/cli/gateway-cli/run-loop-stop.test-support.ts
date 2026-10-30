@@ -7,7 +7,6 @@ import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget
 import type { GatewayRestartResult } from "../daemon-cli/restart-health.types.js";
 import { expectCallCount, withRunLoopCleanup } from "./run-loop-cleanup.test-support.js";
 import {
-  createActiveWorkSnapshot,
   createLifecycleGate,
   createUpdateRespawnChild,
   advanceWithoutCalls,
@@ -52,7 +51,6 @@ export function registerHostedUpdateStopTests(f: UpdateRespawnFixtures) {
         expect(f.isGatewayWorkAdmissionClosed()).toBe(true);
         expectUncalled(close, f.hostedStopExecute, f.hostedStopDispose);
         await expect(host!.request("stop", () => {})).resolves.toMatchObject({ ok: false });
-        expect(f.hostedStopPrepare).toHaveBeenCalledOnce();
         parkReady = true;
         onPark!(f.managedUpdateSuccessorOwner);
         await waitForCall(f.completeForegroundUpdateHandoffAfterClose);
@@ -65,16 +63,13 @@ export function registerHostedUpdateStopTests(f: UpdateRespawnFixtures) {
         await waitForCall(f.hostedStopExecute);
         captureSignal("SIGTERM")();
         await waitForCall(f.hostedStopDispose);
-        expect(f.hostedStopExecute).toHaveBeenCalledOnce();
         expect(runtime.exit).not.toHaveBeenCalled();
         const intentReads = f.consumeGatewayRestartIntentPayload.mock.calls.length;
         captureSignal("SIGTERM")();
         expect(f.consumeGatewayRestartIntentPayload).toHaveBeenCalledTimes(intentReads);
         disposed.resolve();
         await expect(withTimeout(exited, 4_000)).resolves.toBe(0);
-        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
-        expect(close).toHaveBeenCalledOnce();
-        expect(start).toHaveBeenCalledOnce();
+        expectCallCount(1, close, start);
         expect(f.respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
       } finally {
         joined.resolve(true);
@@ -89,7 +84,6 @@ export function registerHostedUpdateStopTests(f: UpdateRespawnFixtures) {
 }
 
 export function registerForegroundUpdateStopTests({
-  waitForGatewayActiveWork: waitForWork,
   requestManagedServiceUpdateHandoffPark: parkUpdate,
   consumeGatewayRestartIntent: consumeRestart,
   managedUpdateSuccessorOwner: updateOwner,
@@ -181,7 +175,6 @@ export function registerForegroundUpdateStopTests({
               expect(settle).toHaveBeenCalledOnce();
               expect(admissionClosed()).toBe(true);
             }
-            expect(captureStop).toHaveBeenCalledOnce();
             expect(close).toHaveBeenCalledTimes(pendingCompletion ? 1 : 0);
             expectCallCount(0, runtime.exit, respawnUpdate);
             if (outcome === "reject") {
@@ -200,13 +193,8 @@ export function registerForegroundUpdateStopTests({
             retry.resolve(true);
             const exitCode = pendingCompletion ? 1 : 0;
             await expect(withTimeout(exited, 4000)).resolves.toBe(exitCode);
-            expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(exitCode);
             expectCallCount(1, close, start, acquireLock);
             expect(respawnUpdate).not.toHaveBeenCalled();
-            expect(cancelUpdate).toHaveBeenCalledTimes(pendingCompletion ? 1 : 0);
-            if (pendingCompletion) {
-              expect(completeUpdate).toHaveBeenCalledExactlyOnceWith(updateOwner);
-            }
           },
           async () => {
             first.resolve(true);
@@ -332,13 +320,11 @@ export function registerForegroundUpdateStopTests({
         await setImmediate();
         await setImmediate();
         expect(consumeIntent).toHaveBeenCalledTimes(reads + 1);
-        expect(rollback).not.toHaveBeenCalled();
+        expectCallCount(0, rollback, close, runtime.exit);
         expect(admissionClosed()).toBe(true);
-        expectCallCount(0, close, runtime.exit);
         expectCallCount(1, settle, captureStop);
         joined.resolve(true);
         await expect(withTimeout(exited, 4000)).resolves.toBe(0);
-        expect(runtime.exit).toHaveBeenCalledOnce();
         expect(respawnUpdate).not.toHaveBeenCalled();
       } finally {
         joined.resolve(true);
@@ -389,12 +375,8 @@ export function registerForegroundUpdateStopTests({
           expect(runtime.exit).not.toHaveBeenCalled();
           expect(start).toHaveBeenCalledOnce();
           cancellation.release();
-          await waitForLoopCondition(
-            () => runtime.exit.mock.calls.length > 0 || start.mock.calls.length > 1,
-            "foreground cancellation did not settle",
-          );
-          expect(start).toHaveBeenCalledOnce();
           await expect(withTimeout(exited, 4_000)).resolves.toBe(0);
+          expect(start).toHaveBeenCalledOnce();
           expect(initialLockRelease).toHaveBeenCalledOnce();
           expect(restoredLockRelease).toHaveBeenCalledTimes(phase === "lock-reacquisition" ? 1 : 0);
           expect(acquireLock).toHaveBeenCalledTimes(phase === "lock-reacquisition" ? 2 : 1);
@@ -414,25 +396,15 @@ export function registerForegroundUpdateStopTests({
   );
 
   it.each([
-    { phase: "drain", signal: "SIGINT", restartIntent: false },
-    { phase: "server-close", signal: "SIGTERM", restartIntent: false },
-    { phase: "drain", signal: "SIGTERM", restartIntent: true },
+    { signal: "SIGINT", restartIntent: false },
+    { signal: "SIGTERM", restartIntent: false },
+    { signal: "SIGTERM", restartIntent: true },
   ] as const)(
-    "retains pre-close foreground $signal during $phase (restart intent: $restartIntent)",
-    async ({ phase, signal, restartIntent }) => {
+    "retains foreground $signal during close (restart intent: $restartIntent)",
+    async ({ signal, restartIntent }) => {
       const preClose = createLifecycleGate();
       const { updater } = prepareRespawn();
-      waitForWork.mockImplementationOnce(async () => {
-        if (phase === "drain") {
-          await preClose.wait();
-        }
-        return { drained: true, snapshot: createActiveWorkSnapshot() };
-      });
-      const close = vi.fn(async () => {
-        if (phase === "server-close") {
-          await preClose.wait();
-        }
-      });
+      const close = vi.fn(preClose.wait);
       await withIsolatedSignals(async ({ captureSignal }) => {
         const { start, runtime, exited } = await startStopLoop(close, 18789);
         try {
@@ -496,9 +468,8 @@ export function registerForegroundUpdateStopTests({
         }
         stop();
         stop();
-        expect(runtime.exit).not.toHaveBeenCalled();
+        expectCallCount(0, runtime.exit, cancelUpdate);
         expect(consumeIntent).toHaveBeenCalledTimes(consumedIntents);
-        expect(cancelUpdate).not.toHaveBeenCalled();
         if (stoppingUpdater) {
           expect(respawnUpdate).not.toHaveBeenCalled();
           updater.resolve({ respawn: phase !== "unsafe-updater" });

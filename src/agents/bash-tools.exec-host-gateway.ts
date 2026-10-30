@@ -38,7 +38,6 @@ import {
   EXEC_AUTO_REVIEW_DISPATCH_IDENTITY_WARNING,
   formatExecAutoReviewAssessment,
   resolveExecAutoReviewDecision,
-  type ExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
 import { hasPosixShellStartupBeforeInlineCommand } from "../infra/exec-wrapper-resolution.js";
 import { LruCache } from "../infra/lru-cache.js";
@@ -70,6 +69,7 @@ import {
 import { prepareCronStandingGrantConsumption } from "./bash-tools.exec-cron-grant.js";
 import {
   buildGatewayExecApprovalFollowupSummary,
+  publishGatewayGuardianReview,
   buildGatewayExecApprovalDeniedToolResult,
   resolveGatewayExecApprovalFollowupText,
 } from "./bash-tools.exec-host-gateway.output.js";
@@ -86,7 +86,7 @@ import {
   sendExecApprovalFollowupResult,
 } from "./bash-tools.exec-host-shared.js";
 import { createApprovalSlug, runExecProcess } from "./bash-tools.exec-runtime.js";
-import type { ExecToolApprovalReview, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
@@ -110,45 +110,6 @@ function recordAutoReviewDenial(sessionKey: string | undefined): number {
   );
   consecutiveAutoReviewDenials.set(sessionKey, count);
   return count;
-}
-
-function publishGatewayGuardianReview(
-  params: ProcessGatewayAllowlistParams,
-  status: ExecToolApprovalReview["status"],
-  decision?: ExecAutoReviewDecision,
-): void {
-  if (!params.toolCallId) {
-    return;
-  }
-  const approvalReviewOutcome =
-    status === "in_progress" ? "reviewing" : status === "approved" ? "approved" : "denied";
-  const review: ExecToolApprovalReview = {
-    id: `guardian:${params.toolCallId}`,
-    label: "Guardian",
-    status,
-    ...(decision ? { riskLevel: decision.risk, rationale: decision.rationale } : {}),
-  };
-  // Preserve terminal evidence before synchronous listeners can change reviewed operands.
-  if (status !== "in_progress") {
-    params.onApprovalReview?.(review);
-  }
-  if (!params.runId) {
-    return;
-  }
-  emitAgentEvent({
-    runId: params.runId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    stream: "tool",
-    data: {
-      phase: "review",
-      name: "exec",
-      toolCallId: params.toolCallId,
-      hideFromChannelProgress: true,
-      approvalReviewOutcome,
-      review,
-    },
-  });
 }
 
 async function resolveGatewayExecApprovalDrift(params: {
@@ -639,6 +600,7 @@ export async function processGatewayAllowlist(
         : dispatchEligibility;
   // Mutable operands and unenforceable patterns cannot authorize later cwd/env bindings.
   const approvalAllowAlwaysPersistence =
+    params.approvalTransport ||
     mutableFileApprovalRequiresOneShot ||
     (params.autoReview === true &&
       (autoReviewBlockedByShellStartup || !unpinnedEligibility.eligible)) ||
@@ -658,6 +620,14 @@ export async function processGatewayAllowlist(
       ? { unavailableDecisions: approvalUnavailableDecisions }
       : {};
   if (requiresAsk) {
+    const bindApprovalExecution = (execCommand: string | undefined) =>
+      params.approvalTransport?.bindExecution({
+        command: params.command,
+        execCommand: execCommand ?? params.command,
+        cwd: params.workdir,
+        env: params.env,
+        pty: params.pty,
+      });
     if (!mutableFileBinding) {
       return deny("SYSTEM_RUN_DENIED: mutable file approval binding is unavailable");
     }
@@ -715,13 +685,14 @@ export async function processGatewayAllowlist(
     if (canAutoReviewApprovalMiss) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
       publishGatewayGuardianReview(params, "in_progress");
-      const pendingDecision = resolveExecAutoReviewDecision(reviewer, {
+      bindApprovalExecution(approvedEnforcedCommand);
+      const reviewInput = {
         command: params.command,
         argv: autoReviewResolvedPath ? autoReviewSingleSegment?.argv : undefined,
         resolvedPath: autoReviewResolvedPath,
         cwd: params.workdir,
         envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
-        host: "gateway",
+        host: "gateway" as const,
         reason: requiresInlineEvalApproval
           ? "strict-inline-eval"
           : hasHeredocSegment
@@ -742,7 +713,10 @@ export async function processGatewayAllowlist(
           id: params.agentId,
           sessionKey: params.sessionKey,
         },
-      });
+      } satisfies Parameters<typeof reviewer>[0];
+      const pendingDecision = params.approvalTransport
+        ? params.approvalTransport.review(reviewInput)
+        : resolveExecAutoReviewDecision(reviewer, reviewInput);
       let decision: Awaited<typeof pendingDecision>;
       try {
         // Custom reviewers may never settle; cancellation must not retain approval authority.
@@ -837,8 +811,10 @@ export async function processGatewayAllowlist(
       return denyHeadlessApproval();
     }
 
+    bindApprovalExecution(boundApprovedCommand ?? enforcedCommand);
     const registerGatewayApproval = async (approvalId: string) =>
       await registerExecApprovalRequestForHostOrThrow({
+        approvalTransport: params.approvalTransport,
         approvalId,
         command: params.command,
         env: params.requestedEnv,
@@ -950,6 +926,7 @@ export async function processGatewayAllowlist(
     );
     const resolveApprovalForExecution = async (onFailure: () => void | Promise<void>) => {
       const approvalOutcome = await resolveExecApprovalWaitOutcome({
+        approvalTransport: params.approvalTransport,
         approvalId,
         expiresAtMs,
         preResolvedDecision,
@@ -980,7 +957,9 @@ export async function processGatewayAllowlist(
           reason: "approval-request-failed",
         });
         return {
-          deniedReason: "approval-request-failed",
+          deniedReason: params.approvalTransport
+            ? "approval-request-failed: retry from a new worker turn"
+            : "approval-request-failed",
           requestFailed: true,
           authorizationSource: "explicit-approval" as const,
           allowAlwaysDecision: undefined,
@@ -1156,6 +1135,7 @@ export async function processGatewayAllowlist(
           try {
             gatewayInvocationStarted = true;
             run = await runExecProcess({
+              approvalTransport: params.approvalTransport,
               command: params.command,
               execCommand: approvalDecision.execCommandOverride,
               workdir: params.workdir,

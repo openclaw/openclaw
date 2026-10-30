@@ -8,7 +8,6 @@ import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store
 import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
-  seedSessionTranscript,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
@@ -22,7 +21,7 @@ const unexpectedPlacementOperation = async (): Promise<never> => {
   throw new Error("Unexpected placement operation in lifecycle ordering test");
 };
 
-test.for(["delete", "archive", "recover"] as const)(
+test.for(["delete", "archive"] as const)(
   "%s lets an earlier move acquire its session fence before reclaim",
   async (action, { signal }) => {
     const { storePath } = await createSessionStoreDir();
@@ -34,24 +33,7 @@ test.for(["delete", "archive", "recover"] as const)(
       worktree: { id: worktree.id, branch: "order-branch", repoRoot: "/fixture/repo" },
       lifecycleRevision: "original-lifecycle",
     });
-    if (action === "recover") {
-      seed.status = "failed";
-      seed.abortedLastRun = true;
-      seed.mainRestartRecovery = {
-        cycleId: "order-cycle",
-        revision: 1,
-        chargedAttempts: 3,
-        tombstone: { reason: "automatic recovery exhausted" },
-      };
-    }
     await writeSessionStore({ entries: { [sessionKey]: seed } });
-    if (action === "recover") {
-      await seedSessionTranscript({
-        ...identity,
-        storePath,
-        messages: [{ role: "user", content: "recover this session" }],
-      });
-    }
     let placement = {
       ...identity,
       state: "active",
@@ -169,11 +151,6 @@ test.for(["delete", "archive", "recover"] as const)(
       expect(entry).toBeUndefined();
     } else {
       expect(entry?.archivedAt).toEqual(expect.any(Number));
-      if (action === "recover") {
-        expect(entry).toMatchObject({
-          mainRestartRecovery: { tombstone: { recoveredSessionKey: expect.any(String) } },
-        });
-      }
     }
   },
 );

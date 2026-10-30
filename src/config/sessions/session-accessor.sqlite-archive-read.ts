@@ -24,7 +24,6 @@ import {
 } from "../../shared/chat-message-content.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -106,9 +105,12 @@ function hasTranscriptArchiveInDatabase(
   );
 }
 
-export function readTranscriptArchivePresenceInWorker(
+export async function readTranscriptArchivePresenceInWorker(
   request: TranscriptArchivePresenceRead,
-): boolean {
+): Promise<boolean> {
+  // Final/page archive readers never borrow the writer's retained lifecycle.
+  const { withOpenClawAgentDatabaseReadOnly } =
+    await import("../../state/openclaw-agent-db-readonly.js");
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) => {
       const actual = readOpenClawAgentDatabaseIdentity(database);
@@ -251,7 +253,7 @@ async function scanArchivedTranscript(
   let seq = 1;
   const scan = async (source: Readable) => {
     for await (const record of readTranscriptArchiveRecords(source, maxRecordBytes)) {
-      const event: unknown = JSON.parse(record.toString("utf8"));
+      const event: unknown = JSON.parse(record);
       if (!headerRead) {
         if (!isRecord(event) || event.type !== "session" || event.id !== sessionId) {
           throw new Error("Archived transcript header does not match its registered session.");

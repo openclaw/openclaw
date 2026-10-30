@@ -5,10 +5,7 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import {
-  parseSqliteSessionFileMarker,
-  type SqliteSessionFileMarker,
-} from "../config/sessions/legacy-sqlite-marker.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
@@ -17,7 +14,6 @@ import {
   captureSessionActorStorageOwner,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
-import { restoreSessionColdTranscript } from "../config/sessions/session-cold-storage.js";
 import { listDurableSqliteTargetPathsForSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { resolveStateDir } from "../config/state-dir.js";
@@ -236,6 +232,7 @@ type UsageCostWorkerRequest =
 export async function runUsageCostWorker(
   prepared: PreparedUsageCostWorker,
   operation: UsageCostWorkerRequest,
+  waitForRefresh = false,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
   if (prepared.memory) {
     const pricing =
@@ -250,14 +247,16 @@ export async function runUsageCostWorker(
       prepared.memory,
       request,
       createUsageCostResolver(prepared, pricing),
+      waitForRefresh,
     );
   }
-  return runPreparedUsageCostWorker(prepared, operation);
+  return runPreparedUsageCostWorker(prepared, operation, waitForRefresh);
 }
 
 async function runPreparedUsageCostWorker(
   prepared: PreparedUsageCostWorker,
   operation: UsageCostWorkerRequest,
+  waitForRefresh: boolean,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
   const { location, archiveStorePaths, stores } = prepared;
   const capturedOperation = structuredClone(operation);
@@ -266,15 +265,6 @@ async function runPreparedUsageCostWorker(
     const assertCurrent = () => {
       scope.assertCurrent();
       signal?.throwIfAborted();
-    };
-    const resolveBinding = (target: Pick<SqliteSessionFileMarker, "agentId" | "storePath">) => {
-      const binding = stores.find(
-        (entry) => entry.agentId === target.agentId && entry.storePath === target.storePath,
-      )?.database;
-      if (!binding) {
-        throw new Error("Usage worker requested an unowned transcript database");
-      }
-      return binding;
     };
     const pruneRows: SessionCostUsageRollupSnapshot[] = [];
     const lock =
@@ -294,7 +284,7 @@ async function runPreparedUsageCostWorker(
       return lock;
     };
     if (lock) {
-      if (!(await lock.acquire())) {
+      if (!(await lock.acquire(waitForRefresh))) {
         return { kind: "busy" };
       }
     }
@@ -358,17 +348,6 @@ async function runPreparedUsageCostWorker(
                 case "pricing":
                   output = request.input.map(resolveCost);
                   break;
-                case "restore": {
-                  const binding = resolveBinding(request.input);
-                  await restoreSessionColdTranscript(
-                    { ...request.input, storePath: binding.path, env: location.env },
-                    assertRequestCurrent,
-                    undefined,
-                    undefined,
-                    context.signal,
-                  );
-                  break;
-                }
                 case "prune-rows":
                   for (const row of request.input) {
                     pruneRows.push({
@@ -412,6 +391,12 @@ async function runPreparedUsageCostWorker(
                         logger.warn("Could not clear usage refresh failure fact", { error });
                       });
                   }
+                  break;
+                case "write-quarters":
+                  output = await requireLock("write cache rows").writeQuarters(
+                    request.input,
+                    context.signal,
+                  );
                   break;
                 default:
                   throw new Error("Unknown usage worker host request");

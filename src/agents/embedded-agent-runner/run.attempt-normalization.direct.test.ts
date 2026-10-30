@@ -89,27 +89,6 @@ describe("normalizeEmbeddedRunAttempt", () => {
     expect(result.result.meta.agentMeta?.credentialSource).toEqual({ kind: "profile" });
   });
 
-  it("keeps attempt cost authoritative over a synthetic assistant zero-cost placeholder", async () => {
-    const assistant = {
-      ...makeCliUsageAssistant("stop"),
-      api: "openai-chatgpt-responses",
-      usage: createMockUsage(150_000, 100),
-    };
-    const attempt = makeAttempt(undefined, {
-      ...withAssistant(assistant),
-      attemptUsage: { input: 300_000, output: 200, cost: { total: 0.125 } },
-    });
-    const input = makeNormalizationInput(attempt);
-
-    await normalizeEmbeddedRunAttempt(input);
-
-    expect(toNormalizedUsage(input.usageAccumulator)).toMatchObject({
-      input: 300_000,
-      output: 200,
-    });
-    expect(toNormalizedUsage(input.usageAccumulator)?.cost).toEqual({ total: 0.125 });
-  });
-
   it("waits for pending user-turn persistence before deriving retry suppression", async () => {
     const persistence = createDeferred();
     const state = makePromptState(async () => {
@@ -155,7 +134,14 @@ describe("normalizeEmbeddedRunAttempt", () => {
         },
         continues
           ? truncatedCount
-            ? { attemptUsage: { input: 2_000, output: 100, total: 2_100 } }
+            ? {
+                ...withAssistant({
+                  ...assistant,
+                  api: "openai-chatgpt-responses",
+                  usage: createMockUsage(150_000, 100),
+                }),
+                attemptUsage: { input: 2_000, output: 100, total: 2_100, cost: { total: 0.125 } },
+              }
             : { toolMetas: [{ toolName: "read", isError: false }] }
           : { ...withAssistant(assistant), messagesSnapshot: [assistant] as never },
       );
@@ -203,6 +189,7 @@ describe("normalizeEmbeddedRunAttempt", () => {
         output: 100,
         total: 2_100,
       });
+      expect(toNormalizedUsage(input.usageAccumulator)?.cost).toEqual({ total: 0.125 });
     },
   );
 

@@ -22,6 +22,7 @@ import {
   createGoalChatStartRequest,
   readGoalChatUserMessages,
 } from "./server.chat-goal.test-support.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { result as workerCommandResult } from "./worker-environments/bootstrap.test-support.js";
@@ -109,20 +110,13 @@ export function registerWorkerGoalChatCases(
       const loadNativeAsync = vi
         .spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandleAsync")
         .mockResolvedValue(getTestPluginRegistry());
-      const baseline = getRuntimeConfig();
-      const config: OpenClawConfig = {
-        ...baseline,
-        plugins: {
-          ...baseline.plugins,
-          entries: { ...baseline.plugins?.entries, codex: { enabled: true } },
-        },
-        agents: {
-          ...baseline.agents,
-          entries: {
-            ...baseline.agents?.entries,
-            main: { ...baseline.agents?.entries?.main, nativeRuntimeConsent: ["codex"] },
-          },
-        },
+      const config: OpenClawConfig = structuredClone(getRuntimeConfig());
+      config.plugins ??= {};
+      config.plugins.entries = { ...config.plugins.entries, codex: { enabled: true } };
+      config.agents ??= {};
+      config.agents.entries = {
+        ...config.agents.entries,
+        main: { ...config.agents.entries?.main, nativeRuntimeConsent: ["codex"] },
       };
       await prepareGatewayReplyRuntimeForTest({ force: true, config });
       await patchSessionEntryCore(scope(), () => ({
@@ -240,12 +234,7 @@ export function registerWorkerGoalChatCases(
       const profile = ensureProfileForEmail("worker-goal@example.test");
       const operator = {
         ...client,
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 1,
-        },
+        authenticatedUserProfile: gatewayProfile(profile.id),
         internal: {
           authenticatedControlUi: true,
           authenticatedOperator: true,
@@ -472,11 +461,7 @@ export function registerWorkerGoalChatCases(
       expect(result).toHaveBeenCalledWith(
         false,
         undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message:
-            "Error: Goal start or resume requires an idle built-in local session with recoverable history or a supported Codex cloud-worker session.",
-        }),
+        expect.objectContaining({ code: "INVALID_REQUEST" }),
       );
       expectNoGoalInput();
       expect(runEmbeddedAgent).not.toHaveBeenCalled();

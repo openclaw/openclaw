@@ -34,10 +34,15 @@ function submitForm(modal: ParentNode) {
     .querySelector("form")!
     .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 }
-function key(target: EventTarget, value: string) {
-  const event = new KeyboardEvent("keydown", { key: value, bubbles: true, cancelable: true });
+function key(target: EventTarget, value: string, init: KeyboardEventInit = {}, prevented = true) {
+  const event = new KeyboardEvent("keydown", {
+    key: value,
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
   target.dispatchEvent(event);
-  expect(event.defaultPrevented).toBe(true);
+  expect(event.defaultPrevented).toBe(prevented);
 }
 const saveButton = (modal: ParentNode) =>
   modal.querySelector<HTMLButtonElement>('button[type="submit"]');
@@ -80,22 +85,9 @@ it("keeps folder input focus while filtering and saves the keyboard-completed fo
     expect(modal.querySelector('[role="option"]')?.textContent).toContain("tools");
     expect(document.activeElement).toBe(input);
   });
-  const composingEnter = new KeyboardEvent("keydown", {
-    key: "Enter",
-    isComposing: true,
-    bubbles: true,
-    cancelable: true,
-  });
-  input.dispatchEvent(composingEnter);
-  expect(composingEnter.defaultPrevented).toBe(false);
+  key(input, "Enter", { isComposing: true }, false);
   input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-  const committingEnter = new KeyboardEvent("keydown", {
-    key: "Enter",
-    bubbles: true,
-    cancelable: true,
-  });
-  input.dispatchEvent(committingEnter);
-  expect(committingEnter.defaultPrevented).toBe(false);
+  key(input, "Enter", {}, false);
   key(input, "Tab");
   await waitForSolid(() => expect(input.value).toBe("/workspace/tools"));
   modal.querySelector<HTMLButtonElement>(".new-session-page__browser-use")!.click();

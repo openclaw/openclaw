@@ -79,10 +79,14 @@ it("keeps the context popover open and its usage link focused during live usage 
   expect(usageLink.textContent).toContain("Max");
   expect(query(".context-usage__context-value")?.textContent).toContain("190k / 200k");
   expect(query(".context-ring")?.classList).toContain("context-ring--warning");
-  expect(query(".context-usage__limit-bar")?.getAttribute("aria-valuenow")).toBe("61");
-  expect(query(".context-usage__provenance")?.textContent).toContain("Claude");
+  expect(query(".context-usage__limit")?.getAttribute("aria-valuenow")).toBe("61");
+  expect(
+    query(".context-usage__identity .provider-brand-icon")?.getAttribute("data-provider-icon"),
+  ).toBe("claude");
   expect(query(".context-usage__stats")?.textContent).toContain("9k");
   details.querySelector("summary")!.click();
   flush();
-  expect(details.querySelector(".context-usage__popover")).toBeNull();
+  expect(details.open).toBe(false);
+  expect(details.querySelector("[popover]")?.matches(":popover-open")).toBe(false);
+  expect(query("[data-chat-provider-usage]")).toBe(usageLink);
 });

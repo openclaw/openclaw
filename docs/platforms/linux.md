@@ -9,7 +9,7 @@ title: "Linux app"
 ---
 
 The Gateway is fully supported on Linux. Node is the primary, default, and
-recommended runtime; Bun 1.4.3+ builds with WAL-reset-safe `node:sqlite` can run
+recommended runtime; Bun 1.4.4+ builds with WAL-reset-safe `node:sqlite` can run
 OpenClaw as an explicit opt-in. Use `pnpm` rather than Bun for dependency
 installation.
 
@@ -82,13 +82,34 @@ disconnection, and manual recovery.
 
 ### Desktop compatibility
 
-The Linux companion shares one Bun fork pin with the native macOS app and CI.
-Runtime admission, SQLite safety checks, and the fork's disabled implicit package
-auto-install remain enabled. macOS Tauri test builds keep their existing runtime
-behavior; the native macOS app owns its separate bundled runtime. Windows Tauri
+The Tauri companion defaults to JIT: the pinned OpenClaw Bun fork plus its
+matching OpenClaw package. Runtime admission, SQLite safety checks, and the
+fork's disabled implicit package auto-install remain enabled. Windows Tauri
 releases use the signed Windows fork from the shared pin for local setup; an
 unsigned dry-run is not shippable. See
 [Bun compatibility](/install/bun-compatibility).
+
+To build an experimental AOT companion, set `OPENCLAW_DESKTOP_RUNTIME=aot` and
+`OPENCLAW_DESKTOP_AOT_ARTIFACT` to a prebuilt
+[standalone artifact](/install/standalone#desktop-app-artifacts). Keep its
+executable, `manifest.json`, and runtime sidecar together. The Tauri build stages
+that artifact without building the experimental compiler. The embedded manifest
+selects the launch command, CLI, and Gateway runtime; the tray shows its flavor.
+Set `OPENCLAW_DESKTOP_RUNTIME=jit` to switch the next build back. Release defaults
+remain JIT.
+
+The manual **Linux App** workflow accepts the same choice through
+`desktop_runtime`. For AOT, also supply `aot_run_id` and `aot_artifact_name` from a
+successful push or manually dispatched workflow in the same repository. The
+artifact must target Linux x64 and contain the standalone files at its root.
+Ordinary PR tests keep their JIT fixtures. AOT runtime qualification and native
+plugin checks must cover the exact artifact you supply.
+
+AOT supports glibc Linux x64/arm64 and Apple silicon macOS Tauri builds. It uses
+the experimental OpenClaw Bun/WebKit forks. macOS Tauri builds require macOS 26.2
+or later; AOT must be signed with hardened runtime and without `allow-jit`.
+The native macOS app has a separate runtime owner and continues to default to
+JIT.
 
 Published AMD64 AppImages are built on Ubuntu 22.04 and require glibc 2.35 or
 newer plus a `libstdc++` that provides `GLIBCXX_3.4.30`. Ubuntu 22.04 and
@@ -98,6 +119,11 @@ this requirement.
 
 `.deb` installs stay owned by the system package manager; installing the download
 does not add an APT repository. AppImages use the signed in-app updater.
+After replacing an existing app with a different runtime build, choose
+**Use bundled runtime…** in the tray to activate it for the local Gateway.
+Updating the app alone does not replace an existing Gateway service. A successful
+activation retains the previous runtime for recovery and keeps any runtime
+still used by a running process.
 
 Global shortcuts are available on X11. On Wayland, use the tray's **Quick Chat**
 entry when your desktop provides a tray host; global shortcuts are unavailable.
@@ -159,8 +185,8 @@ separate from the native **OpenClaw** app.
 
 ### Use the bundled runtime
 
-On Linux, fresh local setup installs the Gateway on the bundled OpenClaw Bun
-fork through the standard CLI. The install guard requires the service to still
+On Linux, Windows, and macOS Tauri builds, fresh local setup installs the Gateway on the selected bundled runtime
+through the standard CLI. The install guard requires the service to still
 be absent. A service that appears during setup blocks that installation. The app's
 runtime marker is informational and never authorizes automatic service changes.
 
@@ -168,7 +194,7 @@ For any existing Gateway that uses another runtime, choose **Use bundled
 runtime…** in the tray menu. This includes Node, an older bundled Bun after an
 app update, and an operator-selected runtime. The confirmation shows the current
 runtime. The CLI install checks that the service definition and runtime pin still
-match what you confirmed before switching to the current bundled Bun. If either
+match what you confirmed before switching to the app's bundled runtime. If either
 changed, the action refuses. A paused or stopped Gateway stays stopped; choose
 **Start Gateway** before switching runtimes.
 
@@ -183,14 +209,16 @@ openclaw gateway install --force --runtime node
 
 To return to a particular previous executable, use
 `openclaw gateway install --force --runtime-path /absolute/path/to/node-or-bun`.
-The CLI owns service installation. Switching an existing Gateway's runtime
-leaves its CLI launcher unchanged.
+The CLI owns service installation. Successful activation also refreshes the
+app-managed CLI launcher; independently installed CLI launchers remain under
+their original owner.
 
 Startup and app updates never change an existing Gateway service or runtime pin.
 After an app update, the current service keeps its existing runtime until you
 choose **Use bundled runtime…** again. Immutable app runtime directories are
-retained, so updates never remove a runtime referenced by a service. These actions
-are Linux-only; macOS Tauri keeps its existing behavior, separate from the
+retained, so updates never remove a runtime referenced by a service. Windows
+Tauri uses this action to activate its updated JIT runtime too; Windows AOT is
+unsupported. The macOS Tauri app remains separate from the
 [native macOS app](/platforms/mac/bundled-gateway).
 
 ### Desktop sharing
@@ -444,7 +472,7 @@ and its reply.
 The CLI remains the simplest option for a headless server or VPS. Use a manual
 SSH tunnel when connecting without the Linux desktop companion:
 
-1. Install Node 26 (recommended), or another supported release: Node 24.16+ or Node 26.1+.
+1. Install Node 26 (recommended), or another supported release: Node 24.22.1+ or Node 26.12.1+.
 2. On npm 12 or npm 11.16+, run `npm i -g openclaw@latest --allow-scripts=openclaw`. On npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
@@ -503,7 +531,7 @@ The bundled Linux Canvas bridge and its desktop Canvas window have been removed.
 For inline widgets in the Control UI, use [`show_widget`](/tools/show-widget).
 The separate [macOS widget panel](/platforms/mac/canvas) requires a connected
 Mac and is render-only. These widget surfaces do not restore the former Linux
-Canvas bridge or its A2UI push commands.
+Canvas bridge.
 
 ## Install
 

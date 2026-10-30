@@ -2,6 +2,7 @@
 
 import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { findButton } from "../test-helpers/dom-probe.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import {
   showConfirmChoiceDialog,
@@ -23,16 +24,6 @@ function setCheckbox(selector: string, checked: boolean) {
 async function show(options: Partial<ConfirmDialogOptions> = {}) {
   const result = showConfirmDialog({ message: "Continue?", ...options });
   return { result, ...(await getRenderedModalDialog(document.body)) };
-}
-
-function findButton(label: string): HTMLButtonElement {
-  const button = [...document.body.querySelectorAll("button")].find(
-    (candidate) => candidate.textContent?.trim() === label,
-  );
-  if (!(button instanceof HTMLButtonElement)) {
-    throw new Error(`Expected ${label} button`);
-  }
-  return button;
 }
 
 describe("showConfirmDialog", () => {
@@ -106,7 +97,7 @@ describe("showConfirmDialog", () => {
     "keeps grouped choices gated by acknowledgement and live authority: %s",
     async (choice) => {
       let allowed = true;
-      const pending = showConfirmChoiceDialog({
+      const result = showConfirmChoiceDialog({
         message: "Choose a scope",
         alternativeLabel: "Only this session",
         confirmLabel: "All sessions",
@@ -126,85 +117,40 @@ describe("showConfirmDialog", () => {
       expect(dialog.open).toBe(true);
       allowed = true;
       selected.click();
-      await expect(pending).resolves.toBe(choice);
+      await expect(result).resolves.toBe(choice);
     },
   );
-
-  it("rejects a reentrant confirmation instead of stacking or replaying it", async () => {
-    const first = showConfirmDialog({ title: "First", message: "First action" });
-    const second = showConfirmDialog({ title: "Second", message: "Second action" });
-    await getRenderedModalDialog(document.body);
-    expect(document.body.textContent).toContain("First");
-    expect(document.body.textContent).not.toContain("Second");
-    await expect(second).resolves.toBe(false);
-    findButton("Cancel").click();
-    await expect(first).resolves.toBe(false);
-  });
-
-  it.each([
-    { button: "This session", result: "confirm" },
-    { button: "All sessions", result: "alternative" },
-    { button: "Cancel", result: null },
-  ] as const)("resolves the choice $result", async ({ button, result }) => {
-    const pending = showConfirmChoiceDialog({
-      title: "Archive session?",
-      message: "Choose which sessions to archive.",
-      confirmLabel: "This session",
-      alternativeLabel: "All sessions",
-    });
-    await getRenderedModalDialog(document.body);
-    expect([...document.body.querySelectorAll("button")].map((item) => item.textContent)).toEqual([
-      "Cancel",
-      "All sessions",
-      "This session",
-    ]);
-    expect(findButton("This session").classList.contains("primary")).toBe(true);
-    expect(findButton("All sessions").className).toBe("btn");
-    expect(findButton("Cancel").hasAttribute("autofocus")).toBe(true);
-    findButton(button).click();
-    await expect(pending).resolves.toBe(result);
-  });
 
   it.each(
-    [
-      { choice: false, grouped: false },
-      { choice: true, grouped: false },
-      { choice: true, grouped: true },
-    ].flatMap((mode) =>
-      ["abort", "dismiss"].map((action) => ({
-        choice: mode.choice,
-        grouped: mode.grouped,
-        action,
-      })),
+    [false, true].flatMap((choice) =>
+      ["abort", "dismiss", ...(choice ? ["Cancel"] : [])].map((action) => ({ choice, action })),
     ),
-  )(
-    "cancels choice=$choice grouped=$grouped on $action without stacking",
-    async ({ choice, grouped, action }) => {
-      const controller = new AbortController();
-      const options = { message: "Continue?", signal: controller.signal };
-      const pending = choice
-        ? showConfirmChoiceDialog({
-            ...options,
-            alternativeLabel: "Alternative",
-            groupChoicesOnMobile: grouped,
-          })
-        : showConfirmDialog(options);
-      const { modal } = await getRenderedModalDialog(document.body);
-      if (choice) {
-        await expect(showConfirmDialog({ message: "Second" })).resolves.toBe(false);
-        await expect(
-          showConfirmChoiceDialog({ message: "Third", alternativeLabel: "Other" }),
-        ).resolves.toBeNull();
-      }
-      if (action === "abort") {
-        controller.abort();
-      } else {
-        modal.dispatchEvent(new CustomEvent("modal-cancel"));
-      }
-      await expect(pending).resolves.toBe(choice ? null : false);
-      if (choice || action === "abort") {
-        expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-      }
-    },
-  );
+  )("cancels choice=$choice on $action without stacking", async ({ choice, action }) => {
+    const controller = new AbortController();
+    const options = { title: "First", message: "Continue?", signal: controller.signal };
+    const pending = choice
+      ? showConfirmChoiceDialog({
+          ...options,
+          alternativeLabel: "Alternative",
+        })
+      : showConfirmDialog(options);
+    const { modal } = await getRenderedModalDialog(document.body);
+    await expect(showConfirmDialog({ message: "Second" })).resolves.toBe(false);
+    await expect(
+      showConfirmChoiceDialog({ message: "Third", alternativeLabel: "Other" }),
+    ).resolves.toBeNull();
+    expect(document.body.textContent).toContain("First");
+    expect(document.body.textContent).not.toContain("Second");
+    if (action === "abort") {
+      controller.abort();
+    } else if (action === "Cancel") {
+      findButton("Cancel").click();
+    } else {
+      modal.dispatchEvent(new CustomEvent("modal-cancel"));
+    }
+    await expect(pending).resolves.toBe(choice ? null : false);
+    if (choice || action === "abort") {
+      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    }
+  });
 });

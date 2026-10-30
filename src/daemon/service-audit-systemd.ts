@@ -103,17 +103,6 @@ function parseSystemdUnit(directives: UnitDirective[]) {
   return { after, wants, restartSec, killMode, stopTimeoutMs };
 }
 
-function isRestartSecPreferred(value: string | undefined): boolean {
-  if (!value) {
-    return false;
-  }
-  const parsed = parseSystemdTimeSpanMs(value);
-  if (parsed === undefined) {
-    return false;
-  }
-  return Math.abs(parsed - 5_000) < 10;
-}
-
 export async function auditSystemdUnit(
   env: Record<string, string | undefined>,
   issues: ServiceConfigIssue[],
@@ -144,14 +133,115 @@ export async function auditSystemdUnit(
   const directives = readUnitDirectives(content);
   if (definitionDrift && !definitionDriftError) {
     try {
-      await auditSystemdDefinition(
-        env,
-        unitPath,
-        directives,
-        command,
-        definitionDrift,
-        inspectRewrite,
+      const definitions = new Map([[unitPath, directives]]);
+      for (const file of command?.definitionPaths ?? []) {
+        if (file !== unitPath) {
+          definitions.set(file, readUnitDirectives(await fs.readFile(file, "utf8")));
+        }
+      }
+      // Values emitted by stable releases; other explicit values are not attributed to an upgrade.
+      const released: Record<string, readonly string[]> = {
+        "Unit.StartLimitBurst": ["5"],
+        "Unit.StartLimitIntervalSec": ["60"],
+        "Service.TimeoutStopSec": ["30"],
+        "Service.KillMode": ["control-group", "process"],
+      };
+      const same = (key: string, value: string, expected: string) =>
+        key.endsWith("Sec")
+          ? parseSystemdTimeSpanMs(value) !== undefined &&
+            parseSystemdTimeSpanMs(value) === parseSystemdTimeSpanMs(expected)
+          : value === expected;
+      const environment = resolveManagedGatewayServiceCommand(command ?? null)?.environment;
+      const environmentFile = renderSystemdEnvironmentFile(
+        resolveSystemdEnvironmentFilePath({
+          stateDir: resolveStateDir({ ...env, ...environment }),
+          environment,
+        }),
       );
+      const preserved = new Set([
+        "Unit.Description",
+        "Service.ExecStart",
+        "Service.WorkingDirectory",
+        "Service.Environment",
+      ]);
+      for (const [sourcePath, entries] of definitions) {
+        const values = new Map<string, string[]>();
+        for (const { section, key, value } of entries) {
+          const name = `${section.slice(1, -1)}.${key}`;
+          values.set(name, [...(values.get(name) ?? []), value]);
+        }
+        const keys =
+          sourcePath === unitPath
+            ? new Set([...Object.keys(SYSTEMD_FIXED_POLICY), ...values.keys()])
+            : values.keys();
+        for (const key of keys) {
+          const expected = SYSTEMD_FIXED_POLICY[key];
+          const current = values.get(key);
+          if (
+            inspectRewrite &&
+            sourcePath === unitPath &&
+            key === "Unit.Description" &&
+            current?.some((value) => !isInstallerServiceDescription(value, env))
+          ) {
+            definitionDrift.push(
+              serviceDefinitionUnknown(
+                key,
+                "The installer would replace custom service metadata.",
+                sourcePath,
+              ),
+            );
+          }
+          if (
+            preserved.has(key) ||
+            (key === "Service.EnvironmentFile" &&
+              (current?.every((value) => value === environmentFile) ||
+                (sourcePath !== unitPath &&
+                  command?.managedDefinition &&
+                  command.managedOverrides &&
+                  command.managedOverrides.environment !== true &&
+                  !command.reloadPending)))
+          ) {
+            continue;
+          }
+          if (expected !== undefined && current?.every((value) => same(key, value, expected))) {
+            continue;
+          }
+          const recognized =
+            expected !== undefined &&
+            (current === undefined ||
+              (sourcePath === unitPath &&
+                current.every((value) =>
+                  [expected, ...(released[key] ?? [])].some((known) => same(key, value, known)),
+                )));
+          definitionDrift.push(
+            recognized
+              ? {
+                  kind: "outdated",
+                  key,
+                  current: current?.at(-1) ?? null,
+                  expected,
+                  sourcePath,
+                  message: `Systemd ${key} differs from the installer value ${expected}.`,
+                }
+              : sourcePath === unitPath && expected !== undefined
+                ? serviceDefinitionPreserved(key, sourcePath)
+                : {
+                    kind: "unknown-edit",
+                    key,
+                    sourcePath,
+                    reason:
+                      sourcePath !== unitPath
+                        ? "Operator drop-in overrides installer policy."
+                        : "The installer would replace a custom directive in the managed unit.",
+                    // Ignored application metadata still belongs to the operator during rewrites.
+                    message:
+                      SYSTEMD_DIRECTIVES.has(key) || /(?:^|\.)X-/.test(key)
+                        ? `Custom systemd ${key}; not changed.`
+                        : `Systemd ${key} contains an unrecognized setting.`,
+                  },
+          );
+        }
+      }
       if (!command?.definitionPaths?.length || command.reloadPending) {
         definitionDriftError =
           "Systemd drop-in paths could not be fully inspected or a daemon reload is pending; definition audit is incomplete.";
@@ -245,7 +335,9 @@ export async function auditSystemdUnit(
       "Missing systemd Wants=network-online.target",
     );
   }
-  if (!isRestartSecPreferred(parsed.restartSec)) {
+  const restartSec = parsed.restartSec;
+  const restartMs = restartSec ? parseSystemdTimeSpanMs(restartSec) : undefined;
+  if (restartMs === undefined || !(Math.abs(restartMs - 5_000) < 10)) {
     report(
       SYSTEMD_SERVICE_AUDIT_CODES.systemdRestartSec,
       "RestartSec does not match the recommended 5s",
@@ -262,125 +354,6 @@ export async function auditSystemdUnit(
     );
   }
   return definitionDriftError;
-}
-
-async function auditSystemdDefinition(
-  env: Record<string, string | undefined>,
-  unitPath: string,
-  directives: UnitDirective[],
-  command: GatewayServiceCommand | undefined,
-  findings: ServiceDefinitionDrift[],
-  inspectRewrite: boolean,
-) {
-  const definitions = new Map([[unitPath, directives]]);
-  for (const file of command?.definitionPaths ?? []) {
-    if (file !== unitPath) {
-      definitions.set(file, readUnitDirectives(await fs.readFile(file, "utf8")));
-    }
-  }
-  // Values emitted by stable releases; other explicit values are not attributed to an upgrade.
-  const released: Record<string, readonly string[]> = {
-    "Unit.StartLimitBurst": ["5"],
-    "Unit.StartLimitIntervalSec": ["60"],
-    "Service.TimeoutStopSec": ["30"],
-    "Service.KillMode": ["control-group", "process"],
-  };
-  const same = (key: string, value: string, expected: string) =>
-    key.endsWith("Sec")
-      ? parseSystemdTimeSpanMs(value) !== undefined &&
-        parseSystemdTimeSpanMs(value) === parseSystemdTimeSpanMs(expected)
-      : value === expected;
-  const environment = resolveManagedGatewayServiceCommand(command ?? null)?.environment;
-  const environmentFile = renderSystemdEnvironmentFile(
-    resolveSystemdEnvironmentFilePath({
-      stateDir: resolveStateDir({ ...env, ...environment }),
-      environment,
-    }),
-  );
-  const preserved = new Set([
-    "Unit.Description",
-    "Service.ExecStart",
-    "Service.WorkingDirectory",
-    "Service.Environment",
-  ]);
-  for (const [sourcePath, entries] of definitions) {
-    const values = new Map<string, string[]>();
-    for (const { section, key, value } of entries) {
-      const name = `${section.slice(1, -1)}.${key}`;
-      values.set(name, [...(values.get(name) ?? []), value]);
-    }
-    const keys =
-      sourcePath === unitPath
-        ? new Set([...Object.keys(SYSTEMD_FIXED_POLICY), ...values.keys()])
-        : values.keys();
-    for (const key of keys) {
-      const expected = SYSTEMD_FIXED_POLICY[key];
-      const current = values.get(key);
-      if (
-        inspectRewrite &&
-        sourcePath === unitPath &&
-        key === "Unit.Description" &&
-        current?.some((value) => !isInstallerServiceDescription(value, env))
-      ) {
-        findings.push(
-          serviceDefinitionUnknown(
-            key,
-            "The installer would replace custom service metadata.",
-            sourcePath,
-          ),
-        );
-      }
-      if (
-        preserved.has(key) ||
-        (key === "Service.EnvironmentFile" &&
-          (current?.every((value) => value === environmentFile) ||
-            (sourcePath !== unitPath &&
-              command?.managedDefinition &&
-              command.managedOverrides &&
-              command.managedOverrides.environment !== true &&
-              !command.reloadPending)))
-      ) {
-        continue;
-      }
-      if (expected !== undefined && current?.every((value) => same(key, value, expected))) {
-        continue;
-      }
-      const recognized =
-        expected !== undefined &&
-        (current === undefined ||
-          (sourcePath === unitPath &&
-            current.every((value) =>
-              [expected, ...(released[key] ?? [])].some((known) => same(key, value, known)),
-            )));
-      findings.push(
-        recognized
-          ? {
-              kind: "outdated",
-              key,
-              current: current?.at(-1) ?? null,
-              expected,
-              sourcePath,
-              message: `Systemd ${key} differs from the installer value ${expected}.`,
-            }
-          : sourcePath === unitPath && expected !== undefined
-            ? serviceDefinitionPreserved(key, sourcePath)
-            : {
-                kind: "unknown-edit",
-                key,
-                sourcePath,
-                reason:
-                  sourcePath !== unitPath
-                    ? "Operator drop-in overrides installer policy."
-                    : "The installer would replace a custom directive in the managed unit.",
-                // Ignored application metadata still belongs to the operator during rewrites.
-                message:
-                  SYSTEMD_DIRECTIVES.has(key) || /(?:^|\.)X-/.test(key)
-                    ? `Custom systemd ${key}; not changed.`
-                    : `Systemd ${key} contains an unrecognized setting.`,
-              },
-      );
-    }
-  }
 }
 
 async function auditSystemdUnitBackup(unitPath: string, issues: ServiceConfigIssue[]) {

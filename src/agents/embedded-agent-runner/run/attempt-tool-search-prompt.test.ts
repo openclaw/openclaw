@@ -1,7 +1,6 @@
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
-import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
@@ -9,6 +8,7 @@ import { createToolSearchTools } from "../../tool-search.js";
 import { runEmbeddedAttemptPromptPhase } from "./attempt-prompt-phase.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
+import { createEmptyPromptBootstrap } from "./attempt-system-prompt.test-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const { createFixture, createPromptAssemblyResult, mocks } = await vi.hoisted(
@@ -31,7 +31,11 @@ const { createPromptBuildToolPolicy } = await vi.importActual<
 
 beforeEach(() => Object.values(mocks).forEach((mock) => mock.mockReset()));
 
-async function promptFixture(codeMode = false, mode: "tools" | "directory" = "tools") {
+async function promptFixture(
+  codeMode = false,
+  mode: "tools" | "directory" = "tools",
+  skillsDeferred = false,
+) {
   const config = {
     agents: { defaults: { experimental: { localModelLean: false } } },
     tools: { codeMode, ...(!codeMode && { toolSearch: { enabled: true, mode } }) },
@@ -52,9 +56,10 @@ async function promptFixture(codeMode = false, mode: "tools" | "directory" = "to
     admission.close();
     runtime.cleanup();
   });
-  const sourceTools = (codeMode ? ["sessions_create"] : ["fixture_allowed", "fixture_denied"]).map(
-    createStubTool,
-  );
+  const sourceTools = [
+    ...(codeMode ? ["sessions_create"] : ["fixture_allowed", "fixture_denied"]),
+    ...(skillsDeferred ? ["skills_search", "skills_read"] : []),
+  ].map(createStubTool);
   const surface = runtime.compactTools([
     ...(!codeMode
       ? createToolSearchTools({ config: runtime.config, catalogRef: runtime.toolSearchCatalogRef })
@@ -80,14 +85,7 @@ async function promptFixture(codeMode = false, mode: "tools" | "directory" = "to
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
     activeContextEngine: undefined,
     attempt,
-    bootstrap: {
-      ...buildBootstrapBudgetState({ files: [] }),
-      bootstrapMode: "full",
-      contextFiles: [],
-      bootstrapInjectionStats: [],
-      shouldRecordCompletedBootstrapTurn: false,
-      workspaceNotes: [],
-    },
+    bootstrap: createEmptyPromptBootstrap(),
     setup: createAttemptSetupFixture({
       effectiveCwd: "/workspace",
       effectiveWorkspace: "/workspace",
@@ -104,6 +102,7 @@ async function promptFixture(codeMode = false, mode: "tools" | "directory" = "to
     skillsPrompt: "",
     codeModeActive: codeMode,
     toolSearchDirectoryEnabled: !codeMode,
+    deferredToolsDirectlyCallable: !codeMode && mode === "directory",
     toolSearchRuntimeConfig: runtime.config,
     toolSearchCatalogRef: runtime.toolSearchCatalogRef,
   });
@@ -127,6 +126,25 @@ it("keeps explicit task creation discoverable in Code Mode and removes revoked c
   const refreshPrompt = await prepared.prepareToolPrompt(restricted.tools);
   expect(refreshPrompt(prepared.systemPromptText)).not.toContain("`sessions_create`");
 });
+
+it.each(["tools", "directory"] as const)(
+  "guides deferred skill access through the callable %s surface",
+  async (mode) => {
+    const { surface, prepared } = await promptFixture(false, mode, true);
+    expect(surface.tools.map((tool) => tool.name)).not.toContain("skills_read");
+    if (mode === "tools") {
+      expect(prepared.systemPromptText).toContain(
+        'call `dispatch_action` with `{"id":"skills_read","args":{"name":"<name>"}}`',
+      );
+      expect(prepared.systemPromptText).toContain(
+        'by calling `dispatch_action` with `{"id":"skills_search","args":{"query":"<query>"}}`',
+      );
+      expect(prepared.systemPromptText).not.toContain("use `skills_read` with its exact name");
+    } else {
+      expect(prepared.systemPromptText).toContain("use `skills_read` with its exact name");
+    }
+  },
+);
 
 it.each([
   { mode: "tools" as const, toolsAllow: undefined },

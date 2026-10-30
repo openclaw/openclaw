@@ -2,6 +2,14 @@
 
 ## Orchestrated stable release
 
+This section describes the executable stable-release controller, not the
+[cross-release manager role](release-manager.md). The release owner selects its
+approved cut and authority through the [owner lifecycle](release-owner.md).
+For a new controller state on a patch or promotion branch, pass
+`--cut-sha <selected-sha>` and `--confirm-cut-sha <selected-sha>` for that branch's
+approved cut, not moving `main`. Confirmation alone does not select the cut.
+On resume, preserve the state's recorded cut.
+
 Stable policy (Peter, 2026-09-28): the GitHub release becomes public and Latest
 as soon as core npm is verified. It never waits for ClawHub, Docker, or native
 apps. The orchestrator does this in `flip-github`; the manual direct publisher
@@ -76,8 +84,11 @@ Release SHA, Q=C, independently pinned P, and one validation parent.
 Record the cut time; aim to seal validation in approximately 20 minutes and
 publish within an hour, with actual timing recorded separately. Backports are
 merged `main` PRs cherry-picked before dispatch (pure-data model/catalog
-additions and bundled-runtime bumps qualify); after dispatch admit only a fix
-for a required-lane defect. A second cut (re-basing the candidate on newer
+additions and bundled-runtime bumps require the approved selection scope);
+after dispatch admit only a fix for a required-lane defect unless the operator
+explicitly reopens intake through the
+[owner lifecycle](release-owner.md#prepare-and-admit-hotfixes).
+A second cut (re-basing the candidate on newer
 `main`) requires the approval specified in the parent skill's
 [release authority rules](../SKILL.md#shared-release-boundaries); otherwise cherry-pick
 merged `main` commits only for a confirmed release blocker and name each one in

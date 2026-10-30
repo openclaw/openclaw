@@ -38,13 +38,31 @@ it("shows the returned identity while preferences are pending, then enables its 
   try {
     await waitForSolid(() => {
       expect(request).toHaveBeenCalledWith("users.prefs.get", {
-        keys: [GIT_COAUTHOR_PREFERENCE_KEY],
+        keys: [GIT_COAUTHOR_PREFERENCE_KEY, "github.prAttribution.enabled"],
       });
       expect(page.textContent).toContain("ada@example.test");
       expect(input()).toMatchObject({ value: "Ada", disabled: true });
+      expect(
+        [
+          ...page.querySelectorAll<HTMLInputElement>('#settings-profile-identity [role="switch"]'),
+        ].map((toggle) => toggle.disabled),
+      ).toEqual([true, true]);
     });
-    preferences.resolve({ status: "ok", entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false } });
-    await waitForSolid(() => expect(input()).toMatchObject({ value: "Ada", disabled: false }));
+    preferences.resolve({
+      status: "ok",
+      entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false, "github.prAttribution.enabled": true },
+    });
+    await waitForSolid(() => {
+      expect(input()).toMatchObject({ value: "Ada", disabled: false });
+      expect(
+        [
+          ...page.querySelectorAll<HTMLInputElement>('#settings-profile-identity [role="switch"]'),
+        ].map((toggle) => ({ checked: toggle.checked, disabled: toggle.disabled })),
+      ).toEqual([
+        { checked: false, disabled: false },
+        { checked: true, disabled: false },
+      ]);
+    });
   } finally {
     page.unmount();
   }

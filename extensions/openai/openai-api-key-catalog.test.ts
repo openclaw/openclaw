@@ -7,7 +7,11 @@ import { resolveModelRoutes } from "./provider-policy-api.js";
 type CatalogOptions = { apiKey?: string; baseUrl?: string; profileId?: string };
 async function runCatalog(response: Response | undefined, options: CatalogOptions = {}) {
   const { apiKey = "sk-openai", baseUrl, profileId } = options;
-  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url.startsWith("https://chatgpt.com/backend-api/codex/models?")) {
+      return Response.json({ models: [] });
+    }
     if (!response) {
       throw new Error("unexpected OpenAI live discovery request");
     }
@@ -41,11 +45,11 @@ beforeEach(clearLiveCatalogCacheForTests);
 const modelRows = (ids: string[]) => ids.map((id) => ({ id, object: "model" }));
 
 it("shows every listed chat model that runs on Responses with conservative metadata", async () => {
-  const admittedIds = ["gpt-5.3-codex", "gpt-5.5-2026-04-23", "gpt-6.2"];
+  const admittedIds = ["gpt-5.3-codex", "gpt-5.5-2026-04-23", "gpt-5.6-cyber", "gpt-6.2"];
   // Include pre-GPT-5, non-chat, subscription-only and experimental model families.
   const unadmittedIds = (
     "gpt-4-0613 gpt-4.1-mini o3 ft:gpt-4.1-mini:acme::abc123 gpt-5.3-codex-spark " +
-    "gpt-5.6-cyber gpt-7-alpha kepler-alpha " +
+    "gpt-unknown-cyber-fixture gpt-7-alpha kepler-alpha " +
     "gpt-5.5-codex-1p-exp-p-0618-b2fcc1-ev3-text-1-treatment " +
     "gpt5-5-1p-exp-p-0628-2069ab-ev3-text-1-treatment " +
     "gpt-4o-mini-search-preview gpt-5-search-api gpt-live-1 gpt-4o-transcribe-diarize " +
@@ -108,7 +112,7 @@ it.each([
   if (apiKey === "secretref-managed") {
     expect(requests).toEqual([]);
   } else {
-    expect(requests).toHaveLength(1);
+    expect(requests).toHaveLength(status === "ready" ? 2 : 1);
     expect(requests[0]?.[0]).toBe("https://api.openai.com/v1/models");
     expect(new Headers(requests[0]?.[1]?.headers).get("Authorization")).toBe(`Bearer ${apiKey}`);
   }

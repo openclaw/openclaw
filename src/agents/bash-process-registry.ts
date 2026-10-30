@@ -16,6 +16,7 @@ import type {
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { notifyListeners } from "../shared/listeners.js";
+import { encodeOwnedBuffer } from "../shared/owned-buffer.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 
@@ -160,9 +161,6 @@ export interface ProcessSession {
   notifyDeliveryContext?: DeliveryContext;
   notifySessionTarget?: SessionEventTarget;
   assertExitNotificationAcceptanceCurrent?: () => void;
-  persistExitNotification?: () => Promise<void>;
-  exitNotificationPersistence?: Promise<void>;
-  clearExitNotification?: () => Promise<void>;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
@@ -286,7 +284,7 @@ function queueProcessChange(session: ProcessSession) {
       }
     }, 5_000),
   );
-  changeTimer.unref?.();
+  changeTimer.unref();
 }
 
 /** Return whether a process session id is live, retained, or reserved for notification. */
@@ -390,7 +388,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
   // Own only the retained suffix; producer strings may borrow a large callback.
   const ownedChunk = {
     order: session.totalOutputChars,
-    text: Buffer.from(
+    text: encodeOwnedBuffer(
       sliceUtf16Safe(chunk, Math.max(0, chunk.length - session.maxOutputChars)),
       "utf16le",
     ),
@@ -538,7 +536,6 @@ export function markBackgrounded(session: ProcessSession) {
   if (active?.session === session) {
     active.promoted = true;
   }
-  session.exitNotificationPersistence ??= session.persistExitNotification?.();
 }
 
 /** Retains the precise completion-event removal handle on its process owner. */
@@ -563,11 +560,7 @@ export function acknowledgeNotifyOnExit(record: {
 }
 
 /** Retire notification custody without claiming that retained output was observed. */
-export function removeNotifyOnExit(record: {
-  notifyOnExitRemoval?: NotifyOnExitRemoval;
-  clearExitNotification?: () => Promise<void>;
-}): void {
-  void record.clearExitNotification?.();
+export function removeNotifyOnExit(record: { notifyOnExitRemoval?: NotifyOnExitRemoval }): void {
   const remove = record.notifyOnExitRemoval;
   if (!remove) {
     return;
@@ -713,7 +706,7 @@ function scheduleSweeper() {
     return;
   }
   sweeper = setTimeout(scheduleSweeper, nextExpiration - now);
-  sweeper.unref?.();
+  sweeper.unref();
 }
 
 function stopSweeper() {

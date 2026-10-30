@@ -1,13 +1,10 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import type { Server } from "node:http";
 import path from "node:path";
-import JSZip from "jszip";
 import { afterEach, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { clawHubSecurityResponse } from "../plugins/clawhub.test-fixtures.js";
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
   readPersistedInstalledPluginIndexInstallRecordsAsync,
@@ -15,7 +12,10 @@ import {
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { packPlugins, startStaticRegistry } from "../plugins/test-helpers/npm-registry-fixtures.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import { reserveTestPortListener } from "../test-utils/port-claims.js";
+import {
+  startClawHubPackageFixture,
+  type ClawHubFixtureOptions,
+} from "./clawhub-package.test-support.js";
 
 const PACKAGE = "@openclaw/brave-plugin";
 const VERSION = "1.0.0";
@@ -30,58 +30,21 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-async function startClawHubFixture(packageDir: string) {
-  const zip = new JSZip();
+async function startClawHubFixture(
+  packageDir: string,
+  options: Partial<ClawHubFixtureOptions> = {},
+) {
+  const files: Record<string, Buffer> = {};
   for (const file of ["package.json", "openclaw.plugin.json", "dist/index.js"]) {
-    zip.file(`package/${file}`, await fs.readFile(path.join(packageDir, file)));
+    files[file] = await fs.readFile(path.join(packageDir, file));
   }
-  const archive = await zip.generateAsync({ type: "nodebuffer" });
-  const sha256hash = createHash("sha256").update(archive).digest("hex");
-  const requests: string[] = [];
-  const packagePath = `/api/v1/packages/${encodeURIComponent(PACKAGE)}`;
-  const pkg = { name: PACKAGE, family: "code-plugin", runtimeId: PLUGIN };
-  const reservation = await reserveTestPortListener({
-    offsets: [0],
-    createListener: () =>
-      createServer((request, response) => {
-        const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-        requests.push(`${request.method} ${pathname}`);
-        let body: unknown;
-        if (pathname === packagePath) {
-          body = {
-            package: { ...pkg, latestVersion: VERSION, tags: { latest: VERSION } },
-          };
-        } else if (pathname === `${packagePath}/versions/${VERSION}/artifact`) {
-          body = { package: pkg, version: { version: VERSION, sha256hash, compatibility: {} } };
-        } else if (pathname === `${packagePath}/versions/${VERSION}/security`) {
-          body = {
-            package: pkg,
-            release: { version: VERSION },
-            overview: "Synthetic recovery fixture.",
-            securityAuditUrl: `http://${request.headers.host}${pathname}`,
-            trust: clawHubSecurityResponse().trust,
-          };
-        } else if (pathname === `${packagePath}/download`) {
-          response.writeHead(200, { "content-type": "application/zip" });
-          response.end(archive);
-          return;
-        } else {
-          response.writeHead(404);
-          response.end("unknown fixture route");
-          return;
-        }
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify(body));
-      }),
+  return startClawHubPackageFixture({
+    name: PACKAGE,
+    id: PLUGIN,
+    version: VERSION,
+    files,
+    ...options,
   });
-  return {
-    url: `http://127.0.0.1:${reservation.claim.port}`,
-    requests,
-    async close() {
-      await reservation.releaseListener();
-      await reservation.claim.release();
-    },
-  };
 }
 
 async function readRecords(stateDir: string) {
@@ -92,7 +55,48 @@ async function readRecords(stateDir: string) {
   return records;
 }
 
-it("confines invalid-config recovery to npm catalog and canonical-ID owners through CLI persistence", async () => {
+type Scenario = {
+  spec: string;
+  source: string | null;
+  valid?: boolean;
+  unbundled?: boolean;
+  repeat?: boolean;
+  error?: string;
+  downloaded?: boolean;
+  options?: Partial<ClawHubFixtureOptions>;
+};
+function remoteScenario(options: Partial<ClawHubFixtureOptions> = {}, error?: string): Scenario {
+  return {
+    spec: `clawhub:${PACKAGE}@${VERSION}`,
+    source: error ? null : "clawhub",
+    valid: true,
+    options,
+    error,
+  };
+}
+const scenarios: Scenario[] = [
+  { spec: `${PACKAGE}@${VERSION}`, source: null },
+  { spec: `clawhub:${PACKAGE}@${VERSION}`, source: null },
+  { spec: `npm:${PACKAGE}@${VERSION}`, source: "npm" },
+  { spec: PLUGIN, source: "path" },
+  { spec: PLUGIN, source: "npm", unbundled: true },
+  { ...remoteScenario(), spec: `${PACKAGE}@${VERSION}`, repeat: true },
+  remoteScenario({ telemetryStatus: 503 }),
+  remoteScenario(
+    { packageCompatibility: { pluginApiRange: ">=9999.0.0" }, artifactCompatibility: null },
+    "requires plugin API >=9999.0.0",
+  ),
+  remoteScenario(
+    { artifactCompatibility: { minGatewayVersion: "9999.0.0" } },
+    "requires OpenClaw >=9999.0.0",
+  ),
+  {
+    ...remoteScenario({ artifactSha256: "0".repeat(64) }, "ClawHub archive integrity mismatch"),
+    downloaded: true,
+  },
+];
+
+async function verifyInstalls(cases: Scenario[]) {
   const root = tempDirs.make("openclaw-recovery-install-e2e-");
   const catalogRequestsPath = path.join(root, "catalog-requests.jsonl");
   const offlineCatalogBootstrap = path.join(root, "offline-catalog.mjs");
@@ -154,27 +158,23 @@ it("confines invalid-config recovery to npm catalog and canonical-ID owners thro
   );
   const npmRequests: string[] = [];
   npmServers[0]!.on("request", (request) => npmRequests.push(`${request.method} ${request.url}`));
-  const clawhub = await startClawHubFixture(packageDir);
+  const clawhubs: Awaited<ReturnType<typeof startClawHubFixture>>[] = [];
 
   try {
-    for (const [index, scenario] of [
-      { spec: `${PACKAGE}@${VERSION}`, source: null },
-      { spec: `clawhub:${PACKAGE}@${VERSION}`, source: null },
-      { spec: `npm:${PACKAGE}@${VERSION}`, source: "npm" },
-      { spec: PLUGIN, source: "path" },
-      { spec: PLUGIN, source: "npm", unbundled: true },
-      // The denied selectors have a usable artifact, independently of config recovery.
-      { spec: `clawhub:${PACKAGE}@${VERSION}`, source: "clawhub", valid: true },
-    ].entries()) {
+    for (const [index, scenario] of cases.entries()) {
+      const clawhub = await startClawHubFixture(packageDir, scenario.options);
+      clawhubs.push(clawhub);
       const stateDir = path.join(root, `state-${index}`);
       const oldPluginPath = path.join(stateDir, "previous-plugin");
       const configPath = path.join(stateDir, "openclaw.json");
-      const config: OpenClawConfig = {
-        channels: { [PLUGIN]: { fixtureToken: 123 } },
-        plugins: {
-          entries: { [PLUGIN]: { enabled: false, config: { marker: "preserve" } } },
-        },
-      };
+      const config: OpenClawConfig = scenario.valid
+        ? {}
+        : {
+            channels: { [PLUGIN]: { fixtureToken: 123 } },
+            plugins: {
+              entries: { [PLUGIN]: { enabled: false, config: { marker: "preserve" } } },
+            },
+          };
       await fs.mkdir(stateDir);
       const originalConfig = `${JSON.stringify(config, null, 2)}\n`;
       await fs.writeFile(configPath, originalConfig);
@@ -201,10 +201,10 @@ it("confines invalid-config recovery to npm catalog and canonical-ID owners thro
         OPENCLAW_CLAWHUB_URL: clawhub.url,
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
         OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: scenario.unbundled ? "1" : "0",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: scenario.unbundled || scenario.valid ? "1" : "0",
         CLAWHUB_TOKEN: "synthetic-fixture-token",
-        CLAWHUB_DISABLE_TELEMETRY: "1",
-        CLAWDHUB_DISABLE_TELEMETRY: "1",
+        CLAWHUB_DISABLE_TELEMETRY: scenario.valid ? "" : "1",
+        CLAWDHUB_DISABLE_TELEMETRY: scenario.valid ? "" : "1",
         NPM_CONFIG_REGISTRY: npmUrl,
         npm_config_registry: npmUrl,
         NPM_CONFIG_CACHE: path.join(stateDir, "npm-cache"),
@@ -221,7 +221,9 @@ it("confines invalid-config recovery to npm catalog and canonical-ID owners thro
         expect(result.error, output).toBeUndefined();
         return { ...result, output };
       };
-      await seedInstalledPluginIndex({ [PLUGIN]: originalRecord }, { stateDir, config, env });
+      if (!scenario.valid) {
+        await seedInstalledPluginIndex({ [PLUGIN]: originalRecord }, { stateDir, config, env });
+      }
       await closeOpenClawStateDatabaseAsync();
       const beforeRecords = await readRecords(stateDir);
       const validation = await run("config", "validate", "--json");
@@ -242,8 +244,7 @@ it("confines invalid-config recovery to npm catalog and canonical-ID owners thro
         "plugins",
         "install",
         scenario.spec,
-        "--force",
-        "--no-enable",
+        ...(scenario.valid ? [] : ["--force", "--no-enable"]),
         "--accept-capabilities",
       );
       const { output } = result;
@@ -252,9 +253,22 @@ it("confines invalid-config recovery to npm catalog and canonical-ID owners thro
       expect(await readText(sentinel)).toBe("existing payload stays intact\n");
       if (scenario.source === null) {
         expect(result.status, output).not.toBe(0);
-        expect(output).toContain(`invalid config for plugin ${PLUGIN}:`);
+        expect(output).toContain(scenario.error ?? `invalid config for plugin ${PLUGIN}:`);
         expect(npmRequests, scenario.spec).toEqual([]);
-        expect(clawhub.requests, scenario.spec).toEqual([]);
+        if (!scenario.valid) {
+          expect(clawhub.requests, scenario.spec).toEqual([]);
+        } else {
+          const download = `GET /api/v1/packages/${encodeURIComponent(PACKAGE)}/download`;
+          if (scenario.downloaded) {
+            expect(clawhub.requests).toContain(download);
+          } else {
+            expect(clawhub.requests).not.toContain(download);
+            expect(clawhub.requests).not.toContain(
+              `GET /api/v1/packages/${encodeURIComponent(PACKAGE)}/versions/${VERSION}/security`,
+            );
+          }
+        }
+        expect(clawhub.telemetry).toEqual([]);
         expect(await readText(configPath)).toBe(originalConfig);
         expect(records).toEqual(beforeRecords);
         expect(await fs.readdir(npmRoot)).toEqual(["untouched.txt"]);
@@ -271,8 +285,12 @@ it("confines invalid-config recovery to npm catalog and canonical-ID owners thro
       }
       expect(result.status, output).toBe(0);
       const persistedConfig = JSON.parse(await readText(configPath)) as OpenClawConfig;
-      expect(persistedConfig.channels).toEqual(config.channels);
-      expect(persistedConfig.plugins?.entries?.[PLUGIN]).toEqual(config.plugins?.entries?.[PLUGIN]);
+      if (!scenario.valid) {
+        expect(persistedConfig.channels).toEqual(config.channels);
+        expect(persistedConfig.plugins?.entries?.[PLUGIN]).toEqual(
+          config.plugins?.entries?.[PLUGIN],
+        );
+      }
       expect(records?.[PLUGIN], output).toMatchObject({ source: scenario.source });
       const installPath = records?.[PLUGIN]?.installPath;
       expect(installPath).toBeTruthy();
@@ -286,6 +304,27 @@ it("confines invalid-config recovery to npm catalog and canonical-ID owners thro
           `GET /api/v1/packages/${encodeURIComponent(PACKAGE)}/download`,
         );
         expect(npmRequests).toEqual([]);
+        expect(records?.[PLUGIN]).toMatchObject({
+          source: "clawhub",
+          clawhubPackage: PACKAGE,
+          version: VERSION,
+        });
+        expect(clawhub.requests).toContain(
+          `GET /api/v1/packages/${encodeURIComponent(PACKAGE)}/versions/${VERSION}/security`,
+        );
+        const event = { event: "plugin_install", packageName: PACKAGE, version: VERSION };
+        expect(clawhub.telemetry).toEqual([event]);
+        if (scenario.repeat) {
+          const repeat = await run(
+            "plugins",
+            "install",
+            `clawhub:${PACKAGE}@${VERSION}`,
+            "--force",
+            "--accept-capabilities",
+          );
+          expect(repeat.status, repeat.output).toBe(0);
+          expect(clawhub.telemetry).toEqual([event, event]);
+        }
       } else {
         expect(npmRequests).toEqual([]);
         expect(clawhub.requests).toEqual([]);
@@ -295,11 +334,29 @@ it("confines invalid-config recovery to npm catalog and canonical-ID owners thro
       expect(JSON.parse(repairedValidation.stdout)).toMatchObject({ valid: true });
     }
   } finally {
-    await clawhub.close();
+    for (const clawhub of clawhubs) {
+      await clawhub.close();
+    }
     for (const server of npmServers) {
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
     }
   }
+}
+
+it("confines invalid-config recovery to npm catalog and canonical-ID owners through CLI persistence", async () => {
+  await verifyInstalls(scenarios.slice(0, 5));
 }, 120_000);
+
+it("reports fresh ClawHub installs and repeat updates after persistence", async () => {
+  await verifyInstalls([scenarios[5]!]);
+}, 60_000);
+
+it.each(scenarios.slice(6))(
+  "keeps ClawHub install failure isolated: %j",
+  async (scenario) => {
+    await verifyInstalls([scenario]);
+  },
+  30_000,
+);

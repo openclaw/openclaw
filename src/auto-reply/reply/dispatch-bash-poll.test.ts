@@ -24,6 +24,7 @@ import {
   createDispatcher,
   hookMocks,
   mocks,
+  mockSessionStorePath,
   resetPluginTtsAndThreadMocks,
   sessionStoreMocks,
   setDiscordTestRegistry,
@@ -47,7 +48,7 @@ beforeEach(() => {
   mocks.routeReply.mockReset().mockResolvedValue({ ok: true, delivered: true });
   sessionStoreMocks.currentEntry = undefined;
   sessionStoreMocks.loadSessionStoreEntry.mockImplementation(() => undefined);
-  sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue("/tmp/mock-sessions.json");
+  sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue(mockSessionStorePath);
 });
 
 afterEach(() => {

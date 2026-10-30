@@ -64,11 +64,7 @@ function requireClickClackSetupCodeBaseUrl(value: string | undefined): string {
   return baseUrl;
 }
 
-function parseClickClackSetupCodeInput(params: { code: string; baseUrl?: string }): {
-  code: string;
-  baseUrl: string;
-  exactClaimUrl?: string;
-} {
+function parseClickClackSetupCodeInput(params: { code: string; baseUrl?: string }) {
   const rawCode = params.code.trim();
   if (!rawCode) {
     throw new Error("ClickClack --code must not be empty.");

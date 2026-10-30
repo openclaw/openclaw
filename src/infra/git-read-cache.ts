@@ -3,6 +3,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import {
   addDiffReadDurations,
@@ -28,7 +29,7 @@ export type GitReadOptions = {
 };
 
 type ReadEntry<T> = {
-  revision: string;
+  revision: string | null | undefined;
   expiresAt: number;
   promise: Promise<T>;
   controller: AbortController;
@@ -48,21 +49,20 @@ type ReadSlot<T> = {
   };
 };
 
-function gitEnvironmentKey(input: unknown): string {
-  return JSON.stringify([
-    input,
-    Object.entries(process.env)
-      .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
-      .toSorted(([left], [right]) => left.localeCompare(right)),
-  ]);
+function gitEnvironment() {
+  return Object.keys(process.env)
+    .filter((key) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
+    .toSorted((left, right) => left.localeCompare(right))
+    .map((key) => [key, process.env[key]]);
 }
 
-function diffRevisionMissReason(previous: string, current: string): DiffReadCacheMissReason {
+function diffRevisionMissReason(
+  previous: ReadEntry<unknown>["revision"],
+  current: ReadEntry<unknown>["revision"],
+): DiffReadCacheMissReason {
   try {
-    const previousKey: [unknown, string | null] = JSON.parse(previous);
-    const currentKey: [unknown, string | null] = JSON.parse(current);
-    const before: Record<string, unknown> | null = JSON.parse(previousKey[1] ?? "null");
-    const after: Record<string, unknown> | null = JSON.parse(currentKey[1] ?? "null");
+    const before: Record<string, unknown> | null = JSON.parse(previous ?? "null");
+    const after: Record<string, unknown> | null = JSON.parse(current ?? "null");
     if (before && after) {
       for (const [component, reason] of [
         ["head", "revision-changed-head"],
@@ -82,25 +82,23 @@ function diffRevisionMissReason(previous: string, current: string): DiffReadCach
 }
 
 function createReadCache<Input, Output>(
-  load: (input: Input, signal: AbortSignal, timing?: DiffReadTiming) => Promise<Output>,
-  freshness: number | { milliseconds: number; joinPending?: true },
-  revision?: (
+  load: (
     input: Input,
     signal: AbortSignal,
     timing?: DiffReadTiming,
-    previous?: Output,
-  ) => Promise<string | null>,
-  keyOf: (input: Input) => string = JSON.stringify,
+    preparedRevision?: GitReadOperations["checkout.revision"]["output"],
+  ) => Promise<Output>,
+  freshness: number | { milliseconds: number; joinPending?: true },
+  revision?: (input: Input, previous?: Output) => GitReadOperations["checkout.revision"]["input"],
   snapshot?: { empty: () => Output },
   // A numeric result retains an unavailable response until its next probe.
   retain: (value: Output) => boolean | number = () => true,
   maxEntries = MAX_CACHED_CHECKOUTS,
   polling?: { empty: () => Output },
-  revisionKeyOf?: (input: Input, previous?: Output) => string,
 ) {
   const freshnessMs = typeof freshness === "number" ? freshness : freshness.milliseconds;
   const joinPending = typeof freshness !== "number" && freshness.joinPending;
-  // Versioned reads retain only the current inputs/revision per checkout. LRU
+  // Versioned reads retain the current revision per request shape. LRU
   // eviction and Gateway shutdown own their lifetime, independently of viewers.
   const entries = new Map<string, ReadSlot<Output>>();
   // Retain only the most recent capacity evictions; older misses become cold again.
@@ -108,7 +106,11 @@ function createReadCache<Input, Output>(
   const pending = new Set<ReadEntry<Output>>();
   const revisions = new Map<
     string,
-    { controller: AbortController; promise: Promise<string | null>; timing?: DiffReadTiming }
+    {
+      controller: AbortController;
+      promise: Promise<GitReadOperations["checkout.revision"]["output"]>;
+      timing?: DiffReadTiming;
+    }
   >();
   let refreshTail: Promise<unknown> = Promise.resolve();
   let closed = false;
@@ -132,35 +134,43 @@ function createReadCache<Input, Output>(
       }
     }
   };
-  const read = async (input: Input, options: GitReadOptions = {}): Promise<Output> => {
+  const read = async (
+    input: Input,
+    options: GitReadOptions = {},
+    preparedEnvironment?: ReturnType<typeof gitEnvironment>,
+    preparedKey?: string,
+  ): Promise<Output> => {
     options.signal?.throwIfAborted();
     using completedTiming = polling ? startDiffReadTiming("checkout.diff") : undefined;
     const timing = completedTiming ?? options.diffTiming;
     const validationStarted = timing ? performance.now() : 0;
-    const key = keyOf(input);
+    const environment = preparedEnvironment ?? gitEnvironment();
+    const key = preparedKey ?? JSON.stringify([input, environment]);
     let entry = entries.get(key)?.entry;
-    const waitingToRetry = !options.refresh && (entry?.retryAt ?? 0) > Date.now();
-    let currentRevision: string | null | undefined;
+    const waitingToRetry = !options.refresh && (entry?.retryAt ?? 0) > monotonicNow();
+    let currentRevision = waitingToRetry ? entry!.revision : undefined;
+    let preparedRevision: GitReadOperations["checkout.revision"]["output"] | undefined;
     if (revision && !waitingToRetry) {
       // Share only overlapping checks of identical inputs, never a settled revision.
-      const revisionInput =
-        revisionKeyOf?.(input, entry?.value) ??
-        (keyOf === gitEnvironmentKey ? key : gitEnvironmentKey(input));
-      let check = revisions.get(revisionInput);
+      const revisionInput = revision(input, entry?.value);
+      const revisionKey = JSON.stringify([revisionInput, environment]);
+      let check = revisions.get(revisionKey);
       if (!check) {
         const controller = new AbortController();
         const revisionTiming = timing ? { durations: {} } : undefined;
-        const promise = revision(input, controller.signal, revisionTiming, entry?.value).finally(
-          () => {
-            revisions.delete(revisionInput);
-          },
-        );
+        const promise = runGitWorkerOperation(
+          { type: "checkout.revision", input: revisionInput },
+          { signal: controller.signal, diffTiming: revisionTiming },
+        ).finally(() => {
+          revisions.delete(revisionKey);
+        });
         check = { controller, promise, timing: revisionTiming };
-        revisions.set(revisionInput, check);
+        revisions.set(revisionKey, check);
       }
-      currentRevision = await racePromiseWithAbortSignal(check.promise, options.signal, (signal) =>
+      preparedRevision = await racePromiseWithAbortSignal(check.promise, options.signal, (signal) =>
         toErrorObject(signal.reason, "Git read aborted"),
       );
+      currentRevision = preparedRevision?.key ?? null;
       if (timing && check.timing) {
         addDiffReadDurations(timing, check.timing);
         timing.revisionUnavailableReason = check.timing.revisionUnavailableReason;
@@ -173,7 +183,6 @@ function createReadCache<Input, Output>(
       typeof freshness !== "number" && typeof currentRevision === "string"
         ? Number.POSITIVE_INFINITY
         : freshnessMs;
-    const revisionKey = waitingToRetry ? entry!.revision : JSON.stringify([input, currentRevision]);
     options.signal?.throwIfAborted();
     if (closed) {
       throw new Error("Git reads are unavailable while the Gateway is restarting");
@@ -185,8 +194,8 @@ function createReadCache<Input, Output>(
     if (
       (options.refresh && (currentRevision === null || entry?.retryAt !== undefined)) ||
       !entry ||
-      entry.revision !== revisionKey ||
-      (entry.expiresAt <= Date.now() && (!(snapshot || joinPending) || !entry.pending))
+      entry.revision !== currentRevision ||
+      (entry.expiresAt <= monotonicNow() && (!(snapshot || joinPending) || !entry.pending))
     ) {
       if (snapshot && pending.size >= MAX_CACHED_CHECKOUTS) {
         return entry?.value ?? snapshot.empty();
@@ -196,11 +205,11 @@ function createReadCache<Input, Output>(
       const previousRefresh = refreshTail;
       const controller = new AbortController();
       const next: ReadEntry<Output> = {
-        revision: revisionKey,
+        revision: currentRevision,
         expiresAt:
           retainedFreshnessMs === 0
             ? Number.POSITIVE_INFINITY
-            : Date.now() +
+            : monotonicNow() +
               (currentRevision === null
                 ? Math.min(retainedFreshnessMs, 75_000)
                 : retainedFreshnessMs),
@@ -214,9 +223,9 @@ function createReadCache<Input, Output>(
                 // Serialize display batches; the worker probes four checkouts concurrently.
                 await previousRefresh;
                 controller.signal.throwIfAborted();
-                return load(input, controller.signal, loadTiming);
+                return load(input, controller.signal, loadTiming, preparedRevision);
               }, "runtime:project-discovery")
-            : load(input, controller.signal, loadTiming),
+            : load(input, controller.signal, loadTiming, preparedRevision),
         ),
       };
       pending.add(next);
@@ -227,11 +236,11 @@ function createReadCache<Input, Output>(
           controller.signal.throwIfAborted();
           next.value = value;
           if (snapshot) {
-            next.expiresAt = Date.now() + freshnessMs;
+            next.expiresAt = monotonicNow() + freshnessMs;
           }
           const retention = retain(value);
           if (typeof retention === "number") {
-            next.retryAt = next.expiresAt = Date.now() + retention;
+            next.retryAt = next.expiresAt = monotonicNow() + retention;
           } else if (retainedFreshnessMs === 0 || !retention) {
             remove(key, next);
           } else if (joinPending && currentRevision === null) {
@@ -244,7 +253,7 @@ function createReadCache<Input, Output>(
           next.pending = false;
           pending.delete(next);
           if (snapshot) {
-            next.expiresAt = Date.now() + freshnessMs;
+            next.expiresAt = monotonicNow() + freshnessMs;
           } else {
             next.expiresAt = 0;
             remove(key, next);
@@ -273,7 +282,7 @@ function createReadCache<Input, Output>(
         break;
       }
       if (candidate.poll) {
-        if (candidate.poll.pending || candidate.poll.expiresAt > Date.now()) {
+        if (candidate.poll.pending || candidate.poll.expiresAt > monotonicNow()) {
           continue;
         }
         releasePoll(oldest, candidate);
@@ -298,8 +307,8 @@ function createReadCache<Input, Output>(
             ? wasEvicted
               ? "evicted"
               : "cold"
-            : previous.revision !== revisionKey
-              ? diffRevisionMissReason(previous.revision, revisionKey)
+            : previous.revision !== currentRevision
+              ? diffRevisionMissReason(previous.revision, currentRevision)
               : "pending";
       if (!cacheHit && entry.timing) {
         addDiffReadDurations(timing, entry.timing);
@@ -328,14 +337,15 @@ function createReadCache<Input, Output>(
         }
         return polling.empty();
       };
-      const key = keyOf(input);
+      const environment = gitEnvironment();
+      const key = JSON.stringify([input, environment]);
       const slot = entries.get(key) ?? {};
-      if (slot.poll && !slot.poll.pending && slot.poll.expiresAt <= Date.now()) {
+      if (slot.poll && !slot.poll.pending && slot.poll.expiresAt <= monotonicNow()) {
         releasePoll(key, slot);
       }
       let poll = slot.poll;
       if (!poll && slot.entry?.value) {
-        return read(input, options);
+        return read(input, options, environment, key);
       }
       if (!poll) {
         if (pollCount >= maxEntries) {
@@ -343,7 +353,7 @@ function createReadCache<Input, Output>(
             if (
               candidate.poll &&
               !candidate.poll.pending &&
-              candidate.poll.expiresAt <= Date.now()
+              candidate.poll.expiresAt <= monotonicNow()
             ) {
               releasePoll(otherKey, candidate);
             }
@@ -362,7 +372,7 @@ function createReadCache<Input, Output>(
         // Fan out both outcomes to reconnecting tabs before the next fresh read.
         const settled = () => {
           admitted.pending = false;
-          admitted.expiresAt = Date.now() + 1_000;
+          admitted.expiresAt = monotonicNow() + 1_000;
         };
         void promise.then(settled, settled);
         slot.poll = poll;
@@ -442,23 +452,25 @@ function createDiffReadCache(
     GitReadOperations["checkout.diff"]["input"],
     GitReadOperations["checkout.diff"]["output"]
   >(
-    (input: GitReadOperations["checkout.diff"]["input"], signal, diffTiming) =>
-      runGitWorkerOperation({ type: "checkout.diff", input }, { signal, diffTiming }),
-    freshness,
-    (input, signal, diffTiming, previous) =>
+    (input, signal, diffTiming, preparedRevision) =>
       runGitWorkerOperation(
         {
-          type: "checkout.revision",
-          input: revisionInput(input, previous),
+          type: "checkout.diff",
+          input: {
+            ...input,
+            ...(preparedRevision?.cleanWorktree
+              ? { cleanWorktree: preparedRevision.cleanWorktree }
+              : {}),
+          },
         },
         { signal, diffTiming },
       ),
-    gitEnvironmentKey,
+    freshness,
+    revisionInput,
     undefined,
     (value) => (value.unavailableReason === "not_git" ? 1_000 : !value.unavailableReason),
     maxEntries,
     { empty: () => ({ files: [], additions: 0, deletions: 0, computing: true }) },
-    (input, previous) => gitEnvironmentKey(revisionInput(input, previous)),
   );
 }
 
@@ -470,12 +482,7 @@ function createReadCaches() {
     (input, signal) =>
       runGitWorkerOperation({ type: "pull-request.branch-comparison", input }, { signal }),
     Number.POSITIVE_INFINITY,
-    (input, signal) =>
-      runGitWorkerOperation(
-        { type: "checkout.revision", input: { ...input, scope: "refs" } },
-        { signal },
-      ),
-    (input) => input.root,
+    ({ root, branch, defaultBranch }) => ({ root, branch, defaultBranch, scope: "refs" }),
     undefined,
     // Missing objects can arrive without moving refs; retry incomplete comparisons.
     (value) => value.complete,
@@ -490,19 +497,13 @@ function createReadCaches() {
       // after one minute; checkout-set/environment changes select an independent snapshot.
       60_000,
       undefined,
-      gitEnvironmentKey,
       { empty: () => [] },
     ),
     context: createReadCache(
       (input: GitReadOperations["checkout.context"]["input"], signal) =>
         runGitWorkerOperation({ type: "checkout.context", input }, { signal }),
       Number.POSITIVE_INFINITY,
-      (input, signal) =>
-        runGitWorkerOperation(
-          { type: "checkout.revision", input: { root: input.root, scope: "context" } },
-          { signal },
-        ),
-      (input) => input.root,
+      ({ root }) => ({ root, scope: "context" }),
     ),
     branchFacts: createReadCache(
       async (input: GitReadOperations["pull-request.branch-facts"]["input"], signal) => {
@@ -523,15 +524,7 @@ function createReadCaches() {
       },
       // Unstaged edits do not advance the ref/index revision.
       5 * 60_000,
-      (input, signal) =>
-        runGitWorkerOperation(
-          {
-            type: "checkout.revision",
-            input: { ...input, scope: "worktree" },
-          },
-          { signal },
-        ),
-      (input) => input.root,
+      ({ root, branch, defaultBranch }) => ({ root, branch, defaultBranch, scope: "worktree" }),
     ),
     diff: createDiffReadCache(
       { milliseconds: 0 },

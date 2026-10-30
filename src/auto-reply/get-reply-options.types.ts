@@ -74,13 +74,6 @@ export type BlockReplyContext = {
   deliveryIntentId?: string;
 };
 
-/** Context passed to onModelSelected callback with actual model used. */
-type ModelSelectedContext = {
-  provider: string;
-  model: string;
-  thinkLevel: string | undefined;
-};
-
 /** Typing indicator class for channel-owned UX policy. */
 export type TypingPolicy = "auto" | "user_message" | "system_event" | "internal_webchat";
 
@@ -111,6 +104,25 @@ export type QueuedReplyDeliveryCorrelation = {
         transportPending?: boolean;
       }) => void)
     | void;
+};
+
+export type QueuedFollowupReplyBatch = {
+  kind: "queued-followup";
+  runId: string;
+  originatingChannel: string | undefined;
+  payloads: ReplyPayload[];
+  completion:
+    | { kind: "progress" }
+    | { kind: "completed"; stopReason?: string; allowCanvasOnly?: true }
+    | { kind: "failed"; error: string; stopReason?: string; errorKind?: "timeout" }
+    | { kind: "aborted"; stopReason?: string };
+};
+
+export type QueuedFollowupReplyDelivery = ((
+  batch: QueuedFollowupReplyBatch,
+) => Promise<void> | void) & {
+  ownsCompletion?: (originatingChannel: string | undefined) => boolean;
+  createSourceRetry?: () => QueuedFollowupReplyDelivery;
 };
 
 /**
@@ -171,10 +183,6 @@ export type ReasoningStreamPayload = Pick<
   requiresReasoningProgressOptIn?: boolean;
 };
 
-type ReasoningProgressPayload = {
-  progressTokens: number;
-};
-
 /** Return false until the channel has accepted operator-visible progress. */
 type ProgressCallbackResult = boolean | void;
 
@@ -216,6 +224,8 @@ export type GetReplyOptions = {
   ) => unknown;
   /** Reports the terminal agent-run classification to the shared dispatch owner. */
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
+  /** Retains source-owned delivery when this turn is queued behind an active run. */
+  onQueuedFollowupReplyBatch?: QueuedFollowupReplyDelivery;
   /** Reports terminal queue-cap rejection or eviction when no agent run will report an outcome. */
   onFollowupQueueDisposition?: (
     disposition: "queue-cap" | "queue-cap-old" | "queue-cap-new",
@@ -263,10 +273,6 @@ export type GetReplyOptions = {
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
-  /** @internal Preserve the recovery owner's replay-safe tool restriction for this turn. */
-  forceRestartSafeTools?: boolean;
-  /** @internal Retain restart-safe Code Mode controls for an interrupted continuation. */
-  forceCodeModeTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
   toolsAllow?: string[];
   /**
@@ -305,7 +311,7 @@ export type GetReplyOptions = {
   onReasoningStream?: (
     payload: ReasoningStreamPayload,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
-  onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void> | void;
+  onReasoningProgress?: (payload: { progressTokens: number }) => Promise<void> | void;
   streamReasoningInNonStreamModes?: boolean;
   /** Called when a thinking/reasoning block ends. */
   onReasoningEnd?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
@@ -433,7 +439,12 @@ export type GetReplyOptions = {
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
-  onModelSelected?: (ctx: ModelSelectedContext) => void;
+  /** Context passed to onModelSelected callback with actual model used. */
+  onModelSelected?: (ctx: {
+    provider: string;
+    model: string;
+    thinkLevel: string | undefined;
+  }) => void;
   /**
    * Controls whether normal assistant replies are automatically delivered to
    * the source conversation. `message_tool_only` prefers message-tool visible

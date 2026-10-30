@@ -130,6 +130,7 @@ struct SettingsHubScreen: View {
 
 struct EmbeddedDashboardContent: View {
     @State private var bridge: IOSDeviceSettingsBridge
+    private let appModel: NodeAppModel
     let embedCompatibility: DashboardEmbedCompatibility?
     let url: URL
     let config: GatewayConnectConfig?
@@ -146,6 +147,7 @@ struct EmbeddedDashboardContent: View {
         openGateway: (() -> Void)? = nil)
     {
         self.url = url
+        self.appModel = appModel
         self.config = config
         self.openGateway = openGateway
         self.embedCompatibility = embedCompatibility
@@ -175,6 +177,10 @@ struct EmbeddedDashboardContent: View {
                     AuthenticatedControlUI.basicProxyCredential(config: self.config)
                 },
                 deviceSettingsBridge: self.bridge,
+                nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
+                    config: self.config,
+                    storedOperatorToken: storedOperatorToken,
+                    appModel: self.appModel),
                 usesNativeEmbed: true,
                 embedCompatibility: self.embedCompatibility)
                 .id(AuthenticatedControlUI.webContentIdentity(

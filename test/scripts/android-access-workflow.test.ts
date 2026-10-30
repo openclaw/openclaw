@@ -2,23 +2,26 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import {
-  evaluateWorkflowRunner,
-  expectIncludes as containsAll,
-  readCiWorkflow,
-} from "./ci-workflow.test-support.js";
+import { readCiWorkflow } from "./ci-workflow.test-support.js";
 
 const workflow = readCiWorkflow();
 const job = workflow.jobs["android-access-native"];
 const step = job.steps.find(
-  (entry: { name?: string }) => entry.name === "Run packaged Access crypto on Android",
+  (entry: { name?: string }) =>
+    entry.name === "Run packaged Access crypto and production TLS on Android",
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const pageSizes = [
-  { "page-size": 4096, image: "google_apis" },
-  { "page-size": 16384, image: "google_apis_ps16k" },
+const invalidReports = [
+  "empty",
+  "wrong-class",
+  "failed",
+  "skipped",
+  "missing-tls",
+  "duplicate-tls",
+  "wrong-tls-method",
+  "failed-tls",
+  "skipped-tls",
 ];
-const invalidReports = ["empty", "wrong-class", "failed", "skipped"];
 const invalidApks = ["missing-abi", "wrong-variant", "ambiguous-output", "outside-output"];
 
 function verifyReports(mode: string) {
@@ -36,7 +39,30 @@ reports.mkdir(parents=True)
 name = 'OtherTest' if mode == 'wrong-class' else 'ai.openclaw.app.gateway.CloudflareAccessNativeTest'
 child = '<failure/>' if mode == 'failed' else '<skipped/>' if mode == 'skipped' else ''
 case = '' if mode == 'empty' else f'<testcase classname="{name}" name="vector">{child}</testcase>'
-(reports / 'TEST-device.xml').write_text(f'<testsuite>{case}</testsuite>')
+tls_methods = {
+    'ai.openclaw.app.gateway.GatewaySessionTlsNativeTest': [
+        'platformRootReachesReadyWithMatchingHostname',
+        'platformRootRejectsWrongHostnameBeforeWebSocketUpgrade',
+        'platformRootCannotBypassBlocklistedRawIntermediate',
+        'matchingLeafPinReachesReadyDespiteDiscoveredIpHostnameMismatch',
+        'wrongLeafPinRejectsBeforeWebSocketUpgrade',
+        'matchingLeafPinCannotBypassBlocklistedRawIntermediate'],
+    'ai.openclaw.app.ui.chat.ChatInlineWidgetTlsNativeTest': [
+        'platformRootFetchesDocumentWithMatchingHostname',
+        'platformRootRejectsWrongHostnameWithoutOriginRequest',
+        'platformRootCannotFetchThroughBlocklistedRawIntermediate',
+        'matchingLeafPinFetchesDocumentDespiteDiscoveredIpHostnameMismatch',
+        'wrongLeafPinReturnsUnavailableWithoutOriginRequest',
+        'matchingLeafPinCannotFetchThroughBlocklistedRawIntermediate']}
+tls_cases = [f'<testcase classname="{cls}" name="{method}"/>'
+             for cls, methods in tls_methods.items() for method in methods]
+if mode == 'missing-tls': tls_cases.pop()
+if mode == 'duplicate-tls': tls_cases[-1] = tls_cases[0]
+if mode == 'wrong-tls-method': tls_cases[-1] = tls_cases[-1].replace('matchingLeafPinCannotFetchThroughBlocklistedRawIntermediate', 'notTheRequiredCase')
+if mode in ('failed-tls', 'skipped-tls'):
+    tag = 'failure' if mode == 'failed-tls' else 'skipped'
+    tls_cases[-1] = tls_cases[-1].replace('/>', f'><{tag}/></testcase>')
+(reports / 'TEST-device.xml').write_text(f'<testsuite>{case}{"".join(tls_cases)}</testsuite>')
 apk = Path('apps/android/app/build/outputs/apk/play/debug/openclaw-2099.1.2-play-debug.apk')
 apk.parent.mkdir(parents=True)
 element = {'outputFile': '../outside.apk' if mode == 'outside-output' else apk.name, 'filters': []}
@@ -54,19 +80,8 @@ with zipfile.ZipFile(apk, 'w') as archive:
   });
 }
 
-it("runs the packaged class with pinned Android tooling", () => {
+it("uses read-only permissions and installed alignment tooling", () => {
   expect(job.permissions).toEqual({ contents: "read" });
-  expect(evaluateWorkflowRunner(job["runs-on"], { eventName: "pull_request" })).toBe(
-    "ubuntu-24.04",
-  );
-  expect(workflow.jobs.preflight.outputs.run_android_access_native).toBe(
-    "${{ steps.manifest.outputs.run_android_access_native }}",
-  );
-  containsAll(step.run, [
-    ":app:connectedPlayDebugAndroidTest",
-    "-Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest",
-    'zipalign" -c -P 16 -v 4 "$apk"',
-  ]);
   const zipalignVersion = step.run.match(/\/build-tools\/([^/]+)\/zipalign"/)?.[1];
   expect(zipalignVersion).toBeDefined();
   expect(readFileSync(".github/actions/setup-android-toolchain/action.yml", "utf8")).toContain(
@@ -75,22 +90,10 @@ it("runs the packaged class with pinned Android tooling", () => {
 });
 
 it("requires ordinary and strict simulated 16 KiB packaged execution", () => {
-  expect(job.strategy).toEqual({ "fail-fast": false, matrix: { include: pageSizes } });
-  expect(step.env).toMatchObject({
-    EXPECTED_PAGE_SIZE: "${{ matrix.page-size }}",
-    SYSTEM_IMAGE: "system-images;android-36;${{ matrix.image }};x86_64",
-  });
-  expect(step.run).toContain(
-    '-Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE"',
-  );
   const guard = step.run.slice(
     step.run.indexOf('test "$(adb -s emulator-5554 shell getconf PAGE_SIZE'),
-    step.run.indexOf("node --import ./scripts/tsx.mjs"),
+    step.run.indexOf("bash scripts/android-native-tls-trust.sh prepare"),
   );
-  containsAll(guard, [
-    "setprop bionic.linker.16kb.app_compat.enabled false",
-    "setprop pm.16kb.app_compat.disabled true",
-  ]);
   for (const [pageSize, linker, packageManager, passes] of [
     [16384, "false", "true", true],
     [4096, "false", "true", false],

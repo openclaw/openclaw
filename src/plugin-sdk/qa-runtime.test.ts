@@ -100,6 +100,17 @@ function registrationOptions(
   };
 }
 
+const mockAsync = () => vi.fn(async () => {});
+const surface = (value: object | null) =>
+  loadBundledPluginPublicSurfaceModuleSync.mockReturnValue(value);
+const listContributions = () => runner.listQaRunnerCliContributions();
+const expectSurface = (dirName: string, artifactBasename: string, sourceRoot?: string) =>
+  expect(loadBundledPluginPublicSurfaceModuleSync.mock.calls[0]?.[0]).toEqual({
+    dirName,
+    artifactBasename,
+    ...(sourceRoot ? { env: privateEnv(sourceRoot) } : {}),
+  });
+
 function cancelTrackedFetchResponse(ok = true) {
   const cancel = vi.fn(async () => {});
   return { response: { ok, body: { cancel } }, cancel };
@@ -127,25 +138,20 @@ it.each([
 });
 
 it("runs a plugin-owned transport through the private QA suite host", async () => {
-  const runLiveTransportQaSuiteCommand = vi.fn(async () => {});
-  loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
-    runLiveTransportQaSuiteCommand,
-  });
-  const options = { providerMode: "mock-openai" };
-  const selectScenarioIds = vi.fn(() => ["channel-canary"]);
-
+  const runLiveTransportQaSuiteCommand = mockAsync();
+  surface({ runLiveTransportQaSuiteCommand });
   const request = {
     channelId: "buzz",
     defaultProviderMode: "mock-openai",
-    options,
-    selectScenarioIds,
+    options: { providerMode: "mock-openai" },
+    selectScenarioIds: vi.fn(() => ["channel-canary"]),
   };
   await module.runLiveTransportQaSuiteCommand(request);
   expect(runLiveTransportQaSuiteCommand).toHaveBeenCalledWith(request);
 });
 
 it("registers shared live transport QA CLI options", async () => {
-  const run = vi.fn(async () => {});
+  const run = mockAsync();
   const parse = registerCli(run, {
     credentialFileHelp: "Private JSON credential file",
     credentialOptions: {
@@ -218,14 +224,12 @@ it("reports a blank dedicated QA scenario selection without dispatching", async 
 });
 
 it("shares Docker health parsing across array and jsonl compose output", async () => {
-  const runtime = dockerRuntime();
   const dockerPsOutputs = ['[{"Health":"starting"}]', '{"State":"running"}\n'];
   const runCommand = vi.fn(async () =>
     commandOutput(dockerPsOutputs.shift() ?? '{"State":"running"}'),
   );
-  const sleepImpl = vi.fn(async () => {});
-
-  await runtime.waitForDockerServiceHealth(
+  const sleepImpl = mockAsync();
+  await dockerRuntime().waitForDockerServiceHealth(
     "homeserver",
     composeFile,
     repoRoot,
@@ -238,7 +242,6 @@ it("shares Docker health parsing across array and jsonl compose output", async (
 });
 
 it("cancels compose service health probe response bodies", async () => {
-  const runtime = dockerRuntime();
   const runCommand = vi.fn<QaDockerRunCommand>(async (_command, args) =>
     commandOutput(args.includes("ps") ? "qa-gateway-one\n" : "172.18.0.4\n"),
   );
@@ -246,7 +249,7 @@ it("cancels compose service health probe response bodies", async () => {
   const fetchImpl = vi.fn(async () => probe.response);
 
   await expect(
-    runtime.resolveComposeServiceUrl(
+    dockerRuntime().resolveComposeServiceUrl(
       "gateway",
       18789,
       composeFile,
@@ -265,23 +268,17 @@ it("cancels the guarded default health response before stripping its body", asyn
     "fetch",
     vi.fn(async () => response),
   );
-  const runtime = dockerRuntime();
-
-  await expect(runtime.fetchHealthUrl(healthUrl)).resolves.toEqual({
-    ok: false,
-  });
+  await expect(dockerRuntime().fetchHealthUrl(healthUrl)).resolves.toEqual({ ok: false });
   expect(cancel).toHaveBeenCalledOnce();
 });
 
 it("cancels waitForHealth response bodies after each probe", async () => {
-  const runtime = dockerRuntime();
   const first = cancelTrackedFetchResponse(false);
   const second = cancelTrackedFetchResponse(true);
   const responses = [first.response, second.response];
   const fetchImpl = vi.fn(async () => responses.shift() ?? second.response);
-  const sleepImpl = vi.fn(async () => {});
-
-  await runtime.waitForHealth(healthUrl, {
+  const sleepImpl = mockAsync();
+  await dockerRuntime().waitForHealth(healthUrl, {
     fetchImpl,
     sleepImpl,
     timeoutMs: 1000,
@@ -294,7 +291,6 @@ it("cancels waitForHealth response bodies after each probe", async () => {
 });
 
 it("bounds a stalled waitForHealth probe by the remaining overall deadline", async () => {
-  const runtime = dockerRuntime();
   let probeSignal: AbortSignal | undefined;
   const fetchImpl = vi.fn(async (_input: string, init?: Pick<RequestInit, "signal">) => {
     probeSignal = init?.signal ?? undefined;
@@ -306,11 +302,11 @@ it("bounds a stalled waitForHealth probe by the remaining overall deadline", asy
     }
     throw new Error("health probe aborted");
   });
-  const sleepImpl = vi.fn(async () => {});
+  const sleepImpl = mockAsync();
   const startedAt = Date.now();
 
   await expect(
-    runtime.waitForHealth(healthUrl, {
+    dockerRuntime().waitForHealth(healthUrl, {
       fetchImpl,
       sleepImpl,
       timeoutMs: 25,
@@ -338,19 +334,6 @@ it("resolves an unpinned QA Docker host port away from an occupied loopback defa
   }
 });
 
-type ManifestRegistryCall = { env?: NodeJS.ProcessEnv };
-type PublicSurfaceCall = {
-  artifactBasename?: string;
-  dirName?: string;
-  env?: NodeJS.ProcessEnv;
-};
-
-function firstPublicSurfaceCall(): PublicSurfaceCall | undefined {
-  return loadBundledPluginPublicSurfaceModuleSync.mock.calls[0]?.[0] as
-    | PublicSurfaceCall
-    | undefined;
-}
-
 function plugin(origin = "bundled", rootDir = "/tmp/qa-example") {
   return { id: "qa-example", origin, rootDir, qaRunners: [{ commandName: "example" }] };
 }
@@ -369,7 +352,7 @@ function registration() {
 
 function installRunner<T extends ReturnType<typeof registration>>(entry: T, declared = plugin()) {
   loadPluginManifestRegistryCore.mockReturnValue(registry([declared]));
-  loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({ qaRunnerCliRegistrations: [entry] });
+  surface({ qaRunnerCliRegistrations: [entry] });
   return entry;
 }
 
@@ -404,31 +387,19 @@ function makePrivateQaSourceRoot(prefix: string) {
 describe("QA runner discovery", () => {
   it.each([false, true])("loads the QA Lab surface with private source mode=%s", (privateMode) => {
     const sourceRoot = privateMode ? makePrivateQaSourceRoot("qa-runtime-root-") : undefined;
-    const surface = { defaultQaRuntimeModelForMode: vi.fn(), createQaLiveLaneGateway: vi.fn() };
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue(surface);
-    expect(runner.loadQaRuntimeModule()).toBe(surface);
-    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
-      dirName: "qa-lab",
-      artifactBasename: "runtime-api.js",
-      ...(sourceRoot
-        ? {
-            env: privateEnv(sourceRoot),
-          }
-        : {}),
-    });
+    const runtime = { defaultQaRuntimeModelForMode: vi.fn(), createQaLiveLaneGateway: vi.fn() };
+    surface(runtime);
+    expect(runner.loadQaRuntimeModule()).toBe(runtime);
+    expectSurface("qa-lab", "runtime-api.js", sourceRoot);
   });
   it("loads bundled plugin test APIs with the private QA source tree override", async () => {
     const sourceRoot = makePrivateQaSourceRoot("openclaw-qa-test-api-root-");
 
     const testApi = { marker: "matrix-test-api" };
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue(testApi);
+    surface(testApi);
 
     expect(runner.loadQaRunnerBundledPluginTestApi("matrix")).toBe(testApi);
-    expect(firstPublicSurfaceCall()).toMatchObject({
-      dirName: "matrix",
-      artifactBasename: "test-api.js",
-      env: privateEnv(sourceRoot),
-    });
+    expectSurface("matrix", "test-api.js", sourceRoot);
   });
 
   it("reports the qa runtime as unavailable when the qa-lab surface is missing", async () => {
@@ -452,16 +423,10 @@ describe("QA runner discovery", () => {
     };
     const registered = installRunner({ ...entry, adapterFactory }, declared);
 
-    expect(runner.listQaRunnerCliContributions()).toEqual([
-      {
-        ...contribution(registered),
-        description: "Run the example live QA lane",
-      },
+    expect(listContributions()).toEqual([
+      { ...contribution(registered), description: "Run the example live QA lane" },
     ]);
-    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
-      dirName: "qa-example",
-      artifactBasename: "qa-runner-api.js",
-    });
+    expectSurface("qa-example", "qa-runner-api.js");
   });
 
   it("rejects invalid module-flow support metadata", async () => {
@@ -471,7 +436,7 @@ describe("QA runner discovery", () => {
       adapterFactory: { ...entry.adapterFactory, supportsModuleFlows: false },
     });
 
-    expect(() => runner.listQaRunnerCliContributions()).toThrow(
+    expect(listContributions).toThrow(
       'QA runner plugin "qa-example" exported an invalid transport factory for "example"',
     );
   });
@@ -480,7 +445,7 @@ describe("QA runner discovery", () => {
     loadPluginManifestRegistryCore.mockReturnValue(registry([plugin("workspace")]));
     tryLoadActivatedBundledPluginPublicSurfaceModuleSync.mockReturnValue(null);
 
-    expect(runner.listQaRunnerCliContributions()).toEqual([contribution()]);
+    expect(listContributions()).toEqual([contribution()]);
   });
 
   it("prefers the source bundled tree for private qa discovery in repo checkouts", async () => {
@@ -490,20 +455,12 @@ describe("QA runner discovery", () => {
     loadBundledPluginManifestRegistry.mockReturnValue(
       registry([plugin("bundled", path.join(sourceRoot, "extensions", "qa-example"))]),
     );
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
-      qaRunnerCliRegistrations: [entry],
-    });
-
-    expect(runner.listQaRunnerCliContributions()).toEqual([contribution(entry)]);
-    const manifestCall = loadBundledPluginManifestRegistry.mock.calls[0]?.[0] as
-      | ManifestRegistryCall
-      | undefined;
-    expect(manifestCall).toMatchObject({ env: privateEnv(sourceRoot) });
-    expect(firstPublicSurfaceCall()).toMatchObject({
-      dirName: "qa-example",
-      artifactBasename: "qa-runner-api.js",
+    surface({ qaRunnerCliRegistrations: [entry] });
+    expect(listContributions()).toEqual([contribution(entry)]);
+    expect(loadBundledPluginManifestRegistry.mock.calls[0]?.[0]).toMatchObject({
       env: privateEnv(sourceRoot),
     });
+    expectSurface("qa-example", "qa-runner-api.js", sourceRoot);
   });
 
   it("fails fast when two plugins declare the same qa runner command", async () => {
@@ -517,20 +474,20 @@ describe("QA runner discovery", () => {
         })),
       ),
     );
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue(null);
+    surface(null);
 
-    expect(() => runner.listQaRunnerCliContributions()).toThrow(
+    expect(listContributions).toThrow(
       'QA runner command "matrix" declared by both "alpha" and "beta"',
     );
   });
 
   it("fails when runtime registrations include an undeclared command", async () => {
     loadPluginManifestRegistryCore.mockReturnValue(registry());
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+    surface({
       qaRunnerCliRegistrations: [registration(), { commandName: "extra", register: vi.fn() }],
     });
 
-    expect(() => runner.listQaRunnerCliContributions()).toThrow(
+    expect(listContributions).toThrow(
       'QA runner plugin "qa-example" exported "extra" from its QA runner surface but did not declare it in openclaw.plugin.json',
     );
   });

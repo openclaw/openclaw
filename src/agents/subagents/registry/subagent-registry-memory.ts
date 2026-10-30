@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
-import type { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { prepareGatewayContextBindingOwner } from "../../../plugins/runtime/gateway-context-binding-owner.js";
 import {
   bindGatewayContextResolver,
@@ -8,6 +7,7 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import type { OperationalRunInstanceRef } from "../../operational-run-instance.js";
 import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
 import {
   matchesSubagentChildSessionOwner,
@@ -16,6 +16,7 @@ import {
 } from "./subagent-child-owner-match.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import type { SubagentCompletionCustody } from "./subagent-registry-memory.types.js";
 import {
   publishSubagentRunChanges,
   subscribeSubagentRunChanges,
@@ -36,6 +37,10 @@ import {
   latestSubagentRun,
   compareSubagentRunGeneration,
 } from "./subagent-run-generation.js";
+import {
+  isSubagentRunPayloadEvicted,
+  recordSubagentRunPayloadEviction,
+} from "./subagent-run-payload-facts.js";
 import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
 function freezeValue(value: unknown): void {
@@ -55,12 +60,10 @@ const immutableRunFacts = new WeakMap<
     childAuthority: ReturnType<typeof resolveSubagentChildAuthority>;
   }
 >();
-const evictedSubagentRunPayloads = new WeakSet<SubagentRunRecord>();
-
 /** Finished rows retain topology and ownership; selected readers load their durable payload. */
 export function compactSubagentRunForMemory(entry: SubagentRunRecord): SubagentRunRecord {
   if (
-    evictedSubagentRunPayloads.has(entry) ||
+    isSubagentRunPayloadEvicted(entry) ||
     needsSubagentActivation(entry) ||
     entry.delivery?.status === "pending" ||
     entry.delivery?.status === "in_progress" ||
@@ -73,18 +76,19 @@ export function compactSubagentRunForMemory(entry: SubagentRunRecord): SubagentR
     // A sliced preview can otherwise retain the entire original V8 string.
     task: Buffer.from(entry.task.slice(0, 160), "utf16le").toString("utf16le"),
     ...(entry.completion ? { completion: { ...entry.completion } } : {}),
+    ...(entry.delivery ? { delivery: { ...entry.delivery } } : {}),
   });
   if (compact.completion) {
     delete compact.completion.resultText;
     delete compact.completion.fallbackResultText;
+    delete compact.completion.terminalReply;
+  }
+  if (compact.delivery) {
+    delete compact.delivery.payload;
   }
   bindGatewayContextResolver(compact, getGatewayContextResolver(entry));
-  evictedSubagentRunPayloads.add(compact);
+  recordSubagentRunPayloadEviction(compact, entry);
   return immutableSubagentRun(compact);
-}
-
-export function isSubagentRunPayloadEvicted(entry: SubagentRunRecord): boolean {
-  return evictedSubagentRunPayloads.has(entry);
 }
 
 /** Hydrate only payload fields: the resident row still owns current lifecycle facts. */
@@ -92,18 +96,22 @@ export function restoreSubagentRunPayload(
   resident: SubagentRunRecord,
   full: SubagentRunRecord,
 ): SubagentRunRecord {
-  if (!evictedSubagentRunPayloads.has(resident)) {
+  if (!isSubagentRunPayloadEvicted(resident)) {
     return immutableSubagentRun(resident);
   }
   const restored = copySubagentRunRuntimeOwner(resident, {
     ...resident,
     task: full.task,
+    ...(resident.delivery
+      ? { delivery: { ...resident.delivery, payload: full.delivery?.payload } }
+      : {}),
     ...(resident.completion
       ? {
           completion: {
             ...resident.completion,
             resultText: full.completion?.resultText,
             fallbackResultText: full.completion?.fallbackResultText,
+            terminalReply: full.completion?.terminalReply,
           },
         }
       : {}),
@@ -144,49 +152,46 @@ export function freezeSubagentRunReadRecord<T extends SubagentRunReadRecord>(rec
   return record;
 }
 
-class SubagentRunIndex extends Map<string, Map<string, SubagentRunRecord>> {
-  private readonly latest = new Map<string, SubagentRunRecord>();
+const emptyRunBucket: readonly SubagentRunRecord[] = Object.freeze([]);
 
+class SubagentRunIndex extends Map<string, SubagentRunRecord[]> {
   constructor(private readonly keyFor: (entry: SubagentRunRecord) => string | undefined) {
     super();
   }
 
-  update(runId: string, entry: SubagentRunRecord, operation: "add" | "remove"): void {
-    const key = this.keyFor(entry);
-    if (!key) {
-      return;
-    }
-    const indexedRuns = this.get(key);
-    if (operation === "remove") {
-      if (indexedRuns?.get(runId) !== entry) {
-        return;
-      }
-      indexedRuns.delete(runId);
-      if (indexedRuns.size === 0) {
-        this.delete(key);
-        this.latest.delete(key);
-      } else if (this.latest.get(key) === entry) {
-        for (const remaining of indexedRuns.values()) {
-          this.latest.set(key, remaining);
+  update(previous?: SubagentRunRecord, entry?: SubagentRunRecord): void {
+    const previousKey = previous && this.keyFor(previous);
+    const key = entry && this.keyFor(entry);
+    if (previousKey && previousKey !== key) {
+      const bucket = this.get(previousKey);
+      const position = bucket && previous ? bucket.indexOf(previous) : -1;
+      if (bucket && position >= 0) {
+        bucket.splice(position, 1);
+        if (bucket.length === 0) {
+          this.delete(previousKey);
         }
       }
-    } else {
-      if (indexedRuns) {
-        indexedRuns.set(runId, entry);
-      } else {
-        this.set(key, new Map([[runId, entry]]));
+    }
+    if (!key || !entry) {
+      return;
+    }
+    const bucket = this.get(key);
+    if (bucket?.length === 1 && bucket[0] === previous) {
+      bucket[0] = entry;
+    } else if (bucket) {
+      // Replacement moves to the end, preserving the collector's last-published lookup.
+      const position = previous ? bucket.indexOf(previous) : -1;
+      if (position >= 0) {
+        bucket.splice(position, 1);
       }
-      this.latest.set(key, entry);
+      bucket.push(entry);
+    } else {
+      this.set(key, [entry]);
     }
   }
 
   getLatest(key: string): SubagentRunRecord | undefined {
-    return this.latest.get(key);
-  }
-
-  override clear(): void {
-    super.clear();
-    this.latest.clear();
+    return this.get(key)?.at(-1);
   }
 }
 
@@ -213,7 +218,8 @@ function childSessionOwnerKey(entry: {
   childAgentId?: string;
 }): string | undefined {
   const owner = resolveSubagentChildAgentId(entry);
-  return owner ? JSON.stringify([owner, entry.childSessionKey]) : undefined;
+  // Process-local index keys need no JSON encoding; the owner length keeps arbitrary child keys injective.
+  return owner ? `${owner.length}:${owner}${entry.childSessionKey}` : undefined;
 }
 
 function collectorGroupKey(entry: SubagentRunRecord): string | undefined {
@@ -271,22 +277,12 @@ function completeRetirementPublication(publication: SubagentRetirementPublicatio
   publication.resolve();
 }
 
-type CompletionAuthority = NonNullable<
-  Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>
->;
-type CompletionCustody = {
-  authority: CompletionAuthority;
-  entry: SubagentRunRecord;
-  stop: () => void;
-};
-
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
   readLookup = new SubagentSessionReadLookup();
   readonly workIndex = new SubagentRunWorkIndex();
-  private readonly completionAuthorities = new Map<object, CompletionCustody>();
+  private readonly completionAuthorities = new Map<object, SubagentCompletionCustody>();
   // A tombstone rejects stale callbacks without retaining closed Gateway/source contexts.
-  // True marks restart custody; false marks a live admitted source.
-  private readonly requiredCompletionEntries = new WeakMap<object, boolean>();
+  private readonly requiredCompletionEntries = new WeakSet<object>();
   private readonly retiredCompletionEntries = new WeakSet<object>();
 
   retireCompletionAuthority(observed: SubagentRunRecord): void {
@@ -304,15 +300,15 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     return getCurrentSubagentRunOwner(this, entry) ?? entry;
   }
 
-  requireCompletionAuthority(entry: SubagentRunRecord): void {
-    this.requiredCompletionEntries.set(getSubagentRunRuntimeKey(entry), true);
-  }
-
-  bindCompletionAuthority(row: SubagentRunRecord, source: CompletionAuthority, recovered = false) {
+  bindCompletionAuthority(
+    row: SubagentRunRecord,
+    source: SubagentCompletionCustody["authority"],
+    requesterRunInstance?: OperationalRunInstanceRef,
+  ) {
     const entry = this.currentValue(row);
     const key = getSubagentRunRuntimeKey(entry);
     // A committed row with captured custody stays restricted if its source expires before publication.
-    this.requiredCompletionEntries.set(key, this.requiredCompletionEntries.get(key) ?? recovered);
+    this.requiredCompletionEntries.add(key);
     source.assertCurrent();
     if (
       this.retiredCompletionEntries.has(key) &&
@@ -321,11 +317,12 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       throw new Error("Subagent completion retry no longer owns its source");
     }
     this.releaseCompletionAuthority(entry);
-    this.requiredCompletionEntries.set(key, recovered);
+    this.requiredCompletionEntries.add(key);
     this.retiredCompletionEntries.delete(key);
-    const custody: CompletionCustody = {
+    const custody: SubagentCompletionCustody = {
       authority: source,
       entry,
+      requesterRunInstance,
       stop: () => source.signal.removeEventListener("abort", revoked),
     };
     const revoked = () => this.releaseCompletionAuthority(custody.entry);
@@ -334,6 +331,20 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     if (source.signal.aborted) {
       revoked();
     }
+  }
+
+  /** Steering adopts an existing execution without replacing its completion source. */
+  bindRequesterRunInstance(entry: SubagentRunRecord, instance?: OperationalRunInstanceRef): void {
+    const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
+    if (custody && instance && isSameSubagentRunOwner(this.get(entry.runId), entry)) {
+      custody.requesterRunInstance = instance;
+    }
+  }
+
+  getRequesterRunInstance(entry: SubagentRunRecord): OperationalRunInstanceRef | undefined {
+    return isSameSubagentRunOwner(this.get(entry.runId), entry)
+      ? this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.requesterRunInstance
+      : undefined;
   }
 
   releaseCompletionAuthority(observed: SubagentRunRecord): void {
@@ -383,8 +394,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   private isCancellationNotice(entry: SubagentRunRecord): boolean {
     return (
       entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-      entry.execution.outcome?.status === "error" &&
-      !this.requiredCompletionEntries.get(getSubagentRunRuntimeKey(entry))
+      entry.execution.outcome?.status === "error"
     );
   }
 
@@ -425,14 +435,8 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       }
       custody?.authority.assertCurrent();
       const source = custody?.authority.operatorAuthority;
-      // Siblings re-admitted independently share durable input evidence, not an old capability.
-      const sameRecoveredSource =
-        this.requiredCompletionEntries.get(getSubagentRunRuntimeKey(resultEntry)) &&
-        this.requiredCompletionEntries.get(getSubagentRunRuntimeKey(entry)) &&
-        resultEntry.operatorRecoverySource !== undefined &&
-        isDeepStrictEqual(resultEntry.operatorRecoverySource, entry.operatorRecoverySource);
       if (
-        (!sameRecoveredSource && source?.source !== first?.source) ||
+        source?.source !== first?.source ||
         !isDeepStrictEqual(source?.scopes, first?.scopes) ||
         !isDeepStrictEqual(custody?.authority.scopes, firstCustody?.authority.scopes)
       ) {
@@ -450,9 +454,8 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     if (this.retiredCompletionEntries.has(previousKey)) {
       this.retiredCompletionEntries.add(nextKey);
     }
-    const recovered = this.requiredCompletionEntries.get(previousKey);
-    if (recovered !== undefined) {
-      this.requiredCompletionEntries.set(nextKey, recovered);
+    if (this.requiredCompletionEntries.has(previousKey)) {
+      this.requiredCompletionEntries.add(nextKey);
     }
     const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(previous));
     if (!custody) {
@@ -624,15 +627,10 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     if (prev && prev !== entry && isSameSubagentRunOwner(prev, entry)) {
       this.publishRuntimeOwner(prev, entry);
     }
-    if (prev) {
-      for (const index of runIndexes) {
-        index.update(runId, prev, "remove");
-      }
-    }
     super.set(runId, entry);
     this.readLookup.set(runId, entry);
     for (const index of runIndexes) {
-      index.update(runId, entry, "add");
+      index.update(prev, entry);
     }
     this.workIndex.set(runId, entry);
     return this;
@@ -644,7 +642,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     const prev = this.get(runId);
     if (prev) {
       for (const index of runIndexes) {
-        index.update(runId, prev, "remove");
+        index.update(prev);
       }
     }
     return super.delete(runId);
@@ -724,24 +722,24 @@ export function getCurrentSubagentRunOwner(
 
 export function getSubagentChildSessionCandidates(
   childSessionKey: string,
-): Iterable<SubagentRunRecord> {
-  return childSessionCandidatesByKey.get(childSessionKey)?.values() ?? [];
+): readonly SubagentRunRecord[] {
+  return childSessionCandidatesByKey.get(childSessionKey) ?? emptyRunBucket;
 }
 
 /** Iterate live generations for one child session without scanning the registry. */
-export function* getSubagentRunsForChildSession(
+export function getSubagentRunsForChildSession(
   childSessionKey: string,
   childAgentId?: string,
 ): Iterable<SubagentRunRecord> {
   const key = childSessionOwnerKey({ childSessionKey, childAgentId });
-  yield* (key ? runsByChildSessionOwner.get(key)?.values() : undefined) ?? [];
+  return (key ? runsByChildSessionOwner.get(key) : undefined) ?? emptyRunBucket;
 }
 
 /** Current requester-owned generations, without restoring or scanning retained rows. */
 export function getSubagentRunsForRequesterSession(
   requesterSessionKey: string,
 ): Iterable<SubagentRunRecord> {
-  return runsByRequesterSessionKey.get(requesterSessionKey)?.values() ?? [];
+  return runsByRequesterSessionKey.get(requesterSessionKey) ?? emptyRunBucket;
 }
 
 /** Iterate live collector members for one requester/group archive decision. */
@@ -752,9 +750,9 @@ export function getSubagentRunsForCollectorGroup(
 ): Iterable<[string, SubagentRunRecord]> {
   const key = JSON.stringify([requesterSessionKey, groupId]);
   // Restore can backfill agent ownership after index insertion; read the live owner.
-  return [...(runsByCollectorGroupKey.get(key)?.entries() ?? [])].filter(
-    ([, entry]) => entry.requesterAgentId === requesterAgentId,
-  );
+  return (runsByCollectorGroupKey.get(key) ?? emptyRunBucket)
+    .filter((entry) => entry.requesterAgentId === requesterAgentId)
+    .map((entry) => [entry.runId, entry]);
 }
 
 /** Resolve a collector tombstone that reserves its child session from ordinary turns. */

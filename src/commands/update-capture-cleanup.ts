@@ -7,6 +7,7 @@ import { hasSymbolicLinkInDirectoryPath } from "../infra/session-sqlite-migratio
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "../infra/update-capture-privacy-marker.js";
 import { captureScopes } from "../infra/update-recovery-backup-reader.js";
+import { isNeverActivatedFailedUpdate } from "../infra/update-run-activation.js";
 import { getUpdateRun, listUpdateRuns } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { isUpdateRecoveryPending } from "../infra/update-run-recovery-schema.js";
@@ -15,6 +16,7 @@ import {
   parseUpdateRecoveryBackupManifest,
   type UpdateRecoveryBackupManifest,
 } from "./backup-verify-manifest.js";
+import type { RecoveryInventoryScan } from "./recovery-inventory-scan.js";
 import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 
 type CaptureIdentity = { dev: bigint; ino: bigint };
@@ -55,6 +57,10 @@ function classifyCapture(
   if (recovery && isUpdateRecoveryPending(recovery)) {
     return { outcome: "protected", reason: "pending-update-recovery" };
   }
+  // A failure that never activated left the original state live; its copy restores nothing.
+  if (isNeverActivatedFailedUpdate(run)) {
+    return { outcome: "candidate", reason: "never-activated-update-capture" };
+  }
   const sealed =
     fs.existsSync(path.join(directory, "manifest.json")) &&
     !fs.existsSync(path.join(directory, "manifest.json.partial"));
@@ -83,12 +89,17 @@ function classifyCapture(
 export function collectUpdateCaptureInventory(params: {
   stateDir: string;
   env: NodeJS.ProcessEnv;
+  scan?: RecoveryInventoryScan;
+  readHistory?: boolean;
 }) {
   const artifacts: RecoveryCleanupArtifact[] = [];
   const identities = new Map<string, CaptureIdentity>();
   const scopes = new Set([params.stateDir, ...captureScopes(params.env).keys()]);
   for (const stateDir of scopes) {
-    const inventory = collectCaptureRootInventory({ stateDir, env: params.env });
+    if (params.scan && !params.scan.available()) {
+      break;
+    }
+    const inventory = collectCaptureRootInventory({ ...params, stateDir });
     artifacts.push(...inventory.artifacts);
     for (const [directory, identity] of inventory.identities) {
       identities.set(directory, identity);
@@ -97,7 +108,12 @@ export function collectUpdateCaptureInventory(params: {
   return { artifacts, identities };
 }
 
-function collectCaptureRootInventory(params: { stateDir: string; env: NodeJS.ProcessEnv }) {
+function collectCaptureRootInventory(params: {
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+  scan?: RecoveryInventoryScan;
+  readHistory?: boolean;
+}) {
   const root = resolveUpdateCaptureRoot(params.stateDir);
   const artifacts: RecoveryCleanupArtifact[] = [];
   const identities = new Map<string, CaptureIdentity>();
@@ -116,16 +132,31 @@ function collectCaptureRootInventory(params: { stateDir: string; env: NodeJS.Pro
     });
     return { artifacts, identities };
   }
-  const history = readCompletedUpdateHistory(params.env);
-  const standalone = collectStandaloneDoctorCaptures(params).captures;
-  const entries = fs
-    .readdirSync(root, { withFileTypes: true })
+  const history = params.readHistory === false ? undefined : readCompletedUpdateHistory(params.env);
+  // Standalone retention reads every manifest; status first qualifies their total metadata cost.
+  const rootEntries = params.scan
+    ? [...params.scan.directory(root)]
+    : fs.readdirSync(root, { withFileTypes: true });
+  const doctorMetadataComplete =
+    !params.scan ||
+    rootEntries
+      .filter((entry) => entry.name.startsWith("doctor-"))
+      .every((entry) => params.scan!.metadata(path.join(root, entry.name, "manifest.json")));
+  const standalone =
+    params.readHistory === false || !doctorMetadataComplete || params.scan?.incomplete
+      ? new Map<string, { eligible: boolean; reason: string }>()
+      : collectStandaloneDoctorCaptures(params).captures;
+  const entries = rootEntries
     .filter((entry) => entry.name !== UPDATE_CAPTURE_PRIVACY_MARKER)
     .toSorted((a, b) => a.name.localeCompare(b.name));
   for (const entry of entries) {
+    if (params.scan && !params.scan.available()) {
+      break;
+    }
     const directory = path.join(root, entry.name);
     const item: RecoveryCleanupArtifact = {
       kind: "update-capture",
+      captureSource: entry.name.startsWith("doctor-") ? "doctor" : "update",
       path: directory,
       runs: [],
       bytes: 0,
@@ -137,7 +168,7 @@ function collectCaptureRootInventory(params: { stateDir: string; env: NodeJS.Pro
       item.bytes = entry.isFile() ? fs.lstatSync(directory).size : 0;
       continue;
     }
-    item.bytes = logicalBytes(directory);
+    item.bytes = params.scan ? params.scan.logicalBytes(directory) : logicalBytes(directory);
     // The producer names each capture by run id and marks it before staging any payload.
     if (
       !/^[a-zA-Z0-9_-]{1,128}$/u.test(entry.name) ||
@@ -164,6 +195,9 @@ function collectCaptureRootInventory(params: { stateDir: string; env: NodeJS.Pro
         ) {
           continue;
         }
+        if (params.scan && !params.scan.metadata(path.join(directory, "manifest.json"))) {
+          continue;
+        }
         const manifest = readRootStructuredFileSync<UpdateRecoveryBackupManifest>({
           rootDir: directory,
           relativePath: "manifest.json",
@@ -174,7 +208,7 @@ function collectCaptureRootInventory(params: { stateDir: string; env: NodeJS.Pro
         });
         if (manifest.ok && manifest.value.runId === entry.name) {
           item.reason = "orphan-update-capture";
-          item.detail = `Sealed update capture created ${manifest.value.createdAt}; no matching update run. No supported command retires it.`;
+          item.detail = `Sealed update capture created ${manifest.value.createdAt}; no matching update run. Retire only with an explicit --include-unmanifested path.`;
         }
         continue;
       }

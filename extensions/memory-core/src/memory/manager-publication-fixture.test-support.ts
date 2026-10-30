@@ -45,6 +45,19 @@ export function createPublication({
     db,
     backend,
     admission,
+    writeCache: (hashes: string[], maxEntries = 10) =>
+      backend.execute({
+        type: "cache.write.inline",
+        input: {
+          header: {
+            agentId: "main",
+            provider: { id: "test", model: "test" },
+            providerKey: "test",
+            maxEntries,
+          },
+          entries: hashes.map((hash) => ({ hash, embedding: [1] })),
+        },
+      }),
     expectResult: (
       command: Parameters<typeof backend.execute>[0],
       expected: object = { ok: true },

@@ -114,17 +114,6 @@ function skippedResult(skippedReason: string) {
   return { terminatedPids: [], skippedReason };
 }
 
-async function expectReaped(
-  killed: ReturnType<typeof cleanupDeps>["killed"],
-  terminatedPids: number[],
-) {
-  const result = await reapStaleOpenClawOwnedAcpxOrphans({ wrapperRoot: WRAPPER_ROOT });
-  expect(result.skippedReason).toBeUndefined();
-  expect(killed.filter((entry) => entry.signal === "SIGTERM").map((entry) => entry.pid)).toEqual(
-    terminatedPids,
-  );
-}
-
 describe("process reaper", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -229,7 +218,7 @@ describe("process reaper", () => {
     expect(killed).toStrictEqual([]);
   });
 
-  it("reaps stale OpenClaw-owned wrapper and adapter orphans on startup", async () => {
+  it("reaps owned wrapper and packaged/local adapter trees without claiming native or leased processes", async () => {
     const { killed } = cleanupDeps([
       { pid: 400, ppid: 1, command: CODEX_WRAPPER_COMMAND },
       { pid: 401, ppid: 400, command: PLUGIN_DEPS_CODEX_COMMAND },
@@ -240,25 +229,17 @@ describe("process reaper", () => {
       { pid: 406, ppid: 1, command: "node /tmp/other/codex-acp-wrapper.mjs" },
       { pid: 407, ppid: 1, command: CODEX_WRAPPER_COMMAND_WITH_LEASE },
       { pid: 408, ppid: 1, command: "node /tmp/owner's-unrelated-script.mjs" },
-    ]);
-    await expectReaped(killed, [402, 401, 400, 404, 403, 405]);
-  });
-
-  it("reaps plugin-local Codex ACP adapter orphans when the generated wrapper is already gone", async () => {
-    const { killed } = cleanupDeps([
       { pid: 500, ppid: 1, command: LOCAL_NODE_MODULES_CODEX_COMMAND },
       { pid: 501, ppid: 500, command: LOCAL_NODE_MODULES_CODEX_PLATFORM_COMMAND },
-    ]);
-    await expectReaped(killed, [501, 500]);
-  });
-
-  it("reaps packaged Codex app-server orphans without claiming native plugin processes", async () => {
-    const { killed } = cleanupDeps([
       { pid: 510, ppid: 1, command: PLUGIN_DEPS_CODEX_APP_SERVER_COMMAND },
       { pid: 511, ppid: 510, command: PLUGIN_DEPS_CODEX_PLATFORM_COMMAND },
       { pid: 512, ppid: 1, command: LOCAL_CODEX_APP_SERVER_COMMAND },
     ]);
-    await expectReaped(killed, [511, 510]);
+    const result = await reapStaleOpenClawOwnedAcpxOrphans({ wrapperRoot: WRAPPER_ROOT });
+    expect(result.skippedReason).toBeUndefined();
+    expect(killed.filter((entry) => entry.signal === "SIGTERM").map((entry) => entry.pid)).toEqual([
+      402, 401, 400, 404, 403, 405, 501, 500, 511, 510,
+    ]);
   });
 
   it("keeps startup scans quiet when process listing is unavailable", async () => {

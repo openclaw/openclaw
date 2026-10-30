@@ -186,8 +186,7 @@ it(
             update: { checkOnStart: false },
           },
         });
-        let owner: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-        let sameOwner: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+        const owners: Awaited<ReturnType<typeof connectGatewayClient>>[] = [];
         try {
           await server.startupSettled;
           const connectOwner = async (label: string) => {
@@ -214,13 +213,12 @@ it(
               deviceToken: rotated.entry.token,
               scopes,
             });
+            owners.unshift(actor);
             return { actor, device };
           };
           // Paired backend devices share the Gateway owner; the proxy authenticates a person.
-          const initialOwner = await connectOwner("setup-owner");
-          owner = initialOwner.actor;
-          const { device } = initialOwner;
-          sameOwner = (await connectOwner("replacement-owner")).actor;
+          const { actor: owner, device } = await connectOwner("setup-owner");
+          const { actor: sameOwner } = await connectOwner("replacement-owner");
           const auth = {
             agentId: "main",
             authChoice: "github-copilot",
@@ -228,21 +226,29 @@ it(
           };
           const readProfiles = () =>
             loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles;
-          const setupOwner = owner;
-          for (const actor of [setupOwner, sameOwner]) {
+          for (const actor of [owner, sameOwner]) {
             const self = await actor.request<UsersSelfResult>("users.self", {});
             expect(self.profile.id).toBe(GATEWAY_OWNER_PROFILE_ID);
           }
           const otherSelf = await client.request<UsersSelfResult>("users.self", {});
           expect(otherSelf.profile.id).not.toBe(GATEWAY_OWNER_PROFILE_ID);
-          const start = (sessionId: string, actor = setupOwner) =>
+          const start = (sessionId: string, actor = owner) =>
             actor.request("openclaw.setup.auth.start", { ...auth, sessionId });
-          const startSignIn = async (sessionId: string, actor = setupOwner) => {
+          const startSignIn = async (sessionId: string, actor = owner) => {
             await start(sessionId, actor);
             return await actor.request<WizardNextResult>("wizard.next", { sessionId });
           };
           const expectPending = (result: WizardNextResult) =>
             expect(result).toMatchObject({ done: false, step: { id: expect.any(String) } });
+          const observeSettlement = () => {
+            const settled = createDeferredCore<string[]>();
+            observation.settled = (options) => {
+              if (options.req.method === "openclaw.setup.auth.start") {
+                settled.resolve([...options.context.wizardSessions.keys()]);
+              }
+            };
+            return settled;
+          };
           const abandoned = await startSignIn("abandoned-signin");
           expectPending(abandoned);
           expect(await owner.request("wizard.next", { sessionId: "abandoned-signin" })).toEqual(
@@ -258,12 +264,7 @@ it(
             ],
             ["abandoned-signin", "wizard session already exists"],
           ] as const) {
-            const foreignSettled = createDeferredCore<string[]>();
-            observation.settled = (options) => {
-              if (options.req.method === "openclaw.setup.auth.start") {
-                foreignSettled.resolve([...options.context.wizardSessions.keys()]);
-              }
-            };
+            const foreignSettled = observeSettlement();
             await expect(start(foreignSessionId, client)).rejects.toThrow(message);
             expect(await join(foreignSettled.promise)).toEqual(["abandoned-signin"]);
             expect(await owner.request("wizard.next", { sessionId: "abandoned-signin" })).toEqual(
@@ -318,7 +319,7 @@ it(
           const beforeRevocation = [...requests];
           const reached = createDeferredCore();
           const release = createDeferredCore();
-          const finished = createDeferredCore<string[]>();
+          const finished = observeSettlement();
           const whenSettled = setupAdmission.whenAdmittedWizardSessionSettled;
           // Hold only the retry's existing settlement await; cancellation and lock release stay real.
           vi.spyOn(setupAdmission, "whenAdmittedWizardSessionSettled").mockImplementationOnce(
@@ -328,11 +329,6 @@ it(
               await release.promise;
             },
           );
-          observation.settled = (options) => {
-            if (options.req.method === "openclaw.setup.auth.start") {
-              finished.resolve([...options.context.wizardSessions.keys()]);
-            }
-          };
           const reply = start("revoked-retry").then(
             (value) => ({ result: value }),
             (error: unknown) => ({ error }),
@@ -361,10 +357,7 @@ it(
             await join(Promise.all([finished.promise, reply]));
           }
         } finally {
-          if (sameOwner) {
-            await disconnectGatewayClient(sameOwner);
-          }
-          if (owner) {
+          for (const owner of owners) {
             await disconnectGatewayClient(owner);
           }
           await disconnectGatewayClient(client);

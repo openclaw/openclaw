@@ -267,7 +267,6 @@ describe("executeAgentTurn: lifecycle progress", () => {
       await Promise.resolve();
     }
   });
-
   it("starts presentation callbacks in source order while typing signals are slow", async () => {
     const callbackOrder: string[] = [];
     const record = (event: string) => () => {

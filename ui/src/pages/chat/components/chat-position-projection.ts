@@ -1,5 +1,6 @@
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibility.ts";
+import { assistantMessageCanCompleteTurn } from "../chat-assistant-reply.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
@@ -15,11 +16,19 @@ type ChatPositionMarker = {
 export type ChatPositionIndex = Readonly<{
   markers: readonly Readonly<ChatPositionMarker>[];
   markerIdsByMessageId: ReadonlyMap<string, string>;
-  /** Current tail previews over the immutable marker membership. */
-  liveMarkers?: readonly Readonly<ChatPositionMarker>[];
+  /** A mounted preview reads current text without invalidating marker membership. */
+  resolveLiveMessage?: (message: unknown) => unknown;
 }>;
 
 type RenderItem = SystemEventRenderItem;
+
+export function isVisibleChatStream(part: Parameters<typeof prepareChatStreamRender>[0]): boolean {
+  const prepared = prepareChatStreamRender(part);
+  return (
+    resolveMessageVisibleContent(prepared.message, prepared.normalizedMessage) === "non-text" ||
+    Boolean(prepared.displayMarkdown.trim())
+  );
+}
 
 export function projectChatPositions(
   items: Iterable<RenderItem>,
@@ -38,7 +47,12 @@ export function projectChatPositions(
   ) => {
     const marker = markers.get(id);
     if (marker) {
-      marker.message = message;
+      if (
+        !assistantMessageCanCompleteTurn(marker.message, true) ||
+        assistantMessageCanCompleteTurn(message, true)
+      ) {
+        marker.message = message;
+      }
     } else {
       markers.set(id, { id, role, anchorId: messageId, message });
     }
@@ -93,14 +107,16 @@ export function projectChatPositions(
         if (part.kind !== "stream") {
           continue;
         }
-        const { message, normalizedMessage, displayMarkdown } = prepareChatStreamRender(part);
-        if (
-          resolveMessageVisibleContent(message, normalizedMessage) !== "non-text" &&
-          !displayMarkdown.trim()
-        ) {
+        if (!isVisibleChatStream(part)) {
           continue;
         }
-        add(item.runId ? `run:${item.runId}` : item.key, "assistant", part.key, message, rowKey);
+        add(
+          item.runId ? `run:${item.runId}` : item.key,
+          "assistant",
+          part.key,
+          prepareChatStreamRender(part).message,
+          rowKey,
+        );
       }
     }
   };

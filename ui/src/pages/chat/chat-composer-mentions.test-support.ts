@@ -23,7 +23,7 @@ import {
   disposeComposer,
   renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import type { HumanMentionAccess } from "./components/chat-composer-mention-menu.tsx";
+import type { HumanMentionAccess } from "./components/chat-composer-mention-menu-state.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 export const people: UsersMentionableResult = {
@@ -189,6 +189,7 @@ export function composerFixture(
       return async (result = people) => {
         response.resolve(result);
         await vi.advanceTimersByTimeAsync(0);
+        await vi.dynamicImportSettled();
       };
     },
     edit,
@@ -196,7 +197,9 @@ export function composerFixture(
     options: () => container.querySelectorAll('[role="option"]'),
     search: async (text: string, options?: Parameters<typeof edit>[1]) => {
       edit(text, options);
+      await vi.dynamicImportSettled();
       await vi.advanceTimersByTimeAsync(150);
+      await vi.dynamicImportSettled();
     },
     key: pressKey,
     send,

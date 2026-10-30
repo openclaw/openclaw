@@ -34,13 +34,8 @@ import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { SettingsSelectRow } from "../config/settings-select-row.tsx";
 import { pluginDetailLocation } from "../plugins/detail-tabs.ts";
-import {
-  labFeatureMergePatch,
-  labFeatureResetPatch,
-  LAB_FEATURES,
-  resolveLabFeatureState,
-  type LabFeature,
-} from "./labs-registry.ts";
+import { resolveLabFeatureState, type LabFeature } from "./labs-feature-state.ts";
+import { labFeatureMergePatch, labFeatureResetPatch, LAB_FEATURES } from "./labs-registry.ts";
 
 registerEnglishCatalog(registerLabsEnglish);
 

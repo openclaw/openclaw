@@ -1,4 +1,3 @@
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireTelegramPollingLease,
@@ -36,7 +35,7 @@ describe("Telegram polling lease", () => {
   it("waits for an aborting same-token poller before acquiring", async () => {
     const { abort, first } = await initialLease();
     abort.abort();
-    const pending = acquire({ waitMs: 1_000 });
+    const pending = acquire();
     await Promise.resolve();
     first.release();
     const second = await pending;
@@ -44,12 +43,12 @@ describe("Telegram polling lease", () => {
     second.release();
   });
 
-  it.each([0, 10])("keeps a replacement lease after %i ms", async (waitMs) => {
+  it("keeps a replacement lease after the default grace period", async () => {
     vi.useFakeTimers();
     const { abort, first } = await initialLease("old");
     abort.abort();
-    const acquireReplacement = acquire({ accountId: "new", waitMs });
-    await vi.advanceTimersByTimeAsync(waitMs);
+    const acquireReplacement = acquire({ accountId: "new" });
+    await vi.advanceTimersByTimeAsync(5_000);
     const replacement = await acquireReplacement;
     expect(replacement.replacedStoppingPrevious).toBe(true);
 
@@ -58,19 +57,6 @@ describe("Telegram polling lease", () => {
     await expect(acquire({ accountId: "third" })).rejects.toThrow('account "new"');
 
     replacement.release();
-  });
-
-  it("caps oversized duplicate-poller wait timers before scheduling", async () => {
-    vi.useFakeTimers();
-    const { abort, first } = await initialLease("old");
-    abort.abort();
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-
-    void acquire({ accountId: "new", waitMs: Number.MAX_SAFE_INTEGER }).catch(() => undefined);
-    await Promise.resolve();
-
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    first.release();
   });
 
   it("does not release a no-signal active lease", async () => {

@@ -11,15 +11,14 @@ import {
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import "./sidebar-attention.tsx";
 import "./tooltip.ts";
-import { renderAppSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
 import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
 import { renderSidebarRail } from "./app-sidebar-rail.tsx";
+import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import "../styles/sidebar-reorder.css";
 import "../styles/app-sidebar.css";
 import "../styles/sidebar-rail.css";
 import "../styles/sidebar-pinned-agents.css";
 import "../styles/sidebar-agent-roster.css";
-import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import { renderSessionListToolbar } from "./app-sidebar-session-filter-summary.tsx";
 import { renderSessionList as SessionList } from "./app-sidebar-session-list-render.tsx";
@@ -33,14 +32,16 @@ import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-rend
 import {
   loadStoredSidebarCatalogGrouping,
   SIDEBAR_SESSION_PAGE_SIZE,
+  sidebarSessionPagination,
   storeSidebarCatalogGrouping,
   type SidebarRecentSession,
   type SidebarToolActivity,
 } from "./app-sidebar-session-types.ts";
 import { SessionOrganizer } from "./session-organizer.ts";
-import type { createSidebarScroll } from "./sidebar-context-controller.ts";
+import { SidebarScrollContext, type createSidebarScroll } from "./sidebar-context-controller.ts";
 import { createSidebarMenus } from "./sidebar-menus.tsx";
 import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
+import { sidebarOnlineOrder } from "./sidebar-online-state.ts";
 import { createSidebarPeople, SidebarPeoplePreferences } from "./sidebar-people.ts";
 import { createSidebarRendererLoader } from "./sidebar-renderer-loader.tsx";
 import {
@@ -63,6 +64,10 @@ const SidebarPinnedSession = lazy(() => import("./sidebar-agent-roster.tsx"), {
 });
 const SidebarPages = lazy(() => import("./app-sidebar-pages.tsx"), {
   export: "SidebarPages",
+});
+
+const SidebarOnline = lazy(() => import("./app-sidebar-online.tsx"), {
+  export: "AppSidebarOnline",
 });
 
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
@@ -115,7 +120,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.sidebarSnapshot = model;
     this.navigationView = model.navigationView;
     this.sessionOrganizer.collapsedSessionSections = new Set(model.collapsedSections);
-    const rows = [...model.sessions, ...model.sections.flatMap((section) => section.rows)];
+    const rows = [...model.pinnedSessions, ...model.sections.flatMap((section) => section.rows)];
     for (const row of rows) {
       rows.push(...row.children);
     }
@@ -128,18 +133,39 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   releaseSidebarSnapshot(): void {
     const snapshot = this.sidebarSnapshot;
-    if (snapshot) {
-      this.pinnedSessions.seed(snapshot.pinnedSessions);
-      // Newer pagination choices override the saved view, independently per mode.
-      const limits = snapshot.sections.map(({ id, visibleLimit }) => [id, visibleLimit] as const);
+    if (!snapshot) {
+      return;
+    }
+    const rows = this.reconciledSidebarZone().sessionRows;
+    this.pinnedSessions.seed(
+      snapshot.pinnedSessions.flatMap(({ key }) => {
+        const row = rows.get(key);
+        return row ? [row] : [];
+      }),
+    );
+    // Newer pagination choices override the saved view, independently per mode.
+    if (snapshot.mode === "roster") {
+      const limits = snapshot.sections.map(
+        ({ id, visibleLimit }) =>
+          [
+            id,
+            Math.max(sidebarSessionPagination("category", id).initialLimit, visibleLimit),
+          ] as const,
+      );
+      this.rosterVisibleSessionLimits = new Map([...limits, ...this.rosterVisibleSessionLimits]);
+    } else if (snapshot.grouping) {
+      const grouping = snapshot.grouping;
+      const limits = snapshot.sections.map(
+        ({ id, visibleLimit }) =>
+          [sidebarSessionPagination(grouping, id).key, visibleLimit] as const,
+      );
       this.sessionData.visibleSessionLimits = new Map([
         ...limits,
         ...this.sessionData.visibleSessionLimits,
       ]);
-      this.rosterVisibleSessionLimits = new Map([...limits, ...this.rosterVisibleSessionLimits]);
     }
     this.sidebarPluginSnapshot =
-      snapshot && this.context.plugins.registryStatus !== "complete"
+      this.context.plugins.registryStatus !== "complete"
         ? { entries: snapshot.entries, plugins: snapshot.plugins }
         : null;
     this.sidebarSnapshot = null;
@@ -312,22 +338,28 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {
     const grouped = this.sidebarAgentsMode === "roster" && sectionId.startsWith("agent:");
+    const grouping = this.effectiveSessionsGrouping();
+    const { key, initialLimit } = sidebarSessionPagination(grouping, sectionId);
     const previousLimit =
       (grouped ? this.rosterVisibleSessionLimits : this.sessionData.visibleSessionLimits).get(
-        sectionId,
-      ) ?? SIDEBAR_SESSION_PAGE_SIZE;
+        key,
+      ) ?? initialLimit;
     if (limit < previousLimit) {
       this.sessionProjection.resetMembership(sectionId);
     }
     if (grouped) {
-      this.rosterVisibleSessionLimits = new Map(this.rosterVisibleSessionLimits).set(
-        sectionId,
-        limit,
-      );
+      this.rosterVisibleSessionLimits = new Map(this.rosterVisibleSessionLimits).set(key, limit);
       this.invalidate();
     } else {
-      this.sessionData.setVisibleSessionLimit(sectionId, limit);
+      this.sessionData.setVisibleSessionLimit(key, limit);
     }
+  }
+
+  resetVisibleSessionLimit(sectionId: string): void {
+    this.setVisibleSessionLimit(
+      sectionId,
+      sidebarSessionPagination(this.effectiveSessionsGrouping(), sectionId).initialLimit,
+    );
   }
 
   async loadMoreSidebarSessions(): Promise<void> {
@@ -342,6 +374,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     const query = () => JSON.stringify(this.sessionData.sessionListQuery(this.expandedAgentId()));
     const initialQuery = query();
     const mode = this.sidebarAgentsMode;
+    const grouping = this.effectiveSessionsGrouping();
     const readRows = () => this.selectedAgentSessionRows(this.getSessionNavigationState());
     const previousKeys = new Set(readRows().map((row) => row.key));
     // Server pages include workers and scheduled/system sessions hidden by the
@@ -353,6 +386,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       if (
         this.context.sessions !== sessions ||
         this.sidebarAgentsMode !== mode ||
+        this.effectiveSessionsGrouping() !== grouping ||
         !sessions.isConnectionScopeCurrent(scope) ||
         query() !== initialQuery
       ) {
@@ -490,11 +524,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         </SidebarViewBoundary>
       );
       const toolbar = renderSessionListToolbar(this);
-      const Online = () => renderAppSidebarOnline(this);
       const menus = this.sidebarMenus.render(this);
-      const statusVisible = () =>
-        this.gatewayStatus?.kind &&
-        (this.gatewayStatus.kind !== "connected" || this.connectionRecovery);
       return (
         <aside
           class="sidebar sidebar--rail"
@@ -526,10 +556,13 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                         <>
                           {toolbar}
                           <div
+                            ref={scroll.createContentRef()}
                             class="sidebar-session-content"
                             hidden={Boolean(this.contextualSidebar)}
                           >
-                            <Sessions />
+                            <SidebarScrollContext value={scroll}>
+                              <Sessions />
+                            </SidebarScrollContext>
                           </div>
                           {this.contextualSidebar?.render(
                             this.contextualSidebar.data,
@@ -539,7 +572,9 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                         </>
                       }
                     >
-                      <Online />
+                      <SidebarViewBoundary>
+                        <SidebarOnline host={this} />
+                      </SidebarViewBoundary>
                     </Show>
                   }
                 >
@@ -552,22 +587,22 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                   {...{ className: "sidebar-session-error sidebar-session-catalog-error" }}
                 />
               </Show>
-            </div>
-            <Show when={statusVisible() || this.devGitBranch}>
-              <div class="sidebar-shell__footer">
-                <Show when={statusVisible()}>
+              <Show when={this.gatewayStatus?.kind === "reconnecting"}>
+                <div class="sidebar-shell__connection">
                   <GatewayStatus {...this.gatewayStatus!} row />
-                </Show>
-                <Show when={this.devGitBranch}>
-                  <openclaw-tooltip prop:content={this.devGitBranch ?? undefined}>
-                    <div class="sidebar-footer-branch">
-                      <span class="sidebar-footer-branch__icon" aria-hidden="true">
-                        <Icon name="gitBranch" />
-                      </span>
-                      <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
-                    </div>
-                  </openclaw-tooltip>
-                </Show>
+                </div>
+              </Show>
+            </div>
+            <Show when={this.devGitBranch}>
+              <div class="sidebar-shell__footer">
+                <openclaw-tooltip prop:content={this.devGitBranch ?? undefined}>
+                  <div class="sidebar-footer-branch">
+                    <span class="sidebar-footer-branch__icon" aria-hidden="true">
+                      <Icon name="gitBranch" />
+                    </span>
+                    <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
+                  </div>
+                </openclaw-tooltip>
               </div>
             </Show>
             <Show

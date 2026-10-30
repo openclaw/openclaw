@@ -20,10 +20,9 @@ import type {
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   controlUiPluginAssetGrantError,
   controlUiPluginDeliveryIdentity,
@@ -161,10 +160,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   get canReload(): boolean {
     const snapshot = this.getContext().gateway.snapshot;
     return (
-      !this.disposed &&
-      snapshot.phase === "connected" &&
-      readGatewayOperatorAccess(snapshot).canAdmin &&
-      isGatewayMethodAdvertised(snapshot, "plugins.controlUi.reload") === true
+      !this.disposed && canCallGatewayMethod(snapshot, "plugins.controlUi.reload", "operator.admin")
     );
   }
 
@@ -215,9 +211,12 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
 
   private syncConnection(): void {
     const snapshot = this.getContext().gateway.snapshot;
-    const client = snapshot.phase === "connected" ? snapshot.client : null;
+    const client = canCallGatewayMethod(snapshot, "plugins.controlUi.list", "operator.read")
+      ? snapshot.client
+      : null;
     // Plugin generations can change while the server connection and UI owners survive.
-    const connectionId = client ? (snapshot.hello?.server?.connId ?? null) : null;
+    const connectionId =
+      snapshot.phase === "connected" ? (snapshot.hello?.server?.connId ?? "") : null;
     if (this.client === client && this.connectionId === connectionId) {
       return;
     }
@@ -226,12 +225,9 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     this.client = client;
     this.connectionId = connectionId;
     this.diagnostics = [];
-    this.catalogStatus =
-      client && !isGatewayMethodAdvertised(snapshot, "plugins.controlUi.list")
-        ? "complete"
-        : "pending";
+    this.catalogStatus = snapshot.phase === "connected" && !client ? "complete" : "pending";
     this.publish();
-    if (client && isGatewayMethodAdvertised(snapshot, "plugins.controlUi.list")) {
+    if (client) {
       const reuseBootstrap = this.firstConnection;
       this.firstConnection = false;
       void this.refresh(reuseBootstrap);

@@ -1,18 +1,27 @@
+import { ChildProcess } from "node:child_process";
 import * as fs from "node:fs/promises";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { getVitestWorkerDescriptor } from "../../scripts/lib/vitest-worker-descriptor.mts";
+import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { runRealGatewayUiTests } from "../../scripts/test-ui-real-gateway.mts";
 import { createDeferred } from "../helpers/promise.js";
 
-const fixtures = vi.hoisted(() => ({ workers: 2 }));
+const fixtures = vi.hoisted(() => ({ workers: 2, serial: true, qualified: true }));
 // mock-isolation: Keep eager environment-based config construction out of fixed coordinator project/budget fixtures.
 vi.mock("../vitest/vitest.ui-e2e-prebuilt.config.ts", () => ({
   createPrebuiltUiE2eVitestConfig: () => ({
     test: {
       maxWorkers: fixtures.workers,
       projects: [
-        { test: { name: "ui-e2e-serial", include: ["serial.test.ts"] } },
-        { test: { name: "ui-e2e-real-gateway", include: ["parallel.test.ts"] } },
+        { test: { name: "ui-e2e-serial", include: fixtures.serial ? ["serial.test.ts"] : [] } },
+        {
+          test: {
+            name: "ui-e2e-real-gateway",
+            include: fixtures.qualified ? ["parallel.test.ts"] : [],
+          },
+        },
       ],
     },
   }),
@@ -21,11 +30,25 @@ vi.mock("../../scripts/lib/managed-child-process.mts", async (original) => ({
   ...(await original<typeof import("../../scripts/lib/managed-child-process.mts")>()),
   runManagedCommand: vi.fn(),
 }));
+vi.mock("../../scripts/lib/vitest-worker-run.mts", async (original) => ({
+  ...(await original<typeof import("../../scripts/lib/vitest-worker-run.mts")>()),
+  createVitestWorkerRun: vi.fn(),
+}));
+vi.mock("../../scripts/lib/vitest-worker-descriptor.mts", async (original) => ({
+  ...(await original<typeof import("../../scripts/lib/vitest-worker-descriptor.mts")>()),
+  getVitestWorkerDescriptor: vi.fn(),
+}));
 vi.mock("node:fs/promises", async (original) => ({
   ...(await original<typeof import("node:fs/promises")>()),
   readFile: vi.fn(),
 }));
 const managed = vi.mocked(runManagedCommand);
+const createWorkers = vi.mocked(createVitestWorkerRun);
+const borrowWorkers = vi.fn(async (_child: ChildProcess) => {});
+const disposeWorkers = vi.fn(async () => {});
+const prepareWorkers = vi.fn(async () => {
+  throw new Error("The coordinator must leave worker preparation to its borrowers");
+});
 const env = {
   OPENCLAW_UI_E2E_RUN_DESKTOP: "true",
   OPENCLAW_VITEST_INCLUDE_FILE: "/selected-tests.json",
@@ -42,24 +65,68 @@ const project = (args: string[] | undefined) => {
 
 beforeEach(() => {
   fixtures.workers = 2;
+  fixtures.serial = true;
+  fixtures.qualified = true;
+  borrowWorkers.mockReset().mockResolvedValue(undefined);
+  disposeWorkers.mockReset().mockResolvedValue(undefined);
+  prepareWorkers.mockClear();
+  vi.mocked(getVitestWorkerDescriptor).mockReset();
+  createWorkers.mockReset().mockImplementation((_env, parent, preset) => ({
+    descriptor: {
+      directory: parent?.directory ?? "/fixture/workers",
+      preset: parent ? (parent.preset ?? "full") : (preset ?? "full"),
+    },
+    prepare: prepareWorkers,
+    async borrow<T>(child: ChildProcess, completion: Promise<T>) {
+      const joined = borrowWorkers(child);
+      try {
+        return await completion;
+      } finally {
+        await joined;
+      }
+    },
+    dispose: disposeWorkers,
+  }));
   managed.mockReset().mockResolvedValue(0);
   vi.mocked(fs.readFile).mockReset().mockResolvedValue(JSON.stringify(safeReceipt));
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("spends one slot per initial branch and waits for both joins before qualified fixtures", async () => {
+it.each([
+  { ownership: "local", parent: undefined },
+  { ownership: "inherited full", parent: { directory: "/fixture/upstream" } },
+  {
+    ownership: "inherited runtime",
+    parent: { directory: "/fixture/upstream", preset: "runtime" as const },
+  },
+])("reuses $ownership workers after both initial branches join", async ({ parent }) => {
+  vi.mocked(getVitestWorkerDescriptor).mockReturnValue(parent);
   const serial = createDeferred<number>();
   const desktop = createDeferred<number>();
+  const qualified = createDeferred<number>();
+  const qualifiedStarted = createDeferred();
+  const qualifiedCommandJoined = createDeferred();
+  const qualifiedBorrowerJoined = createDeferred();
+  borrowWorkers
+    .mockResolvedValueOnce(undefined)
+    .mockReturnValueOnce(qualifiedBorrowerJoined.promise);
   const receiptRead = createDeferred();
   vi.mocked(fs.readFile).mockImplementation(async () => {
     receiptRead.resolve();
     return JSON.stringify(safeReceipt);
   });
-  managed.mockImplementation(async ({ args }) => {
+  managed.mockImplementation(async ({ args, onReady }) => {
+    onReady?.(new ChildProcess());
     if (project(args) === "ui-e2e-serial") {
       return serial.promise;
     }
-    return args?.includes("scripts/test-desktop-resize-real.mts") ? desktop.promise : 0;
+    if (project(args) === "ui-e2e-real-gateway") {
+      qualifiedStarted.resolve();
+      const code = await qualified.promise;
+      qualifiedCommandJoined.resolve();
+      return code;
+    }
+    return desktop.promise;
   });
   const running = runRealGatewayUiTests([], env);
   expect(managed).toHaveBeenCalledTimes(2);
@@ -78,76 +145,73 @@ it("spends one slot per initial branch and waits for both joins before qualified
   await receiptRead.promise;
   expect(managed).toHaveBeenCalledTimes(2);
   serial.resolve(0);
+  await qualifiedStarted.promise;
+  expect(createWorkers).toHaveBeenCalledExactlyOnceWith(expect.any(Object), parent, "runtime");
+  expect(prepareWorkers).not.toHaveBeenCalled();
+  expect(borrowWorkers).toHaveBeenCalledTimes(2);
+  const qualifiedCall = managed.mock.calls[2]?.[0];
+  const generation = parent?.directory ?? "/fixture/workers";
+  const runtime = !parent || parent.preset === "runtime";
+  for (const call of [serialCall, qualifiedCall]) {
+    expect(call?.args?.slice(0, runtime ? 4 : 3)).toEqual([
+      expect.stringMatching(/vitest-worker-bootstrap\.mts$/u),
+      generation,
+      ...(runtime ? ["--worker-preset=runtime"] : []),
+      "scripts/run-vitest.mjs",
+    ]);
+    expect(call?.stdio).toEqual(["inherit", "inherit", "inherit", "ipc"]);
+  }
+  expect(desktopCall?.args).toEqual(["--import", "tsx", "scripts/test-desktop-resize-real.mts"]);
+  expect(disposeWorkers).not.toHaveBeenCalled();
+  qualified.resolve(0);
+  await qualifiedCommandJoined.promise;
+  await setImmediate();
+  expect(disposeWorkers).not.toHaveBeenCalled();
+  qualifiedBorrowerJoined.resolve();
   await expect(running).resolves.toBe(0);
-  expect(project(managed.mock.calls[2]?.[0].args)).toBe("ui-e2e-real-gateway");
+  expect(disposeWorkers).toHaveBeenCalledExactlyOnceWith({ interrupted: false });
   expect(
     managed.mock.calls.every(([call]) => call.requireProcessTreeExit && call.waitForCleanupRelease),
   ).toBe(true);
 });
 
-// The Linux CI runner uses strict process-tree ownership, which is POSIX-only.
-it.skipIf(process.platform === "win32").each([false, true])(
-  "joins both real owners on interruption (cleanup failure=%s)",
+// Native signal/tree cleanup is owned by managed-child-process.test.ts.
+it.each([false, true])(
+  "joins both command results on interruption (cleanup failure=%s)",
   async (failCleanup) => {
-    const actual = await vi.importActual<
-      typeof import("../../scripts/lib/managed-child-process.mts")
-    >("../../scripts/lib/managed-child-process.mts");
-    const initialHandlers = process.listeners("SIGTERM");
+    const serial = createDeferred<number>();
+    const desktop = createDeferred<number>();
     const cleanupError = new Error("cleanup failed");
-    const owners: Promise<number>[] = [];
-    let started = 0;
-    let joined = 0;
-    managed.mockImplementation((command) => {
-      const owner = actual
-        .runManagedCommand({
-          ...command,
-          bin: process.execPath,
-          args: ["-e", "setInterval(() => {}, 1000)"],
-          stdio: "ignore",
-          timeoutMs: 5_000,
-          onReady() {
-            started++;
-            if (started === 2) {
-              // Exercise the real owner without invoking Vitest's own signal handler.
-              const handler = process
-                .listeners("SIGTERM")
-                .find((entry) => !initialHandlers.includes(entry));
-              if (!handler) {
-                throw new Error("Managed signal handler was not installed");
-              }
-              handler("SIGTERM");
-            }
-          },
-        })
-        .then((code) => {
-          if (failCleanup && project(command.args) === "ui-e2e-serial") {
-            throw cleanupError;
-          }
-          return code;
-        })
-        .finally(() => joined++);
-      owners.push(owner);
-      return owner;
+    managed.mockImplementation(({ args, onReady }) => {
+      onReady?.(new ChildProcess());
+      return project(args) === "ui-e2e-serial" ? serial.promise : desktop.promise;
     });
-    try {
-      const running = runRealGatewayUiTests([], env);
-      if (failCleanup) {
-        const failure: unknown = await running.catch((error: unknown) => error);
-        expect(failure).toBeInstanceOf(AggregateError);
-        if (failure instanceof AggregateError) {
-          expect(failure.errors).toEqual([cleanupError]);
-        }
-      } else {
-        await expect(running).resolves.toBe(143);
-      }
-    } finally {
-      await Promise.allSettled(owners);
+    const settled = vi.fn();
+    const running = runRealGatewayUiTests([], env);
+    const observed = running.then(settled, settled);
+    expect(managed).toHaveBeenCalledTimes(2);
+    managed.mock.calls[0]![0].onSignal!("SIGTERM");
+    if (failCleanup) {
+      serial.reject(cleanupError);
+    } else {
+      serial.resolve(143);
     }
-    expect(started).toBe(2);
-    expect(joined).toBe(2);
+    await setImmediate();
+    expect(settled).not.toHaveBeenCalled();
+    expect(disposeWorkers).not.toHaveBeenCalled();
+    desktop.resolve(143);
+    if (failCleanup) {
+      await expect(running).rejects.toMatchObject({
+        name: "AggregateError",
+        errors: [cleanupError],
+      });
+    } else {
+      await expect(running).resolves.toBe(143);
+    }
+    await observed;
     expect(managed).toHaveBeenCalledTimes(2);
     expect(fs.readFile).not.toHaveBeenCalled();
-    expect(process.listeners("SIGTERM")).toEqual(initialHandlers);
+    expect(disposeWorkers).toHaveBeenCalledExactlyOnceWith({ interrupted: true });
   },
 );
 
@@ -170,6 +234,7 @@ it.each(["one worker", "owned cache", "no desktop"])("preserves the %s fallback"
   }
   await expect(running).resolves.toBe(0);
   expect(managed).toHaveBeenCalledTimes(mode === "no desktop" ? 1 : 2);
+  expect(createWorkers).not.toHaveBeenCalled();
   expect(managed.mock.calls.every(([call]) => !call.args?.includes("--project"))).toBe(true);
   if (mode === "owned cache") {
     expect(
@@ -181,18 +246,20 @@ it.each(["one worker", "owned cache", "no desktop"])("preserves the %s fallback"
 });
 
 it.each([
-  { serial: 1, desktop: 0, safe: true, later: true },
-  { serial: 0, desktop: 1, safe: true, later: true },
-  { serial: 2, desktop: 0, safe: true, later: false },
-  { serial: 0, desktop: 1, safe: false, later: false },
+  { serial: 1, desktop: 0, qualified: 0, safe: true, later: true },
+  { serial: 0, desktop: 1, qualified: 0, safe: true, later: true },
+  { serial: 2, desktop: 0, qualified: 0, safe: true, later: false },
+  { serial: 0, desktop: 1, qualified: 0, safe: false, later: false },
+  { serial: 0, desktop: 0, qualified: 2, safe: true, later: true },
 ])("retains failure and admits only safely joined work (%j)", async (scenario) => {
-  managed.mockImplementation(async ({ args }) =>
-    project(args) === "ui-e2e-serial"
+  managed.mockImplementation(async ({ args, onReady }) => {
+    onReady?.(new ChildProcess());
+    return project(args) === "ui-e2e-serial"
       ? scenario.serial
       : args?.includes("scripts/test-desktop-resize-real.mts")
         ? scenario.desktop
-        : 0,
-  );
+        : scenario.qualified;
+  });
   if (!scenario.safe) {
     vi.mocked(fs.readFile).mockResolvedValue('{"cleanup":{"joined":false}}');
     await expect(runRealGatewayUiTests([], env)).rejects.toThrow(
@@ -200,10 +267,44 @@ it.each([
     );
   } else {
     await expect(runRealGatewayUiTests([], env)).resolves.toBe(
-      Math.max(scenario.serial, scenario.desktop),
+      Math.max(scenario.serial, scenario.desktop, scenario.qualified),
     );
   }
   expect(managed.mock.calls.some(([call]) => project(call.args) === "ui-e2e-real-gateway")).toBe(
     scenario.later,
   );
+  expect(disposeWorkers).toHaveBeenCalledExactlyOnceWith({ interrupted: false });
+});
+
+it.each(["serial", "qualified"])(
+  "keeps a single %s phase on its own worker owner",
+  async (phase) => {
+    fixtures.serial = phase === "serial";
+    fixtures.qualified = phase === "qualified";
+    await expect(runRealGatewayUiTests([], env)).resolves.toBe(0);
+    expect(managed).toHaveBeenCalledTimes(2);
+    expect(createWorkers).not.toHaveBeenCalled();
+    expect(borrowWorkers).not.toHaveBeenCalled();
+    expect(disposeWorkers).not.toHaveBeenCalled();
+  },
+);
+
+it("preserves a signal received while final worker disposal is joining", async () => {
+  const disposalStarted = createDeferred();
+  const disposalJoined = createDeferred();
+  const signalListeners = process.listeners("SIGTERM");
+  disposeWorkers.mockImplementation(async () => {
+    disposalStarted.resolve();
+    await disposalJoined.promise;
+  });
+  const running = runRealGatewayUiTests([], env);
+  await disposalStarted.promise;
+  const signalListener = process
+    .listeners("SIGTERM")
+    .find((entry) => !signalListeners.includes(entry));
+  expect(signalListener).toBeDefined();
+  signalListener?.("SIGTERM");
+  disposalJoined.resolve();
+  await expect(running).resolves.toBe(143);
+  expect(process.listeners("SIGTERM")).toEqual(signalListeners);
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createNativeCommandItem } from "./event-projector-command.test-support.js";
 import { createConfiguredProjection } from "./event-projector-projection.test-support.js";
+import * as projectorValues from "./event-projector-values.js";
 import {
   notify,
   result as snapshot,
@@ -171,6 +172,26 @@ describe("Codex tool response fidelity", () => {
 });
 
 describe("streamed-output-echo", () => {
+  it("extracts raw assistant text once for buffering and transcript projection", async () => {
+    const projector = await h.createProjector();
+    const extract = vi.spyOn(projectorValues, "extractRawResponseItemText");
+    try {
+      await raw(projector, {
+        id: "raw-final",
+        type: "message",
+        role: "assistant",
+        content: [
+          { type: "output_text", text: "First part. " },
+          { type: "output_text", text: "Second part." },
+        ],
+      });
+      expect(snapshot(projector).assistantTexts).toEqual(["First part. Second part."]);
+      expect(extract).toHaveBeenCalledTimes(1);
+    } finally {
+      extract.mockRestore();
+    }
+  });
+
   function expectNoReply(projector: Projector) {
     const value = snapshot(projector);
     expect(value).toMatchObject({

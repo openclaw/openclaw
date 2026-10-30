@@ -8,6 +8,7 @@ import {
   resolveModelCatalogScope,
   resolveProviderConfigApiOwnerHint,
 } from "./provider-config-owner.js";
+import { projectRegisteredProvider } from "./provider-registration-projection.js";
 import { findProviderRuntimeRegistrationInRegistry } from "./provider-registry-selection.js";
 import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import type { createProviderRegistryResolver } from "./providers.runtime-core.js";
@@ -137,7 +138,7 @@ export function createProviderHookRuntime(
         isOwnerEligible: (id) => selection.isProviderOwnerEligible(id, provider),
       });
     return registration
-      ? Object.assign({}, registration.provider, { pluginId: registration.pluginId })
+      ? projectRegisteredProvider(registration.provider, registration.pluginId)
       : undefined;
   }
 

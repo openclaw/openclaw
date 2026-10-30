@@ -18,22 +18,11 @@ import {
   IDENTITY,
   identityFor,
   makeManager,
-  type Manager,
   REQUEST,
-  SESSION_TARGET,
+  startInference as start,
   terminalFrames,
   waitForFast,
 } from "./inference.test-support.js";
-
-function start(instance: Manager, overrides: Partial<Parameters<Manager["start"]>[0]> = {}) {
-  return instance.start({
-    identity: IDENTITY,
-    request: REQUEST,
-    sessionTarget: SESSION_TARGET,
-    sink: overrides.sink ?? createSink().sink,
-    ...overrides,
-  });
-}
 
 function setup(executor: WorkerInferenceExecutor = async () => DONE) {
   const store = createMemoryStore();
