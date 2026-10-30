@@ -177,6 +177,7 @@ starts in `shadow` mode.
         config: {
           recallGate: {
             mode: "shadow", // off | shadow | live
+            api: "systemone", // openai | systemone
             baseUrl: "http://127.0.0.1:8010/v1",
             model: "decider-4b",
           },
@@ -187,17 +188,18 @@ starts in `shadow` mode.
 }
 ```
 
-| Key               | Default    | Meaning                                                                       |
-| ----------------- | ---------- | ----------------------------------------------------------------------------- |
-| `mode`            | `"shadow"` | `off`, `shadow` (log only), or `live` (inject into the user turn)             |
-| `baseUrl`         | required   | OpenAI-compatible base URL; the gate calls `<baseUrl>/chat/completions`       |
-| `model`           | required   | Model ID sent with each request                                               |
-| `apiKey`          | none       | Bearer token; accepts a [SecretRef](/gateway/secrets)                         |
-| `highThreshold`   | `0.85`     | Score at or above which the page body is injected                             |
-| `mediumThreshold` | `0.5`      | Score at or above which a one-line pointer is injected                        |
-| `timeoutMs`       | `1500`     | Whole-gate budget per turn (100–10000)                                        |
-| `maxIndexChars`   | `24000`    | Characters of index sent to the decision model; later entries are not offered |
-| `maxCandidates`   | `5`        | Most entries scored per turn (1–10)                                           |
+| Key               | Default    | Meaning                                                                        |
+| ----------------- | ---------- | ------------------------------------------------------------------------------ |
+| `mode`            | `"shadow"` | `off`, `shadow` (log only), or `live` (inject into the user turn)              |
+| `api`             | `"openai"` | Endpoint protocol: `openai` or `systemone` (see below)                         |
+| `baseUrl`         | required   | Base URL; the gate calls `<baseUrl>/chat/completions` or `<baseUrl>/systemone` |
+| `model`           | required   | Model ID sent with each request                                                |
+| `apiKey`          | none       | Bearer token; accepts a [SecretRef](/gateway/secrets)                          |
+| `highThreshold`   | `0.85`     | Score at or above which the page body is injected                              |
+| `mediumThreshold` | `0.5`      | Score at or above which a one-line pointer is injected                         |
+| `timeoutMs`       | `1500`     | Whole-gate budget per turn (100–10000)                                         |
+| `maxIndexChars`   | `24000`    | Characters of index sent to the decision model; later entries are not offered  |
+| `maxCandidates`   | `5`        | Most entries scored per turn (1–10)                                            |
 
 Each user turn in a session that reads the private partition (the same
 sessions that get the standing index):
@@ -206,21 +208,34 @@ sessions that get the standing index):
    one label line (type, title, one exact alias), most connected first. It uses
    the same label rules as the standing index, and skips titles that read like
    instructions or contain markup.
-2. The decision model receives that list and the user message, and replies with
-   the numbers of the relevant entries.
-3. Each pick (up to `maxCandidates`) gets a one-token yes/no request with
-   `logprobs`. Its score is P(yes) / (P(yes) + P(no)) from the top logprobs.
-4. In `live` mode, high-score pages have their body (at most 2,000 characters)
+2. The decision model receives that list and the user message, and scores the
+   entries (see the two protocols below).
+3. In `live` mode, high-score pages have their body (at most 2,000 characters)
    prepended to the user turn, medium-score pages get a one-line pointer to
    `knowledge_lookup`, and low scores add nothing. The whole block is at most
    6,000 characters.
+
+Protocols:
+
+- `systemone`: one request to `<baseUrl>/systemone` (the TypeSafe/Jev System
+  One wire format, served by decision models such as decider). The list is one
+  `choice` question per 254 entries, each with a `None of these` option, and
+  the state is the user message. An entry's score is its option probability,
+  so picking and scoring are one reading. The top `maxCandidates` entries are
+  tiered. When several entries fit, they share the probability mass, so tune
+  thresholds in `shadow` mode.
+- `openai`: a chat model replies with the numbers of the relevant entries,
+  then each pick (up to `maxCandidates`) gets a one-token yes/no request with
+  `logprobs`. Its score is P(yes) / (P(yes) + P(no)) from the top logprobs.
+  Use a chat-tuned model; a model trained on a fixed decision format (such as
+  decider) scores poorly here and should use `systemone`.
 
 The list goes only to the decision model, never to the main model's prompt.
 Injected text goes into the user turn, not the system prompt, so the cached
 prompt prefix is unchanged. The standing [Knowledge index](#knowledge-index) is
 independent of the gate and still appended to the system prompt.
 
-- If the endpoint returns no logprobs, or neither `yes` nor `no` is among them,
+- `openai` only: if the endpoint returns no logprobs, or neither `yes` nor `no` is among them,
   a yes answer counts as medium (pointer only) and anything else as low. An
   uncalibrated answer never injects a page body.
 - On timeout, HTTP error, or any other failure the gate injects nothing, logs

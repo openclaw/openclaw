@@ -86,11 +86,16 @@
             "enum": ["off", "shadow", "live"],
             "description": "off disables the gate; shadow (default) logs what it would inject and injects nothing; live injects matched records into the user turn."
           },
+          "api": {
+            "type": "string",
+            "enum": ["openai", "systemone"],
+            "description": "Decision endpoint protocol. openai (default) posts to {baseUrl}/chat/completions; systemone posts one choice question to {baseUrl}/systemone and reads its option probabilities."
+          },
           "baseUrl": {
             "type": "string",
             "minLength": 1,
             "maxLength": 500,
-            "description": "OpenAI-compatible base URL of the decision model, for example http://127.0.0.1:8010/v1."
+            "description": "Base URL of the decision endpoint, for example http://127.0.0.1:8010/v1."
           },
           "model": {
             "type": "string",

@@ -237,3 +237,84 @@ it("skips non-user turns and sessions that cannot read the private partition", a
   expect(await run("Is Nova due for her shots?")).toBe(undefined);
   expect(fetchMock).not.toHaveBeenCalled();
 });
+
+/** A systemone endpoint: every option whose name contains a key of `probs`
+ * gets that probability; the rest of the mass goes to "None of these". */
+function systemOne(probs: Record<string, number>) {
+  const requests: Array<{ url: string; body: any }> = [];
+  const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+    const body = JSON.parse(typeof init.body === "string" ? init.body : "{}");
+    requests.push({ url, body });
+    const answers: Record<string, unknown> = {};
+    for (const [id, q] of Object.entries<{ criteria: Record<string, null> }>(body.questions)) {
+      const probabilities: Record<string, number> = {};
+      for (const name of Object.keys(q.criteria)) {
+        const key = Object.keys(probs).find((k) => name.includes(k));
+        probabilities[name] = key ? probs[key]! : 0;
+      }
+      const used = Object.values(probabilities).reduce((a, b) => a + b, 0);
+      probabilities["None of these"] = Math.max(0, 1 - used);
+      answers[id] = { type: "choice", probabilities };
+    }
+    return Response.json({ model: body.model, answers });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return { fetchMock, requests };
+}
+
+it("systemone reads picks and scores from one choice question per 254 entries", async () => {
+  const policy = parseRecallGate(gate({ api: "systemone" }).recallGate)!;
+  const entries = Array.from({ length: 300 }, (_, i) => ({
+    id: `r${i}`,
+    // Two entries share a label; the second gets a suffix so both stay options.
+    line: i === 7 ? "note: entry 3" : `note: entry ${i}`,
+    label: `e${i}`,
+  }));
+  const { requests } = systemOne({ "entry 3 (2)": 0.6, "entry 270": 0.9, "entry 12": 0.2 });
+  const decisions = await decide({
+    policy: { ...policy, maxCandidates: 3 },
+    entries,
+    message: "anything",
+    signal: new AbortController().signal,
+  });
+  expect(requests).toHaveLength(1);
+  const { url, body } = requests[0]!;
+  expect(url).toBe("http://decider.test/v1/systemone");
+  expect(body).toMatchObject({ model: "decider", state: "User message: anything" });
+  const questions = Object.values<{ type: string; criteria: object }>(body.questions);
+  expect(questions.map((q) => [q.type, Object.keys(q.criteria).length])).toEqual([
+    ["choice", 255],
+    ["choice", 47],
+  ]);
+  expect(Object.keys(questions[0]!.criteria)).toContain("note: entry 3 (2)");
+  expect(Object.keys(questions[1]!.criteria).at(-1)).toBe("None of these");
+  expect(decisions).toEqual([
+    { id: "r270", score: 0.9, tier: "high" },
+    { id: "r7", score: 0.6, tier: "medium" },
+    { id: "r12", score: 0.2, tier: "low" },
+  ]);
+});
+
+it("systemone live mode injects by option probability in a single request", async () => {
+  const { run, logged } = await setup(gate({ mode: "live", api: "systemone" }));
+  const { fetchMock, requests } = systemOne({ Nova: 0.9, Pizza: 0.55, Garage: 0.02 });
+  const result = await run("Is Nova due for her shots?");
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(Object.keys(result)).toEqual(["prependContext"]);
+  const text: string = result.prependContext;
+  expect(text).toContain("rabies booster is due in March");
+  expect(text).toMatch(/Knowledge has a page on Pizza oven project; use knowledge_lookup/u);
+  expect(text).not.toContain("Garage");
+  expect(JSON.stringify(requests[0]!.body.questions)).toContain("note: Garage door opener");
+  const [record] = logged();
+  expect(record).toMatchObject({ outcome: "injected", offered: 3 });
+  expect(record.decisions.map((d: { tier: string }) => d.tier)).toEqual(["high", "medium", "low"]);
+  expect(JSON.stringify(record)).not.toMatch(/Nova|shots|Pizza/u);
+});
+
+it("systemone injects nothing when None of these wins", async () => {
+  const { run, logged } = await setup(gate({ mode: "live", api: "systemone" }));
+  systemOne({ Garage: 0.01 });
+  expect(await run("What's the weather tomorrow?")).toBe(undefined);
+  expect(logged()[0]).toMatchObject({ outcome: "none" });
+});
