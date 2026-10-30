@@ -139,7 +139,8 @@ claim headlines, never page bodies or evidence.
 ## Automatic recall
 
 Automatic prompt injection uses only summaries the owner approved with
-`knowledge_recall`. Keyword search is never a trusted source for injected
+`knowledge_recall`, plus whatever an operator-configured [recall gate](#recall-gate)
+injects in `live` mode. Keyword search is never a trusted source for injected
 context.
 
 - `knowledge_recall` sets or clears a `recall` block on one exact active record:
@@ -161,6 +162,78 @@ by descending importance, then record ID. The default limit is 48 and the
 maximum is 200. Each candidate excerpt is exactly the approved summary; record
 bodies and ingested text never enter it. An ungranted conversation audience
 receives no candidates.
+
+## Recall gate
+
+The recall gate asks a small local decision model, per user turn, which index
+entries the message needs. It is off unless `recallGate` is configured, and it
+starts in `shadow` mode.
+
+```json5
+{
+  plugins: {
+    entries: {
+      knowledge: {
+        config: {
+          recallGate: {
+            mode: "shadow", // off | shadow | live
+            baseUrl: "http://127.0.0.1:8010/v1",
+            model: "decider-4b",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+| Key               | Default    | Meaning                                                                       |
+| ----------------- | ---------- | ----------------------------------------------------------------------------- |
+| `mode`            | `"shadow"` | `off`, `shadow` (log only), or `live` (inject into the user turn)             |
+| `baseUrl`         | required   | OpenAI-compatible base URL; the gate calls `<baseUrl>/chat/completions`       |
+| `model`           | required   | Model ID sent with each request                                               |
+| `apiKey`          | none       | Bearer token; accepts a [SecretRef](/gateway/secrets)                         |
+| `highThreshold`   | `0.85`     | Score at or above which the page body is injected                             |
+| `mediumThreshold` | `0.5`      | Score at or above which a one-line pointer is injected                        |
+| `timeoutMs`       | `1500`     | Whole-gate budget per turn (100–10000)                                        |
+| `maxIndexChars`   | `24000`    | Characters of index sent to the decision model; later entries are not offered |
+| `maxCandidates`   | `5`        | Most entries scored per turn (1–10)                                           |
+
+Each user turn in a session that reads the private partition (the same
+sessions that get the standing index):
+
+1. Knowledge lists every current page except `source` and `artifact` pages as
+   one label line (type, title, one exact alias), most connected first. It uses
+   the same label rules as the standing index, and skips titles that read like
+   instructions or contain markup.
+2. The decision model receives that list and the user message, and replies with
+   the numbers of the relevant entries.
+3. Each pick (up to `maxCandidates`) gets a one-token yes/no request with
+   `logprobs`. Its score is P(yes) / (P(yes) + P(no)) from the top logprobs.
+4. In `live` mode, high-score pages have their body (at most 2,000 characters)
+   prepended to the user turn, medium-score pages get a one-line pointer to
+   `knowledge_lookup`, and low scores add nothing. The whole block is at most
+   6,000 characters.
+
+The list goes only to the decision model, never to the main model's prompt.
+Injected text goes into the user turn, not the system prompt, so the cached
+prompt prefix is unchanged. The standing [Knowledge index](#knowledge-index) is
+independent of the gate and still appended to the system prompt.
+
+- If the endpoint returns no logprobs, or neither `yes` nor `no` is among them,
+  a yes answer counts as medium (pointer only) and anything else as low. An
+  uncalibrated answer never injects a page body.
+- On timeout, HTTP error, or any other failure the gate injects nothing, logs
+  the outcome, and the turn continues.
+- Each turn logs one `knowledge recall gate:` info line with the mode, outcome,
+  latency, number of entries offered, and each decision's record ID, score, and
+  tier. Logs never contain message or record text.
+- The gate runs only on user-triggered turns. Ungranted conversation audiences,
+  sandboxed sessions, and agents without a provisioned store are skipped
+  without calling the endpoint.
+
+The endpoint receives page labels and the user message. Point it only at a
+model you trust with both, such as a loopback-only local server.
 
 ## Pre-compaction memory flush
 

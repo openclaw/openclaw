@@ -115,6 +115,7 @@ optional.
 | `maintenance.enabled`       | boolean  | `true`            | Run the scheduled maintenance pass.                                                                                                          |
 | `maintenance.schedule`      | string   | `"30 3 * * *"`    | Five-field cron expression for the pass.                                                                                                     |
 | `maintenance.timezone`      | string   | Gateway host zone | IANA time zone for the schedule.                                                                                                             |
+| `recallGate`                | object   | absent            | Optional decision-model recall gate. Off when absent. See [Recall gate](/plugins/knowledge/memory-provider#recall-gate).                     |
 
 `operatorRead` and `writesEnabled` are plugin-wide gates. Changes to
 `plugins.entries.knowledge.config.stores` do not reload the plugin; Knowledge

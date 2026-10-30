@@ -25,6 +25,7 @@ import { buildKnowledgeMemoryPrompt } from "./memory-prompt.js";
 import { createKnowledgeMemoryRuntime } from "./memory-provider.js";
 import { locatePluginFiles } from "./plugin-files.js";
 import { queryFreshness } from "./query-freshness.js";
+import { registerRecallGateHook } from "./recall-gate-hook.js";
 import { searchDetail } from "./search-detail.js";
 import type { StorageOperations } from "./storage-host.js";
 import { createStoreOperations } from "./store-assignments.js";
@@ -139,6 +140,9 @@ export function createKnowledgeService(
   }
   if (typeof api.on === "function") {
     registerMemoryIndexHook(api, stores);
+    if (policy.recallGate) {
+      registerRecallGateHook(api, stores, policy.recallGate);
+    }
   }
   const maintenance = new Maintenance(stores, {
     info: (m) => api.logger?.info?.(m),

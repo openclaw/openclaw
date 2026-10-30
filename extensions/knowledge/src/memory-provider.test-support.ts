@@ -7,7 +7,11 @@ import { createKnowledgeService } from "./service.js";
 import { apiFor } from "./test-support.js";
 
 /** A writable vault with owner-private tool and session contexts and a captured memory capability. */
-export async function memoryFixture(tempDirs: { make(prefix: string): string }, overrides = {}) {
+export async function memoryFixture(
+  tempDirs: { make(prefix: string): string },
+  overrides = {},
+  policy: Record<string, unknown> = {},
+) {
   const base = tempDirs.make("knowledge-memory-");
 
   const root = path.join(base, "vault");
@@ -25,6 +29,8 @@ export async function memoryFixture(tempDirs: { make(prefix: string): string }, 
     active = true;
   const services: any = [];
   const hooks: Record<string, any> = {};
+  // Every registration per hook name; `hooks` keeps the last one.
+  const hookList: Record<string, any[]> = {};
   const api = apiFor(
     base,
     {
@@ -46,8 +52,10 @@ export async function memoryFixture(tempDirs: { make(prefix: string): string }, 
         },
         on(name: string, handler: any) {
           hooks[name] = handler;
+          (hookList[name] ??= []).push(handler);
         },
       },
+      policy,
     },
   );
   const service = createKnowledgeService(api);
@@ -106,6 +114,7 @@ export async function memoryFixture(tempDirs: { make(prefix: string): string }, 
     service,
     services,
     hooks,
+    hookList,
     open,
     save,
     recall,
