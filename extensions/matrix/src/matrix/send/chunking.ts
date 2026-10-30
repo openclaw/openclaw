@@ -40,7 +40,14 @@ function resolveMatrixChunkOverflow(chunk: string, limit: number): number {
   return Math.max(0, renderedLength - limit);
 }
 
+// Every <u>/<ins> tag token starts with one of these, so a miss proves there is none.
+const MATRIX_UNDERLINE_TAG_CANDIDATE_RE = /<\/?(?:u|ins)(?![A-Za-z0-9-])/i;
+
 function protectMatrixUnderlineTags(markdown: string): MatrixSpoilerProtection {
+  // Source analysis only matters for underline tags, which most replies do not contain.
+  if (!MATRIX_UNDERLINE_TAG_CANDIDATE_RE.test(markdown)) {
+    return { markdown };
+  }
   const { codeRegions, metadataRanges, underlineTags } = prepareMatrixMarkdownSource(markdown);
   const tags = underlineTags.filter(
     (tag) =>
