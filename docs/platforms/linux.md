@@ -659,7 +659,10 @@ deliberate pressure budget, not measured disk bandwidth: a 4 GiB memory allowanc
 on one device gives about 6.8 MiB/s in each direction. Gateway IO remains outside
 the exec ceiling.
 
-Run `openclaw doctor --fix` to update an older managed unit. For a custom unit,
+Enable this policy for an older managed unit with an explicit
+`openclaw doctor --fix` or `openclaw gateway install --force`. Normal updates
+preserve the existing delegation policy, including units without delegation;
+shutdown-policy refreshes do not opt the unit in. For a custom unit,
 add the two directives above and reload/restart it through its service owner.
 Doctor and Gateway status report missing delegation or leaf placement. If
 systemd is older than 254, cgroup v2 controllers are unavailable, or delegation

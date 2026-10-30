@@ -253,7 +253,7 @@ export async function execCommand(
         try {
           const cleanup = await (adapter?.waitForExtinction?.() ?? startupCleanup);
           if (cleanup && cleanup.status === "uncertain") {
-            throw new CommandProcessCleanupError({ cause: completedResult ?? cleanup.cause });
+            throw new CommandProcessCleanupError({ cause: completedResult ?? cleanup });
           }
           custody?.settled();
           cleanupDone.resolve();

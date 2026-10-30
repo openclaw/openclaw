@@ -168,7 +168,7 @@ if (isMainThread) {
     p99Ms: metric.count ? metric.percentile(99) / 1000 : null,
     maxMs: metric.count ? metric.max / 1000 : null,
   });
-  process.on("message", async (message) => {
+  async function handleMessage(message) {
     if (message?.channel !== "team-shape-stress") {
       return;
     }
@@ -188,8 +188,8 @@ if (isMainThread) {
       active = false;
       const endedAtEpochMs = Date.now();
       const cgroupsAfter = snapshot();
-      const workerCommits = await stopWorkerCommitMeasurement();
       try {
+        const workerCommits = await stopWorkerCommitMeasurement();
         writeFileSync(
           path.join(output, "agent-exec-io-commits.json"),
           JSON.stringify(
@@ -242,5 +242,15 @@ if (isMainThread) {
         });
       }
     }
+  }
+  process.on("message", (message) => {
+    void handleMessage(message).catch((/** @type {unknown} */ error) => {
+      process.send?.({
+        channel: "agent-exec-io",
+        action: message.action,
+        ok: false,
+        error: String(error),
+      });
+    });
   });
 }

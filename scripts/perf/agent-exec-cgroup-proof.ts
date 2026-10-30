@@ -3,8 +3,10 @@
  * DelegateSubgroup=gateway systemd service on Linux. Requires --device MAJ:MIN
  * and an isolated OPENCLAW_STATE_DIR. Build this entry with the repository's
  * esbuild into each already-built revision's dist directory (packages external).
- * The fixture prepares kernel policy; production startup is covered separately
- * by team-shape-stress --exec-io-storm. Baseline must fail placement assertions.
+ * The fixture prepares kernel policy and models the private startup activation
+ * fact. This proves placement, not startup delegation admission; production
+ * startup is covered separately by team-shape-stress --exec-io-storm.
+ * Baseline must fail placement assertions.
  */
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
@@ -36,6 +38,8 @@ fs.writeFileSync(
   `${values.device} rbps=16777216 wbps=16777216 riops=4096 wiops=4096`,
 );
 fs.writeFileSync(path.join(group, "memory.high"), "1073741824");
+// Literal keeps this identical fixture runnable on the baseline without the new owner module.
+process.env.OPENCLAW_INTERNAL_AGENT_EXEC_CGROUP = group;
 const expected = own.replace(/\/gateway$/u, "/agent-exec");
 const code = `const fs = require('node:fs'); const cp = require('node:child_process'); console.log(JSON.stringify({self:fs.readFileSync('/proc/self/cgroup','utf8').trim(),descendant:cp.execFileSync(process.execPath,['-e',"process.stdout.write(require('node:fs').readFileSync('/proc/self/cgroup','utf8').trim())"],{encoding:'utf8'})}));`;
 const observations: Array<{ route: string; self: string; descendant: string; expected: string }> =

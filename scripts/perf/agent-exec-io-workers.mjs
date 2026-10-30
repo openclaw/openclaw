@@ -31,10 +31,7 @@ if (isMainThread) {
 const { gate, histogram } = shared;
 const channel = new BroadcastChannel(shared.channel);
 channel.unref();
-const announce = (message) => {
-  // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node BroadcastChannel has no targetOrigin argument.
-  channel.postMessage(message);
-};
+const announce = channel.postMessage.bind(channel);
 const identities = new Map();
 let startedAtEpochMs;
 let workersAtStart;

@@ -11,8 +11,12 @@ export function preserveSystemdUnitPolicy(
   generated: string,
   previous: string,
   keys: readonly string[] = [],
+  options: { preserveExecDelegation?: boolean } = {},
 ): string {
-  if (!keys.length) {
+  const policyKeys = options.preserveExecDelegation
+    ? [...keys, "Service.Delegate", "Service.DelegateSubgroup"]
+    : keys;
+  if (!policyKeys.length) {
     return generated;
   }
   const keyedLines = (content: string) => {
@@ -27,7 +31,9 @@ export function preserveSystemdUnitPolicy(
     });
   };
   const installed = keyedLines(previous);
-  const retained = new Map(keys.map((key) => [key, installed.filter((line) => line.key === key)]));
+  const retained = new Map(
+    policyKeys.map((key) => [key, installed.filter((line) => line.key === key)]),
+  );
   const copied = new Set<string>();
   return `${keyedLines(generated)
     .flatMap(({ line, key }) => {
@@ -36,6 +42,10 @@ export function preserveSystemdUnitPolicy(
         return [line];
       }
       if (!original.length) {
+        // Absence is the existing operator policy; updates cannot opt into delegation.
+        if (options.preserveExecDelegation && key.startsWith("Service.Delegate")) {
+          return [];
+        }
         throw new Error(`Custom systemd policy ${key} disappeared before publication.`);
       }
       if (copied.has(key)) {
@@ -107,7 +117,9 @@ export function refreshSystemdUnitPolicy(content: string): string {
       lines.push(`[${name}]`, ...renderFixedPolicy(name));
     }
   }
-  return `${lines.join("\n").trimEnd()}\n`;
+  return preserveSystemdUnitPolicy(`${lines.join("\n").trimEnd()}\n`, content, [], {
+    preserveExecDelegation: true,
+  });
 }
 
 function assertNoSystemdLineBreaks(value: string, label: string): void {

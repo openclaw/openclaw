@@ -192,7 +192,7 @@ export async function canRepairRuntime(
     plan.programArguments[0] !==
       resolveManagedGatewayServiceCommand(command)?.programArguments[0] &&
     audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNode) &&
-    audit.issues.every((issue) => runtimeCodes.has(issue.code)) &&
+    audit.issues.every((issue) => issue.repair === "host" || runtimeCodes.has(issue.code)) &&
     !audit.definitionDriftError &&
     !audit.definitionDrift?.some(
       (finding) =>

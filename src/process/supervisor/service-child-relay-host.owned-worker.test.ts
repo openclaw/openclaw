@@ -16,6 +16,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { killPidIfAlive } from "../../test-utils/process-tree.js";
+import * as execCgroup from "../linux-exec-cgroup.js";
 import { createServiceChildRelayAdapter } from "./service-child-relay-host.js";
 import type { ProcessExtinctionResult } from "./types.js";
 
@@ -76,6 +77,9 @@ it
     const rootExited = createDeferred();
     const output: string[] = [];
     let stderr = "";
+    const activation = "/sys/fs/cgroup/fixture.service/agent-exec";
+    // Model the startup fact, then observe its handoff in the actual worker process.
+    const activationOwner = vi.spyOn(execCgroup, "getAgentExecCgroup").mockReturnValue(activation);
     try {
       const descendantSource = `
         process.on("SIGTERM", () => {});
@@ -108,7 +112,7 @@ it
                 });
               });
             });
-            process.send({ phase: "waiting", pid: process.pid, parentPid: process.ppid });
+            process.send({ phase: "waiting", pid: process.pid, parentPid: process.ppid, activation: process.env[${JSON.stringify(execCgroup.AGENT_EXEC_CGROUP_ENV)}] });
           `,
       ];
       const startup = await createServiceChildRelayAdapter({
@@ -157,7 +161,7 @@ it
       }
       await vi.waitFor(() => {
         expect(onWorkerMessage).toHaveBeenCalledWith(
-          expect.objectContaining({ phase: "waiting", parentPid: ownerPid }),
+          expect.objectContaining({ phase: "waiting", parentPid: ownerPid, activation }),
         );
       });
       const waiting = onWorkerMessage.mock.calls.find(
@@ -232,6 +236,7 @@ it
         );
       }
     } finally {
+      activationOwner.mockRestore();
       killPidIfAlive(descendantPid);
       adapter?.kill("SIGKILL");
       await adapter?.wait().catch(() => undefined);
