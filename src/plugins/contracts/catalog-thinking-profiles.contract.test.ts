@@ -6,6 +6,7 @@ import { resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import type { ThinkingCatalogEntry } from "../../auto-reply/thinking.shared.js";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 import type { ProviderThinkingRegistry } from "../provider-thinking.types.js";
+import { resolveProviderContractProvidersForPluginIds } from "./registry.js";
 
 // Rows that set compat.defaultThinkingLevel own their thinking profile; no provider hook runs.
 // Each expectation is the profile the deleted provider hook returned for that row.
@@ -148,18 +149,39 @@ const PLUGINS_WITH_THINKING_HOOKS = new Set([
   "zai",
 ]);
 
-it("adds no provider thinking hook where catalog rows can own the profile", () => {
+// A hook is registered on the provider, or exported from the plugin's policy artifact, which the
+// thinking resolver loads before plugin runtime.
+async function listPluginsWithThinkingHooks(): Promise<string[]> {
   const files = listGitTrackedFiles({ repoRoot, pathspecs: "extensions" }) ?? [];
-  const withHooks = new Set(
-    files
-      .filter((file) => /^extensions\/[^/]+\/.+\.ts$/.test(file) && !/\.test\.ts$|test-/.test(file))
-      .filter((file) =>
-        fs.readFileSync(path.join(repoRoot, file), "utf8").includes("resolveThinkingProfile"),
+  const withHooks: string[] = [];
+  for (const file of files.filter((f) => /^extensions\/[^/]+\/openclaw\.plugin\.json$/.test(f))) {
+    const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, file), "utf8")) as {
+      id: string;
+      providers?: unknown[];
+    };
+    if ((manifest.providers?.length ?? 0) === 0) {
+      continue;
+    }
+    const pluginDir = path.dirname(file);
+    const policyPath = path.join(repoRoot, pluginDir, "provider-policy-api.ts");
+    const policy = fs.existsSync(policyPath)
+      ? ((await import(policyPath)) as { resolveThinkingProfile?: unknown })
+      : undefined;
+    if (
+      typeof policy?.resolveThinkingProfile === "function" ||
+      resolveProviderContractProvidersForPluginIds([manifest.id]).some(
+        (provider) => provider.resolveThinkingProfile,
       )
-      .map((file) => file.split("/")[1]),
-  );
+    ) {
+      withHooks.push(path.basename(pluginDir));
+    }
+  }
+  return withHooks.toSorted((a, b) => a.localeCompare(b));
+}
+
+it("adds no provider thinking hook where catalog rows can own the profile", async () => {
   expect(
-    [...withHooks].toSorted(),
+    await listPluginsWithThinkingHooks(),
     "Put the thinking profile on manifest rows (compat.defaultThinkingLevel / compat.thinkingLevels; src/plugins/AGENTS.md). A hook needs a reason rows cannot express; then update this list.",
-  ).toEqual([...PLUGINS_WITH_THINKING_HOOKS].toSorted());
-});
+  ).toEqual([...PLUGINS_WITH_THINKING_HOOKS].toSorted((a, b) => a.localeCompare(b)));
+}, 120_000);
