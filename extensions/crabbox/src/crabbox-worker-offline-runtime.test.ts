@@ -3,10 +3,15 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
-import { createCrabboxOfflineRuntimeSetup } from "../cli-runtime-api.js";
+import {
+  createCrabboxOfflineRuntimeSetup,
+  createCrabboxRuntimeCacheVerification,
+  readCrabboxRuntimeInstallation,
+} from "../cli-runtime-api.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const run = promisify(execFile);
@@ -71,14 +76,20 @@ console.log("OpenClaw 2026.8.1");`,
         },
         timeout: 10_000,
       });
-    return { home, nodeBootstrap, workerBundle, installedRoot, execute };
+    const { localPath: _nodePath, ...nodeIdentity } = nodeBootstrap;
+    const { localPath: _workerPath, ...workerIdentity } = workerBundle;
+    const identity = { nodeBootstrap: nodeIdentity, workerBundle: workerIdentity };
+    return { home, nodeBootstrap, workerBundle, identity, installedRoot, execute };
   }
 
   it("installs local bytes without npm, enrollment, credentials or plugin activation", async () => {
     const current = await fixture();
     const setup = await createCrabboxOfflineRuntimeSetup(current);
     expect(setup.forwardedEnv).toEqual({});
-    await current.execute(setup.command);
+    const result = await current.execute(setup.command);
+    expect(readCrabboxRuntimeInstallation(result.stdout, current.identity).disposition).toBe(
+      "installed",
+    );
     const installed = path.join(current.installedRoot, "node_modules/openclaw");
     expect(
       await fs.readFile(path.join(installed, current.workerBundle.packageRelativePath)),
@@ -95,8 +106,80 @@ console.log("OpenClaw 2026.8.1");`,
     // Reuse has no dependency on the transferred source files.
     await fs.unlink(current.nodeBootstrap.localPath);
     await fs.unlink(current.workerBundle.localPath);
-    await current.execute(setup.command);
+    const reused = await current.execute(setup.command);
+    expect(readCrabboxRuntimeInstallation(reused.stdout, current.identity).disposition).toBe(
+      "existing-verified",
+    );
   });
+
+  it.each([
+    ["valid", ""],
+    ["absent runtime", "ENOENT"],
+    ["absent worker", "prepared archive is missing"],
+    ["corrupt worker", "failed integrity verification"],
+    ["corrupt manifest", "inventory does not match"],
+    ["broken CLI", "CLI could not verify"],
+  ])(
+    "verifies %s without repairing, pruning, binding Node or writing state",
+    async (scenario, diagnosis) => {
+      const current = await fixture();
+      const installed = path.join(current.installedRoot, "node_modules/openclaw");
+      if (scenario !== "absent runtime") {
+        const setup = await createCrabboxOfflineRuntimeSetup(current);
+        await current.execute(setup.command);
+        await fs.rm(path.join(current.home, ".openclaw-worker/runtime-node"), { recursive: true });
+        const archive = path.join(installed, current.workerBundle.packageRelativePath);
+        // A read-only probe must not prune another retained archive.
+        await fs.writeFile(path.join(path.dirname(archive), `${"d".repeat(64)}.tgz`), "retained");
+        if (scenario === "absent worker") {
+          await fs.unlink(archive);
+        }
+        if (scenario === "corrupt worker") {
+          await fs.writeFile(archive, Buffer.alloc(current.workerBundle.bytes));
+        }
+        if (scenario === "corrupt manifest") {
+          await fs.writeFile(path.join(installed, "node-runtime.manifest.json"), "[]");
+        }
+        if (scenario === "broken CLI") {
+          await fs.writeFile(path.join(installed, "openclaw.mjs"), "process.exit(1)");
+        }
+      }
+      const snapshot = async () => {
+        const names = [
+          "",
+          ...(await listDirectoryTreeStrict(current.home)).map((entry) => entry.relativePath),
+        ];
+        return Promise.all(
+          names.map(async (name) => {
+            const file = path.join(current.home, name);
+            const stat = await fs.lstat(file);
+            return [
+              name,
+              stat.mode,
+              stat.mtimeMs,
+              stat.isFile() ? digest(await fs.readFile(file)) : null,
+            ];
+          }),
+        );
+      };
+      const before = await snapshot();
+      const verify = await createCrabboxRuntimeCacheVerification(current.identity);
+      expect(verify.forwardedEnv).toEqual({});
+      if (scenario === "valid") {
+        const result = await current.execute(verify.command);
+        expect(readCrabboxRuntimeInstallation(result.stdout, current.identity).disposition).toBe(
+          "existing-verified",
+        );
+      } else {
+        await expect(current.execute(verify.command)).rejects.toMatchObject({
+          code: 1,
+          stdout: "",
+          stderr: expect.stringContaining(diagnosis),
+        });
+      }
+      expect(await snapshot()).toEqual(before);
+    },
+  );
 
   it.each(["digest", "symlink"])(
     "refuses a local archive with an unsafe %s before publication",

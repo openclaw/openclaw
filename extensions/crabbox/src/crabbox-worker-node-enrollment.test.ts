@@ -337,16 +337,30 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     );
     const served = await serveArtifact(bytes);
     const worker = await serveArtifact(Buffer.from("verified-worker-archive"));
+    const manifestSha256 = await runtimeManifestSha256(bytes);
+    if (!manifestSha256) {
+      throw new Error("Fixture runtime manifest is missing");
+    }
     const bootstrap = {
       ...served.nodeBootstrap,
       install: "bundle" as const,
       buildId: "fixture-runtime-build",
-      manifestSha256: await runtimeManifestSha256(bytes),
+      manifestSha256,
+    };
+    const { url: _nodeUrl, token: _nodeToken, install: _install, ...nodeIdentity } = bootstrap;
+    const {
+      sha256,
+      bytes: workerSize,
+      packageRelativePath,
+    } = workerBundleFor(worker.nodeBootstrap);
+    const identity = {
+      nodeBootstrap: nodeIdentity,
+      workerBundle: { sha256, bytes: workerSize, packageRelativePath },
     };
     const { home, stateDir } = testHome();
     const prepare = () =>
       enroll(home, bootstrap, undefined, true, workerBundleFor(worker.nodeBootstrap));
-    await expectSetupPhases(prepare());
+    await expectSetupPhases(prepare(), identity);
     expectAbsent(
       path.join(home, "npm-calls"),
       path.join(runtimePackage(home, bootstrap.sha256), "installed.json"),
@@ -355,7 +369,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     expect(
       readText(runtimePackage(home, bootstrap.sha256), "node_modules/runtime-fixture/index.js"),
     ).toContain("2026.8.1");
-    await expectSetupPhases(prepare());
+    await expectSetupPhases(prepare(), identity);
     expect(served.authorizations).toHaveLength(1);
     expect(worker.authorizations).toHaveLength(1);
     const failed = await enroll(
