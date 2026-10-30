@@ -197,6 +197,15 @@ describe("sendGatewayHello update detail scope", () => {
     vi.mocked(getHealthCache).mockReturnValue(null);
   });
 
+  it("advertises input custody without changing negotiated scopes", async () => {
+    const context = makeContext("operator", ["operator.read"]);
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(helloPayload(context)?.features.capabilities).toContain("chat-input-custody-v1");
+    expect(helloPayload(context)?.auth.scopes).toEqual(["operator.read"]);
+  });
+
   it.each([
     { origin: "https://gateway.example.test", local: false, expected: true },
     { origin: "http://127.0.0.1:18789", local: true, expected: true },
