@@ -4,7 +4,10 @@ import type {
   SessionTranscriptDisplayDeltaResult,
   SessionTranscriptMessageByIdOptions,
 } from "../../gateway/session-transcript-read.types.js";
-import { SOURCE_PAGE_MAX_BYTES } from "../../gateway/session-transcript-source-pages.js";
+import {
+  assertUnboundedAnchorPageUsable,
+  SOURCE_PAGE_MAX_BYTES,
+} from "../../gateway/session-transcript-source-pages.js";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -678,7 +681,7 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
     range.endExclusive - range.readStart,
     options.maxBytes === undefined,
   );
-  // Anchor pages may come back shorter than requested; callers continue from the oldest returned event.
+  assertUnboundedAnchorPageUsable(options, { start, ...range });
   const events = readVisibleHistoryRange(projection, start, range.endExclusive, history);
   return {
     events,

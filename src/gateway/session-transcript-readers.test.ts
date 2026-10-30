@@ -247,12 +247,19 @@ describe("session transcript reader facade", () => {
       sessionId,
       chain(3, "large", () => "a".repeat(3 * 1024 * 1024)),
     );
-    // Earlier-history paging anchors on these windows; an oversized window must still page.
-    const unbounded = await readAround(scope, { messageId: "large-1", maxMessages: 3 });
-    expect(unbounded.messages).toMatchObject([
+    // Earlier-history paging anchors on older windows; an oversized window must still page.
+    const older = await readAround(scope, {
+      messageId: "large-2",
+      maxMessages: 3,
+      direction: "older",
+    });
+    expect(older.messages).toMatchObject([
       { __openclaw: { id: "large-1" } },
       { __openclaw: { id: "large-2" } },
     ]);
+    await expect(readAround(scope, { messageId: "large-1", maxMessages: 3 })).rejects.toThrow(
+      "Transcript history page exceeds the 8388608-byte limit; request a smaller limit",
+    );
     const db = database();
     // Preserve recorded sizes while poisoning excluded payloads: a late cap would parse this.
     db.db

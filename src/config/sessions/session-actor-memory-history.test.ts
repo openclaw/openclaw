@@ -311,9 +311,18 @@ describe("memory actor history", () => {
     expect(() => storage.readCurrent(offsetPage, authority)).toThrow(
       "Transcript history page exceeds the 8388608-byte limit; request a smaller limit",
     );
-    // Earlier-history paging anchors on these windows; an oversized window must still page.
-    const around = await read("around-id", { options: { messageId: "second", maxMessages: 3 } });
-    expect(around.found && messageIds(around.messages)).toEqual(["second", "third"]);
+    // Earlier-history paging anchors on older windows; an oversized window must still page.
+    const older = await read("around-id", {
+      options: { messageId: "third", maxMessages: 3, direction: "older" },
+    });
+    expect(older.found && messageIds(older.messages)).toEqual(["second", "third"]);
+    const around: SessionActorMemoryHistoryQuery = {
+      type: "session.history.around-id",
+      input: { options: { messageId: "second", maxMessages: 3 } },
+    };
+    expect(() => storage.readCurrent(around, authority)).toThrow(
+      "Transcript history page exceeds the 8388608-byte limit; request a smaller limit",
+    );
   });
 
   it("keeps full hydration exact while model context excludes obsolete payloads and private fields", async () => {

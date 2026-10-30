@@ -11,6 +11,26 @@ import type {
 export const SOURCE_PAGE_MAX_MESSAGES = 128;
 export const SOURCE_PAGE_MAX_BYTES = 8 * 1024 * 1024;
 
+/**
+ * Unbounded anchor reads may come back shorter only for older pages that still return an event
+ * before the anchor; callers drop the anchor and continue from the oldest returned event. Other
+ * shapes (newer/around, or an anchor-only result) would read as an end of history, so they refuse.
+ */
+export function assertUnboundedAnchorPageUsable(
+  options: { maxBytes?: number; direction?: "older" | "newer" },
+  page: { start: number; readStart: number; endExclusive: number },
+): void {
+  if (options.maxBytes !== undefined || page.start === page.readStart) {
+    return;
+  }
+  if (options.direction === "older" && page.start < page.endExclusive - 1) {
+    return;
+  }
+  throw new Error(
+    `Transcript history page exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte limit; request a smaller limit`,
+  );
+}
+
 export class SessionTranscriptSourceMessageTooLargeError extends Error {
   readonly code = "TRANSCRIPT_SOURCE_MESSAGE_TOO_LARGE";
 

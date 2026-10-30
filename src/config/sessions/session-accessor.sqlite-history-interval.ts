@@ -1,6 +1,9 @@
 import { sql, type Expression, type RawBuilder, type SqlBool } from "kysely";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../agents/internal-runtime-context.js";
-import { SOURCE_PAGE_MAX_BYTES } from "../../gateway/session-transcript-source-pages.js";
+import {
+  assertUnboundedAnchorPageUsable,
+  SOURCE_PAGE_MAX_BYTES,
+} from "../../gateway/session-transcript-source-pages.js";
 import { engineIndexHint } from "../../infra/database-engine/index-hint.js";
 import { jsonArrayElements } from "../../infra/database-engine/json-values.js";
 import {
@@ -423,6 +426,12 @@ export function readHistoricalHistoryAnchorPage(
     { activePosition: row.active_position, displayPosition: anchorPosition },
     options.maxBytes,
   );
+  // Trimming keeps the newest events, so the returned page starts at endExclusive - events.length.
+  assertUnboundedAnchorPageUsable(options, {
+    start: range.endExclusive - events.length,
+    readStart: range.readStart,
+    endExclusive: range.endExclusive,
+  });
   return {
     events,
     found: true,
