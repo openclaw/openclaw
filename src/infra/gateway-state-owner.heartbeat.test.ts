@@ -242,7 +242,7 @@ it.each(["reparented", "unchanged ppid"])(
     const kill = vi.spyOn(process, "kill").mockReturnValue(true);
     await using runtime = await startRuntime({ [rootPath]: raw });
     expect(runtime.readEvents()).toContain("parent-lost");
-    expect(kill).not.toHaveBeenCalled();
+    expect(kill.mock.calls).toEqual(kind === "unchanged ppid" ? [[process.ppid, 0]] : []);
     expect(fs.statSync(rootPath).mtimeMs).toBeGreaterThan(oldStamp.getTime());
     await vi.advanceTimersByTimeAsync(10_000);
     expect(kill).toHaveBeenLastCalledWith(process.pid, "SIGKILL");

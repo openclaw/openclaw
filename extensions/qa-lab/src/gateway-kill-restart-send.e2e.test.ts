@@ -8,6 +8,8 @@ import { createQaGatewayChild } from "./gateway-child.js";
 import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.js";
 import { QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER } from "./providers/mock-openai/mock-openai-contracts.js";
 import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
+import { fetchOkJson } from "./providers/mock-openai/server.test-harness.js";
+import { readQaMockRequestCursor } from "./providers/shared/debug-request-cursor.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 import { waitForQaTransportCondition } from "./qa-transport.js";
 import {
@@ -24,12 +26,12 @@ afterEach(async () => {
     await cleanup().catch((error: unknown) => errors.push(error));
   }
   if (errors.length) {
-    throw new AggregateError(errors, "hard-kill recovery test cleanup failed");
+    throw new AggregateError(errors, "hard-kill test cleanup failed");
   }
 });
 
 it.skipIf(process.platform === "win32")(
-  "recovers a killed run and replies",
+  "leaves a killed run idle until a new user message arrives",
   async () => {
     const state = createQaBusState();
     const transport = createQaChannelTransport(state);
@@ -62,7 +64,7 @@ it.skipIf(process.platform === "win32")(
         },
         tools: {
           ...cfg.tools,
-          alsoAllow: ["qa_restart_wait", "qa_restart_unsafe_probe"],
+          alsoAllow: ["qa_restart_wait"],
           // Suspend the 30-second tool so the model's wait is pending at SIGKILL.
           codeMode: { enabled: true, timeoutMs: 10_000 },
         },
@@ -106,8 +108,12 @@ it.skipIf(process.platform === "win32")(
         ? { entry, transcript }
         : undefined;
     });
-    expect(pending.entry.status).toBeUndefined();
-    expect(pending.entry.restartRecoveryDeliveryRunId).toEqual(expect.any(String));
+    const requestCursor = readQaMockRequestCursor(
+      await fetchOkJson(`${mock.baseUrl}/debug/request-cursor`),
+    );
+    const sinceIndex = state
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound").length;
     const pid = gateway.pid;
     expect(pid).not.toBeNull();
     expect(signalQaPosixProcessGroup(pid!, "SIGKILL")).toBeUndefined();
@@ -118,26 +124,17 @@ it.skipIf(process.platform === "win32")(
       25,
     );
     await gateway.restartAfterStateMutation(async () => {
-      const orphan = await readEntry();
-      expect(orphan).toMatchObject({
+      const entry = await readEntry();
+      expect(entry).toMatchObject({
         sessionId: pending.entry.sessionId,
-        restartRecoveryDeliveryRunId: pending.entry.restartRecoveryDeliveryRunId,
       });
-      expect(orphan?.status).toBeUndefined();
-      expect(orphan?.abortedLastRun).not.toBe(true);
     });
     expect(gateway.pid).not.toBe(pid);
     await transport.waitReady({ gateway });
-    await poll(async () =>
-      gateway.logs().includes("dispatching restart-safe recovery") &&
-      (await readTranscript()).eventCursor > pending.transcript.eventCursor
-        ? true
-        : undefined,
-    );
-    expect(gateway.logs()).toContain("marked 1 startup-orphaned main session(s)");
-    const { messages } = state.getSnapshot();
-    const sinceIndex = messages.filter((message) => message.direction === "outbound").length;
-    // The current-turn fixture takes precedence over the restart prompt in history.
+    // SIGKILL cannot record graceful markers; the transcript remains available,
+    // and only a fresh input may launch another turn.
+    await transport.waitForNoOutbound({ sinceIndex });
+    expect(await fetchOkJson(`${mock.baseUrl}/debug/requests?after=${requestCursor}`)).toEqual([]);
     const second = await send("repeated request queued reply gateway qa check");
     const reply = await transport.waitForOutbound({
       conversation,
@@ -152,5 +149,5 @@ it.skipIf(process.platform === "win32")(
     }, 30_000);
     expect(settled.sessionId).toBe(pending.entry.sessionId);
   },
-  600_000,
+  240_000,
 );

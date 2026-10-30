@@ -77,8 +77,10 @@ export function createPluginReloadCleanup({
   recordCleanup,
   recordWarning,
   retainRetirement,
+  replacementOperation,
   waitForDrain = false,
 }: {
+  replacementOperation?: import("../plugins/plugin-instance.js").PluginReplacementOperation;
   waitForDrain?: boolean;
   previousRegistry: PluginRegistry;
   changedPluginIds: Set<string>;
@@ -473,7 +475,7 @@ export function createPluginReloadCleanup({
         }
       }
       for (const instance of previousInstances(pluginIds)) {
-        releases.push(instance.reserveReplacement());
+        releases.push(instance.reserveReplacement(replacementOperation));
       }
       return () => releases.forEach((release) => release());
     },

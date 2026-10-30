@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getIMessageRuntime } from "../runtime.js";
@@ -9,7 +10,10 @@ import { advanceIMessageRecoveryCursor, loadIMessageRecoveryCursor } from "./rec
 
 const accountId = "default";
 const dbIdentity = "remote:synthetic:chat.db";
-const cursorKey = `${accountId}\u0000${dbIdentity}`;
+const cursorKey = createHash("sha256")
+  .update(JSON.stringify([accountId, dbIdentity]), "utf8")
+  .digest("hex")
+  .slice(0, 32);
 const cursorStoreOptions = { namespace: "imessage.recovery-cursor", maxEntries: 64 };
 
 function seedCursor(rowid: number) {

@@ -149,7 +149,6 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     attemptLifecycleState,
     () => {
       executionStarted = true;
-      return params.preparedRunAdmission.onRuntimeTurnStarted();
     },
   );
   const { suppressUserTurnPersistence, userTurnTranscriptRecorder } =

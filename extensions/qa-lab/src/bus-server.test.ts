@@ -34,7 +34,8 @@ async function pollQaBus({
   baseUrl: string;
   accountId: string;
   cursor: number;
-  acknowledgedCursor?: number;
+  completedEventCursors?: number[];
+  adoptedEventCursors?: number[];
   timeoutMs: number;
 }): Promise<QaBusPollResult> {
   const response = await postQaBusJson(baseUrl, "/v1/poll", body);
@@ -104,13 +105,14 @@ describe("qa-bus server", () => {
       state,
       post: (route: string, body: unknown) => postQaBusJson(bus.baseUrl, route, body),
       raw: (route: string, body: string) => postQaBusRawJson(bus.baseUrl, route, body),
-      poll: (cursor = 0, acknowledgedCursor?: number) =>
+      poll: (cursor = 0, completedEventCursors?: number[], adoptedEventCursors?: number[]) =>
         pollQaBus({
           baseUrl: bus.baseUrl,
           accountId: "acct-a",
           timeoutMs: 0,
           cursor,
-          acknowledgedCursor,
+          completedEventCursors,
+          adoptedEventCursors,
         }),
       inbound: (text: string, id = "target") =>
         state.addInboundMessage({
@@ -249,44 +251,124 @@ describe("qa-bus server", () => {
     expect(state.getSnapshot()).toMatchObject({ events: [], messages: [] });
   });
 
-  it("resumes an account after its last acknowledged cursor when the client restarts", async () => {
-    const { state, poll, inbound } = await fixture();
-    const consumed = inbound("consumed before restart", "first");
-    const firstPoll = await poll();
-    expect(firstPoll.events.map((event) => event.cursor)).toEqual([1]);
+  it.each([false, true])(
+    "resumes adopted input without inferring completion (completed=%s)",
+    async (completed) => {
+      const { state, poll, inbound } = await fixture();
+      const consumed = inbound("consumed before restart", "first");
+      const firstPoll = await poll();
+      expect(firstPoll.events.map((event) => event.cursor)).toEqual([1]);
 
-    await poll(firstPoll.cursor, 0);
-    expect(state.getAcknowledgedPollCursor("acct-a")).toBe(0);
-    const unacknowledgedRestart = await poll();
-    expect(messageIds(unacknowledgedRestart)).toEqual([consumed.id]);
+      await poll(firstPoll.cursor);
+      expect(state.hasCompletedInboundEvent("acct-a", firstPoll.cursor)).toBe(false);
+      const unacknowledgedRestart = await poll();
+      expect(messageIds(unacknowledgedRestart)).toEqual([consumed.id]);
 
-    await poll(firstPoll.cursor, firstPoll.cursor);
-    expect(state.getAcknowledgedPollCursor("acct-a")).toBe(firstPoll.cursor);
-    const queuedDuringRestart = inbound("queued during restart", "second");
-    const restartedPoll = await poll();
-    expect(messageIds(restartedPoll)).toEqual([queuedDuringRestart.id]);
+      await poll(firstPoll.cursor, completed ? [firstPoll.cursor] : undefined, [firstPoll.cursor]);
+      expect(state.hasCompletedInboundEvent("acct-a", firstPoll.cursor)).toBe(completed);
+      const queuedDuringRestart = inbound("queued during restart", "second");
+      await poll(firstPoll.cursor, [], []);
+      const restartedPoll = await poll();
+      expect(messageIds(restartedPoll)).toEqual([queuedDuringRestart.id]);
 
-    state.reset();
-    const queuedAfterReset = inbound("queued after bus reset", "third");
-    const resetPoll = await poll();
-    expect(messageIds(resetPoll)).toEqual([queuedAfterReset.id]);
-  });
+      state.reset();
+      const queuedAfterReset = inbound("queued after bus reset", "third");
+      const resetPoll = await poll();
+      expect(messageIds(resetPoll)).toEqual([queuedAfterReset.id]);
+    },
+  );
 
-  it("paginates a burst without advancing past events omitted by the poll limit", async () => {
+  it("filters adopted holes before pagination without losing unfinished inputs", async () => {
     const { poll, inbound } = await fixture();
 
-    for (let index = 1; index <= 101; index += 1) {
+    for (let index = 1; index <= 205; index += 1) {
       inbound(`burst event ${index}`, "burst");
     }
 
+    await poll(
+      205,
+      undefined,
+      Array.from({ length: 102 }, (_, index) => 2 * (index + 1)),
+    );
     const firstPage = await poll();
-    expect(firstPage.events).toHaveLength(100);
-    expect(firstPage.cursor).toBe(100);
+    expect(firstPage.events.map((event) => event.cursor)).toEqual(
+      Array.from({ length: 100 }, (_, index) => 2 * index + 1),
+    );
+    expect(firstPage.cursor).toBe(199);
 
     const secondPage = await poll(firstPage.cursor);
-    expect(secondPage.events).toHaveLength(1);
-    expect(secondPage.events[0]?.cursor).toBe(101);
-    expect(secondPage.cursor).toBe(101);
+    expect(secondPage.events.map((event) => event.cursor)).toEqual([201, 203, 205]);
+    expect(secondPage.cursor).toBe(205);
+  });
+
+  it("accepts only retained account-owned inbound completion receipts", async () => {
+    const { state, poll, inbound } = await fixture();
+    inbound("unfinished");
+    inbound("finished");
+    state.addInboundMessage({
+      accountId: "other",
+      conversation: { id: "target", kind: "direct" },
+      senderId: "other",
+      text: "foreign",
+    });
+    state.addOutboundMessage({ accountId: "acct-a", to: "dm:target", text: "preview" });
+    await poll(4, [2, 2, 3, 4]);
+    expect([1, 2, 3, 4].map((cursor) => state.hasCompletedInboundEvent("acct-a", cursor))).toEqual([
+      false,
+      true,
+      false,
+      false,
+    ]);
+    expect(state.hasCompletedInboundEvent("other", 3)).toBe(false);
+    expect((await poll()).events.map((event) => event.cursor)).toEqual([1, 4]);
+    state.reset();
+    inbound("after reset");
+    await poll(5, [2]);
+    expect(state.hasCompletedInboundEvent("acct-a", 2)).toBe(false);
+    expect(state.hasCompletedInboundEvent("acct-a", 5)).toBe(false);
+  });
+
+  it("keeps all-adopted long polls waiting for eligible account traffic", async () => {
+    const { state, baseUrl, poll, inbound } = await fixture();
+    inbound("already adopted");
+    await poll(1, undefined, [1]);
+    const waitForCursorAdvance = vi.spyOn(state, "waitForCursorAdvance");
+    const pending = pollQaBus({ baseUrl, accountId: "acct-a", cursor: 0, timeoutMs: 500 });
+    await vi.waitFor(() => expect(waitForCursorAdvance).toHaveBeenCalled());
+    expect(waitForCursorAdvance.mock.calls[0]?.slice(0, 2)).toEqual([1, 500]);
+    state.addInboundMessage({
+      accountId: "other",
+      conversation: { id: "target", kind: "direct" },
+      senderId: "other",
+      text: "unrelated",
+    });
+    expect(await Promise.race([pending.then(() => "resolved"), sleep(20, "waiting")])).toBe(
+      "waiting",
+    );
+    const fresh = inbound("fresh input");
+    expect(messageIds(await pending)).toEqual([fresh.id]);
+    expect(state.getSnapshot().events).toHaveLength(3);
+  });
+
+  it("rejects adoption removed by reset before recording any completion", async () => {
+    const { state, post, poll, inbound } = await fixture();
+    inbound("adopted before reset");
+    await poll(1, undefined, [1, 1]);
+    state.reset();
+    inbound("new input");
+    await expectJson(
+      await post("/v1/poll", {
+        accountId: "acct-a",
+        cursor: 2,
+        adoptedEventCursors: [1],
+        completedEventCursors: [2],
+        timeoutMs: 0,
+      }),
+      400,
+      { error: "adopted event must be a retained inbound input for the selected account" },
+    );
+    expect(state.hasCompletedInboundEvent("acct-a", 2)).toBe(false);
+    expect((await poll()).events.map((event) => event.cursor)).toEqual([2]);
   });
 
   it.each([
@@ -298,8 +380,20 @@ describe("qa-bus server", () => {
     ],
     [
       "/v1/poll",
-      { accountId: "acct-a", cursor: 1, acknowledgedCursor: 2, timeoutMs: 0 },
-      "acknowledged poll cursor must not exceed the requested poll cursor.",
+      { accountId: "acct-a", cursor: 1, completedEventCursors: [2], timeoutMs: 0 },
+      "completed event cursors must be positive integers within the requested poll cursor.",
+      undefined,
+    ],
+    [
+      "/v1/poll",
+      { accountId: "acct-a", cursor: 1, adoptedEventCursors: [2], timeoutMs: 0 },
+      "adopted event cursors must be positive integers within the requested poll cursor.",
+      undefined,
+    ],
+    [
+      "/v1/poll",
+      { accountId: "acct-a", cursor: 1, adoptedEventCursors: [0.5], timeoutMs: 0 },
+      "adopted event cursors must be positive integers within the requested poll cursor.",
       undefined,
     ],
     [
@@ -317,6 +411,21 @@ describe("qa-bus server", () => {
     }
     await expectJson(response, 400, { error });
   });
+
+  it.each([null, 1, "1", [0], [-1], [0.5], ["1"], [Number.MAX_SAFE_INTEGER + 1]])(
+    "rejects malformed completion receipts: %j",
+    async (completedEventCursors) => {
+      const { post } = await fixture();
+      await expectJson(
+        await post("/v1/poll", { cursor: 1, completedEventCursors, timeoutMs: 0 }),
+        400,
+        {
+          error:
+            "completed event cursors must be positive integers within the requested poll cursor.",
+        },
+      );
+    },
+  );
 
   it.each(["inbound", "outbound"] as const)(
     "accepts a generated-media payload larger than 1 MiB on the %s message route",

@@ -17,6 +17,7 @@ import {
 } from "../infra/sql-connection.js";
 import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { VERSION } from "../version.js";
 import {
   agentColdArchiveChunksPostgresMigration,
@@ -349,25 +350,34 @@ export function openAgentEngineStore(
   if (agentId === undefined && !existingOnly) {
     throw new Error("Creating an agent database requires an agent owner");
   }
-  return openEngineStore({
-    anchor,
-    schema: agentEngineSchema,
-    input: agentEngineInput(),
-    existingOnly,
-    reusePostgresConnection,
-    closeOnFailure,
-    assertMigrationCurrent: assertAgentDatabaseMaintenanceAuthority,
-    prepareAnchor: () => {},
-    openSqlite: () => {},
-    inspectSqlite: () => {
-      const facts = getAdmittedSqliteSchemaFacts(anchor) ?? captureSqliteSchemaFacts(anchor);
-      return {
-        hasEngineAnchor: facts.tables.has("openclaw_engine_anchor"),
-        hasExistingData: [...facts.tables, ...facts.views, ...facts.triggers.keys()].some(
-          (name) => name !== "openclaw_engine_anchor" && !name.startsWith("sqlite_"),
-        ),
-      };
-    },
-    admitPostgres: (db, fresh) => admitAgentPostgres(db, agentId, pathname, fresh),
-  });
+  const input = agentEngineInput();
+  const inspectSqlite = () => {
+    const facts = getAdmittedSqliteSchemaFacts(anchor) ?? captureSqliteSchemaFacts(anchor);
+    return {
+      hasEngineAnchor: facts.tables.has("openclaw_engine_anchor"),
+      hasExistingData: [...facts.tables, ...facts.views, ...facts.triggers.keys()].some(
+        (name) => name !== "openclaw_engine_anchor" && !name.startsWith("sqlite_"),
+      ),
+    };
+  };
+  const retainedPostgres = Boolean(input && inspectSqlite().hasEngineAnchor);
+  const open = () =>
+    openEngineStore({
+      anchor,
+      schema: agentEngineSchema,
+      input,
+      existingOnly: existingOnly || retainedPostgres,
+      reusePostgresConnection,
+      closeOnFailure,
+      assertMigrationCurrent: assertAgentDatabaseMaintenanceAuthority,
+      prepareAnchor: () => {},
+      openSqlite: () => {},
+      inspectSqlite,
+      admitPostgres: (db, fresh) => admitAgentPostgres(db, agentId, pathname, fresh),
+    });
+  // Publish the anchor only after PostgreSQL commits its schema and agent identity.
+  // A crash between commits can leave an unused initialized namespace, never an incomplete anchor.
+  return input && !existingOnly && !retainedPostgres
+    ? runSqliteImmediateTransactionSync(anchor, open)
+    : open();
 }

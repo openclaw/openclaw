@@ -7,18 +7,13 @@ import type { SessionEntryCreationOperation } from "../../config/sessions/sessio
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
-import { execRequestAbortSignal, withExecRequestOwners } from "../../infra/exec-request-context.js";
+import { execRequestAbortSignal } from "../../infra/exec-request-context.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.types.js";
-import {
-  resolveSystemEventQueueKey,
-  withSystemEventOwner,
-} from "../../infra/system-event-ownership.js";
-import {
-  claimSystemEventTurn,
-  enqueueRequiredSystemEventEntry,
-} from "../../infra/system-events.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
+import { claimSystemEventTurn } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import { isCronSessionKey } from "../../routing/session-key.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
@@ -35,6 +30,7 @@ import {
   type ScheduledAutomationAdmission,
 } from "./session-event-automation.js";
 import {
+  claimSessionEventOccurrenceInput,
   buildSessionEventContext,
   prepareSessionEventInput,
   resolveSessionEventExecRequestOwners,
@@ -51,6 +47,7 @@ import {
   assertSessionEventSettingsCurrent,
   captureSessionEventTargetForHost,
   getSessionEventRuntimeConfig,
+  hasSessionEventOriginatingCaller,
   intersectSessionEventToolsAllow,
   prepareSessionEventTargetForHost,
 } from "./session-event-target.js";
@@ -67,7 +64,15 @@ const MAX_CONFIG_READMISSION_ATTEMPTS = 2;
 /** Producer-owned occurrence; passive notices continue to use enqueueSystemEvent. */
 export function enqueueSessionEventForHost(
   text: string,
+  options: SessionEventOptions,
+): SessionEventReceipt {
+  return enqueueSessionEventAttempt(text, options, 0);
+}
+
+function enqueueSessionEventAttempt(
+  text: string,
   { assertAcceptanceCurrent, ...options }: SessionEventOptions,
+  readmissionAttempt: number,
 ): SessionEventReceipt {
   let acceptanceAssertion = assertAcceptanceCurrent;
   acceptanceAssertion?.();
@@ -79,15 +84,6 @@ export function enqueueSessionEventForHost(
   let target = options.expectedTarget;
   let generationLease: Awaited<ReturnType<typeof prepareSessionEventTargetForHost>> | undefined;
   let preparedBinding: { sessionId: string; lifecycleRevision?: string } | undefined;
-  if (
-    options.expectedTarget &&
-    ((options.expectedTarget.agentId && options.expectedTarget.agentId !== agentId) ||
-      (options.expectedTarget.sessionKey && options.expectedTarget.sessionKey !== sessionKey))
-  ) {
-    throw new Error(
-      "Session event destination was reset or replaced while its producer was running",
-    );
-  }
   let route = structuredClone(options.deliveryContext ?? options.expectedTarget?.deliveryContext);
   const controller = new AbortController();
   const execRequestOwners = resolveSessionEventExecRequestOwners(options);
@@ -98,57 +94,16 @@ export function enqueueSessionEventForHost(
     ),
   );
   signal.throwIfAborted();
-  if (options.preserveOccurrenceOnRejection && !options.occurrences?.length) {
-    throw new Error("Preserving a rejected event requires its original queued occurrence");
-  }
-  if (
-    options.occurrences &&
-    options.occurrences.map((event) => event.text).join("\n") !== text.trim()
-  ) {
-    throw new Error("Session event occurrence text changed before admission");
-  }
-  const freshOccurrence = options.occurrences
-    ? undefined
-    : enqueueRequiredSystemEventEntry(
-        text,
-        withExecRequestOwners(
-          withSystemEventOwner(
-            {
-              sessionKey,
-              contextKey: options.contextKey,
-              deliveryContext: route,
-            },
-            agentId,
-          ),
-          execRequestOwners,
-        ),
-        // Refuse matching keyed plugin and tool-handoff retries; unkeyed and host occurrences stay distinct.
-        {
-          allowDuplicate:
-            (options.source !== "plugin" && options.source !== "tool_handoff") ||
-            !options.contextKey?.trim(),
-        },
-      );
-  const occurrences = options.occurrences
-    ? [...options.occurrences]
-    : freshOccurrence
-      ? [freshOccurrence]
-      : [];
-  const occurrence = occurrences[0];
-  if (!occurrence?.id || occurrences.some((event) => !event.id)) {
-    throw new Error("Session event was not enqueued: an identical occurrence is already pending");
-  }
-  const occurrenceId = occurrence.id;
-  const eventText = occurrences.map((event) => event.text).join("\n");
-  const ownership = claimSystemEventTurn(
-    resolveSystemEventQueueKey(sessionKey, agentId),
-    occurrences,
-    () => controller.abort(),
-    agentId,
-  );
-  if (!ownership) {
-    throw new Error("Session event occurrence no longer available for admission");
-  }
+  const { occurrence, occurrences, occurrenceId, eventText, ownership } =
+    claimSessionEventOccurrenceInput({
+      text,
+      options,
+      sessionKey,
+      agentId,
+      route,
+      execRequestOwners,
+      cancel: () => controller.abort(),
+    });
   let releaseOperatorAuthority: (() => void) | undefined;
   try {
     // Transfer custody before the completed process releases its original source.
@@ -175,6 +130,7 @@ export function enqueueSessionEventForHost(
   let operation: ReplyOperation | undefined;
   let inputRecorder: UserTurnTranscriptRecorder | undefined;
   let delivered = false;
+  let conversationResultCommitted: true | undefined;
   let deliveryAttempted = false;
   let deliveryAmbiguous = false;
   let deliveryError: string | undefined;
@@ -309,7 +265,7 @@ export function enqueueSessionEventForHost(
     settlement = "settling";
     const complete = async () => {
       try {
-        inputRecorder?.finishPendingInput?.(signal.aborted ? "cancelled" : "interrupted");
+        inputRecorder?.finishPendingInput?.("cancelled");
         await inputRecorder?.waitForPendingInputSettlement?.();
       } catch (error) {
         failure ??= error instanceof Error ? error : String(error);
@@ -324,7 +280,7 @@ export function enqueueSessionEventForHost(
       // Stop, abort and abandonment still settle terminally.
       const configChangeRetention =
         configPublicationChanged && !started && !deliveryAttempted && !signal.aborted && !abandoned;
-      const attempt = options.readmissionAttempt ?? 0;
+      const attempt = readmissionAttempt;
       const canReadmit = configChangeRetention && attempt < MAX_CONFIG_READMISSION_ATTEMPTS;
       const status = signal.aborted ? "cancelled" : failure ? "failed" : "completed";
       if (status === "failed" && !canReadmit) {
@@ -346,15 +302,18 @@ export function enqueueSessionEventForHost(
         try {
           // Re-admit under current policy with original target, producer checks, cancellation
           // and delivery opt-out; only previously passive notices keep custody on rejection.
-          readmittedReceipt = enqueueSessionEventForHost(eventText, {
-            ...options,
-            agentId,
-            sessionKey,
-            assertAcceptanceCurrent: pendingAcceptanceAssertion,
-            occurrences,
-            preserveOccurrenceOnRejection: preservePassive,
-            readmissionAttempt: attempt + 1,
-          });
+          readmittedReceipt = enqueueSessionEventAttempt(
+            eventText,
+            {
+              ...options,
+              agentId,
+              sessionKey,
+              assertAcceptanceCurrent: pendingAcceptanceAssertion,
+              occurrences,
+              preserveOccurrenceOnRejection: preservePassive,
+            },
+            attempt + 1,
+          );
         } catch (error) {
           if (!preservePassive) {
             // The released occurrence carries no producer contract; consume it.
@@ -401,6 +360,7 @@ export function enqueueSessionEventForHost(
           resolveAgentRunErrorLifecycleFields(failure, operation?.abortSignal ?? signal)
             .stopReason === "restart",
         delivered,
+        conversationResultCommitted,
         deliveryAttempted,
         deliveryAmbiguous,
         deliveryError,
@@ -437,7 +397,11 @@ export function enqueueSessionEventForHost(
     if (kind === "final" && payload.text) {
       summary ??= truncateUtf16Safe(payload.text, 2000);
     }
-    if (options.deliver === false || target?.deliver === false) {
+    if (
+      options.deliver === false ||
+      target?.deliver === false ||
+      (options.suppressErrorDelivery && payload.isError === true)
+    ) {
       return;
     }
     if (kind === "final" && sourceDeliveryOutcome?.satisfiesSourceDelivery) {
@@ -518,6 +482,7 @@ export function enqueueSessionEventForHost(
         sessionKey,
         text: promptText,
         options,
+        readmissionAttempt,
         occurrenceId,
         deliveryContext: route,
         target,
@@ -538,6 +503,10 @@ export function enqueueSessionEventForHost(
           },
         },
         replyOptions: {
+          sessionPrincipalTurn:
+            !options.scheduledAutomation &&
+            !isCronSessionKey(sessionKey) &&
+            !hasSessionEventOriginatingCaller(target),
           scheduledAutomation: options.scheduledAutomation,
           ...resolveScheduledSessionReplyOptions(options.scheduledAutomation),
           operatorAuthority: options.scheduledAutomation?.operatorAuthority ?? operatorAuthority,
@@ -565,7 +534,12 @@ export function enqueueSessionEventForHost(
               inputRecorder = recorder;
               if (
                 !recorder.stageApproved ||
-                !(await recorder.stageApproved({ runId: occurrenceId, assertCurrent }))
+                !(await recorder.stageApproved({
+                  runId: occurrenceId,
+                  assertCurrent,
+                  // Only this live policy retry can reclaim its cancelled attempt.
+                  retryCancelled: readmissionAttempt > 0,
+                }))
               ) {
                 throw new Error("Session event input was not durably admitted");
               }
@@ -625,6 +599,7 @@ export function enqueueSessionEventForHost(
               nextCheckMs = terminal.nextCheckMs;
               sourceDeliveryOutcome = terminal.sourceDeliveryOutcome;
               automationResult = terminal.automationResult;
+              conversationResultCommitted = terminal.conversationResultCommitted;
               delivered ||= sourceDeliveryOutcome?.satisfiesSourceDelivery === true;
             },
           },

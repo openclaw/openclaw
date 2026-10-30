@@ -1,9 +1,10 @@
 import { For, Show, action, createMemo, createOptimistic, createSignal, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { createTimeout } from "../../../lib/reactive/timers.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -22,6 +23,8 @@ import {
 } from "./chat-context-report.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import "../../../styles/chat/context-breakdown.css";
+
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 type ContextPageDetails = Pick<
   ChatDetailsProps,
@@ -502,13 +505,16 @@ function ChatContextPage(props: {
               when={result().report || result().loading}
               fallback={
                 <ContextEmpty
-                  message={t(
-                    result().offline
-                      ? "chat.sessionDetails.contextOffline"
-                      : result().failed
-                        ? "chat.sessionDetails.contextError"
-                        : "chat.sessionDetails.contextUnavailable",
-                  )}
+                  message={
+                    result().blockedReason ??
+                    t(
+                      result().offline
+                        ? "chat.sessionDetails.contextOffline"
+                        : result().failed
+                          ? "chat.sessionDetails.contextError"
+                          : "chat.sessionDetails.contextUnavailable",
+                    )
+                  }
                   onRetry={result().failed ? () => void refresh() : undefined}
                 />
               }

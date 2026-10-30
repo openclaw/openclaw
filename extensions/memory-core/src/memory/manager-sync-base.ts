@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
+import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -16,7 +17,6 @@ import type {
   MemorySyncParams,
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import {
   resolveEmbeddingProviderIndexIdentity,
   type EmbeddingProvider,
@@ -180,7 +180,7 @@ export abstract class MemoryManagerSyncBase {
   protected closing = false;
   protected activeManagerOperations = 0;
   protected managerIdleWaiters = new Set<() => void>();
-  protected readonly acquireLocalService?: MemoryCoreAcquireLocalService;
+  protected readonly acquireLocalService?: AcquireConfiguredProviderLocalService;
   protected abstract readonly runInBackgroundContext: NonNullable<
     MemoryCoreRuntimeHost["runInBackgroundContext"]
   >;
@@ -361,7 +361,7 @@ export abstract class MemoryManagerSyncBase {
         2 ** Math.min(this.fullReindexRetryBackoff.attempts - 1, 30),
       FULL_REINDEX_RETRY_MAX_DELAY_MS,
     );
-    this.fullReindexRetryBackoff.retryAt = Date.now() + delay;
+    this.fullReindexRetryBackoff.retryAt = performance.now() + delay;
   }
 
   protected clearFullReindexRetryBackoff(): void {

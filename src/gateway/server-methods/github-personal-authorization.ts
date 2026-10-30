@@ -21,9 +21,11 @@ import {
   resolveOperatorRolePolicy,
   resolveOperatorRolePolicyForProfile,
   resolveOperatorRolePolicyForAssignment,
+  operatorSessionCap,
 } from "../operator-role-policy.js";
 import type { SessionMutationTarget } from "../session-mutation-authorization-error.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
+import { prepareSessionSharingRead } from "../session-sharing-target-read.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import {
@@ -172,6 +174,7 @@ export async function prepareGitHubPublicationOptionsRead(
     >,
   { sessionKey, agentId: requestedAgentId }: SessionMutationTarget,
   signal?: AbortSignal,
+  purpose: "options" | "shared-observation" = "options",
 ) {
   const authority = readGatewayRequestMutationAuthority(options);
   const client = options.client;
@@ -207,6 +210,7 @@ export async function prepareGitHubPublicationOptionsRead(
   };
   const eligibleClient = currentClient();
   const personal: PersonalEligibility =
+    purpose === "shared-observation" ||
     !eligibleClient ||
     !hasCurrentPersonalGatewaySource(options.client, options.context) ||
     !operatorScopeSatisfied("operator.read", eligibleClient.connect.scopes ?? [])
@@ -217,14 +221,59 @@ export async function prepareGitHubPublicationOptionsRead(
             kind: "eligible",
             action: preparePersonalGitHubAction(options, signal),
           };
-  const preparedSession = await prepareOptionsSession(sessionKey, requestedAgentId, currentClient);
+  const preparedSession =
+    purpose === "shared-observation"
+      ? await prepareGitHubPublicationSession(sessionKey, {
+          agentId: requestedAgentId,
+          assertCurrent: currentClient,
+          // Workspace changes belong to source observation, not disclosure authority.
+          fields: [
+            "sessionId",
+            "lifecycleRevision",
+            "owner",
+            "createdActor",
+            "visibility",
+            "incognito",
+          ],
+        })
+      : await prepareOptionsSession(sessionKey, requestedAgentId, currentClient);
+  let sharing: Awaited<ReturnType<typeof prepareSessionSharingRead>> | undefined;
+  const release = () => {
+    sharing?.release();
+    preparedSession.release();
+  };
   try {
+    const initialCfg = options.context.getRuntimeConfig();
+    if (operatorSessionCap(currentClient(), initialCfg) === "invited") {
+      const loaded = preparedSession.readCurrent();
+      sharing = await prepareSessionSharingRead({
+        cfg: initialCfg,
+        sessionKey,
+        agentId: loaded.agentId,
+      });
+    }
     const readSession = () => {
       const current = currentClient();
       const loaded = preparedSession.readCurrent();
+      const cfg = options.context.getRuntimeConfig();
+      const sharingRead = sharing?.readCurrent(cfg);
+      const target = sharingRead?.target;
+      // Separately prepared membership must authorize the retained publication target.
+      if (
+        sharingRead &&
+        (!target ||
+          target.agentId !== loaded.agentId ||
+          target.canonicalKey !== loaded.canonicalKey ||
+          target.storePath !== loaded.storePath ||
+          target.entry.sessionId !== loaded.entry?.sessionId ||
+          target.entry.lifecycleRevision !== loaded.entry?.lifecycleRevision)
+      ) {
+        throw new GitHubPublicationSessionChangedError();
+      }
       const filter = createSessionListEntryFilter({
-        cfg: options.context.getRuntimeConfig(),
+        cfg,
         client: current,
+        membership: sharingRead?.membership,
       });
       return loaded.entry && filter?.(loaded.canonicalKey, loaded.entry) !== false
         ? {
@@ -255,12 +304,12 @@ export async function prepareGitHubPublicationOptionsRead(
     return {
       personal,
       session,
-      release: preparedSession.release,
-      [Symbol.dispose]: preparedSession.release,
+      release,
+      [Symbol.dispose]: release,
       sessionScoped: authority.sessionScope === "operator.sessions.read",
       currentSession: readCurrent,
       currentSessionRead: () => {
-        currentClient();
+        readCurrent();
         return preparedSession.readCurrent();
       },
       // Callbacks may refresh live facts, but must not replace the response's archive snapshot.
@@ -272,7 +321,7 @@ export async function prepareGitHubPublicationOptionsRead(
       },
     };
   } catch (error) {
-    preparedSession.release();
+    release();
     throw error;
   }
 }

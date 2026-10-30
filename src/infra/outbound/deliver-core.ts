@@ -16,11 +16,7 @@ import {
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { createChannelHandler } from "./deliver-channel.js";
-import type {
-  ChannelHandler,
-  DeliverOutboundPayloadsCoreParams,
-  InternalDeliverOutboundPayloadsParams,
-} from "./deliver-contracts.js";
+import type { ChannelHandler, DeliverOutboundPayloadsCoreParams } from "./deliver-contracts.js";
 import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
 import {
   buildPayloadSummary,
@@ -38,11 +34,7 @@ import {
   type OutboundPayloadDeliveryOutcome,
   type OutboundPayloadDeliverySuppressionReason,
 } from "./deliver-types.js";
-import {
-  createDeliveryPlacementEvidenceRecorder,
-  deliveryPlacementMatchesContext,
-  type DeliveryPlacementEvidence,
-} from "./delivery-placement-evidence.js";
+import { createDeliveryPlacementEvidenceRecorder } from "./delivery-placement-evidence.js";
 import {
   assertStableMediaFanout,
   planOutboundMediaMessageUnits,
@@ -57,8 +49,6 @@ import {
 import { createReplyToDeliveryPolicy } from "./reply-policy.js";
 
 const log = createSubsystemLogger("outbound/deliver");
-type CoreDeliveryParams = DeliverOutboundPayloadsCoreParams &
-  Pick<InternalDeliverOutboundPayloadsParams, "transcriptGeneration">;
 
 function normalizePlatformIds(values: Array<string | undefined>): string[] {
   return values
@@ -67,7 +57,7 @@ function normalizePlatformIds(values: Array<string | undefined>): string[] {
 }
 
 export async function deliverOutboundPayloadsCore(
-  params: CoreDeliveryParams,
+  params: DeliverOutboundPayloadsCoreParams,
 ): Promise<OutboundDeliveryResult[]> {
   const { cfg, channel, to } = params;
   const preparedBatch = params.preparedBatch;
@@ -352,7 +342,6 @@ export async function deliverOutboundPayloadsCore(
       payloadIndex,
       deliveryId: transcriptDeliveryId,
       threadId: preparedTarget.threadId,
-      placement: payloadEvidence.placement.snapshot(),
     });
   };
   // `policyKey` is a diagnostics-only fallback; never use it for hook correlation.
@@ -676,12 +665,11 @@ export async function deliverOutboundPayloadsCore(
 // Records one confirmed payload in its destination conversation. Recording is
 // bookkeeping after an accepted send: failures become diagnostics, never retries.
 async function recordConfirmedTranscript(input: {
-  params: CoreDeliveryParams;
+  params: DeliverOutboundPayloadsCoreParams;
   payload: ReplyPayload;
   payloadIndex: number;
   deliveryId: string;
   threadId: string | number | null | undefined;
-  placement: DeliveryPlacementEvidence;
 }): Promise<void> {
   const { params } = input;
   if (params.skipDestinationHistory) {
@@ -693,33 +681,24 @@ async function recordConfirmedTranscript(input: {
     String(input.threadId) !== String(params.transcriptRoute?.threadId ?? params.threadId);
   let diagnostic: string | undefined;
   try {
-    const result =
-      params.transcriptProvenance?.kind === "recovery-notice" &&
-      (threadChanged || !deliveryPlacementMatchesContext(input.placement, params))
-        ? {
-            ok: true as const,
-            diagnostics:
-              "recovery notice receipt does not confirm its captured destination; original conversation history was not changed",
-          }
-        : await commitConfirmedVisibleMessage({
-            config: params.cfg,
-            channel: params.channel,
-            to: params.to,
-            accountId: params.accountId ?? undefined,
-            threadId: input.threadId ?? undefined,
-            route: threadChanged ? undefined : params.transcriptRoute,
-            producer: params.session,
-            payload: input.payload,
-            deliveryId: input.deliveryId,
-            payloadIndex: input.payloadIndex,
-            signal: params.abortSignal,
-            expectedGeneration: threadChanged ? undefined : params.transcriptExpectedGeneration,
-            provenance: params.transcriptProvenance,
-            generation: params.transcriptGeneration,
-            assertCurrent: params.assertTranscriptCurrent,
-            assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
-            stateDir: params.transcriptStateDir,
-          });
+    const result = await commitConfirmedVisibleMessage({
+      config: params.cfg,
+      channel: params.channel,
+      to: params.to,
+      accountId: params.accountId ?? undefined,
+      threadId: input.threadId ?? undefined,
+      route: threadChanged ? undefined : params.transcriptRoute,
+      producer: params.session,
+      payload: input.payload,
+      deliveryId: input.deliveryId,
+      payloadIndex: input.payloadIndex,
+      signal: params.abortSignal,
+      expectedGeneration: threadChanged ? undefined : params.transcriptExpectedGeneration,
+      provenance: params.transcriptProvenance,
+      assertCurrent: params.assertTranscriptCurrent,
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+      stateDir: params.transcriptStateDir,
+    });
     diagnostic = result.ok
       ? result.diagnostics
       : `result was delivered but was not added to the conversation: ${result.reason}`;

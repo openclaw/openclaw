@@ -6,6 +6,7 @@ import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { SessionMessageCutMutationResult } from "./session-accessor.types.js";
 import { findSessionTranscriptHeader } from "./session-entry-codec.js";
+import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { inheritSessionSelection } from "./session-entry-selection.js";
 import { extractEditorText } from "./session-message-cut-content.js";
@@ -13,7 +14,7 @@ import type {
   SessionMessageCutIntent,
   SessionMessageCutResult,
 } from "./session-message-cut.types.js";
-import { createSessionTranscriptHeader } from "./transcript-header.js";
+import { createSessionTranscriptHeader, readInheritedThrough } from "./transcript-header.js";
 import {
   isSessionTranscriptLeafControl,
   scanSessionTranscriptTree,
@@ -94,6 +95,19 @@ export function planSessionMessageCut(
     cwd: readTranscriptHeaderCwd(events),
     sessionId: nextSessionId,
     version: findSessionTranscriptHeader(events)?.version ?? MIN_READABLE_SESSION_VERSION,
+    // A fork copies a prefix of the counted active path. Rewind and switch copy the whole
+    // tree: the source counts its active path, and its own inherited paths stay inherited.
+    inheritedThrough:
+      params.mode === "fork" && cut
+        ? [readLastEventId(cut.prefix)].filter((id): id is string => id !== null)
+        : [
+            ...new Set(
+              [
+                ...readInheritedThrough(findSessionTranscriptHeader(events)),
+                scanSessionTranscriptTree(events).leafId,
+              ].filter((id): id is string => typeof id === "string"),
+            ),
+          ],
   });
   const nextEvents =
     params.mode === "fork" && cut
@@ -112,7 +126,7 @@ export function planSessionMessageCut(
   // Rotating transcript identity fences stale live managers: later snapshot-replace writes
   // target the old session and cannot erase this leaf repoint from the active session.
   const forked = params.mode === "fork";
-  const nextEntry: SessionEntry = {
+  const cutEntry: SessionEntry = {
     // Rewind keeps retired history references so cleanup cannot orphan old transcripts.
     ...(forked ? inheritSessionSelection(currentEntry) : currentEntry),
     sessionId: nextSessionId,
@@ -149,13 +163,9 @@ export function planSessionMessageCut(
     modelSelectionLocked: undefined,
     skillsSnapshot: undefined,
     systemPromptReport: undefined,
-    restartRecoveryRuns: undefined,
-    restartRecoveryForceSafeTools: undefined,
+    resumeAfterRestart: undefined,
     abortCutoffMessageSid: undefined,
     abortCutoffTimestamp: undefined,
-    usageFamilyKey: forked ? undefined : currentEntry.usageFamilyKey,
-    usageFamilySessionIds: forked ? undefined : currentEntry.usageFamilySessionIds,
-    previousSessionId: forked ? undefined : currentEntry.sessionId,
     ...(forked
       ? {
           forkSource: {
@@ -178,6 +188,14 @@ export function planSessionMessageCut(
       ? { incognito: true as const }
       : {}),
   };
+  // Rewind and branch switch keep the session key, so Usage keeps the retired window in its family.
+  const nextEntry = forked
+    ? cutEntry
+    : preserveSqliteSameKeySessionRolloverLineage({
+        next: cutEntry,
+        previous: currentEntry,
+        sessionKey: params.targetKey,
+      });
   return {
     status: "prepared",
     header,

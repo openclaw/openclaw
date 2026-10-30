@@ -1,16 +1,24 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
-import type { ReplyToolAuthorityCaller } from "../../agents/harness/host-private-capabilities.js";
+import {
+  bindReplyInputChannel,
+  isSharedGatewayOwnerRunAuthority,
+  readReplyInputChannel,
+  type ReplyToolAuthorityCallerBinding,
+  type ReplyToolAuthorityCaller,
+} from "../../agents/harness/host-private-capabilities.js";
 import {
   captureRequesterOrigin,
   resolveRequesterPrincipalKey,
 } from "../../agents/requester-origin.js";
 import { resolveRequesterConversationToolPolicy } from "../../agents/requester-tool-policy.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { normalizeChatChannelId } from "../../channels/registry.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -24,24 +32,154 @@ import type {
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { internalSessionConversationId } from "../../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
-import { getRequesterProfile } from "../requester-profile.js";
+import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
+import {
+  getRequesterProfile,
+  readTransferredRequesterProfile,
+  transferRequesterProfile,
+} from "../requester-profile.js";
 import { shouldUseFromAsSenderFallback } from "../sender-identity.js";
 import type { RuntimeMsgContext } from "../templating.js";
-import { MessageInjectionRequesterMismatchError } from "./message-injection-authority.js";
+import {
+  MessageInjectionAuthorityError,
+  MessageInjectionRequesterMismatchError,
+} from "./message-injection-authority.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
+
+/** Classify ordinary guidance without changing the selected execution's authority. */
+export function captureReplyToolAuthorityContinuation({
+  snapshot,
+  caller,
+  requesterPrincipalKey,
+  requesterProfileId,
+  channelOwner,
+  inputChannel,
+}: {
+  snapshot: ReplyToolAuthorityInput;
+  caller: ReplyToolAuthorityCaller | undefined;
+  requesterPrincipalKey: string | undefined;
+  requesterProfileId: string | undefined;
+  channelOwner: ReturnType<typeof getCommandOwnerAuthority>;
+  inputChannel: string | undefined;
+}): Pick<
+  ReplyToolAuthorityCallerBinding,
+  "continuationKind" | "allowPendingUserInputAnswer" | "assertCurrent"
+> {
+  const continuation =
+    caller &&
+    "kind" in caller &&
+    snapshot.run.sessionKey?.trim() &&
+    (!caller.caller.inputProvenance || caller.caller.inputProvenance.kind === "external_user") &&
+    caller.caller.sessionKey?.trim() === snapshot.run.sessionKey?.trim()
+      ? caller
+      : undefined;
+  const incomingProfile = continuation && readTransferredRequesterProfile(continuation.caller);
+  // A profile link records attribution; only host-attested human ingress can
+  // use it to continue another transport's execution.
+  const matchingProfile =
+    continuation &&
+    inputChannel &&
+    readReplyInputChannel(continuation.caller) &&
+    incomingProfile &&
+    incomingProfile.id !== GATEWAY_OWNER_PROFILE_ID &&
+    (incomingProfile.id === requesterProfileId ||
+      requesterPrincipalKey === JSON.stringify(["operator", incomingProfile.id]))
+      ? incomingProfile
+      : undefined;
+  const sharedOwner =
+    continuation &&
+    (() => {
+      if (snapshot.run.inputProvenance && snapshot.run.inputProvenance.kind !== "external_user") {
+        return undefined;
+      }
+      const incoming = continuation.caller;
+      const incumbentShared = isSharedGatewayOwnerRunAuthority(snapshot.operatorAuthority);
+      const incomingShared = isSharedGatewayOwnerRunAuthority(incoming.operatorAuthority);
+      // This is a continuation grant between a shared browser principal and a
+      // channel participant, never equivalence between personal administrators.
+      const channel =
+        incumbentShared && !incomingShared
+          ? readReplyInputChannel(incoming)
+          : incomingShared && !incumbentShared
+            ? inputChannel
+            : undefined;
+      if (!normalizeChatChannelId(channel)) {
+        return undefined;
+      }
+      const shared = incumbentShared ? snapshot.operatorAuthority : incoming.operatorAuthority;
+      const owner = incumbentShared ? getCommandOwnerAuthority(incoming) : channelOwner;
+      const collaborative =
+        continuation.config.messages?.queue?.allowCollaborativeSteering === true;
+      if (
+        !collaborative &&
+        (!shared?.scopes.includes("operator.admin") || owner?.isCurrent() !== true)
+      ) {
+        return undefined;
+      }
+      return () => {
+        if (shared) {
+          assertAdmittedRunOperatorAuthority(shared);
+          shared.assertCurrent();
+        }
+        if (!collaborative && owner?.isCurrent() !== true) {
+          throw new MessageInjectionAuthorityError({
+            cause: new Error("Channel owner authority is no longer current"),
+          });
+        }
+      };
+    })();
+  const continuationKind = matchingProfile
+    ? "verified-profile"
+    : sharedOwner
+      ? "shared-owner"
+      : undefined;
+  // Continuation permits guidance across scopes, not automatic question
+  // answers or image cancellation under the incumbent's question authority.
+  const allowPendingUserInputAnswer: false | undefined =
+    continuationKind &&
+    caller &&
+    "kind" in caller &&
+    (sharedOwner ||
+      !isSameReplyToolAuthorityConversation(snapshot, caller.caller) ||
+      requesterPrincipalKey !==
+        resolveRequesterPrincipalKey({
+          ...caller.caller,
+          messageChannel: caller.caller.originatingChannel,
+        }))
+      ? false
+      : undefined;
+  return {
+    continuationKind,
+    allowPendingUserInputAnswer,
+    assertCurrent: () => {
+      if (matchingProfile && !matchingProfile.isCurrent()) {
+        throw new MessageInjectionAuthorityError({
+          cause: new Error("Requester profile binding is no longer current"),
+        });
+      }
+      sharedOwner?.();
+    },
+  };
+}
 
 /** Keep execution settings with their owner while projecting current caller and policy facts. */
 export function projectReplyToolAuthorityInput(
   snapshot: ReplyToolAuthorityInput,
   caller: ReplyToolAuthorityCaller | undefined,
   requesterPrincipalKey: string | undefined,
+  preserveIncumbentAuthority = false,
 ): ReplyToolAuthorityInput {
   const continuation = caller && "kind" in caller ? caller : undefined;
   const participant: ReplyToolAuthorityOverlay | ReplyToolAuthorityRequester | undefined =
     caller && "kind" in caller
       ? { ...caller.caller, traceAuthorized: snapshot.run.traceAuthorized === true }
       : caller;
+  if (continuation && preserveIncumbentAuthority) {
+    // Authorized guidance follows the selected execution across transports without
+    // replacing its requester, permissions, personal tools, or delivery route.
+    return snapshot;
+  }
   const incomingRequester =
     participant && !("requesterOrigin" in participant) && participant.allowCollaborativeSteering
       ? resolveRequesterPrincipalKey({
@@ -159,8 +297,6 @@ function applyReplyToolAuthorityCaller(
     operatorAuthority: overlay.operatorAuthority,
     toolsAllow: overlay.toolsAllow,
     disableTools: overlay.disableTools,
-    forceRestartSafeTools: overlay.forceRestartSafeTools,
-    forceCodeModeTools: overlay.forceCodeModeTools,
     run: {
       ...snapshot.run,
       requesterOrigin: undefined,
@@ -199,13 +335,11 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   toolsAllow?: string[];
   disableTools: boolean;
-  forceRestartSafeTools?: boolean;
-  forceCodeModeTools?: boolean;
 }): ReplyToolAuthorityOverlay {
   const { ctx } = params;
   const senderId = normalizeOptionalString(ctx.SenderId);
   const senderE164 = normalizeOptionalString(ctx.SenderE164);
-  return {
+  const overlay: ReplyToolAuthorityOverlay = {
     sessionKey: normalizeOptionalString(ctx.SessionKey),
     operatorAuthority: params.operatorAuthority,
     permissionMode: params.sessionEntry?.permissionMode,
@@ -242,8 +376,6 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
     runtimePluginToolGrant: undefined,
     toolsAllow: params.toolsAllow,
     disableTools: params.disableTools,
-    forceRestartSafeTools: params.forceRestartSafeTools,
-    forceCodeModeTools: params.forceCodeModeTools,
     traceAuthorized:
       params.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
     approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
@@ -251,6 +383,13 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
     gatewayUiCommandTarget: ctx.GatewayUiCommandTarget,
     toolBindings: ctx.GatewayRunToolBindings,
   };
+  transferRequesterProfile(ctx, overlay);
+  bindReplyInputChannel(overlay, ctx.SenderIsBot ? undefined : (ctx.Provider ?? ctx.Surface));
+  const ownerAuthority = getCommandOwnerAuthority(ctx);
+  if (ownerAuthority) {
+    bindCommandOwnerAuthority(overlay, ownerAuthority);
+  }
+  return overlay;
 }
 
 /** Resolve configured conversation policy from the same trusted ingress facts as steering. */

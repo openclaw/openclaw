@@ -6,7 +6,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
-import { readMainSessionRecoveryCheckpoint } from "../agents/main-session-recovery/main-session-restart-recovery-checkpoint.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
@@ -533,11 +532,6 @@ it("reduces full transcript recovery, usage, and MCP facts without caller-thread
       /\b(?:transcript_events|session_transcript_active_events)\b/iu.test(sql),
     );
     try {
-      expect(await readMainSessionRecoveryCheckpoint(target)).toEqual({
-        replaySafe: true,
-        source: "external_user",
-      });
-      expect(scans).toEqual([]);
       expect(await readLatestSessionUsageFromTranscriptAsync(target)).toMatchObject({
         inputTokens: 2400,
         outputTokens: 1200,

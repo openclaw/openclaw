@@ -625,9 +625,6 @@ vi.mock("./conversation-binding-input.js", async (importOriginal) => ({
   resolveConversationBindingContextFromMessage:
     conversationBindingMocks.resolveConversationBindingContextFromMessage,
 }));
-vi.mock("../../tts/status-config.js", () => ({
-  resolveStatusTtsSnapshot: () => ttsMocks.state.statusSnapshot,
-}));
 vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
   persistAcpDispatchTranscript: (params: unknown) =>
     transcriptMocks.persistAcpDispatchTranscript(params),
@@ -684,12 +681,6 @@ export function resetPluginTtsAndThreadMocks() {
   pluginConversationBindingMocks.shownFallbackNoticeBindingIds.clear();
   ttsMocks.state.synthesizeFinalAudio = false;
   ttsMocks.state.synthesizeToolAudio = false;
-  ttsMocks.state.statusSnapshot = {
-    autoMode: "always",
-    provider: "auto",
-    maxLength: 1500,
-    summarize: true,
-  };
   ttsMocks.maybeApplyTtsToPayload.mockReset().mockImplementation(ttsMocks.applyTtsToPayload);
   ttsMocks.normalizeTtsAutoMode
     .mockReset()

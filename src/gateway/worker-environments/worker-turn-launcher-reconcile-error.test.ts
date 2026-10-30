@@ -79,7 +79,6 @@ it("settles a stale-build turn when a lost shared node rejects its stop acknowle
       placements,
       environments,
       workspaceOperations,
-      runRecoveryBarrier: async ({ run }) => await run({ kind: "local", path: root }),
       runReclaimBarrier: async ({ begin, reclaim }) =>
         await reclaim({ kind: "local", path: root }, await begin()),
       ...createWorkerWorkspaceRecoveryFixture({

@@ -11,6 +11,11 @@ Use focused local checks before publication and PR CI for broad proof. Open a re
 
 Review transitions recognize conflict metadata retained after committed merge or rebase resolutions, including renamed files. Each stage must match its source commit's exact mode and blob at the same path or a unique Git-detected rename source leading to the committed resolution path. Ambiguous or undetected renames still refuse without changing the index; preserve the transition journal for native recovery.
 
+Unknown working-file bytes remain refused, even when empty. Explicitly authorized
+[review-file salvage](/reference/scripts/pr-tooling#salvage-an-unknown-file-in-an-interrupted-review-checkout)
+preserves one selected preimage and restores its journaled source without changing
+HEAD, the index, journal, or workflow binding. Ordinary replay still owns completion.
+
 For blobless partial clones, transition recovery prefetches missing target objects in batches of at most 1,024 through the canonical source transport. Fetches skip local-history negotiation and automatic maintenance, and leave refs and `FETCH_HEAD` unchanged. Worktree admission runs after prefetching, followed by one restore so file/directory replacements remain intact. A failed prefetch retains the transition journal for retry.
 
 - The default agent handoff leaves `OPENCLAW_PR_GATES_REMOTE` unset and uses `merge-run --auto-merge`; explicitly setting `OPENCLAW_PR_GATES_REMOTE=github` selects the same mode. Preparation records `github_pending` bound to the published head without successful-proof stamps. Merge requires completed local review, the exact prepared head, and the enforced `openclaw/ci-gate`; it rejects known failed required checks, accepts pending checks, and skips separate hosted workflow verification and its synchronous CI watcher. GitHub enforces required CI/security checks and reviews; the agent retains responsibility for follow-through. This mode replaces separate scheduled Testbox evidence with the PR's enforced gate; existing completed-evidence modes remain available. Accepted requests return pending, not completion. Follow the maintainer skill's polling cadence, investigate failures and conflicts, and reconcile through native recovery until merge and cleanup are verified. Preserve accepted or uncertain outcome records; never blindly re-arm a request. No implicit admin or REST fallback applies to pending-gate admission; explicitly authorized [prior-CI admin admission](/reference/scripts/prior-ci) is a separate mode.
@@ -48,6 +53,66 @@ Missing original metadata is never reconstructed, and this route does not replay
 the old baseline review as current approval. A genuine fresh incoming NEEDS WORK
 review, the existing publication, signature and live-identity checks, and a new
 candidate READY review and gates are still required.
+
+## Publish a candidate for required proof
+
+Some package proofs require a remotely addressable candidate before the review
+can become READY. For that case, an independent correction reviewer can authorize
+`scripts/pr prepare-publish-for-proof <PR>` without resolving the proof finding.
+The command publishes only the exact signed commit; it does not run proof,
+approve the correction, create successful gate stamps, or authorize merging.
+
+Keep the correction recommendation `NEEDS WORK` and each pending incoming
+finding's resolution empty. Add this exact typed record under `correction` in
+`.local/correction-review.json`:
+
+```json
+{
+  "proofPublication": {
+    "version": 1,
+    "kind": "published-candidate-proof",
+    "headSha": "<candidate commit SHA>",
+    "treeOid": "<candidate tree OID>",
+    "workflowSource": "<admitted workflow commit SHA>",
+    "workflowBinding": "<current workflow binding OID>",
+    "expectedHostedHead": "<observed PR head SHA>",
+    "pendingFindings": [
+      {
+        "id": "R2",
+        "evidence": "The exact published package must demonstrate the required upgrade behavior."
+      }
+    ]
+  }
+}
+```
+
+Use full lowercase 40-character object IDs. Enumerate every current IMPORTANT
+finding and its concrete required evidence. Every other incoming required finding
+must be resolved. Unresolved BLOCKER findings, unvalidated issues, incomplete
+finding sets, and changed source or review authority refuse publication.
+
+If the retained workflow predates this command, first land the capability through
+ordinary review and qualification. Then use the existing exact-identity
+`prepare-workflow-successor` command with `--for-proof`, naming that authenticated
+current-main workflow in the review record. It preserves the same candidate,
+review, predecessor binding, and atomic operation-lock/binding transaction.
+The record keeps the predecessor binding OID; the successor binds those exact
+review bytes. Neither an unlanded implementation nor a manual binding edit can
+authorize the transition.
+
+Publication requires an open PR with no auto-merge request, queue membership,
+retained merge outcome, or unresolved execution. Unknown observations refuse;
+the command does not cancel another operation. It requires Git transport and
+valid signatures, rejects unsigned overrides and same-tree commit aliases, and
+does not fall back to GraphQL after a Git failure. An uncertain push remains
+incomplete. After independently reconciling the hosted OID, an explicit invocation
+can record an already-published exact candidate without another push.
+
+The existing `prepare-push-result.env` records `PUSH_PURPOSE=proof`, the exact
+review OID, and pending finding IDs alongside publication identity. It is not a
+qualified `prep.env`. Normal gates, push, sync, and merge still require a genuine
+READY correction review. After obtaining the enumerated proof, independently
+resolve those findings for the exact candidate and run ordinary qualification.
 
 ## Signing a baseline on another host
 

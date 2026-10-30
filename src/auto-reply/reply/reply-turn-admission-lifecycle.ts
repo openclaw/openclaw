@@ -1,10 +1,4 @@
 import { addAbortListener } from "node:events";
-import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
-import {
-  releaseMainSessionRecoveryOwner,
-  type MainSessionRecoveryOwnerLease,
-  type MainSessionRecoveryPendingTarget,
-} from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { SessionWorkStartChangedError } from "../../config/sessions/lifecycle.js";
 import type { SessionAdmissionDatabaseClaim } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
@@ -32,33 +26,15 @@ import {
 
 const log = createSubsystemLogger("auto-reply/reply-turn-admission");
 
-export async function releaseReplyRecoveryOwner(
-  lease: MainSessionRecoveryOwnerLease | undefined,
-): Promise<MainSessionRecoveryPendingTarget | undefined> {
-  if (!lease) {
-    return undefined;
-  }
-  try {
-    return await releaseMainSessionRecoveryOwner(lease);
-  } catch (error) {
-    log.warn(`failed to release main-session recovery reply owner: ${formatErrorMessage(error)}`);
-    // The durable owner schedules exact-token retries. A completed reply must
-    // not keep its successor barrier and lifecycle admission until that
-    // background repair wins a contested SQLite write.
-    return undefined;
-  }
-}
-
 export function bindReplyAdmissionRelease(params: {
   operation: ReplyOperation;
   admission: SessionEffectRef | undefined;
   databaseClaim: SessionAdmissionDatabaseClaim | undefined;
-  recoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
   sessionId: string;
   sessionKey: string;
   workSignal?: AbortSignal;
 }): void {
-  const { operation, admission, databaseClaim, recoveryOwnerLease, sessionId, sessionKey } = params;
+  const { operation, admission, databaseClaim, sessionId, sessionKey } = params;
   let handoff: Promise<void> | undefined;
   let releasing: Promise<void> | undefined;
   let sessionActor: Promise<SessionActor | undefined> | undefined;
@@ -225,25 +201,13 @@ export function bindReplyAdmissionRelease(params: {
   if (admission) {
     // The lifecycle fence spans hooks, media, execution, and final delivery;
     // reset/delete waits for the owner to clear before mutating the session.
-    let recoveryOwnerRelease: Promise<MainSessionRecoveryPendingTarget | undefined> | undefined;
-    const releaseRecoveryOwner = () =>
-      (recoveryOwnerRelease ??= releaseReplyRecoveryOwner(recoveryOwnerLease));
-    if (recoveryOwnerLease) {
-      registerReplyOperationSuccessorBarrier({
-        operation,
-        sessionId: recoveryOwnerLease.sessionId,
-        sessionKeys: [sessionKey, recoveryOwnerLease.sessionKey],
-        start: releaseRecoveryOwner,
-      });
-    }
     runAfterReplyOperationClear(operation, () => {
       // Keep immutable store correlation after releasing only this admission's lease.
       operationAdmission.lease = undefined;
-      // Keep reset/delete behind durable owner release and its writer lock.
-      void Promise.all([releaseRecoveryOwner(), releaseWorkerDatabaseClaim?.()]).then(
-        ([pendingTarget]) => {
+      // Release the database borrow before reset/delete can mutate the session.
+      void Promise.resolve(releaseWorkerDatabaseClaim?.()).then(
+        () => {
           admission.release();
-          scheduleMainSessionRecoveryPendingTarget(pendingTarget);
         },
         (error: unknown) => {
           log.warn(`failed to release reply database owner: ${formatErrorMessage(error)}`);

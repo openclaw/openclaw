@@ -24,6 +24,13 @@ Message authors, execution authority, initiating agents, and actual approval
 responses remain separate facts. Scheduled jobs and SDK/plugin runs without turn
 participants retain their existing session access rules.
 
+System continuations, including exec completion, subagent handoffs, and Goal turns,
+keep the originating caller's current authority and policy. A guest's continuation
+stays that guest; it never inherits the session owner's privileges. Unattributed
+host events, including restart resume, use the session principal's current authority.
+Access is checked again before effects. When no person has authority, a person must
+resume the work before selecting a user. Cron retains its own authority rules.
+
 ## Available tools
 
 | Tool                 | What it does                                                                |
@@ -371,6 +378,11 @@ budget. For nonblocking coordination, use `sessions_send` with `timeoutSeconds: 
 When that wait expires, eligible pending reply delivery continues observing the accepted
 run until it finishes; a wait interval does not discard a late reply. Nested
 inter-session replies use the same completion observation.
+On a Gateway, an eligible same-session follow-up retains its own accepted result;
+the guest does not need global `operator.write` permission to observe completion.
+An actual failed or cancelled run remains a failure, and any returned failure notice
+uses the same retained completion path. Current requester and session authority
+still govern the result.
 The low-level Gateway `sessions.send` RPC has a different contract: its JSON
 `timeoutMs` limits **receiver execution**, just like `chat.send`. Omit that field
 to keep the receiver's configured budget; bound the CLI wait separately with

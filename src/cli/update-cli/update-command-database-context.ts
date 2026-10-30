@@ -34,6 +34,7 @@ import {
 type UpdateManagedServiceInspectionParams = {
   roots: readonly string[];
   updateInstallKind: "package" | "git";
+  packageAlreadyCurrent?: boolean;
   shouldRestart: boolean;
   jsonMode: boolean;
   timeoutMs: number;
@@ -102,6 +103,7 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
     }
     if (
       params.updateInstallKind === "package" &&
+      !params.packageAlreadyCurrent &&
       inspected.serviceUpdateVerdict?.kind === "unavailable"
     ) {
       await assertUnavailableGatewayPackageConsumerStopped({

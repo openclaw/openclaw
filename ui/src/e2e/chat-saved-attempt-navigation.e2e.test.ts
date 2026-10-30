@@ -165,6 +165,7 @@ suite.define(() => {
         messages: Array.from({ length: to - from + 1 }, (_, index) => message(from + index)),
         hasMore,
         nextOffset: hasMore ? 20 : undefined,
+        ...(hasMore ? { olderCursor: "older-saved-history" } : {}),
         totalMessages: 40,
         pendingInputs,
       });

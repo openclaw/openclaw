@@ -12,7 +12,7 @@ import {
 } from "./session-actor-receipt.js";
 import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 
 // mock-isolation: Count real receipt encodings separately from residency/transport work.
 vi.mock("node:v8", async (importOriginal) => {
@@ -287,7 +287,7 @@ it.each(["append", "tool", "patch", "adopt"] as const)(
         const input = {
           target: f.target,
           sessionId: f.scope.sessionId,
-          expectedState: buildRestartRecoveryExpectedState(before.entry!),
+          expectedState: buildSessionTranscriptTurnExpectedState(before.entry!),
           lifecycle: {},
           commandId: `resident-${phase}-${mode}`,
           phaseId: "turn",

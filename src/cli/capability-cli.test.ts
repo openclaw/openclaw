@@ -16,6 +16,7 @@ import {
   runCapabilityWithParentAgent,
   runModelAuthWithAgent,
 } from "./capability-cli.test-harness.js";
+import { registerVideoOutputCapabilityCliTests } from "./capability-cli.video-output.test-support.js";
 
 const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
@@ -1249,63 +1250,6 @@ describe("capability cli", () => {
     });
   });
 
-  it("passes image output format, quality, and OpenAI hints through to edit runtime", async () => {
-    const png = Buffer.from(PNG_1X1_BASE64, "base64");
-    primeGeneratedImage("gpt-image-1.5", "transparent-edit.png", png);
-    const directory = tempDirs.make("capability-image-edit-");
-    const inputPath = path.join(directory, "input.png");
-    const outputPath = path.join(directory, "output.png");
-    await fs.writeFile(inputPath, png);
-
-    await runCapability(
-      "image",
-      "edit",
-      ...cliOptions({
-        file: [inputPath, inputPath],
-        count: 3,
-        size: "2160x3840",
-        "aspect-ratio": "9:16",
-        resolution: "4K",
-        background: "opaque",
-        "timeout-ms": 180000,
-        prompt: "make background transparent",
-        model: "openai/gpt-image-1.5",
-        "output-format": "png",
-        "openai-background": "transparent",
-        "openai-moderation": "auto",
-        quality: "high",
-        output: outputPath,
-        json: true,
-      }),
-    );
-
-    const generationCall = firstImageGenerationCall();
-    const inputImages = generationCall?.inputImages as Array<Record<string, unknown>>;
-    expect(generationCall).toMatchObject({
-      prompt: "make background transparent",
-      modelOverride: "openai/gpt-image-1.5",
-      outputFormat: "png",
-      quality: "high",
-      count: 3,
-      size: "2160x3840",
-      aspectRatio: "9:16",
-      resolution: "4K",
-      background: "opaque",
-      timeoutMs: 180000,
-    });
-    expect(generationCall?.providerOptions).toEqual({
-      openai: {
-        background: "transparent",
-        moderation: "auto",
-      },
-    });
-    expect(firstJsonOutput()?.outputs).toEqual([
-      expect.objectContaining({ path: outputPath, mimeType: "image/png" }),
-    ]);
-    expect(inputImages).toHaveLength(2);
-    expect(inputImages[0]?.fileName).toBe(path.basename(inputPath));
-  });
-
   it.each(["generate", "edit"])(
     "rejects invalid image %s resolution before dispatch",
     async (action) => {
@@ -1376,21 +1320,14 @@ describe("capability cli", () => {
     },
   );
 
-  it("preserves an existing --output and removes its temp when a video stream fails", async () => {
-    primeGeneratedVideoUrl("https://example.com/broken-video.mp4");
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode("partial-video"));
-        controller.error(new Error("video stream exploded"));
-      },
-    });
-    mockVideoFetch(stream);
-    const fixture = await outputFixture(".mp4", "keep-existing-video");
-    const { outputBase } = fixture;
-    await expect(generateVideo("--output", outputBase)).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains("video stream exploded");
-    await expectOutputFile(fixture, "keep-existing-video");
+  registerVideoOutputCapabilityCliTests({
+    mocks,
+    generateVideo,
+    primeGeneratedVideoUrl,
+    mockVideoFetch,
+    outputFixture,
+    expectOutputFile,
+    expectRuntimeErrorContains,
   });
 
   it("preserves buffered image output when publication fails", async () => {

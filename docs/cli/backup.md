@@ -68,10 +68,15 @@ result on stdout.
 ## PostgreSQL stores
 
 `openclaw backup create` routes each managed database through its physical engine,
-including activated plugins' declared backup resources. If any selected store
-uses PostgreSQL, stop the Gateway through its service owner first. A running
-Gateway causes a refusal: “stop through the service owner, then rerun.” Backup
-never stops it automatically. The requirement also applies to `create --to`.
+including activated plugins' declared backup resources. It runs while the
+Gateway serves requests, including `create --to`. Each PostgreSQL store is
+exported from one `REPEATABLE READ READ ONLY` snapshot, the same per-store
+consistency as the live SQLite snapshots in the archive; separate stores are
+captured one after another, not at one shared instant. Rows committed after a
+store's snapshot belong to the next backup. With the Gateway stopped, the command
+holds offline custody instead. Restore, Git backups, and generic local snapshots
+that select PostgreSQL still require the Gateway stopped and refuse while it is
+running: “stop through the service owner, then rerun.”
 
 Mixed-engine installations use the same commands and archive format. Each
 store's physical engine and selected shared connection determine its capture;
@@ -528,6 +533,26 @@ It omits these per-agent tables:
 - `session_suggestions`
 
 For generated plugin model catalogs in per-agent `cache_entries`, including retained migration copies, it removes provider and model API keys and headers while retaining model inventory and unrelated cache rows. Unusable generated-cache rows are omitted rather than exporting unknown secrets.
+
+In `plugin_state_entries` and `plugin_blob_entries`, it removes the identified
+bundled credential scopes listed in `STATE_SECRET_PLUGIN_SCOPES` in the same
+policy file. These include Discord Activity bearer sessions and document tokens,
+Zalo User and Matrix credentials, Matrix recovery
+keys and crypto snapshots, Google Meet, Twitch, X and Microsoft Teams token
+stores, Reef identity keys and setup sessions, MCP relay identity keys, MCP
+Events subscription signing secrets, and Zalo, SMS and Synology Chat hosted
+media bearer records. Retained variants of these namespaces receive the same
+redaction. For Discord thread bindings, it removes only the webhook token from
+each JSON record while retaining routing fields. Unreadable records in that
+credential scope are omitted rather than exported with unknown secrets.
+Other plugin state, including allowlists, spending counters, memory
+settings, registration identities, relay grants and durable blobs, is preserved.
+Restoring a redacted backup requires signing in or registering the affected
+integrations again; hosted media links whose bearer records were omitted must
+be recreated. Custom plugin payloads need their own credential classification;
+this policy does not inspect arbitrary JSON or blob contents for secrets. An
+unclassified custom plugin's `credentials` namespace remains included, for both
+JSON records and blobs.
 
 The backup manifest records omitted tables in `excludedTables` and omitted
 machine-state prefixes in `excludedConfigStateKeyPrefixes`. Restore reports

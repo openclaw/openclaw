@@ -11,6 +11,8 @@
  * Acceptance: lower allocation or CPU, unchanged bytes, no material controlled harm.
  * Run matched A/A controls before interpreting adverse timing/GC. Sparse tails are context.
  * Add --cold to replace every row identity (includes shallow fixture copying/freezing).
+ * --transmit serializes each full response, distinguishing avoided reservation work
+ * from work deferred until transport. Default models preparation for conditional replies.
  * Repeat --source-file <path/session-list-view-cache.ts> (or session-row-serialization.ts)
  * to pin those owners independently; each source retains its original basename.
  * --max-owner-bytes-per-call <bytes> adds an opt-in sampled allocation regression
@@ -20,12 +22,13 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Session, type HeapProfiler } from "node:inspector/promises";
-import { registerHooks, stripTypeScriptTypes } from "node:module";
+import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { transformSync } from "esbuild";
 import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import type { GatewaySessionRow } from "../../src/gateway/session-utils.types.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
@@ -38,6 +41,7 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "3000" },
     allocations: { type: "boolean", default: false },
     cold: { type: "boolean", default: false },
+    transmit: { type: "boolean", default: false },
     "max-owner-bytes-per-call": { type: "string" },
   },
 });
@@ -76,7 +80,10 @@ const hook = registerHooks({
     for (const [name, source] of sources) {
       if (url.endsWith(`/src/gateway/${name}`)) {
         replaced.add(name);
-        return { ...loaded, source: stripTypeScriptTypes(source) };
+        return {
+          ...loaded,
+          source: transformSync(source, { loader: "ts", format: "esm", target: "esnext" }).code,
+        };
       }
     }
     return loaded;
@@ -122,6 +129,9 @@ function page(index: number) {
 const retained: ReturnType<typeof shareSidebarSessionRows>[] = [];
 function run(index: number) {
   const result = shareSidebarSessionRows(page(index));
+  if (values.transmit) {
+    serializeGatewayFrame({ type: "res", id: "sidebar", ok: true, payload: result }).toString();
+  }
   retained[index % slots] = result;
   return result;
 }
@@ -224,6 +234,7 @@ const result = {
       "session-row-presentation.ts",
       "session-list-view-cache.ts",
       "session-row-serialization.ts",
+      "serialized-json.ts",
     ].map((name) => [
       name,
       createHash("sha256")
@@ -233,6 +244,7 @@ const result = {
   ),
   mode: values.allocations ? "sampled-allocation" : "untraced-timing",
   scenario: values.cold ? "cold-identities" : "warm-identities",
+  transmit: values.transmit,
   rowCount,
   pageSize,
   slots,

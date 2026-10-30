@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
   diagnosticLoads: 0,
   lossless: true,
   initializeSqlite: vi.fn(),
+  releaseStdin: vi.fn(),
 }));
 
 vi.mock("./bun-sqlite-library.js", async (importOriginal) => ({
@@ -52,6 +53,8 @@ vi.mock("../logging/json-console-line.js", async (importOriginal) => {
 vi.mock("../worker/worker-deploy-runtime.js", () => ({}));
 vi.mock("../worker/worker-deploy-browser-runtime.js", () => ({ default: {} }));
 vi.mock("../worker/worker-process.js", () => ({ runWorkerProcess: state.run }));
+// mock-isolation: the real helper would inspect and destroy the test runner's own stdin.
+vi.mock("../process/release-stdin.js", () => ({ releaseProcessStdin: state.releaseStdin }));
 // mock-isolation: keep the worker's process-local agent/exec state out of admission tests.
 vi.mock("../worker/worker.runtime.js", () => ({
   createWorkerRuntimeEnvironment: vi.fn(),
@@ -424,7 +427,6 @@ describe("runtime failure diagnostics", () => {
 });
 
 describe("sealed worker runtime", () => {
-  let destroyStdin: MockInstance<typeof process.stdin.destroy>;
   let disconnect: MockInstance<NonNullable<typeof process.disconnect>>;
   const originalArgv = process.argv;
   const originalExitCode = process.exitCode;
@@ -434,8 +436,8 @@ describe("sealed worker runtime", () => {
     state.run.mockClear();
     process.argv = [process.execPath, "worker.mjs"];
     process.exitCode = undefined;
-    // The executable owns stdin and IPC, not the test runner's real transports.
-    destroyStdin = vi.spyOn(process.stdin, "destroy").mockReturnThis();
+    state.releaseStdin.mockClear();
+    // The executable owns IPC, not the test runner's real transport.
     disconnect = vi.spyOn(process, "disconnect").mockImplementation(() => {});
     vi.stubEnv("OPENCLAW_DEBUG", undefined);
   });
@@ -459,7 +461,7 @@ describe("sealed worker runtime", () => {
     const stderr = supported ? undefined : vi.spyOn(process.stderr, "write").mockReturnValue(true);
     await expect(import("../worker/worker-deploy-entry.js")).resolves.toBeDefined();
     expect(process.exitCode).toBe(supported ? undefined : 1);
-    expect(destroyStdin).toHaveBeenCalledOnce();
+    expect(state.releaseStdin).toHaveBeenCalledOnce();
     expect(disconnect).toHaveBeenCalledOnce();
     expect(state.run).toHaveBeenCalledTimes(supported ? 1 : 0);
     if (supported) {

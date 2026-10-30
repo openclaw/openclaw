@@ -32,7 +32,6 @@ async function parkExpiringRun(method: "callValue" | "agentWait") {
         cancel,
       },
     ],
-    replaySafe: false,
     settlementMode: { kind: "awaiting" },
     continuation,
     parentToolCallId: "code-mode-lifecycle",

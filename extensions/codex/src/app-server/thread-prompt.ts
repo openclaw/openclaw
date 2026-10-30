@@ -2,9 +2,8 @@ import {
   buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
   buildUiPresentationPrompt,
-  buildSkillWorkshopPromptSection,
+  listToolPromptGuidance,
   resolveMainSessionDelegationMode,
-  SKILL_WORKSHOP_TOOL_NAME,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
@@ -173,9 +172,7 @@ export function buildDeveloperInstructions(
           .join(", ")}.`
       : undefined,
     deferredToolDiscoveryGuidance,
-    toolNames.has(SKILL_WORKSHOP_TOOL_NAME)
-      ? buildSkillWorkshopPromptSection().join("\n")
-      : undefined,
+    listToolPromptGuidance(toolNames.keys()).join("\n\n"),
     // Deferred native tools still need discovery. Inherited dynamic schemas do
     // not give native children OpenClaw executors, so choose that owner up front.
     nativeDelegationAvailable

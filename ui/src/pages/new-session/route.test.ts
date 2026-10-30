@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { newSessionModelSearch } from "./model-location.ts";
 import { page } from "./route.ts";
@@ -29,10 +30,14 @@ function createContext(
     return { catalogs: [] };
   });
   const client = { request } as unknown as GatewayBrowserClient;
-  const snapshot: Pick<ApplicationGatewaySnapshot, "client" | "phase" | "assistantAgentId"> = {
+  const snapshot: Pick<
+    ApplicationGatewaySnapshot,
+    "client" | "phase" | "assistantAgentId" | "hello"
+  > = {
     client,
     phase: "connected",
     assistantAgentId,
+    hello: gatewayHelloForMethods(["sessions.catalog.list"]),
   };
   const ensureList = vi.fn(async () => agentsList);
   const agentsState = {

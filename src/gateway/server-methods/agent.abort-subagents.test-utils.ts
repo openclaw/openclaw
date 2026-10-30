@@ -5,8 +5,11 @@ import {
   registerSubagentRun,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
-import { observeSwarmSchedulerWork } from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
+import { releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import {
+  enqueueSwarmRun,
+  observeSwarmSchedulerWork,
+} from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";

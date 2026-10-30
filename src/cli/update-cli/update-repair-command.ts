@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
@@ -26,7 +27,9 @@ import {
   inspectNewerRecoveryHistory,
   needsPostCoreRepair,
   isFreshUnacknowledgedAbandonedUpdateRun,
+  recordedUpdateRunDrivers,
 } from "../../infra/update-run-activity.js";
+import { inspectUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   acknowledgeAbandonedUpdateRun,
   createUpdateRun,
@@ -62,6 +65,8 @@ import {
   resolveTargetVersion,
   type UpdateFinalizeOptions,
 } from "./shared.js";
+import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { updateFinalizeCommand, type UpdateCoreCompletion } from "./update-command-finalize.js";
 import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
@@ -72,7 +77,8 @@ import {
 } from "./update-retained-custody.js";
 
 export function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> {
-  return repairUpdate(opts).catch((error: unknown) => {
+  const env = resolveServiceRefreshEnv(process.env, tryProcessCwd());
+  return withUpdateDatabaseEngine(env, () => repairUpdate(opts)).catch((error: unknown) => {
     throw updateMaintenanceError(error);
   });
 }
@@ -92,45 +98,49 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     env,
     recoverOrphanedSidecars: false,
   });
-  const activeRuns = listUpdateRuns({ active: true, limit: 100 }, options);
+  let activeRuns = listUpdateRuns({ active: true, limit: 100 }, options);
   const inheritedRunId = env[UPDATE_RUN_ID_ENV];
-  const admission = inspectUpdateRepairDriverAdmission(activeRuns, inheritedRunId);
+  let admission = inspectUpdateRepairDriverAdmission(activeRuns, inheritedRunId);
+  if (
+    admission.kind === "conflict" &&
+    !inheritedRunId &&
+    activeRuns.some((run) =>
+      recordedUpdateRunDrivers(run).some((driver) => inspectUpdateRunDriver(driver) === "unknown"),
+    )
+  ) {
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const repairOwnership = await executor
+        .enter(resolveUpdateInstallRoot(discoveredRoot))
+        .catch((error: unknown) => {
+          throw new Error(
+            `Repair could not acquire exclusive update ownership. Wait for the update or stop it through its owning host or supervisor, then retry openclaw update repair. ${String(error)}`,
+            { cause: error },
+          );
+        });
+      // Settle independently: an unresolved sibling must not discard proven progress.
+      for (const run of activeRuns) {
+        const reconciled = await reconcileAbandonedUpdateRunsAsync(
+          { explicit: true, runIds: [run.runId] },
+          { ...options, repairOwnership },
+        );
+        for (const retired of reconciled) {
+          const hosts = recordedUpdateRunDrivers(retired)
+            .map((driver) => driver.host)
+            .join(", ");
+          const age = Math.max(0, Math.floor((Date.now() - retired.createdAtMs) / 1_000));
+          defaultRuntime.error(
+            `Warning: abandoned update ${retired.runId} on ${hosts || "an unrecorded host"} (age ${age}s); retired under exclusive update and state ownership.`,
+          );
+        }
+      }
+    });
+    activeRuns = listUpdateRuns({ active: true, limit: 100 }, options);
+    admission = inspectUpdateRepairDriverAdmission(activeRuns, inheritedRunId);
+  }
   if (admission.kind === "conflict") {
     throw new Error(admission.message);
   }
   const validChannel = opts.channel === undefined || normalizeUpdateChannel(opts.channel) !== null;
-  if (validChannel) {
-    const settlement = await settlePendingPackageActivation(
-      resolveUpdateInstallRoot(discoveredRoot),
-      (settled) => {
-        defaultRuntime.error(
-          `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
-            settled.retained
-              ? `Recovery evidence retained at ${settled.retained}.`
-              : "The original package and launchers remain unchanged."
-          }${settled.detail ? ` ${settled.detail}` : ""}`,
-        );
-        if (settled.detail) {
-          // The operation UUID identifies this repair receipt, not the original failed run.
-          // Replaying it after interrupted reporting preserves the original update outcome.
-          createUpdateRun(
-            {
-              runId: settled.operationId,
-              trigger: "cli",
-              settlement: {
-                reason: settled.reason,
-                detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
-              },
-            },
-            options,
-          );
-        }
-      },
-    );
-    if (settlement?.warning) {
-      defaultRuntime.error(`Warning: ${settlement.warning}`);
-    }
-  }
   let retained: RetainedUpdateCustodyReport | undefined;
   const prepareHandoffRepair = async () => {
     // Admission keys custody by the canonical installation, not a lexical slot.
@@ -167,6 +177,41 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     validChannel
       ? await prepareHandoffRepair()
       : null;
+  if (validChannel) {
+    // Repair's claim now owns the installation; fresh admission would be refused.
+    const settlement = await settlePendingPackageActivation(
+      resolveUpdateInstallRoot(discoveredRoot),
+      (settled) => {
+        defaultRuntime.error(
+          `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
+            settled.retained
+              ? `Recovery evidence retained at ${settled.retained}.`
+              : "The original package and launchers remain unchanged."
+          }${settled.detail ? ` ${settled.detail}` : ""}`,
+        );
+        if (settled.detail) {
+          // The operation UUID identifies this repair receipt, not the original failed run.
+          // Replaying it after interrupted reporting preserves the original update outcome.
+          createUpdateRun(
+            {
+              runId: settled.operationId,
+              trigger: "cli",
+              settlement: {
+                reason: settled.reason,
+                detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
+              },
+            },
+            options,
+          );
+        }
+      },
+      undefined,
+      handoff ? { owner: () => handoff.assertCurrent() } : undefined,
+    );
+    if (settlement?.warning) {
+      defaultRuntime.error(`Warning: ${settlement.warning}`);
+    }
+  }
   // Capture Doctor-visible history before finalization admits its own newer run.
   // Terminal age limits the shortcut below, not successful repair acknowledgment.
   const recentRuns = listUpdateRuns({ limit: 100 }, options);

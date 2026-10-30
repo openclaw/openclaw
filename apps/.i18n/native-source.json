@@ -1728,6 +1728,7 @@
     {"path":"apps/ios/Sources/Design/ChatProTab.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.d22afdc8f4adfb5d","source":"Connected"},
     {"path":"apps/ios/Sources/Design/ChatProTab.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.5936a4a11d4f206a","source":"Expanded"},
     {"path":"apps/ios/Sources/Design/ChatProTab.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.11910b82859672bc","source":"Unavailable"},
+    {"path":"apps/ios/Sources/Design/ChatProTab.swift","kind":"ui-call","surface":"apple","id":"native.apple.1229aa9b7046fd4d","source":"Chat actions"},
     {"path":"apps/ios/Sources/Design/ChatProTab.swift","kind":"ui-call","surface":"apple","id":"native.apple.2f4ecf908494f83c","source":"OK"},
     {"path":"apps/ios/Sources/Design/ChatProTab.swift","kind":"ui-call","surface":"apple","id":"native.apple.047e5ed17ef11e5d","source":"OpenClaw could not prepare the Markdown file."},
     {"path":"apps/ios/Sources/Design/ChatProTab.swift","kind":"ui-call","surface":"apple","id":"native.apple.5078ee1df33807eb","source":"The session attaches once the gateway is ready."},

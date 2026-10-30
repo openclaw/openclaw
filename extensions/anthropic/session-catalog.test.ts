@@ -1138,20 +1138,20 @@ describe("Claude session catalog", () => {
     }
   });
 
-  it("imports indexed CLI titles and colors through a symlinked root", async () => {
+  it("searches canonical CLI titles and imports colors through a symlinked root", async () => {
     const home = await createHome();
     const transcripts = Object.fromEntries(
       ["custom", "automatic", "prompt"].map((sessionId) => [
         sessionId,
         [
-          sdkCliMessage(sessionId, "First prompt"),
+          sdkCliMessage(sessionId, "Cafe\u0301 first prompt"),
           ...(sessionId !== "prompt"
-            ? [{ type: "ai-title", aiTitle: "Automatic title", sessionId }]
+            ? [{ type: "ai-title", aiTitle: "Cafe\u0301 automatic title", sessionId }]
             : []),
           ...(sessionId === "custom"
             ? [
                 { type: "custom-title", customTitle: "Earlier rename", sessionId },
-                { type: "custom-title", customTitle: "My renamed session", sessionId },
+                { type: "custom-title", customTitle: "Cafe\u0301 renamed session", sessionId },
                 { type: "ai-title", aiTitle: "Later automatic title", sessionId },
                 { type: "agent-color", agentColor: "red", sessionId },
                 { type: "agent-color", agentColor: "blue", sessionId },
@@ -1178,12 +1178,12 @@ describe("Claude session catalog", () => {
       path.join(home, ".claude", "projects"),
       path.join(scanHome, ".claude", "projects"),
     );
-    const sessions = (await listPage({}, scanHome)).sessions;
+    const sessions = (await listPage({ searchTerm: "CAFÉ" }, scanHome)).sessions;
     expect(Object.fromEntries(sessions.map((session) => [session.threadId, session.name]))).toEqual(
       {
-        custom: "My renamed session",
-        automatic: "Automatic title",
-        prompt: "First prompt",
+        custom: "Cafe\u0301 renamed session",
+        automatic: "Cafe\u0301 automatic title",
+        prompt: "Cafe\u0301 first prompt",
       },
     );
     expect(sessions.find((session) => session.threadId === "custom")).toMatchObject({

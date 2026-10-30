@@ -1,5 +1,4 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { JSX } from "@solidjs/web";
 import {
   elementScroll,
   observeElementOffset,
@@ -27,6 +26,7 @@ import {
   SettingsToggle,
 } from "../../components/solid/settings-ui.tsx";
 import { registerLogsEnglish } from "../../i18n/locales/en-logs.ts";
+import { cancelLayout, scheduleLayout } from "../../lib/layout-frame.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { LOG_LEVELS, type LogEntry, type LogLevel } from "./log-lines.ts";
@@ -56,7 +56,6 @@ export type LogsProps = {
   onToggleAutoFollow: (next: boolean) => void;
   onRefresh: () => void;
   onExport: (lines: string[], label: string) => void;
-  onScroll: JSX.EventHandler<HTMLDivElement, Event>;
 };
 
 function formatLogTime(value: string | null | undefined, formatter: Intl.DateTimeFormat) {
@@ -133,29 +132,63 @@ export function LogsView(props: LogsProps) {
   });
   const publish = () =>
     setWindow({ items: virtualizer.getVirtualItems(), height: virtualizer.getTotalSize() });
+  const scrollRequest = {};
+  let readerScrollPending = false;
+  let synchronizeScrollOffset: (() => void) | undefined;
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLDivElement>({
     count: 0,
     getScrollElement: () => stream,
     initialOffset: () => stream.scrollTop,
     estimateSize: () => 44,
     observeElementRect,
-    observeElementOffset,
+    observeElementOffset: (instance, notify) => {
+      synchronizeScrollOffset = () => {
+        if (readerScrollPending) {
+          readerScrollPending = false;
+          notify(stream.scrollTop, true);
+        }
+      };
+      return observeElementOffset(instance, (offset, scrolling) => {
+        readerScrollPending = false;
+        notify(offset, scrolling);
+      });
+    },
     scrollToFn: elementScroll,
     overscan: 6,
     // The library retains the reader's keyed row when the oldest lines are trimmed.
     anchorTo: "end",
+    scrollEndThreshold: 120,
+    // Measure outside observer delivery so synchronous compensation can publish safely.
+    useAnimationFrameWithResizeObserver: true,
     onChange: publish,
   });
+  const beginReaderScroll = () => {
+    cancelLayout(scrollRequest);
+    readerScrollPending = true;
+    virtualizer.cancelScroll();
+  };
   onSettled(() => {
     const { _didMount: mountVirtualizer } = virtualizer;
-    return mountVirtualizer();
+    const unmount = mountVirtualizer();
+    return () => {
+      cancelLayout(scrollRequest);
+      unmount();
+    };
   });
   createLayoutMeasurement(
-    () => ({ rows: filtered(), byKey: rowsByKey(), getItemKey: getItemKey() }),
+    () => ({
+      rows: filtered(),
+      byKey: rowsByKey(),
+      getItemKey: getItemKey(),
+      autoFollow: props.autoFollow,
+    }),
     (next) => {
       if (!next) {
         return;
       }
+      // WebKit can expose a wheel offset before delivering its scroll event.
+      // Anchor a trim to the reader's current position, not the previous event.
+      synchronizeScrollOffset?.();
       for (const key of virtualizer.itemSizeCache.keys()) {
         if (!next.byKey.has(key)) {
           virtualizer.itemSizeCache.delete(key);
@@ -165,12 +198,23 @@ export function LogsView(props: LogsProps) {
         ...virtualizer.options,
         count: next.rows.length,
         getItemKey: next.getItemKey,
+        followOnAppend: next.autoFollow,
       });
       const { _willUpdate: updateVirtualizer } = virtualizer;
       updateVirtualizer();
       publish();
     },
     { targets: () => [stream], changeTiming: "sync", fonts: true },
+  );
+  const windowHeight = createMemo(() => window().height);
+  createLayoutMeasurement(
+    windowHeight,
+    () => {
+      // Retry compensation only after Solid commits the measured spacer height.
+      const { _willUpdate: updateVirtualizer } = virtualizer;
+      updateVirtualizer();
+    },
+    { targets: () => [stream] },
   );
   const rendered = createMemo(() =>
     window().items.flatMap((item) => {
@@ -303,14 +347,27 @@ export function LogsView(props: LogsProps) {
         <div
           ref={(element) => {
             stream = element;
-            props.onStreamRef?.(element, () => virtualizer.scrollToEnd());
+            props.onStreamRef?.(element, () =>
+              scheduleLayout(scrollRequest, () => () => virtualizer.scrollToEnd()),
+            );
           }}
           class="log-stream log-stream--windowed"
           role="region"
           aria-label={t("gatewayLogs.title")}
           tabindex={0}
-          onScroll={(event) => props.onScroll(event)}
+          onScroll={(event) => {
+            const element = event.currentTarget;
+            if (Math.abs(element.scrollHeight - element.scrollTop - element.clientHeight) < 2) {
+              // Reaching the estimated bottom must survive the next wrapped-row measurements.
+              virtualizer.scrollToEnd();
+            }
+          }}
+          onWheel={beginReaderScroll}
+          onTouchStart={beginReaderScroll}
           onKeyDown={(event) => {
+            if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home"].includes(event.key)) {
+              beginReaderScroll();
+            }
             if (
               event.key === "End" &&
               !event.altKey &&

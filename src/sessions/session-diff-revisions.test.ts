@@ -219,6 +219,7 @@ it.skipIf(process.platform === "win32").each(["all", "uncommitted"] as const)(
         { path: "file.txt", status: "modified", additions: 1, deletions: 1 },
         { path: "new.txt", untracked: true, additions: 1 },
       ]);
+      expect(commands.mock.calls.filter(([argv]) => argv.includes("ls-files"))).toHaveLength(0);
     }),
 );
 
@@ -230,29 +231,29 @@ it("binds a clean inventory to its checkout, HEAD, and selected comparison", () 
     await write("file.txt", "feature\n");
     await git("commit", "-am", "feature");
     const head = (await git("rev-parse", "HEAD")).trim();
-    const cleanWorktree = { root, head };
+    const worktreeStatus = { root, head, clean: true, untrackedPaths: [] };
     const clean = await runGitWorkerOperation({
       type: "checkout.diff",
-      input: { cwd: root, scope: "uncommitted", cleanWorktree },
+      input: { cwd: root, scope: "uncommitted", worktreeStatus },
     });
     expect(clean).toMatchObject({ files: [], aheadCount: 1, commits: [{ subject: "feature" }] });
     const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
     for (const input of [{ scope: "all" as const }, { scope: "commit" as const, commit: head }]) {
       const diff = await runGitWorkerOperation({
         type: "checkout.diff",
-        input: { cwd: root, cleanWorktree, ...input },
+        input: { cwd: root, worktreeStatus, ...input },
       });
       expect(diff.files[0]).toMatchObject({ path: "file.txt", additions: 1, deletions: 1 });
     }
     expect(commands.mock.calls.filter(([argv]) => argv.includes("ls-files"))).toHaveLength(0);
     await write("file.txt", "unstaged\n");
     for (const stale of [
-      { root, head: base },
-      { root: path.join(root, "other"), head },
+      { ...worktreeStatus, head: base },
+      { ...worktreeStatus, root: path.join(root, "other") },
     ]) {
       const diff = await runGitWorkerOperation({
         type: "checkout.diff",
-        input: { cwd: root, scope: "uncommitted", cleanWorktree: stale },
+        input: { cwd: root, scope: "uncommitted", worktreeStatus: stale },
       });
       expect(diff.files[0]?.patch).toContain("+unstaged");
     }
@@ -275,7 +276,7 @@ it.skipIf(process.platform === "win32")(
       await fs.mkdir(cwd);
       await promisify(execFile)("git", ["-C", cwd, "init", "-b", "main"]);
       await fs.writeFile(path.join(cwd, "created.txt"), "created\n");
-      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1_001);
+      vi.spyOn(performance, "now").mockReturnValue(performance.now() + 1_001);
       const recreated = await read();
       expect(recreated.unavailableReason).toBeUndefined();
       expect(recreated.files).toEqual([

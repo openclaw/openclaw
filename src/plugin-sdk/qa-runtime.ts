@@ -1,5 +1,6 @@
 import { createServer } from "node:net";
 import path from "node:path";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { monotonicNow } from "../shared/monotonic-time.js";
 import { runExec } from "./process-runtime.js";
 import { loadQaRuntimeModule as loadQaRunnerRuntimeModule } from "./qa-runner-runtime.js";
@@ -339,9 +340,11 @@ export function createQaDockerRuntime(params: {
         break;
       }
       let response: QaDockerFetchResponse | undefined;
-      const requestTimeoutMs = Math.max(
-        1,
+      // Rounding the timer delay must not lose the final probe's deadline ownership.
+      const isFinalProbe = remainingMs <= DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS;
+      const requestTimeoutMs = resolveTimerTimeoutMs(
         Math.min(DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS, remainingMs),
+        DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS,
       );
       const requestSignal = AbortSignal.timeout(requestTimeoutMs);
       try {
@@ -354,7 +357,7 @@ export function createQaDockerRuntime(params: {
         lastError = new Error(`Health check returned non-OK for ${url}`);
       } catch (error) {
         lastError = error;
-        if (requestSignal.aborted && requestTimeoutMs === remainingMs) {
+        if (requestSignal.aborted && isFinalProbe) {
           break;
         }
       } finally {

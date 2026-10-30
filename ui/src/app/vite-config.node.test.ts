@@ -436,18 +436,21 @@ it.each([
   ).toThrow(`${key} ${error}`);
 });
 
-it.each(["agent-id", "error-coercion"])("resolves internal source aliases for %s", (subpath) => {
-  const aliases = resolveSourcePackageAliasesForVite();
-  const moduleId = `@openclaw/normalization-core/${subpath}`;
-  expect(aliases.find((alias) => alias.find === moduleId)?.replacement).toBe(
-    path.join(repoRoot, `packages/normalization-core/src/${subpath}.ts`),
-  );
-  expectBefore(
-    aliases.map((alias) => alias.find),
-    moduleId,
-    "@openclaw/normalization-core",
-  );
-});
+it.each(["agent-id", "error-coercion", "expect"])(
+  "resolves internal source aliases for %s",
+  (subpath) => {
+    const aliases = resolveSourcePackageAliasesForVite();
+    const moduleId = `@openclaw/normalization-core/${subpath}`;
+    expect(aliases.find((alias) => alias.find === moduleId)?.replacement).toBe(
+      path.join(repoRoot, `packages/normalization-core/src/${subpath}.ts`),
+    );
+    expectBefore(
+      aliases.map((alias) => alias.find),
+      moduleId,
+      "@openclaw/normalization-core",
+    );
+  },
+);
 
 it("uses Node package resolution for external packages inherited by worktrees", () => {
   const resolvePackage = vi.fn((specifier: string) => path.join("/parent/node_modules", specifier));

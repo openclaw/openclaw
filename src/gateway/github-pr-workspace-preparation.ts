@@ -74,6 +74,7 @@ export async function performSessionGitHubPreparation(
     throw new Error("The PR preparation session is unavailable.");
   }
   const session = { agentId: loaded.agentId, sessionKey: loaded.canonicalKey };
+  const publicationSession = { ...session, sessionId: loaded.entry.sessionId };
   const admitted = await prepareGitHubPublicationRequesterV2(options, session);
   using _ = { [Symbol.dispose]: admitted.release };
   // Publication admits other writers; replacing this conversation's source is its own requester's.
@@ -87,7 +88,9 @@ export async function performSessionGitHubPreparation(
         : undefined,
     )
   ) {
-    throw new Error("Only this conversation's owner can prepare a PR in it.");
+    throw new Error(
+      "Only the person who started this conversation can prepare a PR in it. Assigning a new owner does not transfer this.",
+    );
   }
   const assertSession = () => {
     options.signal?.throwIfAborted();
@@ -107,7 +110,7 @@ export async function performSessionGitHubPreparation(
   const inspectCurrent = async (assertWorkspace: () => void) => {
     const inspected = await inspectOwnGitHubPullRequest({
       pullRequestUrl: params.pullRequestUrl,
-      agentId: session.agentId,
+      session: publicationSession,
       requester: admitted.requester,
       assertCurrent: assertWorkspace,
     });
@@ -125,6 +128,7 @@ export async function performSessionGitHubPreparation(
       pullRequest: inspected.result,
       identity,
       assertCurrent,
+      requirePublicRepositories: inspected.requirePublicRepositories,
     });
     return { inspected, identity, assertCurrent };
   };
@@ -152,6 +156,7 @@ export async function performSessionGitHubPreparation(
             pullRequest: eligibility.inspected.result,
             identity: eligibility.identity,
             assertCurrent: eligibility.assertCurrent,
+            requirePublicRepositories: eligibility.inspected.requirePublicRepositories,
           });
         },
         signal: options.signal,
@@ -252,6 +257,9 @@ export async function performSessionGitHubPreparation(
       throw new Error("The conversation disappeared before PR workspace preparation.");
     }
     const previous = assertEntry(initialEntry).githubPullRequest;
+    // A PR this conversation published continues from its published head, so commits
+    // another writer appended merge into the saved work like any advanced PR head.
+    const preparedHead = previous ? previous.preparedHeadCommit : inspected.publishedHeadCommit;
     if (
       previous &&
       (previous.host !== pullRequest.host ||
@@ -326,11 +334,9 @@ export async function performSessionGitHubPreparation(
         ? { ...previous, base: structuredClone(pullRequest.base) }
         : {
             ...structuredClone(pullRequest),
-            ...(previous?.preparedHeadCommit
-              ? { preparedHeadCommit: previous.preparedHeadCommit }
-              : {}),
+            ...(preparedHead ? { preparedHeadCommit: preparedHead } : {}),
           };
-    const reviewOnly = previous?.preparedHeadCommit === binding.head.commit;
+    const reviewOnly = preparedHead === binding.head.commit;
     using sourceResources = new DisposableStack();
     let reserved: Awaited<ReturnType<typeof prepareGitHubPublicationSession>> | undefined;
     const assertReserved = () => {
@@ -344,12 +350,13 @@ export async function performSessionGitHubPreparation(
       }
     };
     const accept = async () => {
-      if (previous?.preparedHeadCommit) {
+      if (preparedHead) {
         // Source fetches can outlive a remote head or permission observation.
         await assertExistingPullRequestWriteAccess({
           pullRequest: inspected.result,
           identity,
           assertCurrent,
+          requirePublicRepositories: inspected.requirePublicRepositories,
         });
       }
       assertReserved();

@@ -124,27 +124,17 @@ async function resetMainSession() {
 type ArchivedMainResetCase = {
   key: string;
   mainKey?: string;
-  reason?: InternalSessionEntry["archiveReason"];
-  tombstone?: boolean;
-  allowed: boolean;
-  locked?: boolean;
   staleIdentity?: boolean;
 };
 
 test.each<[string, ArchivedMainResetCase]>([
-  ["default Main", { key: "agent:main:main", allowed: true }],
-  ["configured Main", { key: "agent:main:inbox", mainKey: "inbox", allowed: true }],
-  ["manually archived Main", { key: "agent:main:main", reason: "manual", allowed: false }],
-  ["archived peer", { key: "agent:main:dashboard:peer", allowed: false }],
-  ["archive without tombstone", { key: "agent:main:main", tombstone: false, allowed: false }],
-  ["model-locked recovered Main", { key: "agent:main:main", locked: true, allowed: false }],
-  ["stale expected Main identity", { key: "agent:main:main", staleIdentity: true, allowed: false }],
+  ["default Main", { key: "agent:main:main" }],
+  ["configured Main", { key: "agent:main:inbox", mainKey: "inbox" }],
+  ["peer", { key: "agent:main:dashboard:peer" }],
+  ["stale expected Main identity", { key: "agent:main:main", staleIdentity: true }],
 ])(
-  "sessions.reset preserves history when restoring %s",
-  async (
-    _,
-    { key, mainKey, reason = "restart-recovery", tombstone = true, allowed, locked, staleIdentity },
-  ) => {
+  "sessions.reset refuses archived %s without changing history",
+  async (_, { key, mainKey, staleIdentity }) => {
     const { dir, storePath } = await createSessionStoreDir();
     testState.sessionConfig = mainKey ? { mainKey } : undefined;
     const sessionId = "synthetic-archived-main";
@@ -154,22 +144,7 @@ test.each<[string, ArchivedMainResetCase]>([
         [key]: {
           ...sessionStoreEntry(sessionId),
           archivedAt: 100,
-          archiveReason: reason,
-          ...(locked ? { modelSelectionLocked: true } : {}),
-          ...(tombstone
-            ? {
-                mainRestartRecovery: {
-                  cycleId: "synthetic-recovery",
-                  revision: 1,
-                  chargedAttempts: 3,
-                  tombstone: {
-                    reason: "synthetic exhausted restart recovery",
-                    recoveredSessionKey: "agent:main:dashboard:old-successor",
-                    recoveredSessionId: "synthetic-successor",
-                  },
-                },
-              }
-            : {}),
+          archiveReason: "manual",
         },
       },
     });
@@ -178,22 +153,14 @@ test.each<[string, ArchivedMainResetCase]>([
       key,
       expectedSessionId: staleIdentity ? "stale-session" : sessionId,
     });
-    expect(result.ok).toBe(allowed);
+    expect(result.ok).toBe(false);
     const entry = loadSessionEntry({ storePath, sessionKey: key });
     expect(entry?.sessionId).toBe(sessionId);
     const after = await loadTranscriptRows({ storePath, sessionKey: key, sessionId });
     expect(after.slice(0, before.length)).toEqual(before);
-    if (allowed) {
-      expect(entry?.archivedAt).toBeUndefined();
-      expect(entry?.archiveReason).toBeUndefined();
-      expect(entry?.mainRestartRecovery).toBeUndefined();
-      expect(after.slice(before.length)).toContainEqual(
-        expect.objectContaining({ type: "reset", reason: "reset" }),
-      );
-    } else {
-      expect(entry).toMatchObject({ archivedAt: 100, archiveReason: reason });
-      expect(after).toEqual(before);
-    }
+    expect(entry?.archivedAt).toBe(100);
+    expect(entry?.archiveReason).toBe("manual");
+    expect(after).toEqual(before);
   },
 );
 

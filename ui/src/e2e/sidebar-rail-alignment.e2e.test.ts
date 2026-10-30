@@ -96,18 +96,17 @@ suite.define(() => {
             await captureFrame(suite.artifactDir, "sidebar.png", sidebar, [owner]);
           }
           const toolbarBox = await page.locator(".sidebar-session-toolbar").boundingBox();
-          const groupsBox = await page
-            .locator(".sidebar-sessions > .personal-session-groups")
-            .boundingBox();
+          // Fresh preferences have no personal sections above the first row.
+          const sessionsBox = await page.locator(".sidebar-sessions").boundingBox();
           const firstRowBox = await page
             .locator(".sidebar-sessions .sidebar-recent-session")
             .first()
             .boundingBox();
           expect(toolbarBox).not.toBeNull();
-          expect(groupsBox).not.toBeNull();
+          expect(sessionsBox).not.toBeNull();
           expect(firstRowBox).not.toBeNull();
-          expect(groupsBox!.y - toolbarBox!.y - toolbarBox!.height).toBe(4);
-          expect(firstRowBox!.y - groupsBox!.y - groupsBox!.height).toBe(8);
+          expect(sessionsBox!.y - toolbarBox!.y - toolbarBox!.height).toBe(6);
+          expect(firstRowBox!.y - sessionsBox!.y).toBe(0);
         },
       );
     },

@@ -114,6 +114,10 @@
               s.navWidth + "px",
             );
           }
+          // The boot composer follows the saved send shortcut before the app loads.
+          if (s && s.chatSendShortcut === "modifier-enter") {
+            document.documentElement.setAttribute("data-openclaw-boot-send-shortcut", "modifier");
+          }
           var t = s && s.theme;
           var m = s && s.themeMode;
           if (typeof t !== "string") t = "";
@@ -485,6 +489,124 @@
         border-radius: 20px;
       }
 
+      /* Chat frames hold the live boot composer; status text stays above it.
+         First-paint tokens only, so every loading frame paints identical pixels.
+         Sizes mirror the chat composer (one editor line plus its action row,
+         growing to six lines) so the handoff keeps text and frame still. */
+      html:not([data-openclaw-boot-chat]) #openclaw-boot-composer {
+        display: none;
+      }
+
+      /* The chat composer's surface; fallbacks match the default theme's tokens
+         until the app stylesheet defines --chat-composer-surface. */
+      html[data-openclaw-boot-chat]
+        :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+        .loading-skeleton__composer:has(> #openclaw-boot-composer) {
+        height: auto;
+        background: var(
+          --chat-composer-surface,
+          color-mix(in srgb, var(--boot-ink) 14%, var(--bg-content, var(--boot-content-bg)))
+        );
+      }
+
+      html[data-openclaw-boot-chat][data-theme-mode="light"]
+        :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+        .loading-skeleton__composer:has(> #openclaw-boot-composer) {
+        background: var(
+          --chat-composer-surface,
+          color-mix(in srgb, var(--bg-content, var(--boot-content-bg)) 50%, white)
+        );
+      }
+
+      #openclaw-boot-composer {
+        display: block;
+        box-sizing: border-box;
+        width: 100%;
+        min-height: 86px;
+        max-height: 188px;
+        field-sizing: content;
+        margin: 0;
+        padding: 12px 14px 50px;
+        border: 0;
+        border-radius: inherit;
+        background: none;
+        color: var(--boot-ink);
+        font:
+          14px/21px system-ui,
+          sans-serif;
+        resize: none;
+        outline: none;
+      }
+
+      #openclaw-boot-composer::placeholder,
+      #openclaw-boot-composer[data-submit-queued] {
+        color: color-mix(in srgb, var(--boot-ink) 55%, transparent);
+        opacity: 1;
+      }
+
+      :is(
+          html[data-openclaw-boot-chat] #openclaw-boot-shell,
+          .connect-splash[data-chat],
+          .content--workbench .lazy-view-state--route[data-chat]
+        )
+        .connect-splash__status {
+        bottom: 132px;
+      }
+
+      /* A growing draft needs no loading text over it. */
+      :is(.connect-splash__main, .lazy-view-state--route):has(
+          > .loading-skeleton #openclaw-boot-composer:not(:placeholder-shown)
+        )
+        > .connect-splash__status {
+        visibility: hidden;
+      }
+
+      @media (max-width: 900px) {
+        :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+          .loading-skeleton:has(#openclaw-boot-composer:focus) {
+          padding-bottom: 6px;
+        }
+      }
+
+      @media (max-width: 768px) {
+        /* The idle mobile capsule shows one line beside its attachment button;
+           focus opens the editing form like the chat composer. */
+        #openclaw-boot-composer {
+          min-height: 50px;
+          max-height: 50px;
+          padding: 13px 16px 0 42px;
+          line-height: 24px;
+        }
+
+        html[data-openclaw-boot-chat]
+          :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
+          .loading-skeleton__composer:has(> #openclaw-boot-composer:focus) {
+          border-radius: 20px;
+        }
+
+        #openclaw-boot-composer:focus {
+          min-height: 90px;
+          max-height: 192px;
+          padding: 12px 14px 54px;
+          line-height: 21px;
+        }
+      }
+
+      @media (pointer: coarse) {
+        #openclaw-boot-composer {
+          /* Touch browsers zoom into editors below 16px. */
+          font-size: 16px;
+          line-height: 24px;
+        }
+      }
+
+      @media (pointer: coarse) and (max-width: 768px) {
+        #openclaw-boot-composer:focus {
+          max-height: 210px;
+          line-height: 24px;
+        }
+      }
+
       @media (min-width: 769px) {
         html[data-openclaw-boot-chat] #openclaw-boot-shell .loading-skeleton__composer,
         .connect-splash[data-chat] .loading-skeleton__composer,
@@ -827,6 +949,15 @@
           .connect-splash__status {
           bottom: 26px;
         }
+
+        :is(
+            html[data-openclaw-boot-chat] #openclaw-boot-shell,
+            .connect-splash[data-chat],
+            .content--workbench .lazy-view-state--route[data-chat]
+          )
+          .connect-splash__status {
+          bottom: 112px;
+        }
       }
 
       @media (max-width: 768px),
@@ -1090,8 +1221,8 @@
         role="status"
         aria-label="Loading"
       >
-        <div class="connect-splash__layout" aria-hidden="true">
-          <aside class="connect-splash__sidebar">
+        <div class="connect-splash__layout">
+          <aside class="connect-splash__sidebar" aria-hidden="true">
             <div class="skeleton loading-skeleton__avatar"></div>
             <div class="skeleton connect-splash__new-session"></div>
             <div class="skeleton skeleton-line"></div>
@@ -1102,12 +1233,12 @@
             <div class="skeleton skeleton-line"></div>
           </aside>
           <div class="connect-splash__main">
-            <div class="loading-skeleton" aria-hidden="true">
-              <div class="loading-skeleton__header">
+            <div class="loading-skeleton">
+              <div class="loading-skeleton__header" aria-hidden="true">
                 <div class="skeleton loading-skeleton__avatar"></div>
                 <div class="skeleton skeleton-line loading-skeleton__title"></div>
               </div>
-              <div class="loading-skeleton__messages">
+              <div class="loading-skeleton__messages" aria-hidden="true">
                 <div class="loading-skeleton__message loading-skeleton__message--user">
                   <div class="skeleton skeleton-line"></div>
                   <div class="skeleton skeleton-line skeleton-line--medium"></div>
@@ -1119,13 +1250,71 @@
                   <div class="skeleton skeleton-line skeleton-line--medium"></div>
                 </div>
               </div>
-              <div class="skeleton loading-skeleton__composer"></div>
+              <div class="skeleton loading-skeleton__composer">
+                <textarea
+                  id="openclaw-boot-composer"
+                  rows="1"
+                  dir="auto"
+                  enterkeyhint="enter"
+                  placeholder="Message…"
+                ></textarea>
+              </div>
             </div>
-            <span class="connect-splash__status">Loading…</span>
+            <span class="connect-splash__status" aria-hidden="true">Loading…</span>
           </div>
         </div>
       </main>
     </openclaw-app>
+    <script data-cfasync="false">
+      // A chat link accepts typing at first paint; Enter only records intent.
+      // app/boot-composer.ts carries this element to the chat pane. Enter, IME
+      // and touch rules mirror lib/ime.ts, lib/browser-platform.ts and the chat
+      // composer's keydown handler.
+      (function () {
+        var root = document.documentElement;
+        var input = document.getElementById("openclaw-boot-composer");
+        if (!input || !root.hasAttribute("data-openclaw-boot-chat")) return;
+        var nav = navigator;
+        // Touch Return keeps native editing, matching the chat composer.
+        var touch =
+          /iPad|iPhone|iPod|Android/.test(nav.userAgent) ||
+          (nav.platform === "MacIntel" && nav.maxTouchPoints > 1);
+        var modifier = root.hasAttribute("data-openclaw-boot-send-shortcut");
+        var composedAt = -1;
+        input.addEventListener("compositionend", function (event) {
+          composedAt = event.timeStamp;
+        });
+        input.addEventListener("keydown", function (event) {
+          if (
+            event.key !== "Enter" ||
+            event.shiftKey ||
+            touch ||
+            event.isComposing ||
+            event.keyCode === 229 ||
+            (composedAt >= 0 && Math.abs(event.timeStamp - composedAt) < 100) ||
+            (modifier && !event.metaKey && !event.ctrlKey)
+          ) {
+            return;
+          }
+          event.preventDefault();
+          input.toggleAttribute("data-submit-queued", input.value.trim() !== "");
+        });
+        input.addEventListener("input", function () {
+          input.removeAttribute("data-submit-queued");
+        });
+        input.addEventListener("focus", function () {
+          input.setAttribute("data-focused", "");
+        });
+        input.addEventListener("blur", function () {
+          // Loading frames move this node within a task; a lasting blur is the operator's.
+          setTimeout(function () {
+            if (input.isConnected && document.activeElement !== input) {
+              input.removeAttribute("data-focused");
+            }
+          }, 0);
+        });
+      })();
+    </script>
     <section
       id="openclaw-mount-fallback"
       class="mount-fallback"

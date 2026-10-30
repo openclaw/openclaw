@@ -40,6 +40,7 @@ import {
 } from "../../infra/update-check.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { projectUpdateRunHistory } from "../../infra/update-run-history-projection.js";
+import type { getUpdateRunAsync } from "../../infra/update-run-reader.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
@@ -51,21 +52,17 @@ import { VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
+import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
 
-async function readUpdateRecoverySetStatus() {
+async function readUpdateRecoverySetStatus(readRun?: typeof getUpdateRunAsync) {
   try {
     const { inspectUpdateRecoveryBackups } =
       await import("../../infra/update-recovery-backup-status.js");
-    const sets = await inspectUpdateRecoveryBackups();
+    const sets = await inspectUpdateRecoveryBackups(readRun);
     return {
       recoverySets: sets.map((set) =>
-        set.status === "incomplete"
-          ? {
-              directory: set.directory,
-              status: set.status,
-              message: set.message,
-              nextAction: set.nextAction,
-            }
+        set.status === "incomplete" || set.status === "unreadable"
+          ? set
           : {
               runId: set.runId,
               manifestPath: set.ref.manifestPath,
@@ -167,21 +164,58 @@ async function inspectUpdateStatus(
     }
   };
 
-  const runStatusPromise = inspect<Awaited<ReturnType<typeof readUpdateRunStatus>>>(
-    "update history",
-    readUpdateRunStatus,
-    { runStatusError: "Update history inspection unavailable" },
-  );
-  const recoveryStatusPromise = inspect<Awaited<ReturnType<typeof readUpdateRecoverySetStatus>>>(
-    "recovery sets",
-    readUpdateRecoverySetStatus,
-    { recoverySetsError: "Recovery set inspection unavailable" },
-  );
   const [root, config, runtimeFindings] = await Promise.all([
     inspect<string | null>("installation root", resolveUpdateRoot, null),
     inspect<OpenClawConfig>("configuration", readSourceConfigBestEffort, {}),
     inspect("Node runtime", collectNodeRuntimeFindings, []),
   ]);
+  const databaseStatusPromise = inspect(
+    "state database",
+    () =>
+      withUpdateDatabaseEngine(process.env, () =>
+        Promise.all([
+          inspect<Awaited<ReturnType<typeof readUpdateRunStatus>>>(
+            "update history",
+            readUpdateRunStatus,
+            { runStatusError: "Update history inspection unavailable" },
+          ),
+          inspect<Awaited<ReturnType<typeof readUpdateRecoverySetStatus>>>(
+            "recovery sets",
+            () => readUpdateRecoverySetStatus(),
+            { recoverySetsError: "Recovery set inspection unavailable" },
+          ),
+          config.gateway?.mode === "remote"
+            ? undefined
+            : inspect(
+                "previous Gateway shutdown",
+                readGatewayLastInstallationReplacementAsync,
+                undefined,
+              ),
+        ]),
+      ).catch(async (error: unknown) => {
+        const message = sanitizeTerminalText(
+          redactSensitiveText(formatErrorMessage(error), { mode: "tools" }),
+        );
+        inspectionErrors.push({ section: "state database", message });
+        return [
+          { runStatusError: message },
+          await inspect(
+            "recovery sets",
+            () =>
+              readUpdateRecoverySetStatus(async () => {
+                throw new Error(message);
+              }),
+            { recoverySetsError: "Recovery set inspection unavailable" },
+          ),
+          undefined,
+        ] as const;
+      }),
+    [
+      { runStatusError: "Update history inspection unavailable" },
+      { recoverySetsError: "Recovery set inspection unavailable" },
+      undefined,
+    ] as const,
+  );
   const configChannel = normalizeUpdateChannel(config.update?.channel);
   const gitTargetChannel =
     opts.json && (configChannel === "stable" || configChannel === "beta")
@@ -277,7 +311,7 @@ async function inspectUpdateStatus(
     }
   }
 
-  const [runStatus, recoveryStatus] = await Promise.all([runStatusPromise, recoveryStatusPromise]);
+  const [runStatus, recoveryStatus, replacement] = await databaseStatusPromise;
   const activeRun = "activeRun" in runStatus ? runStatus.activeRun : undefined;
   const updateInProgress =
     !("runStatusError" in runStatus) && activeRun && !runStatus.staleRun && !runStatus.abandonedRun;
@@ -292,14 +326,6 @@ async function inspectUpdateStatus(
         ...formatConfigIssueLines(configValidation.issues, "", { normalizeRoot: true }),
         "Run openclaw doctor --fix to repair the configuration.",
       ].map(safeMessage);
-  const replacement =
-    config.gateway?.mode === "remote"
-      ? undefined
-      : await inspect(
-          "previous Gateway shutdown",
-          readGatewayLastInstallationReplacementAsync,
-          undefined,
-        );
   const lastGatewayInstallationReplacement = replacement
     ? { ...replacement, reason: safeMessage(replacement.reason) }
     : undefined;
@@ -625,8 +651,8 @@ async function inspectUpdateStatus(
     defaultRuntime.log("");
   } else {
     for (const set of recoveryStatus.recoverySets) {
-      if (set.status === "incomplete") {
-        defaultRuntime.log("Update capture: incomplete");
+      if (set.status === "incomplete" || set.status === "unreadable") {
+        defaultRuntime.log(`Update capture: ${set.status}`);
         defaultRuntime.log(safeMessage(set.directory));
       } else {
         const label = set.status === "manual" ? "Doctor capture" : "Update recovery set";

@@ -1,5 +1,6 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import "./database-suite-workers.test-support.js";
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,8 +11,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { z } from "zod";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { withRuntimePreload } from "../../../test/helpers/runtime-preload.js";
-import { parseUpdateRecoveryBackupManifest } from "../../commands/backup-verify-manifest.js";
+import { updateStatusCommand } from "../../cli/update-cli/status.js";
+import {
+  observeUpdateParentDatabaseWrites,
+  recordUpdateDatabaseWrites,
+} from "../../cli/update-cli/update-command-database-receipts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { defaultRuntime } from "../../runtime.js";
 import { fingerprintPostgresDatabase } from "../../snapshot/database-backup-core.worker.js";
 import { readBackupEngine } from "../../snapshot/database-backup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
@@ -41,12 +47,16 @@ import {
 } from "../update-database-backup.js";
 import { assertUpdateDatabaseEngineContexts } from "../update-database-engine-admission.js";
 import { restoreUpdateDatabaseBackup } from "../update-database-restore.js";
+import { createUpdateDoctorDatabaseWriteCapture } from "../update-doctor-result.js";
 import { captureUpdateRecoveryBaseline } from "../update-recovery-baseline-capture.js";
+import { createUpdateRun, finishUpdateRun } from "../update-run-ledger.js";
+import { recordUpdateRunStepAsync } from "../update-run-write.async.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { agentPortProvider } from "./agent-port.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
+import { writePortAnchor as createAnchor } from "./port-backup.test-support.js";
 import { materializeDatabasePort } from "./port.worker.js";
 import { statePortProvider } from "./state-port.js";
 import {
@@ -76,19 +86,11 @@ const connection = typeof configured === "string" ? configured : undefined;
 const suiteLifetime = createFixtureLifetime();
 const caseLifetime = createFixtureLifetime();
 afterAll(() => suiteLifetime.cleanup());
-const runId = "postgres-update-conformance";
-function createAnchor(pathname: string, storeId: string, namespace: string) {
-  using anchor = openNodeSqliteDatabase(pathname);
-  anchor.exec(
-    "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
-  );
-  anchor
-    .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
-    .run(storeId, namespace);
-}
-
+const runId = randomUUID();
 describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", () => {
   const client = new Client({ connectionString: connection });
+  const expectRows = async (sql: string, expected: unknown[], values?: unknown[]) =>
+    expect((await client.query(sql, values)).rows).toEqual(expected);
   const namespaces = new Set<string>();
   const additionalAnchors: string[] = [];
   let root: string;
@@ -205,10 +207,8 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       vi.stubEnv(key, env[key]);
     }
   });
-
   // A timeout rejects Vitest's wrapper before the original body releases its owner.
   afterEach(() => suiteLifetime.verifyCleanup(() => caseLifetime.cleanup()));
-
   afterAll(async () => {
     await suiteLifetime.verifyCleanup(() => caseLifetime.cleanup());
     return suiteLifetime.verifyCleanup(async () => {
@@ -307,13 +307,10 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
           value: "agent baseline",
         });
       }
-      expect(
-        (
-          await client.query(
-            `SELECT path FROM "${namespace}".agent_databases WHERE agent_id = 'registered'`,
-          )
-        ).rows,
-      ).toEqual([{ path: agent }]);
+      await expectRows(
+        `SELECT path FROM "${namespace}".agent_databases WHERE agent_id = 'registered'`,
+        [{ path: agent }],
+      );
       expect(await fs.readFile(shared)).toEqual(before);
     }));
 
@@ -482,35 +479,59 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
         }
       }));
 
-    // Green CI runs 39068774273/39071119824 measured p95 at 92s for five-family capture.
     it(
       "seals an original recovery baseline containing all PostgreSQL families",
       () =>
         caseLifetime.run(async () => {
-          const owner = await acquireGatewayLock({
+          const run = createUpdateRun({ trigger: "cli" }, { env });
+          const baseline = await captureUpdateRecoveryBaseline({
+            runId: run.runId,
+            installRoot: root,
             env,
-            role: "sqlite-maintenance",
-            allowInTests: true,
-            timeoutMs: 0,
+            drivers: [],
+            assertCurrent() {},
           });
+          expect(baseline.diagnostics.databaseWarnings).toEqual([]);
+          finishUpdateRun(run.runId, { status: "succeeded" }, { env });
+          await closeOpenClawStateDatabaseAsync();
+          resetDatabaseEngineSelectionForTest();
+          const retained = await Promise.all([
+            fs.readFile(shared),
+            fs.readFile(baseline.ref.manifestPath),
+          ]);
+          const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+          const gateway = vi
+            .spyOn(await import("../../gateway/call.js"), "callGateway")
+            .mockRejectedValue(new Error("Offline status proof"));
           try {
-            const baseline = await owner!.run(() =>
-              captureUpdateRecoveryBaseline({
-                runId: "postgres-original-baseline",
-                installRoot: root,
-                env,
-                drivers: [],
-                assertCurrent: () => owner!.assertCurrent(),
-                acquisition: { mode: "maintenance-owner" },
-              }),
-            );
-            expect(baseline.diagnostics.databaseWarnings).toEqual([]);
-            const manifest = parseUpdateRecoveryBackupManifest(
-              await fs.readFile(baseline.ref.manifestPath, "utf8"),
-            );
-            expect(manifest).toMatchObject({ schemaVersion: 2, generation: { kind: "baseline" } });
+            for (const broken of [false, true, false]) {
+              await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, broken ? "{" : JSON.stringify(config));
+              await updateStatusCommand({ json: true, timeout: "1" });
+              expect(output.mock.lastCall?.[0]).toHaveProperty(
+                "recoverySets",
+                broken
+                  ? [
+                      {
+                        directory: baseline.ref.directory,
+                        status: "unreadable",
+                        message: expect.stringContaining("Update refused: configuration"),
+                        nextAction: expect.any(String),
+                      },
+                    ]
+                  : [expect.objectContaining({ runId: run.runId, status: "stale" })],
+              );
+              expect(JSON.stringify(output.mock.lastCall?.[0])).toContain(
+                broken ? "is unreadable" : "stale: its update already succeeded",
+              );
+              expect(
+                await Promise.all([fs.readFile(shared), fs.readFile(baseline.ref.manifestPath)]),
+              ).toEqual(retained);
+            }
           } finally {
-            await owner!.release();
+            await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
+            output.mockRestore();
+            gateway.mockRestore();
+            installDatabaseEngineSelection(await resolveDatabaseEngineSelection(config, env));
           }
         }),
       200_000,
@@ -590,15 +611,37 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
               }),
             );
             expect(backup.warnings).toEqual([]);
+            const baseline = backup;
+            await owner!.run(async () => {
+              await recordUpdateRunStepAsync(
+                runId,
+                { step: "database snapshot", status: "completed" },
+                { env },
+              );
+              await observeUpdateParentDatabaseWrites(baseline, { env });
+              const doctor = createUpdateDoctorDatabaseWriteCapture(
+                baseline.migration?.to ?? baseline.sourceGenerations,
+                {
+                  env,
+                  signal: new AbortController().signal,
+                  warn: (message) => expect.fail(message),
+                  pluginOwners: baseline.pluginOwners,
+                },
+              )!;
+              await doctor.admit();
+              await doctor.settle();
+              expect(
+                recordUpdateDatabaseWrites(baseline, doctor.receipt, { name: "post-plugin doctor" })
+                  .warnings,
+              ).toBeUndefined();
+            });
             const capturedAgent = backup.databases.find((entry) => entry.path === agent);
             expect(capturedAgent).toMatchObject({
               engine: "postgres",
               storeId: agentStoreId,
               namespace: agentNamespace,
             });
-            if (!capturedAgent?.exportDirectory) {
-              throw new Error("Retained agent has no matched PostgreSQL capture");
-            }
+            assert(capturedAgent?.exportDirectory, "Expected retained PostgreSQL export");
             {
               using image = openNodeSqliteDatabase(
                 path.join(capturedAgent.exportDirectory, "database.sqlite"),
@@ -677,13 +720,10 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
               ]),
             );
             expect(migration.haltedBy?.refusal?.code).toBe("step-threw");
-            expect(
-              (
-                await client.query(
-                  `SELECT value_json FROM "${namespace}".config_machine_state WHERE state_key = 'update.conformance'`,
-                )
-              ).rows,
-            ).toEqual([{ value_json: '"candidate"' }]);
+            await expectRows(
+              `SELECT value_json FROM "${namespace}".config_machine_state WHERE state_key = 'update.conformance'`,
+              [{ value_json: '"candidate"' }],
+            );
             expect(runClientCredentialOperation(env, { kind: "token.read", key })).toMatchObject({
               token: { token: "synthetic-candidate-client-token" },
             });
@@ -697,74 +737,49 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
             assertCurrent() {},
           });
           const restored = readBackupEngine(shared);
-          if (restored.engine !== "postgres") {
-            throw new Error("Recovery replaced the PostgreSQL anchor with SQLite data");
-          }
+          assert(restored.engine === "postgres", "Expected restored PostgreSQL state");
           namespaces.add(restored.namespace);
-          expect(
-            runClientCredentialOperation(env, { kind: "identity.read", identity_key: "node" }),
-          ).toEqual({ kind: "identity", identity });
-          expect(runClientCredentialOperation(env, { kind: "token.read", key })).toEqual({
-            kind: "token",
-            token,
+          const credential = runClientCredentialOperation.bind(undefined, env);
+          expect(credential({ kind: "identity.read", identity_key: "node" })).toEqual({
+            kind: "identity",
+            identity,
           });
-          expect(runClientCredentialOperation(env, { kind: "socket.read" })).toEqual({
-            kind: "socket",
-            socket,
-          });
-          expect(
-            (
-              await client.query(
-                `SELECT value_json FROM "${restored.namespace}".config_machine_state WHERE state_key = 'update.conformance'`,
-              )
-            ).rows,
-          ).toEqual([{ value_json: ' {"value":"baseline","opaque":"\\u0061"} ' }]);
-          expect(
-            (
-              await client.query(
-                `SELECT phase, reason, after_json FROM "${restored.namespace}".update_runs WHERE run_id = $1`,
-                [runId],
-              )
-            ).rows,
-          ).toEqual([
-            {
-              phase: "validating",
-              reason: "candidate migration failed",
-              after_json: ' {"opaque":"\\u0062"} ',
-            },
-          ]);
+          expect(credential({ kind: "token.read", key })).toEqual({ kind: "token", token });
+          expect(credential({ kind: "socket.read" })).toEqual({ kind: "socket", socket });
+          await expectRows(
+            `SELECT value_json FROM "${restored.namespace}".config_machine_state WHERE state_key = 'update.conformance'`,
+            [{ value_json: ' {"value":"baseline","opaque":"\\u0061"} ' }],
+          );
+          await expectRows(
+            `SELECT phase, reason, after_json FROM "${restored.namespace}".update_runs WHERE run_id = $1`,
+            [
+              {
+                phase: "validating",
+                reason: "candidate migration failed",
+                after_json: ' {"opaque":"\\u0062"} ',
+              },
+            ],
+            [runId],
+          );
           const restoredAgent = readBackupEngine(agent);
-          if (restoredAgent.engine !== "postgres") {
-            throw new Error("Recovery replaced the retained PostgreSQL agent with SQLite data");
-          }
+          assert(restoredAgent.engine === "postgres", "Expected restored PostgreSQL agent");
           namespaces.add(restoredAgent.namespace);
-          expect(
-            (
-              await client.query(
-                `SELECT value_json, blob FROM "${restoredAgent.namespace}".cache_entries WHERE scope = 'update-conformance' AND key = 'retained'`,
-              )
-            ).rows,
-          ).toEqual([{ value_json: agentJson, blob: agentBlob }]);
-          expect(
-            (
-              await client.query(
-                `SELECT path FROM "${restored.namespace}".agent_databases WHERE agent_id = 'registered'`,
-              )
-            ).rows,
-          ).toEqual([{ path: agent }]);
+          await expectRows(
+            `SELECT value_json, blob FROM "${restoredAgent.namespace}".cache_entries WHERE scope = 'update-conformance' AND key = 'retained'`,
+            [{ value_json: agentJson, blob: agentBlob }],
+          );
+          await expectRows(
+            `SELECT path FROM "${restored.namespace}".agent_databases WHERE agent_id = 'registered'`,
+            [{ path: agent }],
+          );
           for (const store of stores) {
             const restoredStore = readBackupEngine(store.pathname);
-            if (restoredStore.engine !== "postgres") {
-              throw new Error(`Recovery replaced ${store.provider.id} with SQLite data`);
-            }
+            assert(restoredStore.engine === "postgres", `Expected restored ${store.provider.id}`);
             namespaces.add(restoredStore.namespace);
-            expect(
-              (
-                await client.query(
-                  `SELECT "${store.column}" AS value FROM "${restoredStore.namespace}"."${store.table}"`,
-                )
-              ).rows,
-            ).toEqual([{ value: "baseline" }]);
+            await expectRows(
+              `SELECT "${store.column}" AS value FROM "${restoredStore.namespace}"."${store.table}"`,
+              [{ value: "baseline" }],
+            );
           }
         }),
       200_000,

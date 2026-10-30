@@ -2,7 +2,8 @@ import path from "node:path";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { resolveStateDir } from "../../config/paths.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
+import { getScopedDatabaseEngineSelection } from "../../infra/database-engine/context.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { readPackageName } from "../../infra/package-json.js";
 import { checkGlobalPackageUpdateAdmission } from "../../infra/package-update-manager-preflight.js";
@@ -41,6 +42,7 @@ import {
   UpdatePreMutationError,
   type UpdateCommandOptions,
 } from "./shared.js";
+import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 import type { RefuseUpdate } from "./update-command-result.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
 import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
@@ -74,6 +76,7 @@ export async function previewUpdateCommand(params: {
   invocationCwd?: string;
   updateStepTimeoutMs: number;
   preflight?: NonNullable<Awaited<ReturnType<typeof preflightUpdateCommandSchemas>>>;
+  malformedConfig?: ConfigFileSnapshot;
 }): Promise<void> {
   const { target, prepared, opts } = params;
   const preflight =
@@ -85,6 +88,7 @@ export async function previewUpdateCommand(params: {
       invocationCwd: params.invocationCwd,
       packageTargetVersion: target.targetVersion ?? undefined,
       opts,
+      malformedConfig: params.malformedConfig,
       expectedForeground:
         prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
     }));
@@ -179,7 +183,8 @@ export async function previewUpdateCommand(params: {
       );
     }
 
-    const run = getUpdateRun(params.runId, { env: opts.run?.env });
+    const canReadHistory = !params.malformedConfig && Boolean(getScopedDatabaseEngineSelection());
+    const run = canReadHistory ? getUpdateRun(params.runId, { env: opts.run?.env }) : undefined;
     const targetVersionReason = target.targetVersion
       ? undefined
       : target.updateInstallKind === "git"
@@ -254,6 +259,11 @@ export async function previewUpdateCommand(params: {
           durationMs: 0,
         },
         opts,
+        {
+          record: run,
+          ...(!canReadHistory ? { readHistory: false } : {}),
+          ...(params.malformedConfig ? { writeArtifacts: false } : {}),
+        },
       );
     }
   }
@@ -282,6 +292,7 @@ export async function preflightUpdateCommandSchemas(params: {
   managedServiceNodeRunner?: string;
   expectedForeground?: true;
   candidateAdmissionChecks?: readonly string[];
+  malformedConfig?: ConfigFileSnapshot;
   opts: Pick<UpdateCommandOptions, "dryRun" | "json" | "run">;
   refuseUpdate: RefuseUpdate;
 }): Promise<
@@ -324,12 +335,13 @@ export async function preflightUpdateCommandSchemas(params: {
   let service: PreManagedServiceStop | undefined;
   if ((opts.dryRun || updateInstallKind === "package") && updateInstallKind !== "unknown") {
     try {
-      const { inspectUpdateDatabaseContexts } =
+      const { inspectUpdateDatabaseContexts, inspectUpdateManagedServices } =
         await import("./update-command-database-context.js");
       const { inspectGitDryRunTargetSchemaVersions } = await import("./update-command-git.js");
-      const admission = await inspectUpdateDatabaseContexts({
+      const inspectionParams: Parameters<typeof inspectUpdateDatabaseContexts>[0] = {
         roots: switchToGit ? [root, resolveGitInstallDir()] : [root],
         updateInstallKind,
+        packageAlreadyCurrent: params.packageAlreadyCurrent,
         shouldRestart,
         jsonMode: Boolean(opts.json),
         timeoutMs: updateStepTimeoutMs,
@@ -341,7 +353,12 @@ export async function preflightUpdateCommandSchemas(params: {
         candidateAdmissionChecks,
         expectedForeground:
           params.expectedForeground || run?.completionOwner === "gateway-restart" || undefined,
-      });
+      };
+      if (params.malformedConfig) {
+        await inspectUpdateManagedServices(inspectionParams);
+        throw createUpdateConfigFailure(params.malformedConfig);
+      }
+      const admission = await inspectUpdateDatabaseContexts(inspectionParams);
       service = admission.foreground
         ? undefined
         : (admission.service ?? admission.services.get(root));
@@ -365,7 +382,12 @@ export async function preflightUpdateCommandSchemas(params: {
               channel,
               devTarget,
             })
-          : { schemaVersions: packageTargetSchemaVersions };
+          : {
+              // A no-op keeps the installed runtime, even if registry metadata describes an older build.
+              schemaVersions: params.packageAlreadyCurrent
+                ? undefined
+                : packageTargetSchemaVersions,
+            };
       if ("metadataUnreadable" in target && target.metadataUnreadable) {
         preflightNotes.push(
           "Node compatibility was not checked because the Git target metadata is unavailable.",

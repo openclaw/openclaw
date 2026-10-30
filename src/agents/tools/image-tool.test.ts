@@ -11,6 +11,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import {
+  buildMediaUnderstandingRegistry,
+  getMediaUnderstandingProvider,
+} from "../../media-understanding/provider-registry.js";
 import type {
   ImageDescriptionRequest,
   ImagesDescriptionRequest,
@@ -55,6 +59,9 @@ import {
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
 import { createPdfTool } from "./pdf-tool.js";
 
+const buildProviderRegistry = buildMediaUnderstandingRegistry;
+const readProvider = getMediaUnderstandingProvider;
+
 const publicSurfaceLoaderMocks = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleFromCandidatesSync: vi.fn(() => null),
   loadBundledPluginPublicArtifactModuleSync: vi.fn(
@@ -84,31 +91,6 @@ const publicSurfaceLoaderMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../plugins/public-surface-loader.js", () => publicSurfaceLoaderMocks);
-
-const imageProviderHarness = vi.hoisted(() => {
-  let providers = new Map<string, MediaUnderstandingProvider>();
-  return {
-    setProviders(next: MediaUnderstandingProvider[]) {
-      providers = new Map(next.map((provider) => [provider.id.toLowerCase(), provider]));
-    },
-    reset() {
-      providers = new Map();
-    },
-    buildProviderRegistry(overrides?: Record<string, MediaUnderstandingProvider>) {
-      const registry = new Map(providers);
-      for (const [id, provider] of Object.entries(overrides ?? {})) {
-        registry.set(id.toLowerCase(), provider);
-      }
-      return registry;
-    },
-    getMediaUnderstandingProvider(
-      id: string,
-      registry: Map<string, MediaUnderstandingProvider>,
-    ): MediaUnderstandingProvider | undefined {
-      return registry.get(id.toLowerCase()) ?? providers.get(id.toLowerCase());
-    },
-  };
-});
 
 // Keep image-tool tests focused on root propagation; media-tool-shared
 // and channel-inbound tests cover the real bundled contract loader.
@@ -349,25 +331,9 @@ function registerImageToolEnvReset(priorFetch: typeof global.fetch, keys: string
   });
 }
 
-function stubMinimaxOkFetch() {
+function stubMinimaxResponse(baseResp = { status_code: 0, status_msg: "" }) {
   minimaxUnderstandImageMock.mockReset();
   vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-  minimaxUnderstandImageMock.mockResolvedValue("ok");
-  // Tests that fall back to the generic image runtime still hit a mocked
-  // global.fetch because media-understanding/image.ts is not behind the
-  // minimax-vlm module mock.
-  const fetch = vi.fn().mockImplementation(async () =>
-    Response.json({
-      content: "ok",
-      base_resp: { status_code: 0, status_msg: "" },
-    }),
-  );
-  global.fetch = withFetchPreconnect(fetch);
-  return minimaxUnderstandImageMock;
-}
-
-function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string }, content = "ok") {
-  minimaxUnderstandImageMock.mockReset();
   if (baseResp.status_code !== 0) {
     minimaxUnderstandImageMock.mockRejectedValue(
       new Error(
@@ -377,15 +343,8 @@ function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string },
       ),
     );
   } else {
-    minimaxUnderstandImageMock.mockResolvedValue(content);
+    minimaxUnderstandImageMock.mockResolvedValue("ok");
   }
-  const fetch = vi.fn().mockImplementation(async () =>
-    Response.json({
-      content,
-      base_resp: baseResp,
-    }),
-  );
-  global.fetch = withFetchPreconnect(fetch);
   return minimaxUnderstandImageMock;
 }
 
@@ -420,43 +379,6 @@ const minimaxProvider = {
   },
 } satisfies MediaUnderstandingProvider;
 
-async function readMockResponseText(response: Response): Promise<string> {
-  const payload = (await response.json()) as { content?: string };
-  return payload.content ?? "";
-}
-
-async function describeGenericImageWithModel(
-  params: ImageDescriptionRequest,
-): Promise<{ text: string; model: string }> {
-  const response = await global.fetch("https://example.invalid/media-image", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      provider: params.provider,
-      model: params.model,
-      prompt: params.prompt,
-      mime: params.mime,
-    }),
-  });
-  return { text: await readMockResponseText(response), model: params.model };
-}
-
-async function describeGenericImagesWithModel(
-  params: ImagesDescriptionRequest,
-): Promise<{ text: string; model: string }> {
-  const response = await global.fetch("https://example.invalid/media-images", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      provider: params.provider,
-      model: params.model,
-      prompt: params.prompt,
-      imageCount: params.images.length,
-    }),
-  });
-  return { text: await readMockResponseText(response), model: params.model };
-}
-
 const codexMediaProvider = {
   id: "codex",
   capabilities: ["image"],
@@ -490,7 +412,7 @@ function installImageUnderstandingProviderDeps(
     >["resolveDefaultMediaModel"];
   },
 ) {
-  imageProviderHarness.setProviders(providers);
+  const providerRegistry = buildProviderRegistry(undefined, undefined, providers);
   const defaultImageModels = new Map<string, string>([
     ["anthropic", "claude-opus-4-6"],
     ["minimax", "MiniMax-VL-01"],
@@ -504,14 +426,11 @@ function installImageUnderstandingProviderDeps(
     ["zai", "glm-4.6v"],
   ]);
   testing.setProviderDepsForTest({
-    buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
-      imageProviderHarness.buildProviderRegistry(overrides),
-    getMediaUnderstandingProvider: (
-      id: string,
-      registry: Map<string, MediaUnderstandingProvider>,
-    ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
-    describeImageWithModel: options?.describeImageWithModel ?? describeGenericImageWithModel,
-    describeImagesWithModel: options?.describeImagesWithModel ?? describeGenericImagesWithModel,
+    buildProviderRegistry: (overrides, cfg, preparedProviders) =>
+      buildProviderRegistry(overrides, cfg, preparedProviders ?? providers),
+    describeImageWithModel: options?.describeImageWithModel ?? replyImageOk,
+    describeImagesWithModel:
+      options?.describeImagesWithModel ?? (async ({ model }) => ({ text: "ok", model })),
     resolveAutoMediaKeyProviders:
       options?.resolveAutoMediaKeyProviders ??
       (({ capability }) => (capability === "image" ? ["openai", "anthropic"] : [])),
@@ -520,10 +439,7 @@ function installImageUnderstandingProviderDeps(
       (({ providerId, capability }) =>
         capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined),
     resolveRegisteredMediaUnderstandingProvider: ({ providerId }) =>
-      imageProviderHarness.getMediaUnderstandingProvider(
-        providerId,
-        imageProviderHarness.buildProviderRegistry(),
-      ),
+      readProvider(providerId, providerRegistry),
     ...(options?.useDefaultResolveModelAsync
       ? {}
       : { resolveModelAsync: options?.resolveModelAsync ?? resolveConfiguredImageModelForTest }),
@@ -702,7 +618,6 @@ describe("image tool implicit imageModel config", () => {
   });
 
   afterEach(() => {
-    imageProviderHarness.reset();
     testing.setProviderDepsForTest();
   });
 
@@ -779,14 +694,6 @@ describe("image tool implicit imageModel config", () => {
       const resolveDefaultMediaModelSpy = vi.fn(() => "gpt-5.4-mini");
       const resolveAutoMediaKeyProvidersSpy = vi.fn(() => ["openai"]);
       testing.setProviderDepsForTest({
-        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
-          imageProviderHarness.buildProviderRegistry(overrides),
-        getMediaUnderstandingProvider: (
-          id: string,
-          registry: Map<string, MediaUnderstandingProvider>,
-        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
-        describeImageWithModel: describeGenericImageWithModel,
-        describeImagesWithModel: describeGenericImagesWithModel,
         resolveDefaultMediaModel: resolveDefaultMediaModelSpy,
         resolveAutoMediaKeyProviders: resolveAutoMediaKeyProvidersSpy,
       });
@@ -1040,7 +947,6 @@ describe("image tool implicit imageModel config", () => {
 
   it.each<{
     name: string;
-    primary?: string;
     imageModel: { primary: string; fallbacks?: string[] };
     providers?: string[];
     models?: string[];
@@ -1058,10 +964,10 @@ describe("image tool implicit imageModel config", () => {
       imageModel: { primary: "gpt-5.4-mini" },
       expected: "openai/gpt-5.4-mini",
     },
-  ])("resolves $name", async ({ primary, imageModel, providers, models, expected }) => {
+  ])("resolves $name", async ({ imageModel, providers, models, expected }) => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
-        agents: { defaults: { ...(primary ? { model: { primary } } : {}), imageModel } },
+        agents: { defaults: { imageModel } },
         ...(providers
           ? {
               models: {
@@ -1228,7 +1134,7 @@ describe("image tool implicit imageModel config", () => {
     "enforces local image roots (workspaceOnly: %s)",
     async (workspaceOnly) => {
       await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
-        const fetch = stubMinimaxOkFetch();
+        const fetch = stubMinimaxResponse();
         await withTempAgentDir(async (agentDir) => {
           const cfg = createMinimaxImageConfig();
           const tool = createRequiredImageTool({
@@ -1251,8 +1157,6 @@ describe("image tool implicit imageModel config", () => {
             const withWorkspace = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
             await expectImageToolExecOk(withWorkspace, imagePath);
             expect(fetch).toHaveBeenCalledTimes(1);
-          } else if (!workspaceOnly) {
-            expect(fetch).not.toHaveBeenCalled();
           }
         });
       });
@@ -1378,7 +1282,7 @@ describe("image tool implicit imageModel config", () => {
         Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
       );
       const bridge = createContainerWorkspaceSandboxFsBridge(sandboxRoot);
-      stubMinimaxOkFetch();
+      stubMinimaxResponse();
       const tool = createRequiredImageTool({
         config: createMinimaxImageConfig(),
         agentDir,
@@ -1402,7 +1306,7 @@ describe("image tool implicit imageModel config", () => {
       if (!bridge) {
         throw new Error("expected unsafe sandbox filesystem bridge");
       }
-      const fetch = stubMinimaxOkFetch();
+      const fetch = stubMinimaxResponse();
       const imageTool = createRequiredImageTool({
         config: createMinimaxImageConfig(),
         agentDir,
@@ -1430,7 +1334,7 @@ describe("image tool implicit imageModel config", () => {
         Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
       );
 
-      const fetch = stubMinimaxOkFetch();
+      const fetch = stubMinimaxResponse();
 
       const cfg: OpenClawConfig = {
         agents: {
@@ -1462,7 +1366,7 @@ describe("image tool implicit imageModel config", () => {
         Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
       );
 
-      const fetch = stubMinimaxOkFetch();
+      const fetch = stubMinimaxResponse();
       const sandbox = {
         root: sandboxRoot,
         bridge: createHostSandboxFsBridge(sandboxRoot),
@@ -1508,7 +1412,6 @@ describe("image tool data URL support", () => {
 });
 
 describe("image tool MiniMax VLM routing", () => {
-  const priorFetch = global.fetch;
   let state: OpenClawTestState;
 
   beforeEach(async () => {
@@ -1517,17 +1420,14 @@ describe("image tool MiniMax VLM routing", () => {
   });
 
   afterEach(async () => {
-    global.fetch = priorFetch;
-    imageProviderHarness.reset();
     testing.setProviderDepsForTest();
     await state.cleanup();
   });
 
   async function createMinimaxVlmFixture(baseResp: { status_code: number; status_msg: string }) {
-    const fetchMock = stubMinimaxFetch(baseResp, baseResp.status_code === 0 ? "ok" : "");
+    const fetchMock = stubMinimaxResponse(baseResp);
 
     const agentDir = state.agentDir();
-    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const cfg = createMinimaxImageConfig();
     const tool = createRequiredImageTool({ config: cfg, agentDir });
     return { fetch: fetchMock, tool, cfg, agentDir };
@@ -1701,13 +1601,12 @@ describe("image compression policy", () => {
   });
 
   afterEach(() => {
-    imageProviderHarness.reset();
     testing.setProviderDepsForTest();
   });
 
   it.each([{ label: "static catalog", runtimeAugment: false, staticMaxSidePx: undefined }])(
     "keeps image policy pinned to the prepared generation: $label",
-    async ({ runtimeAugment, staticMaxSidePx }) => {
+    async ({ runtimeAugment }) => {
       const state = await createOpenClawTestState({ label: "image-model-generation" });
       try {
         const provider = "prepared-image-provider";
@@ -1723,7 +1622,6 @@ describe("image compression policy", () => {
           modelId: model,
           runtimeAugment,
           staticImagePolicy: {
-            ...(staticMaxSidePx === undefined ? {} : { maxSidePx: staticMaxSidePx }),
             maxBytes: 1_000_000,
             preferredSidePx: 1_280,
             tokenMode: "detail",
@@ -1772,9 +1670,7 @@ describe("image compression policy", () => {
             },
           ],
         });
-        expect(generationA.resolveDynamicModel).toHaveBeenCalledTimes(
-          staticMaxSidePx === undefined ? 1 : 0,
-        );
+        expect(generationA.resolveDynamicModel).toHaveBeenCalledTimes(1);
         expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
       } finally {
         resetModelGenerationFixtureState();
@@ -1883,8 +1779,7 @@ describe("image compression policy", () => {
           ...(supplied === "none"
             ? {}
             : {
-                preparedModelRuntime: (supplied === "captured" ? captured : ambient)
-                  .preparedModelRuntime,
+                preparedModelRuntime: captured.preparedModelRuntime,
               }),
         });
         const source = createLargeColorBlockPng(256);

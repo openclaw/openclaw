@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "How OpenClaw manages conversation sessions"
 read_when:
   - You want to understand session routing and isolation
@@ -56,6 +57,9 @@ commands, skills, replies, and background task notifications retain the
 agent selected by the route or explicit request.
 Session lists, model filters, previews, and sharing controls also retain the
 stored conversation's agent, rather than the aggregate view's default agent.
+In the Sessions page, enabling **Unknown** includes authorized unknown sessions
+owned by the selected agent. An agent-qualified key such as `agent:ops:unknown`
+is an ordinary session and remains visible when **Unknown** is off.
 Renaming, pinning, or editing session metadata retains the existing message
 preview without rereading the transcript. New messages, transcript replacements,
 completed transcript repairs, and cold-storage restoration refresh previews; changes to model selection
@@ -284,167 +288,41 @@ Opt into automatic resets globally, then override them per chat type or channel:
 
 ## Gateway restart recovery
 
-An incoming message does not trigger a delivery-uncertainty notice while the
-previous reply is still being sent or its delivery result is being recorded.
-If a send settles with an unknown outcome, or restart recovery finds an
-unconfirmed final reply, OpenClaw retains the warning for the next turn on the
-same route.
+A graceful Gateway stop or restart writes one small marker for each running root
+session, then aborts work promptly. A root is running when its agent loop, one of
+its descendant sub-agents, or one of its background processes is active. At startup,
+the Gateway clears the marker and sends one ordinary system input asking the agent
+to check current files, processes, sub-agents, and external actions before continuing.
 
-When a Gateway restart interrupts an admitted turn, including one still waiting
-in the queue or preparing to execute, OpenClaw tries to continue the existing
-session automatically. Shutdown records recovery before canceling queued work.
-If restart cancellation finishes a collected run before that record commits,
-shutdown retains its recovery custody unless the session or run owner changes.
-Backend-owned restart aborts retain the same custody even when the caller's
-abort signal stays open and lifecycle persistence finishes after reply cleanup.
-Recovery follows the interrupted turn, including later turns in a child whose
-original subagent task has finished. Channel, group, cross-agent, and nested
-parents do not exclude those turns. Active subagent tasks retain their registry
-recovery owner; independent child turns use the ordinary session recovery cycle
-and can be resumed with `sessions.recover`.
-Delegated recovery rechecks the recorded parent identity and current cross-agent
-spawn policy. If that authority cannot be restored, the child records why it
-stopped, and its unchanged parent receives a local transcript notice. A deleted,
-archived, or replaced parent cannot receive that notice. A fresh authenticated
-message to the child from the TUI, Control UI, or a channel carries its own authority.
-Startup discovery excludes archived sessions, recovery tombstones, and rows without
-recovery obligations before preparing targets. Completed sessions with pending
-recovery obligations still settle. Other skipped candidates are logged with a
-reason, including when other sessions recover.
-The final pass over exhausted recovery targets prepares one session at a time,
-so a restart cannot flood database queues with background preparation. A failure
-for one target is logged without abandoning the remaining targets.
-Three attempts that fail to start a backend turn exhaust the recovery budget.
-Once a real backend turn starts,
-the budget refreshes, so a later Gateway restart does not consume the old allowance.
-Accepting, queueing, or preparing a resume request alone does not refresh it.
-CLI backends that do not report turn acceptance refresh the budget only after
-observed assistant output or tool activity; silent startup does not refresh it.
+Running children stop quietly and do not resume independently. Their root requester
+receives the single resume input and can inspect results, send new instructions,
+or spawn replacements. Cron occurrence sessions and ACP/external-harness sessions
+keep their own lifecycle owners.
 
-For a freshly created session's eligible local, idle, restart-safe initial turn,
-`sessions.create` commits the session first, then commits the input transcript and
-restart claim together before acknowledging a started run. Failure or a crash
-between those commits can leave the created session with no retained input bytes.
-After the input commits, restart recovery retains that turn even if the client
-never receives the acknowledgment. Queued input, hook-dependent input, worker
-placement, idle `chat.send`, and retries of existing durable input retain their
-existing admission and recovery behavior. A restart
-during managed worktree preparation resumes the accepted turn and prepares or
-reuses its local worktree before starting the agent. Recovery does not inherit
-the original caller's permission to run worktree setup scripts.
+The input uses the recorded human owner's current authority, or the human creator
+when no owner is set, narrowed by the session's current permission mode and tool
+policy. A deleted or archived session, removed principal, or lost access is skipped.
+A session without a human principal uses ordinary system-event authority. Saved
+operator or requester snapshots do not grant permissions.
 
-When replaying an interrupted turn, recovery preserves its recorded tool calls
-and results, including nested tool activity, and reuses the original user message.
-Explicit nonfinal message-tool progress (`final: false`) recorded by the same run
-does not close that turn; recovery preserves the visible update without sending it
-back to the model as an answer.
-A restart-aborted embedded response retains its already-streamed text as an
-interrupted assistant message when the transcript writer is still available.
-Unfinished tool calls in that response are discarded before persistence.
-A completed reply or a later user message closes that turn to replay.
+The marker records the IDs of accepted user messages still queued at shutdown.
+Only those messages follow the resume input in FIFO order, each under its recorded
+sender's current authority. Older crash-left queued rows remain inert. A sender that
+cannot be admitted gets an ordinary failed send and can resend. New messages during
+the resumed run use normal steering and queue rules; they do not wait behind a
+special recovery predecessor.
 
-For authenticated operator turns, recovery revalidates the original caller's
-recorded permissions against current profile, role, access-grant, and device
-policy. A Control UI administrator can therefore continue authorized automation
-work after a restart without losing `operator.admin`. Recovery cannot gain scopes
-the original caller lacked, and revocation still stops the recovered run.
-Callers with `operator.sessions.write` can resume their own interrupted turns
-without needing the broader `operator.write` scope. If the original grant has
-been revoked, recovery records an interruption and a notice in the session
-instead of repeatedly retrying the same input. Send a new authenticated message
-after access is restored to continue.
-If the recorded source no longer matches the session or interrupted input,
-recovery also retires that stale input with one local interruption notice.
-The incoming message can then continue normally without resetting the session.
-Pending replies, harness completions, and independent runs retain their existing
-recovery protection.
-Older interrupted turns without a recorded authorization source remain restricted;
-send a fresh authenticated message to continue privileged work. Session ownership
-or a saved display name never grants recovery permissions.
+A crash or `SIGKILL` writes no markers, so nothing resumes automatically. The
+transcript stays available and a new message can continue the work. The agent must
+inspect uncertain effects before repeating them. The Control UI shows the ordinary
+conversation and resume turn without restart banners or interrupted-input notices.
+There is no manual `sessions.recover` method.
 
-The reserved device-less backend helper connection is a local control-plane path,
-not a durable operator identity. Use an identified operator client, such as the
-TUI or Control UI, for user-owned work that must resume automatically. Paired
-clients must retain the original device-token generation: reissuing that token
-under a different authentication path can prevent recovery even for the same user.
-
-This also covers public parent turns started by subagent completion or pause notices.
-An interrupted public parent turn continues independently of later child completions, and a
-retry of the same notice joins that recovery instead of starting the turn again.
-Parents still waiting after yielding to children remain owned by their child batch.
-Once a parent turn has its own recorded operator source, recovery revalidates that
-source against current policy using the parent's exact session claim. Changes to
-the original child batch, including settlement or cleanup, do not cancel that
-admitted parent input. Older requester inputs without a recorded operator source
-still reconcile their original completion cohort. If that source cannot be
-restored, recovery records one terminal interruption in the transcript and settles
-the old input. Later startup passes and restarts skip it. The session remains
-available for a fresh authenticated message; recovery never substitutes system
-authority. Temporary startup, binding, or access-policy availability failures keep
-their recovery claims and retry.
-
-Private completion turns retain their original accepted input with the child batch
-that owns its processing receipt. After a restart, that owner replays the same input
-once and records its result; ordinary recovery does not start a second copy.
-While automatic recovery owns that input, `sessions.recover` reports that it is
-already queued. Restoring the private turn still requires current sender and parent
-authority. An unavailable source produces a recorded interruption instead.
-
-If a delegated turn's sender authority cannot be reconstructed and no pending
-reply, harness completion, or independent run remains owed, recovery ends only that
-turn. One local interruption notice and terminal source receipt prevent replay;
-the same session and transcript remain available for a fresh authenticated message.
-Recovery does not send the notice to an external channel. Saved delegation alone
-does not authorize replay after restart.
-
-Turns with remaining custody retain the existing recovery block. **Resume** in
-WebChat supplies current operator authority to continue the saved task in the same
-session after its outstanding delivery settles.
-
-If a child finishes before its restart-tombstoned parent can accept the result, it stays
-pending with the child owner. The parent receives one local notice that the result
-is waiting for **Resume**. The pending completion does not reserve the parent's
-message queue or grant permission to restart it. After an authorized in-place
-Resume, the same completion can continue once. Resetting or replacing the parent
-does not deliver the old child's result into the replacement session.
-
-Messages sent while restart recovery is waiting to start stay pending. Once
-recovery starts, they follow the session's normal message queue policy. You do
-not need to resend a message just because recovery is waiting for capacity.
-Stopping or replacing the session still cancels pending work. A recovery resend
-stopped during preparation stays canceled and is not replayed on the next startup.
-
-If subagent recovery changes session-protection facts while an incoming turn is
-being prepared, reply initialization refreshes those facts and retries within its
-existing bounded retry budget. Exhaustion reports an error asking you to retry
-the message. A saved user message that has not reached the model remains user
-input when a subagent announcement continues the session; it is not demoted to
-background context.
-
-If automatic recovery is exhausted, the unfinished task and transcript remain
-available. Use **Resume** in WebChat to continue with the same session identity,
-workspace, participants, and child sessions. Resume saves the new operator input
-and clears the restart tombstone together before starting work. It rechecks your
-current permissions; previous approvals and delegated authority are not restored.
-Completed tool results stay in the transcript, and uncertain effects must be
-inspected before being repeated. Existing restart-safe tool restrictions still
-apply to the continuation.
-
-A session already recovered into a replacement opens that replacement instead;
-resuming both could duplicate the task. If a CLI runtime cannot enforce the
-required restart-safe tools, WebChat offers **Resume in new session** instead.
-For SQLite-backed sessions, this copies the complete transcript, including large
-histories, without loading the entire conversation into memory. The replacement
-and its recovery link are saved together; a failed copy leaves the original
-session available for retry.
-An unresolved final-delivery record must
-settle before an in-place continuation, and missing transcripts require repair.
-In other channels, `/new` or `/reset` still starts a replacement session.
-
-A canonical Main session archived specifically by restart recovery can also be
-reset. Reset retains its physical session identity and transcript while starting a
-fresh model context; it does not replay the interrupted task. Other archived
-sessions must be restored before reset.
+Already-produced outbound messages and media keep their existing delivery queue.
+An unknown delivery outcome can still require inspection; restarting does not prove
+that an external action or reply happened exactly once. See
+[Restart recovery](/gateway/restart-recovery) for shutdown, compatibility, and
+post-update checks.
 
 ## Where state lives
 

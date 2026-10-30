@@ -3856,16 +3856,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   margin: 0;
 }
 
-.agent-chat__hint kbd {
-  display: inline-block;
-  padding: 1px 6px;
-  font-size: 12px;
-  font-family: var(--mono);
-  background: var(--panel-strong);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-}
-
 .agent-chat__suggestions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

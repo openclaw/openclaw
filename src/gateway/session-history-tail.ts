@@ -162,6 +162,45 @@ export type IncrementalChatHistoryTail = {
   hasOlder: boolean;
 };
 
+/** Keep each worker reply bounded even when the anchor and its neighbor cannot fit together. */
+export async function readChatHistoryAnchorPage(
+  readers: SessionTranscriptPageReader,
+  scope: SessionTranscriptReadScope,
+  options: Parameters<SessionTranscriptPageReader["readSessionMessagesAroundIdWithStatsAsync"]>[1],
+) {
+  const page = await readers.readSessionMessagesAroundIdWithStatsAsync(scope, {
+    ...options,
+    captureReadWindow: Boolean(options.direction),
+  });
+  if (
+    !options.direction ||
+    !page.found ||
+    page.windowReset ||
+    page.messages.length !== 1 ||
+    readChatHistoryMessageId(page.messages[0]) !== options.messageId ||
+    (options.direction === "older"
+      ? readChatHistoryMessageSeq(page.messages[0]) === 1
+      : page.offset === 0)
+  ) {
+    return page;
+  }
+  const next = await readers.readSessionMessagesAroundIdWithStatsAsync(scope, {
+    ...options,
+    excludeAnchor: true,
+    expectedReadWindow: page.readWindow,
+  });
+  if (!next.found || next.windowReset || next.displaySource !== page.displaySource) {
+    return { ...next, messages: [], windowReset: true };
+  }
+  return {
+    ...next,
+    messages:
+      options.direction === "older"
+        ? [...next.messages, ...page.messages]
+        : [...page.messages, ...next.messages],
+  };
+}
+
 async function readNewerChatHistoryMessages(params: {
   anchorId: string;
   limit: number;
@@ -172,7 +211,7 @@ async function readNewerChatHistoryMessages(params: {
   readOnly?: boolean;
 }): Promise<unknown[]> {
   // Anchor lookup and positioning share one snapshot; numeric offsets drift on appends.
-  const page = await params.readers.readSessionMessagesAroundIdWithStatsAsync(params.readScope, {
+  const page = await readChatHistoryAnchorPage(params.readers, params.readScope, {
     messageId: params.anchorId,
     maxMessages: params.limit + 1,
     direction: "newer",

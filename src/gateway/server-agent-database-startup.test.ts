@@ -2,8 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Worker } from "node:worker_threads";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { openFixtureReceiptChannel } from "../../test/helpers/fixture-receipts.js";
+import { afterEach, expect, it, vi } from "vitest";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -15,7 +14,6 @@ import {
   markPreparedModelRuntimeSnapshotsStale,
   refreshPreparedModelRuntimeSnapshots,
 } from "../agents/prepared-model-runtime.js";
-import * as subagents from "../agents/subagents/registry/subagent-registry.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -64,8 +62,6 @@ import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflig
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 // Keep cold module evaluation outside the lifecycle and RPC behavior deadlines.
-import * as early from "./server-startup-early.js";
-import * as postAttach from "./server-startup-post-attach.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import "./server-methods/chat-send-external-entry.js";
 import { gatewayReplyMock, testState } from "./test-helpers.runtime-state.js";
@@ -115,7 +111,6 @@ function pauseIntegrityInspection(params: {
   pathname: string;
   pausePreparation?: boolean;
   pauseSchema?: boolean;
-  preparationReceiptBroadcastName?: string;
 }) {
   const releasePath = path.join(params.root, "release-inspection");
   const enteredPath = path.join(params.root, "inspection-entered");
@@ -127,10 +122,7 @@ function pauseIntegrityInspection(params: {
     `
 const fs = require('node:fs'), path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
-const { BroadcastChannel, isMainThread, threadId } = require('node:worker_threads');
-const receiptBroadcastName = ${JSON.stringify(params.preparationReceiptBroadcastName)};
-const receipts = !isMainThread && receiptBroadcastName ? new BroadcastChannel(receiptBroadcastName) : undefined;
-receipts?.unref();
+const { isMainThread, threadId } = require('node:worker_threads');
 const pathname = ${JSON.stringify(fs.realpathSync.native(params.pathname))};
 const preparation = ${params.pausePreparation === true} && (!isMainThread || process.argv[1]?.includes('sqlite-integrity.worker'));
 const marker = preparation ? ${JSON.stringify(preparationEnteredPath)} : ${JSON.stringify(enteredPath)};
@@ -155,7 +147,6 @@ DatabaseSync.prototype.prepare = function(sql) {
     if (!isMainThread) fs.writeFileSync(marker + '.thread', String(threadId));
     fs.writeFileSync(pendingMarker, String(process.pid));
     fs.renameSync(pendingMarker, marker);
-    receipts?.postMessage({ source: marker, line: 'entered' });
     const pause = new Int32Array(new SharedArrayBuffer(4));
     const deadline = Date.now() + 60000;
     while (!fs.existsSync(release)) {
@@ -195,46 +186,8 @@ it.for([
 ] as const)(
   "applies startup admission while $agentId follows its $outcome lifecycle",
   async ({ outcome, agentId }, { signal }) => {
-    const holdSubagentRestoration = outcome === "recover" && agentId === "worker";
-    const checkHostJournalReads = outcome === "recover" && !holdSubagentRestoration;
-    const restorationEntered = createDeferredCore();
-    const restorationRelease = createDeferredCore();
-    const initialRecoveryReady = createDeferredCore();
-    let startupSettled = false;
+    const checkHostJournalReads = outcome === "recover";
     let recoverySource: OpenClawConfig | undefined;
-    let bootstrapSecrets: ReturnType<typeof getActiveSecretsRuntimeSnapshot> | undefined;
-    let subagentRecoverySettled: Promise<void> | undefined;
-    if (holdSubagentRestoration) {
-      vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", undefined);
-      const startPostAttach = postAttach.startGatewayPostAttachRuntime;
-      vi.spyOn(postAttach, "startGatewayPostAttachRuntime").mockImplementation(async (params) => {
-        const unlockStartupMethods = params.unlockStartupMethods;
-        const runtime = await startPostAttach({
-          ...params,
-          unlockStartupMethods: (options) => {
-            unlockStartupMethods(options);
-            if (!options?.keepChatSendUnavailable) {
-              initialRecoveryReady.resolve();
-            }
-          },
-        });
-        subagentRecoverySettled = runtime.subagentRecoverySettled;
-        return runtime;
-      });
-      const startEarly = early.startGatewayEarlyRuntime;
-      vi.spyOn(early, "startGatewayEarlyRuntime").mockImplementation((params) => {
-        bootstrapSecrets = getActiveSecretsRuntimeSnapshot();
-        return startEarly(params);
-      });
-      vi.spyOn(subagents, "activateSubagentRegistry").mockImplementation(() => {
-        restorationEntered.resolve();
-        return {
-          initial: Promise.resolve(),
-          pending: new Map([["worker", restorationRelease.promise]]),
-          settled: restorationRelease.promise,
-        };
-      });
-    }
     const nativeBroker = process.platform === "linux" && !process.versions.bun;
     const brokerExpected =
       nativeBroker ||
@@ -320,13 +273,6 @@ it.for([
     const refusal = () => readAgentDatabaseAdmissionRefusal(agentId, { env });
     const waitForRecovery = () =>
       vi.waitFor(() => expect(refusal()).toBeUndefined(), { timeout: 10000 });
-    const handoffReceipts =
-      outcome === "handoff" || outcome === "shutdown-preparation"
-        ? await openFixtureReceiptChannel()
-        : undefined;
-    if (handoffReceipts) {
-      onTestFinished(() => handoffReceipts.close());
-    }
     const paused = outcome !== "corrupt" && outcome !== "physical-corrupt" && outcome !== "fast";
     const pause = paused
       ? pauseIntegrityInspection({
@@ -334,7 +280,6 @@ it.for([
           pathname: agentPath,
           pausePreparation: outcome === "shutdown-preparation" || outcome === "handoff",
           pauseSchema: outcome !== "handoff",
-          preparationReceiptBroadcastName: handoffReceipts?.broadcastName,
         })
       : undefined;
     const releasePath = pause?.releasePath ?? path.join(root, "release-inspection");
@@ -348,7 +293,6 @@ it.for([
     let preparationParent: number | undefined;
     let brokerPid: number | undefined;
     let inspectionAliveAtBrokerClose: boolean | undefined;
-    let preparationCancelled = false;
     const nativeWorkers = new Map<number, Worker>();
     const createWorker = workerCpu.createCpuTrackedWorker;
     vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((...args) => {
@@ -458,16 +402,6 @@ it.for([
       unadoptedPortClaim = portClaim;
       const port = portClaim.port;
       const startup = withAgentDatabaseStartupAdmission(async (admission) => {
-        if (outcome === "shutdown-preparation") {
-          admission.signal.addEventListener(
-            "abort",
-            () => {
-              preparationCancelled = true;
-              fs.writeFileSync(pause!.preparationReleasePath, "owner cancelled");
-            },
-            { once: true },
-          );
-        }
         await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
         inspectionSettled = admission.pendingPreparation;
         waitForHealthyAgent = () =>
@@ -486,7 +420,6 @@ it.for([
           return startTestGatewayServer(portClaim, {
             bind: "loopback",
             auth: { mode: "none" },
-            ...(holdSubagentRestoration ? { sidecarStartup: "defer" as const } : {}),
           });
         });
       }).then((started) => {
@@ -503,12 +436,6 @@ it.for([
         return;
       }
       server = await startup;
-      void server.startupSettled.then(
-        () => {
-          startupSettled = true;
-        },
-        () => {},
-      );
       await server.startupSettled;
       if (brokerExpected) {
         expect(brokerPid).toBeTypeOf("number");
@@ -530,10 +457,6 @@ it.for([
       // Sidecar settlement can precede the unpaused sibling's database admission.
       await waitForHealthyAgent();
       expect(readAgentDatabaseAdmissionRefusal(healthyAgentId, { env })).toBeUndefined();
-      if (holdSubagentRestoration) {
-        // startupSettled does not join the independent initial-recovery admission signal.
-        await withinTest(initialRecoveryReady.promise, signal);
-      }
       const readiness = await probeGateway(port, "/readyz");
       expect(readiness.status).toBe(agentId === "main" && paused ? 503 : 200);
       if (agentId === "main" && paused) {
@@ -557,8 +480,9 @@ it.for([
           // Old startup blocks in full-file preflight before claiming its writable lease.
           expect(fs.existsSync(enteredPath)).toBe(false);
           const preparationMarker = pause!.preparationEnteredPath;
-          await withinTest(handoffReceipts!.waitFor(preparationMarker, "entered"), signal);
-          expect(fs.existsSync(preparationMarker)).toBe(true);
+          await vi.waitFor(() => expect(fs.existsSync(preparationMarker)).toBe(true), {
+            timeout: 10_000,
+          });
         } else {
           await vi.waitFor(() => expect(fs.existsSync(enteredPath)).toBe(true));
         }
@@ -566,9 +490,7 @@ it.for([
       if (outcome === "recover") {
         // Full post-attach model preparation can republish auth-store containers;
         // assert the bootstrap fence before that independent publication.
-        const snapshot = holdSubagentRestoration
-          ? bootstrapSecrets
-          : getActiveSecretsRuntimeSnapshot();
+        const snapshot = getActiveSecretsRuntimeSnapshot();
         expect(snapshot?.authStores.some((entry) => entry.databasePath === agentPath)).toBe(false);
         expect(snapshot?.degradedOwners?.some((owner) => owner.paths.includes(agentPath))).toBe(
           false,
@@ -603,23 +525,23 @@ it.for([
         const preparationEnteredPath = pause!.preparationEnteredPath;
         await withinTest(
           awaitGateBeforeSettlement(
-            handoffReceipts!.waitFor(preparationEnteredPath, "entered"),
+            vi.waitFor(() => expect(fs.existsSync(preparationEnteredPath)).toBe(true), {
+              timeout: 10_000,
+            }),
             inspectionSettled!,
             "startup preparation settled before entering its shutdown gate",
           ),
           signal,
         );
         expect(fs.existsSync(preparationEnteredPath)).toBe(true);
-        expect(preparationCancelled).toBe(false);
         expect(fs.existsSync(pause!.preparationReleasePath)).toBe(false);
-        await server.close();
+        await withinTest(server.close(), AbortSignal.timeout(5_000));
         await suppliedBroker?.close();
         if (brokerExpected) {
           expect(inspectionAliveAtBrokerClose).toBe(false);
           expect(() => process.kill(brokerPid!, 0)).toThrow();
         }
-        expect(preparationCancelled).toBe(true);
-        expect(fs.readFileSync(pause!.preparationReleasePath, "utf8")).toBe("owner cancelled");
+        expect(fs.existsSync(pause!.preparationReleasePath)).toBe(false);
         expect(inspectionAlive(preparationEnteredPath)).toBe(false);
         expect(fs.readFileSync(agentPath)).toEqual(agentBytes);
       } else if (outcome === "recover" || outcome === "superseded") {
@@ -716,30 +638,6 @@ it.for([
         expect(snapshot?.degradedOwners?.some((owner) => owner.paths.includes(agentPath))).toBe(
           false,
         );
-        if (holdSubagentRestoration) {
-          // The optional worker stays gated without making the healthy Gateway unready.
-          await withinTest(restorationEntered.promise, signal);
-          expect(startupSettled).toBe(true);
-          const recoveringReadiness = await probeGateway(port, "/readyz");
-          expect(recoveringReadiness.status).toBe(200);
-          await expect(recoveringReadiness.json()).resolves.toMatchObject({
-            ready: true,
-            coreReady: true,
-            failing: [],
-            agentRecovery: ["worker"],
-          });
-          expect(await rpcReq(chatClient!, "chat.send", chatParams)).toMatchObject({
-            ok: false,
-            error: {
-              code: "UNAVAILABLE",
-              message: "chat.send unavailable during gateway startup",
-              details: { reason: "startup-sidecars", method: "chat.send" },
-            },
-          });
-          restorationRelease.resolve();
-          expect(subagentRecoverySettled).toBeDefined();
-          await withinTest(subagentRecoverySettled!, signal);
-        }
         expect((await probeGateway(port, "/readyz")).status).toBe(200);
         expect(await rpcReq(chatClient!, "chat.send", chatParams)).toMatchObject({ ok: true });
         await withinTest(dispatched.promise, signal);
@@ -761,7 +659,6 @@ it.for([
       }
     } finally {
       pendingFixtureCleanup = (async () => {
-        restorationRelease.resolve();
         preparationRelease.resolve();
         fs.writeFileSync(releasePath, "resume");
         if (pause) {

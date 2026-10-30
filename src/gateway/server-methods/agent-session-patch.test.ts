@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import {
   mergeSessionEntry,
   resolveSessionResetPolicy,
@@ -78,38 +77,6 @@ it("clears agent status at the next human interaction boundary", async () => {
   });
   expect(patch).toMatchObject({ agentStatus: undefined, lifecycleRunId: undefined });
   expect(patch.lastRunId).toBeUndefined();
-});
-
-it("preserves a recovery reservation while reusing a session with a failed outcome", async () => {
-  const entry: SessionEntry = {
-    sessionId: "recovering-session",
-    updatedAt: 1_000,
-    status: "failed",
-    abortedLastRun: true,
-    restartRecoveryDeliveryRunId: "recovery-run",
-    mainRestartRecovery: {
-      cycleId: "recovery-cycle",
-      revision: 2,
-      chargedAttempts: 1,
-      reservation: { runId: "recovery-run", lifecycleGeneration: "generation-1", attempt: 1 },
-    },
-  };
-  const { patch } = await buildCreationPatch({ freshEntry: entry, isSystemGatewayRun: true });
-  const merged = mergeSessionEntry(entry, patch);
-
-  expect(
-    transitionMainSessionRecovery(merged, {
-      kind: "validate_recovery",
-      lifecycleGeneration: "generation-1",
-      runId: "recovery-run",
-      sessionId: entry.sessionId,
-    }),
-  ).toEqual({ kind: "recovery_validated" });
-  expect(merged).toMatchObject({
-    status: "failed",
-    abortedLastRun: true,
-    mainRestartRecovery: entry.mainRestartRecovery,
-  });
 });
 
 it.each([

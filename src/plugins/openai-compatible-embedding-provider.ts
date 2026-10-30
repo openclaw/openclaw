@@ -70,10 +70,6 @@ type ResolvedConfiguredEmbeddingProvider = {
   config: ConfiguredEmbeddingProvider;
 };
 
-type LocalServiceAwareEmbeddingOptions = EmbeddingProviderCreateOptions & {
-  acquireLocalService?: AcquireConfiguredProviderLocalService;
-};
-
 function normalizeBaseUrl(value: string | undefined): string {
   const baseUrl = value?.trim();
   if (!baseUrl) {
@@ -484,7 +480,6 @@ async function createOpenAICompatibleEmbeddingClient(
       headers.authorization = `Bearer ${providerApiKey}`;
     }
   }
-  const localServiceOptions = options as LocalServiceAwareEmbeddingOptions;
   return {
     providerId,
     baseUrl,
@@ -508,7 +503,7 @@ async function createOpenAICompatibleEmbeddingClient(
             baseUrl,
             headers,
           },
-          acquireLocalService: localServiceOptions.acquireLocalService,
+          acquireLocalService: options.acquireLocalService,
         }
       : {}),
     ...(options.dimensions !== undefined

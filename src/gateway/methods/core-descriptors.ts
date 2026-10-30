@@ -1,25 +1,20 @@
+import {
+  CONTROL_PLANE_WRITE,
+  OBSERVATION,
+  OWN_SESSION_WRITE,
+  PORTAL_SESSION_WRITE,
+  PROFILE_DEPENDENT,
+  PROFILE_STARTUP,
+  SESSION_METADATA_READ,
+  SESSION_WRITE,
+  SIDECAR_CONTROL_PLANE_WRITE,
+  UNADVERTISED,
+  UNADVERTISED_OBSERVATION,
+} from "./core-descriptor-options.js";
 import type { CoreGatewayMethodSpecRow } from "./core-descriptor-types.js";
 import { cronListShareKey, modelsListShareKey, operatorReadShareKey } from "./read-share-keys.js";
 
 // Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
-const CONTROL_PLANE_WRITE = { controlPlaneWrite: true } as const;
-const SIDECAR_CONTROL_PLANE_WRITE = { startup: true, controlPlaneWrite: true } as const;
-const UNADVERTISED = { advertise: false } as const;
-const PROFILE_DEPENDENT = { profileAccess: "required" } as const;
-const PROFILE_STARTUP = { startup: true, ...PROFILE_DEPENDENT } as const;
-const SESSION_METADATA_READ = {
-  shareKey: operatorReadShareKey,
-  shareMaxAgeMs: 1_000,
-  shareInvalidationEvents: ["sessions.changed", "chat.metadata.changed"],
-} as const;
-const OBSERVATION = { lifetime: "observation" } as const;
-const UNADVERTISED_OBSERVATION = { ...UNADVERTISED, ...OBSERVATION } as const;
-const SESSION_WRITE = { sessionAccess: { mode: "write" } } as const;
-const OWN_SESSION_WRITE = { sessionAccess: { mode: "write", allowOwnSessionScope: true } } as const;
-const PORTAL_SESSION_WRITE = {
-  sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "portal" },
-} as const;
-
 // This is the canonical core method policy table: every core handler must appear here so
 // listing, authorization, startup availability, and write throttling stay in sync.
 export const CORE_GATEWAY_METHOD_SPECS = [
@@ -247,7 +242,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   // Params-aware plus state-aware: the handler permits write-scoped cwd only
   // inside configured agent workspaces; execNode and other privileged modes stay admin.
   ["sessions.create", "sessions-create", "dynamic", "<=2026.7", { startup: true }],
-  ["sessions.recover", "sessions-recover", "operator.write", "2026.8", { startup: true }],
   ["sessions.send", "sessions-messaging", "operator.write", "<=2026.7", { startup: true }],
   ["sessions.abort", "sessions-abort", "operator.write", "<=2026.7", { startup: true }],
   // Dynamic mutation scope policy, including write-scoped model overrides, lives
@@ -750,4 +744,13 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["diagnostics.capabilities", "diagnostics", "operator.read", "2026.10"],
   ["cron.bind", "cron", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["talk.client.say", "talk", "operator.talk", "2026.10"],
+  [
+    "sessions.github.readiness",
+    "sessions-github",
+    "operator.read",
+    "2026.10",
+    { startup: true, ...OBSERVATION },
+  ],
+  ["sessions.files.preview", "sessions-files", "operator.read", "2026.10"],
+  ["sessions.files.preview.release", "sessions-files", "operator.read", "2026.10"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
