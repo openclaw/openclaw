@@ -226,7 +226,7 @@ function readErrorMessage(error: unknown): string | undefined {
 
 function readErrorDiagnostics(
   error: unknown,
-): DiagnosticStabilityBundle["error"]["diagnostics"] | undefined {
+): NonNullable<DiagnosticStabilityBundle["error"]>["diagnostics"] | undefined {
   if (!error || typeof error !== "object" || !("diagnostics" in error)) {
     return undefined;
   }
@@ -249,7 +249,9 @@ function readErrorDiagnostics(
     typeof source.command === "string" && SAFE_REASON_CODE.test(source.command)
       ? source.command
       : undefined;
-  let pending: DiagnosticStabilityBundle["error"]["diagnostics"]["pending"] | undefined;
+  let pending:
+    | NonNullable<NonNullable<DiagnosticStabilityBundle["error"]>["diagnostics"]>["pending"]
+    | undefined;
   if (source.pending && typeof source.pending === "object" && !Array.isArray(source.pending)) {
     const pendingSource = source.pending as Record<string, unknown>;
     const pendingFlags: Record<string, boolean> = {};
@@ -267,7 +269,9 @@ function readErrorDiagnostics(
       }
     }
     if (Object.keys(pendingFlags).length > 0) {
-      pending = pendingFlags as DiagnosticStabilityBundle["error"]["diagnostics"]["pending"];
+      pending = pendingFlags as NonNullable<
+        NonNullable<DiagnosticStabilityBundle["error"]>["diagnostics"]
+      >["pending"];
     }
   }
   if (!pluginId && pid === undefined && !argv0 && !command && !pending) {
