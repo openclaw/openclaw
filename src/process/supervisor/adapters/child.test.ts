@@ -289,6 +289,41 @@ describe("createChildAdapter", () => {
     expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
   });
 
+  it.each(["event", "exitCode", "signalCode"] as const)(
+    "does not signal an exited Windows fallback root with held output (%s)",
+    async (observation) => {
+      const { adapter, child, emitExit, killMock } = await setupTimed("win32");
+      const settled = watch(adapter.wait());
+      const cleanup = watch(adapter.waitForExtinction!());
+      try {
+        adapter.kill("SIGTERM");
+        if (observation === "event") {
+          emitExit(0);
+        } else if (observation === "exitCode") {
+          child.exitCode = 0;
+        } else {
+          child.signalCode = "SIGTERM";
+        }
+        adapter.kill("SIGKILL");
+        expect(signalMock).toHaveBeenCalledExactlyOnceWith(
+          child.pid,
+          "SIGTERM",
+          expect.objectContaining({ detached: false }),
+        );
+        expect(killMock).not.toHaveBeenCalled();
+        await advancePending(settled, 3_999);
+        expect(cleanup).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toHaveBeenCalledExactlyOnceWith({ code: null, signal: "SIGKILL" });
+        expect(cleanup).toHaveBeenCalledExactlyOnceWith(
+          new Error("child cleanup could not be confirmed before the kill deadline"),
+        );
+      } finally {
+        adapter.dispose();
+      }
+    },
+  );
+
   it.each([undefined, true] as const)(
     "preserves the exact environment for application and owned workers (%s)",
     async (ownedWorker) => {

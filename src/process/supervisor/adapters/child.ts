@@ -554,6 +554,14 @@ export async function createChildAdapter(
     if (processClosed) {
       return;
     }
+    if (
+      process.platform === "win32" &&
+      (childExitState !== null || child.exitCode !== null || child.signalCode !== null)
+    ) {
+      // A descendant can retain output after root exit, but taskkill must not target its reusable PID.
+      scheduleForceKillWaitFallback(signal ?? "SIGKILL");
+      return;
+    }
     const pid = child.pid ?? undefined;
     if (signal === undefined || signal === "SIGKILL") {
       hardKillRequested = true;
