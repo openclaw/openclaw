@@ -977,3 +977,20 @@ it("cannot revive lost authority with a late closing receipt while output remain
     vi.useRealTimers();
   }
 });
+
+it("exposes child diagnostics on the adapter", async () => {
+  const { adapter } = await createRelay("linux");
+  expect(adapter.diagnostics).toMatchObject({
+    command: "synthetic-command",
+    pid: 1234,
+    pending: {
+      closingReceipt: true,
+      controlClose: true,
+      relayExit: true,
+      stdoutEnd: true,
+      stderrEnd: true,
+      lineageEof: true,
+      extinctionUnconfirmed: true,
+    },
+  });
+});

@@ -3,6 +3,7 @@ import { performance } from "node:perf_hooks";
 import type { Duplex, Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { extractErrorCode, toErrorObject } from "../../infra/errors.js";
+import type { PluginRuntimeCloseChildDiagnostics } from "../../plugins/runtime-close-error.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { joinProcessCompletionAndOutput } from "../decoded-output.js";
 import { pipeProcessOutput } from "../pipe-output.js";
@@ -726,6 +727,23 @@ export async function createServiceChildRelayAdapter(
       ),
     get cleanupResult() {
       return state === "closed" ? retirement.result : undefined;
+    },
+    get diagnostics(): PluginRuntimeCloseChildDiagnostics {
+      return {
+        pluginId: params.pluginId,
+        pid: params.ownedWorker ? anchorPid : commandPid,
+        argv0: params.argv0,
+        command: params.command,
+        pending: {
+          closingReceipt: !closingReceipt,
+          controlClose: !control?.closed,
+          relayExit: !childExited,
+          stdoutEnd: !stdoutRelay.ended,
+          stderrEnd: !stderrRelay.ended,
+          lineageEof: !lineage?.readableEnded,
+          extinctionUnconfirmed: state !== "closed",
+        },
+      };
     },
     kill,
     openStartGate,

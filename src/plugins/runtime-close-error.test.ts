@@ -30,3 +30,29 @@ it("recognizes retained cleanup failures from another runtime module copy", asyn
   expect(first.hasRetainedPluginRuntimeCloseError(ordinaryFailure)).toBe(false);
   expect(second.hasRetainedPluginRuntimeCloseError(ordinaryFailure)).toBe(false);
 });
+
+it("retains child diagnostics", async () => {
+  const { PluginRuntimeCloseRetainedError, hasRetainedPluginRuntimeCloseError } =
+    await import("./runtime-close-error.js");
+  const diagnostics = {
+    pluginId: "signal",
+    pid: 1234,
+    argv0: "signal-cli",
+    command: "/usr/bin/signal-cli",
+    pending: {
+      closingReceipt: false,
+      controlClose: false,
+      relayExit: true,
+      stdoutEnd: true,
+      stderrEnd: false,
+      lineageEof: true,
+      extinctionUnconfirmed: true,
+    },
+  } as const;
+  const failure = new PluginRuntimeCloseRetainedError(
+    new Error("service child cleanup did not complete"),
+    diagnostics,
+  );
+  expect(failure.diagnostics).toEqual(diagnostics);
+  expect(hasRetainedPluginRuntimeCloseError(failure)).toBe(true);
+});

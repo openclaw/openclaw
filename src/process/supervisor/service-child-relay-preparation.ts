@@ -1,6 +1,7 @@
 import type { Writable } from "node:stream";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import type { NodeWorkerCleanupBinding } from "../../node-host/node-worker-launch-receipt.js";
+import type { PluginRuntimeCloseChildDiagnostics } from "../../plugins/runtime-close-error.js";
 import { prepareSecretInputStdio, type SpawnStdioEntry } from "../spawn-secret-input.js";
 import { getInheritedProcessLineageFds } from "./inherited-process-lineage.js";
 import { supportsNodeWorkerProcessOwner } from "./service-child-protocol.js";
@@ -11,6 +12,8 @@ export type ServiceChildRelayParams = ProcessAdapterConstruction & {
   command: string;
   args: string[];
   argv0?: string;
+  /** Optional plugin owner for cleanup diagnostics. */
+  pluginId?: string;
   cwd?: string;
   stdinMode: "inherit" | "pipe-open" | "pipe-closed";
   input?: string;
@@ -28,6 +31,7 @@ export type ServiceChildRelayParams = ProcessAdapterConstruction & {
 export type ServiceChildRelayAdapter = SpawnProcessAdapter<NodeJS.Signals | null> & {
   waitForExtinction: () => Promise<void>;
   confirmExtinction: () => boolean;
+  get diagnostics(): PluginRuntimeCloseChildDiagnostics;
   openStartGate?: () => Promise<void>;
   closeStartGate?: () => void;
 } & Required<Pick<SpawnProcessAdapter<NodeJS.Signals | null>, "onExit" | "onError">>;
