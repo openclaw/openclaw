@@ -230,6 +230,7 @@ describe("cross-region Home composer ownership", () => {
       const { context, owner, page } = fixture;
       page.edit("Keep this draft and file");
       const container = document.createElement("div");
+      document.body.append(container);
       const inputHandle = createChatAttachmentInputHandle();
       const view = mountSolid(
         (props: { controls: ChatAttachmentControlsProps; showInputs: boolean }) => (
@@ -252,6 +253,7 @@ describe("cross-region Home composer ownership", () => {
       disposals.push(() => {
         read.mockRestore();
         view.dispose();
+        container.remove();
       });
       const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input")!;
       selectFile(input, new File(["pending payload"], "handoff.txt", { type: "text/plain" }));

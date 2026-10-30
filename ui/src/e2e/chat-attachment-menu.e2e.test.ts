@@ -249,7 +249,11 @@ suite.define(() => {
           await trigger.press("Enter");
           await attachmentOption(page, "file").waitFor({ state: "visible" });
           expect((await items.allTextContents()).map((text) => text.trim())).toEqual(
-            fixture.single ? ["Add attachment…"] : ["Camera", "Media", "File"],
+            fixture.single
+              ? ["Add attachment…"]
+              : fixture.nativeCapture
+                ? ["Camera", "Record video", "Media", "File"]
+                : ["Camera", "Media", "File"],
           );
           if (fixture.single) {
             await expect

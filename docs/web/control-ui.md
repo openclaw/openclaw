@@ -500,6 +500,19 @@ preview. Allow camera access when your browser asks, then choose **Capture**,
 not send the message. The preview stays in your browser and does not request
 microphone access.
 
+On recognized Android browsers, **Camera** opens the device photo camera
+instead of the preview. **Record video** requests a single video from the device
+camera and adds the returned clip to the draft. The browser and operating system
+own recording controls, device permissions, and any alternative chooser sources;
+OpenClaw does not start a browser preview or request microphone access itself.
+Canceling leaves the draft unchanged. Existing attachment size limits and explicit
+video-compression consent still apply.
+
+**Record video** is not offered in image-only composers, embedded app browsers,
+or desktop browsers. Their existing photo capture is unchanged. iOS Safari keeps
+its combined **Add attachment…** picker; other iOS browsers keep the photo preview. This
+does not add a desktop video recorder or change the Files picker.
+
 The live preview requires HTTPS or localhost and a browser that supports camera
 access. On plain HTTP LAN addresses or browsers without the camera API, choose
 **Use device camera** to open the native capture picker instead. This preserves

@@ -56,6 +56,7 @@ const catalog = {
       addAttachment: "Add attachment",
       attach: "Add attachment…",
       attachPhoto: "Photo",
+      recordVideo: "Record video",
       attachMedia: "Media",
       attachFileOption: "File",
       menu: {
