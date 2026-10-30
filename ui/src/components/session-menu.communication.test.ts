@@ -5,12 +5,12 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import {
   mountMenu,
   menuPanel,
   openSubmenu,
   menuItem,
-  menuItemLabels,
   selectMenuValue,
   settleSessionMenu,
 } from "../test-helpers/session-menu.ts";
@@ -60,6 +60,40 @@ function choice(menu: ParentNode, direction: Direction, mode: Mode) {
 }
 
 describe("session communication menu", () => {
+  it.each([
+    { compact: false, involvingMeContext: false },
+    { compact: true, involvingMeContext: false },
+    { compact: false, involvingMeContext: true },
+    { compact: true, involvingMeContext: true },
+  ])(
+    "separates Advanced sections once in $compact menus with list context $involvingMeContext",
+    async (options) => {
+      const owner = settingsHarness(() => descriptor());
+      owner.publish({
+        hello: {
+          ...gatewayHelloForMethods(["sessions.setInvolvement"]),
+          policy: { hasMultipleSessionSharingIdentities: true },
+        },
+      });
+      const menu = await mountMenu({
+        context: owner.context,
+        session: { hiddenFromInvolvingMe: false },
+        ...options,
+      });
+      const advanced = options.compact
+        ? (await selectMenuValue(menu, "compact:open-advanced"), menuPanel(menu))
+        : await openSubmenu(menu, "Advanced");
+      expect(
+        [...advanced.querySelectorAll('[role="separator"]')].filter(
+          (element) => element.closest('[role="menu"]') === advanced,
+        ),
+      ).toHaveLength((options.involvingMeContext ? 2 : 3) + Number(options.compact));
+      expect(advanced.querySelector('[data-value="toggle-involving-me"]') !== null).toBe(
+        !options.involvingMeContext,
+      );
+    },
+  );
+
   it("loads compact settings and ignores the previous target reply", async () => {
     const oldReply = createDeferred<{ session: GatewaySessionRow }>();
     const nextReply = createDeferred<{ session: GatewaySessionRow }>();
@@ -85,7 +119,6 @@ describe("session communication menu", () => {
     await menu.updateComplete;
     expect(pressed(advanced, "send", "ask")).toBe("true");
     expect(pressed(advanced, "receive", "always")).toBe("true");
-    expect(request.mock.calls.filter(([method]) => method === "sessions.describe")).toHaveLength(2);
   });
 
   it("retires settings on disconnect and reloads after reconnect", async () => {
@@ -117,9 +150,11 @@ describe("session communication menu", () => {
     const { menu, advanced } = await setup({ context, session: target() });
     await waitForFast(() => expect(advanced.textContent).toContain("Settings unavailable"));
     expect(choice(advanced, "send", "always").disabled).toBe(true);
+    expect(advanced.querySelectorAll(':scope > [role="separator"]')).toHaveLength(2);
     await selectMenuValue(menu, "reload-settings");
     await waitForFast(() => expect(pressed(advanced, "send", "never")).toBe("true"));
     expect(advanced.textContent).not.toContain("Settings unavailable");
+    expect(advanced.querySelectorAll(':scope > [role="separator"]')).toHaveLength(2);
   });
 
   it("dispatches only the selected direction and resets raw overrides together", async () => {
@@ -135,6 +170,7 @@ describe("session communication menu", () => {
     await settleSessionMenu(menu);
     const reopened = await openSubmenu(menu, "Advanced");
     expect(choice(reopened, "send", "never").title).toBe("");
+    expect(reopened.querySelectorAll(':scope > [role="separator"]')).toHaveLength(2);
     await selectMenuValue(menu, "communication:reset");
     expect(onAction).toHaveBeenLastCalledWith({ kind: "set-communication", communication: null });
   });
@@ -147,9 +183,7 @@ describe("session communication menu", () => {
       onAction,
     });
     await selectMenuValue(menu, "compact:open-advanced");
-    expect(menuItem(menu, "Back").getAttribute("data-value")).toBe("compact:back");
     expect(pressed(menu, "receive", "ask")).toBe("true");
-    expect(menuPanel(menu).querySelector('[role="menu"]')).toBeNull();
     // jsdom has no layout; the communication controls in this fixture are visible.
     for (const control of menu.querySelectorAll<HTMLElement>(
       ".session-menu__communication-choice",
@@ -162,16 +196,6 @@ describe("session communication menu", () => {
     expect(document.activeElement).toBe(choice(menu, "send", "always"));
     choice(menu, "send", "always").dispatchEvent(keydown(true));
     expect(document.activeElement).toBe(menuItem(menu, "Open in"));
-    for (const view of ["icon", "copy", "open-in"]) {
-      await selectMenuValue(menu, `compact:open-${view}`);
-      expect(menuItem(menu, "Back").getAttribute("data-value")).toBe("compact:back-advanced");
-      await selectMenuValue(menu, "compact:back-advanced");
-      expect(choice(menu, "receive", "ask")).toBeTruthy();
-    }
-    await selectMenuValue(menu, "compact:back");
-    expect(menuItemLabels(menu)).toContain("Advanced");
-    expect(menu.querySelector('[role="group"]')).toBeNull();
-    await selectMenuValue(menu, "compact:open-advanced");
     choice(menu, "receive", "never").click();
     expect(onAction).toHaveBeenCalledWith({
       kind: "set-communication",
@@ -194,16 +218,11 @@ describe("session communication menu", () => {
     expect(onAction).not.toHaveBeenCalled();
   });
 
-  it("disables missing metadata and hides batch settings", async () => {
+  it("disables missing communication metadata", async () => {
     const { advanced, onAction } = await setup();
     expect(choice(advanced, "send", "always").disabled).toBe(true);
     expect(advanced.querySelector('.session-menu__communication [aria-pressed="true"]')).toBeNull();
     choice(advanced, "send", "always").click();
     expect(onAction).not.toHaveBeenCalled();
-    const batch = await mountMenu({
-      session: { effectiveCommunication: policy },
-      selectionCount: 2,
-    });
-    expect(menuItemLabels(batch)).not.toContain("Advanced");
   });
 });

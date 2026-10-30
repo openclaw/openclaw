@@ -2,7 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
-  errorShape,
   type SessionCatalog,
   validateSessionsCatalogListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -10,6 +9,7 @@ import { prepareShellPathFromLoginShell } from "../../infra/shell-env.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
+import { respondError } from "./response.js";
 import {
   createSessionCatalogRequestEntrySnapshot,
   type SessionCatalogInstances,
@@ -22,6 +22,7 @@ import {
 import {
   getSessionCatalogListOperations,
   listSessionCatalogWithinBudget,
+  retainSessionCatalogHostStatus,
   resolvePublishedSessionCatalogs,
   sessionCatalogListKey,
   type CatalogListEnumeration,
@@ -50,10 +51,10 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
   async ({ params, respond, context, client, signal }) => {
     const request = params;
     if (request.cursors !== undefined && request.catalogId === undefined) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "catalogId is required when cursors are provided"),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "catalogId is required when cursors are provided",
       );
       return;
     }
@@ -62,10 +63,10 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
       ? catalogRegistrations.providers.find((candidate) => candidate.id === request.catalogId)
       : undefined;
     if (request.catalogId && !requestedProvider) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${request.catalogId}`),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        `unknown session catalog: ${request.catalogId}`,
       );
       return;
     }
@@ -244,7 +245,6 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
           operations.retirement.signal,
           signal,
         ].filter((candidate): candidate is AbortSignal => candidate !== undefined),
-        selected.map((provider) => provider.id),
       );
     subscribe(progress);
     const enumerate = async () => {
@@ -281,13 +281,16 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
             const shareRoute = catalogRegistrations.shareRoutes.get(provider);
             const resolution = resolveProviderCreateTarget(provider, resolvedAgent.agentId, config);
             const createTarget = resolution.ok ? resolution.target : undefined;
+            const providerKey = JSON.stringify([listKey, provider.id]);
             const page = await listSessionCatalogWithinBudget(
               operations,
-              JSON.stringify([listKey, provider.id]),
+              providerKey,
               progress,
               subscribe,
               catalogResult(provider, shareRoute, [], undefined, createTarget),
               async () => {
+                const cached = operations.pages.get(providerKey)?.page;
+                const cachedCatalog = cached && resolvePublishedSessionCatalogs(cached)[0];
                 const providerInstances: SessionCatalogInstances = new Map();
                 const onHost = (host: SessionCatalog["hosts"][number]) => {
                   if (publishedHosts) {
@@ -295,12 +298,16 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
                     hosts.set(host.hostId, host);
                     publishedHosts.set(provider.id, hosts);
                   }
+                  const previousHost = cachedCatalog?.hosts.find(
+                    (candidate) => candidate.hostId === host.hostId,
+                  );
+                  const currentHost = retainSessionCatalogHostStatus(host, previousHost);
                   requestEntries?.captureHostInstances(host, providerInstances);
                   const catalog = catalogResult(
                     provider,
                     shareRoute,
-                    [host],
-                    undefined,
+                    [currentHost],
+                    operations.pages.get(providerKey)?.error,
                     createTarget,
                   );
                   // The final response also reconciles these snapshots if a slow client drops a frame.

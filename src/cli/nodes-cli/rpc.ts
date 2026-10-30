@@ -5,6 +5,7 @@ import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Command } from "commander";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import {
@@ -29,6 +30,7 @@ const STORED_DEVICE_AUTH_FALLBACK_DETAIL_CODES = new Set([
   "AUTH_TOKEN_MISMATCH",
   "AUTH_DEVICE_TOKEN_MISMATCH",
   "AUTH_SCOPE_MISMATCH",
+  "AUTH_VERIFIED_USER_REQUIRED",
   "PAIRING_REQUIRED",
 ]);
 const NODE_PAIR_APPROVAL_GATEWAY_METHODS = new Set<string>(["node.pair.list", "node.pair.approve"]);
@@ -115,12 +117,7 @@ export const callNodesGatewayCli = async (
   },
 ) => {
   const invokeTimeoutMs =
-    method === "node.invoke" &&
-    params !== null &&
-    typeof params === "object" &&
-    !Array.isArray(params)
-      ? (params as { timeoutMs?: unknown }).timeoutMs
-      : undefined;
+    method === "node.invoke" && isRecord(params) ? params.timeoutMs : undefined;
   const useLocalBackendSharedAuth = callOpts?.useLocalBackendSharedAuth === true;
   return await callGatewayFromCliWithTransport(method, opts, params, {
     label: `Nodes ${method}`,

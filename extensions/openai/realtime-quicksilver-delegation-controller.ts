@@ -4,7 +4,6 @@ import type {
   RealtimeVoiceGatewayControl,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
-  buildRealtimeVoiceAgentControlSpeechMessage,
   extractErrorCode,
   readErrorName,
   rawDataToString,
@@ -31,6 +30,16 @@ import { isOpenAIGptLiveApiModel } from "./realtime-quicksilver.js";
 const WEBSOCKET_OPEN = 1;
 const CONSULT_FAILURE_TEXT =
   "The agent task failed. Tell the user it did not complete and offer to try again.";
+// Keep the launch note in one append; it does not establish consultation admission.
+const NATURAL_DELEGATION_ACK_MESSAGE = [
+  "Internal OpenClaw voice control note.",
+  "Do not delegate this note or call tools.",
+  "The request may not be accepted yet.",
+  "For this launch acknowledgment only, confirm hearing the request; never imply checking or doing it.",
+  "Reply in your own words and the user's language, under 8 words; vary naturally and avoid repeating recent acknowledgments.",
+  'Do not imply acceptance, work begun, or completion: no "on it", "taking that", "accepted", or equivalents in any language.',
+  "Do not guess an answer or promise one.",
+].join("\n");
 
 type PendingDelegation = {
   id: string;
@@ -469,10 +478,7 @@ export class OpenAIQuicksilverDelegationController {
     try {
       // Host-classified sessions disable vendor filler. Receipt is launch-only, not run admission.
       if (this.options.handleDelegationInput) {
-        this.sendSessionContext(
-          buildRealtimeVoiceAgentControlSpeechMessage("I’ll check that request."),
-          "speakable",
-        );
+        this.sendSessionContext(NATURAL_DELEGATION_ACK_MESSAGE, "speakable");
       }
       const result = await runner({
         prompt: delegation.prompt,

@@ -1,4 +1,5 @@
 /** Verifies global hook runner sequencing, mutation, and error behavior. */
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createMockPluginRegistry } from "./hooks.test-fixtures.js";
@@ -85,6 +86,92 @@ describe("hook-runner-global", () => {
     expect(mod.hasGlobalHooks("reply_dispatch", { dispatchKind: "acp" })).toBe(true);
     expect(mod.hasGlobalHooks("reply_dispatch", {})).toBe(true);
     expect(mod.hasGlobalHooks("reply_dispatch")).toBe(true);
+  });
+
+  it.each([
+    {
+      hookName: "before_tool_call" as const,
+      run: (runner: HookRunner) =>
+        runner.runBeforeToolCall({ toolName: "read", params: {} }, { toolName: "read" }),
+    },
+    {
+      hookName: "before_reset" as const,
+      run: (runner: HookRunner) =>
+        runner.runBeforeReset({ reason: "new" } as never, { sessionKey: "main" } as never),
+    },
+  ])(
+    "waits out a plugin replacement before dispatching $hookName to the published registration",
+    async ({ hookName, run }) => {
+      // Earlier cases reset modules; use the instance class from the runner's module graph.
+      const { PluginInstance } = await import("./plugin-instance.js");
+      const previous = new PluginInstance("swap-policy");
+      const current = new PluginInstance("swap-policy");
+      const previousHandler = vi.fn();
+      const currentHandler = vi.fn();
+      const previousRegistry = createMockPluginRegistry([
+        { hookName, pluginId: "swap-policy", handler: previous.wrap(previousHandler) },
+      ]);
+      const currentRegistry = createMockPluginRegistry([
+        { hookName, pluginId: "swap-policy", handler: current.wrap(currentHandler) },
+      ]);
+      const mod = await importHookRunnerGlobalModule();
+      setActivePluginRegistry(previousRegistry);
+      mod.initializeGlobalHookRunner(previousRegistry);
+      const release = previous.reserveReplacement();
+      previous.quiesce();
+
+      const dispatch = run(expectGlobalHookRunner(mod.getGlobalHookRunner()));
+      await setImmediate();
+      expect(currentHandler).not.toHaveBeenCalled();
+      setActivePluginRegistry(currentRegistry);
+      mod.initializeGlobalHookRunner(currentRegistry);
+      release();
+
+      await expect(dispatch).resolves.toBeUndefined();
+      expect(previousHandler).not.toHaveBeenCalled();
+      expect(currentHandler).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("re-selects every registration of a plugin a sequential dispatch waited out", async () => {
+    const { PluginInstance } = await import("./plugin-instance.js");
+    const previous = new PluginInstance("swap-policy");
+    const current = new PluginInstance("swap-policy");
+    const previousHandler = vi.fn();
+    const calls: string[] = [];
+    const registration = (instance: InstanceType<typeof PluginInstance>, label: string) => ({
+      hookName: "before_tool_call",
+      pluginId: "swap-policy",
+      handler: instance.wrap(label === "previous" ? previousHandler : () => void calls.push(label)),
+    });
+    const previousRegistry = createMockPluginRegistry([
+      { ...registration(previous, "previous"), priority: 2 },
+      { ...registration(previous, "previous"), priority: 1 },
+    ]);
+    const currentRegistry = createMockPluginRegistry([
+      { ...registration(current, "first"), priority: 2 },
+      { ...registration(current, "second"), priority: 1 },
+    ]);
+    const mod = await importHookRunnerGlobalModule();
+    setActivePluginRegistry(previousRegistry);
+    mod.initializeGlobalHookRunner(previousRegistry);
+    const release = previous.reserveReplacement();
+    previous.quiesce();
+
+    const dispatch = expectGlobalHookRunner(mod.getGlobalHookRunner()).runBeforeToolCall(
+      { toolName: "read", params: {} },
+      { toolName: "read" },
+    );
+    await setImmediate();
+    setActivePluginRegistry(currentRegistry);
+    mod.initializeGlobalHookRunner(currentRegistry);
+    release();
+    // The retired generation stops accepting entirely once its reload settles.
+    await previous.dispose();
+
+    await expect(dispatch).resolves.toBeUndefined();
+    expect(previousHandler).not.toHaveBeenCalled();
+    expect(calls).toEqual(["first", "second"]);
   });
 
   it("re-admits hook dispatch against the current registry after its prepared generation retires", async () => {

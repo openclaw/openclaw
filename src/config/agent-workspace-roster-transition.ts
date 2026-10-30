@@ -23,8 +23,10 @@ export async function assertAgentDeletionTargetsUnchanged(
   if (sourceConfig.session?.store !== targetConfig.session?.store) {
     const { listPendingAgentDeletionJournalsAsync } =
       await import("../state/agent-deletion-journal.js");
-    const { entries, manualClawAgentIds } = await listPendingAgentDeletionJournalsAsync({ env });
-    for (const agentId of [...entries.map((entry) => entry.agentId), ...manualClawAgentIds]) {
+    const { entries, manualTemplateAgentIds } = await listPendingAgentDeletionJournalsAsync({
+      env,
+    });
+    for (const agentId of [...entries.map((entry) => entry.agentId), ...manualTemplateAgentIds]) {
       if (
         resolveSessionStorePathCore(sourceConfig.session?.store, { agentId, env }) !==
         resolveSessionStorePathCore(targetConfig.session?.store, { agentId, env })

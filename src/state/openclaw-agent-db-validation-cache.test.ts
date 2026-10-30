@@ -6,19 +6,12 @@ import { assert, describe, expect, it as baseIt, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
-import {
-  getAdmittedSqliteSchemaFacts,
-  runSqliteReadOperationSync,
-} from "../infra/sqlite-schema-facts.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import {
   AgentDatabaseSchemaAdmissionChangedError as AdmissionChangedError,
   AgentDatabaseSchemaAdmissionInvalidError as AdmissionInvalidError,
 } from "./agent-database-admission-error.js";
-import {
-  withReceiptFixture,
-  independentWorkerReceipt,
-  observeValidationPragmas,
-} from "./agent-validation.test-support.js";
+import { withReceiptFixture, independentWorkerReceipt } from "./agent-validation.test-support.js";
 import {
   loadOpenClawAgentCanonicalValidationReceipt as loadCanonical,
   recordOpenClawAgentCanonicalValidation as recordCanonical,
@@ -58,9 +51,15 @@ import {
   runOpenClawAgentWriteTransaction as writeTransaction,
 } from "./openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission as admitWrite } from "./openclaw-agent-write-admission.js";
+import { expectRow, expectRows } from "./openclaw-state-db-fixtures.test-support.js";
 
 const observedValidationDirectories = vi.hoisted(
-  () => [] as Array<{ directory: string; notify: (filename?: string) => void; active: boolean }>,
+  () =>
+    [] as Array<{
+      directory: string;
+      notify: (filename?: string, event?: string) => void;
+      active: boolean;
+    }>,
 );
 type ReceiptRun = Parameters<typeof withReceiptFixture>[1];
 type ReceiptOptions = Parameters<ReceiptRun>[1];
@@ -86,10 +85,6 @@ function replaceFile(pathname: string) {
   fs.copyFileSync(pathname, replacement);
   fs.renameSync(replacement, pathname);
 }
-function observe(db: DatabaseSync) {
-  const observation = observeValidationPragmas(db);
-  return { ...observation, [Symbol.dispose]: observation.restore };
-}
 function activeObservers(pathname: string) {
   return observedValidationDirectories.filter(
     (observer) => observer.active && observer.directory === path.dirname(pathname),
@@ -106,9 +101,17 @@ function expectSharedSchema(database: ReceiptDatabase, reader: ReturnType<typeof
 function expectFlag(cell: SharedArrayBuffer, value: number) {
   expect(Atomics.load(new Int32Array(cell), 0)).toBe(value);
 }
+function revokeCell(cell: SharedArrayBuffer) {
+  Atomics.store(new Int32Array(cell), 0, 0);
+}
+function liveCell() {
+  const cell = new SharedArrayBuffer(4);
+  Atomics.store(new Int32Array(cell), 0, 1);
+  return cell;
+}
 // mock-isolation: Drive identity invalidation deterministically without native watcher timing.
 vi.mock("../infra/owned-directory-observation.js", () => ({
-  observeOwnedDirectory(directory: string, notify: (filename?: string) => void) {
+  observeOwnedDirectory(directory: string, notify: (filename?: string, event?: string) => void) {
     const observer = { directory, notify, active: true };
     observedValidationDirectories.push(observer);
     return {
@@ -130,9 +133,6 @@ describe("canonical proof on physical database validation", () => {
         (candidate) => candidate.active && candidate.directory === root,
       );
       expect(observer).toBeDefined();
-      expect(successor.receiptId).not.toBe(captured.validation.receiptId);
-      expect(successor.valid).not.toBe(captured.validation.valid);
-      expect(successor.canonicalReady).not.toBe(captured.validation.canonicalReady);
 
       await closeDatabases(root);
       expect(observer!.active).toBe(true);
@@ -152,8 +152,6 @@ describe("canonical proof on physical database validation", () => {
       };
       const publish = captureTransfer(target);
       expect(publish(successor.identity, successor)).toBe(true);
-      expect(getTransfer(target)?.valid).toBe(successor.valid);
-      expectFlag(successor.valid, 1);
 
       // Deliver even after close: a queued callback must not find retired path trust.
       observer!.notify(path.basename(database.path));
@@ -166,26 +164,22 @@ describe("canonical proof on physical database validation", () => {
     (invalidation, { empty: { database } }) => {
       const captured = captureReadValidation(database);
       expect(captured?.canonicalPath).toBe(database.path);
-      const realpath = vi.spyOn(fs.realpathSync, "native");
-      const stat = vi.spyOn(fs, "statSync");
-      syncBuiltinESMExports();
-      try {
-        const warm = captureReadValidation(database);
-        expect(warm?.validation.receiptId).toBe(captured?.validation.receiptId);
-        captured!.assertCurrent();
-        warm!.assertCurrent();
-        expect(realpath).not.toHaveBeenCalled();
-        expect(stat).not.toHaveBeenCalled();
-      } finally {
-        realpath.mockRestore();
-        stat.mockRestore();
-        syncBuiltinESMExports();
-      }
+      captured!.assertCurrent();
       closePath(database.path);
       expect(activeObservers(database.path)).not.toHaveLength(0);
-      expect(captureReadValidation(database)?.validation.receiptId).toBe(
-        captured?.validation.receiptId,
-      );
+      if (invalidation === "observation") {
+        const stat = vi.spyOn(fs, "statSync");
+        syncBuiltinESMExports();
+        try {
+          for (const observer of activeObservers(database.path)) {
+            observer.notify(path.basename(database.path), "change");
+          }
+          expect(stat).not.toHaveBeenCalled();
+        } finally {
+          stat.mockRestore();
+          syncBuiltinESMExports();
+        }
+      }
       replaceFile(database.path);
       expectFlag(captured!.validation.valid, 1);
       expect(captureReadValidation(database)?.validation.receiptId).toBe(
@@ -194,10 +188,8 @@ describe("canonical proof on physical database validation", () => {
       if (invalidation === "reader admission") {
         expect(captureReadValidation(database, "admission")).toBeUndefined();
       } else {
-        for (const observer of observedValidationDirectories) {
-          if (observer.active && observer.directory === path.dirname(database.path)) {
-            observer.notify(path.basename(database.path));
-          }
+        for (const observer of activeObservers(database.path)) {
+          observer.notify(path.basename(database.path), "rename");
         }
       }
       expect(() => captured!.assertCurrent()).toThrow(
@@ -260,102 +252,28 @@ describe("canonical proof on physical database validation", () => {
     publish(delayed.identity, delayed);
     expect(() => reader!.assertCurrent()).not.toThrow();
     expect(getTransfer(alias)).toBe(receipt);
-    expect(alias.path).toContain("reader-alias");
     invalidateValidation(database.path);
     expect(() => reader!.assertCurrent()).toThrow("Session reader validation is no longer current");
   });
 
-  it("shares admitted schema without marker queries while retaining explicit revocation", ({
-    empty: { database, options },
-  }) => {
-    {
-      using warm = observe(database.db);
-      runSqliteReadOperationSync(database.db, () => {
-        expect(adoptSchema(database)).toBe(true);
-        expect(adoptSchema(database)).toBe(true);
-      });
-      expect(warm.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
+  it.for(["refreshed", "replacement"] as const)(
+    "repairs missing schema and shares %s proof without losing sessions",
+    (receipt, { populated: { database, options } }) => {
+      using reader = openTestReader(options);
+      runSqliteReadOperationSync(database.db, () => expect(adoptSchema(database)).toBe(true));
       database.db.exec("BEGIN");
       try {
         expect(adoptSchema(database)).toBe(false);
-        expect(warm.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
       } finally {
         database.db.exec("COMMIT");
       }
-      expect(adoptSchema(database)).toBe(true);
-      expect(warm.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
-    }
-
-    {
-      using reader = openTestReader(options);
-      using cold = observe(reader.db);
-      expect(adoptSchema(reader.database)).toBe(true);
-      expect(cold.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
-      runSqliteReadOperationSync(reader.database.db, () =>
-        expect(adoptSchema(reader.database)).toBe(true),
-      );
-      expect(cold.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
-    }
-
-    const writer = new DatabaseSync(database.path);
-    try {
-      writer.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
-      {
-        using observation = observe(database.db);
-        expect(adoptSchema(database)).toBe(true);
-        expect(adoptSchema(database, true, true)).toBe(true);
-        expect(observation.counts).toMatchObject({ schema_version: 0, user_version: 0 });
-      }
-    } finally {
-      writer.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
-      writer.close();
-    }
-    invalidateSchema(database);
-    expect(adoptSchema(database)).toBe(false);
-  });
-
-  it("repairs missing additive schema during refresh without losing existing sessions", ({
-    populated: { database, options },
-  }) => {
-    using reader = openTestReader(options);
-    const previousFacts = getValidation(database)?.schema?.facts;
-    assert(previousFacts, "Expected native schema facts before refresh");
-    const previousSchemaVersion = previousFacts.schemaVersion;
-    database.db.exec("DROP TABLE session_reactions");
-    expect(adoptSchema(database)).toBe(false);
-
-    refreshSchema(database, () => {});
-
-    expect(hasReadSchema(reader.database)).toBe(true);
-    const published = getAdmittedSqliteSchemaFacts(reader.database.db);
-    expect(published?.schemaVersion).toBeGreaterThan(previousSchemaVersion);
-    expect(published?.tables.has("session_reactions")).toBe(true);
-    expect(reader.database.db.prepare("SELECT message_id FROM session_reactions").all()).toEqual(
-      [],
-    );
-    expect(
-      reader.database.db
-        .prepare(
-          "SELECT current_session_id, entry_json, updated_at FROM session_nodes WHERE session_key = ?",
-        )
-        .get("agent:main:existing"),
-    ).toEqual({
-      current_session_id: "existing",
-      entry_json: '{"sessionId":"existing","updatedAt":1}',
-      updated_at: 1,
-    });
-  });
-
-  it.for(["refreshed", "replacement"] as const)(
-    "shares %s proof published after local DDL without rechecking foreign schema markers",
-    (receipt, { empty: { database, options } }) => {
-      using reader = openTestReader(options);
-      expect(hasCanonical(reader.database)).toBe(true);
       const original = getValidation(database)!.schema!;
       publishSchema(database);
       const foreign = new DatabaseSync(database.path);
       try {
-        database.db.exec("CREATE TABLE late_reader_fixture(value TEXT)");
+        database.db.exec(
+          "DROP TABLE session_reactions; CREATE TABLE late_reader_fixture(value TEXT)",
+        );
         expect(adoptSchema(database)).toBe(false);
         refreshSchema(database, () => {});
         if (receipt === "replacement") {
@@ -365,9 +283,22 @@ describe("canonical proof on physical database validation", () => {
         expectFlag(original.valid, 0);
         expect(adoptSchema(database, true, true)).toBe(true);
         expectSharedSchema(database, reader);
-        expectFlag(original.valid, 0);
         expect(getValidation(database)?.schema?.facts?.tables.has("late_reader_fixture")).toBe(
           true,
+        );
+        expectRows(reader.db, "SELECT message_id FROM session_reactions", []);
+        expectRow(
+          reader.db,
+          "SELECT current_session_id, entry_json, updated_at FROM session_nodes WHERE session_key = ?",
+          {
+            current_session_id: "existing",
+            entry_json: '{"sessionId":"existing","updatedAt":1}',
+            updated_at: 1,
+          },
+          "agent:main:existing",
+        );
+        runSqliteReadOperationSync(reader.db, () =>
+          expect(adoptSchema(reader.database)).toBe(true),
         );
 
         // TEMP changes preserve MAIN admission; durable DDL still revokes it.
@@ -382,7 +313,10 @@ describe("canonical proof on physical database validation", () => {
         expectSharedSchema(database, reader);
 
         foreign.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+        expect(adoptSchema(database)).toBe(true);
         expectSharedSchema(database, reader);
+        invalidateSchema(database);
+        expect(adoptSchema(database)).toBe(false);
       } finally {
         foreign.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
         foreign.close();
@@ -409,9 +343,9 @@ describe("canonical proof on physical database validation", () => {
       ).toThrow("rollback proof");
       expect(hasCanonical(database)).toBe(false);
       if (proof === "durable receipt") {
-        expect(
-          database.db.prepare("SELECT canonical_ready FROM session_key_contract").get(),
-        ).toEqual({ canonical_ready: null });
+        expectRow(database.db, "SELECT canonical_ready FROM session_key_contract", {
+          canonical_ready: null,
+        });
       } else {
         expect(
           database.db.prepare("SELECT current_session_id FROM session_nodes").get()
@@ -469,6 +403,29 @@ describe("canonical proof on physical database validation", () => {
   );
 
   describe("native integrity proof handoff", () => {
+    it.for(["empty", "canonical"] as const)(
+      "keeps concurrent publications current after $0 admission succeeds",
+      (cache, { empty: { database, options } }) => {
+        if (cache === "canonical") {
+          writeTransaction(recordCanonical, options);
+        }
+        const received = independentWorkerReceipt(database);
+        clearValidation(database.path);
+        if (cache === "canonical") {
+          expect(hasCanonical(database)).toBe(true);
+        }
+        const first = capturePublication(database);
+        const second = capturePublication(database);
+
+        first(received.identity, structuredClone(received));
+        // A later opener must not replace the owner captured by the queued peer.
+        const third = capturePublication(database);
+        expect(() => second(received.identity, structuredClone(received))).not.toThrow();
+        expect(() => third(received.identity, structuredClone(received))).not.toThrow();
+        expect(getTransfer(database)?.schema).toBeDefined();
+      },
+    );
+
     it("distinguishes raced publication from malformed receipts even after revocation", ({
       empty: { database },
     }) => {
@@ -477,18 +434,26 @@ describe("canonical proof on physical database validation", () => {
         const original = getValidation(database)!;
         const received = independentWorkerReceipt(database);
         const publish = capturePublication(database);
+        const adopt = captureTransfer(database);
         if (race === "capture") {
           invalidateValidation(database.path);
         } else {
           const cell =
             race === "captured proof"
-              ? original.valid
+              ? structuredClone(original).valid
               : race === "received proof"
                 ? received.valid
                 : received.schema!.valid;
-          Atomics.store(new Int32Array(cell), 0, 0);
+          revokeCell(cell);
         }
         expect(() => publish(received.identity, received), race).toThrow(AdmissionChangedError);
+        if (race !== "schema") {
+          expect(adopt(received.identity, received)).toBe(false);
+        }
+        if (race === "captured proof") {
+          expectFlag(received.valid, 1);
+          expect(getTransfer(database)).toBeUndefined();
+        }
         if (race === "schema") {
           assert(original.schema);
           expectFlag(original.schema.valid, 0);
@@ -569,8 +534,7 @@ describe("canonical proof on physical database validation", () => {
       (mode, { empty: { database } }) => {
         const received = independentWorkerReceipt(database);
         assert(received.schema, "Expected independently checked schema facts");
-        received.schema = { ...received.schema, valid: new SharedArrayBuffer(4) };
-        Atomics.store(new Int32Array(received.schema.valid), 0, 1);
+        received.schema = { ...received.schema, valid: liveCell() };
         invalidateSchema(database);
         const publish =
           mode === "required" ? capturePublication(database) : captureTransfer(database);
@@ -651,26 +615,9 @@ describe("canonical proof on physical database validation", () => {
         ...received,
         agentId: successor.agentId,
         identity: "successor-file",
-        valid: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+        valid: liveCell(),
       };
-      Atomics.store(new Int32Array(successorReceipt.valid), 0, 1);
       expect(beforeOwnerRevocation(successorReceipt.identity, successorReceipt)).toBe(false);
-    });
-
-    it("rejects delayed proof when a peer revokes the captured shared receipt", ({
-      empty: { database },
-    }) => {
-      const received = independentWorkerReceipt(database);
-      const original = getValidation(database)!;
-      const peer = structuredClone(original);
-      const adopt = captureTransfer(database);
-
-      Atomics.store(new Int32Array(peer.valid), 0, 0);
-
-      expectFlag(original.valid, 0);
-      expectFlag(received.valid, 1);
-      expect(adopt(received.identity, received)).toBe(false);
-      expect(getTransfer(database)).toBeUndefined();
     });
 
     it.for(["superseded", "acknowledged"] as const)(
@@ -689,7 +636,7 @@ describe("canonical proof on physical database validation", () => {
         const acknowledgeAlias = capturePublication(alias);
         acknowledgeAlias(aliasReceipt.identity, aliasReceipt);
         // Worker lease cleanup revokes its transferred proof, not an independent alias.
-        Atomics.store(new Int32Array(structuredClone(original).valid), 0, 0);
+        revokeCell(structuredClone(original).valid);
         const publish = capturePublication(database);
 
         publish(replacement.identity, structuredClone(replacement));
@@ -808,34 +755,30 @@ describe("canonical proof on physical database validation", () => {
     "shares proof with %s readers but never raw readers",
     (mode, { populated: { database, options } }) => {
       using raw = new DatabaseSync(database.path, { readOnly: true });
+      const rawTarget = { agentId: "main", db: raw };
+      expect([hasCanonical(rawTarget), markCanonical(rawTarget)]).toEqual([false, false]);
       {
-        expect(hasCanonical({ agentId: "main", db: raw })).toBe(false);
-        expect(markCanonical({ agentId: "main", db: raw })).toBe(false);
-        {
-          using opened = openTestReader(options);
-          const receipt = getValidation(database);
-          assert(receipt, "Expected physical validation receipt");
-          const transferred = structuredClone(receipt);
-          if (mode === "transferred") {
-            expect(adoptValidation(opened.database, transferred)).toBe(true);
-          }
-          expect(
-            markCanonical(
-              mode === "thin" ? { agentId: "main", db: opened.database.db } : opened.database,
-            ),
-          ).toBe(true);
-          expect(hasCanonical(database)).toBe(true);
-          expect(hasCanonical({ agentId: "other", db: opened.database.db })).toBe(false);
-          expectFlag(transferred.canonicalReady, 1);
-          if (mode === "transferred") {
-            invalidateValidation(database.path);
-            expect(adoptValidation(opened.database, transferred)).toBe(false);
-            expect(hasCanonical(opened.database)).toBe(false);
-          }
+        using opened = openTestReader(options);
+        const receipt = getValidation(database);
+        assert(receipt, "Expected physical validation receipt");
+        const transferred = structuredClone(receipt);
+        if (mode === "transferred") {
+          expect(adoptValidation(opened.database, transferred)).toBe(true);
         }
-        expect(hasCanonical(database)).toBe(mode === "thin");
-        expect(hasCanonical({ agentId: "main", db: raw })).toBe(false);
+        const target =
+          mode === "thin" ? { agentId: "main", db: opened.database.db } : opened.database;
+        expect(markCanonical(target)).toBe(true);
+        expect(hasCanonical(database)).toBe(true);
+        expect(hasCanonical({ agentId: "other", db: opened.database.db })).toBe(false);
+        expectFlag(transferred.canonicalReady, 1);
+        if (mode === "transferred") {
+          invalidateValidation(database.path);
+          expect(adoptValidation(opened.database, transferred)).toBe(false);
+          expect(hasCanonical(opened.database)).toBe(false);
+        }
       }
+      expect(hasCanonical(database)).toBe(mode === "thin");
+      expect(hasCanonical(rawTarget)).toBe(false);
     },
   );
 

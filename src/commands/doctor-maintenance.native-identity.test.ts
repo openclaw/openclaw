@@ -4,10 +4,12 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForGatewayHealthyRestart } from "../cli/daemon-cli/restart-health.js";
+import { nativeExit } from "../daemon/systemd-exec.test-support.js";
 import { getSelfAndAncestorPidsSync } from "../infra/restart-stale-pids.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
+import { doctorMaintenanceTestEnv } from "./doctor-maintenance.admission.test-support.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { mockDoctorServicePlatform } from "./doctor-maintenance.state-owner.test-support.js";
 
@@ -66,11 +68,6 @@ const refusalCases = [
 ] as const;
 type Scenario = (typeof refusalCases)[number][0] | "capture-unavailable" | "inspection-failed";
 type Property = { type: string; data: unknown };
-const cleanEnv = Object.fromEntries(
-  "HOME CONFIG_PATH PROFILE SUPERVISOR_MODE SERVICE_REPAIR_POLICY SERVICE_MARKER SERVICE_KIND SYSTEMD_UNIT UPDATE_RUN_ID UPDATE_IN_PROGRESS UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION"
-    .split(" ")
-    .map((key) => [`OPENCLAW_${key}`, undefined]),
-);
 function properties(groups: Record<string, Record<string, unknown>>): Record<string, Property> {
   return Object.fromEntries(
     Object.entries(groups).flatMap(([type, values]) =>
@@ -142,13 +139,14 @@ async function repair(scenario: Scenario) {
       if (reads[method]) {
         return [reads[method]];
       }
-      if (["ResetFailedUnit", "StartUnit", "RestartUnit"].includes(method)) {
+      if (["ResetFailedUnit", "StartUnit", "RestartUnit", "StopUnit"].includes(method)) {
         expect(args[1]).toBe(":1.42");
-        effects.push(method);
+        effects.push(method === "StopUnit" ? "stop" : method);
         if (method === "ResetFailedUnit") {
           return [];
         }
-        running = true;
+        stopped ||= method === "StopUnit";
+        running = method !== "StopUnit";
         return [{ type: "o", data: ["/org/freedesktop/systemd1/job/7"] }];
       }
     }
@@ -203,19 +201,16 @@ async function repair(scenario: Scenario) {
       diagnosticFailure = false;
       return { code: 1, termination: "exit", stdout: "", stderr: "Failed to connect to bus" };
     }
-    return {
-      code: 0,
-      termination: "exit",
-      stdout: reply(args)
-        .map((property) => JSON.stringify(property))
-        .join("\n"),
-      stderr: "",
-    };
+    const lines = reply(args).map((property) => JSON.stringify(property));
+    return nativeExit(lines.join("\n"));
   });
   native.systemctl.mockImplementation(async (args) => {
     const action = args[0];
     if (!action) {
       throw new Error("Missing systemctl action in fixture query");
+    }
+    if (action === "show") {
+      return nativeExit("LoadState=loaded\nTimeoutStopUSec=330s\n");
     }
     if (action !== "is-enabled") {
       // A missing pinned identity must fail visibly if it reaches unbound activation.
@@ -245,7 +240,7 @@ async function repair(scenario: Scenario) {
   });
   return await withEnvAsync(
     {
-      ...cleanEnv,
+      ...doctorMaintenanceTestEnv,
       HOME: home,
       USERPROFILE: home,
       OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),

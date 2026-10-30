@@ -33,8 +33,9 @@ Prepare the complete history manifest and substantive version-matched release
 notes before freezing the product-complete commit and its target context as the
 **Code SHA/ref**. Package source preflight requires a matching release section;
 an empty placeholder is not preparation. If the notes are final, this commit
-can also be the **Release SHA**. The candidate C owns qualification Q=C; select
-independently trusted admission/publication tooling P, then run:
+can also be the **Release SHA**. The candidate C owns test qualification Q=C;
+select independently trusted P for admission, aggregate validation, and
+publication, then run:
 
 ```bash
 PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"
@@ -48,6 +49,11 @@ pnpm ci:full-release \
   -f validation_purpose=publish \
   -f publication_selection_json="$PUBLICATION_SELECTION"
 ```
+
+For `main`, `--admission-workflow-sha` is the reviewed ancestry anchor; the helper
+may advance it to a verified descendant before dispatch as `main` moves. Add
+`--pin-admission-workflow` only when the exact main SHA must remain unchanged.
+Protected `release-publish/*` admission refs are always pinned.
 
 This example selects normal final-release publication. Select `npmDistTag=beta`
 for a beta, or `route=prepared` when the intended consumer is the prepared release

@@ -1,6 +1,7 @@
 // Focused public test helpers for plugin runtime, registry, and setup fixtures.
 
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import type { AgentHarness } from "../agents/harness/types.js";
 import type {
   IsolatedCompletionBoundaryFixture,
   IsolatedCompletionBoundaryFixtureParams,
@@ -183,12 +184,22 @@ export async function runInHarnessToolAuthorityForTest<
   run: (
     attempt: Omit<Attempt, "replyOperation"> & { toolAuthorityFingerprint?: string },
   ) => Promise<T>,
+  options?: { registeredHarness: AgentHarness },
 ): Promise<T> {
   if (attempt.toolAuthorityFingerprint) {
     throw new Error("The tool-authority boundary derives its own fingerprint");
   }
   const { withPreparedEmbeddedRunToolAuthority } =
     await import("../agents/harness/tool-authority.runtime.js");
+  const queueInputAdapter = options
+    ? await import("../agents/harness/registry.js").then((registry) => {
+        const harness = options.registeredHarness;
+        if (registry.resolveAgentHarnessOwnerPluginId(harness) !== pluginId) {
+          throw new Error("Fixture harness does not belong to the admitted plugin");
+        }
+        return registry.resolveAgentHarnessQueueInputAdapter(harness);
+      })
+    : undefined;
   const { resolveAgentIdFromSessionKey } = await import("../routing/session-key.js");
   const { harnessHostAdmissionsForTest } =
     await import("../agents/harness/host-capability.test-support.js");
@@ -205,6 +216,7 @@ export async function runInHarnessToolAuthorityForTest<
         replyOperation,
         trigger: attempt.trigger,
         sessionPersistence: attempt.sessionPersistence,
+        queueInputAdapter,
       },
       { ...pluginAttempt, agentId },
       undefined,
@@ -233,8 +245,7 @@ export {
   type PluginRecord,
 } from "../plugins/registry.js";
 export {
-  providerContractLoadError,
-  pluginRegistrationContractRegistry,
+  getPluginRegistrationContracts,
   resolveProviderContractProvidersForPluginIds,
   resolveWebFetchProviderContractEntriesForPluginId,
   resolveWebSearchProviderContractEntriesForPluginId,
@@ -249,7 +260,6 @@ export { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-tr
 export { runWithDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 export { prepareSystemRunMutableFileApproval } from "../infra/system-run-approval-binding.js";
 export { logMessageDispatchStarted, logMessageProcessed } from "../logging/diagnostic.js";
-export { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../plugins/provider-contract-public-artifacts.js";
 export {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,

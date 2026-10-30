@@ -1,5 +1,5 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { AsyncContext } from "../shared/async-context.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type AgentRingZeroToolScope = {
@@ -7,7 +7,7 @@ type AgentRingZeroToolScope = {
   tools: readonly AnyAgentTool[];
 };
 
-const activeRingZeroTools = new AsyncLocalStorage<AgentRingZeroToolScope>();
+const activeRingZeroTools = new AsyncContext<AgentRingZeroToolScope>(Symbol("agentRingZeroTools"));
 
 function bindToolToScope(tool: AnyAgentTool, scope: AgentRingZeroToolScope): AnyAgentTool {
   const execute = tool.execute;

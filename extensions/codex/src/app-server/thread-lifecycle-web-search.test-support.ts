@@ -45,7 +45,7 @@ export function registerThreadWebSearchBindingTests({
 
     const fixture = await createSequentialLifecycleHarness(() => threadStartResult("thread-1"));
     const { client, request } = fixture;
-    const policies: Array<{ persistent: boolean | undefined; current: boolean }> = [];
+    const policies: Array<[persistent: boolean | undefined, current: boolean]> = [];
     const start = async () => {
       const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
         params,
@@ -74,7 +74,7 @@ export function registerThreadWebSearchBindingTests({
         },
       });
       expect(tools).toEqual([]);
-      policies.push({ persistent: persistentWebSearchAllowed, current: webSearchAllowed });
+      policies.push([persistentWebSearchAllowed, webSearchAllowed]);
       return startOrResumeThread({
         client,
         params,
@@ -98,25 +98,20 @@ export function registerThreadWebSearchBindingTests({
     expect(savedAfterRestriction?.threadId).toBe("thread-1");
     expect(resumedBinding.threadId).toBe("thread-1");
     expect(policies).toEqual([
-      { persistent: true, current: true },
-      { persistent: true, current: false },
-      { persistent: true, current: true },
+      [true, true],
+      [true, false],
+      [true, true],
     ]);
-    expect(
-      request.mock.calls
-        .map(([method]) => method)
-        .filter((method) => method === "thread/start" || method === "thread/resume"),
-    ).toEqual(["thread/start", "thread/start", "thread/resume"]);
-    expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toMatchObject({
-      config: { web_search: "cached" },
-    });
-    expect(
-      request.mock.calls.filter(
-        ([method]) => method === "thread/start" || method === "thread/resume",
-      )[1]?.[1],
-    ).toMatchObject({
-      config: { web_search: "disabled" },
-    });
+    const lifecycle = request.mock.calls.filter(
+      ([method]) => method === "thread/start" || method === "thread/resume",
+    );
+    expect(lifecycle.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/start",
+      "thread/resume",
+    ]);
+    expect(lifecycle[0]?.[1]).toMatchObject({ config: { web_search: "cached" } });
+    expect(lifecycle[1]?.[1]).toMatchObject({ config: { web_search: "disabled" } });
   });
 
   it("persists config-denied search when runtime toolsAllow also excludes web_search", async () => {
@@ -139,36 +134,25 @@ export function registerThreadWebSearchBindingTests({
     params.toolsAllow = ["message"];
     params.pluginHarnessToolPolicyScope = "conversation";
     await fixture.endTurn("thread-1");
-    const restrictedBinding = await startOrResumeThread({
-      client,
-      params,
-      nativeCodeModeEnabled: false,
-      persistentWebSearchAllowed: false,
-      webSearchAllowed: false,
-    });
+    const startRestricted = () =>
+      startOrResumeThread({
+        client,
+        params,
+        nativeCodeModeEnabled: false,
+        persistentWebSearchAllowed: false,
+        webSearchAllowed: false,
+      });
+    const restrictedBinding = await startRestricted();
     await fixture.endTurn("thread-2");
-    const resumedRestrictedBinding = await startOrResumeThread({
-      client,
-      params,
-      nativeCodeModeEnabled: false,
-      persistentWebSearchAllowed: false,
-      webSearchAllowed: false,
-    });
+    const resumedRestrictedBinding = await startRestricted();
 
     expect(restrictedBinding.threadId).toBe("thread-2");
     expect(resumedRestrictedBinding.threadId).toBe("thread-2");
     expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-2");
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       ...preflightMethods,
-      "thread/start",
-      "thread/unsubscribe",
-      "config/read",
-      "thread/start",
-      "thread/unsubscribe",
-      "config/read",
-      "thread/read",
-      "thread/resume",
-      "thread/inject_items",
+      ...`thread/start thread/unsubscribe config/read thread/start thread/unsubscribe
+      config/read thread/read thread/resume thread/inject_items`.split(/\s+/),
     ]);
   });
 }

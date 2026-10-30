@@ -23,7 +23,7 @@ import {
 } from "./channels.plugin-install.test-helpers.js";
 import { createTestConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
-let channelsRemoveCommand: typeof import("./channels.js").channelsRemoveCommand;
+let channelsRemoveCommand: typeof import("./channels/remove.js").channelsRemoveCommand;
 
 const catalogMocks = vi.hoisted(() => ({
   listChannelPluginCatalogEntries: vi.fn((): ChannelPluginCatalogEntry[] => []),
@@ -96,7 +96,7 @@ function mockInstalledPlugin(plugin: ChannelPlugin) {
 
 describe("channelsRemoveCommand", () => {
   beforeAll(async () => {
-    ({ channelsRemoveCommand } = await import("./channels.js"));
+    ({ channelsRemoveCommand } = await import("./channels/remove.js"));
   });
 
   beforeEach(() => {
@@ -285,15 +285,7 @@ describe("channelsRemoveCommand", () => {
         ),
       },
     };
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockResolvedValue(
-      createTestRegistry([
-        {
-          pluginId: "@vendor/external-chat-plugin",
-          plugin: scopedPlugin,
-          source: "test",
-        },
-      ]),
-    );
+    mockInstalledPlugin(scopedPlugin);
     return scopedPlugin;
   }
 

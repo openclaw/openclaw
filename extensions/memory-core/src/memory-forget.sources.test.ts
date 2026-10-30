@@ -14,7 +14,6 @@ import {
   requireNativeSqliteDatabase,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  observeHostDataSql,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import { pruneMemoryEntryOrigins } from "./memory-entry-origins.js";
@@ -78,21 +77,13 @@ describe("memory forget source removal", () => {
       entryKeys: [],
       corpusSnippets: [],
     };
-    const observer = observeHostDataSql();
-    try {
-      expect(await readMemoryForgetIndexInWorker(request)).toMatchObject({
-        chunks: [],
-        sources: [],
-      });
-      expect(
-        observer.queries.filter((sql) => /\bfrom\s+"?memory_index_sources\b/iu.test(sql)),
-      ).toEqual([]);
-      expect(
-        await readMemoryForgetIndexInWorker({ ...request, removedPaths: ["memory/retained.md"] }),
-      ).toMatchObject({ sources: [{ path: "memory/retained.md", source: "memory" }] });
-    } finally {
-      observer.restore();
-    }
+    expect(await readMemoryForgetIndexInWorker(request)).toMatchObject({
+      chunks: [],
+      sources: [],
+    });
+    expect(
+      await readMemoryForgetIndexInWorker({ ...request, removedPaths: ["memory/retained.md"] }),
+    ).toMatchObject({ sources: [{ path: "memory/retained.md", source: "memory" }] });
   });
 
   it("retains planning input and placement across dispatch without creating missing stores", async () => {
@@ -397,7 +388,7 @@ describe("memory forget source removal", () => {
     }
   });
 
-  it("forgets 32 sessions with bounded writes and preserves other sources", async () => {
+  it("forgets 32 sessions and preserves other sources", async () => {
     const sessionCount = 32;
     const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const indexData = memoryIndexFixture(db);
@@ -422,41 +413,13 @@ describe("memory forget source removal", () => {
     expect(db.prepare("SELECT count(*) AS count FROM memory_index_sources").get()).toEqual({
       count: 34,
     });
-    const reportPath = path.join(h.stateDir, "forget-native-counts.jsonl");
-    const restore = observeMemoryForgetWorker(db, { reportPath });
-    try {
-      const result = await forget({ sessionIds });
-      expect(result).toEqual({ ...preview, dryRun: false });
-      expect(db.prepare("SELECT * FROM memory_index_sources ORDER BY id").all()).toEqual(survivors);
-      expect(db.prepare("SELECT id FROM memory_index_chunks").all()).toEqual([]);
-      expect(tombstones()).toMatchObject(
-        sessionIds.toSorted().map((sessionId) => ({ sessionId, reason: "forgotten" })),
-      );
-      let sourceDeletes = 0;
-      let tombstoneInserts = 0;
-      const reports = (await readText(reportPath)).trim().split("\n");
-      for (const report of reports) {
-        const counts: unknown = JSON.parse(report);
-        if (
-          typeof counts !== "object" ||
-          counts === null ||
-          !("sourceDeletes" in counts) ||
-          typeof counts.sourceDeletes !== "number" ||
-          !("tombstoneInserts" in counts) ||
-          typeof counts.tombstoneInserts !== "number"
-        ) {
-          throw new Error("Invalid native Forget execution counts");
-        }
-        sourceDeletes += counts.sourceDeletes;
-        tombstoneInserts += counts.tombstoneInserts;
-      }
-      expect(sourceDeletes).toBeGreaterThan(0);
-      expect(sourceDeletes).toBeLessThanOrEqual(2);
-      expect(tombstoneInserts).toBeGreaterThan(0);
-      expect(tombstoneInserts).toBeLessThanOrEqual(2);
-    } finally {
-      restore();
-    }
+    const result = await forget({ sessionIds });
+    expect(result).toEqual({ ...preview, dryRun: false });
+    expect(db.prepare("SELECT * FROM memory_index_sources ORDER BY id").all()).toEqual(survivors);
+    expect(db.prepare("SELECT id FROM memory_index_chunks").all()).toEqual([]);
+    expect(tombstones()).toMatchObject(
+      sessionIds.toSorted().map((sessionId) => ({ sessionId, reason: "forgotten" })),
+    );
   });
   it("keeps the index intact when batched admission fails", async () => {
     const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);

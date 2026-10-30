@@ -1,5 +1,6 @@
 import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import {
   isSyntheticMissingToolResult,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
@@ -39,6 +40,7 @@ export const MODEL_MESSAGE_NAVIGATION_KEYS = [
   "model",
   "timestamp",
   "excludeFromContext",
+  "openclawModelPlacement",
   "toolCallId",
   "toolUseId",
   "tool_call_id",
@@ -113,6 +115,13 @@ export function projectSessionModelContextNavigation(entry: SessionTreeEntry): S
     }
   } else if (entry.type === "custom" && entry.customType === "openclaw.system-prompt") {
     projected.data = { restart: isRecord(entry.data) && entry.data.restart === true };
+  } else if (
+    entry.type === "custom" &&
+    entry.customType === BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE
+  ) {
+    projected.data = isRecord(entry.data)
+      ? pickNavigation(entry.data, ["afterEntryId", "resultEntryIds"])
+      : entry.data;
   }
   // SAFETY: Navigation preserves every entry discriminant and control field with empty payloads.
   return projected as SessionTreeEntry;

@@ -33,6 +33,9 @@ function decodeSessionEntryCurrentFacts(
       ...(deviceFolder ? { deviceFolder } : {}),
       sessionId: value.sessionId,
       createdVia: value.createdVia,
+      clientCapabilities: Array.isArray(value.clientCapabilities)
+        ? value.clientCapabilities.filter((cap): cap is string => typeof cap === "string")
+        : undefined,
       spawnedBy: value.spawnedBy,
       spawnDepth: value.spawnDepth,
       completionOwnerSessionKey: value.completionOwnerSessionKey,
@@ -45,10 +48,6 @@ function decodeSessionEntryCurrentFacts(
       delegatedToolPolicy: value.delegatedToolPolicy,
     };
   }
-  const recovery = value.subagentRecovery;
-  if (recovery !== undefined && !isRecord(recovery)) {
-    throw new Error("Session currency facts have an invalid recovery projection");
-  }
   return {
     ...(deviceFolder ? { deviceFolder } : {}),
     sessionId: value.sessionId,
@@ -57,17 +56,13 @@ function decodeSessionEntryCurrentFacts(
     ...(value.repositoryWorkspaceId === undefined
       ? {}
       : { repositoryWorkspaceId: value.repositoryWorkspaceId }),
+    goal: value.goal,
     lifecycleRevision: value.lifecycleRevision,
     lifecycleRunId: value.lifecycleRunId,
+    lastRunId: value.lastRunId,
     activeWriterRunId: value.activeWriterRunId,
-    ...(recovery
-      ? {
-          subagentRecovery: {
-            lastRunId: recovery.lastRunId,
-            sessionLifecycleRunId: recovery.sessionLifecycleRunId,
-          },
-        }
-      : {}),
+    skillLibrarySelections: value.skillLibrarySelections,
+    executionPolicy: value.executionPolicy,
   };
 }
 

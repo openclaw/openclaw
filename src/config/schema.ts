@@ -1,8 +1,3 @@
-import crypto from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { CHANNEL_IDS } from "../channels/ids.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type {
   PluginConfigUiHint,
   PluginManifestProviderRequest,
@@ -278,27 +273,7 @@ function applyMetadataHints(
     mergeRelativeHints(basePath, channel.configUiHints);
   }
 
-  const channelList = listHeartbeatTargetChannels(channels);
-  const channelHelp = channelList.length ? ` Known channels: ${channelList.join(", ")}.` : "";
-  const help = `Delivery target ("owner", "last", "none", or a channel id).${channelHelp}`;
-  const paths = ["agents.defaults.heartbeat.target", "agents.entries.*.heartbeat.target"];
-  for (const path of paths) {
-    const current = next[path] ?? {};
-    next[path] = {
-      ...current,
-      help: current.help ?? help,
-      placeholder: current.placeholder ?? "owner",
-    };
-  }
   return next;
-}
-
-function listHeartbeatTargetChannels(channels: ChannelUiMetadata[]): string[] {
-  return uniqueStrings(
-    [...CHANNEL_IDS, ...channels.map((channel) => channel.id)]
-      .map(normalizeLowercaseStringOrEmpty)
-      .filter(Boolean),
-  );
 }
 
 /** Mutate a caller-owned schema; cached inputs must be cloned before merging. */
@@ -389,53 +364,6 @@ function mergeExtensionSchemas(
 }
 
 let cachedBase: ConfigSchemaResponse | null = null;
-const mergedSchemaCache = new Map<string, ConfigSchemaResponse>();
-const MERGED_SCHEMA_CACHE_MAX = 64;
-
-function buildMergedSchemaCacheKey(params: {
-  plugins: PluginUiMetadata[];
-  channels: ChannelUiMetadata[];
-}): string {
-  const plugins = params.plugins
-    .map((plugin) => ({
-      id: plugin.id,
-      name: plugin.name,
-      description: plugin.description,
-      configSchema: plugin.configSchema ?? null,
-      configSecretInputPaths: plugin.configSecretInputPaths ?? null,
-      configUiHints: plugin.configUiHints ?? null,
-      configGroups: plugin.configGroups ?? null,
-      providerRequest: plugin.providerRequest ?? null,
-    }))
-    .toSorted((a, b) => a.id.localeCompare(b.id));
-  const channels = params.channels
-    .map((channel) => ({
-      id: channel.id,
-      label: channel.label,
-      description: channel.description,
-      configSchema: channel.configSchema ?? null,
-      configUiHints: channel.configUiHints ?? null,
-    }))
-    .toSorted((a, b) => a.id.localeCompare(b.id));
-  // Build the hash incrementally so we never materialize one giant JSON string.
-  const hash = crypto.createHash("sha256");
-  hash.update('{"plugins":[');
-  plugins.forEach((plugin, index) => {
-    if (index > 0) {
-      hash.update(",");
-    }
-    hash.update(JSON.stringify(plugin));
-  });
-  hash.update('],"channels":[');
-  channels.forEach((channel, index) => {
-    if (index > 0) {
-      hash.update(",");
-    }
-    hash.update(JSON.stringify(channel));
-  });
-  hash.update("]}");
-  return hash.digest("hex");
-}
 
 function getBundledChannelSchemaMetadata(): ChannelUiMetadata[] {
   return GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map((entry) => {
@@ -524,7 +452,6 @@ export function buildConfigRedactionHints(params: {
 export function buildConfigSchemaCore(params?: {
   plugins?: PluginUiMetadata[];
   channels?: ChannelUiMetadata[];
-  cache?: boolean;
 }): ConfigSchemaResponse {
   const base = buildBaseConfigSchema();
   const { plugins, channels } = limitExtensionSchemas({
@@ -534,28 +461,15 @@ export function buildConfigSchemaCore(params?: {
   if (plugins.length === 0 && channels.length === 0) {
     return base;
   }
-  const useCache = params?.cache !== false;
-  const cacheKey = useCache ? buildMergedSchemaCacheKey({ plugins, channels }) : null;
-  if (cacheKey) {
-    const cached = mergedSchemaCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-  }
   const mergedHints = mergeConfigUiHints(base.uiHints, plugins, channels);
   const mergedSchema = mergeExtensionSchemas(structuredClone(base.schema), channels, plugins);
   const changedRoots = [
     ...(plugins.length ? ["plugins"] : []),
     ...(channels.length ? ["channels"] : []),
   ];
-  const merged = {
+  return {
     ...base,
     schema: mergedSchema,
     uiHints: resolveMergedUiHints(mergedSchema, mergedHints, changedRoots),
   };
-  if (cacheKey) {
-    pruneMapToMaxSize(mergedSchemaCache, MERGED_SCHEMA_CACHE_MAX - 1);
-    mergedSchemaCache.set(cacheKey, merged);
-  }
-  return merged;
 }

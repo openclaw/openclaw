@@ -16,6 +16,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import type { GatewayClient } from "./client.js";
 import { startGatewayServer } from "./server.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { startClaimedGateway } from "./test-helpers.listener.js";
 
 const fileFixture = (title: string, bytes: Buffer, sizeBytes?: number) => ({
@@ -31,16 +32,8 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
     {
       label: "artifact-https-download",
       env: {
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        ...KERNEL_TEST_ENV,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
       },
     },
     async (state) => {
@@ -133,7 +126,7 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
                 mode: "test",
                 scopes,
                 deviceIdentity: loadOrCreateDeviceIdentity({
-                  path: state.statePath(`${label}.sqlite`),
+                  path: state.statePath(label, "client", "credentials.sqlite"),
                 }),
               },
               {

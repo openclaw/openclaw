@@ -93,7 +93,7 @@ enum ChatTranscriptRow: Hashable, Identifiable {
 
     var id: UUID {
         switch self {
-        case let .message(message): message.id
+        case let .message(message): message.presentationID
         case let .systemNotice(notice): notice.id
         case let .historyDivider(divider): divider.id
         case let .completedWork(work): work.id

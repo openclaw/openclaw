@@ -1,9 +1,8 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { EventEmitter, once } from "node:events";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "openclaw/plugin-sdk/sandbox";
@@ -36,7 +35,7 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
 
 import type { JsonValue } from "./protocol.js";
 import { createSessionExecServer } from "./sandbox-exec-server-session.test-support.js";
-import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
+import { createSandboxChild, createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { httpRequest } from "./sandbox-exec-server/http.js";
 import { startProcess, terminateProcess } from "./sandbox-exec-server/processes.js";
 import { CodexSandboxExecSession } from "./sandbox-exec-server/session.js";
@@ -47,16 +46,6 @@ import type {
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function createFakeChild(): ChildProcessWithoutNullStreams {
-  return Object.assign(new EventEmitter(), {
-    stdin: new PassThrough(),
-    stdout: new PassThrough(),
-    stderr: new PassThrough(),
-    pid: 42_424,
-    kill: vi.fn(() => true),
-  }) as unknown as ChildProcessWithoutNullStreams;
-}
 
 function createFakeNotifications() {
   return {
@@ -90,7 +79,7 @@ function createFixture(
   overrides: Parameters<typeof createSandboxContext>[0] = {},
   release: Array<() => void> = [],
 ) {
-  const child = createFakeChild();
+  const child = createSandboxChild();
   spawnMock.mockReturnValue(child);
   const finalizeExec = vi.fn(overrides.finalizeExec ?? (async () => undefined));
   const server = createSessionExecServer(
@@ -137,7 +126,7 @@ function createFixture(
 async function createPendingRemoteSignalFixture(holdFirstScan = false) {
   const { spawn: spawnReal } =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  const transport = createFakeChild();
+  const transport = createSandboxChild();
   spawnMock.mockReturnValue(transport);
   signalProcessTreeMock.mockImplementation(() => transport.emit("close", 143, "SIGTERM"));
   const procRoot = tempDirs.make("codex-interrupt-procfs-");
@@ -366,7 +355,7 @@ it.each([
     let foreignRoot = path.join(testHome, "..", "foreign-state-path");
     let target = foreignRoot;
     const cleanup: string[] = [];
-    spawnMock.mockReturnValue(createFakeChild());
+    spawnMock.mockReturnValue(createSandboxChild());
     try {
       if (via === "symlink") {
         // A state root that lexically sits inside the home but physically points outside.
@@ -465,9 +454,7 @@ it.each(["process", "http"] as const)(
     } else {
       const request = call("http/request", streamingHttpParams("finalizing-http"));
       await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
-      (child.stdout as PassThrough).write(
-        `${JSON.stringify({ type: "headers", status: 200, headers: [] })}\n`,
-      );
+      child.stdout.write(`${JSON.stringify({ type: "headers", status: 200, headers: [] })}\n`);
       await request;
       expect(send).toHaveBeenCalledWith({
         jsonrpc: "2.0",
@@ -515,7 +502,7 @@ it("preserves the nonstreaming HTTP byte limit and settles overflow cleanup", as
   const request = http("http-buffer-limit", false);
   const response = request.catch((error: unknown) => error);
   await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
-  const output = child[stream] as PassThrough;
+  const output = child[stream];
   // Reuse backing memory while exercising the real per-stream byte threshold.
   const chunk = Buffer.alloc(1024 * 1024, "x");
   for (let remaining = SANDBOX_COMMAND_MAX_BUFFER_BYTES; remaining > 0; remaining -= chunk.length) {

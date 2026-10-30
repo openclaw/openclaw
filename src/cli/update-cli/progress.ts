@@ -1,5 +1,6 @@
 import { spinner } from "@clack/prompts";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import { clearActiveProgressLine } from "../../../packages/terminal-core/src/progress-line.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
@@ -19,9 +20,11 @@ import {
   renderUpdateRunReport,
   updateRunReportInputFromResult,
 } from "../../infra/update-run-report.js";
-import { isFailedUpdateStep } from "../../infra/update-run-step.js";
+import { isFailedUpdateStep, projectUpdateRunResultSteps } from "../../infra/update-run-step.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { formatJsonConsoleLine, getConsoleSettings } from "../../logging/console.js";
+import { isLogLevelEnabled } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
@@ -36,6 +39,20 @@ const activeUpdateProgress = new Map<
 >();
 const UPDATE_PROGRESS_POLL_MS = 250;
 const UPDATE_STEP_NOTICE_MS = 30_000;
+
+/** Child phase facts stay visible while schema changes defer ledger observation. */
+export function createUpdateDoctorProgress(): ((line: string) => void) | undefined {
+  const settings = getConsoleSettings();
+  if (!isLogLevelEnabled("info", settings.level)) {
+    return undefined;
+  }
+  return (message) => {
+    const line =
+      settings.style === "json" ? formatJsonConsoleLine({ level: "info", message }) : message;
+    clearActiveProgressLine();
+    process.stderr.write(`${line}\n`);
+  };
+}
 
 // These CLI-only callbacks can render the row just committed by their ledger owner.
 export type UpdateDisplayProgress = {
@@ -74,18 +91,14 @@ export function createUpdateProgress(
   let observation: "active" | "suspended" | "disposed" = "active";
   const seenPhases = new Set<UpdateRunPhase>();
   const stop = () => {
-    if (stepNotice) {
-      clearInterval(stepNotice);
-      stepNotice = undefined;
-    }
+    clearInterval(stepNotice);
+    stepNotice = undefined;
     currentSpinner?.clear();
     currentSpinner = null;
   };
   const clearTimer = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+    clearTimeout(timer);
+    timer = undefined;
   };
   const pausePolling = () => {
     polling = false;
@@ -278,9 +291,10 @@ export async function prepareResult(
     nextAction?: string;
     record?: UpdateRunRecord;
     readHistory?: boolean;
+    writeArtifacts?: boolean;
   } = {},
   assertCurrent?: () => void,
-): Promise<() => void> {
+): Promise<(additionalSteps?: readonly UpdateStepResult[]) => void> {
   assertCurrent?.();
   const finalizeProgress = result.runId ? activeUpdateProgress.get(result.runId) : undefined;
   // Retire polling before waiting for report IO, including detached recovery.
@@ -311,38 +325,55 @@ export async function prepareResult(
     });
     return report;
   };
-  const reportPath = await writeUpdateRunReportArtifact({
-    result,
-    report: renderReport,
-    readRun,
-    env: opts.run?.env,
-    detached: reportHints.readHistory === false,
-    assertCurrent,
-  }).catch((error: unknown) => {
-    assertCurrent?.();
-    defaultRuntime.error(`Update report could not be saved: ${formatErrorMessage(error)}`);
-    return undefined;
-  });
+  const reportPath =
+    reportHints.writeArtifacts === false
+      ? undefined
+      : await writeUpdateRunReportArtifact({
+          result,
+          report: renderReport,
+          record: reportHints.record,
+          readRun,
+          env: opts.run?.env,
+          detached: reportHints.readHistory === false,
+          assertCurrent,
+        }).catch((error: unknown) => {
+          assertCurrent?.();
+          defaultRuntime.error(`Update report could not be saved: ${formatErrorMessage(error)}`);
+          return undefined;
+        });
   assertCurrent?.();
   report ??= renderReport(readRun?.());
   const preparedReport = report;
-  const publicResult = {
-    ...result,
-    ...(run ? { run: toPublicUpdateRun(run) } : {}),
-    reportPath,
-  };
-  return () => {
-    finalizeProgress?.finish(run);
+  return (additionalSteps = []) => {
+    // Optional post-success maintenance runs after executor settlement. Its
+    // diagnostics enrich captured output without reopening history or changing
+    // the update's already prepared outcome/report artifact.
+    const reportedResult = additionalSteps.length
+      ? { ...result, steps: [...result.steps, ...additionalSteps] }
+      : result;
+    const reportedRun = run ? projectUpdateRunResultSteps(run, additionalSteps) : undefined;
+    const outputReport = additionalSteps.length
+      ? renderUpdateRunReport(updateRunReportInputFromResult(reportedResult, reportedRun), {
+          ...reportHints,
+          mode: result.mode === "unknown" ? run?.target.kind : result.mode,
+          markdownLimit: Infinity,
+        })
+      : preparedReport;
+    finalizeProgress?.finish(reportedRun);
     if (opts.json) {
-      defaultRuntime.writeJson(publicResult);
+      defaultRuntime.writeJson({
+        ...reportedResult,
+        ...(reportedRun ? { run: toPublicUpdateRun(reportedRun) } : {}),
+        reportPath,
+      });
       return;
     }
     defaultRuntime.log("");
-    defaultRuntime.log(theme.heading(preparedReport.headline));
+    defaultRuntime.log(theme.heading(outputReport.headline));
     if (reportPath) {
       defaultRuntime.log(`Report: ${reportPath}`);
     }
-    for (const line of preparedReport.lines) {
+    for (const line of outputReport.lines) {
       defaultRuntime.log(line);
     }
   };

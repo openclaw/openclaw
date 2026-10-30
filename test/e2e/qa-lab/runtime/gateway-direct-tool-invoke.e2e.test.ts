@@ -58,15 +58,13 @@ function installHook(handler: (event: unknown) => unknown) {
   initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_tool_call", handler }]));
 }
 
-function expectAgentsListResult(value: unknown): void {
-  expect(value).toMatchObject({
-    details: {
-      requester: "main",
-      allowAny: false,
-      agents: [expect.objectContaining({ id: "main", configured: true })],
-    },
-  });
-}
+const agentsListResult = {
+  details: {
+    requester: "main",
+    allowAny: false,
+    agents: [expect.objectContaining({ id: "main", configured: true })],
+  },
+};
 
 afterEach(() => {
   resetGlobalHookRunner();
@@ -172,15 +170,14 @@ it(
         { ...httpArgs, tool: "nodes", action: "status" },
         "operator.approvals",
       );
-      expect(ownerRestored.status).toBe(200);
-      expect(ownerRestored.body.ok).toBe(true);
+      expect(ownerRestored).toMatchObject({ status: 200, body: { ok: true } });
       expect(ownerRestored.body.result).toBeDefined();
 
       for (let index = 0; index < 2; index += 1) {
-        const httpResult = await invoke({ ...httpArgs, idempotencyKey: "qa-http-stable" });
-        expect(httpResult.status).toBe(200);
-        expect(httpResult.body.ok).toBe(true);
-        expectAgentsListResult(httpResult.body.result);
+        expect(await invoke({ ...httpArgs, idempotencyKey: "qa-http-stable" })).toMatchObject({
+          status: 200,
+          body: { ok: true, result: agentsListResult },
+        });
       }
 
       writeClient = await connect(WRITE_SCOPE, "direct-tool-invoke-writer");
@@ -198,13 +195,12 @@ it(
       });
 
       for (let index = 0; index < 2; index += 1) {
-        const rpcResult = await rpc({ idempotencyKey: "qa-rpc-stable" });
-        expect(rpcResult).toMatchObject({
+        expect(await rpc({ idempotencyKey: "qa-rpc-stable" })).toMatchObject({
           ok: true,
           toolName: "agents_list",
           source: "core",
+          output: agentsListResult,
         });
-        expectAgentsListResult(rpcResult.output);
       }
 
       // Repeated calls still traverse the hook; this asserts stable IDs, not deduplication.
@@ -247,14 +243,15 @@ it(
         },
       });
 
-      const blockedHttp = await invoke({ ...httpArgs, idempotencyKey: "qa-http-blocked" });
-      expect(blockedHttp.status).toBe(403);
-      expect(blockedHttp.body).toEqual({
-        ok: false,
-        error: {
-          type: "tool_call_blocked",
-          message: "Blocked by QA policy",
-          requiresApproval: false,
+      expect(await invoke({ ...httpArgs, idempotencyKey: "qa-http-blocked" })).toEqual({
+        status: 403,
+        body: {
+          ok: false,
+          error: {
+            type: "tool_call_blocked",
+            message: "Blocked by QA policy",
+            requiresApproval: false,
+          },
         },
       });
       expect(approvalToolCallIds).toEqual([

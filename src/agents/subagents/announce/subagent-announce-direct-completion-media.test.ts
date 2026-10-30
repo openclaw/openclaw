@@ -20,13 +20,13 @@ const hidden = `${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nMEDIA:/tmp/hidden.png\n${INTE
 const sent = { channel: "discord", to: "dm:U123", via: "direct" as const, mediaUrl: null };
 const delivered = { delivered: true, path: "direct" } as const;
 
-async function deliver(params: {
-  event?: Partial<AgentInternalEvent>;
-  payloads?: Record<string, unknown>[];
-  sendMessage?: SendMessage;
-  onDeliveryResult?: DeliveryParams["onDeliveryResult"];
-  onDeliveryError?: DeliveryParams["onDeliveryError"];
-}) {
+async function deliver(
+  params: Pick<DeliveryParams, "onDeliveryResult" | "onDeliveryError"> & {
+    event?: Partial<AgentInternalEvent>;
+    payloads?: Record<string, unknown>[];
+    sendMessage?: SendMessage;
+  },
+) {
   const sendMessage = params.sendMessage ?? vi.fn<SendMessage>(async () => sent);
   testing.setDepsForTest({
     callGateway: vi.fn(async () => {
@@ -93,14 +93,13 @@ it("retains the original failed text fallback error", async () => {
   expect(sendMessage).toHaveBeenCalledOnce();
 });
 
-it.each<
-  [
-    name: string,
-    event: Partial<AgentInternalEvent>,
-    expected?: [content?: string, mediaUrls?: string[], asVoice?: boolean] | null,
-    payloads?: Record<string, unknown>[],
-  ]
->([
+type MediaCase = [
+  string,
+  Partial<AgentInternalEvent>,
+  ([string?, string[]?, boolean?] | null)?,
+  Record<string, unknown>[]?,
+];
+it.each<MediaCase>([
   ["structured media", imageEvent],
   ["captionless media", { result: "", mediaUrls: [image] }, ["", [image]]],
   ["attachment metadata", { attachments: [{ type: "image", path: image }] }],
@@ -112,13 +111,7 @@ it.each<
     "requester voice payload",
     {},
     ["Voice ready", [voice], true],
-    [
-      {
-        text: `Voice ready\nMEDIA:${voice}\n${hidden}`,
-        mediaUrls: [voice],
-        audioAsVoice: true,
-      },
-    ],
+    [{ text: `Voice ready\nMEDIA:${voice}\n${hidden}`, mediaUrls: [voice], audioAsVoice: true }],
   ],
   ["recorded absent result", { result: "(no output)", noVisibleResult: true }, null],
   [
@@ -158,7 +151,6 @@ it("does not settle or retry a partially sent media batch", async () => {
     delivered: false,
     terminal: true,
     disposition: "permanent_failure",
-    missingMediaUrls: [image],
   });
   expect(sendMessage).toHaveBeenCalledOnce();
   expect(onDeliveryResult).not.toHaveBeenCalled();

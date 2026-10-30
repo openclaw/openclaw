@@ -15,7 +15,7 @@ import { resolveAuthProfileDatabasePath, writePersistedAuthProfileStoreRaw } fro
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 
 const mocks = getOAuthProviderRuntimeMocks();
-const { refreshProviderOAuthCredentialWithPluginMock } = mocks;
+const { refreshProviderOAuthCredentialWithPluginMock: refresh } = mocks;
 const profileId = "openai:default";
 const provider = "openai";
 
@@ -25,21 +25,18 @@ vi.mock("../../llm/oauth.js", () => ({
   getOAuthProviders: () => [{ id: "openai" }],
 }));
 
-beforeEach(async () => {
+function reset() {
   resetFileLockStateForTest();
   resetOAuthProviderRuntimeMocks(mocks);
   clearRuntimeAuthProfileStoreSnapshots();
-});
-afterEach(() => {
-  resetFileLockStateForTest();
-  resetOAuthProviderRuntimeMocks(mocks);
-  clearRuntimeAuthProfileStoreSnapshots();
-});
+}
+beforeEach(reset);
+afterEach(reset);
 
 it.each(["peer fence", "owner commit"] as const)(
   "does not replay an uncertain %s after the provider consumes the generation",
-  async (stage) => {
-    await withOpenClawTestState(
+  (stage) =>
+    withOpenClawTestState(
       { scenario: "minimal", label: "oauth-uncertain-settlement" },
       async (state) => {
         const [candidates, oauthStore, { SqliteWorkerError }, { resolveApiKeyForProfile }] =
@@ -70,7 +67,7 @@ it.each(["peer fence", "owner commit"] as const)(
           refresh: "synthetic-lost-reply-refresh",
           expires: Date.now() + 60 * 60 * 1000,
         };
-        refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
+        refresh.mockImplementation(async () => {
           if (stage === "peer fence") {
             writePersistedAuthProfileStoreRaw(original, lateDir);
           }
@@ -81,62 +78,50 @@ it.each(["peer fence", "owner commit"] as const)(
           "outcome-unknown",
         );
         let attempts = 0;
-        let restore: () => void;
-        if (stage === "peer fence") {
-          const fence = candidates.fenceCandidateAuthProfileStore;
-          const spy = vi
-            .spyOn(candidates, "fenceCandidateAuthProfileStore")
-            .mockImplementation(async (params) => {
-              const selected =
-                params.candidate.databasePath === resolveAuthProfileDatabasePath(lateDir);
-              if (selected) {
-                attempts++;
-              }
-              await fence(params);
-              if (selected && attempts === 1) {
-                throw lostReply;
-              }
-            });
-          restore = () => spy.mockRestore();
-        } else {
-          const settle = oauthStore.settleOAuthRefreshClaim;
-          const spy = vi
-            .spyOn(oauthStore, "settleOAuthRefreshClaim")
-            .mockImplementation(async (params) => {
-              attempts++;
-              const result = await settle(params);
-              if (attempts === 1) {
-                throw lostReply;
-              }
-              return result;
-            });
-          restore = () => spy.mockRestore();
-        }
-        try {
-          await expect(resolveFrom(peerDir)).rejects.toThrow(
-            stage === "peer fence"
-              ? "Failed to fence every historical OAuth refresh peer"
-              : lostReply.message,
-          );
-          expect(attempts).toBe(1);
-          expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledOnce();
-          if (stage === "peer fence") {
-            for (const dir of [mainAgentDir, peerDir, lateDir]) {
-              const terminal = read(dir);
-              expect(terminal?.type === "oauth" && isOAuthRefreshFence(terminal)).toBe(true);
-              expect(terminal?.type === "oauth" && isPendingOAuthRefreshFence(terminal)).toBe(
-                false,
-              );
-            }
-          } else {
-            expect(read(mainAgentDir)).toMatchObject(replacement);
-            const peer = read(peerDir);
-            expect(peer?.type === "oauth" && isPendingOAuthRefreshFence(peer)).toBe(true);
+        const loseReply = async <T>(operation: () => Promise<T>, selected = true) => {
+          if (selected) {
+            attempts++;
           }
-        } finally {
-          restore();
+          const result = await operation();
+          if (selected && attempts === 1) {
+            throw lostReply;
+          }
+          return result;
+        };
+        const fence = candidates.fenceCandidateAuthProfileStore;
+        const settle = oauthStore.settleOAuthRefreshClaim;
+        using _ =
+          stage === "peer fence"
+            ? vi
+                .spyOn(candidates, "fenceCandidateAuthProfileStore")
+                .mockImplementation((params) =>
+                  loseReply(
+                    () => fence(params),
+                    params.candidate.databasePath === resolveAuthProfileDatabasePath(lateDir),
+                  ),
+                )
+            : vi
+                .spyOn(oauthStore, "settleOAuthRefreshClaim")
+                .mockImplementation((params) => loseReply(() => settle(params)));
+
+        await expect(resolveFrom(peerDir)).rejects.toThrow(
+          stage === "peer fence"
+            ? "Failed to fence every historical OAuth refresh peer"
+            : lostReply.message,
+        );
+        expect(attempts).toBe(1);
+        expect(refresh).toHaveBeenCalledOnce();
+        if (stage === "peer fence") {
+          for (const dir of [mainAgentDir, peerDir, lateDir]) {
+            const terminal = read(dir);
+            expect(terminal?.type === "oauth" && isOAuthRefreshFence(terminal)).toBe(true);
+            expect(terminal?.type === "oauth" && isPendingOAuthRefreshFence(terminal)).toBe(false);
+          }
+        } else {
+          expect(read(mainAgentDir)).toMatchObject(replacement);
+          const peer = read(peerDir);
+          expect(peer?.type === "oauth" && isPendingOAuthRefreshFence(peer)).toBe(true);
         }
       },
-    );
-  },
+    ),
 );

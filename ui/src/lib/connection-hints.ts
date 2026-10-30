@@ -56,23 +56,8 @@ export function readConnectionAuthReason(details: unknown): string | null {
   return typeof reason === "string" && PROXY_AUTH_REASONS.has(reason) ? reason : null;
 }
 
-type AuthHintKind = "required" | "failed" | "trusted-proxy";
-
-type PairingHint = {
-  kind:
-    | "pairing-required"
-    | "scope-upgrade-pending"
-    | "role-upgrade-pending"
-    | "metadata-upgrade-pending";
-  requestId: string | null;
-};
-
-export function resolvePairingHint(
-  connected: boolean,
-  lastError: string | null,
-  lastErrorCode?: string | null,
-): PairingHint | null {
-  if (connected || !lastError) {
+export function resolvePairingHint(lastError: string | null, lastErrorCode?: string | null) {
+  if (!lastError) {
     return null;
   }
   const pairing = readConnectPairingRequiredMessage(lastError);
@@ -106,7 +91,7 @@ export function resolveAuthHintKind(params: {
   lastErrorAuthReason?: string | null;
   hasToken: boolean;
   hasPassword: boolean;
-}): AuthHintKind | null {
+}): "required" | "failed" | "trusted-proxy" | null {
   if (params.connected || !params.lastError) {
     return null;
   }
@@ -142,11 +127,10 @@ export function resolveAuthHintKind(params: {
 }
 
 export function shouldShowInsecureContextHint(
-  connected: boolean,
   lastError: string | null,
   lastErrorCode?: string | null,
 ): boolean {
-  if (connected || !lastError) {
+  if (!lastError) {
     return false;
   }
   if (lastErrorCode) {

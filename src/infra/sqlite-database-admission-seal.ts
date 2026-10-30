@@ -40,11 +40,18 @@ export const integrityVerificationKey: SqliteDatabaseAdmissionKey<number> = {
   read: (value) => (typeof value === "number" && Number.isSafeInteger(value) ? value : undefined),
 };
 
+// Recovery QUICK may survive an orderly close without claiming a FULL verification.
+export const quickIntegrityVerificationKey: SqliteDatabaseAdmissionKey<number> = {
+  ...integrityVerificationKey,
+  name: "sqlite.quick-verification",
+};
+
 // Only completed validation facts cross a restart. Row caches and live authority
 // are deliberately excluded; their owners reconstruct them from current state.
 const sealedKeys = new Set([
   "sqlite-schema",
   "sqlite.full-verification",
+  "sqlite.quick-verification",
   "state.schema-version",
   "state.runtime-schema",
   "state.integrity",
@@ -144,35 +151,56 @@ export class SqliteDatabaseCleanCloseSeals {
             typeof entry[1] === "boolean",
         ) ||
         !facts.some(
-          ([name, , value]) => name === integrityVerificationKey.name && value === seal.verifiedAt,
+          ([name, , value]) =>
+            (name === integrityVerificationKey.name ||
+              name === quickIntegrityVerificationKey.name) &&
+            value === seal.verifiedAt,
         ) ||
         !facts.some(([name, , value]) => name === "sqlite-schema" && isRecord(value))
       ) {
         return;
       }
       const expected = sealSchema(facts.map(([name]) => name));
-      if (seal.schemaIdentity !== expected?.schemaIdentity) {
+      if (!expected) {
         record.cleanCloseRefusal = "identity-mismatch";
-        // Older seals retain their digest contract but cannot explain its constituents.
-        if (seal.identity !== undefined) {
-          const saved = seal.identity;
-          if (
-            !isRecord(saved) ||
-            typeof saved.runtime !== "string" ||
-            typeof saved.sqlite !== "string" ||
-            typeof saved.schema !== "string" ||
-            typeof saved.policy !== "number"
-          ) {
-            record.cleanCloseRefusal = "malformed-proof";
-          } else if (expected) {
-            for (const component of ["runtime", "sqlite", "schema", "policy"] as const) {
-              if (saved[component] !== expected.identity[component]) {
-                record.cleanCloseRefusal = `${component}-mismatch`;
-                break;
-              }
-            }
-          }
+        return;
+      }
+      const saved = seal.identity;
+      if (
+        saved !== undefined &&
+        (!isRecord(saved) ||
+          typeof saved.runtime !== "string" ||
+          typeof saved.schema !== "string" ||
+          typeof saved.policy !== "number")
+      ) {
+        return;
+      }
+      if (isRecord(saved) && typeof saved.sqlite !== "string") {
+        if (
+          !isRecord(saved.sqlite) ||
+          typeof saved.sqlite.version !== "string" ||
+          typeof saved.sqlite.sourceId !== "string" ||
+          typeof saved.sqlite.compileOptions !== "string"
+        ) {
+          return;
         }
+        // Version/source changes do not invalidate verified bytes. Compare every
+        // compatibility component even when the runtime or library changed too.
+        const schemaChanged = saved.schema !== expected.identity.schema;
+        const policyChanged = saved.policy !== expected.identity.policy;
+        const featuresChanged =
+          saved.sqlite.compileOptions !== expected.identity.sqlite.compileOptions;
+        if (schemaChanged || policyChanged || featuresChanged) {
+          record.cleanCloseRefusal = schemaChanged
+            ? "schema-mismatch"
+            : policyChanged
+              ? "policy-mismatch"
+              : "feature-mismatch";
+          return;
+        }
+      } else if (seal.schemaIdentity !== expected.schemaIdentity) {
+        // Legacy combined hashes cannot prove unchanged features across upgrades.
+        record.cleanCloseRefusal = "identity-mismatch";
         return;
       }
       const schema = facts.find(([name]) => name === "sqlite-schema")?.[2];

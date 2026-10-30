@@ -219,8 +219,3 @@ export function mapSensitivePaths(
   });
   return applySensitiveUrlHints(next, urlPaths);
 }
-
-/** @internal */
-export const testApi = {
-  SECTION_DOCS_URLS,
-};

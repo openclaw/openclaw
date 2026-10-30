@@ -1,6 +1,9 @@
-import { For, createMemo, createUniqueId, onCleanup, onSettled } from "solid-js";
+import { For, createMemo, createUniqueId, onSettled } from "solid-js";
+import "../../../styles/chat/composer-queue-content.css";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
+import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import {
   chatQueueMovableSegments,
   isMovableChatQueueItem,
@@ -8,11 +11,7 @@ import {
 import type { ChatQueueItem, ChatQueueDisplayItem } from "../../../lib/chat/chat-types.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
-import {
-  clearCompositionEnd,
-  isComposingKeyboardEvent,
-  recordCompositionEnd,
-} from "../../../lib/ime.ts";
+import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
@@ -20,6 +19,7 @@ import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { isChatSendReconnecting } from "../chat-send-presentation.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { handleQueueEditKeydown } from "./chat-composer-keydown.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 type ChatQueueProps = {
@@ -53,22 +53,13 @@ const queueMentionInputs = new WeakMap<HTMLTextAreaElement, HumanMentionInput>()
 // Row tone, badges, and actions carry failure, review, reconnect, and steer.
 function QueueWaitingIcon() {
   return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden="true"
-    >
+    <StrokeIcon aria-hidden="true">
       <path d="M16 5H3" />
       <path d="M16 12H3" />
       <path d="M9 19H3" />
       <path d="m16 16-3 3 3 3" />
       <path d="M21 5v12a2 2 0 0 1-2 2h-6" />
-    </svg>
+    </StrokeIcon>
   );
 }
 
@@ -146,39 +137,6 @@ function mountQueueEditInput(element: HTMLTextAreaElement, value: string): void 
   });
 }
 
-function sendStateLabel(
-  item: ChatQueueItem,
-  offline: boolean,
-  connected: boolean | undefined,
-): string | null {
-  if (
-    offline &&
-    item.sendState !== "failed" &&
-    item.sendState !== "unconfirmed" &&
-    item.sendState !== "held"
-  ) {
-    return t("chat.queue.states.waitingForReconnect");
-  }
-  switch (item.sendState) {
-    case "waiting-model":
-    case "waiting-idle":
-      return null;
-    case "executing-command":
-      return t("chat.queue.states.runningCommand");
-    case "waiting-reconnect":
-      return isChatSendReconnecting(item.sendState, connected)
-        ? t("chat.queue.states.waitingForReconnect")
-        : null;
-    case "unconfirmed":
-    case "held":
-      return t("chat.queue.states.needsReview");
-    case "failed":
-      return t("common.failed");
-    default:
-      return null;
-  }
-}
-
 export function renderChatQueueSolid(props: ChatQueueProps) {
   const visibleQueue = createMemo(() => {
     const items = (props.displayQueue ?? props.queue).filter(
@@ -213,15 +171,14 @@ export function renderChatQueueSolid(props: ChatQueueProps) {
   });
   const globalState = createMemo(() => {
     const head = props.queue.find((item) => item.sendState !== "failed" || item.localCommandName);
-    return (head?.sendState === "unconfirmed" || head?.sendState === "held") &&
-      isQueuedSendInlineState(head)
-      ? { label: t("chat.queue.states.blockedByUnconfirmed"), tone: "warn" }
+    return head?.sendState === "held" && isQueuedSendInlineState(head)
+      ? { label: t("chat.queue.states.blockedByReview"), tone: "warn" }
       : visibleQueue().some((item) => item.sendState === "waiting-model") && !props.offline
         ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
         : null;
   });
   let scrollRegion: HTMLDivElement | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     if (queueDragScroll?.container === scrollRegion) {
       stopQueueDragAutoScroll();
     }
@@ -296,8 +253,8 @@ function ChatQueueItem(rowProps: {
   let pointerSelection = false;
   const item = () => rowProps.item;
   const reorder = () => rowProps.reorder;
-  const edit = createMemo(() => rowProps.controls.queuedEdit);
-  const hasAuthorAvatar = createMemo(() => Boolean(formatSenderLabel(item().sender)));
+  const edit = () => rowProps.controls.queuedEdit;
+  const hasAuthorAvatar = () => Boolean(formatSenderLabel(item().sender));
   const images = createMemo(() =>
     item().attachments?.filter((attachment) => attachment.mimeType.startsWith("image/")),
   );
@@ -305,67 +262,69 @@ function ChatQueueItem(rowProps: {
     const image = images()?.[0];
     return image ? getChatAttachmentPreviewUrl(image) : null;
   });
-  const failed = createMemo(
-    () =>
-      item().sendState === "failed" ||
-      item().sendState === "unconfirmed" ||
-      item().sendState === "held",
-  );
-  const reconnecting = createMemo(
-    () =>
-      !item().serverQueued &&
-      !failed() &&
-      (rowProps.controls.offline === true ||
-        isChatSendReconnecting(item().sendState, rowProps.controls.connected)),
-  );
-  const stateLabel = createMemo(() =>
-    sendStateLabel(
-      item(),
-      !item().serverQueued && rowProps.controls.offline === true,
-      rowProps.controls.connected,
-    ),
-  );
-  const steered = createMemo(() => item().queueMode === "steer" && stateLabel() === null);
-  const busy = createMemo(() => item().sendState === "executing-command");
-  const editing = createMemo(() => edit()?.editingId === item().id);
-  const mentionText = createMemo(() =>
-    editing() ? (edit()?.editingText ?? item().text) : item().text,
-  );
-  const mentions = createMemo(() => (editing() ? edit()?.editingMentions : item().mentions));
-  const canSteer = createMemo(
-    () =>
-      Boolean(rowProps.controls.canAbort && rowProps.controls.onQueueSteer) &&
-      isSteerableQueuedMessage(item()) &&
-      !editing(),
-  );
-  const showsSteer = createMemo(
-    () =>
-      Boolean(rowProps.controls.canAbort && rowProps.controls.onQueueSteer) &&
-      !editing() &&
-      !item().localCommandName &&
-      !item().intent &&
-      (isSteerableQueuedMessage(item()) || item().sendState === "waiting-model"),
-  );
+  const failed = () => item().sendState === "failed" || item().sendState === "held";
+  const reconnecting = () =>
+    !item().serverQueued &&
+    !failed() &&
+    (rowProps.controls.offline === true ||
+      isChatSendReconnecting(item().sendState, rowProps.controls.connected));
+  const stateLabel = (): string | null => {
+    const queueItem: ChatQueueItem = item();
+    const offline: boolean = !item().serverQueued && rowProps.controls.offline === true;
+    const connected: boolean | undefined = rowProps.controls.connected;
+    if (offline && queueItem.sendState !== "failed" && queueItem.sendState !== "held") {
+      return t("chat.queue.states.waitingForReconnect");
+    }
+    switch (queueItem.sendState) {
+      case "waiting-model":
+      case "waiting-idle":
+        return null;
+      case "executing-command":
+        return t("chat.queue.states.runningCommand");
+      case "waiting-reconnect":
+        return isChatSendReconnecting(queueItem.sendState, connected)
+          ? t("chat.queue.states.waitingForReconnect")
+          : null;
+      case "held":
+        return t("chat.queue.states.needsReview");
+      case "failed":
+        return t("common.failed");
+      default:
+        return null;
+    }
+  };
+  const steered = () => item().queueMode === "steer" && stateLabel() === null;
+  const busy = () => item().sendState === "executing-command";
+  const editing = () => edit()?.editingId === item().id;
+  const mentionText = () => (editing() ? (edit()?.editingText ?? item().text) : item().text);
+  const mentions = () => (editing() ? edit()?.editingMentions : item().mentions);
+  const canSteer = () =>
+    Boolean(rowProps.controls.canAbort && rowProps.controls.onQueueSteer) &&
+    isSteerableQueuedMessage(item()) &&
+    !editing();
+  const showsSteer = () =>
+    Boolean(rowProps.controls.canAbort && rowProps.controls.onQueueSteer) &&
+    !editing() &&
+    !item().localCommandName &&
+    !item().intent &&
+    (isSteerableQueuedMessage(item()) || item().sendState === "waiting-model");
   const segment = createMemo(() => reorder().segments.find((ids) => ids.includes(item().id)) ?? []);
-  const moveIndex = createMemo(() => segment().indexOf(item().id));
-  const move = createMemo(() => rowProps.controls.onQueueMove);
+  const moveIndex = () => segment().indexOf(item().id);
+  const move = () => rowProps.controls.onQueueMove;
   // Queue-level: once any row can move, every row's own state icon becomes the
   // handle so text stays on one x without adding a second grabber column.
-  const showsHandle = createMemo(() => Boolean(move()) && reorder().offered);
-  const canMove = createMemo(() => showsHandle() && moveIndex() >= 0 && segment().length > 1);
+  const showsHandle = () => Boolean(move()) && reorder().offered;
+  const canMove = () => showsHandle() && moveIndex() >= 0 && segment().length > 1;
   // Every row keeps its handle and action slots in every state and goes inert
   // instead of empty while an edit is open, so no column moves mid-flow.
-  const editable = createMemo(
-    () => Boolean(edit()?.onEdit) && isMovableChatQueueItem(item()) && !item().localCommandName,
-  );
-  const canEdit = createMemo(() => editable() && !edit()?.editingId);
-  const text = createMemo(
-    () =>
-      item().text ||
-      (item().attachments?.length
-        ? t("chat.queue.imageCount", { count: String(item().attachments?.length ?? 0) })
-        : ""),
-  );
+  const editable = () =>
+    Boolean(edit()?.onEdit) && isMovableChatQueueItem(item()) && !item().localCommandName;
+  const canEdit = () => editable() && !edit()?.editingId;
+  const text = () =>
+    item().text ||
+    (item().attachments?.length
+      ? t("chat.queue.imageCount", { count: String(item().attachments?.length ?? 0) })
+      : "");
   const renderDeliveryAction = (action: "retry" | "steer", disabled = false) => (
     <button
       class={["chat-queue__action", `chat-queue__${action}`]}
@@ -525,6 +484,7 @@ function ChatQueueItem(rowProps: {
       {editing() ? (
         <textarea
           class="chat-queue__edit-input"
+          enterkeyhint="enter"
           rows="1"
           ref={[
             (element) => mountQueueEditInput(element, edit()?.editingText ?? item().text),
@@ -558,26 +518,14 @@ function ChatQueueItem(rowProps: {
             }
             queueMentionInputs.delete(textarea);
           }}
-          onKeyDown={(event: KeyboardEvent) => {
-            if (isComposingKeyboardEvent(event)) {
-              return;
-            }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              event.stopPropagation();
-              edit()?.onCancel();
-            } else if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              edit()?.onEditSubmit?.();
-            }
-          }}
+          onKeyDown={(event) => handleQueueEditKeydown(event, edit())}
           onCompositionEnd={recordCompositionEnd}
           onKeyUp={clearCompositionEnd}
           onBlur={clearCompositionEnd}
         />
       ) : (
         <span class="chat-queue__copy">
-          <span class="chat-queue__text" title={text()}>
+          <span class="chat-queue__text" title={text()} ref={createTextOverflow(text)}>
             {text()}
           </span>
           {steered() && !canSteer() ? (

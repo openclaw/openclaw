@@ -11,15 +11,18 @@ import {
 } from "./authenticated-request-dispatch.test-support.js";
 
 const { databasePath, open } = useSqliteWorkerStoreFixture("gateway-disk-full-");
-const diskFullMessage =
-  "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.";
 
 it.each([
-  { index: 0, retryable: false },
-  { index: 1, retryable: true },
+  {
+    index: 0,
+    retryable: false,
+    outcomeCode: "session_actor_reconciliation",
+    guidance: /check.*history/i,
+  },
+  { index: 1, retryable: true, outcomeCode: "SQLITE_FULL", guidance: /free.*space/i },
 ])(
-  "reports disk-full guidance for write RPC $index (retryable: $retryable)",
-  async ({ index, retryable }) => {
+  "reports storage outcome guidance for write RPC $index (retryable: $retryable)",
+  async ({ index, retryable, outcomeCode, guidance }) => {
     const store = await open(databasePath(), { type: "disk-full" });
     let failure: unknown;
     const fixture = createDispatchTestHarness({
@@ -47,9 +50,9 @@ it.each([
       ok: false,
       error: {
         code: ErrorCodes.UNAVAILABLE,
-        message: diskFullMessage,
+        message: expect.stringMatching(guidance),
         retryable,
-        details: { code: "SQLITE_FULL" },
+        details: { code: outcomeCode },
       },
     });
     expect(fixture.logGateway.error).toHaveBeenCalledWith(expect.stringContaining("disk is full"));

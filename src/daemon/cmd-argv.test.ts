@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 
 describe("cmd argv helpers", () => {
-  it.each(["safe|whoami", "safe<in", "safe>out", "safe^caret"])(
+  it.each(["", "safe|whoami", "safe<in", "safe>out", "safe^caret"])(
     "round-trips single arg: %p",
     (arg) => {
       const encoded = quoteCmdScriptArg(arg);
@@ -16,6 +16,7 @@ describe("cmd argv helpers", () => {
       "node",
       "gateway.js",
       "--display-name",
+      "",
       "safe&whoami",
       "--percent",
       "%TEMP%",
@@ -23,6 +24,7 @@ describe("cmd argv helpers", () => {
       "!token!",
       "--quoted",
       'he said "hi"',
+      "",
     ];
     const encoded = args.map((arg) => quoteCmdScriptArg(arg)).join(" ");
     expect(parseCmdScriptCommandLine(encoded)).toEqual(args);

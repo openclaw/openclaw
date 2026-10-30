@@ -2,6 +2,7 @@
 import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
@@ -29,6 +30,7 @@ import { loadResumableNodeHostGateway, runNodeHost } from "../node-host/runner.j
 import { isDevicePairingJoinCode } from "../pairing/join-code.js";
 import { decodePairingSetupCode, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
 import { addNodeCommandOptions } from "./node-cli/command-options.js";
@@ -77,16 +79,19 @@ function parseJoinTarget(target: string): URL | null {
 async function fetchJoinPayload(
   target: URL,
   cloudflareAccess?: CloudflareAccessCredentials,
-): Promise<PairingSetupPayload> {
+  signal?: AbortSignal,
+): Promise<PairingSetupPayload | undefined> {
   const expectedHost = normalizeHostname(target.hostname);
   let release: () => Promise<void> = async () => {};
   try {
+    signal?.throwIfAborted();
     const guarded = await fetchWithSsrFGuard({
       url: target.toString(),
       auditContext: "openclaw-connect-join",
       maxRedirects: 0,
       requireHttps: target.protocol === "https:",
       timeoutMs: JOIN_FETCH_TIMEOUT_MS,
+      signal,
       ...(cloudflareAccess
         ? {
             init: { headers: buildCloudflareAccessHeaders(cloudflareAccess) },
@@ -105,12 +110,17 @@ async function fetchJoinPayload(
       },
     });
     release = guarded.release;
+    signal?.throwIfAborted();
     const response = guarded.response;
-    if (!response.ok || !response.headers.get("content-type")?.startsWith("application/json")) {
+    if (
+      !response.ok ||
+      normalizeMimeType(response.headers.get("content-type")) !== "application/json"
+    ) {
       await cancelUnreadResponseBody(response);
       throw new Error("Gateway join code was not found or has expired.");
     }
-    const body = await readResponseWithLimit(response, MAX_JOIN_PAYLOAD_BYTES);
+    const body = await readResponseWithLimit(response, MAX_JOIN_PAYLOAD_BYTES, { signal });
+    signal?.throwIfAborted();
     let decoded: unknown;
     try {
       decoded = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)) as unknown;
@@ -119,6 +129,9 @@ async function fetchJoinPayload(
     }
     return decodePairingSetupCode(encodePairingSetupCode(decoded as PairingSetupPayload));
   } catch (error) {
+    if (signal?.aborted) {
+      return undefined;
+    }
     if (error instanceof Error && error.message.startsWith("Gateway ")) {
       throw error;
     }
@@ -126,19 +139,6 @@ async function fetchJoinPayload(
   } finally {
     await release();
   }
-}
-
-function selectCloudflareAccessConfig(params: {
-  savedGateway?: NodeHostGatewayConfig;
-  target: URL;
-  env: NodeJS.ProcessEnv;
-}): NodeHostCloudflareAccessConfig | undefined {
-  const saved = params.savedGateway;
-  return (
-    (saved && nodeHostGatewayMatchesUrl(saved, params.target)
-      ? saved.cloudflareAccess
-      : undefined) ?? nodeHostCloudflareAccessConfigFromEnv(params.env)
-  );
 }
 
 /** Connect only redeems one-shot targets; a saved pairing resumes through `openclaw node`. */
@@ -225,105 +225,6 @@ async function resolveConnectTarget(
   return value;
 }
 
-async function runConnectCommand(
-  target: string | undefined,
-  opts: ConnectCommandOptions,
-): Promise<void> {
-  if (opts.ephemeral && opts.sessionHost) {
-    throw new Error("--ephemeral cannot be combined with --session-host.");
-  }
-  if (opts.ephemeral && opts.service) {
-    throw new Error("--ephemeral cannot be combined with --service.");
-  }
-  const resolvedTarget = await resolveConnectTarget(target, opts.targetFile);
-  if (!resolvedTarget) {
-    throw new Error(formatMissingTargetError(opts, await loadResumableNodeHostGateway()));
-  }
-  const joinTarget = parseJoinTarget(resolvedTarget);
-  const saved = await loadNodeHostConfig();
-  const initialCloudflareAccess = joinTarget
-    ? selectCloudflareAccessConfig({
-        savedGateway: saved?.gateway,
-        target: joinTarget,
-        env: process.env,
-      })
-    : undefined;
-  if (initialCloudflareAccess && joinTarget?.protocol !== "https:") {
-    throw new Error("Cloudflare Access credentials require an HTTPS join URL.");
-  }
-  const joinCredentials = await resolveNodeHostCloudflareAccess({
-    value: initialCloudflareAccess,
-    config: await captureRuntimeConfigAsyncReader()(),
-    env: process.env,
-  });
-  const payload = joinTarget
-    ? await fetchJoinPayload(joinTarget, joinCredentials)
-    : decodePairingSetupCode(resolvedTarget);
-  const pair = resolveNodePairGatewayPayload(payload);
-  const cloudflareAccess =
-    initialCloudflareAccess ??
-    (saved?.gateway && nodeHostGatewaysShareOrigin(saved.gateway, pair.candidates[0]!)
-      ? saved.gateway.cloudflareAccess
-      : undefined) ??
-    nodeHostCloudflareAccessConfigFromEnv(process.env);
-  const gatewayCandidates = pair.candidates.map((candidate, index) => {
-    const boundToAccessOrigin = joinTarget
-      ? nodeHostGatewayMatchesUrl(candidate, joinTarget)
-      : index === 0;
-    return boundToAccessOrigin && cloudflareAccess ? { ...candidate, cloudflareAccess } : candidate;
-  });
-  const forceWorkerRuns = opts.ephemeral === true || (opts.sessionHost === true && !opts.service);
-  const nodeRunOptions = {
-    gatewayHost: pair.host,
-    gatewayPort: pair.port,
-    gatewayTls: pair.tls,
-    gatewayTlsFingerprint: pair.tlsFingerprint,
-    gatewayContextPath: pair.contextPath,
-    ...(gatewayCandidates[0]?.cloudflareAccess
-      ? { gatewayCloudflareAccess: gatewayCandidates[0].cloudflareAccess }
-      : {}),
-    gatewayCandidates,
-    gatewayBootstrapToken: pair.bootstrapToken,
-    // Environment-managed nodes reuse their persisted device token when a provider
-    // replays setup after the one-shot bootstrap credential has been consumed.
-    preferGatewayBootstrapToken: opts.ephemeral !== true,
-    ...(forceWorkerRuns ? { forceWorkerRuns: true } : {}),
-    ...(opts.ephemeral === true ? { ephemeral: true } : {}),
-    displayName: opts.displayName,
-    commands: opts.commands,
-    allCommands: opts.allCommands,
-  };
-
-  if (!opts.service) {
-    await runNodeHost(nodeRunOptions);
-    return;
-  }
-
-  // The first hello stores durable device auth and the winning endpoint before
-  // installation, so the service never persists the one-shot bootstrap bearer.
-  await runNodeHost({ ...nodeRunOptions, stopAfterFirstConnect: true });
-  if (opts.sessionHost) {
-    await mutateConfigFileWithRetry({
-      writeOptions: {
-        auditOrigin: "cli",
-        explicitSetPaths: [["nodeHost", "workerRuns", "enabled"]],
-      },
-      mutate: (draft) => {
-        draft.nodeHost = {
-          ...draft.nodeHost,
-          workerRuns: { ...draft.nodeHost?.workerRuns, enabled: true },
-        };
-      },
-    });
-  }
-  await runNodeDaemonInstall({
-    displayName: opts.displayName,
-    commands: opts.commands,
-    allCommands: opts.allCommands,
-    force: true,
-  });
-}
-
 export function registerConnectCli(program: Command): void {
   addNodeCommandOptions(
     program.command("connect").description("Connect this machine to an OpenClaw Gateway as a node"),
@@ -355,7 +256,113 @@ export function registerConnectCli(program: Command): void {
     )
     .action(async (target: string | undefined, opts: ConnectCommandOptions) => {
       try {
-        await runConnectCommand(target, opts);
+        if (opts.ephemeral && opts.sessionHost) {
+          throw new Error("--ephemeral cannot be combined with --session-host.");
+        }
+        if (opts.ephemeral && opts.service) {
+          throw new Error("--ephemeral cannot be combined with --service.");
+        }
+        const resolvedTarget = await resolveConnectTarget(target, opts.targetFile);
+        if (!resolvedTarget) {
+          throw new Error(formatMissingTargetError(opts, await loadResumableNodeHostGateway()));
+        }
+        const joinTarget = parseJoinTarget(resolvedTarget);
+        const signal = joinTarget ? getAsyncWorkSignal() : undefined;
+        const saved = await loadNodeHostConfig();
+        let initialCloudflareAccess: NodeHostCloudflareAccessConfig | undefined;
+        if (joinTarget) {
+          const savedGateway = saved?.gateway;
+          const env = process.env;
+          initialCloudflareAccess =
+            (savedGateway && nodeHostGatewayMatchesUrl(savedGateway, joinTarget)
+              ? savedGateway.cloudflareAccess
+              : undefined) ?? nodeHostCloudflareAccessConfigFromEnv(env);
+        }
+        if (initialCloudflareAccess && joinTarget?.protocol !== "https:") {
+          throw new Error("Cloudflare Access credentials require an HTTPS join URL.");
+        }
+        const joinCredentials = await resolveNodeHostCloudflareAccess({
+          value: initialCloudflareAccess,
+          config: await captureRuntimeConfigAsyncReader()(),
+          env: process.env,
+        });
+        // Providers replay setup codes on restart. The node runtime may use an expired
+        // code only to reconnect with a saved device token for the same Gateway.
+        const payload = joinTarget
+          ? await fetchJoinPayload(joinTarget, joinCredentials, signal)
+          : decodePairingSetupCode(resolvedTarget, { allowExpired: opts.ephemeral === true });
+        if (!payload || signal?.aborted) {
+          return;
+        }
+        const pair = resolveNodePairGatewayPayload(payload);
+        const cloudflareAccess =
+          initialCloudflareAccess ??
+          (saved?.gateway && nodeHostGatewaysShareOrigin(saved.gateway, pair.candidates[0]!)
+            ? saved.gateway.cloudflareAccess
+            : undefined) ??
+          nodeHostCloudflareAccessConfigFromEnv(process.env);
+        const gatewayCandidates = pair.candidates.map((candidate, index) => {
+          const boundToAccessOrigin = joinTarget
+            ? nodeHostGatewayMatchesUrl(candidate, joinTarget)
+            : index === 0;
+          return boundToAccessOrigin && cloudflareAccess
+            ? { ...candidate, cloudflareAccess }
+            : candidate;
+        });
+        const forceWorkerRuns =
+          opts.ephemeral === true || (opts.sessionHost === true && !opts.service);
+        const nodeRunOptions = {
+          gatewayHost: pair.host,
+          gatewayPort: pair.port,
+          gatewayTls: pair.tls,
+          gatewayTlsFingerprint: pair.tlsFingerprint,
+          gatewayContextPath: pair.contextPath,
+          ...(gatewayCandidates[0]?.cloudflareAccess
+            ? { gatewayCloudflareAccess: gatewayCandidates[0].cloudflareAccess }
+            : {}),
+          gatewayCandidates,
+          gatewayBootstrapToken: pair.bootstrapToken,
+          ...(opts.ephemeral === true && pair.expiresAtMs !== undefined
+            ? { gatewayBootstrapExpiresAtMs: pair.expiresAtMs }
+            : {}),
+          // Environment-managed nodes reuse their persisted device token when a provider
+          // replays setup after the one-shot bootstrap credential has been consumed.
+          preferGatewayBootstrapToken: opts.ephemeral !== true,
+          ...(forceWorkerRuns ? { forceWorkerRuns: true } : {}),
+          ...(opts.ephemeral === true ? { ephemeral: true } : {}),
+          displayName: opts.displayName,
+          commands: opts.commands,
+          allCommands: opts.allCommands,
+        };
+
+        if (!opts.service) {
+          await runNodeHost(nodeRunOptions);
+          return;
+        }
+
+        // The first hello stores durable device auth and the winning endpoint before
+        // installation, so the service never persists the one-shot bootstrap bearer.
+        await runNodeHost({ ...nodeRunOptions, stopAfterFirstConnect: true });
+        if (opts.sessionHost) {
+          await mutateConfigFileWithRetry({
+            writeOptions: {
+              auditOrigin: "cli",
+              explicitSetPaths: [["nodeHost", "workerRuns", "enabled"]],
+            },
+            mutate: (draft) => {
+              draft.nodeHost = {
+                ...draft.nodeHost,
+                workerRuns: { ...draft.nodeHost?.workerRuns, enabled: true },
+              };
+            },
+          });
+        }
+        await runNodeDaemonInstall({
+          displayName: opts.displayName,
+          commands: opts.commands,
+          allCommands: opts.allCommands,
+          force: true,
+        });
       } catch (error) {
         defaultRuntime.error(error instanceof Error ? error.message : String(error));
         defaultRuntime.exit(1);

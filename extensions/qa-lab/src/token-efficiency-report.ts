@@ -136,7 +136,6 @@ function toolNamesForCells(openclaw: RuntimeParityCell, codex: RuntimeParityCell
 
 function buildRow(params: {
   result: RuntimeParityResult;
-  thresholdPercent: number;
   usageSource: "live-usage" | "mock-estimate";
 }) {
   const openclaw = runtimeUsage(params.result.cells.openclaw);
@@ -145,11 +144,11 @@ function buildRow(params: {
     openclaw.processedTokenEvidence !== "unavailable" &&
     codex.processedTokenEvidence !== "unavailable";
   const delta = comparable ? deltaPercent(openclaw.processedTokens, codex.processedTokens) : 0;
-  const flagged = params.usageSource === "live-usage" && delta > params.thresholdPercent;
+  const flagged = params.usageSource === "live-usage" && delta > DEFAULT_THRESHOLD_PERCENT;
   const classification =
-    delta > params.thresholdPercent
+    delta > DEFAULT_THRESHOLD_PERCENT
       ? "regression"
-      : delta < -params.thresholdPercent
+      : delta < -DEFAULT_THRESHOLD_PERCENT
         ? "savings"
         : "neutral";
   return {
@@ -270,11 +269,9 @@ function liveUsageShapeFailures(
 export function buildTokenEfficiencyReport(params: {
   summary: QaParitySuiteSummary;
   generatedAt?: string;
-  thresholdPercent?: number;
 }) {
   const providerMode = params.summary.run?.providerMode;
   const runtimePair = normalizeRuntimePair(params.summary.run?.runtimePair);
-  const thresholdPercent = params.thresholdPercent ?? DEFAULT_THRESHOLD_PERCENT;
   const liveUsage = providerMode?.startsWith("live-") === true;
   const usageSource: TokenEfficiencyRow["usageSource"] = liveUsage ? "live-usage" : "mock-estimate";
   const parityResults = params.summary.scenarios
@@ -308,7 +305,7 @@ export function buildTokenEfficiencyReport(params: {
       runtimePair,
       generatedAt: params.generatedAt ?? new Date().toISOString(),
       ...(providerMode ? { providerMode } : {}),
-      thresholdPercent,
+      thresholdPercent: DEFAULT_THRESHOLD_PERCENT,
       rows: [],
       notApplicableScenarios,
       aggregate: ZERO_AGGREGATE,
@@ -326,7 +323,6 @@ export function buildTokenEfficiencyReport(params: {
   const rows = usageApplicableResults.map((result) =>
     buildRow({
       result,
-      thresholdPercent,
       usageSource,
     }),
   );
@@ -343,7 +339,7 @@ export function buildTokenEfficiencyReport(params: {
         : [];
     if (row.flagged) {
       rowFailures.push(
-        `${row.scenarioId} token delta=${formatPercent(row.deltaPercent)} exceeds ${thresholdPercent.toFixed(1)}% Codex increase threshold`,
+        `${row.scenarioId} token delta=${formatPercent(row.deltaPercent)} exceeds ${DEFAULT_THRESHOLD_PERCENT.toFixed(1)}% Codex increase threshold`,
       );
     }
     return rowFailures;
@@ -355,7 +351,7 @@ export function buildTokenEfficiencyReport(params: {
     runtimePair,
     generatedAt: params.generatedAt ?? new Date().toISOString(),
     ...(providerMode ? { providerMode } : {}),
-    thresholdPercent,
+    thresholdPercent: DEFAULT_THRESHOLD_PERCENT,
     rows,
     notApplicableScenarios,
     aggregate,

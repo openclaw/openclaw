@@ -2,12 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
-import type { WorkerProvider } from "../../plugins/types.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 import { nodeArtifacts, repository } from "./provider-lifecycle.test-support.js";
 import * as support from "./service.test-support.js";
-import type { WorkerEnvironmentRecord } from "./store.js";
 
 describe("prepared worker intent admission", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -18,27 +15,23 @@ describe("prepared worker intent admission", () => {
       disableSigning: true,
       content: "base\n",
     });
-    const target = vi.fn<NonNullable<WorkerProvider["resolvePreparationTarget"]>>(
-      (_profile, machineClass, os) => ({
-        machineClass: machineClass ?? "small",
-        platform: os ?? "linux",
-        arch: "amd64",
-      }),
-    );
     const provider = support.createProvider({
       requiresNodeEnrollment: true,
       supportsProjectPreparation: () => true,
-      resolvePreparationTarget: target,
+      resolvePreparationTarget: (_profile, machineClass = "small", platform = "linux") => ({
+        machineClass,
+        platform,
+        arch: "amd64",
+      }),
     });
     const prepareNodeArtifacts = vi.fn(async () => nodeArtifacts(["runtime-plugin"]));
-    const resumeProvision = vi.fn(async (record: WorkerEnvironmentRecord) => record);
     const owner = createWorkerProviderIntent({
       store: support.testState.store,
       getConfig: () => support.testState.config,
       projectNamespace: "gateway-test",
       providerFor: () => provider,
       prepareNodeArtifacts,
-      resumeProvision,
+      resumeProvision: async (record) => record,
       isStopping: () => false,
       withLock: async (_environmentId, task) => task(),
     });
@@ -49,8 +42,7 @@ describe("prepared worker intent admission", () => {
       options: Parameters<typeof owner.createWithProfile>[2] = {},
       admitted?: Parameters<typeof owner.createWithProfile>[3],
     ) => owner.createWithProfile("development", key, { projectPath, ...options }, admitted);
-    const spies = { target, prepareNodeArtifacts, resumeProvision };
-    return { owner, provider, projectPath, spies, prepare, create };
+    return { owner, provider, projectPath, prepareNodeArtifacts, prepare, create };
   }
 
   it("keeps empty workspaces cold on providers with only setup commands", async () => {
@@ -60,8 +52,7 @@ describe("prepared worker intent admission", () => {
     const intent = await f.owner.prepareIntent("development", { emptyWorkspace: true });
     expect(intent.profileSnapshot).not.toHaveProperty("project");
     expect(intent.profileSnapshot).not.toHaveProperty("runtimePreparation");
-    expect(intent.preparationKey).toBeUndefined();
-    expect(f.spies.prepareNodeArtifacts).not.toHaveBeenCalled();
+    expect(f.prepareNodeArtifacts).not.toHaveBeenCalled();
   });
 
   it("admits exact local source and OS without allocating, and retains reusable facts after caller abort", async () => {
@@ -69,15 +60,15 @@ describe("prepared worker intent admission", () => {
     const controller = new AbortController();
     const options = { machineClass: "large", os: "linux", signal: controller.signal };
     const intent = await f.prepare(options);
-    expect(intent.preparationKey).toMatch(/^[a-f0-9]{64}$/u);
-    expect(f.spies.target).toHaveBeenCalledWith({ region: "test" }, "large", "linux");
+    expect(intent.profileSnapshot.project?.preparation?.target).toMatchObject({
+      machineClass: "large",
+      platform: "linux",
+    });
     expect(support.testState.store.list()).toEqual([]);
-    expect(f.spies.resumeProvision).not.toHaveBeenCalled();
     controller.abort();
     expect(() => f.owner.assertPreparedIntentCurrent("development", intent)).not.toThrow();
     await f.create("admitted-local", { ...options, signal: undefined }, intent);
     expect(support.testState.store.list()).toHaveLength(1);
-    expect(f.spies.resumeProvision).toHaveBeenCalledOnce();
   });
 
   it("replays a removed linked source through its canonical repository while rejecting other projects and commits", async () => {
@@ -121,21 +112,22 @@ describe("prepared worker intent admission", () => {
     expect(support.testState.store.get(stored.environmentId)?.profileSnapshot).toEqual(
       stored.profileSnapshot,
     );
-    expect(f.spies.resumeProvision).toHaveBeenCalledTimes(3);
   });
 
   it("requires setup authority for reserves while preserving explicit session setup admission", async () => {
     const f = await fixture(true);
     const ordinary = await f.prepare();
-    expect(ordinary.preparationKey).toBeUndefined();
+    expect(ordinary.profileSnapshot.project?.preparation).toBeUndefined();
     const authorized = await f.prepare({ setupAuthorized: true });
     const skipped = await f.prepare({ runSetupScript: false });
-    expect(authorized.preparationKey).toBeDefined();
-    expect(skipped.preparationKey).toBeDefined();
-    expect(skipped.preparationKey).not.toBe(authorized.preparationKey);
+    const authorizedKey = authorized.profileSnapshot.project?.preparation?.key;
+    const skippedKey = skipped.profileSnapshot.project?.preparation?.key;
+    expect(authorizedKey).toBeDefined();
+    expect(skippedKey).toBeDefined();
+    expect(skippedKey).not.toBe(authorizedKey);
     await f.create("session-setup", { runSetupScript: true });
-    expect(
-      readWorkerProjectPreparation(support.testState.store.list()[0]!.profileSnapshot.project)?.key,
-    ).toBe(authorized.preparationKey);
+    expect(support.testState.store.list()[0]!.profileSnapshot).toMatchObject({
+      project: { preparation: { key: authorizedKey } },
+    });
   });
 });

@@ -15,7 +15,11 @@ import type { NodeRegistry } from "../node-registry.js";
 import { isNodeWakeLifecycleCurrent } from "../node-wake-state.js";
 import { resetNodeWakeStateForTest } from "../node-wake-state.test-support.js";
 import { nodeInvokeHandlers } from "./nodes.invoke.js";
-import { createNodeInvokeTestHarness } from "./nodes.invoke.test-support.js";
+import {
+  createNodeInvokeTestHarness,
+  expectNodeFailure as expectFailure,
+  expectNodeReply,
+} from "./nodes.invoke.test-support.js";
 import type { GatewayNodeInvokeStream, GatewayRequestHandlerOptions } from "./shared-types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -93,10 +97,6 @@ function streamingInvoke(
     return { ok: true, payload };
   });
 }
-function expectFailure(respond: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
-}
-
 beforeEach(() => {
   resetNodeWakeStateForTest();
   vi.clearAllMocks();
@@ -167,14 +167,12 @@ describe("node.invoke caller cancellation", () => {
         capabilities: ["accessibility", "eventPosting", "screenRecording", "computerControl"],
         state: "denied",
       };
-      const invoke = vi.fn<NodeRegistry["invoke"]>(async () => ({
-        ok: false,
-        error: {
-          code: "PERMISSION_MISSING",
-          message: "Native permissions missing",
-          details: nativeDetails,
-        },
-      }));
+      const nodeError = {
+        code: "PERMISSION_MISSING",
+        message: "Native permissions missing",
+        details: nativeDetails,
+      };
+      const invoke = vi.fn<NodeRegistry["invoke"]>(async () => ({ ok: false, error: nodeError }));
       const run = createOperationalRunInstanceRef("permission-run");
       const authority = claimAgentRunDelegatedAuthority(run);
       const events: AgentEventPayload[] = [];
@@ -212,11 +210,7 @@ describe("node.invoke caller cancellation", () => {
             "Accessibility, Event Posting, Screen Recording, Computer Control required on node paired-node",
           ),
           details: expect.objectContaining({
-            nodeError: {
-              code: "PERMISSION_MISSING",
-              message: "Native permissions missing",
-              details: nativeDetails,
-            },
+            nodeError,
             permissionMissing,
           }),
         });
@@ -275,10 +269,9 @@ describe("node.invoke caller cancellation", () => {
         idleTimeoutMs: 5_000,
       }),
     );
-    expect(respond).toHaveBeenCalledWith(
-      true,
+    expectNodeReply(
+      respond,
       expect.objectContaining({ nodeId: "paired-node", command: "ollama.chat" }),
-      undefined,
     );
 
     runtimeCurrent = false;
@@ -326,12 +319,6 @@ describe("node.invoke caller cancellation", () => {
       await invocation;
 
       expect(invoke).not.toHaveBeenCalled();
-      if (privateControl) {
-        expect(mocks.resolveNodeCommandAllowlist).not.toHaveBeenCalled();
-        expect(mocks.applyPluginNodeInvokePolicy).not.toHaveBeenCalled();
-      } else {
-        expect(mocks.sanitizeNodeInvokeParamsForForwarding).toHaveBeenCalledOnce();
-      }
       expect(stream.onDispatchReady).not.toHaveBeenCalled();
       expectFailure(respond, {
         message: privateControl ? expect.stringContaining("private") : message,

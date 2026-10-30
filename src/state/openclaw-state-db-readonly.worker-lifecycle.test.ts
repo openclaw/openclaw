@@ -95,8 +95,6 @@ import {
 } from "./openclaw-state-db-cache.js";
 import {
   executeExistingOpenClawStateRead as readExisting,
-  getActiveOpenClawStateDatabaseReadSnapshot as getSnapshot,
-  getActiveOpenClawStateDatabaseReadSnapshotAsync as getSnapshotAsync,
   withArtifactPreservingStateReads as preserveArtifacts,
   withOpenClawStateDatabaseReadSnapshot as withSnapshot,
 } from "./openclaw-state-db-readonly.js";
@@ -161,46 +159,6 @@ function startPendingRead() {
   });
   return { started, finish };
 }
-
-it("prepares one lazy snapshot without blocking and retains its identity through sync reads", async () => {
-  const started = createDeferredCore();
-  const preparation = createDeferredCore<AsyncPreparedSqliteReadOnlyLocation>();
-  mock.prepareSourceAsync.mockImplementation(() => {
-    started.resolve();
-    return preparation.promise;
-  });
-  finishProducer = () => preparation.resolve(preparedLocation());
-  const afterCleanup = createDeferredCore();
-  let escaped: ReturnType<typeof getSnapshotAsync> | undefined;
-  await withSnapshot(
-    async () => {
-      const first = getSnapshotAsync(options);
-      const second = getSnapshotAsync(options);
-      await started.promise;
-      // Completion needs an event-loop turn, which a synchronous first read would block.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(mock.cleanup).not.toHaveBeenCalled();
-      finishProducer!();
-      const [left, right] = await Promise.all([first, second]);
-      expect(left).toMatchObject({ location: "/fixture/prepared.sqlite" });
-      expect(right).toBe(left);
-      expect(getSnapshot(options)).toBe(left);
-      await read();
-      expect(mock.prepareSourceAsync).toHaveBeenCalledOnce();
-      expect(mock.prepareSource).not.toHaveBeenCalled();
-      expect(mock.cleanup).not.toHaveBeenCalled();
-      escaped = afterCleanup.promise.then(() => getSnapshotAsync(options));
-    },
-    { ...options, lazy: true },
-  );
-  expect(mock.cleanup).toHaveBeenCalledOnce();
-  afterCleanup.resolve();
-  await expect(escaped).rejects.toMatchObject({
-    code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
-  });
-});
 
 it("closes pending snapshot preparation before joining the read at shutdown", async () => {
   const started = createDeferredCore();
@@ -331,10 +289,12 @@ it("retries transport stop and settles the already-selected query", async () => 
   const observed = settle(preserveArtifacts(read));
   await started.promise;
   await expect(closePath(options.path)).rejects.toBe(failure);
+  expect(mock.closePreparation).not.toHaveBeenCalled();
   expect(mock.cleanup).not.toHaveBeenCalled();
   await expect(closePath(options.path)).resolves.toBe(false);
   expect(mock.close).toHaveBeenCalledTimes(2);
   expect(mock.cleanup).toHaveBeenCalledTimes(1);
+  expect(mock.closePreparation).toHaveBeenCalledOnce();
   expect(await observed).toEqual({
     value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
   });

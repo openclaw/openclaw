@@ -19,6 +19,11 @@ type CompletionDeliveryDependencies = {
   retiredParents: Pick<WeakSet<ParentState>, "has">;
   unregisterChild: (child: ChildState) => void;
   abandon: (state: ParentState, child: ChildState, assertCurrent: () => void) => Promise<void>;
+  settleNestedCompletion: (
+    state: ParentState,
+    child: ChildState,
+    assertCurrent: () => void,
+  ) => Promise<boolean>;
   releaseClientRetentionIfIdle: () => void;
 };
 
@@ -59,8 +64,25 @@ export class CodexNativeSubagentCompletionDelivery {
     }
     let deferredToForeground = false;
     try {
-      if (childState.cancellationRequested && completion.status === "cancelled") {
-        // Stop owns durable cancellation acknowledgement before releasing this child.
+      if (childState.cancellationRequested) {
+        // Stop settles owned processes before acknowledging cancellation or
+        // delivering a natural result that won the interruption race.
+        return;
+      }
+      if (
+        await this.dependencies.settleNestedCompletion(state, childState, () => {
+          if (
+            !this.isCurrent(state, childState) ||
+            (childState.completionCustody && !childState.completionCustody.isCurrent())
+          ) {
+            throw new Error("Native completion acknowledgement is no longer current.");
+          }
+        })
+      ) {
+        this.dependencies.unregisterChild(childState);
+        return;
+      }
+      if (!this.isCurrent(state, childState)) {
         return;
       }
       if (!this.prepareDelivery(state, childState)) {
@@ -121,13 +143,8 @@ export class CodexNativeSubagentCompletionDelivery {
         await this.abandon(state, childState);
         return;
       }
-      const recoveryPending = delivery.recoveryPending;
-      const error =
-        delivery.error ??
-        (recoveryPending
-          ? "requester recovery owns completion"
-          : "completion delivery did not produce a parent response");
-      await this.scheduleRetry(state, childState, error, !recoveryPending);
+      const error = delivery.error ?? "completion delivery did not produce a parent response";
+      await this.scheduleRetry(state, childState, error);
     } catch (error) {
       if (!this.isCurrent(state, childState)) {
         return;

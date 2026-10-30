@@ -3,4 +3,5 @@
 export {
   hasTerminalControl,
   sanitizeTerminalText,
+  terminalText,
 } from "../../packages/terminal-core/src/safe-text.js";

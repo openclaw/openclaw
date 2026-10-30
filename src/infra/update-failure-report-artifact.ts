@@ -11,8 +11,9 @@ import {
 } from "../commands/triage-update.js";
 import { resolveStateDir } from "../config/paths.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
-import { classifyUpdateOutcome } from "../shared/update-outcome.js";
+import { classifyUpdateOutcome } from "../shared/update-outcome-classification.js";
 import { sha256Hex } from "./crypto-digest.js";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { withFileLock } from "./file-lock.js";
 import { formatUpdateDoctorLintFinding } from "./update-doctor-lint.js";
@@ -44,12 +45,7 @@ function nativeFailureDiagnostics(steps: UpdateRunRecord["steps"]): string {
 }
 
 async function readSavedUpdateReport(filePath: string): Promise<string | undefined> {
-  return fs.readFile(filePath, "utf8").catch((error: unknown) => {
-    if (hasErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  return fs.readFile(filePath, "utf8").catch(ignoreMissingPath);
 }
 
 async function writeReportText(
@@ -196,6 +192,7 @@ export async function writeUpdateRunReportArtifact(params: {
     | Pick<UpdateRunReport, "markdown">
     | ((run?: UpdateRunRecord) => Pick<UpdateRunReport, "markdown">);
   readRun?: () => UpdateRunRecord | undefined;
+  record?: UpdateRunRecord;
   env?: NodeJS.ProcessEnv;
   detached?: boolean;
   assertCurrent?: () => void;
@@ -212,7 +209,7 @@ export async function writeUpdateRunReportArtifact(params: {
   const outputPath = path.join(directory, `${id}.md`);
   const write = async () => {
     params.assertCurrent?.();
-    const run = params.readRun?.();
+    const run = params.record ?? params.readRun?.();
     const report = typeof params.report === "function" ? params.report(run) : params.report;
     if (params.readRun && !run) {
       const previous = await readSavedUpdateReport(outputPath);
@@ -226,7 +223,7 @@ export async function writeUpdateRunReportArtifact(params: {
     const failurePath =
       classifyUpdateOutcome(params.result) === "failed"
         ? await writeTriageUpdateFailure(
-            { result: params.result },
+            { result: { ...params.result, target: run?.target } },
             {
               env,
               assertCurrent: params.assertCurrent,
@@ -339,12 +336,9 @@ export async function listRetiredUpdateFailureReportArtifacts(
   prepared: PreparedUpdateFailureReport,
 ): Promise<string[]> {
   const base = path.parse(prepared.savedReportPath);
-  const entries = await fs.readdir(base.dir).catch((error: unknown) => {
-    if (hasErrorCode(error, "ENOENT")) {
-      return [];
-    }
-    throw error;
-  });
+  const entries = await fs
+    .readdir(base.dir)
+    .catch((error: unknown) => ignoreMissingPath(error) ?? []);
   return entries
     .filter((entry) => isAttemptArtifactName(base, entry))
     .map((entry) => path.join(base.dir, entry));

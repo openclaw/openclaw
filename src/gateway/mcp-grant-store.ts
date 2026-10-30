@@ -13,6 +13,7 @@ import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import type { PreparedSessionPermissionPolicy } from "../agents/tool-fs-policy.types.js";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
@@ -118,7 +119,6 @@ export type McpLoopbackRequestContext = {
   execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
   bashElevated?: ExecElevatedDefaults;
   trigger?: string;
-  continuesConversation?: boolean;
   approvalReviewerDeviceId?: string;
   channelContext?: PluginHookChannelContext;
   senderName?: string;
@@ -179,11 +179,15 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   ) => CronCreatorAuthorityGrant;
   /** Retained Cron permission, independent of this grant's other tool authority. */
   cronAuthorityCheck?: () => boolean;
+  /** Exact Cron management scope for construction after native CLI admission. */
+  withCronManagementToolConstruction?: <T>(run: () => T) => T;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   /** Original CLI policy, rebound only to this stored row's exact lifetime. */
   bindQuestionAnswerAuthority?: (assertActive: () => void) => PreparedQuestionAnswerAuthority;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+  /** Configured MCP tools owned by the minting CLI run; disposed with that run. */
+  bundledTools?: readonly AnyAgentTool[];
   activeCaptureKey?: string;
   /** Effective attempt authority, including plugin-owned timeout and cancellation. */
   assertCaptureCurrent?: () => void;
@@ -314,10 +318,12 @@ export function mintMcpLoopbackClientGrant(
     memoryAudience: params.memoryAudience,
     cronRequesterGrantIssuer: params.cronRequesterGrantIssuer,
     cronAuthorityCheck: params.cronAuthorityCheck,
+    withCronManagementToolConstruction: params.withCronManagementToolConstruction,
     abortSignal: params.abortSignal,
     assertCurrent: params.assertCurrent,
     bindQuestionAnswerAuthority: params.bindQuestionAnswerAuthority,
     skillLibraryAuthoring: params.skillLibraryAuthoring,
+    ...(params.bundledTools?.length ? { bundledTools: params.bundledTools } : {}),
     ...(params.toolAuth ? { toolAuth: structuredClone(params.toolAuth) } : {}),
   };
   clientGrantsByToken.set(grant.token, grant);
@@ -515,8 +521,10 @@ export function resolveMcpLoopbackClientGrant(params: {
       memoryAudience?: MemoryAudience;
       mintCronRequesterGrant?: (signal?: AbortSignal) => CronCreatorAuthorityGrant;
       cronAuthorityCheck?: () => boolean;
+      withCronManagementToolConstruction?: <T>(run: () => T) => T;
       questionAnswerAuthority?: PreparedQuestionAnswerAuthority;
       skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+      bundledTools?: readonly AnyAgentTool[];
       isCurrent: () => boolean;
       toolAuth?: McpLoopbackToolAuth;
     }
@@ -547,6 +555,7 @@ export function resolveMcpLoopbackClientGrant(params: {
     }
   });
   const issueCronRequesterGrant = grant.cronRequesterGrantIssuer;
+  const withCronManagementToolConstruction = grant.withCronManagementToolConstruction;
   // Cached tools and OAuth refreshes must share the prepared store for this
   // grant; cloning on each request would discard refreshed credentials.
   return {
@@ -560,6 +569,14 @@ export function resolveMcpLoopbackClientGrant(params: {
     messageActionTurnCapability: grant.messageActionTurnCapability || undefined,
     memoryAudience: grant.memoryAudience,
     cronAuthorityCheck: grant.cronAuthorityCheck,
+    withCronManagementToolConstruction: withCronManagementToolConstruction
+      ? <T>(run: () => T): T => {
+          if (!isCurrent()) {
+            throw new Error("cron management MCP grant is no longer active");
+          }
+          return withCronManagementToolConstruction(run);
+        }
+      : undefined,
     mintCronRequesterGrant: issueCronRequesterGrant
       ? (signal?: AbortSignal) => {
           if (!isCurrent()) {
@@ -570,6 +587,7 @@ export function resolveMcpLoopbackClientGrant(params: {
       : undefined,
     questionAnswerAuthority,
     skillLibraryAuthoring: grant.skillLibraryAuthoring,
+    ...(grant.bundledTools ? { bundledTools: grant.bundledTools } : {}),
     isCurrent,
 
     ...(grant.toolAuth ? { toolAuth: grant.toolAuth } : {}),

@@ -49,7 +49,7 @@ vi.mock("../../../gateway/session-sharing-preparation.js", () => ({
 const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
 
-it("keeps automations manageable after yield retires the batch", async () => {
+it("keeps bound automation management after the old cohort is explicitly removed", async () => {
   const { withCronManagementGrant } =
     await import("../../../gateway/cron-creator-authority-grant.js");
   const { cronJobMatchesCallerScope, readCronCallerScope } =
@@ -160,7 +160,6 @@ it("keeps automations manageable after yield retires the batch", async () => {
         },
         hasRestoredCronContinuation: false,
         isOneShotModelRun: false,
-        isRestartRecoveryResumeRun: false,
       });
       if (admission) {
         const operationalRunInstance = createTestAdmittedRunContext(runId).operationalRunInstance;

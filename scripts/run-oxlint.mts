@@ -19,9 +19,11 @@ import {
   resolveDistArtifactLockPath,
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
+import { checkLintParity } from "./lib/lint-parity.mts";
 import { applyLocalOxlintPolicy, resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolveUntouchedOxlintExclusions } from "./lib/oxlint-changed-scope.mts";
+import { isCiEnvironment } from "./lib/pinned-bun.mts";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
@@ -158,18 +160,26 @@ async function runWithAdvisoryLimits(
     env,
     requireProcessTreeExit: process.platform !== "win32",
   };
+  const writesOutput = args.some((arg) =>
+    /^(?:--output-file|--fix(?:-suggestions|-dangerously)?)(?:=|$)/u.test(arg),
+  );
   const evidenceId = env.OPENCLAW_CI_STATIC_EVIDENCE_ID;
   const evidenceEnabled =
     env.OPENCLAW_CI_STATIC_EVIDENCE === "1" &&
     typeof evidenceId === "string" &&
     /^[\w:-]{1,160}$/u.test(evidenceId) &&
-    !args.some((arg) => /^(?:--output-file|--fix(?:-suggestions|-dangerously)?)(?:=|$)/u.test(arg));
+    !writesOutput;
   const githubAdvisory = limitsAreAdvisory(env);
+  // Windows has no automatic fork staging; an explicit executable still enables parity.
+  const parity =
+    isCiEnvironment(env) &&
+    !writesOutput &&
+    (process.platform !== "win32" || Boolean(env.OPENCLAW_BUN_PATH?.trim()));
   let untouchedExclusions = githubAdvisory
     ? undefined
     : resolveUntouchedOxlintExclusions(configPath, env);
   if (
-    (!githubAdvisory && !untouchedExclusions && !evidenceEnabled) ||
+    (!githubAdvisory && !untouchedExclusions && !evidenceEnabled && !parity) ||
     args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg.replace(/[=][\s\S]*$/u, ""))) ||
     !fs.existsSync(configPath)
   ) {
@@ -212,7 +222,7 @@ async function runWithAdvisoryLimits(
     });
   }
   enabled &&= githubAdvisory || Boolean(untouchedExclusions);
-  if (!enabled && !evidenceEnabled) {
+  if (!enabled && !evidenceEnabled && !parity) {
     return { status: await runManagedCommand(command) };
   }
 
@@ -268,7 +278,7 @@ async function runWithAdvisoryLimits(
   };
   try {
     const configuredArgs = advisoryConfig ? configOption.replace(advisoryConfig) : args;
-    if (!githubAdvisory && !evidenceEnabled) {
+    if (!githubAdvisory && !evidenceEnabled && !parity) {
       return { status: await runManagedCommand({ ...command, args: configuredArgs }) };
     }
     const format = oxlintOption(configuredArgs, "--format", "-f");
@@ -335,6 +345,10 @@ async function runWithAdvisoryLimits(
           env,
         );
       }
+      if (parity) {
+        console.error("[lint] parity failed: oxlint report exceeded capture limit.");
+        return { status: 1 };
+      }
       return { status };
     }
     if (status !== 0 && status !== 1) {
@@ -355,6 +369,17 @@ async function runWithAdvisoryLimits(
     const limits = report.diagnostics.filter((diagnostic) =>
       LIMIT_RULES.has(/^eslint\(([^)]+)\)$/u.exec(diagnostic.code ?? "")?.[1] ?? ""),
     );
+    if (
+      parity &&
+      !(await checkLintParity(
+        format.replace("json"),
+        env,
+        { status, stdout: output },
+        MAX_REPORT_BYTES,
+      ))
+    ) {
+      return { status: 1 };
+    }
     reportLimitViolations(
       limits.map((diagnostic) => ({
         file: diagnostic.filename.startsWith("file://")
@@ -641,7 +666,10 @@ export async function runOxlint(
         platform: process.platform,
       });
   const sparseTargets = filterSparseMissingOxlintTargets(policyArgs);
-  const tool = resolveDevTool("lint", env);
+  const tool = resolveDevTool(
+    "lint",
+    isCiEnvironment(env) ? { ...env, OPENCLAW_LINT_TOOL: "oxlint" } : env,
+  );
   const finalArgs = [...tool.args, ...sparseTargets.args];
   const oxlintPath = tool.command;
   const needsArtifactPreparation =

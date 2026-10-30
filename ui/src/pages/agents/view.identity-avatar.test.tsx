@@ -2,6 +2,7 @@ import { flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
+import { cleanupSolid } from "../../test-helpers/solid-cleanup.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createAgentViewTestProps as createProps } from "./agents-view.test-helpers.ts";
@@ -16,25 +17,21 @@ const identity = (revision: number) => ({
   beta: { agentId: "beta", name: "Fetched Beta", avatar: `/avatar/beta?v=${revision}`, emoji: "" },
 });
 const fetchAvatar = vi.fn<typeof fetch>();
-const fetchOther = vi.fn<typeof fetch>();
 const createObjectURL = vi.fn<typeof URL.createObjectURL>();
-const disposals: Array<() => void> = [];
 const requestUrls = () =>
   fetchAvatar.mock.calls.map(([input]) => (input instanceof Request ? input.url : String(input)));
 
 beforeEach(() => {
   const nativeFetch = globalThis.fetch;
   fetchAvatar.mockReset();
-  fetchOther.mockReset().mockImplementation(nativeFetch);
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
     const url = new URL(
       input instanceof Request ? input.url : String(input),
       globalThis.location.href,
     );
-    // Only the persisted avatar belongs to the request-count contract.
     return url.origin === globalThis.location.origin && url.pathname === "/avatar/beta"
       ? fetchAvatar(input, init)
-      : fetchOther(input, init);
+      : nativeFetch(input, init);
   });
   let sequence = 0;
   createObjectURL.mockReset().mockImplementation(() => `blob:settings-avatar-${++sequence}`);
@@ -48,9 +45,8 @@ beforeEach(() => {
   setAvatarGatewayOrigin(globalThis.location.origin, ["avatar-token"]);
 });
 afterEach(() => {
-  for (const dispose of disposals.splice(0)) {
-    dispose();
-  }
+  cleanupSolid();
+  document.body.replaceChildren();
   setAvatarGatewayOrigin(null);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -59,27 +55,17 @@ afterEach(() => {
 function createView(avatar: string | null = null) {
   const container = document.body.appendChild(document.createElement("div"));
   let props = createProps({
-    agentsList: {
-      defaultId: "beta",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "beta", name: "Beta" }],
-    },
     agentIdentityById: identity(1),
-    overview: { ...createProps().overview, identityDraft: { name: null, emoji: null, avatar } },
+    readData: () => ({
+      ...createProps().readData(),
+      identityDraft: { name: null, emoji: null, avatar },
+    }),
   });
   const view = mountSolid(Agents, props, container);
-  disposals.push(() => {
-    view.dispose();
-    container.remove();
-  });
   const query = (selector: string) => container.querySelector<HTMLElement>(selector);
   const image = () => query(".agent-identity-editor__avatar img");
   const classes = () => query(".agent-identity-editor__avatar .identity-avatar--agent")?.classList;
-  const update = (next: Partial<AgentsProps>) => {
-    props = { ...props, ...next };
-    view.update(props);
-  };
+  const update = (next: Partial<AgentsProps>) => view.update((props = { ...props, ...next }));
   const loaded = (sequence: number) =>
     waitForFast(() => {
       expect(image()?.getAttribute("src")).toBe(`blob:settings-avatar-${sequence}`);
@@ -100,42 +86,43 @@ function createView(avatar: string | null = null) {
     revision: (revision: number) => update({ agentIdentityById: identity(revision) }),
     rename: () =>
       update({
-        overview: {
-          ...props.overview,
+        readData: () => ({
+          ...createProps().readData(),
           identityDraft: { name: "Renamed Beta", emoji: null, avatar: null },
-        },
+        }),
       }),
   };
 }
 
-it("fetches one persisted settings avatar alongside unrelated requests", async () => {
+it("shares one authenticated avatar between editor and picker", async () => {
   const response = createDeferred<Response>();
   fetchAvatar.mockReturnValue(response.promise);
   const view = createView();
-  const assetResponse = new Response("independent asset");
-  fetchOther.mockResolvedValueOnce(assetResponse);
-  const asset = fetch(new URL("/fixture/settings-asset", globalThis.location.origin));
   try {
     const classes = view.classes();
     expect(classes).toContain("is-pending");
     expect(classes).not.toContain("is-fallback");
-    expect(fetchAvatar).toHaveBeenCalledWith(
-      avatarUrl(1),
-      expect.objectContaining({
-        credentials: "include",
-        headers: { Authorization: "Bearer avatar-token" },
-        signal: expect.any(AbortSignal),
-      }),
-    );
+    const chooser = view.query('button[aria-label="Edit avatar"]');
+    chooser?.click();
+    flush();
+    view.query(".avatar-picker__tab:nth-child(2)")?.click();
+    flush();
+    const preview = view.query(".avatar-picker__preview .identity-avatar--agent");
+    const image = preview?.querySelector("img");
+    expect(preview?.classList).toContain("is-pending");
+    expect(image?.getAttribute("src")).toBeNull();
+    await waitForFast(() => expect(requestUrls()).toEqual([avatarUrl(1)]));
     response.resolve(avatarResponse());
     await view.loaded(1);
-    expect(classes).toContain("is-pending");
+    await waitForFast(() => expect(image?.getAttribute("src")).toBe("blob:settings-avatar-1"));
+    image?.dispatchEvent(new Event("load"));
+    flush();
+    expect(preview?.classList).not.toContain("is-pending");
+    expect(classes).not.toContain("is-pending");
     view.image()?.dispatchEvent(new Event("load"));
     flush();
     expect(classes).not.toContain("is-pending");
     expect(requestUrls()).toEqual([avatarUrl(1)]);
-    expect(createObjectURL).toHaveBeenCalledOnce();
-    expect(await asset).toBe(assetResponse);
   } finally {
     response.resolve(avatarResponse());
   }
@@ -192,9 +179,9 @@ it("keeps a reopened picker preview pending until the authenticated avatar resol
   flush();
   const preview = view.query(".avatar-picker__preview .identity-avatar--agent");
   const image = preview?.querySelector("img");
+  await waitForFast(() => expect(fetchAvatar).toHaveBeenCalledOnce());
   expect(preview?.classList).toContain("is-pending");
   expect(image?.getAttribute("src")).toBeNull();
-  expect(fetchAvatar).toHaveBeenCalledOnce();
   response.resolve(avatarResponse());
   await waitForFast(() => expect(image?.getAttribute("src")).toBe("blob:settings-avatar-1"));
   image?.dispatchEvent(new Event("load"));

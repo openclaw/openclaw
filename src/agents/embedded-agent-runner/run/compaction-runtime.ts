@@ -15,11 +15,13 @@ import {
   type ContextEngine,
   type ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { acknowledgeReplySessionTransition } from "../../../sessions/session-controller.session-reader.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-manager-api.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
+import { runBestEffortCallback } from "../../embedded-agent-subscribe.callback.js";
 import { resolveModelCallUrgency } from "../../run-trigger.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
@@ -39,8 +41,9 @@ import { mergeUsageIntoAccumulator, type UsageAccumulator } from "../usage-accum
 import { attachCompactionAccountingRecorder } from "./compaction-accounting-bridge.js";
 import type { resolveCompactionLiveModelSelection } from "./compaction-live-model-selection.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import { outsideExecutionCapacity } from "./execution-capacity.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.js";
 import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
@@ -51,7 +54,7 @@ type CompactionResult = Awaited<ReturnType<ContextEngine["compact"]>>;
 
 export type EmbeddedRunCompactionRecoveryInput = {
   runInput?: PreparedEmbeddedRunInput;
-  runParams: RunEmbeddedAgentParams;
+  runParams: RunEmbeddedAgentInternalParams;
   state: EmbeddedRunContextRecoveryState;
   contextEngine: ContextEngine;
   contextTokenBudget?: number;
@@ -81,20 +84,78 @@ export type EmbeddedRunCompactionRecoveryInput = {
   usageAccumulator: UsageAccumulator;
 } & ReturnType<typeof createEmbeddedRunCompactionRuntime>;
 
-/** Preserve one prepared owner snapshot throughout context and timeout recovery. */
+type RecoveryCompactionRequest = {
+  tokenBudget: number;
+  trigger: "budget" | "overflow" | "timeout_recovery";
+  diagId: string;
+  attempt: number;
+  maxAttempts: number;
+  currentTokenCount?: number;
+};
+
+/** The host owns recovery progress even when the engine produces no hook notices. */
 export async function compactEmbeddedRunForRecovery(
   input: EmbeddedRunCompactionRecoveryInput,
-  recovery: {
-    tokenBudget: number;
-    trigger: "budget" | "overflow" | "timeout_recovery";
-    diagId: string;
-    attempt: number;
-    maxAttempts: number;
-    currentTokenCount?: number;
-  },
+  recovery: RecoveryCompactionRequest,
+) {
+  const owner = input.prepareRecoveryOwner();
+  const emitProgress = (phase: "start" | "end", completed?: boolean) => {
+    const event = {
+      stream: "compaction" as const,
+      data: {
+        phase,
+        itemId: recovery.diagId,
+        ...(completed === undefined ? {} : { completed }),
+      },
+      ...(input.runParams.sessionKey ? { sessionKey: input.runParams.sessionKey } : {}),
+    };
+    emitAgentEvent({ runId: input.runParams.runId, ...event });
+    runBestEffortCallback({
+      label: "recovery compaction progress",
+      log,
+      callback: () => input.runParams.onAgentEvent?.(event),
+    });
+  };
+  let completed = false;
+  emitProgress("start");
+  try {
+    if (recovery.trigger === "overflow") {
+      // The detached flush needs its own capacity ticket, while this source keeps custody.
+      let outcome: string;
+      try {
+        const checkpoint = input.runParams.beforeRecoveryCompaction;
+        outcome = checkpoint
+          ? await outsideExecutionCapacity(() =>
+              checkpoint({
+                sessionId: owner.session.id,
+                ...input.modelSelection,
+                contextTokenBudget: recovery.tokenBudget,
+              }),
+            )
+          : "skipped: no reply-owned memory checkpoint";
+      } catch {
+        owner.assertActive();
+        log.warn("Overflow memory checkpoint failed; continuing compaction");
+        outcome = "failed";
+      }
+      owner.assertActive();
+      log.info(`[memory-flush] overflow checkpoint ${outcome}`);
+    }
+    const result = await executeRecoveryCompaction(input, recovery, owner);
+    completed = result.result.ok && result.result.compacted;
+    return result;
+  } finally {
+    emitProgress("end", completed);
+  }
+}
+
+/** Preserve one prepared owner snapshot throughout context and timeout recovery. */
+async function executeRecoveryCompaction(
+  input: EmbeddedRunCompactionRecoveryInput,
+  recovery: RecoveryCompactionRequest,
+  owner: ReturnType<EmbeddedRunCompactionRecoveryInput["prepareRecoveryOwner"]>,
 ) {
   const { runParams } = input;
-  const owner = input.prepareRecoveryOwner();
   const activeSession = owner.session;
   const promptCacheIdentity = {
     ...runParams,
@@ -448,7 +509,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
         : await SessionManager.openAsync(
             owner.session.target,
             params.workspaceDir,
-            resolveEmbeddedSessionContextLimits(contextTokenBudget),
+            resolveEmbeddedSessionContextLimits({ contextTokenBudget }),
           ));
     owner.assertActive();
     return {
@@ -534,25 +595,23 @@ export function createEmbeddedRunCompactionRuntime(input: {
     assertRecoveryActive();
     return accepted.previousSessionId;
   };
-  const onCompactionHookMessages = async (payload: {
-    phase: "before" | "after";
-    messages: string[];
-  }) => {
+  // Notices are progress like recovery start/end: ordered, but never awaited by compaction.
+  const onCompactionHookMessages = (payload: { phase: "before" | "after"; messages: string[] }) => {
     const messages = payload.messages.filter((message) => message.trim().length > 0);
     if (messages.length === 0) {
       return;
     }
     assertRecoveryActive();
-    await params.onAgentEvent?.({
-      stream: "compaction",
-      data: {
-        phase: payload.phase === "before" ? "start" : "end",
-        ...(payload.phase === "after" ? { completed: true } : {}),
-        messages,
-      },
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    runBestEffortCallback({
+      label: "compaction hook notice",
+      log,
+      callback: () =>
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "notice", messages },
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        }),
     });
-    assertRecoveryActive();
   };
   const runOwnsCompactionHook = async (
     reason: string,

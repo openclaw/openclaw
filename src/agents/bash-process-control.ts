@@ -10,12 +10,14 @@ import {
   peekExecRequestSystemEventEntries,
 } from "../infra/system-events.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import {
   removeNotifyOnExit,
   getSession,
   listExecSessionsForCancellation,
   markCancellationRequested,
   waitForExecSession,
+  waitForExecScope,
   type ProcessSession,
 } from "./bash-process-registry.js";
 
@@ -31,13 +33,44 @@ export function isBackgroundExecCancellable(
   );
 }
 
+/** One-shot runs retain process cleanup and backend finalization for the same exec scope. */
+export function registerOneShotExecScopeCleanup(
+  options:
+    | {
+        oneShotCliRun?: boolean;
+        registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
+      }
+    | undefined,
+  scopeKey: string | undefined,
+): void {
+  if (!options?.oneShotCliRun || !scopeKey || !options.registerRunCleanup) {
+    return;
+  }
+  const supervisor = getProcessSupervisor();
+  // Sandbox runtimes retain their configured lifetime; host commands still
+  // need tree cleanup, including elevated commands from sandboxed sessions.
+  const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "owned-only" });
+  options.registerRunCleanup(async () => {
+    // Transport closure can precede backend finalization. Join both owners
+    // before their local artifacts or the invocation state can be released.
+    const settled = await Promise.allSettled([cleanupScope(), waitForExecScope(scopeKey)]);
+    const failed = settled.find((result) => result.status === "rejected");
+    if (failed) {
+      throw failed.reason;
+    }
+  });
+}
+
 export function cancelBackgroundExecSession(sessionId: string): boolean {
   const session = getSession(sessionId);
   if (!isBackgroundExecCancellable(session)) {
     return false;
   }
-  const supervisor = getProcessSupervisor();
-  supervisor.cancel(sessionId, "manual-cancel");
+  if (session.durable) {
+    session.durable.cancel(captureAgentToolSourceExecutionGuard());
+  } else {
+    getProcessSupervisor().cancel(sessionId, "manual-cancel");
+  }
   markCancellationRequested(session);
   return true;
 }
@@ -68,7 +101,11 @@ export async function drainAgentExecProcesses(
       session.requestCancelled = true;
       if (!session.exited && !session.finalizing) {
         markCancellationRequested(session);
-        getProcessSupervisor().cancel(session.id, "manual-cancel");
+        if (session.durable) {
+          session.durable.cancel(assertCurrent);
+        } else {
+          getProcessSupervisor().cancel(session.id, "manual-cancel");
+        }
       }
       removeNotifyOnExit(session);
     }

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import {
@@ -10,6 +11,10 @@ import {
   isGeneratedLaunchAgentEnvironmentWrapper,
 } from "./launchd-env-wrapper.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
+import {
+  prepareLaunchAgentCaEnvironment,
+  rethrowCaMigrationAuthorityError,
+} from "./launchd-legacy-ca-migration.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   buildLaunchAgentPlist,
@@ -21,7 +26,6 @@ import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
 import { formatLine, normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir, resolveGatewayStateDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
-import { preserveServicePolicyXml } from "./service-policy-xml.js";
 import {
   publishServiceFile,
   matchesServiceFilePublication,
@@ -111,7 +115,40 @@ async function prepareLaunchAgentPlist(
     definitionTransaction: GatewayServiceDefinitionTransactionHooks;
   },
 ): Promise<string> {
-  const entries = collectLaunchAgentEnvironmentEntries(params.environment);
+  const warn = (message: string) => {
+    if (params.warn) {
+      params.warn(message);
+    } else {
+      params.stdout?.write(`${formatLine("Warning", message)}\n`);
+    }
+  };
+  let installedExtraCa: string | undefined;
+  try {
+    // Read the actual installed service before replacing its private env file.
+    // The invoking updater shell does not own the service's CA configuration.
+    const installed = await readLaunchAgentProgramArgumentsFromFile(
+      resolveLaunchAgentPlistPathForLabel(params.env, params.label),
+      {
+        ...resolveLaunchAgentEnvironmentReadOptions(params.env, params.label),
+        requireEffective: true,
+      },
+    );
+    installedExtraCa = installed?.environment?.NODE_EXTRA_CA_CERTS;
+  } catch (error) {
+    rethrowCaMigrationAuthorityError(error);
+    warn(
+      "CA migration unavailable: the installed service environment could not be inspected. The installer retains its hardened trust policy; inspect service CA configuration and configure a distinct maintained NODE_EXTRA_CA_CERTS bundle if private connections fail.",
+    );
+  }
+  const environment = await prepareLaunchAgentCaEnvironment({
+    env: params.env,
+    label: params.label,
+    environment: params.environment,
+    installedExtraCa,
+    assertCurrent: () => params.definitionTransaction.assertCurrent(),
+    warn,
+  });
+  const entries = collectLaunchAgentEnvironmentEntries(environment);
   let { programArguments } = params;
   if (entries.length > 0) {
     // Secret values belong to the private env file, never inline plist XML.
@@ -188,10 +225,7 @@ export async function readExistingLaunchAgentPlist(
       await handle.close();
     }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? null;
   }
 }
 
@@ -412,6 +446,7 @@ export async function writeLaunchAgentPlist(
   });
 
   if (definitionTransaction.preservePolicy?.length) {
+    const { preserveServicePolicyXml } = await import("./service-policy-xml.js");
     plist = preserveServicePolicyXml(
       plist,
       await normalizeLaunchdPlistXml(await fs.readFile(plistPath)),

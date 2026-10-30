@@ -57,21 +57,21 @@ function coordinatePair(description: string, integer = true) {
 const cachedComputerToolSchema = createCachedToolSchema({
   key: (inputs: {
     actions: readonly ComputerUseV2ActionName[];
-    targetScope: "paired" | "session";
+    targetScope: "paired" | "node" | "session";
   }) => JSON.stringify([inputs.targetScope, inputs.actions]),
   build: ({ actions, targetScope }) => buildComputerToolSchema(actions, targetScope),
 });
 
 export function createComputerToolSchema(
   actions: readonly ComputerUseV2ActionName[],
-  targetScope: "paired" | "session" = "paired",
+  targetScope: "paired" | "node" | "session" = "paired",
 ) {
   return cachedComputerToolSchema({ actions, targetScope });
 }
 
 function buildComputerToolSchema(
   actions: readonly ComputerUseV2ActionName[],
-  targetScope: "paired" | "session",
+  targetScope: "paired" | "node" | "session",
 ) {
   const supportsHold = actions.includes("hold_key");
   const accessibilityTarget = actions.includes("get_window_state")
@@ -82,13 +82,18 @@ function buildComputerToolSchema(
   return Type.Object({
     // Attached desktops arbitrate control on the Gateway, independently of provider actions.
     action: stringEnum(actions.includes("screenshot") ? [...actions, "take_control"] : actions),
-    ...(targetScope === "paired"
+    ...(targetScope !== "session"
       ? {
           ...gatewayCallOptionSchemaProperties(),
-          target: optionalStringEnum(["gateway", "node"] as const, {
-            description:
-              "Computer host. Defaults to the Gateway desktop when configured, otherwise a paired node. Later calls retain the selected host.",
-          }),
+          target: optionalStringEnum(
+            targetScope === "paired" ? (["gateway", "node"] as const) : (["node"] as const),
+            {
+              description:
+                targetScope === "paired"
+                  ? "Computer host. Omit target for automatic selection: the configured Gateway desktop, otherwise the sole connected computer-capable node. target: gateway selects the Gateway desktop; target: node selects a paired node. Later calls retain the selected host."
+                  : "Computer host. The Gateway has no computer provider configured, so target: gateway is unavailable. Omit target for automatic selection of the sole connected computer-capable node, or use target: node. Later calls retain the selected host.",
+            },
+          ),
           node: describedString(
             "Paired node id or display name; implies target=node. Omit when selecting the sole connected computer-capable node.",
           ),

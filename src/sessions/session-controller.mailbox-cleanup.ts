@@ -1,6 +1,5 @@
 /** Captured mailbox batch cleanup and summary bookkeeping. */
 import type { FollowupRun } from "../auto-reply/reply/queue/types.js";
-import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCurrentSessionControllerTurnInput } from "./session-controller.context.js";
 import type {
@@ -9,13 +8,8 @@ import type {
 } from "./session-controller.contracts.js";
 import {
   abortSessionControllerInput,
-  completeSessionControllerSourceLifecycle,
   retireSessionControllerInput,
 } from "./session-controller.mailbox-source.js";
-import { runWithSessionControllerCleanup } from "./session-controller.owner-context.js";
-import { sessionControllers } from "./session-controller.state.js";
-
-let followedRestartDrainSignal: AbortSignal | undefined;
 
 /** Snapshots aggregate summary sources shared by selection and captured cleanup. */
 export function captureSessionControllerMailboxSummarySources(
@@ -66,6 +60,7 @@ export function clearSessionControllerMailbox(
   settleSource: (source: FollowupRun) => void,
   capturedInputs?: readonly SessionControllerInput[],
   assertCurrent: () => void = () => {},
+  reason: unknown = new Error("Session mailbox cleared"),
 ): number {
   const inputs = capturedInputs
     ? capturedInputs.filter(
@@ -95,7 +90,6 @@ export function clearSessionControllerMailbox(
   const nextAbort = capturedInputs ? undefined : new AbortController();
   const timer = mailbox.timer;
   const droppedCount = mailbox.droppedCount;
-  const evictedSummaryCount = mailbox.evictedSummaryCount;
   let removedSummaries = 0;
   const wasClearing = mailbox.clearing;
   mailbox.clearing = true;
@@ -129,7 +123,11 @@ export function clearSessionControllerMailbox(
         (source) => source.controllerInput === input,
       );
       for (const [key, record] of mailbox.recentSources) {
-        if (record.input === input && !input.custody.adopted && input.phase !== "consumed") {
+        if (
+          record.inputInstance === input.instance &&
+          !input.custody.adopted &&
+          input.phase !== "consumed"
+        ) {
           mailbox.recentSources.delete(key);
         }
       }
@@ -139,7 +137,7 @@ export function clearSessionControllerMailbox(
       input.retirementRequested = true;
       try {
         if (!input.withdrawalHolds) {
-          abortSessionControllerInput(input, new Error("Session mailbox cleared"), assertCurrent);
+          abortSessionControllerInput(input, reason, assertCurrent);
         }
         for (const [source, capturedInput] of sources) {
           if (capturedInput === input) {
@@ -166,7 +164,6 @@ export function clearSessionControllerMailbox(
         0,
         mailbox.droppedCount - Math.max(0, droppedCount - removedSummaries),
       );
-      mailbox.evictedSummaryCount = Math.max(0, mailbox.evictedSummaryCount - evictedSummaryCount);
       if (
         !mailbox.entries.some(
           (input) => !selected.has(input) && !isCurrentSessionControllerTurnInput(input),
@@ -188,43 +185,4 @@ export function clearSessionControllerMailbox(
     mailbox.wake();
   }
   return cleared;
-}
-
-/** Waiting inputs retire on restart; active producers remain with the shutdown drain owner. */
-export function bindSessionControllerMailboxRestartDrain(): void {
-  const signal = getGatewayRestartDrainSignal();
-  if (followedRestartDrainSignal === signal) {
-    return;
-  }
-  followedRestartDrainSignal = signal;
-  signal.addEventListener(
-    "abort",
-    () => {
-      // Capture owners before cleanup can mutate the registry or publish a successor.
-      const mailboxes = [...sessionControllers.values()].flatMap((owner) =>
-        owner.mailbox ? [owner.mailbox] : [],
-      );
-      // Restart may originate inside a turn; selection must not depend on its context.
-      runWithSessionControllerCleanup(() => {
-        for (const mailbox of mailboxes) {
-          const waiting = mailbox.entries.filter(
-            (input) => (!input.claim || input.claim.released) && input.phase !== "injecting",
-          );
-          clearSessionControllerMailbox(mailbox, completeRestartClearedSource, waiting);
-        }
-      });
-    },
-    { once: true },
-  );
-}
-
-// Use the existing source custody without submitting missing followup work.
-function completeRestartClearedSource(source: FollowupRun): void {
-  const input = source.controllerInput;
-  if (input) {
-    completeSessionControllerSourceLifecycle(
-      source,
-      source.controllerClaim?.custody ?? input.custody,
-    );
-  }
 }

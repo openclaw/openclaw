@@ -24,6 +24,8 @@ describe("Tool Search activation defaults", () => {
     { raw: { mode: "tools" }, enabled: true, mode: "tools" },
     { raw: { mode: "directory" }, enabled: true, mode: "directory" },
     { raw: { enabled: false, mode: "tools" }, enabled: false, mode: "tools" },
+    { raw: { include: [] }, enabled: true, mode: "tools" },
+    { raw: { enabled: false, include: [{ source: "mcp" }] }, enabled: false, mode: "tools" },
   ] satisfies Array<{
     raw: NonNullable<NonNullable<OpenClawConfig["tools"]>["toolSearch"]>;
     enabled: boolean;
@@ -33,5 +35,18 @@ describe("Tool Search activation defaults", () => {
       enabled,
       mode,
     });
+  });
+
+  it("retains omitted and empty selectors distinctly", () => {
+    expect(resolveToolSearchConfig()).not.toHaveProperty("include");
+    expect(resolveToolSearchConfig()).not.toHaveProperty("exclude");
+    expect(
+      resolveToolSearchConfig({ tools: { toolSearch: { include: [], exclude: [] } } }),
+    ).toMatchObject({ include: [], exclude: [] });
+    const selection = {
+      include: [{ source: "mcp" as const }],
+      exclude: [{ source: "mcp" as const, name: "github_read_*" }],
+    };
+    expect(resolveToolSearchConfig({ tools: { toolSearch: selection } })).toMatchObject(selection);
   });
 });

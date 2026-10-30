@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
+import { createEnteredGate as gate } from "../agents/entered-gate.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { createTestGatewayScheduler as createScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -35,19 +36,6 @@ import { createPluginMetadataSnapshotFixture as createSnapshot } from "./plugin-
 const clearMemo = vi.fn();
 registerPluginMetadataProcessMemoLifecycleClear(clearMemo);
 
-function gate() {
-  const entered = createDeferredCore();
-  const released = createDeferredCore();
-  return {
-    entered: entered.promise,
-    release: () => released.resolve(),
-    wait: async () => {
-      entered.resolve();
-      await released.promise;
-    },
-  };
-}
-
 it("retains running metadata readers through Gateway close after package replacement", async () => {
   const readers = { ...snapshotReaderSlot };
   const manifests = [{ pluginDir: "/fixture", manifest: { id: "fixture" }, origin: "bundled" }];
@@ -70,6 +58,7 @@ it("retains running metadata readers through Gateway close after package replace
     listKnownProviderAuthEnvVarNamesCore: replacementReader,
   };
   const expectRetainedPolicyReaders = () => {
+    expect(currentSnapshot({})).toBe(snapshot);
     expect(listOpenClawPluginManifestMetadataRuntime()).toBe(manifests);
     expect(listKnownProviderAuthEnvVarNamesRuntime()).toBe(envNames);
   };
@@ -78,13 +67,12 @@ it("retains running metadata readers through Gateway close after package replace
   try {
     owner.publish(snapshot);
     setGatewayPluginMetadataSnapshot(snapshot);
-    setSnapshot(snapshot, "boot", undefined, undefined, undefined, "gateway");
+    setSnapshot(snapshot, "boot", undefined, undefined, "gateway");
     clearMemo.mockClear();
     clearPluginMetadataLifecycleCaches();
     // Released modules register by assigning the shared slot directly.
     Object.assign(snapshotReaderSlot, replacementReaders);
     await drainGlobalSingletonLifecycleState("close");
-    expect(currentSnapshot({})).toBe(snapshot);
     expectRetainedPolicyReaders();
     expect(withSnapshot(scoped, () => currentSnapshot({}))).toBe(scoped);
     expect(snapshotState().snapshot).toBe(snapshot);
@@ -93,7 +81,6 @@ it("retains running metadata readers through Gateway close after package replace
     finalClose = owner.close(closing.wait);
     await closing.entered;
     Object.assign(snapshotReaderSlot, replacementReaders);
-    expect(currentSnapshot({})).toBe(snapshot);
     expectRetainedPolicyReaders();
     closing.release();
     await finalClose;
@@ -203,14 +190,14 @@ it.each([false, true])(
   },
 );
 
-it.each([
+it.for([
   { borrowed: true, deferred: true, releasedBeforeClose: false },
   { borrowed: false, deferred: true, releasedBeforeClose: false },
   { borrowed: true, deferred: false, releasedBeforeClose: false },
   { borrowed: true, deferred: false, releasedBeforeClose: true },
 ])(
   "settles retirement (borrowed: $borrowed, deferred: $deferred, early release: $releasedBeforeClose)",
-  async ({ borrowed, deferred, releasedBeforeClose }) => {
+  async ({ borrowed, deferred, releasedBeforeClose }, { signal }) => {
     const cache = getPluginCache();
     const pluginId = deferred ? "turn-owner" : "retained-publication";
     const dispose = vi.fn();
@@ -242,7 +229,7 @@ it.each([
     const publication = owner.waitForRetirement();
     let closing: Promise<unknown> | undefined;
     try {
-      await withTestTimeout(publication, 1_000, "Publication waited for its retained consumer");
+      await withinTest(publication, signal);
       if (deferred) {
         expect(await publication).toEqual({
           cleanupCount: 0,

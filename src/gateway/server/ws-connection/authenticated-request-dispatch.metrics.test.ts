@@ -33,6 +33,7 @@ import type { GatewayRequestHandler, RespondFn } from "../../server-methods/type
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
+  requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 import { captureGatewayRpcReceivedAt, createGatewayRpcDiagnostics } from "./request-diagnostics.js";
 import { GatewayRequestStartTimeoutError } from "./request-start.js";
@@ -111,7 +112,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
     setDiagnosticsEnabledForProcess(false);
     await fixture.dispatch();
     expect(monitor.drain().stalls).toEqual([
-      { elapsedMs: 250, task: "gateway:rpc:health", taskMs: 250 },
+      { elapsedMs: 250, task: "gateway:rpc:health", taskMs: 250, startedAt: 0, endedAt: 250 },
     ]);
     expect(fixture.events).toEqual([]);
   });
@@ -965,12 +966,7 @@ describe("Gateway observation response ordering", () => {
       markGatewayRestartDraining("stop (SIGTERM)");
     });
     await fixture.dispatcher.dispatch(
-      {
-        type: "req",
-        id: "completed",
-        method: "agent.wait",
-        params: { runId: "missing-completed", timeoutMs: 0 },
-      },
+      requestFrame("completed", "agent.wait", { runId: "missing-completed", timeoutMs: 0 }),
       createOperatorWsClient(),
     );
     await shutdown;

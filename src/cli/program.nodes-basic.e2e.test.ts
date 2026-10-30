@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayProtocolRequestTimeoutError } from "../../packages/gateway-client/src/protocol-request.js";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import { expectText as expectOutput } from "../test-utils/text-assertions.js";
 import {
   createNodesProgram,
   gatewayRequests,
@@ -24,15 +25,6 @@ const statusColumns = ["Detail", "Status", "Caps", "camera", "canvas"];
 describe("cli program (nodes basics)", () => {
   let program: Command;
 
-  function expectOutput(output: string, included: string[], excluded: string[] = []) {
-    for (const value of included) {
-      expect(output).toContain(value);
-    }
-    for (const value of excluded) {
-      expect(output).not.toContain(value);
-    }
-  }
-
   async function runNodes(command: string, ...args: string[]) {
     runtime.log.mockClear();
     await program.parseAsync(["nodes", command, ...args], { from: "user" });
@@ -47,9 +39,7 @@ describe("cli program (nodes basics)", () => {
   }
 
   function expectGatewayRequest(method: string, params: unknown): void {
-    const request = gatewayRequest(method);
-    expect(request?.method).toBe(method);
-    expect(request?.params).toEqual(params);
+    expect(gatewayRequest(method)?.params).toEqual(params);
   }
 
   function mockDescribe(result: unknown) {
@@ -210,35 +200,29 @@ describe("cli program (nodes basics)", () => {
       const now = Date.now();
       const recent = now - 1_000;
       const old = now - 2 * 24 * 60 * 60 * 1_000;
+      const seenNode = (nodeId: string, displayName?: string, lastConnectedAtMs?: number) => ({
+        nodeId,
+        ...(displayName === undefined ? {} : { displayName }),
+        paired: true,
+        connected: false,
+        ...(lastConnectedAtMs === undefined ? {} : { lastConnectedAtMs }),
+      });
       const nodes = [
         {
-          nodeId: "reconnected",
-          paired: true,
+          ...seenNode("reconnected", undefined, recent),
           connected: true,
           connectedAtMs: recent,
-          lastConnectedAtMs: recent,
         },
-        {
-          nodeId: "catalog-only",
-          displayName: "One",
-          paired: true,
-          connected: false,
-          lastConnectedAtMs: recent,
-        },
-        {
-          nodeId: "old",
-          displayName: "Two",
-          paired: true,
-          connected: false,
-          lastConnectedAtMs: old,
-        },
-        { nodeId: "unknown", paired: true, connected: false },
+        seenNode("catalog-only", "One", recent),
+        seenNode("old", "Two", old),
+        seenNode("unknown"),
       ];
-      programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-        const { method } = (args[0] ?? {}) as { method?: string };
-        return method === "node.pair.list"
-          ? { pending: [], paired: [{ nodeId: "reconnected", lastConnectedAtMs: old }] }
-          : { ts: now, nodes };
+      mockGateway({
+        "node.pair.list": {
+          pending: [],
+          paired: [{ nodeId: "reconnected", lastConnectedAtMs: old }],
+        },
+        "node.list": { ts: now, nodes },
       });
 
       if (command === "status") {
@@ -353,9 +337,7 @@ describe("cli program (nodes basics)", () => {
     expectGatewayRequest("node.list", {});
 
     const output = getRuntimeOutput();
-    for (const expected of expectedOutput) {
-      expect(output).toContain(expected);
-    }
+    expectOutput(output, expectedOutput);
     if (label === "pending node reapproval") {
       expect(output).toMatch(/connected \([^)]* ago\) · reapproval pending/);
     }
@@ -573,11 +555,9 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("runs nodes rename and preserves the successful node.rename payload", async () => {
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const { method } = (args[0] ?? {}) as { method?: string };
-      return method === "node.list"
-        ? { nodes: [{ nodeId: "ios-node", displayName: "iOS Node", paired: true }] }
-        : { ok: true, nodeId: "ios-node", displayName: "Renamed Node" };
+    mockGateway({
+      "node.list": { nodes: [makeNode("ios-node", "iOS Node", { paired: true })] },
+      "node.rename": { ok: true, nodeId: "ios-node", displayName: "Renamed Node" },
     });
 
     await runNodes("rename", "--node", "iOS Node", "--name", " Renamed Node ", "--json");
@@ -596,13 +576,12 @@ describe("cli program (nodes basics)", () => {
       timeoutMs: 80,
       requestSent: true,
     });
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const { method } = (args[0] ?? {}) as { method?: string };
-      if (method === "node.list") {
+    mockGateway((request) => {
+      if (request.method === "node.list") {
         throw timeout;
       }
-      if (method === "node.pair.list") {
-        return { pending: [], paired: [{ nodeId: "stale-node", displayName: "Stale Node" }] };
+      if (request.method === "node.pair.list") {
+        return { pending: [], paired: [makeNode("stale-node", "Stale Node")] };
       }
       throw new GatewayClientRequestError({
         code: "UNAVAILABLE",

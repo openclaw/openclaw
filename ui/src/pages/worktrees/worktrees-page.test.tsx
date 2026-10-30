@@ -5,8 +5,12 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { i18n } from "../../i18n/index.ts";
+import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../../test-helpers/application-context-fixtures.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { WorktreesModel } from "./worktrees-model.ts";
@@ -35,17 +39,11 @@ function worktree(id = "worktree-1", overrides: Partial<WorktreeRecord> = {}): W
 }
 
 function gatewayWithSnapshot(client: GatewayBrowserClient | null, connected: boolean) {
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: connected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   return { snapshot, subscribe: () => () => undefined } as unknown as ApplicationContext["gateway"];
 }
 
@@ -65,22 +63,11 @@ function listRequest(records: WorktreeRecord[] = []) {
 
 function mutableGateway(request: Request) {
   const snapshot = requestGateway(request).snapshot;
-  let listener: ((snapshot: ApplicationGatewaySnapshot) => void) | undefined;
-  const gateway = {
-    snapshot,
-    subscribe(next: (snapshot: ApplicationGatewaySnapshot) => void) {
-      listener = next;
-      return () => {
-        if (listener === next) {
-          listener = undefined;
-        }
-      };
-    },
-  } as unknown as ApplicationContext["gateway"];
+  const { gateway, publish } = createApplicationGateway(snapshot);
   return {
     emit(connected: boolean) {
-      (snapshot as ApplicationGatewaySnapshot).phase = connected ? "connected" : "stopped";
-      listener?.(snapshot as ApplicationGatewaySnapshot);
+      snapshot.phase = connected ? "connected" : "stopped";
+      publish(snapshot);
     },
     setScopes(scopes: string[], methods = ["worktrees.list", "worktrees.create"]) {
       snapshot.hello = {
@@ -89,7 +76,7 @@ function mutableGateway(request: Request) {
         auth: { role: "operator", scopes },
         features: { methods },
       } as ApplicationGatewaySnapshot["hello"];
-      listener?.(snapshot);
+      publish(snapshot);
     },
     gateway,
   };
@@ -108,7 +95,8 @@ function createWorktreesPage(request?: Request, initial: ModelState = {}) {
   const [context, setContext] = createSignal(
     contextWithGateway(request ? requestGateway(request) : gatewayWithSnapshot(null, false)),
   );
-  const model = new WorktreesModel(context);
+  let publish: (() => void) | undefined;
+  const model = new WorktreesModel(context, () => publish?.());
   model.update(initial);
   const element = document.createElement("div");
   let dispose: (() => void) | undefined;
@@ -128,10 +116,28 @@ function createWorktreesPage(request?: Request, initial: ModelState = {}) {
     inputs: () => [
       ...element.querySelectorAll<HTMLInputElement>('input.settings-input[type="text"]'),
     ],
+    async ready() {
+      page.mount();
+      await waitForSolid(() => expect(model.listLoaded).toBe(true));
+      await waitForSolid(() => expect(model.loading).toBe(false));
+      return page;
+    },
     mount() {
       flush();
       document.body.append(element);
-      dispose = mountSolid(() => renderWorktreesView(model), { container: element }).unmount;
+      dispose = mountSolid(
+        () => {
+          const { view } = projectCallbackOwner(
+            (notify) => {
+              publish = notify;
+              return model;
+            },
+            (owner) => owner,
+          );
+          return renderWorktreesView(model, view.read);
+        },
+        { container: element },
+      ).unmount;
       return page;
     },
     unmount() {
@@ -141,6 +147,12 @@ function createWorktreesPage(request?: Request, initial: ModelState = {}) {
     },
   };
   return page;
+}
+
+function expectDisabled(page: ReturnType<typeof createWorktreesPage>, labels: string[]) {
+  for (const label of labels) {
+    expect(page.button(label).disabled, label).toBe(true);
+  }
 }
 
 function mutablePage(request: Request, initial?: ModelState) {
@@ -176,53 +188,76 @@ afterEach(() => {
 });
 
 describe("WorktreesPage lifecycle", () => {
+  it("shows pending list readiness and retries a failed first read", async () => {
+    const first = deferred<{ worktrees: WorktreeRecord[] }>();
+    const request = listRequest([worktree()]).mockReturnValueOnce(first.promise);
+    const page = createWorktreesPage(request).mount();
+    await waitForRead(request);
+    await waitForSolid(() => expect(page.element.textContent).toContain("Loading"));
+    expect(page.element.textContent).not.toContain("No managed worktrees");
+
+    first.reject(new Error("List unavailable"));
+    await waitForSolid(() => expect(page.button("Retry")).toBeDefined());
+    expect(page.query('[role="alert"]')?.textContent).toContain("List unavailable");
+    page.button("Retry").click();
+    await waitForSolid(() =>
+      expect(page.query('button[aria-label="Delete: worktree-1"]')).not.toBeNull(),
+    );
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(page.query('[role="alert"]')).toBeNull();
+  });
+
+  it("retains a rejected creation draft and releases its pending presentation", async () => {
+    const created = deferred<unknown>();
+    const request = pendingRequest("worktrees.create", created.promise);
+    const page = await createWorktreesPage(request, {
+      createOpen: true,
+      createRepoRoot: "/tmp/repo",
+      createName: "retained draft",
+    }).ready();
+    page.button("Create").click();
+    await waitForCall(request, "worktrees.create", {
+      repoRoot: "/tmp/repo",
+      name: "retained draft",
+    });
+    await waitForSolid(() => expect(page.inputs().every((input) => input.disabled)).toBe(true));
+    created.reject(new Error("Creation unavailable"));
+    await waitForSolid(() => expect(page.button("Create")?.disabled).toBe(false));
+    expect(page.query<HTMLInputElement>('input[aria-label="Name"]')?.value).toBe("retained draft");
+    expect(page.query('[role="alert"]')?.textContent).toContain("Creation unavailable");
+  });
+
   it("keeps local creation editable but disables server actions while offline", async () => {
-    const request = vi.fn(async () => ({
-      worktrees: [worktree(), { ...worktree("removed"), removedAt: 2 }],
-    }));
+    const request = listRequest([worktree(), worktree("removed", { removedAt: 2 })]);
     const { source, page } = mutablePage(request);
     source.setScopes(["operator.admin"]);
     page.mount();
     await waitForSolid(() => expect(page.model.records).toHaveLength(2));
+    expect(page.query('button[aria-label="Delete: worktree-1"]')).toBe(page.button("Delete"));
+    expect(page.query('button[aria-label="Restore: removed"]')).toBe(page.button("Restore"));
     page.model.update({ createOpen: true, createRepoRoot: "/tmp/repo", createName: "local draft" });
     source.emit(false);
     await settle();
     expect(page.button("New worktree").disabled).toBe(false);
-    for (const label of ["Clean up now", "Create", "Delete", "Restore"]) {
-      expect(page.button(label).disabled, label).toBe(true);
-    }
+    expectDisabled(page, ["Clean up now", "Create", "Delete", "Restore"]);
     const name = page.query<HTMLInputElement>('input[aria-label="Name"]')!;
     expect(name).toMatchObject({ disabled: false, value: "local draft" });
   });
 
-  it("navigates the hub only after activating a tab", async () => {
+  it("wires the selected worktrees tab to sessions navigation", async () => {
     const page = createWorktreesPage().mount();
     await settle();
+    expect(page.query("h1.page-title")?.textContent).toBe("Worktrees");
+    expect(page.query(".hub-page-header--stacked")).not.toBeNull();
+    expect(page.query(".page-subtitle")?.textContent).toContain(
+      "Isolated agent task checkouts and recovery snapshots.",
+    );
     const selected = page.query<HTMLButtonElement>("#sessions-tab-worktrees")!;
-    const sessions = page.query<HTMLButtonElement>("#sessions-tab-sessions")!;
-    expect(selected.getAttribute("aria-selected")).toBe("true");
-    selected.focus();
-    selected.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
-    expect(document.activeElement).toBe(sessions);
+    selected.click();
     expect(page.model.context.navigate).not.toHaveBeenCalled();
-    sessions.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    page.query<HTMLButtonElement>("#sessions-tab-sessions")!.click();
     expect(page.model.context.navigate).toHaveBeenCalledExactlyOnceWith("sessions");
     expect(selected.getAttribute("aria-selected")).toBe("true");
-  });
-
-  it("updates the shared header when the locale changes", async () => {
-    const page = createWorktreesPage().mount();
-    const locale = i18n.getLocale();
-    try {
-      await i18n.setLocale("pt-BR");
-      flush();
-      expect(i18n.t("tabs.sessions")).not.toBe("Sessions");
-      expect(page.query("h1.page-title")?.textContent).toBe(i18n.t("tabs.worktrees"));
-      expect(page.query(".hub-page-header--stacked")).not.toBeNull();
-      expect(page.query(".page-subtitle")?.textContent).toContain(i18n.t("subtitles.worktrees"));
-    } finally {
-      await i18n.setLocale(locale);
-    }
   });
 
   it("keeps read-only viewers in browsing mode without branch or mutation RPCs", async () => {
@@ -240,11 +275,7 @@ describe("WorktreesPage lifecycle", () => {
     expect(page.query(".callout.info")?.textContent).toContain(
       "Worktree changes require operator.admin access.",
     );
-    const mutationButtons = [...page.element.querySelectorAll<HTMLButtonElement>("button")].filter(
-      (button) =>
-        ["New worktree", "Clean up now", "Delete"].includes(button.textContent?.trim() ?? ""),
-    );
-    expect(mutationButtons.map((button) => button.disabled)).toEqual([true, true, true]);
+    expectDisabled(page, ["New worktree", "Clean up now", "Delete"]);
 
     await page.model.loadCreateBranches();
     await page.model.removeWorktree(record);
@@ -256,10 +287,7 @@ describe("WorktreesPage lifecycle", () => {
   it("closes an open create draft when admin access is lost", async () => {
     const request = listRequest();
     const { source, page } = mutablePage(request, { createRepoRoot: "/tmp/repo" });
-    page.mount();
-
-    await waitForRead(request);
-    await waitForSolid(() => expect(page.model.loading).toBe(false));
+    await page.ready();
     const newWorktreeButton = page.button("New worktree");
     expect(newWorktreeButton?.getAttribute("aria-expanded")).toBe("false");
     newWorktreeButton?.click();
@@ -324,9 +352,8 @@ describe("WorktreesPage lifecycle", () => {
     const request = vi.fn((method: string) =>
       method === "worktrees.list" ? list() : Promise.resolve({ removed: true }),
     );
-    const page = createWorktreesPage(request).mount();
+    const page = await createWorktreesPage(request).ready();
     await waitForSolid(() => expect(page.model.records).toEqual([record]));
-    await waitForSolid(() => expect(page.model.loading).toBe(false));
 
     const refreshing = page.model.load();
     await waitForSolid(() => expect(list).toHaveBeenCalledTimes(2));
@@ -365,7 +392,7 @@ describe("WorktreesPage lifecycle", () => {
   it("starts a replacement-client load after disconnecting during an in-flight load", async () => {
     const first = deferred<{ worktrees: [] }>();
     const firstRequest = vi.fn(() => first.promise);
-    const secondRequest = vi.fn(async () => ({ worktrees: [] }));
+    const secondRequest = listRequest();
     const page = createWorktreesPage(firstRequest).mount();
     await waitForSolid(() => expect(firstRequest).toHaveBeenCalledOnce());
     expect(page.model.loading).toBe(true);
@@ -385,7 +412,7 @@ describe("WorktreesPage lifecycle", () => {
   it("never force-removes through a replacement gateway", async () => {
     const pendingRemove = deferred<unknown>();
     const firstRequest = pendingRequest("worktrees.remove", pendingRemove.promise);
-    const secondRequest = vi.fn(async () => ({ worktrees: [] }));
+    const secondRequest = listRequest();
     const page = createWorktreesPage(firstRequest);
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
     page.mount();
@@ -423,7 +450,7 @@ describe("WorktreesPage lifecycle", () => {
               : { worktrees: [] },
           )
         : listRequest();
-      const replacement = vi.fn(async () => ({ worktrees: [] }));
+      const replacement = listRequest();
       const { source, page } = mutablePage(request);
       page.mount();
       await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
@@ -584,14 +611,12 @@ describe("WorktreesPage lifecycle", () => {
   it("locks the create draft and its toggle until create settles", async () => {
     const pendingCreate = deferred<unknown>();
     const request = pendingRequest("worktrees.create", pendingCreate.promise);
-    const page = createWorktreesPage(request, {
+    const page = await createWorktreesPage(request, {
       createOpen: true,
       createRepoRoot: "/tmp/repo",
       createName: "submitted-name",
       createBaseRef: "main",
-    }).mount();
-    await waitForRead(request);
-    await waitForSolid(() => expect(page.model.loading).toBe(false));
+    }).ready();
 
     const toggleButton = page.button("New worktree");
     const creating = page.model.createWorktree();
@@ -603,9 +628,7 @@ describe("WorktreesPage lifecycle", () => {
       repoRoot: "/tmp/repo",
     });
     await settle();
-    const createButton = page.query<HTMLButtonElement>(
-      ".settings-group .settings-row button.btn--sm",
-    );
+    const createButton = page.query<HTMLButtonElement>(".settings-row button.btn--sm");
     expect(page.inputs().map((input) => input.disabled)).toEqual([true, true, true]);
     expect([createButton?.disabled, toggleButton?.disabled]).toEqual([true, true]);
 

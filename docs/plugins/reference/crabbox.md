@@ -40,6 +40,11 @@ Forward Gateway environment variables to an operator-provided setup script by li
 
 `setupEnv` explicitly forwards up to 16 unique environment variable names to the setup command only. Values are read from the Gateway process environment and are never stored in the profile configuration. Missing variables fail before a machine is allocated.
 
+## Model-run timeout
+
+`openclaw crabbox run --timeout <seconds>` requires decimal whole seconds from
+`1` through `86400`. Hexadecimal, binary, octal, and exponent spellings are rejected.
+
 ## Conversation tool feedback
 
 The `crabbox` tool reports readable outcomes for profile discovery, attachment

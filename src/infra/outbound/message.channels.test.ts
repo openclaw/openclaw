@@ -1,7 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { pinRuntimePaths } from "../../config/paths.js";
+import { GatewayTransportError } from "../../gateway/transport-error.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -12,14 +14,24 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-
 import { drainPendingDeliveriesCore } from "./delivery-queue-recovery.js";
 import type { OutboundMessageGatewayOptionsInput } from "./message-gateway-options.js";
 
-function registerPlugin(plugin: ChannelPlugin) {
-  setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
+function registerPlugin(
+  id: string,
+  outbound: ChannelOutboundAdapter,
+  aliases: string[] = [],
+  options: Omit<Parameters<typeof createChannelTestPluginBase>[0], "id"> = {},
+) {
+  const base = createChannelTestPluginBase({ id, ...options });
+  const plugin: ChannelPlugin = { ...base, meta: { ...base.meta, aliases }, outbound };
+  setActivePluginRegistry(createTestRegistry([{ pluginId: id, source: "test", plugin }]));
 }
 
 const callGatewayMock = vi.fn();
-vi.mock("../../gateway/call.js", () => ({
+// mock-isolation: Captures Gateway RPCs; the real transport-error guard classifies timeouts.
+vi.mock("../../gateway/call.js", async () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
   callGatewayLeastPrivilege: (...args: unknown[]) => callGatewayMock(...args),
+  isGatewayTransportError: (await import("../../gateway/transport-error.js"))
+    .isGatewayTransportError,
   randomIdempotencyKey: () => "idem-1",
 }));
 
@@ -88,11 +100,7 @@ it("keeps ephemeral-authority sends out of recovery after revocation", async () 
         await ctx.onPlatformSendDispatch?.();
         return { channel: "threadchat", messageId: "live-only-1" };
       });
-      const plugin: ChannelPlugin = {
-        ...createChannelTestPluginBase({ id: "threadchat" }),
-        outbound: { deliveryMode: "direct", sendText },
-      };
-      registerPlugin(plugin);
+      registerPlugin("threadchat", { deliveryMode: "direct", sendText });
       const onDeliveryIntent = vi.fn(() => {
         throw new Error("simulated crash after queue persistence");
       });
@@ -138,17 +146,9 @@ it("threads resolved cfg through alias + target normalization in outbound dispat
     sendCfg?: unknown;
     to?: string;
   } = {};
-  const localChatAliasPlugin: ChannelPlugin = {
-    ...createChannelTestPluginBase({
-      id: "localchat",
-      label: "LocalChat",
-      config: { listAccountIds: () => [] },
-    }),
-    meta: {
-      ...createChannelTestPluginBase({ id: "localchat", label: "LocalChat" }).meta,
-      aliases: ["localmsg"],
-    },
-    outbound: {
+  registerPlugin(
+    "localchat",
+    {
       deliveryMode: "direct",
       resolveTarget: ({ to, cfg }) => {
         seen.resolveCfg = cfg;
@@ -161,9 +161,9 @@ it("threads resolved cfg through alias + target normalization in outbound dispat
         return { channel: "localchat", messageId: "local-resolved" };
       },
     },
-  };
-
-  registerPlugin(localChatAliasPlugin);
+    ["localmsg"],
+    { label: "LocalChat", config: { listAccountIds: () => [] } },
+  );
 
   const result = await sendMessage({
     cfg: resolvedCfg,
@@ -180,18 +180,26 @@ it("threads resolved cfg through alias + target normalization in outbound dispat
 
 describe("sendMessage replyToId threading", () => {
   const setupThreadChatCapture = () => {
-    const capturedCtx: Record<string, unknown>[] = [];
-    const plugin = createThreadChatLikePlugin({
-      onSendText: (ctx) => capturedCtx.push(ctx),
-    });
-    registerPlugin(plugin);
+    const capturedCtx: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0][] = [];
+    registerPlugin(
+      "threadchat",
+      {
+        deliveryMode: "direct",
+        sendText: async (ctx) => {
+          capturedCtx.push(ctx);
+          return { channel: "threadchat", messageId: "m1" };
+        },
+      },
+      [],
+      { label: "ThreadChat", capabilities: { chatTypes: ["direct", "channel"] } },
+    );
     return capturedCtx;
   };
 
   it.each([
     ["replyToId", "post123", "thread reply"],
     ["threadId", "topic456", "topic reply"],
-  ])("passes %s through to the outbound adapter", async (field, expected, content) => {
+  ] as const)("passes %s through to the outbound adapter", async (field, expected, content) => {
     const capturedCtx = setupThreadChatCapture();
     await sendThreadMessage({ content, [field]: expected });
 
@@ -201,16 +209,15 @@ describe("sendMessage replyToId threading", () => {
 });
 
 function setDemoPollRegistry(outboundOptions: Parameters<typeof createDemoAliasOutbound>[0] = {}) {
-  const base = createChannelTestPluginBase({
-    id: "demo-alias-channel",
-    label: "Demo Alias Channel",
-    config: { listAccountIds: () => [], resolveAccount: () => ({}) },
-  });
-  registerPlugin({
-    ...base,
-    meta: { ...base.meta, aliases: ["workspace-chat"] },
-    outbound: createDemoAliasOutbound(outboundOptions),
-  });
+  registerPlugin(
+    "demo-alias-channel",
+    createDemoAliasOutbound(outboundOptions),
+    ["workspace-chat"],
+    {
+      label: "Demo Alias Channel",
+      config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+    },
+  );
 }
 
 describe("sendPoll channel normalization", () => {
@@ -251,6 +258,84 @@ describe("sendPoll channel normalization", () => {
       expect(result.result).toMatchObject({ messageId: "owned-1" });
       expect(callGatewayMock).not.toHaveBeenCalled();
       expect(resolveAgentRuntimeIdentityToken).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reattaches a send whose Gateway request timed out after dispatch", async () => {
+    setDemoPollRegistry({ deliveryMode: "gateway" });
+    const gateway: OutboundMessageGatewayOptionsInput = {
+      request: async () => {
+        throw new Error("unexpected unconfigured Gateway request");
+      },
+    };
+    const request = vi
+      .spyOn(gateway, "request")
+      // The upload outlives the caller's timer, but the Gateway keeps sending.
+      .mockRejectedValueOnce(
+        new GatewayProtocolRequestTimeoutError({
+          method: "send",
+          timeoutMs: 30_000,
+          requestSent: true,
+        }),
+      )
+      .mockResolvedValueOnce({ messageId: "late-media" });
+
+    const result = await sendMessage({
+      cfg: {},
+      to: "conversation:demo-target",
+      channel: "workspace-chat",
+      content: "photo",
+      idempotencyKey: "slow-upload",
+      gateway,
+    });
+
+    expect(result.result).toMatchObject({ messageId: "late-media" });
+    expect(request).toHaveBeenCalledTimes(2);
+    for (const attempt of [1, 2]) {
+      expect(request).toHaveBeenNthCalledWith(
+        attempt,
+        expect.objectContaining({
+          method: "send",
+          params: expect.objectContaining({ idempotencyKey: "slow-upload" }),
+        }),
+      );
+    }
+  });
+
+  it.each([true, false])(
+    "reattaches a transport-timed-out send only when it was dispatched (%s)",
+    async (requestDispatched) => {
+      setDemoPollRegistry({ deliveryMode: "gateway" });
+      const timeout = new GatewayTransportError({
+        kind: "timeout",
+        message: "gateway timeout after 30000ms",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+        requestDispatched,
+      });
+      callGatewayMock.mockRejectedValueOnce(timeout);
+      if (requestDispatched) {
+        callGatewayMock.mockResolvedValueOnce({ messageId: "late" });
+      }
+
+      const sending = sendMessage({
+        cfg: {},
+        to: "conversation:demo-target",
+        channel: "workspace-chat",
+        content: "photo",
+        idempotencyKey: "slow-upload",
+      });
+
+      // A send that never reached the Gateway cannot be joined; retrying would deliver anew.
+      if (requestDispatched) {
+        await expect(sending).resolves.toMatchObject({ result: { messageId: "late" } });
+      } else {
+        await expect(sending).rejects.toBe(timeout);
+      }
+      expect(callGatewayMock).toHaveBeenCalledTimes(requestDispatched ? 2 : 1);
     },
   );
 
@@ -327,9 +412,9 @@ describe("sendPoll channel normalization", () => {
 });
 
 const setThreadChatGatewayRegistry = () =>
-  registerPlugin({
-    ...createThreadChatLikePlugin({ onSendText: () => {} }),
-    outbound: { deliveryMode: "gateway" },
+  registerPlugin("threadchat", { deliveryMode: "gateway" }, [], {
+    label: "ThreadChat",
+    capabilities: { chatTypes: ["direct", "channel"] },
   });
 
 describe("gateway url override hardening", () => {
@@ -510,21 +595,4 @@ const createDemoAliasOutbound = (
   pollMaxOptions: 12,
   ...(opts.supportsAnonymousPolls ? { supportsAnonymousPolls: true } : {}),
   sendPoll: opts.sendPoll ?? (async () => ({ messageId: "p1" })),
-});
-
-const createThreadChatLikePlugin = (opts: {
-  onSendText: (ctx: Record<string, unknown>) => void;
-}): ChannelPlugin => ({
-  ...createChannelTestPluginBase({
-    id: "threadchat",
-    label: "ThreadChat",
-    capabilities: { chatTypes: ["direct", "channel"] },
-  }),
-  outbound: {
-    deliveryMode: "direct",
-    sendText: async (ctx) => {
-      opts.onSendText(ctx as unknown as Record<string, unknown>);
-      return { channel: "threadchat", messageId: "m1" };
-    },
-  },
 });

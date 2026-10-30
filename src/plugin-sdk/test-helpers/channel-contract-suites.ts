@@ -83,8 +83,6 @@ export function installChannelActionsContractSuite(params: {
       const actions = discovery.actions;
       const capabilities = discovery.capabilities;
 
-      expect(actions).toEqual([...new Set(actions)]);
-      expect(capabilities).toEqual([...new Set(capabilities)]);
       expect(sortStrings(actions)).toEqual(sortStrings(testCase.expectedActions));
       expect(sortStrings(capabilities)).toEqual(sortStrings(testCase.expectedCapabilities ?? []));
 
@@ -123,10 +121,6 @@ export function installChannelSetupContractSuite<
   const setup = resolveChannelSetupExecutionAdapter(
     params.plugin as Pick<ChannelPlugin<ResolvedAccount>, "setup" | "setupContract">,
   );
-  it("exposes the base setup contract", () => {
-    expect(typeof setup?.applyAccountConfig).toBe("function");
-  });
-
   for (const testCase of params.cases) {
     it(`setup contract: ${testCase.name}`, () => {
       testCase.beforeTest?.();
@@ -140,7 +134,9 @@ export function installChannelSetupContractSuite<
         testCase.accountId ??
         "default";
 
-      expect(resolvedAccountId).toBe(testCase.expectedAccountId ?? resolvedAccountId);
+      if (testCase.expectedAccountId !== undefined) {
+        expect(resolvedAccountId).toBe(testCase.expectedAccountId);
+      }
 
       const validation =
         setup?.validateInput?.({

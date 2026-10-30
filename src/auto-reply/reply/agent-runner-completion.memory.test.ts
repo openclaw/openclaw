@@ -1,7 +1,10 @@
-import { afterEach, expect, it, vi } from "vitest";
-import type { SessionActorPendingFinalDelivery } from "../../config/sessions/session-actor-contract.js";
+import { afterEach, assert, expect, it, vi } from "vitest";
+import type {
+  SessionActorPendingFinalDelivery,
+  SessionActorStorage,
+} from "../../config/sessions/session-actor-contract.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import { readSessionActorStorageResult } from "../../config/sessions/session-actor-storage-result.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -37,6 +40,12 @@ const target = captureSessionTarget({ ...scope, storeScope: scope.storePath });
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 
+async function mutate(command: Parameters<SessionActorStorage["mutate"]>[0], create = false) {
+  await withSessionActorStorage(scope, { lifetime, authority, create }, async ({ actor }) =>
+    readSessionActorStorageResult(await actor.storage.mutate(command, authority)),
+  );
+}
+
 afterEach(() => {
   getSessionControllerOperation(scope.sessionKey, target)?.complete();
   memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
@@ -54,20 +63,7 @@ it("settles unbound memory usage and final custody without losing an intervening
     model: "before",
     groupActivationNeedsSystemIntro: true,
   };
-  const initial = await acquireSessionActorStorage(scope, { lifetime, authority, create: true });
-  if (!initial) {
-    throw new Error("Expected initial memory actor");
-  }
-  try {
-    readSessionActorStorageResult(
-      await initial.actor.storage.mutate(
-        { type: "session.entry.create", input: { entry } },
-        authority,
-      ),
-    );
-  } finally {
-    await initial.actor.release();
-  }
+  await mutate({ type: "session.entry.create", input: { entry } }, true);
   const operation = createReplyOperation({
     ...scope,
     sessionId: entry.sessionId,
@@ -86,9 +82,7 @@ it("settles unbound memory usage and final custody without losing an intervening
   const result = await withAgentTurnCompletion(
     { ...scope, entry, operation, publish: (committed) => published.push(committed) },
     async (completion) => {
-      if (!completion) {
-        throw new Error("Unbound incognito turn omitted completion accounting");
-      }
+      assert(completion, "Unbound incognito turn omitted completion accounting");
       completion.patch({
         kind: "usage",
         updatedAt: 100,
@@ -108,28 +102,15 @@ it("settles unbound memory usage and final custody without losing an intervening
         kind: "group-intro",
         needsSystemIntro: current.label === "Before completion",
       }));
-      const concurrent = await acquireSessionActorStorage(scope, { lifetime, authority });
-      if (!concurrent) {
-        throw new Error("Expected existing memory actor");
-      }
-      try {
-        readSessionActorStorageResult(
-          await concurrent.actor.storage.mutate(
-            {
-              type: "session.entry.patch",
-              input: {
-                operation: {
-                  kind: "fields",
-                  patch: { label: "Edited during completion", model: "after" },
-                },
-              },
-            },
-            authority,
-          ),
-        );
-      } finally {
-        await concurrent.actor.release();
-      }
+      await mutate({
+        type: "session.entry.patch",
+        input: {
+          operation: {
+            kind: "fields",
+            patch: { label: "Edited during completion", model: "after" },
+          },
+        },
+      });
       expect(published).toEqual([]);
       return completion.complete(pendingFinal);
     },

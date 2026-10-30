@@ -8,14 +8,16 @@ import { extractGeneratedTranscriptSessionId } from "../config/sessions/generate
 import { readLegacySessionStoreEntries } from "../config/sessions/legacy-store-inspection.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { existingSessionSourcePaths } from "./deferred-plugin-session-artifacts.js";
+import type {
+  DeferredPluginSessionImport,
+  SessionImportSource,
+} from "./deferred-plugin-session-import-schema.js";
+import { readDeferredPluginSessionImportReceipt } from "./deferred-plugin-session-source-read.js";
 import {
-  collectArchivedSources,
-  existingSessionSourcePaths,
-} from "./deferred-plugin-session-artifacts.js";
-import {
-  readDeferredPluginSessionImportReceipt,
   resolveVerifiedSessionSource,
-  type SessionImportSource,
+  sessionSourceArchives,
+  type SessionSourceVerification,
 } from "./deferred-plugin-session-sources.js";
 import {
   databaseIdentity,
@@ -33,13 +35,13 @@ import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 import {
   parseSessionImportReceipt,
   supersedeDeferredPluginSessionImport,
-  type DeferredPluginSessionImport,
 } from "./state-migrations.deferred-session-import.js";
 import type { LegacyMigrationReceipt } from "./state-migrations.receipts.js";
 
 /** Rebuild derived evidence from proven original index values or verified canonical transcripts. */
 export async function rebuildDeferredPluginSessionSourceIndex(
   params: SessionImportSource & {
+    verification?: SessionSourceVerification;
     onSourceConflict?: (sourcePath: string, artifactPath?: string, error?: unknown) => void;
     onEmptySource?: (sourcePath: string, reason: string) => void;
     onMissingSource?: (sourcePath: string, reason: string) => void;
@@ -69,10 +71,9 @@ export async function rebuildDeferredPluginSessionSourceIndex(
   const target = { ...params.target, sqlitePath: params.sqlitePath };
   const index = recorded.sources.find((source) => source.path === path.resolve(target.storePath));
   let verifiedIndex = index;
-  const archives = collectArchivedSources(target, params.env);
+  const archives = sessionSourceArchives(target, params.env, params.verification ?? new Map());
   const verifiedSourcePaths = new Set(recorded.sources.map((source) => source.path));
-  const missingIndex =
-    index && existingSessionSourcePaths(index.path, target, params.env, archives).length === 0;
+  const missingIndex = index && existingSessionSourcePaths(index.path, archives).length === 0;
   const receiptStillBound = (current: LegacyMigrationReceipt | null | undefined) =>
     isDeepStrictEqual(current, receipt) &&
     databaseIdentity(params.sqlitePath, "physical") === physicalIdentity &&
@@ -82,8 +83,8 @@ export async function rebuildDeferredPluginSessionSourceIndex(
       !receiptStillBound(readDeferredPluginSessionImportReceipt(params)) ||
       (verifiedIndex &&
         !missingIndex &&
-        !resolveVerifiedSessionSource(verifiedIndex, target, params.env, new Map())) ||
-      (missingIndex && existingSessionSourcePaths(index.path, target, params.env).length > 0)
+        !resolveVerifiedSessionSource(verifiedIndex, target, params.env, new Map(), archives)) ||
+      (missingIndex && existingSessionSourcePaths(index.path, archives).length > 0)
     ) {
       throw new Error(
         "Retained session receipt, index, or database changed during recovery; sources remain protected.",
@@ -96,11 +97,11 @@ export async function rebuildDeferredPluginSessionSourceIndex(
     (item) =>
       (!missingIndex || item !== index) &&
       (!isTrajectorySessionArtifactName(path.basename(item.path)) ||
-        existingSessionSourcePaths(item.path, target, params.env, archives).length > 0),
+        existingSessionSourcePaths(item.path, archives).length > 0),
   )) {
     if (
       isPrimarySessionTranscriptFileName(path.basename(source.path)) &&
-      existingSessionSourcePaths(source.path, target, params.env, archives).length === 0 &&
+      existingSessionSourcePaths(source.path, archives).length === 0 &&
       (await verifyMissingDeferredSessionTranscript({
         target,
         env: params.env,
@@ -149,8 +150,8 @@ export async function rebuildDeferredPluginSessionSourceIndex(
             const indexPath =
               !isIndex &&
               verifiedIndex &&
-              // Recovery yields between sources; do not reuse verification across those awaits.
-              resolveVerifiedSessionSource(verifiedIndex, target, params.env, new Map());
+              // Recheck file identities after awaits, reusing only the archive mappings.
+              resolveVerifiedSessionSource(verifiedIndex, target, params.env, new Map(), archives);
             if (isIndex) {
               const issues: Array<{ code: string; message: string }> = [];
               const current = readLegacySessionStoreEntries(params.target, issues, {

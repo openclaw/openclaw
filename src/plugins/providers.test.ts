@@ -1,8 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginAutoEnableResult } from "../config/plugin-auto-enable.types.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createIndexFixture } from "./test-helpers/installed-plugin-index-fixture.js";
 import type { ProviderPlugin } from "./types.js";
 
 type ResolveRuntimePluginRegistry = typeof import("./loader.js").resolveRuntimePluginRegistry;
@@ -33,19 +35,14 @@ let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePlugi
 let setActivePluginRegistry: SetActivePluginRegistry;
 
 function manifest(id: string, overrides: Partial<PluginManifestRecord> = {}): PluginManifestRecord {
-  return {
+  return createPluginManifestRecordFixture({
     id,
     providers: [id],
-    channels: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled",
     rootDir: `/tmp/${id}`,
     source: overrides.origin ?? "bundled",
     manifestPath: `/tmp/${id}/openclaw.plugin.json`,
     ...overrides,
-  };
+  });
 }
 
 function setManifestPlugins(plugins: PluginManifestRecord[]) {
@@ -90,17 +87,10 @@ function createProviderRegistrySnapshotFixture(): PluginRegistrySnapshot {
     return snapshotPlugin;
   });
 
-  return {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test",
+  return createIndexFixture({
     generatedAtMs: 0,
-    installRecords: {},
     plugins,
-    diagnostics: [],
-  };
+  });
 }
 
 function providerRegistry(provider: ProviderPlugin, pluginId = provider.id) {

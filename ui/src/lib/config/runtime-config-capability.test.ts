@@ -18,6 +18,128 @@ import {
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 describe("runtime config capability", () => {
+  it("keeps bootstrap reads and connection facts available before configuration is opened", () => {
+    const request = vi.fn(async () => ({}));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const replacementRequest = vi.fn(async () => ({}));
+    const replacement = { request: replacementRequest } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    let config = { ui: { theme: "dark" } };
+    let notify: (() => void) | undefined;
+    const runtimeConfig = createRuntimeConfigCapability(gateway, {
+      current: () => config,
+      subscribe: (listener) => {
+        notify = listener;
+        return () => {
+          notify = undefined;
+        };
+      },
+    });
+    const observed = vi.fn();
+    runtimeConfig.subscribe(observed);
+    expect(runtimeConfig.state.bootstrapConfig).toBe(config);
+    config = { ui: { theme: "light" } };
+    notify?.();
+    expect(runtimeConfig.state.bootstrapConfig).toBe(config);
+    publish(false);
+    expect(runtimeConfig.state.connected).toBe(false);
+    publish(true, replacement);
+    expect(runtimeConfig.state.client).toBe(replacement);
+    expect(runtimeConfig.state.connected).toBe(true);
+    expect(request).not.toHaveBeenCalled();
+    expect(replacementRequest).not.toHaveBeenCalled();
+    expect(observed).toHaveBeenCalledTimes(3);
+    runtimeConfig.dispose();
+    expect(notify).toBeUndefined();
+  });
+
+  it("retires a first configuration load disposed before its editor is ready", async () => {
+    const request = vi.fn(async () => makeSnapshot());
+    const { runtimeConfig, state } = createConfigCapabilityHarness(request);
+    const loading = runtimeConfig.ensureLoaded();
+    expect(state.configLoading).toBe(true);
+    runtimeConfig.dispose();
+    await loading;
+    expect(state.configLoading).toBe(false);
+    expect(state.connected).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("does not retarget a first mutation while its editor activates on a replacement connection", async () => {
+    const request = vi.fn(async () => makeSnapshot());
+    const { runtimeConfig, publish } = createConfigCapabilityHarness(request);
+    const replacementRequest = vi.fn(async () => ({}));
+    const replacement = { request: replacementRequest } as unknown as GatewayBrowserClient;
+    const mutation = runtimeConfig.patch({ raw: { count: 2 }, note: "test patch" });
+    publish(false);
+    publish(true, replacement);
+    await expect(mutation).resolves.toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    expect(replacementRequest).toHaveBeenCalledWith("config.get", {});
+    expect(replacementRequest).not.toHaveBeenCalledWith("config.patch", expect.anything());
+    runtimeConfig.dispose();
+  });
+
+  it("retains updater write suspension acquired before the editor activates", async () => {
+    const server = createConfigServerMock();
+    const { runtimeConfig } = createConfigCapabilityHarness(server.request);
+    runtimeConfig.setWritesSuspended(true);
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.patchForm(["count"], 2);
+    await expect(runtimeConfig.save()).resolves.toBe(false);
+    expect(server.submissions).toHaveLength(0);
+    runtimeConfig.setWritesSuspended(false);
+    await expect(runtimeConfig.save()).resolves.toBe(true);
+    expect(server.submissions).toHaveLength(1);
+    runtimeConfig.dispose();
+  });
+
+  it("keeps connection updates ahead of consumers when editing activates", async () => {
+    const server = createConfigServerMock();
+    const { gateway, publish } = createGatewayHarness({
+      request: server.request,
+    } as unknown as GatewayBrowserClient);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    const observed: boolean[] = [];
+    const stop = gateway.subscribe((snapshot) => {
+      observed.push(runtimeConfig.state.connected === (snapshot.phase === "connected"));
+    });
+    try {
+      await runtimeConfig.ensureLoaded();
+      publish(false);
+      publish(true);
+      expect(observed).toEqual([true, true]);
+    } finally {
+      stop();
+      runtimeConfig.dispose();
+    }
+  });
+  it("publishes schema completion and retires a held schema read on disconnect", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    let attempts = 0;
+    const { runtimeConfig, state, client, publish } = await loadHarness(
+      mockRequest({
+        "config.schema": () => (++attempts === 1 ? first.promise : second.promise),
+      }),
+    );
+    const initialLoad = runtimeConfig.ensureSchemaLoaded();
+    const initial = runtimeConfig.schemaRead!;
+    first.reject(new Error("Schema unavailable"));
+    await initialLoad;
+    expect(await initial).toEqual({ ok: false, error: "Schema unavailable" });
+
+    const retry = runtimeConfig.ensureSchemaLoaded();
+    const pending = runtimeConfig.schemaRead!;
+    expect(pending).not.toBe(initial);
+    publish(false, client);
+    expect(runtimeConfig.schemaRead).toBeNull();
+    second.resolve({ schema: { type: "object" }, uiHints: {}, version: "retired" });
+    await retry;
+    expect(state.configSchema).toBeNull();
+    runtimeConfig.dispose();
+  });
+
   it("does not load configuration for session-only connections, including reconnect refresh", async () => {
     const request = vi.fn(async () => ({ config: {}, hash: "ready", valid: true, issues: [] }));
     let auth: GatewayHelloOk["auth"] = { role: "operator", scopes: ["operator.sessions.read"] };
@@ -661,6 +783,122 @@ describe("runtime config capability", () => {
 });
 
 describe("runtime config load subscriptions", () => {
+  it.each(["display", "editor"] as const)(
+    "coalesces a reentrant observer during first %s loading",
+    async (kind) => {
+      const server = createConfigServerMock();
+      const { runtimeConfig } = createConfigCapabilityHarness(server.request);
+      const ensure =
+        kind === "display" ? runtimeConfig.ensureDisplayLoaded : runtimeConfig.ensureLoaded;
+      const pending: Promise<void>[] = [];
+      let depth = 0;
+      let maxDepth = 0;
+      const unsubscribe = runtimeConfig.subscribe(() => {
+        depth += 1;
+        maxDepth = Math.max(maxDepth, depth);
+        if (depth < 3) {
+          pending.push(ensure());
+        }
+        depth -= 1;
+      });
+      try {
+        await ensure();
+        await Promise.all(pending);
+        expect(maxDepth).toBe(1);
+        expect(server.request).toHaveBeenCalledOnce();
+        expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-1");
+      } finally {
+        unsubscribe();
+        runtimeConfig.dispose();
+      }
+    },
+  );
+
+  it("opens the editor from the exact read-only snapshot without another read", async () => {
+    const server = createConfigServerMock();
+    const { runtimeConfig, state } = createConfigCapabilityHarness(server.request);
+    try {
+      await runtimeConfig.ensureDisplayLoaded();
+      const snapshot = state.configSnapshot;
+      expect(snapshot?.hash).toBe("hash-1");
+      expect(state.configForm).toBeNull();
+      expect(state.configRawOriginal).toBe("");
+      await runtimeConfig.ensureLoaded();
+      expect(server.request).toHaveBeenCalledOnce();
+      expect(state.configSnapshot).toBe(snapshot);
+      expect(state.configForm).toEqual({ count: 1 });
+      expect(state.configRawOriginal).toBe(snapshot?.raw);
+      expect(state.configDraftBaseHash).toBe(snapshot?.hash);
+      runtimeConfig.patchForm(["count"], 2);
+      await expect(runtimeConfig.save()).resolves.toBe(true);
+      expect(server.submissions[0]?.baseHash).toBe("hash-1");
+    } finally {
+      runtimeConfig.dispose();
+    }
+  });
+
+  it("loads schema and replaces a held display read after editing takes custody", async () => {
+    const first = deferred<ConfigSnapshot>();
+    let reads = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.schema") {
+        return { schema: { type: "object" }, uiHints: {}, version: "ready" };
+      }
+      return ++reads === 1
+        ? first.promise
+        : makeSnapshot({ config: { count: 2 }, hash: "current" });
+    });
+    const { runtimeConfig, state } = createConfigCapabilityHarness(request);
+    const display = runtimeConfig.ensureDisplayLoaded();
+    const editing = runtimeConfig.ensureLoaded();
+    try {
+      await runtimeConfig.ensureSchemaLoaded();
+      expect(request).toHaveBeenCalledWith("config.schema", {});
+      expect(reads).toBe(1);
+      expect(state.configLoading).toBe(true);
+
+      await runtimeConfig.refresh();
+      await editing;
+      expect(reads).toBe(2);
+      expect(state.configForm).toEqual({ count: 2 });
+      expect(state.configDraftBaseHash).toBe("current");
+      expect(state.configLoading).toBe(false);
+
+      first.resolve(makeSnapshot({ config: { count: 1 }, hash: "retired" }));
+      await display;
+      expect(state.configForm).toEqual({ count: 2 });
+      expect(state.configDraftBaseHash).toBe("current");
+    } finally {
+      first.resolve(makeSnapshot());
+      runtimeConfig.dispose();
+    }
+  });
+
+  it("releases editor activation from a retired display read without adopting its snapshot", async () => {
+    const first = deferred<ConfigSnapshot>();
+    let reads = 0;
+    const request = vi.fn(async () =>
+      ++reads === 1 ? first.promise : makeSnapshot({ config: { count: 2 }, hash: "current" }),
+    );
+    const { runtimeConfig, state, publish } = createConfigCapabilityHarness(request);
+    const display = runtimeConfig.ensureDisplayLoaded();
+    const editor = runtimeConfig.ensureLoaded();
+    publish(false);
+    publish(true);
+    try {
+      await editor;
+      await runtimeConfig.ensureLoaded();
+      expect(state.configForm).toEqual({ count: 2 });
+      expect(state.configDraftBaseHash).toBe("current");
+      first.resolve(makeSnapshot({ config: { count: 1 }, hash: "retired" }));
+      await display;
+      expect(state.configDraftBaseHash).toBe("current");
+      expect(state.configForm).toEqual({ count: 2 });
+    } finally {
+      first.resolve(makeSnapshot());
+      runtimeConfig.dispose();
+    }
+  });
   it("clears a settled load when an observer throws so an explicit retry can read again", async () => {
     const request = vi.fn().mockRejectedValueOnce(new Error("temporarily unavailable"));
     request.mockResolvedValue({ config: {}, hash: "ready", valid: true, issues: [] });
@@ -673,7 +911,7 @@ describe("runtime config load subscriptions", () => {
     try {
       await expect(runtimeConfig.ensureLoaded()).rejects.toThrow("observer failed");
       unsubscribe();
-      await runtimeConfig.ensureLoaded();
+      await runtimeConfig.refresh();
       expect(request).toHaveBeenCalledTimes(2);
       expect(state.configSnapshot?.hash).toBe("ready");
     } finally {
@@ -714,6 +952,35 @@ describe("runtime config load subscriptions", () => {
       expect(state.configSnapshot?.hash).toBe("ready");
     } finally {
       unsubscribe();
+      runtimeConfig.dispose();
+    }
+  });
+
+  it("retains schema admission when config loading publishes during editor activation", async () => {
+    const schema = deferred<unknown>();
+    const request = vi.fn(async (method: string) =>
+      method === "config.schema" ? schema.promise : makeSnapshot(),
+    );
+    const { runtimeConfig, state } = createConfigCapabilityHarness(request);
+    const stop = runtimeConfig.subscribe(() => {
+      if (!runtimeConfig.schemaRead) {
+        void runtimeConfig.ensureSchemaLoaded();
+      }
+    });
+    const configRead = runtimeConfig.ensureLoaded();
+    const schemaRead = runtimeConfig.ensureSchemaLoaded();
+    try {
+      await configRead;
+      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("config.schema", {}));
+      expect(state.configSchemaLoading).toBe(true);
+      schema.resolve({ schema: { type: "object" }, uiHints: {}, version: "ready" });
+      await schemaRead;
+      expect(state.configSchemaLoading).toBe(false);
+      expect(state.configSchemaVersion).toBe("ready");
+      expect(request.mock.calls.filter(([method]) => method === "config.schema")).toHaveLength(1);
+    } finally {
+      stop();
+      schema.resolve({ schema: { type: "object" }, uiHints: {}, version: "ready" });
       runtimeConfig.dispose();
     }
   });

@@ -10,6 +10,7 @@ import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import {
   ageManagedWorktreeTemplates,
+  git,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
 import { listTemplatesAsync } from "./template-registry-async.js";
@@ -17,9 +18,6 @@ import { listTemplatesAsync } from "./template-registry-async.js";
 const read = (root: string, file: string) => fs.readFile(path.join(root, file), "utf8");
 
 const execFileAsync = promisify(execFile);
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
-}
 
 async function readAcl(file: string): Promise<string[]> {
   const { stdout } = await execFileAsync("/bin/ls", ["-lde", file]);

@@ -26,6 +26,7 @@ import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admissi
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
+import { createWorkerConnectionIdentity } from "../../worker-environments/connection-identity.test-support.js";
 import { createGatewayWsTestSocket } from "../ws-connection.test-helpers.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
@@ -64,18 +65,13 @@ const WORKER_CONNECT: WorkerConnectParams = {
     handshake: HANDSHAKE,
   },
 };
-export const IDENTITY: WorkerConnectionIdentity = {
+export const IDENTITY: WorkerConnectionIdentity = createWorkerConnectionIdentity(null, {
   environmentId: "worker-1",
   credentialHash: "h".repeat(43),
   bundleHash: HANDSHAKE.bundleHash,
-  sessionId: null,
-  runId: null,
-  turnClaim: null,
-  ownerEpoch: 1,
-  rpcSetVersion: 1,
   protocolFeatures: [...HANDSHAKE.protocolFeatures],
   credentialExpiresAtMs: Date.now() + 60_000,
-};
+});
 export const TRANSCRIPT_COMMIT = {
   runEpoch: 1,
   seq: 1,
@@ -262,6 +258,7 @@ export function attachHarness(
   });
   const cleanup = attachWorkerWsMessageHandler({
     socket: socket as unknown as WebSocket,
+    transport: socket,
     connectionWork,
     connId: "worker-connection",
     service,

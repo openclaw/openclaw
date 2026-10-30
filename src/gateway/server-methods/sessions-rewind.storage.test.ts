@@ -27,6 +27,7 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import * as memoryStorage from "../../config/sessions/session-actor-memory-storage.js";
 import { readSessionColdTranscript } from "../../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../../config/sessions/session-cold-storage.js";
 import {
@@ -41,6 +42,8 @@ import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner
 import { createRuntimeAgent } from "../../plugins/runtime/runtime-agent.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import * as sessionController from "../../sessions/session-controller.lifecycle.js";
+import * as upstreamReads from "../../sessions/session-upstream-links-runtime.js";
+import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as storeWriterQueue from "../../shared/store-writer-queue.js";
 import {
@@ -52,6 +55,10 @@ import {
   withOpenClawAgentDatabaseRuntime,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import {
   withOpenClawTestState,
@@ -63,7 +70,13 @@ import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import * as sessionEntryReader from "../session-utils-store-worker.js";
 import * as repositoryCheckpoints from "../worker-environments/session-repository-checkpoints.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
-import { holdLifecycle, invokeHandler } from "./sessions-rewind.handler.test-support.js";
+import {
+  expectCutFailure as expectFailure,
+  expectCutReply,
+  holdLifecycle,
+  invokeHandler,
+  installHarness,
+} from "./sessions-rewind.handler.test-support.js";
 import {
   cfg,
   messageCutContext as context,
@@ -91,10 +104,6 @@ function withStorage(
       await run(state);
     },
   );
-}
-
-function expectFailure(respond: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
 }
 
 async function authorizeMemberFork(scope: SourceScope) {
@@ -239,18 +248,24 @@ it.each([
         params: { sessionKey: scope.sessionKey },
         client: identified ? sharingPolicyClient({ user: "branch-reader" }) : null,
       });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          branches: hidden
-            ? []
-            : expect.arrayContaining([
-                expect.objectContaining({ leafEntryId: "user-2", active: true }),
-                expect.objectContaining({ leafEntryId: "alternate-user", active: false }),
-              ]),
-        },
-        undefined,
-      );
+      expectCutReply(respond, {
+        branches: hidden
+          ? []
+          : [
+              expect.objectContaining({
+                leafEntryId: "user-2",
+                active: true,
+                headline: "What did I say?",
+                messageCount: 3,
+              }),
+              expect.objectContaining({
+                leafEntryId: "alternate-user",
+                active: false,
+                headline: "An alternate branch.",
+                messageCount: 1,
+              }),
+            ],
+      });
       expect(parse.mock.calls.filter(([text]) => text.includes(unrelatedPrompt))).toHaveLength(0);
       expect(parse.mock.calls.filter(([text]) => text.includes(selectedPrompt))).toHaveLength(0);
       expect(reads).toHaveBeenCalledTimes(1);
@@ -375,7 +390,7 @@ async function revokeWithPublicLifecyclePredecessor(
     await mutation?.error;
   }
   expect(await removal).toBeUndefined();
-  expect(respond).toHaveBeenCalledWith(true, { ok: true, ...params }, undefined);
+  expectCutReply(respond, { ok: true, ...params });
   return expectDefined(mutation, "queued fork");
 }
 
@@ -429,19 +444,22 @@ it.each(
 );
 
 it.each([
-  { kind: "incognito", incognito: true },
-  { kind: "ordinary", incognito: false },
+  { kind: "incognito", incognito: true, visibility: "draft" },
+  { kind: "ordinary", incognito: false, visibility: "draft" },
   { kind: "repository", incognito: false },
   { kind: "repository-changed", incognito: false },
-  { kind: "local-project", incognito: false },
+  { kind: "local-project", incognito: false, visibility: "shared" },
 ])(
   "preserves source and child storage ownership during $kind fork preparation",
-  async ({ kind, incognito }) => {
+  async ({ kind, incognito, visibility }) => {
     await withStorage(async (testState) => {
       if (kind === "repository-changed") {
         openOpenClawAgentDatabase({ agentId: "main" });
       }
       const sourceScope = await seedMessageCutSource(incognito);
+      if (visibility === "draft" || visibility === "shared") {
+        await upsertSessionEntryCore(sourceScope, { visibility });
+      }
       const { sessionKey } = sourceScope;
       const repositories = getSessionRepositoryWorkspaceStore();
       const repository = kind.startsWith("repository")
@@ -555,11 +573,7 @@ it.each([
         expect(sourceReads).toEqual([]);
       }
 
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        { sessionKey: expect.any(String), editorText: "What did I say?" },
-        undefined,
-      );
+      expectCutReply(respond, { sessionKey: expect.any(String), editorText: "What did I say?" });
       const result = expectDefined(
         respond.mock.calls[0]?.[1] as SessionsForkResult | undefined,
         "fork response",
@@ -574,6 +588,7 @@ it.each([
       expect(child.incognito === true).toBe(incognito);
       expect(child.sessionId).not.toBe(sourceScope.sessionId);
       expect(child.parentSessionKey).toBe(sessionKey);
+      expect(child.visibility ?? "shared").toBe(visibility === "draft" ? "draft" : "shared");
       if (kind === "local-project") {
         expect(child).toMatchObject(projectEntry);
       }
@@ -659,12 +674,7 @@ it.each(
       const guards =
         guardKind === "sessionMutationCommitGuard"
           ? { sessionMutationCommitGuard: assertCurrent }
-          : {
-              sessionMutationAuthorization: {
-                assertCurrent,
-                assertTargetCurrent: vi.fn(),
-              },
-            };
+          : { sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: vi.fn() } };
       probe.admission(workerAdmission, (request, grant, callback) => {
         workerCommitGrant = request.stage === "commit";
         if (workerCommitGrant) {
@@ -684,6 +694,69 @@ it.each(
       expect(await mutation.error).toBe(denied);
       expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
     }, true);
+  },
+);
+
+it.each([false, true].flatMap((incognito) => [false, true].map((late) => ({ incognito, late }))))(
+  "refuses new Draft copies when disabled (memory=$incognito, late=$late)",
+  async ({ incognito, late }) => {
+    await withStorage(async () => {
+      const scope = await seedMessageCutSource(incognito);
+      await upsertSessionEntryCore(scope, { visibility: "draft" });
+      const before = await readMutationStorage(scope);
+      let enabled = late;
+      const requestContext = context();
+      requestContext.getCommittedRuntimeConfig = () =>
+        enabled ? cfg : { ...cfg, session: { sharing: { drafts: false } } };
+      const run = async () => {
+        const mutation = invokeMessageCut("sessions.fork", scope, { context: requestContext });
+        const error = await mutation.error;
+        expect(enabled).toBe(false);
+        expect(error).toMatchObject({
+          error: {
+            code: ErrorCodes.INVALID_REQUEST,
+            message: expect.stringContaining("Continue in this conversation"),
+            details: { code: "SESSION_VISIBILITY_DISABLED", visibility: "draft" },
+          },
+        });
+        expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
+        expect(await readMutationStorage(scope)).toEqual(before);
+      };
+      if (late && incognito) {
+        const createStorage = memoryStorage.createSessionActorMemoryStorage;
+        vi.spyOn(memoryStorage, "createSessionActorMemoryStorage").mockImplementation((options) => {
+          const storage = createStorage(options);
+          const mutate = storage.mutate.bind(storage);
+          storage.mutate = (command, guard, observer) =>
+            mutate(command, guard, {
+              ...observer,
+              async beforeCommit(receipt) {
+                await observer?.beforeCommit?.(receipt);
+                if (command.type === "session.messageCut") {
+                  enabled = false;
+                }
+              },
+            });
+          return storage;
+        });
+        await run();
+      } else {
+        if (late) {
+          probe.admission(workerAdmission, (request, grant, callback) => {
+            if (
+              request.stage === "commit" &&
+              isRecord(request.facts) &&
+              isRecord(request.facts.publication) &&
+              request.facts.publication.kind === "session-entry-patch-committed"
+            ) {
+              enabled = false;
+            }
+            callback(request, grant);
+          });
+        }
+        await run();
+      }
+    });
   },
 );
 
@@ -767,7 +840,157 @@ it("sessions.fork retains member authority while restoring cold source history",
     const mutation = invokeMessageCut("sessions.fork", scope, mutationOptions);
 
     expect(await mutation.error).toBeUndefined();
-    expect(mutation.respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    expectCutReply(mutation.respond, expect.any(Object));
     expect(readSessionColdTranscript(coldDatabase, scope.sessionId)).toBeUndefined();
+  });
+});
+
+function adoptUpstreamSource(scope: SourceScope, threadId = "late-upstream-thread"): boolean {
+  return upsertSessionUpstreamLink(
+    {
+      sessionKey: scope.sessionKey,
+      agentId: scope.agentId,
+      catalogId: "fixture",
+      hostId: "gateway:local",
+      threadId,
+      upstreamKind: "codex-app-server",
+      upstreamRef: { threadId },
+      marker: null,
+    },
+    { now: 1 },
+  );
+}
+
+function withSource(run: (scope: SourceScope) => Promise<void>, incognito = false) {
+  return withStorage(async () => {
+    const scope = await seedMessageCutSource(incognito);
+    const before = await readMutationStorage(scope);
+    await run(scope);
+    expect(await readMutationStorage(scope)).toEqual(before);
+  });
+}
+
+it.each(
+  (["sessions.fork", "sessions.rewind"] as const).flatMap((method) =>
+    (["transaction", "commit"] as const).map((boundary) => ({ method, boundary })),
+  ),
+)(
+  "refuses $method when an upstream link appears at the $boundary boundary",
+  async ({ method, boundary }) => {
+    await withSource(async (scope) => {
+      openOpenClawStateDatabase();
+      let linked = false;
+      probe.admission(workerAdmission, (request, grant, callback) => {
+        if (
+          !linked &&
+          request.stage === boundary &&
+          isRecord(request.facts) &&
+          (boundary === "transaction"
+            ? request.facts.publication === undefined
+            : isRecord(request.facts.publication) &&
+              request.facts.publication.kind === "session-entry-patch-committed")
+        ) {
+          linked = adoptUpstreamSource(scope);
+        }
+        callback(request, grant);
+      });
+      const mutation = invokeMessageCut(method, scope);
+      await mutation.error;
+
+      expect(linked).toBe(true);
+      expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
+    });
+  },
+);
+
+it.each(["preparation", "current guard"] as const)(
+  "refuses a local cut when upstream %s is unavailable",
+  async (phase) => {
+    await withSource(async (scope) => {
+      const prepare = upstreamReads.prepareSessionUpstreamPresence;
+      vi.spyOn(upstreamReads, "prepareSessionUpstreamPresence").mockImplementationOnce(
+        async (...args) => {
+          if (phase === "preparation") {
+            throw new Error("fixture upstream read unavailable");
+          }
+          const prepared = await prepare(...args);
+          return {
+            ...prepared,
+            current() {
+              throw new Error("fixture upstream facts unavailable");
+            },
+          };
+        },
+      );
+      const mutation = invokeMessageCut("sessions.rewind", scope);
+      expect(await mutation.error).toBeUndefined();
+      expectFailure(mutation.respond, { code: ErrorCodes.UNAVAILABLE });
+    });
+  },
+);
+
+it("refuses incognito native context effects after upstream revocation during preparation", async () => {
+  await withSource(async (scope) => {
+    openOpenClawStateDatabase();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let linked = false;
+    const effect = vi.fn();
+    const rollback = vi.fn();
+    installHarness(
+      {
+        label: "Native source fixture",
+        supports: () => ({ supported: true }),
+        withSessionContextReset: async (params, run) => {
+          entered.resolve();
+          await release.promise;
+          params.assertCurrent();
+          effect();
+          return run({ commit: effect, rollback });
+        },
+      },
+      true,
+      "native-upstream-fixture",
+    );
+    const mutation = invokeMessageCut("sessions.rewind", scope);
+    try {
+      await awaitGateBeforeSettlement(entered.promise, mutation.error, "native reset preparation");
+      linked = adoptUpstreamSource(scope);
+    } finally {
+      release.resolve();
+    }
+    expect(await mutation.error).toBeUndefined();
+    expect(linked).toBe(true);
+    expect(
+      await upstreamReads.prepareSessionUpstreamLink(
+        upstreamReads.captureSessionUpstreamLinkReadSource(),
+        scope.sessionKey,
+        scope.agentId,
+      ),
+    ).toMatchObject({ threadId: "late-upstream-thread" });
+    expect(effect).not.toHaveBeenCalled();
+    expect(rollback).not.toHaveBeenCalled();
+    expectFailure(mutation.respond, {
+      message: expect.stringContaining("external agent harness"),
+    });
+  }, true);
+});
+it("refuses a shared-state owner retired while rewind waits for the lifecycle lock", async () => {
+  await withSource(async (scope) => {
+    const { release, settled: holding } = await holdLifecycle(
+      resolveSessionStorePathCore(undefined, { agentId: scope.agentId }),
+      scope.sessionId,
+    );
+    const mutation = invokeMessageCut("sessions.rewind", scope);
+    try {
+      await closeOpenClawStateDatabaseAsync();
+    } finally {
+      release();
+      await holding;
+    }
+    expect(await mutation.error).toMatchObject({
+      message: expect.stringMatching(/state database read admission (?:changed|is closed)/),
+    });
+    expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
   });
 });

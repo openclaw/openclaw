@@ -9,6 +9,7 @@ import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
   invalidateSqliteDatabaseCleanClose,
+  prepareSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
@@ -184,9 +185,13 @@ export function ensureOpenClawQuarantineStore(env: NodeJS.ProcessEnv): void {
 /** Runtime guards share the owner's decision; explicit repair may inspect disk. */
 function readOpenClawDatabaseQuarantine(
   pathname: string,
-  options: { env?: NodeJS.ProcessEnv; fresh?: true } = {},
+  options: { env?: NodeJS.ProcessEnv; fresh?: true; refreshIdentity?: true } = {},
 ): OpenClawDatabaseQuarantine | undefined {
   const storePath = resolveQuarantineStorePath(options.env ?? process.env);
+  if (options.refreshIdentity) {
+    // Worker readers refresh the binding before using a retained auxiliary generation.
+    prepareSqliteDatabaseAdmission(storePath);
+  }
   const load = () => readPersistedQuarantineDecision(pathname, storePath, options.fresh) ?? null;
   const decision = options.fresh
     ? load()
@@ -310,7 +315,7 @@ function resolveQuarantineDecision(
 export function readOpenClawDatabaseQuarantineFailure(
   kind: OpenClawDatabaseKind,
   pathname: string,
-  options: { env?: NodeJS.ProcessEnv; fresh?: true } = {},
+  options: { env?: NodeJS.ProcessEnv; fresh?: true; refreshIdentity?: true } = {},
 ): Error | undefined {
   let quarantine: OpenClawDatabaseQuarantine | undefined;
   let cleanupFailure: OpenClawQuarantineReadCleanupError | undefined;

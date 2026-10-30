@@ -3,8 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
-import { collectModuleReferencesFromSource } from "../../scripts/lib/guard-inventory-utils.mjs";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+import { toLine, visitModuleSpecifiers } from "../../scripts/lib/ts-guard-utils.mts";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
 
@@ -51,7 +51,7 @@ type ClosureEntry = {
   kind: ClosureKind;
 };
 
-type ModuleReference = ReturnType<typeof collectModuleReferencesFromSource>[number];
+type ModuleReference = { kind: string; line: number; specifier: string };
 
 function formatRepoPath(filePath: string): string {
   return path.relative(REPO_ROOT, filePath).split(path.sep).join("/");
@@ -110,55 +110,29 @@ function collectLegacySetupSpecifiers(setupEntryPath: string): string[] {
   return [...specifiers].toSorted();
 }
 
-function collectStaticValueReferenceKeys(sourceFile: ts.SourceFile): Set<string> {
-  const keys = new Set<string>();
-  const add = (
-    kind: "commonjs-require" | "import" | "export",
-    specifier: ts.StringLiteralLikeNode,
-  ) => {
-    const line = sourceFile.getLineAndCharacterOfPosition(specifier.getStart(sourceFile)).line + 1;
-    keys.add(`${kind}\0${line}\0${specifier.text}`);
-  };
-  const visit = (node: ts.Node) => {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteralLikeNode(node.moduleSpecifier)) {
-      const clause = node.importClause;
-      const hasValueBinding =
-        !clause ||
-        (clause.phaseModifier !== ts.SyntaxKind.TypeKeyword &&
-          (Boolean(clause.name) ||
-            (clause.namedBindings !== undefined &&
-              (ts.isNamespaceImport(clause.namedBindings) ||
-                clause.namedBindings.elements.some((element) => !element.isTypeOnly)))));
-      if (hasValueBinding) {
-        add("import", node.moduleSpecifier);
-      }
-    } else if (
-      ts.isExportDeclaration(node) &&
+function hasStaticValue(node: ts.Node): boolean {
+  if (ts.isImportDeclaration(node)) {
+    const clause = node.importClause;
+    const bindings = clause?.namedBindings;
+    return Boolean(
+      !clause ||
+      (clause.phaseModifier !== ts.SyntaxKind.TypeKeyword &&
+        (clause.name ||
+          (bindings &&
+            (ts.isNamespaceImport(bindings) ||
+              bindings.elements.some((element) => !element.isTypeOnly))))),
+    );
+  }
+  if (ts.isExportDeclaration(node)) {
+    const clause = node.exportClause;
+    return (
       !node.isTypeOnly &&
-      node.moduleSpecifier &&
-      ts.isStringLiteralLikeNode(node.moduleSpecifier)
-    ) {
-      const clause = node.exportClause;
-      if (
-        !clause ||
+      (!clause ||
         ts.isNamespaceExport(clause) ||
-        clause.elements.some((element) => !element.isTypeOnly)
-      ) {
-        add("export", node.moduleSpecifier);
-      }
-    } else if (
-      ts.isImportEqualsDeclaration(node) &&
-      !node.isTypeOnly &&
-      ts.isExternalModuleReference(node.moduleReference) &&
-      node.moduleReference.expression &&
-      ts.isStringLiteralLikeNode(node.moduleReference.expression)
-    ) {
-      add("commonjs-require", node.moduleReference.expression);
-    }
-    node.forEachChild(visit);
-  };
-  visit(sourceFile);
-  return keys;
+        clause.elements.some((element) => !element.isTypeOnly))
+    );
+  }
+  return ts.isImportEqualsDeclaration(node) && !node.isTypeOnly;
 }
 
 function collectStaticValueReferences(
@@ -168,11 +142,21 @@ function collectStaticValueReferences(
     FORBIDDEN_SPECIFIER_RULES.has(specifier) || specifier.startsWith("."),
 ): ModuleReference[] {
   const sourceFile = parser.parseSourceFile(filePath, source);
-  const staticValueReferenceKeys = collectStaticValueReferenceKeys(sourceFile);
-  return collectModuleReferencesFromSource(sourceFile, {
-    acceptSpecifier,
-  }).filter((reference) =>
-    staticValueReferenceKeys.has(`${reference.kind}\0${reference.line}\0${reference.specifier}`),
+  const references: ModuleReference[] = [];
+  visitModuleSpecifiers(
+    sourceFile,
+    ({ kind, node, specifier, specifierNode }) => {
+      if (hasStaticValue(node) && acceptSpecifier(specifier)) {
+        references.push({ kind, line: toLine(sourceFile, specifierNode), specifier });
+      }
+    },
+    { includeCommonJs: true },
+  );
+  return references.toSorted(
+    (left, right) =>
+      left.line - right.line ||
+      left.kind.localeCompare(right.kind) ||
+      left.specifier.localeCompare(right.specifier),
   );
 }
 

@@ -12,7 +12,6 @@ import {
   MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
   registerMemoryCoreDoctorChecks,
 } from "./doctor-health.js";
-import { collectVectorProviderFindings } from "./doctor-vector-index-provider.js";
 
 type InspectManagedLocalEmbeddingSetup = Parameters<
   typeof registerMemoryCoreDoctorChecks
@@ -136,19 +135,8 @@ describe("managed local embedding setup health check", () => {
     expect(registerHealthCheck).toHaveBeenCalledTimes(2);
   });
 
-  it("passes configured local setup and ignores non-local providers", async () => {
-    const stateDir = await createState();
-    const inspect = vi.fn<InspectManagedLocalEmbeddingSetup>(async () => null);
-    const check = captureCheck(inspect);
-
-    await expect(check.detect(context(stateDir, "local"))).resolves.toEqual([]);
-    await expect(check.detect(context(stateDir, "openai"))).resolves.toEqual([]);
-    expect(inspect.mock.calls.map(([params]) => params.provider)).toEqual(["local"]);
-  });
-
   it("snapshots only local agents while preserving their setup findings", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-mixed-"));
-    roots.add(stateDir);
+    const stateDir = await createState(false);
     for (const agentId of ["default", "disabled", "local"]) {
       await createSemanticIndex(stateDir, "embeddinggemma-300m", agentId);
     }
@@ -170,9 +158,12 @@ describe("managed local embedding setup health check", () => {
         }),
       ).resolves.toEqual([
         expect.objectContaining({
+          checkId: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
           target: "local/local",
           path: "agents.entries.local.memory.search.provider",
           requirement: "memory-embedding-provider-plugin",
+          message: expect.stringMatching(/official llama.cpp provider plugin.*llama-server/s),
+          fixHint: expect.stringContaining("openclaw plugins install @openclaw/llama-cpp-provider"),
         }),
       ]);
       expect(snapshot.mock.calls.map(([databasePath]) => databasePath)).toEqual([
@@ -183,44 +174,22 @@ describe("managed local embedding setup health check", () => {
     }
   });
 
-  it("reports a structured blocker when the local provider plugin is unavailable", async () => {
-    const stateDir = await createState();
-    const check = captureCheck();
-
-    await expect(check.detect(context(stateDir, "local"))).resolves.toEqual([
-      expect.objectContaining({
-        checkId: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
-        target: "main/local",
-        requirement: "memory-embedding-provider-plugin",
-        message: expect.stringMatching(/official llama.cpp provider plugin.*llama-server/s),
-        fixHint: expect.stringContaining("openclaw plugins install @openclaw/llama-cpp-provider"),
-      }),
-    ]);
-  });
-
-  it("ignores stale built-in indexes when another plugin owns the memory slot", async () => {
-    const stateDir = await createState();
+  it.each([
+    { name: "non-local provider", index: model, active: true, provider: "openai" },
+    { name: "another memory plugin", index: model, active: false, provider: "local" },
+    { name: "missing index", index: false, active: true, provider: "local" },
+    { name: "FTS-only index", index: "fts-only", active: true, provider: "local" },
+  ] as const)("does not inspect local setup for $name", async ({ index, active, provider }) => {
+    const stateDir = await createState(index);
     const inspect = vi.fn<InspectManagedLocalEmbeddingSetup>(async () => ({
       provider: "local",
       reason: setupFailure.reason,
     }));
-    const check = captureCheck(inspect, false);
+    const check = captureCheck(inspect, active);
 
-    await expect(check.detect(context(stateDir, "local"))).resolves.toEqual([]);
+    await expect(check.detect(context(stateDir, provider))).resolves.toEqual([]);
     expect(inspect).not.toHaveBeenCalled();
   });
-
-  it.each(["missing", "fts-only"] as const)(
-    "does not inspect a provider for a %s vector index",
-    async (indexMode) => {
-      const stateDir = await createState(indexMode === "fts-only" ? "fts-only" : false);
-      const inspect = vi.fn<InspectManagedLocalEmbeddingSetup>(async () => null);
-      const check = captureCheck(inspect);
-
-      await expect(check.detect(context(stateDir, "local"))).resolves.toEqual([]);
-      expect(inspect).not.toHaveBeenCalled();
-    },
-  );
 
   it("reads an active WAL index without changing committed database or WAL bytes", async () => {
     const stateDir = await createState(false);
@@ -305,25 +274,24 @@ describe("managed local embedding setup health check", () => {
         }),
       ]);
       const checkContext = context(stateDir, "local");
-      const config = checkContext.cfg;
-      const env = checkContext.env!;
       const check = captureCheck(async () => null);
       await expect(check.detect(checkContext)).resolves.toEqual([]);
-      await expect(
-        collectVectorProviderFindings(
-          { config, env, stateDir, shouldInspectAgent: () => true },
-          async () => ({
-            provider: "local",
-            reason: "Synthetic provider setup requirement",
-          }),
-        ),
-      ).resolves.toEqual([
+      const failureCheck = captureCheck(async ({ provider }) => ({
+        provider,
+        reason: "Synthetic provider setup requirement",
+      }));
+      await expect(failureCheck.detect(checkContext)).resolves.toEqual([
         {
-          agentId: "main",
-          model,
-          provider: "local",
-          configPrefix: "memory.search",
-          reason: "Synthetic provider setup requirement",
+          checkId: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
+          severity: "error",
+          source: "memory-core",
+          path: "memory.search.provider",
+          target: "main/local",
+          requirement: "managed-local-embedding-setup",
+          message:
+            "Memory index for agent main uses vector model embeddinggemma-300m, but " +
+            'embedding provider "local" cannot initialize (Synthetic provider setup requirement).',
+          fixHint: undefined,
         },
       ]);
       expect(writer.exitCode).toBeNull();

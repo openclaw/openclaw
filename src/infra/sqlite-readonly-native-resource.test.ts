@@ -87,7 +87,6 @@ function fixture() {
     onFailure(error) {
       throw error;
     },
-    onDispose() {},
   });
   const ownerPort = host.port;
   const resource = createNativeWorkerResource(port1, undefined, ownerPort);
@@ -389,7 +388,7 @@ it("rejects lost-port RPCs without declaring child death and joins outstanding w
   });
   const copy = client.runOnce(
     "/fixture/source",
-    { mode: "sync" },
+    { mode: "sync", stagingRoot: "/fixture/allocated" },
     { env: launch.env, cwd: launch.cwd, deadlineOwnedByCaller: false },
   );
   const rejected = expect(copy).rejects.toThrow("child cleanup is not acknowledged");

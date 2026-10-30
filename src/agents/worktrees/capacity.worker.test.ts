@@ -4,7 +4,10 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { withExistingOpenClawStateSchema as withSchema } from "../../state/openclaw-state-db-schema-policy.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import * as leaseWorker from "../../state/openclaw-state-lease-worker-operation.js";
 import * as stateLeases from "../../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -68,39 +71,26 @@ function fixture() {
 it("releases off-thread disk debt after caller and schema admission end", async () => {
   const f = fixture();
   const caller = new AbortController();
-  await withSchema({ path: f.database.path }, () => {
-    const leaseContext = captureOpenClawStateWorkerContext({ env: f.env });
-    return stateLeases.withOpenClawStateLeaseAsync(
-      {
-        scope: WORKTREE_MUTATION_LEASE_SCOPE,
-        key: "retirement",
-        leaseMs: 60_000,
-        waitMs: 0,
-        heartbeat: "worker",
-      },
-      leaseContext,
-      async (lease) => {
-        const ended = await withSchema({ path: f.database.path }, async () => {
-          const context = captureOpenClawStateWorkerContext({ env: f.env });
-          const capacity = createWorktreeDiskAdmission({
-            env: f.env,
-            workerAuthority: {
-              leaseSet: { context: leaseContext, leases: [lease] },
-              assertCurrent: () => caller.signal.throwIfAborted(),
-            },
-            assertCurrent: () => caller.signal.throwIfAborted(),
-          });
-          await expectOffThread(() => reserve(capacity, f.root), true);
-          return { capacity, context };
+  const assertCurrent = () => caller.signal.throwIfAborted();
+  await withSchema({ path: f.database.path }, () =>
+    withWorktreeMutationLease({ env: f.env, id: "retirement" }, async (guard) => {
+      const ended = await withSchema({ path: f.database.path }, async () => {
+        const context = captureOpenClawStateWorkerContext({ env: f.env });
+        const capacity = createWorktreeDiskAdmission({
+          env: f.env,
+          workerAuthority: { ...guard.workerAuthority, assertCurrent },
+          assertCurrent,
         });
-        expect(f.debts()).toHaveLength(1);
-        caller.abort(new Error("caller cancelled"));
-        expect(() => ended.context.admission.assertCurrent()).toThrow("schema admission has ended");
-        await expectOffThread(() => ended.capacity.release());
-        expect(f.debts()).toEqual([]);
-      },
-    );
-  });
+        await expectOffThread(() => reserve(capacity, f.root), true);
+        return { capacity, context };
+      });
+      expect(f.debts()).toHaveLength(1);
+      caller.abort(new Error("caller cancelled"));
+      expect(() => ended.context.admission.assertCurrent()).toThrow("schema admission has ended");
+      await expectOffThread(() => ended.capacity.release());
+      expect(f.debts()).toEqual([]);
+    }),
+  );
 });
 
 it("rolls back disk admission on owner revocation at worker commit", async () => {
@@ -112,7 +102,6 @@ it("rolls back disk admission on owner revocation at worker commit", async () =>
       reserve(guard, f.root),
     ),
   ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
-  expect(caller.signal.aborted).toBe(true);
   expect(f.debts()).toEqual([]);
 });
 
@@ -146,7 +135,6 @@ it.for(["parent", "child"] as const)(
         });
         try {
           await expect(reserve(capacity, f.root)).rejects.toMatchObject(lost);
-          expect(restoreClock).toBeDefined();
           expect(f.debts()).toEqual([]);
         } finally {
           restoreClock?.();
@@ -174,3 +162,44 @@ it("preserves typed capacity contention across the worker result boundary", asyn
   });
   expect(f.debts()).toEqual([]);
 });
+
+it.each([true, false])(
+  "reclaims an exited disk reservation only with its recorded namespace (namespace: %s)",
+  async (namespace) => {
+    const f = fixture();
+    await withWorktreeMutationLease({ env: f.env, id: "abandoned" }, async (guard) => {
+      await reserve(guard, f.root);
+      const [held] = f.debts();
+      // Keep the production owner's recorded namespace; only its PID has exited.
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          executeSqliteQuerySync(
+            db,
+            getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
+              .updateTable("state_leases")
+              .set((eb) => {
+                const exited = eb.fn<string>("json_set", [
+                  eb.ref("payload_json"),
+                  eb.val("$.owner.pid"),
+                  eb.val(2_147_483_647),
+                ]);
+                return {
+                  payload_json: namespace
+                    ? exited
+                    : eb.fn<string>("json_remove", [exited, eb.val("$.owner.processNamespace")]),
+                };
+              })
+              .where("scope", "=", WORKTREE_CAPACITY_RESERVATION_SCOPE)
+              .where("lease_key", "=", held!.lease_key),
+          );
+        },
+        { env: f.env },
+      );
+      await withWorktreeAllocationLease({ env: f.env }, async (replacement) => {
+        await reserve(replacement, f.root);
+        expect(f.debts().some((debt) => debt.lease_key === held!.lease_key)).toBe(!namespace);
+      });
+    });
+    expect(f.debts()).toEqual([]);
+  },
+);

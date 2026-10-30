@@ -9,11 +9,12 @@ import {
   createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
-  postJsonRequest,
+  postJsonResponse,
   readProviderBinaryResponse,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
+  type postJsonRequest,
   type ProviderOperationDeadline,
   type ProviderOperationTimeoutMs,
 } from "../plugin-sdk/provider-http.js";
@@ -479,7 +480,7 @@ export async function runDashscopeVideoGenerationTask(params: {
     timeoutMs: createProviderOperationTimeoutResolver({ deadline, defaultTimeoutMs }),
     totalTimeoutMs: deadline.timeoutMs,
   });
-  const { response, release } = await postJsonRequest({
+  const submitted = await postJsonResponse<DashscopeVideoGenerationResponse>({
     url: params.url,
     headers: params.headers,
     body: {
@@ -500,22 +501,14 @@ export async function runDashscopeVideoGenerationTask(params: {
     fetchFn: params.fetchFn,
     allowPrivateNetwork: params.allowPrivateNetwork,
     dispatcherPolicy: params.dispatcherPolicy,
-  });
-
-  let submitted: DashscopeVideoGenerationResponse;
-  try {
-    await assertOkOrThrowHttpError(response, `${params.providerLabel} video generation failed`, {
+    errorLabel: `${params.providerLabel} video generation failed`,
+    responseLabel: `${params.providerLabel} video generation`,
+    errorOptions: {
       bodyTimeoutMs: bodyReadOptions.timeoutMs,
       onBodyTimeout: bodyReadOptions.onTimeout,
-    });
-    submitted = await readProviderJsonResponse<DashscopeVideoGenerationResponse>(
-      response,
-      `${params.providerLabel} video generation`,
-      bodyReadOptions,
-    );
-  } finally {
-    await release();
-  }
+    },
+    readOptions: bodyReadOptions,
+  });
 
   const taskId = submitted.output?.task_id?.trim();
   if (!taskId) {

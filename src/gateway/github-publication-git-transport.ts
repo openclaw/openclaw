@@ -1,16 +1,22 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { githubRepositoryUrl } from "../agents/github-host.js";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
 import { splitNullBuffer } from "../agents/worktrees/git-path-inventory.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { gitNullConfigPath, gitReadOnlyEnvironment } from "../infra/git-exec.js";
+import { appendGitConfig, gitMaintenanceEnvironment } from "../infra/git-maintenance-env.js";
 import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-network-retry.js";
+import { redactToolPayloadText } from "../logging/redact.js";
+import { createCommandError } from "../process/command-error.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import {
   githubPublicationUnsafeConfigArgs,
   parseGitHubPublicationBaseRef,
@@ -27,6 +33,9 @@ type GitCommandOptions = {
   maxOutputBytes?: number;
   beforeRun?: () => void;
   operation?: GitProcessOperation;
+  timeoutMs?: number;
+  noOutputTimeoutMs?: number;
+  discardOutput?: { stdout?: boolean };
 };
 type GitCommandResult = { code: number | null; stdout: Buffer };
 
@@ -51,25 +60,25 @@ export async function runPublicationCommand(argv: string[], options: GitCommandO
   return await withGitProcessOperation(options.operation ?? "publication", () =>
     withGitNetworkRetry(
       argv[0] === "git" ? retryableGitNetworkOperation(argv.slice(1)) : undefined,
-      { timeoutMs: 60_000, beforeRun: options.beforeRun },
+      { timeoutMs: options.timeoutMs ?? 60_000, beforeRun: options.beforeRun },
       (timeoutMs) =>
         runCommandBuffered(argv, {
           ...(options.cwd ? { cwd: options.cwd } : {}),
           env: {
             ...(argv[0] === "git"
-              ? gitReadOnlyEnvironment(argv.slice(1), options.env ?? process.env)
-              : (options.env ?? process.env)),
+              ? gitReadOnlyEnvironment(argv.slice(1), options.env ?? {})
+              : (options.env ?? {})),
             GIT_NO_REPLACE_OBJECTS: "1",
             // Pin every command against repository hooks; explicit hook-disabling -c flags stay stronger.
-            GIT_CONFIG_COUNT: "1",
-            GIT_CONFIG_KEY_0: "core.hooksPath",
-            GIT_CONFIG_VALUE_0: os.devNull,
+            ...appendGitConfig(gitMaintenanceEnvironment(), [["core.hooksPath", os.devNull]]),
           },
           // Resolve optional disclosure after beforeRun, directly at the transport boundary.
           ...(options.input !== undefined
             ? { input: typeof options.input === "function" ? options.input() : options.input }
             : {}),
           timeoutMs,
+          noOutputTimeoutMs: options.noOutputTimeoutMs,
+          discardOutput: options.discardOutput,
           maxOutputBytes: options.maxOutputBytes ?? 256 * 1024,
         }),
     ),
@@ -81,8 +90,12 @@ export async function requirePublicationCommand(
   options: GitCommandOptions = {},
 ): Promise<string> {
   const result = await runPublicationCommand(argv, options);
-  if (result.code !== 0) {
-    throw new Error(`${argv[0]} command failed`);
+  if (result.code !== 0 || result.error) {
+    throw createCommandError(
+      argv[0] ?? "command",
+      { ...result, stdout: Buffer.alloc(0) },
+      { timeoutMs: options.timeoutMs ?? 60_000 },
+    );
   }
   return result.stdout.toString("utf8").trim();
 }
@@ -160,10 +173,6 @@ export async function requireGitHubPublicationCommit(
         `core.hooksPath=${os.devNull}`,
         "-c",
         "core.fsmonitor=false",
-        "-c",
-        "maintenance.auto=false",
-        "-c",
-        "gc.auto=0",
         "fetch",
         "--no-auto-maintenance",
         "--no-tags",
@@ -177,11 +186,39 @@ export async function requireGitHubPublicationCommit(
       { cwd, env, ...(missing ? { input: `${missing.join("\n")}\n` } : {}) },
     );
     if (result.code !== 0) {
-      throw new Error(failure);
+      // This diagnostic reaches both receipt readers and recovery warnings. Remove
+      // whole remote URLs before truncation, including unrecognized query credentials.
+      const detail = truncateUtf8Prefix(
+        redactToolPayloadText(
+          sanitizeForLog(result.stderr.toString("utf8").replace(/[\r\n\t]+/gu, " ")).replace(
+            /\b[a-z][a-z\d+.-]*:\/\/\S+/giu,
+            "[redacted URL]",
+          ),
+        ).trim(),
+        1_024,
+      );
+      throw new Error(detail ? `${failure} Git fetch: ${detail}` : failure);
     }
   };
   if (!options.commitPresent) {
-    await fetch();
+    // Fetching a present non-promisor commit still makes Git enumerate every
+    // promisor object for connectivity. Probe the physical commit without lazy
+    // fetching or trusting commit-graph metadata; content hydration stays below.
+    const present = await run(
+      [
+        "git",
+        "-c",
+        "core.commitGraph=false",
+        "rev-list",
+        "--missing=allow-any",
+        "--no-walk",
+        `${sha}^{commit}`,
+      ],
+      { cwd, env },
+    );
+    if (present.code !== 0 || !present.stdout.toString("utf8").trim()) {
+      await fetch();
+    }
   }
   if (!options.contents) {
     return;
@@ -223,10 +260,8 @@ export async function requireGitHubPublicationCommit(
   }
 }
 
-// A recursive tree listing scales with repository size (openclaw itself is
-// ~3.3MB), far past the default per-command cap above. Without this explicit
-// bound the attribute scan dies as an output-limit "verification" failure on
-// any real repository.
+// Recursive inventories scale with repository size, far past the default
+// per-command cap. Keep an explicit bound for tree and missing-object listings.
 const TREE_LISTING_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 
 export async function hasGitHubPublicationWorkflowChanges(params: {
@@ -375,47 +410,58 @@ export async function readGitHubPublicationTree(
   return listing.stdout;
 }
 
-async function assertGitHubPublicationTreeHasNoFilters(
+async function assertGitHubPublicationIndexHasNoFilters(
   cwd: string,
-  workspaceTree: string,
-  run: (argv: string[], options?: Omit<GitCommandOptions, "input">) => Promise<GitCommandResult>,
+  indexFile: string,
 ): Promise<void> {
-  const listing = await readGitHubPublicationTree(cwd, workspaceTree, run);
-  const attributeObjects = new Set<string>();
-  for (const record of listing.toString("latin1").split("\0")) {
-    const tab = record.indexOf("\t");
-    if (tab < 0) {
-      continue;
-    }
-    const file = record.slice(tab + 1).toLowerCase();
-    if (file !== ".gitattributes" && !file.endsWith("/.gitattributes")) {
-      continue;
-    }
-    const objectId = record.slice(0, tab).split(" ")[2];
-    if (objectId) {
-      attributeObjects.add(objectId);
-    }
+  // This private index just produced the accepted tree, including admission pruning.
+  // Select attributes in Git instead of buffering every path in that tree.
+  const listing = await runPublicationCommand(
+    [
+      "git",
+      "-c",
+      "core.fsmonitor=false",
+      "ls-files",
+      "--cached",
+      "--format=%(objectname)",
+      "--",
+      ":(top,icase,glob)**/.gitattributes",
+    ],
+    {
+      cwd,
+      env: { GIT_INDEX_FILE: indexFile, GIT_LITERAL_PATHSPECS: "0" },
+      maxOutputBytes: TREE_LISTING_MAX_OUTPUT_BYTES,
+    },
+  );
+  if (listing.code !== 0) {
+    throw new Error("GitHub publication workspace attributes could not be verified.");
   }
+  const attributeObjects = new Set(
+    listing.stdout.toString("utf8").trim().split("\n").filter(Boolean),
+  );
   if (attributeObjects.size > 1024) {
     throw new Error("GitHub publication workspace has too many Git attribute files.");
   }
   for (const objectId of attributeObjects) {
-    const blob = await run(["git", "cat-file", "blob", objectId], { cwd });
+    const blob = await runPublicationCommand(["git", "cat-file", "blob", objectId], { cwd });
     if (blob.code !== 0) {
       throw new Error("GitHub publication workspace attributes could not be verified.");
     }
     assertNoGitFilterAttributes(blob.stdout);
   }
 
-  const infoPath = await run(["git", "rev-parse", "--git-path", "info/attributes"], {
-    cwd,
-  });
+  const infoPath = await runPublicationCommand(
+    ["git", "rev-parse", "--git-path", "info/attributes"],
+    {
+      cwd,
+    },
+  );
   if (infoPath.code !== 0) {
     throw new Error("GitHub publication workspace attributes could not be verified.");
   }
   const attributeFiles = await Promise.all(
     ["GIT_ATTR_GLOBAL", "GIT_ATTR_SYSTEM"].map(
-      async (name) => await run(["git", "var", name], { cwd }),
+      async (name) => await runPublicationCommand(["git", "var", name], { cwd }),
     ),
   );
   if (attributeFiles.some((result) => result.code !== 0)) {
@@ -535,7 +581,31 @@ export async function captureSettledGitHubPublicationWorkspaceSnapshot(
     await step(() => fs.utimes(env.GIT_INDEX_FILE, indexTimestamp, indexTimestamp));
     const sourceIndexTree = await git(["write-tree"], env);
     // Ordinary staging preserves unchanged blobs; renormalization would rewrite unrelated CRLF files.
-    await git(["-c", `core.attributesFile=${os.devNull}`, "add", "-A"], env);
+    try {
+      // Allow quiet scans and buffered file progress; a hard bound stops endless progress.
+      const args = ["-c", `core.attributesFile=${os.devNull}`, "add", "-A", "--verbose"];
+      const options = {
+        cwd: params.cwd,
+        env,
+        timeoutMs: 600_000,
+        noOutputTimeoutMs: 180_000,
+        discardOutput: { stdout: true },
+        beforeRun: params.assertCurrent,
+      };
+      const result = await step(() =>
+        policy
+          ? policy.worker.buffered(params.cwd, args, options)
+          : runPublicationCommand(["git", "-c", "core.fsmonitor=false", ...args], options),
+      );
+      if (result.code !== 0 || result.error) {
+        throw createCommandError("git add", result, options);
+      }
+    } catch (cause) {
+      throw new Error(
+        `GitHub publication snapshot staging failed before submission: ${formatErrorMessage(cause, { includeCode: true })}. The source index is unchanged; inspect Git locks, disk space and host load, then retry publication.`,
+        { cause },
+      );
+    }
     let workspaceTree = await git(["write-tree"], env);
     if (admittedPaths) {
       // Staging must not turn guest-edited ignore rules into host admission.
@@ -560,9 +630,7 @@ export async function captureSettledGitHubPublicationWorkspaceSnapshot(
         workspaceTree = await git(["write-tree"], env);
       }
     }
-    await step(() =>
-      assertGitHubPublicationTreeHasNoFilters(params.cwd, workspaceTree, runPublicationCommand),
-    );
+    await step(() => assertGitHubPublicationIndexHasNoFilters(params.cwd, env.GIT_INDEX_FILE));
     return { sourceHeadCommit, sourceIndexTree, workspaceTree };
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });

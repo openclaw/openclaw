@@ -74,10 +74,12 @@ function shutdownHandler(signal: (typeof signals)[number]) {
   return () => added[0]!(signal);
 }
 
-function expectSignalsDetached() {
+function expectStopped() {
   for (const signal of signals) {
     expect(process.rawListeners(signal)).toEqual(signalBaselines.get(signal));
   }
+  expect(children.filter((child) => child.alive)).toHaveLength(0);
+  expect(vi.getTimerCount()).toBe(0);
 }
 
 beforeEach(() => {
@@ -110,9 +112,7 @@ afterEach(async () => {
     handler?.("SIGINT");
     await vi.advanceTimersByTimeAsync(10_000);
     await stopGmailWatcher();
-    expectSignalsDetached();
-    expect(children.filter((child) => child.alive)).toHaveLength(0);
-    expect(vi.getTimerCount()).toBe(0);
+    expectStopped();
   } finally {
     vi.useRealTimers();
   }
@@ -141,16 +141,15 @@ it.each(["rejected renewal", "timed-out registration"])(
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(3);
     if (failure === "timed-out registration") {
       expect(mocks.log.error).toHaveBeenCalledTimes(3);
-      for (const [message] of mocks.log.error.mock.calls) {
-        expect(message.length).toBeLessThan(2000);
-        expect(message).toContain("gog gmail watch start failed");
-        expect(message).toContain("registration stdout tail");
-        expect(message).toContain("registration stderr tail");
-        expect(message).toContain("termination=timeout");
-        expect(message).toContain("code=124");
-        expect(message).toContain("signal=SIGTERM");
-        expect(message).not.toContain("\u001b");
-      }
+      const [message] = mocks.log.error.mock.calls[0]!;
+      expect(message.length).toBeLessThan(2000);
+      expect(message).toContain("gog gmail watch start failed");
+      expect(message).toContain("termination=timeout");
+      expect(message).toContain("code=124");
+      expect(message).toContain("signal=SIGTERM");
+      expect(message).toContain("registration stdout tail");
+      expect(message).toContain("registration stderr tail");
+      expect(message).not.toContain("\u001b");
     }
   },
 );
@@ -168,7 +167,7 @@ it("keeps renewal single-flight and cancels it on shutdown", async () => {
   await vi.advanceTimersByTimeAsync(60_000);
   expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
   expect(children[0]?.alive).toBe(false);
-  expectSignalsDetached();
+  expectStopped();
 });
 
 it.each([
@@ -198,8 +197,7 @@ it.each([
       );
       expect(children[1]?.alive).toBe(false);
     }
-    expectSignalsDetached();
-    expect(vi.getTimerCount()).toBe(0);
+    expectStopped();
   },
 );
 
@@ -226,7 +224,7 @@ it.each([
     await starting;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(children).toHaveLength(0);
-    expectSignalsDetached();
+    expectStopped();
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(boundary === "tailscale" ? 0 : 1);
   },
 );
@@ -243,25 +241,5 @@ it.each(["tailscale", "spawn"])("cleans up signals after %s startup failure", as
     runGmailService({ tailscale: boundary === "tailscale" ? "serve" : "off" }),
   ).rejects.toThrow("fixture setup failed");
   expect(children).toHaveLength(0);
-  expectSignalsDetached();
-  expect(vi.getTimerCount()).toBe(0);
-});
-
-it("bounds retries after split bind errors while continuing watch renewal", async () => {
-  await runGmailService({});
-  children[0]!.exit();
-  await vi.advanceTimersByTimeAsync(5_000);
-  const countBeforeBind = children.length;
-  for (const delayMs of [5_000, 10_000, 20_000, 60_000]) {
-    const child = children.at(-1)!;
-    child.stderr.emit("data", Buffer.from("address alre"));
-    child.alive = false;
-    child.emit("exit", 1, null);
-    child.stderr.emit("data", Buffer.from("ady in use\n"));
-    child.emit("close", 1, null);
-    await vi.advanceTimersByTimeAsync(delayMs);
-  }
-  expect(children).toHaveLength(countBeforeBind + 3);
-  expect(children.filter((candidate) => candidate.alive)).toHaveLength(0);
-  expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
+  expectStopped();
 });

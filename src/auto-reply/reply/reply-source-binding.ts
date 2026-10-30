@@ -68,12 +68,13 @@ export function readReplySourceInput(
 }
 
 /** Capture only an actual physical source scope, before asynchronous preparation. */
-export function prepareReplySourceInput(
+export async function prepareReplySourceInput(
   ctx: MsgContext,
   cfg: OpenClawConfig,
   options: InternalGetReplyOptions | undefined,
-): { options: InternalGetReplyOptions; input?: SessionControllerInput; created: boolean } {
+): Promise<{ options: InternalGetReplyOptions; input?: SessionControllerInput; created: boolean }> {
   const prepared = { ...options };
+  const sessionKey = ctx.SessionKey?.trim() || ctx.CommandTargetSessionKey?.trim();
   const existing = readReplySourceInput(prepared);
   if (existing) {
     const signal = existing.claim?.operation?.abortSignal ?? existing.abortSignal;
@@ -83,7 +84,6 @@ export function prepareReplySourceInput(
         : signal;
     return { options: bindReplySourceInput(prepared, existing), input: existing, created: false };
   }
-  const sessionKey = ctx.SessionKey?.trim() || ctx.CommandTargetSessionKey?.trim();
   if (!sessionKey) {
     return { options: prepared, created: false };
   }
@@ -92,14 +92,21 @@ export function prepareReplySourceInput(
     resolveExplicitSessionStorePathForScope({ agentId, sessionKey }) ??
     resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const policy = resolveQueueSettingsCore({ cfg, channel: ctx.Provider ?? ctx.Surface });
-  // Ambient events and heartbeats may not preempt a user turn. Full directive
+  // Ambient events may not preempt a user turn. Full directive
   // resolution refines policy on this same input before queue publication.
-  if (options?.isHeartbeat || ctx.InboundEventKind === "room_event") {
+  if (ctx.InboundEventKind === "room_event") {
     policy.mode = "followup";
   }
   const signals = [options?.abortSignal, options?.turnAdoptionLifecycle?.abortSignal].filter(
     (signal): signal is AbortSignal => signal !== undefined,
   );
+  const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+  if (signal?.aborted) {
+    // Dispatch owns the skipped outcome for input cancelled before admission.
+    return { options: { ...prepared, abortSignal: signal }, created: false };
+  }
+  signal?.throwIfAborted();
+  options?.operatorAuthority?.assertCurrent();
   const input = reserveSessionControllerSource(sessionKey, {
     sourceTurnId: readChannelSourceTurnId(ctx),
     protocolRunId: options?.runId,
@@ -111,7 +118,7 @@ export function prepareReplySourceInput(
       incarnation: options?.expectedExistingSessionId,
     }),
     adapter: {
-      signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
+      signal,
       authority: options?.operatorAuthority,
     },
   });

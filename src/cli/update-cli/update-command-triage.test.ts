@@ -2,22 +2,25 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as configureShared from "../../commands/configure.shared.js";
 import { withTriageTerminal } from "../../commands/triage.test-support.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
+import * as updateFailureReport from "../../infra/update-failure-report.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { expectMessages, expectMissing, expectNoCalls } from "./update-boundary.test-support.js";
 import { resultFixture, stepFixture } from "./update-command-fixtures.test-support.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import { withUpdateFailureTriage, type UpdateTriageTarget } from "./update-command-triage.js";
 
-const runInteractiveUpdateFailureAction = vi.hoisted(() =>
-  vi.fn<typeof import("./update-command-report.js").runInteractiveUpdateFailureAction>(),
-);
-
-vi.mock("./update-command-report.js", () => ({ runInteractiveUpdateFailureAction }));
+const reportActionSelect = vi.hoisted(() => vi.fn<() => Promise<string | symbol>>());
+vi.mock("../../commands/configure.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/configure.shared.js")>()),
+  select: reportActionSelect,
+}));
 vi.mock("@clack/prompts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@clack/prompts")>()),
   confirm: async () => true,
@@ -111,13 +114,10 @@ async function createManagedTriageTarget() {
   await fs.mkdir(handoffDir, { mode: 0o700 });
   const contextPath = path.join(handoffDir, "update-failure.json");
   const metaPath = path.join(handoffDir, "sentinel-meta.json");
-  await fs.writeFile(
-    metaPath,
-    JSON.stringify({
-      version: 1,
-      meta: { handoffId: "fixture-handoff", triageContextPath: contextPath },
-    }),
-  );
+  await writeFixtureJson(metaPath, {
+    version: 1,
+    meta: { handoffId: "fixture-handoff", triageContextPath: contextPath },
+  });
   Object.assign(target.env, {
     OPENCLAW_UPDATE_RUN_HANDOFF: "1",
     [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
@@ -127,8 +127,8 @@ async function createManagedTriageTarget() {
 
 beforeEach(() => {
   triageAfterFailure.mockClear();
-  runInteractiveUpdateFailureAction.mockReset();
-  runInteractiveUpdateFailureAction.mockResolvedValue("triage");
+  reportActionSelect.mockReset();
+  reportActionSelect.mockResolvedValue("triage");
   for (const method of ["exit", "log", "error", "writeJson"] as const) {
     vi.spyOn(defaultRuntime, method).mockImplementation(() => undefined);
   }
@@ -181,7 +181,7 @@ it.each([
       .join("\n");
     expect(output).toContain("openclaw triage --run --update-result");
     expect(output).toContain("Triage diagnostics saved; no repair agent was started.");
-    expectNoCalls(defaultRuntime.exit, triageAfterFailure, runInteractiveUpdateFailureAction);
+    expectNoCalls(defaultRuntime.exit, triageAfterFailure, reportActionSelect);
   },
 );
 
@@ -203,7 +203,7 @@ it("preserves non-interactive updater failures", async () => {
     error: failure.message,
     result: { recovery: { serviceRestartSafe: false } },
   });
-  expectNoCalls(defaultRuntime.exit, runInteractiveUpdateFailureAction);
+  expectNoCalls(defaultRuntime.exit, reportActionSelect);
 });
 
 it("exports the final managed failure after cleanup without launching triage", async () => {
@@ -214,7 +214,7 @@ it("exports the final managed failure after cleanup without launching triage", a
     recovery: { serviceRestartSafe: true, version: "2026.9.1" },
   };
   const targetWithResult: UpdateTriageTarget = { ...target, failureResult: result };
-  await fs.writeFile(contextPath, JSON.stringify({ error: "Stale pre-recovery result" }));
+  await writeFixtureJson(contextPath, { error: "Stale pre-recovery result" });
   const secret = "sk-test-managed-triage-secret-1234567890";
   const detail = `Fresh Doctor failed token=${secret}; original Doctor diagnostic`;
   const failure = new UpdateCommandFailure(result, 1, detail);
@@ -248,7 +248,7 @@ it("exports the final managed failure after cleanup without launching triage", a
     expect((await fs.stat(contextPath)).mode & 0o777).toBe(0o600);
   }
   await expectNoTriage(target);
-  expectNoCalls(defaultRuntime.writeJson, defaultRuntime.log, runInteractiveUpdateFailureAction);
+  expectNoCalls(defaultRuntime.writeJson, defaultRuntime.log, reportActionSelect);
 });
 
 it("leaves the outer managed export untouched in a post-core child", async () => {
@@ -275,41 +275,32 @@ it("leaves triage to the owner for a managed helper child", async () => {
 
 it("uses a new report identity for each distinct CLI update execution", async () => {
   const target = await createInstalledTriage();
-  runInteractiveUpdateFailureAction.mockResolvedValue("handled");
+  reportActionSelect.mockResolvedValue("dismiss");
+  vi.spyOn(configureShared, "confirm").mockResolvedValue(false);
+  const prepare = vi.spyOn(updateFailureReport, "prepareUpdateFailureReport");
 
   await withTriageTerminal(true, async () => {
     for (let index = 0; index < 2; index += 1) {
+      reportActionSelect.mockResolvedValueOnce("report");
       await expect(failUpdate(target)).rejects.toMatchObject({ code: 1 });
     }
   });
 
-  const attemptIds = runInteractiveUpdateFailureAction.mock.calls.map(
-    ([params]) => params.attemptId,
-  );
+  const attemptIds = prepare.mock.calls.map(([params]) => params.attemptId);
   expect(attemptIds).toHaveLength(2);
   expect(attemptIds).toEqual(Array(2).fill(expect.stringMatching(/^[0-9a-f-]{36}$/u)));
   expect(attemptIds[0]).not.toBe(attemptIds[1]);
 });
 
-it("does not start triage when the selected report action throws", async () => {
+it("does not start triage when the report action menu throws", async () => {
   const target = await createInstalledTriage();
-  const bin = path.join(target.root, "bin");
-  const triageReceipt = path.join(target.root, "triage-receipt");
-  await fs.mkdir(bin);
-  await fs.writeFile(
-    path.join(bin, "claude"),
-    `#!${process.execPath}\nrequire("node:fs").writeFileSync(${JSON.stringify(triageReceipt)}, "called");\n`,
-    { mode: 0o700 },
-  );
-  runInteractiveUpdateFailureAction.mockRejectedValue(new Error("report storage unavailable"));
+  reportActionSelect.mockRejectedValue(new Error("report storage unavailable"));
 
-  await withEnvAsync({ PATH: bin, HOME: target.root, USERPROFILE: target.root }, () =>
-    withTriageTerminal(true, async () => {
-      await expect(failUpdate(target)).rejects.toMatchObject({ code: 1 });
-    }),
-  );
-
-  await expectMissing(triageReceipt);
+  await withTriageTerminal(true, async () => {
+    await expect(failUpdate(target)).rejects.toMatchObject({ code: 1 });
+  });
+  await expectNoTriage(target);
+  expectNoCalls(triageAfterFailure);
   expectMessages(defaultRuntime.error, "report storage unavailable");
 });
 

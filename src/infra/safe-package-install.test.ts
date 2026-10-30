@@ -209,14 +209,7 @@ describe("safe npm install helpers", () => {
       write(".npmrc", "[other]\nallow-git=none\n");
       write("parent-prefix/etc/npmrc", "allow-git=none\n");
       write("scoped-prefix/etc/npmrc", "'allow-remote'=root\n");
-      write(
-        "package.json",
-        JSON.stringify({
-          name: "npm-source-policy-fixture",
-          version: "1.0.0",
-          publishConfig: { "allow-git": "none", "allow-remote": "none" },
-        }) + "\n",
-      );
+      write("package.json", '{"publishConfig":{"allow-git":"none","allow-remote":"none"}}');
       expectPolicies(
         createSafeNpmInstallEnv(
           {

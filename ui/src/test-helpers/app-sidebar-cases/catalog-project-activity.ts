@@ -113,6 +113,10 @@ describe("AppSidebar project session activity", () => {
     const menu = sidebar.querySelector<HTMLButtonElement>(
       '[data-session-key*="thread-a"] [data-catalog-session-menu]',
     );
+    expect(menu?.getAttribute("aria-label")).toBe("Open session menu: Project A");
+    expect(
+      sidebar.querySelector('button[aria-label="Open session menu: Project B"]'),
+    ).not.toBeNull();
     menu?.focus();
     expect(document.activeElement).toBe(menu);
 
@@ -157,5 +161,11 @@ describe("AppSidebar project session activity", () => {
     expect(active?.classList.contains("session-row-host--running")).toBe(true);
     expect(idleLead?.childElementCount).toBe(0);
     expect(idle?.querySelector(".session-row-state")).toBeNull();
+    project?.click();
+    await sidebar.updateComplete;
+    expect(project?.querySelector('[aria-label="Active run"]')).not.toBeNull();
+    project?.click();
+    await sidebar.updateComplete;
+    expect(project?.querySelector('[aria-label="Active run"]')).toBeNull();
   });
 });

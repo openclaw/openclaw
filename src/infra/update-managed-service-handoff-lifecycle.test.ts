@@ -1,6 +1,3 @@
-/**
- * Tests managed-service update handoff behavior exposed by gateway methods.
- */
 // Register process and coordinator mocks before the boundary imports their owners.
 // oxfmt-ignore
 import {
@@ -13,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { escape as escapeGlob } from "minimatch";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -35,13 +33,56 @@ import {
   isManagedServiceInspectionCommand,
   registerManagedHandoffOwnerTests,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
+import type { ManagedServiceUpdateHandoffParams } from "./update-managed-service-handoff-types.js";
 import { pathExists } from "./update-managed-service-native.test-support.js";
 import { recordUpdateRunStep } from "./update-run-ledger.js";
 
 const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-lifecycle-${process.pid}`);
-const { forceKillChildProcessTreeMock, spawnMock, tempDirs, runManagedServiceManagerBoundary } =
-  useManagedServiceHandoffLifecycleFixture();
+const {
+  forceKillChildProcessTreeMock,
+  spawnMock,
+  tempDirs,
+  runManagedServiceManagerBoundary: runBoundary,
+} = useManagedServiceHandoffLifecycleFixture();
 const nodeTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const entrypoint = "/opt/openclaw/openclaw.mjs";
+const nodeExec = "/usr/local/bin/node";
+const sessionKey = "agent:test:webchat:dm:user-123";
+const success = { updaterExitCode: 0, updaterResult: { status: "ok", mode: "npm" } };
+const transferred = { controlDisconnect: "transferred" } as const;
+const safeRecovery = { serviceRestartSafe: true, version: "1.0.0" } as const;
+const unsafeRecovery = {
+  serviceRestartSafe: false,
+  reason: "runtime-verification-failed",
+} as const;
+const version = { version: "1.0.0" };
+const cancelled = { status: "skipped", stats: { reason: "managed-service-handoff-cancelled" } };
+
+function expectTrueFields(actual: unknown, ...fields: string[]) {
+  expect(actual).toMatchObject(Object.fromEntries(fields.map((field) => [field, true])));
+}
+
+function handoffArtifacts(call = 0, logPath?: string) {
+  const [command, args, options] = spawnMock.mock.calls.at(call) as [
+    string,
+    string[],
+    { env: NodeJS.ProcessEnv; detached?: boolean },
+  ];
+  const artifacts = readManagedHandoffArtifacts(args);
+  tempDirs.add(logPath ? path.dirname(logPath) : artifacts.dir);
+  return { command, args, options, ...artifacts };
+}
+
+async function startHandoff(options: Partial<ManagedServiceUpdateHandoffParams>) {
+  const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
+  return startManagedServiceUpdateHandoff({
+    root: MOCK_INSTALL_ROOT,
+    restartDrainTimeoutMs: 300_000,
+    parentPid: process.pid,
+    meta: {},
+    ...options,
+  });
+}
 
 // Gateway startup admits its engine before update requests. Cold discovery is
 // covered separately by update-managed-service-handoff-engine.test.ts.
@@ -51,8 +92,7 @@ beforeAll(() => {
 afterAll(resetDatabaseEngineSelectionForTest);
 
 async function createUserSystemdFixture() {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-run-"));
-  tempDirs.add(home);
+  const home = tempDirs.make("openclaw-systemd-run-");
   const unitPath = path.join(home, ".config", "systemd", "user", "openclaw-gateway.service");
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
   await fs.writeFile(unitPath, "[Service]\nExecStart=/usr/bin/true\n");
@@ -83,34 +123,20 @@ describe("managed service update handoff", () => {
 
   itUnix("tracks the real handoff artifacts with Bun runtime arguments", async () => {
     const root = tempDirs.make("openclaw-handoff-bun-args-");
-    const { startManagedServiceUpdateHandoff } =
-      await import("./update-managed-service-handoff.js");
-    const result = await startManagedServiceUpdateHandoff({
+    const result = await startHandoff({
       root,
-      restartDrainTimeoutMs: 300_000,
-      parentPid: process.pid,
       execPath: path.join(root, "bun"),
       argv1: path.join(root, "openclaw.mjs"),
-      meta: {},
     });
-    const [command, args] = spawnMock.mock.calls[0] as [string, string[]];
-    const { dir, scriptPath, paramsPath } = readManagedHandoffArtifacts(args);
-    tempDirs.add(path.dirname(result.logPath));
+    const { command, args, scriptPath, paramsPath } = handoffArtifacts(0, result.logPath);
     expect(command).toBe(path.join(root, "bun"));
     expect(args).toEqual(["--no-install", scriptPath, paramsPath]);
-    expect(dir).toBe(path.dirname(result.logPath));
-    expect(tempDirs.dirs.has(dir)).toBe(true);
-    const tmpRoot = await fs.realpath(os.tmpdir());
-    for (const registered of tempDirs.dirs) {
-      const relative = path.relative(tmpRoot, await fs.realpath(registered));
-      expect(relative === "" || relative.startsWith("..") || path.isAbsolute(relative)).toBe(false);
-    }
   });
 
-  registerManagedHandoffOwnerTests(runManagedServiceManagerBoundary, itUnix, expect);
+  registerManagedHandoffOwnerTests(runBoundary, itUnix, expect);
 
   itUnix.each(["addressed-unsafe", "rollback", "unsafe", "data-at-risk", "validation"] as const)(
-    "coordinates CLI %s outcomes and preserves the notice destination",
+    "preserves CLI %s outcome and notice destination",
     async (outcome) => {
       const rollback = outcome === "rollback";
       const origin =
@@ -125,33 +151,28 @@ describe("managed service update handoff", () => {
               },
             }
           : undefined;
-      const result = await runManagedServiceManagerBoundary("systemd", {
+      const result = await runBoundary("systemd", {
         trigger: "cli",
-        ...(origin ? { origin } : {}),
+        origin,
         ledger: true,
-        controlDisconnect: "transferred",
+        ...transferred,
         ...(outcome === "validation"
           ? { validationResult: "failed", helperExitCode: 1 }
           : {
-              ...(!origin ? { rollbackRestoration: rollback } : {}),
+              rollbackRestoration: origin ? undefined : rollback,
               updaterExitCode: 79,
               helperExitCode: rollback ? 1 : 79,
               updaterResult: {
                 status: "error",
                 mode: "npm",
                 reason: "restart-unhealthy",
-                ...(!origin
-                  ? {
-                      before: { version: "1.0.0" },
-                      after: { version: "1.0.0" },
-                    }
-                  : {}),
+                before: origin ? undefined : version,
+                after: origin ? undefined : version,
                 recovery: rollback
-                  ? { serviceRestartSafe: true, packageRollbackVerified: true, version: "1.0.0" }
+                  ? { ...safeRecovery, packageRollbackVerified: true }
                   : {
-                      serviceRestartSafe: false,
-                      reason: "runtime-verification-failed",
-                      ...(outcome === "data-at-risk" ? { dataAtRisk: "unreadable-state" } : {}),
+                      ...unsafeRecovery,
+                      dataAtRisk: outcome === "data-at-risk" ? "unreadable-state" : undefined,
                     },
               },
             }),
@@ -221,17 +242,16 @@ describe("managed service update handoff", () => {
     { kind: "launchd", reply: "acknowledged", profileRequester: true },
     { kind: "launchd", reply: "rejected", profileRequester: true },
   ] as const)(
-    "bounds the park notice and requires profile acknowledgement: $kind/$reply/profile=$profileRequester",
+    "bounds $kind/$reply park notice (profile=$profileRequester)",
     async ({ kind, reply, profileRequester }) => {
       const accepted = reply === "acknowledged";
-      const result = await runManagedServiceManagerBoundary(kind, {
+      const result = await runBoundary(kind, {
         ...(profileRequester
           ? { ledger: true, profileRequester, helperExitCode: accepted ? 0 : 1 }
           : {}),
-        controlDisconnect: "transferred",
+        ...transferred,
         beforeParkNotice: reply,
-        updaterExitCode: 0,
-        updaterResult: { status: "ok", mode: "npm" },
+        ...success,
       });
       if (profileRequester) {
         expect(result.parkAdmitted, result.log).toBe(accepted);
@@ -245,7 +265,7 @@ describe("managed service update handoff", () => {
         expect(
           result.commands.some((command) => command.includes("stop openclaw-gateway.service")),
         ).toBe(true);
-        expect(result.state).toMatchObject({ parked: true, stopCompleted: true });
+        expectTrueFields(result.state, "parked", "stopCompleted");
         expect(result.parkAdmitted).toBe(false);
         expect(result.log.includes("pre-park notice timed out after 10 seconds")).toBe(
           reply === "stalled",
@@ -261,13 +281,12 @@ describe("managed service update handoff", () => {
       { kind, selectedDriver: true },
     ]),
   )(
-    "preserves $kind handoff history with selected driver=$selectedDriver",
+    "preserves $kind history (selected driver=$selectedDriver)",
     async ({ kind, selectedDriver }) => {
-      const { run, state, sensitiveFilesRemoved } = await runManagedServiceManagerBoundary(kind, {
+      const { run, state, sensitiveFilesRemoved } = await runBoundary(kind, {
         ...(selectedDriver ? { controlDisconnect: "transferred", selectedDriver: "2026.9.3" } : {}),
         ledger: true,
-        updaterExitCode: 0,
-        updaterResult: { status: "ok", mode: "npm" },
+        ...success,
       });
       if (selectedDriver) {
         expect(state).toMatchObject({
@@ -288,93 +307,76 @@ describe("managed service update handoff", () => {
     },
   );
 
-  itUnix(
-    "retains terminal parent exit when a later liveness probe would be inconclusive",
-    async () => {
-      const { log, state, sensitiveFilesRemoved } = await runManagedServiceManagerBoundary(
-        "launchd",
-        {
-          controlDisconnect: "transferred",
-          terminalParentExitProbe: true,
-          updaterExitCode: 7,
-          helperExitCode: 7,
-          updaterResult: {
-            status: "error",
-            mode: "npm",
-            recovery: { serviceRestartSafe: true, version: "1.0.0" },
-          },
-        },
-      );
-      expect(log).toContain("terminal parent exit observed");
-      expect(log).not.toContain("parent probed after terminal exit");
-      expect(state).toMatchObject({ parked: true, restored: true, healthProbeCount: 1 });
-      expect(sensitiveFilesRemoved).toBe(true);
-    },
-  );
+  itUnix("keeps terminal parent exit despite inconclusive later probes", async () => {
+    const { log, state, sensitiveFilesRemoved } = await runBoundary("launchd", {
+      ...transferred,
+      terminalParentExitProbe: true,
+      updaterExitCode: 7,
+      helperExitCode: 7,
+      updaterResult: {
+        status: "error",
+        mode: "npm",
+        recovery: safeRecovery,
+      },
+    });
+    expect(log).toContain("terminal parent exit observed");
+    expect(log).not.toContain("parent probed after terminal exit");
+    expectTrueFields(state, "parked", "restored");
+    expect(state.healthProbeCount).toBe(1);
+    expect(sensitiveFilesRemoved).toBe(true);
+  });
 
   itUnix.each(
     (["systemd", "launchd"] as const).flatMap((kind) =>
       [false, true].map((recover) => ({ kind, recover })),
     ),
   )(
-    "keeps $kind serving through ten minutes of validation before activation and preserves relative inputs (recovery=$recover)",
+    "keeps $kind serving through validation (relative inputs, recovery=$recover)",
     async ({ kind, recover }) => {
-      const { commands, state, sensitiveFilesRemoved } = await runManagedServiceManagerBoundary(
-        kind,
-        {
-          controlDisconnect: "transferred",
-          validationClockAdvanceMs: 10 * 60_000,
-          relativeInput: true,
-          updaterExitCode: recover ? 7 : 0,
-          helperExitCode: recover ? 7 : 0,
-          updaterResult: {
-            status: recover ? "error" : "ok",
-            mode: "npm",
-            ...(recover ? { recovery: { serviceRestartSafe: true, version: "1.0.0" } } : {}),
-          },
+      const { commands, state, sensitiveFilesRemoved } = await runBoundary(kind, {
+        ...transferred,
+        validationClockAdvanceMs: 10 * 60_000,
+        relativeInput: true,
+        updaterExitCode: recover ? 7 : 0,
+        helperExitCode: recover ? 7 : 0,
+        updaterResult: {
+          status: recover ? "error" : "ok",
+          mode: "npm",
+          ...(recover ? { recovery: safeRecovery } : {}),
         },
-      );
+      });
       expect(commands.some((command) => /\b(stop|bootout)\b/.test(command))).toBe(true);
       expect(state).toMatchObject({ parked: true });
       if (recover) {
-        expect(state).toMatchObject({
-          restored: true,
-          healthProbeCount: 1,
-          triageCalls: 1,
-          triageObservedRestored: true,
-          triageObservedRecovery: true,
-        });
+        expectTrueFields(state, "restored", "triageObservedRestored", "triageObservedRecovery");
+        expect(state).toMatchObject({ healthProbeCount: 1, triageCalls: 1 });
       }
       expect(sensitiveFilesRemoved).toBe(true);
     },
   );
 
-  itUnix("carries the activation acknowledgement through the spawn fallback runner", async () => {
-    const { state } = await runManagedServiceManagerBoundary("systemd", {
-      controlDisconnect: "transferred",
+  itUnix("acknowledges activation through the spawn fallback", async () => {
+    const { state } = await runBoundary("systemd", {
+      ...transferred,
       runnerFallback: true,
-      updaterExitCode: 0,
-      updaterResult: { status: "ok", mode: "npm" },
+      ...success,
     });
-    expect(state).toMatchObject({ parked: true, stopCompleted: true });
+    expectTrueFields(state, "parked", "stopCompleted");
   });
 
   itUnix.each(["systemd", "launchd"] as const)(
-    "joins the selected legacy driver's pending %s stop after parent expiry with unverified recovery",
+    "joins pending %s stop after parent expiry; refuses unverified recovery",
     async (kind) => {
-      const { commands, state, run, log, stopSettlement } = await runManagedServiceManagerBoundary(
-        kind,
-        {
-          controlDisconnect: "transferred",
-          selectedDriver: "2026.9.3",
-          expireParentWhileStopPending: true,
-          originalRecovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-          systemdStopDelayMs: 2_500,
-          launchdTeardown: { bootoutDelayMs: 2_500 },
-          ledger: true,
-          helperExitCode: 1,
-        },
-      );
+      const { commands, state, run, log, stopSettlement } = await runBoundary(kind, {
+        ...transferred,
+        selectedDriver: "2026.9.3",
+        expireParentWhileStopPending: true,
+        originalRecovery: unsafeRecovery,
+        systemdStopDelayMs: 2_500,
+        launchdTeardown: { bootoutDelayMs: 2_500 },
+        ledger: true,
+        helperExitCode: 1,
+      });
       expect(stopSettlement).toMatchObject({
         pid: expect.any(Number),
         closed: true,
@@ -400,38 +402,31 @@ describe("managed service update handoff", () => {
     },
   );
 
-  itUnix(
-    "finalizes through the installed runtime after replacing its module graph within the recovery budget",
-    async () => {
-      const { run, log, state } = await runManagedServiceManagerBoundary("systemd", {
-        controlDisconnect: "transferred",
-        ledger: true,
-        replaceLedgerWriter: true,
-        finalizationWorkMs: 65_000,
-        recoveryTimeoutMs: 120_000,
-        updaterExitCode: 0,
-        updaterResult: { status: "ok", mode: "npm" },
-      });
-      expect(run).toMatchObject({ status: "succeeded", phase: "finished" });
-      expect(state.finalizationBudgetMs).toBe(120_000);
-      expect(log).not.toContain("the previous runtime must not finalize the candidate");
-      expect(log).toContain("managed update finalize command exited code=0");
-    },
-  );
+  itUnix("finalizes through replacement runtime within recovery budget", async () => {
+    const { run, log, state } = await runBoundary("systemd", {
+      ...transferred,
+      ledger: true,
+      replaceLedgerWriter: true,
+      finalizationWorkMs: 65_000,
+      recoveryTimeoutMs: 120_000,
+      ...success,
+    });
+    expect(run).toMatchObject({ status: "succeeded", phase: "finished" });
+    expect(state.finalizationBudgetMs).toBe(120_000);
+    expect(log).not.toContain("the previous runtime must not finalize the candidate");
+    expect(log).toContain("managed update finalize command exited code=0");
+  });
 
   itUnix.each(["failed", "skipped"] as const)(
-    "finishes the update run without touching the serving generation when validation finishes %s",
+    "finishes %s validation without touching the serving generation",
     async (validationResult) => {
-      const { commands, parentSignal, log, run } = await runManagedServiceManagerBoundary(
-        "systemd",
-        {
-          controlDisconnect: "transferred",
-          ledger: true,
-          validationResult,
-          validationClockAdvanceMs: 10 * 60_000,
-          helperExitCode: validationResult === "failed" ? 1 : 0,
-        },
-      );
+      const { commands, parentSignal, log, run } = await runBoundary("systemd", {
+        ...transferred,
+        ledger: true,
+        validationResult,
+        validationClockAdvanceMs: 10 * 60_000,
+        helperExitCode: validationResult === "failed" ? 1 : 0,
+      });
       expect(run).toMatchObject({
         status: validationResult,
         phase: "finished",
@@ -444,48 +439,39 @@ describe("managed service update handoff", () => {
     },
   );
 
-  itUnix(
-    "rechecks revoked chat ownership after validation before stopping the Gateway",
-    async () => {
-      const { commands, parentSignal, sentinel } = await runManagedServiceManagerBoundary(
-        "systemd",
-        {
-          controlDisconnect: "transferred",
-          requester: { channel: "slack", accountId: "primary", senderId: "owner" },
-          revokeWhileValidating: true,
-          helperExitCode: 1,
-        },
-      );
-      expect(commands.filter((command) => !isManagedServiceInspectionCommand(command))).toEqual([]);
-      expect(parentSignal).toBeNull();
-      expect(sentinel).toMatchObject({
-        payload: { status: "error", stats: { reason: "owner_required" } },
-      });
-    },
-  );
+  itUnix("rechecks chat ownership between validation and stopping", async () => {
+    const { commands, parentSignal, sentinel } = await runBoundary("systemd", {
+      ...transferred,
+      requester: { channel: "slack", accountId: "primary", senderId: "owner" },
+      revokeWhileValidating: true,
+      helperExitCode: 1,
+    });
+    expect(commands.filter((command) => !isManagedServiceInspectionCommand(command))).toEqual([]);
+    expect(parentSignal).toBeNull();
+    expect(sentinel).toMatchObject({
+      payload: { status: "error", stats: { reason: "owner_required" } },
+    });
+  });
 
-  itUnix("preserves the Gateway refusal when cancellation settles its run", async () => {
+  itUnix("preserves Gateway refusal during cancellation settlement", async () => {
     const reason = "managed-service-handoff-failed";
     const message = "managed update ownership transfer failed";
-    const { commands, parentSignal, run, sentinel } = await runManagedServiceManagerBoundary(
-      "systemd",
-      {
-        ledger: true,
-        controlDisconnect: "unarmed",
-        beforeDisconnect: (admittedRun, env) => {
-          recordUpdateRunStep(
-            expectDefined(admittedRun, "admitted update run").runId,
-            {
-              step: "requested",
-              status: "failed",
-              reason,
-              failureFacts: [{ check: reason, code: reason, message }],
-            },
-            { env },
-          );
-        },
+    const { commands, parentSignal, run, sentinel } = await runBoundary("systemd", {
+      ledger: true,
+      controlDisconnect: "unarmed",
+      beforeDisconnect: (admittedRun, env) => {
+        recordUpdateRunStep(
+          expectDefined(admittedRun, "admitted update run").runId,
+          {
+            step: "requested",
+            status: "failed",
+            reason,
+            failureFacts: [{ check: reason, code: reason, message }],
+          },
+          { env },
+        );
       },
-    );
+    });
     expect(commands).toEqual([]);
     expect(parentSignal).toBeNull();
     expect(run).toMatchObject({
@@ -502,7 +488,7 @@ describe("managed service update handoff", () => {
     expect(sentinel).toMatchObject({ payload: { status: "error", stats: { reason } } });
   });
 
-  registerManagedCampaignFailureTests(runManagedServiceManagerBoundary, itUnix);
+  registerManagedCampaignFailureTests(runBoundary, itUnix);
 
   itUnix.each([
     ["systemd", "validation"],
@@ -511,18 +497,17 @@ describe("managed service update handoff", () => {
     ["launchd", "requester"],
     ["launchd", "inspection"],
   ] as const)(
-    "cancels %s updates at %s without stopping the serving generation",
+    "cancels %s at %s without stopping the serving generation",
     async (kind, boundary) => {
-      const { commands, parentSignal, state, sentinel, log } =
-        await runManagedServiceManagerBoundary(kind, {
-          controlDisconnect: "transferred",
-          ...(boundary === "validation"
-            ? { cancelDuringValidation: true }
-            : { cancelAtActivation: boundary }),
-          ...(boundary === "requester"
-            ? { requester: { channel: "synthetic", senderId: "owner" } }
-            : {}),
-        });
+      const { commands, parentSignal, state, sentinel, log } = await runBoundary(kind, {
+        ...transferred,
+        ...(boundary === "validation"
+          ? { cancelDuringValidation: true }
+          : { cancelAtActivation: boundary }),
+        ...(boundary === "requester"
+          ? { requester: { channel: "synthetic", senderId: "owner" } }
+          : {}),
+      });
       expect(parentSignal).toBeNull();
       if (boundary === "validation") {
         expect(commands).toEqual([]);
@@ -530,11 +515,8 @@ describe("managed service update handoff", () => {
         expect(log).toContain("managed update helper completed code=0");
       } else {
         expect(commands.filter((command) => !/\b(?:show|print)\b/u.test(command))).toEqual([]);
-        expect(state.parked).toBeUndefined();
-        expect(state.disabled).toBeUndefined();
-        expect(sentinel).toMatchObject({
-          payload: { status: "skipped", stats: { reason: "managed-service-handoff-cancelled" } },
-        });
+        expect([state.parked, state.disabled]).toEqual([undefined, undefined]);
+        expect(sentinel).toMatchObject({ payload: cancelled });
       }
     },
   );
@@ -542,7 +524,7 @@ describe("managed service update handoff", () => {
   itUnix.each(["expired", "unarmed", "dead-parent"] as const)(
     "does not stop or update the service after %s admission",
     async (admission) => {
-      const { commands, parentSignal, sentinel } = await runManagedServiceManagerBoundary(
+      const { commands, parentSignal, sentinel } = await runBoundary(
         "systemd",
         admission === "expired"
           ? { parentExitTimeoutMs: 100 }
@@ -552,9 +534,7 @@ describe("managed service update handoff", () => {
       if (admission === "expired") {
         expect(parentSignal).toBeNull();
       }
-      expect(sentinel).toMatchObject({
-        payload: { status: "skipped", stats: { reason: "managed-service-handoff-cancelled" } },
-      });
+      expect(sentinel).toMatchObject({ payload: cancelled });
     },
   );
 
@@ -586,29 +566,17 @@ describe("managed service update handoff", () => {
       });
       return child;
     });
-    let env: NodeJS.ProcessEnv | undefined;
-    if (failure === "launcher exit") {
-      env = (await createUserSystemdFixture()).env;
-    }
-    const { startManagedServiceUpdateHandoff } =
-      await import("./update-managed-service-handoff.js");
-    const resultPromise = startManagedServiceUpdateHandoff({
-      root: MOCK_INSTALL_ROOT,
+    const resultPromise = startHandoff({
       timeoutMs: 30_000,
-      restartDrainTimeoutMs: 300_000,
-      parentPid: process.pid,
-      execPath:
-        failure === "spawn error" ? "/definitely/missing/openclaw-node" : "/usr/local/bin/node",
-      argv1: "/opt/openclaw/openclaw.mjs",
+      execPath: failure === "spawn error" ? "/definitely/missing/openclaw-node" : nodeExec,
+      argv1: entrypoint,
       supervisor: failure === "launcher exit" ? "systemd" : undefined,
-      env,
-      meta: { sessionKey: "agent:test:webchat:dm:user-123" },
+      env: failure === "launcher exit" ? (await createUserSystemdFixture()).env : undefined,
+      meta: { sessionKey },
     });
     await expect(resultPromise).rejects.toMatchObject(expected);
     expect(spawnMock).toHaveBeenCalledTimes(1);
-    const [, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
-    const { dir: handoffDir } = readManagedHandoffArtifacts(args);
-    tempDirs.add(handoffDir);
+    const { dir: handoffDir } = handoffArtifacts();
 
     if (failure === "readiness timeout") {
       expect(forceKillChildProcessTreeMock).toHaveBeenCalledExactlyOnceWith(child);
@@ -674,17 +642,12 @@ describe("managed service update handoff", () => {
     process.execPath = scenario === "wrapper-present" ? originalExecPath : removed;
     const beforePark = vi.fn(async () => {});
     try {
-      const { startManagedServiceUpdateHandoff } =
-        await import("./update-managed-service-handoff.js");
-      const handoff = startManagedServiceUpdateHandoff({
-        root: MOCK_INSTALL_ROOT,
-        restartDrainTimeoutMs: 300_000,
-        parentPid: process.pid,
-        argv1: "/opt/openclaw/openclaw.mjs",
+      const handoff = startHandoff({
+        argv1: entrypoint,
         env: { HOME: home, PATH: home },
         supervisor: "launchd",
         ...(wrapperScenario ? { beforePark } : {}),
-        meta: { sessionKey: "agent:test:webchat:dm:user-123" },
+        meta: { sessionKey },
       });
       if (scenario === "direct-missing" || scenario === "wrapper-missing") {
         await expect(handoff).rejects.toThrow(removed);
@@ -696,9 +659,7 @@ describe("managed service update handoff", () => {
       } else {
         const result = await handoff;
         expect(result).toMatchObject({ status: "started" });
-        const [command, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
-        tempDirs.add(path.dirname(result.logPath));
-        const { scriptPath, paramsPath } = readManagedHandoffArtifacts(args);
+        const { command, args, scriptPath, paramsPath } = handoffArtifacts(0, result.logPath);
         expect(args).toEqual([...resolveRuntimeArgs(command), scriptPath, paramsPath]);
         expect(command).toBe(scenario === "wrapper-present" ? originalExecPath : replacement);
         if (scenario === "versioned-service") {
@@ -707,9 +668,13 @@ describe("managed service update handoff", () => {
             recoveryCommandArgv: string[];
             triageCommandArgv: string[];
           };
-          expect(helperParams.commandArgv[0]).toBe(replacement);
-          expect(helperParams.recoveryCommandArgv[0]).toBe(replacement);
-          expect(helperParams.triageCommandArgv[0]).toBe(replacement);
+          for (const argv of [
+            helperParams.commandArgv,
+            helperParams.recoveryCommandArgv,
+            helperParams.triageCommandArgv,
+          ]) {
+            expect(argv[0]).toBe(replacement);
+          }
         }
       }
     } finally {
@@ -719,21 +684,16 @@ describe("managed service update handoff", () => {
     }
   });
 
-  itUnix("refuses a removed Node without a replacement before parking the Gateway", async () => {
+  itUnix("refuses missing Node before parking the Gateway", async () => {
     const originalExecPath = process.execPath;
     const runtimePaths = await import("../daemon/runtime-paths.js");
     const probe = vi.spyOn(runtimePaths, "resolveSystemNodeInfo").mockResolvedValue(null);
     process.execPath = path.join(os.tmpdir(), `missing-openclaw-node-${process.pid}`);
     try {
-      const { startManagedServiceUpdateHandoff } =
-        await import("./update-managed-service-handoff.js");
       await expect(
-        startManagedServiceUpdateHandoff({
-          root: MOCK_INSTALL_ROOT,
-          restartDrainTimeoutMs: 300_000,
-          parentPid: process.pid,
+        startHandoff({
           env: { PATH: "" },
-          meta: { sessionKey: "agent:test:webchat:dm:user-123" },
+          meta: { sessionKey },
         }),
       ).rejects.toThrow("openclaw gateway install --force");
       expect(spawnMock).not.toHaveBeenCalled();
@@ -751,8 +711,6 @@ describe("managed service update handoff", () => {
   ] as const)(
     "preserves launch metadata for $supervisors (timeout=$timeoutMs)",
     async ({ supervisors, timeoutMs }) => {
-      const { startManagedServiceUpdateHandoff } =
-        await import("./update-managed-service-handoff.js");
       const serviceIdentityEnv = {
         OPENCLAW_LAUNCHD_LABEL: "com.example.openclaw.test",
         OPENCLAW_SYSTEMD_UNIT: "openclaw-test.service",
@@ -791,121 +749,79 @@ describe("managed service update handoff", () => {
             : supervisor === "schtasks"
               ? { OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Test Gateway" }
               : { ...supervisorEnv, ...serviceIdentityEnv, KEEP_ME: "1" };
-        const result = await startManagedServiceUpdateHandoff({
-          root: MOCK_INSTALL_ROOT,
+        const result = await startHandoff({
           timeoutMs,
           ...(systemd
             ? { recoveryTimeoutMs: 45 * 60_000, handoffId: "handoff-123", channel: "beta" }
             : {}),
-          restartDrainTimeoutMs: 300_000,
           restartDelayMs: 500,
-          parentPid: process.pid,
-          execPath: "/usr/local/bin/node",
-          argv1: "/opt/openclaw/openclaw.mjs",
+          execPath: nodeExec,
+          argv1: entrypoint,
           supervisor,
           env,
           meta: {
             ...(systemd ? { handoffId: "handoff-123" } : {}),
-            sessionKey: "agent:test:webchat:dm:user-123",
+            sessionKey,
             ...(!supervisor || systemd ? { continuationMessage: "continue after restart" } : {}),
           },
         });
 
         expect(result.status).toBe("started");
-        if (!supervisor || systemd) {
-          expect(spawnMock).toHaveBeenCalledTimes(1);
-        }
-        const [command, args, options] = spawnMock.mock.calls.at(-1) as unknown as [
-          string,
-          string[],
-          { env: NodeJS.ProcessEnv; detached?: boolean; cwd?: string },
-        ];
-        tempDirs.add(path.dirname(result.logPath));
-        const { paramsPath } = readManagedHandoffArtifacts(args);
+        const { command, args, options, paramsPath } = handoffArtifacts(-1, result.logPath);
         const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf-8")) as {
           metaPath: string;
-          triageContextPath: string;
-          commandArgv?: string[];
-          handoffId?: string;
           serviceRecovery?: unknown;
-          recoveryTimeoutMs: number;
         };
         if (systemd) {
+          const environmentPath = path.join(path.dirname(result.logPath), "handoff.env");
           expect(command).toBe(systemd.systemdRunPath);
-          expect(args.slice(0, 4)).toEqual([
+          expect(args.slice(0, 11)).toEqual([
             "--user",
-            "--scope",
+            "--pipe",
+            "--wait",
+            "--service-type=exec",
+            "--slice=app-openclaw-update.slice",
+            "--property=KillMode=control-group",
+            "--property=OOMPolicy=stop",
+            `--property=EnvironmentFile=${escapeGlob(environmentPath)}`,
+            `--working-directory=${path.dirname(result.logPath)}`,
             "--collect",
-            "--unit=openclaw-update-handoff-123.scope",
+            "--unit=openclaw-update-handoff-123.service",
           ]);
-          expect(args.slice(4, 7)).toEqual([
-            "/usr/local/bin/node",
-            expect.stringMatching(/handoff\.cjs$/u),
-            expect.stringMatching(/handoff\.json$/u),
-          ]);
+          expect(await fs.readFile(environmentPath, "utf8")).toContain("KEEP_ME=1");
+          if (process.platform !== "win32") {
+            expect((await fs.stat(environmentPath)).mode & 0o777).toBe(0o600);
+          }
+          expect(args.at(-3)).toBe(nodeExec);
           expect(helperParams.serviceRecovery).toEqual({
             kind: "systemd",
             unit: "openclaw-gateway.service",
           });
-          expect(helperParams.commandArgv).toEqual([
-            "/usr/local/bin/node",
-            "/opt/openclaw/openclaw.mjs",
-            "update",
-            "--yes",
-            "--json",
-            "--channel",
-            "beta",
-            ...(timeoutMs === undefined ? [] : ["--timeout", "1800"]),
-          ]);
-          expect(helperParams.recoveryTimeoutMs).toBe(45 * 60_000);
-          expect(helperParams.handoffId).toBe("handoff-123");
-          expect(options.detached).toBe(true);
-          expect(options.env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway.service");
+          expect(options).toMatchObject({
+            detached: true,
+            env: { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
+          });
           expect(options.env.INVOCATION_ID).toBeUndefined();
         } else if (!supervisor) {
-          for (const [key, value] of Object.entries(serviceIdentityEnv)) {
-            expect(options.env[key]).toBe(value);
-          }
+          expect(options.env).toMatchObject(serviceIdentityEnv);
           for (const key of SUPERVISOR_HINT_ENV_VARS.filter(
             (envKey) => !(envKey in serviceIdentityEnv),
           )) {
             expect(options.env[key]).toBeUndefined();
           }
           expect(options.env[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]).toBe(helperParams.metaPath);
-          expect(JSON.parse(await fs.readFile(helperParams.metaPath, "utf8"))).toMatchObject({
-            meta: { triageContextPath: helperParams.triageContextPath },
-          });
         } else {
-          expect(helperParams.serviceRecovery).toEqual(
-            supervisor === "launchd"
-              ? {
-                  kind: "launchd",
-                  uid: typeof process.getuid === "function" ? process.getuid() : 501,
-                  label: "test.gateway",
-                  plistPath: path.posix.join(
-                    "/Users/test",
-                    "Library",
-                    "LaunchAgents",
-                    "test.gateway.plist",
-                  ),
-                }
-              : { kind: "schtasks", taskName: "OpenClaw Test Gateway" },
-          );
           const child = spawnMock.mock.results.at(-1)?.value as
             | ReturnType<typeof createSpawnMock>
             | undefined;
           child?.emit("exit", 0, null);
         }
-        if (!supervisor || systemd) {
-          expect(options.env.KEEP_ME).toBe("1");
-          expect(options.env.OPENCLAW_UPDATE_RUN_HANDOFF).toBe("1");
-        }
       }
     },
   );
 
-  itUnix("parks and restores the exact user-systemd service from its detached helper", async () => {
-    const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
+  itUnix("parks and restores the exact user-systemd service", async () => {
+    const { commands, sentinel, state } = await runBoundary("systemd", {
       cancelAfterPark: true,
     });
     const verbs = commands.map((command) =>
@@ -918,13 +834,13 @@ describe("managed service update handoff", () => {
       "--property=Id,LoadState,ActiveState,MainPID,ExecMainStartTimestampMonotonic,InvocationID",
     );
     expect(commands[1]).toContain("stop openclaw-gateway.service");
-    expect(state).toMatchObject({ parked: true, restored: true });
+    expectTrueFields(state, "parked", "restored");
     expect(state.guardedRestart).toBeUndefined();
     expect(sentinel).toMatchObject({
       payload: {
-        status: "skipped",
+        ...cancelled,
         stats: {
-          reason: "managed-service-handoff-cancelled",
+          ...cancelled.stats,
           steps: expect.arrayContaining([
             expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
           ]),
@@ -933,15 +849,14 @@ describe("managed service update handoff", () => {
     });
   });
 
-  it("sweeps stale handoff temp directories while keeping fresh handoff logs", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-cleanup-test-"));
-    tempDirs.add(tmpDir);
+  it("sweeps stale handoff directories but retains fresh and unrelated ones", async () => {
+    const tmpDir = tempDirs.make("openclaw-handoff-cleanup-test-");
     const staleDir = path.join(tmpDir, `${MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX}stale`);
     const freshDir = path.join(tmpDir, `${MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX}fresh`);
     const unrelatedDir = path.join(tmpDir, "openclaw-other-temp");
-    await fs.mkdir(staleDir, { recursive: true });
-    await fs.mkdir(freshDir, { recursive: true });
-    await fs.mkdir(unrelatedDir, { recursive: true });
+    await Promise.all(
+      [staleDir, freshDir, unrelatedDir].map((dir) => fs.mkdir(dir, { recursive: true })),
+    );
     const now = Date.now();
     const staleTime = new Date(now - 25 * 60 * 60_000);
     await fs.utimes(staleDir, staleTime, staleTime);

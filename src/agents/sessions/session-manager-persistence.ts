@@ -3,6 +3,7 @@ import {
   prepareTranscriptMessageAppendForWorker,
   type PreparedTranscriptMessageAppend,
 } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
+import type { SessionActorAppend } from "../../config/sessions/session-actor-contract.js";
 import type {
   SessionMetadataOperations,
   SessionMetadataWorkerOperations,
@@ -60,6 +61,22 @@ type CommittedMetadataAppend = Extract<MetadataAppend["snapshot"], { ok: true }>
   result: NonNullable<Extract<MetadataAppend["snapshot"], { ok: true }>["value"]["result"]>;
 };
 
+function requireCommittedMetadataAppend(
+  snapshot: MetadataAppend["snapshot"],
+  entry: SessionEntry | SessionLeafControl,
+): CommittedMetadataAppend {
+  if (
+    !snapshot.ok ||
+    !snapshot.value.result ||
+    (entry.type !== "message" && !snapshot.value.result.appended)
+  ) {
+    throw new Error(`Session transcript entry was not persisted: ${entry.id}`, {
+      cause: snapshot.ok ? undefined : snapshot.error,
+    });
+  }
+  return { ...snapshot.value, result: snapshot.value.result };
+}
+
 export class SessionManagerPersistence extends SessionManagerNativePersistence {
   protected async persistWorkerRecord(
     entry: SessionEntry | SessionLeafControl,
@@ -74,6 +91,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
     retryMutationConflicts = true,
     assertNavigation?: () => void,
     initialModel?: ModelChangeEntry,
+    modelPromptProjection?: SessionActorAppend["modelPromptProjection"],
   ): Promise<PersistWorkerRecordResult> {
     this.assertTranscriptWriteActive();
     const target = this.persistenceTarget;
@@ -246,8 +264,10 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           assertCurrent,
           beforeFreshMessageCommit,
           toolResult: entry.type === "message" && entry.message.role === "toolResult",
+          message: entry.type === "message" ? entry.message : null,
           append: {
             kind: "metadata",
+            ...(modelPromptProjection ? { modelPromptProjection } : {}),
             input: {
               scope: captured,
               event: wireEvent,
@@ -348,17 +368,8 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
         }
         const value = outcome.committed.value;
         const snapshot = value.snapshot;
-        if (
-          !snapshot.ok ||
-          !snapshot.value.result ||
-          (entry.type !== "message" && !snapshot.value.result.appended)
-        ) {
-          throw new Error(`Session transcript entry was not persisted: ${entry.id}`, {
-            cause: snapshot.ok ? undefined : snapshot.error,
-          });
-        }
         const projected = projectAppend(
-          { ...snapshot.value, result: snapshot.value.result },
+          requireCommittedMetadataAppend(snapshot, entry),
           value.reload,
           outcome.failure,
           loadedVersion,
@@ -371,7 +382,10 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
             preferredSessionId: captured.sessionId,
           });
         }
-        return projected;
+        return {
+          ...projected,
+          modelPromptProjection: outcome.committed.modelPromptProjection?.result,
+        };
       } catch (cause) {
         const failure =
           outcome.failure ??
@@ -513,17 +527,8 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           loadedVersion = this.transcriptVersion;
           const outcome = await appendEvent(entry, wireEvent, mutationAt, appendIntent);
           const snapshot = outcome.snapshot;
-          if (
-            !snapshot.ok ||
-            !snapshot.value.result ||
-            (entry.type !== "message" && !snapshot.value.result.appended)
-          ) {
-            throw new Error(`Session transcript entry was not persisted: ${entry.id}`, {
-              cause: snapshot.ok ? undefined : snapshot.error,
-            });
-          }
           return {
-            committed: { ...snapshot.value, result: snapshot.value.result },
+            committed: requireCommittedMetadataAppend(snapshot, entry),
             initialModelParentId: outcome.initialModelParentId,
             reload: outcome.reload,
             failure: outcome.failure,

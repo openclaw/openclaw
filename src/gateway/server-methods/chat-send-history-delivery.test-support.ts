@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
@@ -26,34 +26,27 @@ export function registerChatHistoryDeliveryCases(
     "keeps committed history delivery with the %s source owner",
     async (route) => {
       const fixture = await createBrowserFollowupFixture({ active: false });
+      const { params, scope } = fixture;
+      const key = scope.sessionKey;
       const entered = createDeferred<Parameters<typeof dispatchInboundMessage>[0]>();
       const release = createDeferred();
       let settleQueued: (() => Promise<void>) | undefined;
       if (route === "external") {
-        fixture.params.originatingChannel = "discord";
-        fixture.params.originatingTo = "channel:synthetic";
-        fixture.params.deliver = true;
+        params.originatingChannel = "discord";
+        params.originatingTo = "channel:synthetic";
+        params.deliver = true;
       }
       dispatchInboundMessageMock.mockImplementation(async (dispatchParams: unknown) => {
         const options = dispatchParams as Parameters<typeof dispatchInboundMessage>[0];
         if (route === "queued-webchat") {
           // The queue retains cancellation/admission after the initial dispatch unwinds.
           const input = readReplySourceInput(options.replyOptions);
-          if (!input) {
-            throw new Error("Expected original controller input");
-          }
-          const run = createQueueTestRun({ prompt: fixture.params.message });
+          assert(input, "Expected original controller input");
+          const run = createQueueTestRun({ prompt: params.message });
           run.turnAdoptionLifecycle = options.replyOptions?.turnAdoptionLifecycle;
           bindSessionControllerSource(input, run);
           expect(
-            enqueueFollowupRun(
-              fixture.scope.sessionKey,
-              run,
-              createQueueSettings(),
-              "none",
-              undefined,
-              false,
-            ),
+            enqueueFollowupRun(key, run, createQueueSettings(), "none", undefined, false),
           ).toBe(true);
           settleQueued = async () => {
             completeFollowupRunLifecycle(run);
@@ -72,13 +65,11 @@ export function registerChatHistoryDeliveryCases(
         const { replyOptions } = await entered.promise;
         if (route === "queued-webchat") {
           await vi.waitFor(() =>
-            expect(isRpcSourceQueued(rpcSourceTesting.get(fixture.params.idempotencyKey))).toBe(
-              true,
-            ),
+            expect(isRpcSourceQueued(rpcSourceTesting.get(params.idempotencyKey))).toBe(true),
           );
         }
         await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
-        await replyOptions?.onAgentRunStart?.(fixture.params.idempotencyKey);
+        await replyOptions?.onAgentRunStart?.(params.idempotencyKey);
         const message = attachSessionTranscriptRunId(
           {
             role: "assistant",
@@ -86,26 +77,17 @@ export function registerChatHistoryDeliveryCases(
               {
                 type: "text",
                 text: "The synthetic fixture is ready.",
-                textSignature: JSON.stringify({
-                  v: 1,
-                  id: "receipt-answer",
-                  phase: "final_answer",
-                }),
+                textSignature: '{"v":1,"id":"receipt-answer","phase":"final_answer"}',
               },
               { type: "toolCall", id: "inspect", name: "read", arguments: {} },
             ],
             stopReason: "toolUse",
           },
-          fixture.params.idempotencyKey,
+          params.idempotencyKey,
         );
-        const appended = appendTranscriptMessageSync(fixture.scope, {
-          eventId: "route-answer",
-          message,
-        });
-        if (!appended?.ok) {
-          throw new Error("Expected committed route fixture answer");
-        }
-        await publishTranscriptUpdate(fixture.scope, { message, messageId: "route-answer" });
+        const appended = appendTranscriptMessageSync(scope, { eventId: "route-answer", message });
+        assert(appended?.ok, "Expected committed route fixture answer");
+        await publishTranscriptUpdate(scope, { message, messageId: "route-answer" });
         expect((await replyOptions?.resolveReplyDelivery?.()) ?? "missing").toBe(
           route === "external" ? "missing" : "delivered",
         );

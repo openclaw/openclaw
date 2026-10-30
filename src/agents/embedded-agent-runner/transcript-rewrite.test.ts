@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
@@ -10,7 +9,6 @@ import {
   appendTranscriptMessageSync,
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
-  replaceSessionEntry,
   resolveSessionTranscriptDatabasePath,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -27,8 +25,13 @@ import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.
 import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
 import { textToolResult } from "../test-helpers/sparse-transcript.test-support.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
-import { useTranscriptRewriteTempDirs } from "./transcript-rewrite.test-support.js";
-const tempDirs = useTranscriptRewriteTempDirs(afterEach);
+import {
+  appendMessages,
+  asAppendMessage,
+  createTextContent,
+  useTranscriptRewriteTargets,
+} from "./transcript-rewrite.test-support.js";
+const persistedTarget = useTranscriptRewriteTargets(afterEach);
 
 function rewrite(sessionManager: SessionManager, entryId: string, message: AgentMessage) {
   return rewriteTranscriptEntriesInSessionManager({
@@ -39,33 +42,11 @@ function rewrite(sessionManager: SessionManager, entryId: string, message: Agent
 
 const boundedOptions = { maxBytes: 64_000, maxEvents: 20 };
 
-type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
-
-function asAppendMessage(message: unknown): AppendMessage {
-  return message as AppendMessage;
-}
-
 function getBranchMessages(sessionManager: SessionManager): AgentMessage[] {
   return sessionManager
     .getBranch()
     .filter((entry) => entry.type === "message")
     .map((entry) => entry.message);
-}
-
-function appendMessages(sessionManager: SessionManager, messages: AppendMessage[]): string[] {
-  return messages.map((message) => sessionManager.appendMessage(message));
-}
-
-async function persistedTarget(sessionId: string) {
-  const directory = tempDirs.make(`openclaw-${sessionId}-`);
-  const target = {
-    agentId: "main",
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    storePath: path.join(directory, "sessions.json"),
-  };
-  await replaceSessionEntry(target, { sessionId, updatedAt: 1 });
-  return { directory, target };
 }
 
 function assistant(text: string, timestamp: number) {
@@ -84,10 +65,6 @@ async function expectReaderContexts(
   ]) {
     expect(reader.buildSessionContext()).toEqual(expected);
   }
-}
-
-function createTextContent(text: string) {
-  return [{ type: "text" as const, text }];
 }
 
 function appendReadExchange(manager: SessionManager, text: string) {

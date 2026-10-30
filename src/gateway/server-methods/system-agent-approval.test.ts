@@ -1,5 +1,6 @@
 // Covers delegated system-agent approval ownership and closure.
 
+import "./system-agent-transcript.mocks.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -10,6 +11,8 @@ import { createOperationalRunInstanceRef } from "../../agents/admitted-run-conte
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createSystemAgentTool } from "../../agents/tools/system-agent-tool.js";
 import { runConfigSet as runConfigSetCommand } from "../../cli/config-cli.js";
+import * as configModule from "../../config/config.js";
+import { createSnapshot } from "../../config/mutate.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -41,6 +44,7 @@ import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
+const { transcriptStoreMocks } = await import("./system-agent-transcript.mocks.test-support.js");
 const delegation = { agentId: "main", sessionKey: "agent:main:main" };
 type Caller = NonNullable<Parameters<typeof withGatewayToolCallerIdentity>[0]>;
 
@@ -61,29 +65,8 @@ const cancelledGuidance = ["approval request is no longer active", "No change wa
 const setupInferenceMocks = vi.hoisted(() => ({ resolvePersistentApplyInference: vi.fn() }));
 // mock-isolation: Exercise delegated approval without loading the machine's config CLI.
 vi.mock("../../cli/config-cli.js", () => ({ runConfigSet: vi.fn() }));
-const transcriptStoreMocks = vi.hoisted(() => ({
-  appendReset: vi.fn(),
-  appendTurn: vi.fn(),
-  readTranscriptTailAsync: vi
-    .fn<typeof import("../../system-agent/transcript-store.js").readTranscriptTailAsync>()
-    .mockResolvedValue([]),
-}));
-
 vi.mock("../../system-agent/setup-inference.js", () => ({
   resolvePersistentApplyInference: setupInferenceMocks.resolvePersistentApplyInference,
-}));
-// mock-isolation: Exercise delegated approval ownership without opening the machine-wide audit store.
-vi.mock("../../system-agent/transcript-store.js", () => ({
-  readTranscriptTailAsync: transcriptStoreMocks.readTranscriptTailAsync,
-  createSystemAgentTranscriptStore: () => ({
-    assertCurrent: () => undefined,
-    appendTurn: transcriptStoreMocks.appendTurn,
-    appendReset: transcriptStoreMocks.appendReset,
-    readTail: (limit: number, afterLastReset = false) =>
-      afterLastReset
-        ? transcriptStoreMocks.readTranscriptTailAsync(limit, { afterLastReset })
-        : transcriptStoreMocks.readTranscriptTailAsync(limit),
-  }),
 }));
 
 afterEach(() => {
@@ -138,23 +121,14 @@ describe("Full Access delegated chat", () => {
     );
     vi.mocked(runConfigSetCommand).mockReset().mockResolvedValue(undefined);
     let proposed = false;
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockResolvedValue({
+      ...createSnapshot({ sourceConfig: verifiedConfig, hash: "verified-config", raw: null }),
+      includedPaths: [],
+    });
     const engine = new SystemAgentChatEngine({
       operatorApprovalOnly: true,
       surface: "gateway",
       verifiedInference: fixture.binding,
-      deps: {
-        readConfigFileSnapshot: async () =>
-          ({
-            exists: true,
-            valid: true,
-            path: "/tmp/openclaw.json",
-            hash: "verified-config",
-            config: verifiedConfig,
-            runtimeConfig: verifiedConfig,
-            sourceConfig: verifiedConfig,
-            issues: [],
-          }) as never,
-      },
       runAgentTurn: async (params) => {
         if (source === "typed" || (proposed && source !== "repair")) {
           return { text: "Config verified." };

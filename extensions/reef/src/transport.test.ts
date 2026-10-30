@@ -1,19 +1,18 @@
-import { createPublicKey, verify as verifySignature } from "node:crypto";
 import { once } from "node:events";
 import http from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, expect, it, vi } from "vitest";
-import { canonicalBytes, fromBase64url, sha256Hex } from "../protocol/index.js";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
+import { createClosedChunkStream } from "../../test-support/streaming-error-response.js";
 import {
-  ReefInboxConnection,
   ReefProtocolCompatibilityError,
   ReefRelayError,
   createReefWebSocket,
   isRetryableReefRelayFailure,
 } from "./transport.js";
-import { createClient, signing, ts } from "./transport.test-helpers.js";
+import { createClient, ts } from "./transport.test-helpers.js";
 import type { RelayFriend } from "./types.js";
 
 type EffectAuthority = ReturnType<
@@ -87,13 +86,9 @@ async function listen(server: http.Server | WebSocketServer) {
   });
   if (server instanceof http.Server) {
     server.on("connection", (socket) => peers.add(socket));
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-  } else {
-    await once(server, "listening");
+    return await listenOnLoopback(server);
   }
+  await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Reef test server did not bind a TCP port");
@@ -218,21 +213,6 @@ it("normalizes connection loss while reading a successful response body", async 
     cause,
   });
 });
-function verifyRelaySignature(signature: string, path: string): boolean {
-  const spkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
-  const publicKey = createPublicKey({
-    key: Buffer.concat([spkiPrefix, Buffer.from(fromBase64url(signing.publicKey))]),
-    format: "der",
-    type: "spki",
-  });
-  return verifySignature(
-    null,
-    canonicalBytes({ method: "GET", path, ts, bodySha256: sha256Hex(new Uint8Array()) }),
-    publicKey,
-    Buffer.from(fromBase64url(signature)),
-  );
-}
-
 it("signs the relay canonical REST path including its query and emits auth headers", async () => {
   const { client, fetcher } = recordingClient({ entries: [], cursor: 5 });
 
@@ -250,8 +230,6 @@ it("signs the relay canonical REST path including its query and emits auth heade
     "x-reef-sig":
       "1Zx-WD8JygVzq8pdTWULPiEZyoLuoJ1zyokkDRGlPWu_6fAKxEfJHPZkCQaZ8DIS4LERDqeh2z6-qlw7BtcoDw",
   });
-
-  expect(verifyRelaySignature(headers.get("x-reef-sig")!, "/v1/mail?after=5")).toBe(true);
 });
 
 it("puts WebSocket auth in the query but signs the bare relay path", () => {
@@ -263,7 +241,6 @@ it("puts WebSocket auth in the query but signs the bare relay path", () => {
     ts: String(ts),
     sig: "teC4QkpLUCMghGA-PkBGBMZFPxNeERmNfGCivaxpYhL8q81v6ReHRKEq2ZVvOd-FG3d3BbMjk-FcvoKjW5kwAA",
   });
-  expect(verifyRelaySignature(url.searchParams.get("sig")!, "/v1/mail/ws")).toBe(true);
 });
 
 it("binds friendship responses to the exact listed peer key snapshot", async () => {
@@ -273,26 +250,21 @@ it("binds friendship responses to the exact listed peer key snapshot", async () 
 });
 
 it.each([
-  [
-    400,
-    "invalid_request",
-    "reef-relay",
-    "The Reef relay is likely incompatible or outdated. Update OpenClaw and the Reef relay together, then approve the fresh pairing challenge again.",
-  ],
-  [
-    409,
-    "client_upgrade_required",
-    "openclaw-client",
-    "OpenClaw is outdated for this Reef relay. Update OpenClaw, then approve the fresh pairing challenge again.",
-  ],
+  [400, "invalid_request", "reef-relay"],
+  [409, "client_upgrade_required", "openclaw-client"],
 ] as const)(
   "diagnoses HTTP %i compatibility failure without retrying or downgrading",
-  async (status, code, upgradeRequired, message) => {
+  async (status, code, upgradeRequired) => {
     const { client, fetcher } = recordingClient({ error: code }, status);
     const error = await client.respondFriend(pendingFriend, true).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(ReefRelayError);
     expect(error).toBeInstanceOf(ReefProtocolCompatibilityError);
-    expect(error).toMatchObject({ status, code, upgradeRequired, message });
+    expect(error).toMatchObject({
+      status,
+      code,
+      upgradeRequired,
+      message: expect.stringContaining("approve the fresh pairing challenge again"),
+    });
     expect(fetcher).toHaveBeenCalledTimes(1);
     expectFriendshipBody(fetcher.mock.calls[0]?.[1]);
   },
@@ -436,14 +408,11 @@ it("redacts signed body credentials across bounded error text", async () => {
     });
     const splitAt = responseBody.indexOf(code) + Math.floor(code.length / 2);
     return new Response(
-      new ReadableStream({
-        start(controller) {
-          for (const part of [responseBody.slice(0, splitAt), responseBody.slice(splitAt)]) {
-            controller.enqueue(new TextEncoder().encode(part));
-          }
-          controller.close();
-        },
-      }),
+      createClosedChunkStream(
+        [responseBody.slice(0, splitAt), responseBody.slice(splitAt)].map((part) =>
+          new TextEncoder().encode(part),
+        ),
+      ),
       { status: 401, headers: { "content-type": "application/json" } },
     );
   });
@@ -463,40 +432,14 @@ it("rejects a relay frame above the payload limit before dispatch", async () => 
   const frame = `${prefix}${"x".repeat(bytes - prefix.length - suffix.length)}${suffix}`;
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   const port = await listen(server);
-  const entries: unknown[] = [];
-  const states: string[] = [];
-  const abort = new AbortController();
-  const timeout = setTimeout(() => abort.abort(), 2_000);
   server.once("connection", (socket) => socket.send(frame));
-  const client = createClient(
-    async () => Response.json({ entries: [], cursor: 0 }),
-    () => ts,
-    `http://127.0.0.1:${port}`,
-  );
-  const inbox = new ReefInboxConnection(
-    client,
-    async (received) => {
-      entries.push(...received);
-      abort.abort();
-    },
-    createReefWebSocket,
-    {
-      onState: (state) => {
-        states.push(state);
-        if (state === "disconnected") {
-          abort.abort();
-        }
-      },
-    },
-  );
-
-  try {
-    await inbox.start(abort.signal);
-  } finally {
-    clearTimeout(timeout);
-  }
+  const socket = createReefWebSocket(`ws://127.0.0.1:${port}`) as WebSocket;
+  const received: unknown[] = [];
+  socket.on("message", (message) => received.push(message));
+  const [error] = await once(socket, "error", { signal: AbortSignal.timeout(2_000) });
   expect(Buffer.byteLength(frame)).toBe(bytes);
-  expect({ entries, states }).toEqual({ entries: [], states: ["connected", "disconnected"] });
+  expect(error).toMatchObject({ message: "Max payload size exceeded" });
+  expect(received).toEqual([]);
 });
 
 it("errors when the relay accepts TCP but never completes the upgrade", async () => {

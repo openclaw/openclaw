@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGitHubToolIdentityStatus } from "../agents/github-tool-identity.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createFactoryGitHubReadClaim } from "./factory-github-proof.test-support.js";
 import { prepareGatewayProjectGitHubIdentity } from "./project-github-identity.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { coreGatewayHandlers } from "./server-methods/core-handlers.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 const catalog = vi.hoisted(() => ({ emails: ["github:engineering.ghe.com:42"] }));
 // Resident catalog facts replace storage only; all admission decisions remain production code.
@@ -23,36 +25,18 @@ const privateKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKe
 });
 const host = "engineering.ghe.com";
 const apiBaseUrl = `https://api.${host}`;
-const claim = {
-  purpose: "session-item-read" as const,
-  binding: {
-    kind: "session" as const,
-    agentId: "main",
-    sessionKey: "agent:main:room",
-    sessionId: "session-1",
-    lifecycleRevision: "revision-1",
-    requestDigest: "synthetic-item-digest",
-  },
-};
+const admissionPath = "/__factory__/github/repository-admission";
+const admissionRequest = `GET ${admissionPath}`;
+const issueUrl = `${apiBaseUrl}/repos/example/project/issues/1`;
+const claim = createFactoryGitHubReadClaim("synthetic-item-digest");
 const permissions = { contents: "read" as const, metadata: "read" as const };
 function client(): GatewayClient {
   return {
     connId: "human-connection",
     authenticatedFactoryGitHubAccountId: 42,
     authenticatedUserId: `github:${host}:42`,
-    authenticatedUserProfile: {
-      profileId: "person-1",
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "cli", version: "test", platform: "test", mode: "cli" },
-      role: "operator",
-      scopes: ["operator.read"],
-    },
+    authenticatedUserProfile: gatewayProfile("person-1"),
+    connect: gatewayConnect(["operator.read"], { id: "cli", mode: "cli" }),
     internal: { authenticatedOperator: true },
   };
 }
@@ -110,6 +94,15 @@ function prepare(caller = client(), requestedRepository?: string) {
   });
 }
 
+function readIssue(identity: NonNullable<Awaited<ReturnType<typeof prepare>>>) {
+  return identity.start(() =>
+    fetch(issueUrl, {
+      method: "GET",
+      headers: { authorization: `Bearer ${identity.token}` },
+    }),
+  );
+}
+
 beforeEach(() => {
   active = true;
   deny = false;
@@ -144,7 +137,7 @@ beforeEach(() => {
     const path = url.startsWith(apiBaseUrl) ? url.slice(apiBaseUrl.length) : new URL(url).pathname;
     requests.push(`${init.method} ${path}`);
     onRequest?.(path);
-    if (path === "/__factory__/github/repository-admission") {
+    if (path === admissionPath) {
       const headers = new Headers(init.headers);
       expect(headers.get("authorization")).toBe("Bearer synthetic-broker-password");
       const verdict = await redeem(headers.get("x-factory-github-proof") ?? "");
@@ -234,9 +227,7 @@ describe("Factory project read admission composition", () => {
       ).rejects.toThrow(
         failure === "unconfigured" ? "unavailable" : "Factory repository admission failed",
       );
-      expect(requests).toEqual(
-        failure === "unconfigured" ? [] : ["GET /__factory__/github/repository-admission"],
-      );
+      expect(requests).toEqual(failure === "unconfigured" ? [] : [admissionRequest]);
     },
   );
 
@@ -249,35 +240,26 @@ describe("Factory project read admission composition", () => {
       };
       if (phase === "admission") {
         onRequest = (path) => {
-          if (path === "/__factory__/github/repository-admission") {
+          if (path === admissionPath) {
             changeOtherRepository();
           }
         };
         await expect(prepare(client(), "example/project")).rejects.toThrow("changed");
-        expect(requests).toEqual(["GET /__factory__/github/repository-admission"]);
+        expect(requests).toEqual([admissionRequest]);
         return;
       }
       const identity = await prepare(client(), "example/project");
-      config = {
-        ...config,
-        tools: {
-          github: {
-            ...selected,
-            app: {
-              ...selected.app,
-              repositories: [
-                { id: 406, fullName: "example/other" },
-                { id: 404, fullName: "example/project" },
-              ],
-            },
-          },
-        },
+      const app = {
+        ...selected.app,
+        repositories: [
+          { id: 406, fullName: "example/other" },
+          { id: 404, fullName: "example/project" },
+        ],
       };
+      config = { ...config, tools: { github: { ...selected, app } } };
       setRuntimeConfigSnapshot(config);
       try {
-        await expect(
-          identity!.start(() => fetch(`${apiBaseUrl}/repos/example/project/issues/1`)),
-        ).rejects.toThrow("changed");
+        await expect(identity!.start(() => fetch(issueUrl))).rejects.toThrow("changed");
         expect(requests.some((request) => request.includes("/issues/"))).toBe(false);
       } finally {
         await identity?.revoke?.();
@@ -302,12 +284,7 @@ describe("Factory project read admission composition", () => {
         ...claim,
       });
       expect(identity).toBeDefined();
-      const response = await identity!.start(() =>
-        fetch(`${apiBaseUrl}/repos/example/project/issues/1`, {
-          method: "GET",
-          headers: { authorization: `Bearer ${identity!.token}` },
-        }),
-      );
+      const response = await readIssue(identity!);
       expect(await response.json()).toEqual({ title: "Private issue" });
       expect(
         (
@@ -320,28 +297,22 @@ describe("Factory project read admission composition", () => {
       ).toMatchObject({ credentialState: "available", account: { login: "factory[bot]" } });
       await identity!.revoke?.();
       await expect(identity!.revalidate()).rejects.toThrow("changed");
-      expect(requests[0]).toBe("GET /__factory__/github/repository-admission");
+      expect(requests[0]).toBe(admissionRequest);
       expect(requests.at(-1)).toBe("DELETE /installation/token");
     },
   );
 
-  it.each(["denied", "foreign repository", "foreign host", "actor mismatch"])(
-    "rejects %s admission before any App token request",
-    async (failure) => {
-      deny = failure === "denied";
-      if (failure === "foreign repository") {
-        receiptPatch.repository = { id: 405, fullName: "other/project" };
-      }
-      if (failure === "foreign host") {
-        receiptPatch.host = "other.ghe.com";
-      }
-      if (failure === "actor mismatch") {
-        receiptPatch.actor = { accountId: 43, profileId: "person-1" };
-      }
-      await expect(prepare()).rejects.toThrow("Factory repository admission failed");
-      expect(requests).toEqual(["GET /__factory__/github/repository-admission"]);
-    },
-  );
+  it.each([
+    ["denied", {}],
+    ["foreign repository", { repository: { id: 405, fullName: "other/project" } }],
+    ["foreign host", { host: "other.ghe.com" }],
+    ["actor mismatch", { actor: { accountId: 43, profileId: "person-1" } }],
+  ] as const)("rejects %s admission before any App token request", async (failure, patch) => {
+    deny = failure === "denied";
+    Object.assign(receiptPatch, patch);
+    await expect(prepare()).rejects.toThrow("Factory repository admission failed");
+    expect(requests).toEqual([admissionRequest]);
+  });
 
   it("rejects a handshake actor that disagrees with the current profile before contacting the broker", async () => {
     catalog.emails = [`github:${host}:43`];
@@ -356,7 +327,7 @@ describe("Factory project read admission composition", () => {
     expect(requests).toEqual([]);
   });
 
-  it.each(["/__factory__/github/repository-admission", "/app/installations/202/access_tokens"])(
+  it.each([admissionPath, "/app/installations/202/access_tokens"])(
     "retirement during %s prevents a usable credential and cleans up any issued token",
     async (path) => {
       onRequest = (current) => {
@@ -374,14 +345,9 @@ describe("Factory project read admission composition", () => {
     const identity = await prepare();
     catalog.emails = [];
     try {
-      await expect(
-        identity!.start(() =>
-          fetch(`${apiBaseUrl}/repos/example/project/issues/1`, {
-            method: "GET",
-            headers: { authorization: `Bearer ${identity!.token}` },
-          }),
-        ),
-      ).rejects.toThrow("GitHub actor binding is unavailable or ambiguous");
+      await expect(readIssue(identity!)).rejects.toThrow(
+        "GitHub actor binding is unavailable or ambiguous",
+      );
       expect(requests.some((request) => request.includes("/issues/"))).toBe(false);
     } finally {
       await identity!.revoke?.();

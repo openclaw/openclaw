@@ -14,10 +14,10 @@ import { isCommandFlagEnabled } from "../../config/commands.flags.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { clampInt } from "../../utils.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { isBangCommandInput } from "./bash-command-input.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
 import { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
@@ -26,7 +26,6 @@ import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js"
 
 const CHAT_BASH_SCOPE_KEY = "chat:bash";
 const DEFAULT_FOREGROUND_MS = 2000;
-const MAX_FOREGROUND_MS = 30_000;
 
 type BashRequest =
   | { action: "help" }
@@ -42,14 +41,6 @@ type ActiveBashJob =
     };
 
 let activeJob: ActiveBashJob | null = null;
-
-function resolveForegroundMs(cfg: OpenClawConfig): number {
-  const raw = cfg.commands?.bashForegroundMs;
-  if (typeof raw !== "number" || Number.isNaN(raw)) {
-    return DEFAULT_FOREGROUND_MS;
-  }
-  return clampInt(raw, 0, MAX_FOREGROUND_MS);
-}
 
 function formatSessionSnippet(sessionId: string) {
   const trimmed = sessionId.trim();
@@ -72,7 +63,7 @@ function parseBashRequest(trimmed: string): BashRequest | null {
   let restSource;
   if (match) {
     restSource = match[1] ?? "";
-  } else if (trimmed.startsWith("!")) {
+  } else if (isBangCommandInput(trimmed)) {
     restSource = trimmed.slice(1);
     if (restSource.trimStart().startsWith(":")) {
       restSource = restSource.trimStart().slice(1);
@@ -256,7 +247,7 @@ export async function handleBashChatCommand(params: {
   };
 
   try {
-    const foregroundMs = resolveForegroundMs(params.cfg);
+    const foregroundMs = params.cfg.commands?.bashForegroundMs ?? DEFAULT_FOREGROUND_MS;
     const shouldBackgroundImmediately = foregroundMs <= 0;
     const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
     const notifyOnExit = params.cfg.tools?.exec?.notifyOnExit;

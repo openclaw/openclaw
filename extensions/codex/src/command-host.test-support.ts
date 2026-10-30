@@ -12,6 +12,12 @@ export function createCodexCommandHost(
     resolveCodexCliSessionForBindingOnNode: async () => {
       throw new Error("Codex CLI node sessions require Gateway node runtime.");
     },
+    codexPluginsManagementIo: {
+      readConfig: async () => ({}),
+      mutate: async () => {
+        throw new Error("Codex plugin configuration mutation was not supplied by this test.");
+      },
+    },
     ...overrides,
   };
 }

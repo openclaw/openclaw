@@ -68,6 +68,16 @@ Details: [Plugins](/tools/plugin)
 Self-hosted Mattermost on a private/LAN/tailnet address: outbound Mattermost API requests pass through an SSRF guard that blocks private and internal IPs by default. Opt in with `channels.mattermost.network.dangerouslyAllowPrivateNetwork: true` (per account: `channels.mattermost.accounts.<id>.network.dangerouslyAllowPrivateNetwork`).
 </Note>
 
+## Inbound batching
+
+Set `messages.inbound.byChannel.mattermost` (milliseconds) to combine rapid,
+consecutive text posts from the same sender in the same channel and thread.
+The default is the global `messages.inbound.debounceMs`, or `0` when unset.
+A different sender or thread ends the previous batch; attachments and control
+commands flush buffered text before their own dispatch. Channel batches preserve
+arrival order through turn admission. Stopping the monitor cancels buffered work
+and leaves unadopted durable posts available for recovery.
+
 ## Native slash commands
 
 Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash commands on every team the bot is a member of and receives callback POSTs on the gateway HTTP server.
@@ -225,6 +235,7 @@ Notes:
 - Approve via:
   - `openclaw pairing list mattermost`
   - `openclaw pairing approve mattermost <CODE>`
+- If the pending pairing queue is full, slash commands return a capacity message instead of an empty pairing code. Ask the bot owner to approve or dismiss requests in **Settings → Channels → DM access requests**, then retry. Existing pending requests keep their valid codes.
 - Public DMs: `channels.mattermost.dmPolicy="open"` plus `channels.mattermost.allowFrom=["*"]` (the config schema enforces the wildcard).
 - `channels.mattermost.allowFrom` accepts user ids (recommended) and `accessGroup:<name>` entries. See [Access groups](/channels/access-groups).
 
@@ -256,6 +267,39 @@ Example:
 }
 ```
 
+## Posts from other bots
+
+Mattermost marks every post created by a bot account with `from_bot`. OpenClaw uses that marker to tell bot posts apart from human posts. The receiving bot's own posts are always ignored.
+
+`channels.mattermost.allowBots` controls whether posts from other bot accounts can start a turn:
+
+- `true` (default): bot posts follow the same access and mention rules as human posts.
+- `"mentions"`: in channels, a bot post must @mention this bot, match a mention pattern, or use an `onchar` prefix. Thread participation does not count, so two bots replying in the same thread cannot keep waking each other. Unmentioned bot posts are kept as channel context. Direct messages from bots are unaffected.
+- `false`: bot posts are ignored.
+
+Account values override the channel-wide value. For an individual channel, `groups.<channelId>.allowBots` overrides `groups["*"].allowBots`, then the account value.
+
+Accepted bot posts pass through [bot loop protection](/channels/bot-loop-protection). When two bots exchange more than `maxEventsPerWindow` posts in one channel within `windowSeconds`, the receiving bot ignores the other one for `cooldownSeconds`. Set `channels.mattermost.botLoopProtection`, `channels.mattermost.accounts.<id>.botLoopProtection`, or `channels.mattermost.groups.<channelId>.botLoopProtection`; values merge key by key over `groups["*"]`, the account, and `channels.defaults.botLoopProtection`. Each suppressed post is logged as `mattermost: drop bot post (bot-loop-protection channel=<id> sender=<id>)`.
+
+The default budget (20 posts in 60 seconds) stops fast loops. Agent replies often take tens of seconds, so two agents sharing a channel can stay under it. For that setup, combine `allowBots: "mentions"` with a longer window:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      allowBots: "mentions",
+      botLoopProtection: {
+        maxEventsPerWindow: 6,
+        windowSeconds: 600,
+        cooldownSeconds: 1800,
+      },
+    },
+  },
+}
+```
+
+Only Mattermost bot accounts carry the marker. An integration that posts with a regular user's access token looks like a person to OpenClaw.
+
 ## Targets for outbound delivery
 
 Use these target formats with `openclaw message send` or cron/webhooks:
@@ -268,6 +312,7 @@ Use these target formats with `openclaw message send` or cron/webhooks:
 | `@username`                         | DM (username resolved via the Mattermost API)                 |
 
 Outbound sends support at most one attachment per message; split multiple files into separate sends.
+Unsupported binary attachment objects are rejected before any message is posted.
 
 Set `channels.mattermost.mediaMaxMb` to limit each inbound download and outbound
 attachment in MiB. `accounts.<id>.mediaMaxMb` overrides the channel root, then
@@ -335,12 +380,13 @@ Preview streaming is **on by default** in `partial` mode. Configure via `channel
   <Accordion title="Streaming modes">
     - `partial` (default): one preview post that is edited as the reply grows, then finalized with the complete answer.
     - `block` rotates the preview between completed text and tool-activity blocks, so each block stays visible as its own post instead of being overwritten in place. Parallel and consecutive tool updates share the current tool-activity post.
-    - `progress` shows a status preview while generating and only posts the final answer at completion.
+    - `progress` shows a status preview (thinking and tool activity, no partial answer text) while generating, then finalizes that preview with the answer.
     - `off` disables preview streaming. With `streaming.block.enabled: true`, completed assistant blocks are still delivered as normal block replies (separate posts) rather than a single coalesced final post.
 
   </Accordion>
   <Accordion title="Streaming behavior notes">
     - If the stream cannot be finalized in place (for example the post was deleted mid-stream), OpenClaw falls back to sending a fresh final post so the reply is never lost.
+    - The answer finalizes the preview in place only while the preview is still the newest post in its thread (or in the channel, for a preview outside a thread). If anything was posted after it, such as a `message` tool send, a person's reply, or another bot's post, OpenClaw sends the answer as a new post and deletes the preview: Mattermost keeps posts in creation order, and an edit neither moves a post nor notifies. System posts such as channel joins do not count. If the check fails, the preview is finalized in place.
     - Clearing a plan removes an otherwise empty preview; a replacement plan gets a fresh preview even when its text is unchanged. At turn completion, failed deletions of old previews are attempted once more without deleting the finalized reply. If deletion still fails, the old preview may remain; verbose logs include the cleanup failure.
     - Thinking-only payloads are suppressed from channel posts, including text that arrives as a `> Thinking` blockquote. Set `/reasoning on` to see thinking in other surfaces; the Mattermost final post keeps the answer only.
     - See [Streaming](/concepts/streaming#preview-streaming-modes) for the channel-mapping matrix.

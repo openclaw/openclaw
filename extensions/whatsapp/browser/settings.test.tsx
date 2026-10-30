@@ -1,21 +1,21 @@
 import type {
-  ControlUiChannelSettingsContext,
-  ControlUiChannelSettingsSnapshot,
+  ControlUiChannelSettingsContext as Context,
+  ControlUiChannelSettingsSnapshot as Snapshot,
 } from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { flush } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { settingsViews } from "./index.tsx";
 
-const cleanups: Array<() => void> = [];
-afterEach(() => {
-  for (const cleanup of cleanups.splice(0)) {
-    cleanup();
-  }
-  document.body.replaceChildren();
-});
-function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
-  let snapshot: ControlUiChannelSettingsSnapshot = {
+const emptyLogin = { message: null, qrDataUrl: null, connected: null, busy: false };
+const qrLogin = { ...emptyLogin, message: "Scan now", qrDataUrl: "data:image/png,qr" };
+const settle = (check: () => void) =>
+  vi.waitFor(() => {
+    flush();
+    check();
+  });
+function fixture(patch: Partial<Snapshot> = {}) {
+  let snapshot: Snapshot = {
     channelId: "whatsapp",
     status: {},
     accounts: [],
@@ -24,23 +24,14 @@ function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
     connectionEpoch: 1,
     locale: "en",
     presented: true,
-    login: { message: null, qrDataUrl: null, connected: null, busy: false },
+    login: emptyLogin,
     ...patch,
   };
   const abort = new AbortController();
-  const unavailable = () => {
-    throw new Error("WhatsApp uses native Settings markup");
-  };
-  const start = vi.fn<(force: boolean) => Promise<void>>().mockResolvedValue();
-  const wait = vi.fn<() => Promise<void>>().mockResolvedValue();
+  const unavailable = () => assert.fail("WhatsApp uses native Settings markup");
   const logout = vi.fn<() => Promise<void>>().mockResolvedValue();
-  const confirm = vi
-    .fn<NonNullable<ControlUiChannelSettingsContext["confirm"]>>()
-    .mockResolvedValue(false);
   const configDispose = vi.fn();
-  const mountConfig = vi.fn(() => configDispose);
-  const formatPhoneNumber = vi.fn((value: string) => `display:${value}`);
-  const context: ControlUiChannelSettingsContext = {
+  const context = {
     signal: abort.signal,
     props: snapshot,
     components: {
@@ -52,48 +43,52 @@ function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
       mountLobster: unavailable,
     },
     request: unavailable,
-    mountConfig,
+    mountConfig: vi.fn(() => configDispose),
     refresh: vi.fn().mockResolvedValue(undefined),
     formatRelativeTimestamp: () => "recently",
+    formatPhoneNumber: (phone) => phone,
     formatError: String,
     formatExternalText: String,
-    formatPhoneNumber,
-    formatDuration: () => "1m",
-    confirm,
-    login: { start, wait, captureLogout: () => ({ accountId: "work/account", logout }) },
-  };
-  const container = document.createElement("div");
-  document.body.append(container);
+    confirm: vi.fn<NonNullable<Context["confirm"]>>().mockResolvedValue(false),
+    login: {
+      start: vi.fn<(force: boolean) => Promise<void>>().mockResolvedValue(),
+      wait: vi.fn<() => Promise<void>>().mockResolvedValue(),
+      captureLogout: () => ({ accountId: "work/account", logout }),
+    },
+  } satisfies Context;
+  const container = document.body.appendChild(document.createElement("div"));
   const mounted = settingsViews[0]!.mount(container, context);
-  cleanups.push(() => {
+  onTestFinished(() => {
     abort.abort();
     mounted.dispose();
+    container.remove();
   });
   flush();
-  const button = (label: string) => {
-    const node = [...container.querySelectorAll("button")].find(
-      (candidate) => candidate.textContent?.trim() === label,
-    );
-    if (!node) {
-      throw new Error(`Missing ${label}`);
-    }
-    return node;
-  };
-  const fact = (label: string) =>
-    [...container.querySelectorAll("dt")].find((node) => node.textContent === label)
-      ?.nextElementSibling?.textContent;
+  const buttons = () => [...container.querySelectorAll("button")];
+  const rows = () => [...container.querySelectorAll("dt")];
   return {
+    ...context,
+    ...context.login,
     container,
-    button,
-    fact,
-    start,
-    wait,
+    buttons,
+    retainNodes(selector: string) {
+      const query = () => [...container.querySelectorAll(selector)];
+      const original = query();
+      return (inserted: (Element | null | undefined)[] = []) => {
+        const current = query().filter((node) => !inserted.includes(node));
+        expect(current).toHaveLength(original.length);
+        current.forEach((node, index) => expect(node).toBe(original[index]));
+      };
+    },
+    button: (label: string) =>
+      buttons().find((node) => node.textContent?.trim() === label) ?? assert.fail("Missing button"),
+    expectFacts(expected: Record<string, string>) {
+      const facts = rows().map((dt) => [dt.textContent, dt.nextElementSibling?.textContent]);
+      expect(Object.fromEntries(facts)).toMatchObject(expected);
+    },
     logout,
-    confirm,
-    mountConfig,
     configDispose,
-    formatPhoneNumber,
-    update(nextPatch: Partial<ControlUiChannelSettingsSnapshot>) {
+    update(nextPatch: Partial<Snapshot>) {
       snapshot = { ...snapshot, ...nextPatch };
       mounted.update(snapshot);
       flush();
@@ -101,78 +96,78 @@ function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
     dispose: mounted.dispose,
   };
 }
-
 it("keeps QR/relink actions and busy state tied to the shared login snapshot", () => {
   const f = fixture();
-  expect([...f.container.querySelectorAll("button")].map((node) => node.textContent)).toEqual([
-    "Show QR",
-    "Logout",
-    "Refresh",
-  ]);
   expect(f.button("Show QR").classList.contains("primary")).toBe(true);
   f.button("Show QR").click();
   expect(f.start).toHaveBeenCalledWith(false);
-  f.update({
-    status: { linked: true },
-    login: {
-      message: "Scan now",
-      qrDataUrl: "data:image/png;base64,fixture",
-      busy: false,
-      connected: false,
-    },
-  });
-  expect(f.container.querySelector("img")?.getAttribute("alt")).toBe("WhatsApp QR");
+  f.update({ status: { linked: true }, login: qrLogin });
   expect(f.container.querySelector('[role="status"]')?.textContent).toBe("Scan now");
   f.button("Relink").click();
   expect(f.start).toHaveBeenLastCalledWith(true);
   f.button("Wait for scan").click();
   expect(f.wait).toHaveBeenCalledOnce();
-  f.update({
-    login: {
-      message: null,
-      qrDataUrl: "data:image/png;base64,fixture",
-      busy: true,
-      connected: null,
-    },
-  });
+  f.update({ login: { ...qrLogin, message: null, busy: true } });
   for (const label of ["Relink", "Wait for scan", "Logout"]) {
     expect(f.button(label).disabled).toBe(true);
   }
 });
-
 it("uses the declared default account for configured fallback and keeps absent status booleans false", () => {
+  const configuredAccount = { accountId: "selected", configured: true };
   const f = fixture({
-    accounts: [
-      { accountId: "first", configured: false },
-      { accountId: "selected", configured: true },
-    ],
+    accounts: [{ accountId: "first", configured: false }, configuredAccount],
     defaultAccountId: "selected",
   });
-  expect(f.fact("Configured")).toBe("Yes");
-  for (const label of ["Linked", "Running", "Connected"]) {
-    expect(f.fact(label)).toBe("No");
-  }
+  f.expectFacts({ Configured: "Yes", Linked: "No", Running: "No", Connected: "No" });
   expect(f.container.querySelector(".settings-count")?.textContent).toBe("2");
   f.update({ status: { configured: false } });
-  expect(f.fact("Configured")).toBe("No");
+  f.expectFacts({ Configured: "No" });
   f.update({
     status: {},
     defaultAccountId: "missing",
-    accounts: [{ accountId: "first", configured: true }],
+    accounts: [configuredAccount],
   });
-  expect(f.fact("Configured")).toBe("Yes");
+  f.expectFacts({ Configured: "Yes" });
   expect(f.container.querySelector(".settings-count")).toBeNull();
 });
-
+it("retains localized rows and login controls until the configuration slot is disposed", async () => {
+  const f = fixture({ login: qrLogin, locale: "de" });
+  await settle(() => f.expectFacts({ Konfiguriert: "k. A." }));
+  const expectOriginal = f.retainNodes("dt, dd, button, img");
+  const qr = f.container.querySelector("img");
+  f.update({ locale: "en", status: { configured: true, running: true } });
+  expectOriginal();
+  f.expectFacts({ Configured: "Yes", Running: "Yes" });
+  f.update({ status: { configured: true, running: true, self: { e164: "+15555550123" } } });
+  const phone = f.container.querySelector("dt:nth-of-type(3)");
+  expect(phone?.nextElementSibling?.textContent).toBe("+15555550123");
+  expectOriginal([phone, phone?.nextElementSibling]);
+  const expectWithPhone = f.retainNodes("dt, dd, button, img");
+  for (const [locale, facts, alt] of [
+    ["de", { Konfiguriert: "Ja", Läuft: "Ja", Telefonnummer: "+15555550123" }, "WhatsApp-QR"],
+    ["en", { Configured: "Yes", Running: "Yes" }, "WhatsApp QR"],
+  ] as const) {
+    f.update({ locale });
+    await settle(() => f.expectFacts(facts));
+    expectWithPhone();
+    expect(qr?.getAttribute("alt")).toBe(alt);
+  }
+  expect(qr?.getAttribute("src")).toBe(qrLogin.qrDataUrl);
+  expect(f.mountConfig).toHaveBeenCalledOnce();
+  f.update({ status: { configured: true, running: true } });
+  expect(phone?.isConnected).toBe(false);
+  expectOriginal();
+  f.dispose();
+  expect(f.configDispose).toHaveBeenCalledOnce();
+  expect([f.start, f.wait, f.logout].map((mock) => mock.mock.calls)).toEqual([[], [], []]);
+});
 it("requires the operator's confirmation before invoking the captured account logout", async () => {
   const f = fixture();
   f.button("Logout").click();
   await vi.waitFor(() => expect(f.confirm).toHaveBeenCalledOnce());
-  expect(f.confirm).toHaveBeenCalledWith({
-    title: "Log out of WhatsApp account work/account?",
-    message:
-      "Logging out of account work/account stops its listener and deletes its saved credentials.",
-    confirmLabel: "Logout",
+  expect(f.confirm.mock.lastCall?.[0]).toMatchObject({
+    title: expect.stringContaining("work/account"),
+    message: expect.stringMatching(/work\/account.*listener.*credentials/),
     danger: true,
   });
   expect(f.logout).not.toHaveBeenCalled();
@@ -183,15 +178,30 @@ it("requires the operator's confirmation before invoking the captured account lo
   decision.resolve(true);
   await vi.waitFor(() => expect(f.logout).toHaveBeenCalledOnce());
 });
-
-it("updates translated labels and disposes the host configuration slot without resetting login", () => {
+it("ignores a superseded refresh failure and keeps command errors retryable", async () => {
   const f = fixture();
-  expect(f.mountConfig).toHaveBeenCalledOnce();
-  f.update({ locale: "de" });
-  expect(f.container.textContent).not.toContain("Link WhatsApp Web and monitor connection health.");
-  f.dispose();
-  expect(f.configDispose).toHaveBeenCalledOnce();
-  expect(f.start).not.toHaveBeenCalled();
-  expect(f.wait).not.toHaveBeenCalled();
-  expect(f.logout).not.toHaveBeenCalled();
+  const older = createDeferred<void>();
+  f.refresh.mockReturnValueOnce(older.promise);
+  const refresh = f.button("Refresh");
+  refresh.click();
+  refresh.click();
+  await Promise.resolve();
+  older.reject(new Error("Superseded refresh failed"));
+  await older.promise.catch(() => undefined);
+  flush();
+  expect(f.container.textContent).not.toContain("Superseded refresh failed");
+  f.refresh.mockRejectedValueOnce(new Error("Current refresh failed"));
+  refresh.click();
+  await settle(() => expect(f.container.textContent).toContain("Current refresh failed"));
+  refresh.click();
+  flush();
+  expect(f.container.textContent).not.toContain("Current refresh failed");
+  expect(f.button("Refresh")).toBe(refresh);
+  await Promise.resolve();
+  flush();
+  expect(f.container.textContent).not.toContain("Current refresh failed");
+  f.update({ status: { lastError: "Gateway is disconnected" } });
+  expect(f.container.querySelector(".settings-row__desc")?.textContent).toBe(
+    "Gateway is disconnected",
+  );
 });

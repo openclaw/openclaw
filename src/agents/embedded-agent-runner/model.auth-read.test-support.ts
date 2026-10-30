@@ -1,8 +1,9 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { Model } from "../../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.owner.js";
 import {
   createEmptyPreparedModelRuntimeFixture,
@@ -101,23 +102,18 @@ export function registerModelAuthReadTests({
   it.each(["auth", "suppressed auth", "prepared miss", "prepared model"] as const)(
     "rejects retired run authority after %s before invoking another provider hook",
     async (stage) => {
-      const entered = createDeferred();
-      const release = createDeferred();
+      const preparationGate = createEnteredGate();
       const expired = new Error("The model resolution owner retired.");
       let current = true;
-      const pause = async () => {
-        entered.resolve();
-        await release.promise;
-      };
       getAuthSpy().mockImplementation(async () => {
         if (stage === "auth" || stage === "suppressed auth") {
-          await pause();
+          await preparationGate.wait();
         }
         return { version: 1, profiles: {} };
       });
       const prepareProviderDynamicModel = vi.fn(async () => {
         if (stage === "prepared miss" || stage === "prepared model") {
-          await pause();
+          await preparationGate.wait();
         }
         return stage === "prepared model" ? discoveredModel("candidate") : undefined;
       });
@@ -145,14 +141,13 @@ export function registerModelAuthReadTests({
         },
       );
       try {
-        await Promise.race([
-          entered.promise,
-          resolution.then(() => {
-            throw new Error("Model resolution settled before the preparation barrier.");
-          }),
-        ]);
+        await awaitGateBeforeSettlement(
+          preparationGate.entered,
+          resolution,
+          "Model resolution settled before the preparation barrier.",
+        );
         current = false;
-        release.resolve();
+        preparationGate.release();
         await expect(resolution.then(() => "resolved")).rejects.toBe(expired);
         expect(prepareProviderDynamicModel).toHaveBeenCalledTimes(
           stage.startsWith("prepared") ? 1 : 0,
@@ -160,7 +155,7 @@ export function registerModelAuthReadTests({
         expect(runProviderDynamicModel).not.toHaveBeenCalled();
         expect(normalizeProviderResolvedModelWithPlugin).not.toHaveBeenCalled();
       } finally {
-        release.resolve();
+        preparationGate.release();
         await resolution.catch(() => {});
       }
     },

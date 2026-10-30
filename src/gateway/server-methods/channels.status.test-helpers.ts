@@ -28,15 +28,10 @@ export function createChannelPlugin({
 
 export function createChannelDeadlineFixture(step: string, synchronous: boolean) {
   const expire = () => {
-    vi.setSystemTime(Date.now() + 1000);
+    vi.advanceTimersByTime(1000);
     return {};
   };
-  const overrun = async () => {
-    if (!synchronous) {
-      await new Promise<never>(() => {});
-    }
-    return expire();
-  };
+  const overrun = async () => (synchronous ? expire() : new Promise<never>(() => {}));
   const plugin: ChannelPlugin = createChannelTestPluginBase({ id: "hanging" });
   const describeAccount = vi.fn(() => ({ accountId: "default" }));
   plugin.config.resolveAccount = step === "resolve" && synchronous ? expire : () => ({});
@@ -80,7 +75,7 @@ export function createQueuedSummaryFixture() {
   const plugin = createChannelPlugin({ id: "beta" });
   plugin.status = {
     get buildChannelSummary() {
-      void Promise.resolve().then(() => vi.setSystemTime(Date.now() + 1000));
+      void Promise.resolve().then(() => vi.advanceTimersByTime(1000));
       return summary;
     },
   };

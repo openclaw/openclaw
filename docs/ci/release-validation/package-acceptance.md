@@ -56,6 +56,10 @@ npm install -g --prefix "$tmp" ./openclaw.tgz
 node scripts/check-openclaw-installed-package-budget.mts "$tmp/lib/node_modules/openclaw"
 ```
 
+This check also verifies that the installed Anthropic SDK can resolve its required
+OpenTelemetry API dependency. An empty dependency directory fails even when npm
+reported a successful installation.
+
 On failure, reduce installed entries by trimming the largest dependencies or
 dist chunk and precompressed asset counts; reduce large files for a byte-budget
 failure. Do not raise the budgets: caps cannot change in already-shipped updaters.
@@ -159,9 +163,8 @@ on the candidate-relative predecessor. The lane does not run an extra Doctor or
 omit those fixtures to turn a failed schema upgrade into a pass.
 
 Current cross-OS tooling runs packaged fresh-install and upgrade checks on both
-Node 24.21.0 and the Node 26.1.0 support floor across Linux, Windows, and macOS.
-Windows packaged fresh-install retains Node 24.16.0 for its Node 24 cell because
-of the later libuv file-watcher regression. Both runtime variants consume the
+Node 24.22.1 and the Node 26.12.1 support floor across Linux, Windows, and macOS.
+Both runtime variants consume the
 same prepared candidate tarball. A focused `suite_filter` selects both Node
 variants; the Node 26 jobs and artifacts have distinct names. Installer and
 source-update lanes keep their existing Node 24 coverage. Explicitly selecting

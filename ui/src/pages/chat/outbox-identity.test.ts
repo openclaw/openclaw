@@ -7,6 +7,7 @@ import {
   readChatOutboxRecovery as readRecovery,
   restoreChatOutboxRecovery as restoreRecovery,
 } from "../../lib/chat/outbox-recovery.ts";
+import { listStoredChatOutboxes as listOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   captureChatOutboxAdmission as captureAdmission,
   storageTargetForComposer,
@@ -21,13 +22,13 @@ import {
   updateQueuedMessage as updateQueued,
 } from "./chat-queue.ts";
 import {
-  admitStoredChatComposerQueueItem as admitQueueItem,
-  listStoredChatOutboxes as listOutboxes,
   loadChatComposerState as loadComposer,
   persistChatComposerState as persistComposer,
+} from "./composer-draft-storage.ts";
+import {
+  admitStoredChatComposerQueueItemResult as admitQueueItem,
   updateStoredChatComposerQueueItems as updateQueueItems,
-  removeStoredChatComposerQueueItem as removeQueueItem,
-} from "./composer-persistence.ts";
+} from "./composer-queue-persistence.ts";
 
 const gatewayUrl = "ws://outbox.test";
 const globalScope = "global\u0000agent:selected";
@@ -64,7 +65,7 @@ function queueItem(overrides: Partial<ChatQueueItem> = {}): ChatQueueItem {
 }
 
 function admit(host: typeof state, item: ChatQueueItem) {
-  expect(admitQueueItem(host, captureAdmission(host, host.sessionKey), item)).toBe(true);
+  expect(admitQueueItem(host, captureAdmission(host, host.sessionKey), item)).toBe("admitted");
 }
 
 function expectedOutbox(item: ChatQueueItem, sessionKey = state.sessionKey, agentId = "default") {
@@ -85,6 +86,7 @@ function admittedSubmission(options = { inline: true, isCurrent: () => true }) {
       text: "@Alex review this",
       mentions: [{ profileId: "first-recipient", start: 0, end: 5 }],
       sendRunId: "submitted-run",
+      sessionId: "submitted-session",
       sendAttempts: 0,
       sendState: "waiting-idle",
     }),
@@ -185,7 +187,7 @@ const queue = Array.from({ length: 60 }, (_, i) => ({
   createdAt: i + 1,
   sendRunId: `attempt-${i}`,
   sendAttempts: i === 0 ? 1 : 0,
-  sendState: i === 0 ? "unconfirmed" : "waiting-reconnect",
+  sendState: "waiting-reconnect",
   attachments: [
     { id: `attachment-${i}`, mimeType: "text/plain", dataUrl: "data:text/plain;base64,YQ==" },
   ],
@@ -196,6 +198,10 @@ const legacy = {
   draftRevision: 42,
   updatedAt: 50,
   queue,
+};
+const recoveredLegacy = {
+  ...legacy,
+  queue: [{ ...queue[0]!, sendState: "held" }, ...queue.slice(1)],
 };
 
 it("preserves v1 global and qualified-main recovery separately", () => {
@@ -209,11 +215,15 @@ it("preserves v1 global and qualified-main recovery separately", () => {
   const scopes = entries.map((entry) => entry.sourceScopeKey).toSorted();
   expect(scopes).toEqual([qualifiedScope, globalScope]);
   expect(entries.find((entry) => entry.sourceScopeKey === globalScope)?.session).toEqual({
-    ...legacy,
-    queue: queue.map((item) => ({ ...item, sessionKey: "global", agentId: "selected" })),
+    ...recoveredLegacy,
+    queue: recoveredLegacy.queue.map((item) => ({
+      ...item,
+      sessionKey: "global",
+      agentId: "selected",
+    })),
   });
   expect(entries.find((entry) => entry.sourceScopeKey === qualifiedScope)?.session.queue).toEqual([
-    { ...queue[0], sessionKey: "agent:selected:main", agentId: "selected" },
+    { ...recoveredLegacy.queue[0], sessionKey: "agent:selected:main", agentId: "selected" },
   ]);
   expect(sessionStorage.getItem(source.key)).toBeNull();
   expect(sessionStorage.getItem(storageTargetForComposer(state).key)).toBeNull();
@@ -224,7 +234,7 @@ it("preserves v1 global and qualified-main recovery separately", () => {
 it("restores collapsed entries unsent into a confirmed empty target", () => {
   const source = seed(2, { [globalScope]: legacy });
   const [entry] = readRecovery(state).entries;
-  expect(entry?.session).toEqual(legacy);
+  expect(entry?.session).toEqual(recoveredLegacy);
   expect(listOutboxes(state)).toEqual([]);
   const destination = destinationFor("agent:selected:review", "selected");
   expect(restoreRecovery(state, entry!, destination)).toBe("restored");
@@ -232,9 +242,8 @@ it("restores collapsed entries unsent into a confirmed empty target", () => {
   const restored = listOutboxes(state)[0]!;
   expect(
     restored.queue.map((item) => [item.id, item.sendRunId, item.sendAttempts, item.attachments]),
-  ).toEqual(queue.map((item) => [item.id, item.sendRunId, item.sendAttempts, item.attachments]));
-  expect(restored.queue[0]?.sendState).toBe("unconfirmed");
-  expect(restored.queue.slice(1).every((item) => item.sendState === "failed")).toBe(true);
+  ).toEqual(queue.map((item) => [item.id, undefined, 0, item.attachments]));
+  expect(restored.queue.every((item) => item.sendState === "failed")).toBe(true);
   expect(loadComposer(state, restored.sessionKey).snapshot?.goalMode).toEqual(legacy.goalMode);
   expect(sessionStorage.getItem(source.key)).toBeNull();
   expect(restoreRecovery(state, entry!, destination)).toBe("conflict");
@@ -320,7 +329,7 @@ it("defers new recovery while full, then resumes after restoration", () => {
   const resumed = readRecovery(state);
   expect(resumed.blocked).toBe(false);
   expect(resumed.entries).toHaveLength(80);
-  expect(resumed.entries.at(-1)?.session).toEqual(legacy);
+  expect(resumed.entries.at(-1)?.session).toEqual(recoveredLegacy);
   expect(loadComposer(state, state.sessionKey).snapshot?.draft).toBe("draft 0");
   expect(sessionStorage.getItem(source.key)).toBeNull();
   expect(recovery.blocked).toBe(true);
@@ -334,7 +343,7 @@ it("recovers targeted legacy rows separately from ambiguous drafts", () => {
     agentId: "other",
     sendAttempts: 1,
     sendRunId: "original",
-    sendState: "unconfirmed",
+    sendState: "waiting-reconnect",
   });
   seed(2, {
     [globalScope]: {
@@ -351,7 +360,7 @@ it("recovers targeted legacy rows separately from ambiguous drafts", () => {
   const entries = readRecovery(state).entries;
   expect(entries).toHaveLength(2);
   const exact = entries.find((entry) => entry.session.queue?.[0]?.id === "exact")!;
-  expect(exact.session.queue).toMatchObject([exactItem]);
+  expect(exact.session.queue).toMatchObject([{ ...exactItem, sendState: "held" }]);
   expect(entries.find((entry) => entry !== exact)?.session).toMatchObject({
     draft: "ambiguous draft",
     queue: [{ id: "ambiguous" }],
@@ -359,7 +368,7 @@ it("recovers targeted legacy rows separately from ambiguous drafts", () => {
   const destination = destinationFor("agent:other:thread", "other");
   expect(restoreRecovery(state, exact, destination!)).toBe("restored");
   expect(listOutboxes(state)[0]).toMatchObject(
-    expectedOutbox(exactItem, "agent:other:thread", "other"),
+    expectedOutbox({ ...exactItem, sendState: "held" }, "agent:other:thread", "other"),
   );
   expect(readRecovery(state).entries).toHaveLength(1);
 });
@@ -384,7 +393,7 @@ it("pins admission despite notification-driven default changes", () => {
   });
   try {
     const item = queueItem({ id: "captured-admission" });
-    const admitted = admitQueueItem(host, captureAdmission(host, "main"), item);
+    const admitted = admitQueueItem(host, captureAdmission(host, "main"), item) === "admitted";
     expect(listOutboxes(host)).toEqual([expectedOutbox(item)]);
     expect(admitted).toBe(true);
   } finally {
@@ -404,20 +413,23 @@ it("mutates captured scopes after mainKey changes", () => {
   const item = original.queue[0]!;
   const next = {
     ...item,
-    sendState: "unconfirmed" as const,
+    sendState: "waiting-reconnect" as const,
     sendAttempts: 1,
     sendRunId: "captured-attempt",
+    sessionId: "captured-session",
   };
   const changes = [{ expected: item, next }];
   expect(updateQueueItems(changed, sessionKey, changes, "other")).toBe(false);
-  removeQueueItem(changed, sessionKey, item.id, item, "other");
+  updateQueueItems(changed, sessionKey, [{ expected: item, next: null }], "other");
   expect(listOutboxes(changed)).toEqual([original]);
   expect(updateQueueItems(changed, sessionKey, changes, agentId)).toBe(true);
   expect(listOutboxes(changed)[0]).toMatchObject({
     sessionKey: initial.sessionKey,
     queue: [next],
   });
-  expect(removeQueueItem(changed, sessionKey, item.id, next, agentId)).toBe(true);
+  expect(updateQueueItems(changed, sessionKey, [{ expected: next, next: null }], agentId)).toBe(
+    true,
+  );
   expect(listOutboxes(changed)).toEqual([]);
 });
 it.each(["bucket", "item"])("quarantines conflicting %s agents", (conflict) => {

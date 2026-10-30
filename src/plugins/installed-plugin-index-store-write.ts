@@ -22,15 +22,11 @@ import { readOpenClawStateLease } from "../state/openclaw-state-lease-store.js";
 import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
-import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
-import { isBundledProviderCompatPlugin } from "./bundled-provider-compat.js";
 import {
   isPluginCandidateInstallOwnerAmbiguous,
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { isGatewayPluginMetadataSnapshotActive } from "./current-plugin-metadata-state.js";
-import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.types.js";
 import {
   resolveActivePluginInstallRoots,
@@ -63,6 +59,7 @@ import {
   INSTALLED_PLUGIN_INDEX_WARNING,
   INSTALLED_PLUGIN_INDEX_VERSION,
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
+  projectInstalledPluginIndexPolicy,
   resolveInstalledPluginIndexPolicyHash,
   refreshInstalledPluginIndex,
   type InstalledPluginIndex,
@@ -71,7 +68,7 @@ import {
 import { hasMissingInstalledPluginOwnerMetadata } from "./installed-plugin-package-ownership.js";
 import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "./plugin-lifecycle-lease-identity.js";
 import {
-  withPluginLifecycleLease,
+  withPluginLifecycleLeaseAsync,
   type PluginMetadataLeaseContext,
 } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -351,10 +348,12 @@ export async function writePersistedInstalledPluginIndex(
   assertWritableInstalledPluginIndexStoreOptions(options);
   const captured = {
     ...options,
-    env: cloneEnvWithPlatformSemantics(options.env ?? process.env),
+    env: cloneEnvWithPlatformSemantics(
+      resolveInstalledPluginIndexStateDatabaseOptions(options).env ?? options.env ?? process.env,
+    ),
     filePath: resolveInstalledPluginIndexStorePath(options),
   };
-  return await withPluginLifecycleLease(
+  return await withPluginLifecycleLeaseAsync(
     resolveInstalledPluginIndexStateDatabaseOptions(captured),
     async (lease) => {
       await runInstalledPluginIndexWrite(captured, lease, (scope, identity) =>
@@ -521,37 +520,19 @@ function refreshPersistedPolicyState(
   persisted: InstalledPluginIndex,
   params: RefreshInstalledPluginIndexParams,
 ): InstalledPluginIndex {
-  const activationConfig = withBundledPluginEnablementCompat({
+  // Keep the existing ambient discovery-read behavior. Forwarding
+  // artifactPreservingReadOnly here would change this refresh's memo/snapshot scope.
+  const plugins = projectInstalledPluginIndexPolicy({
+    plugins: persisted.plugins,
     config: params.config,
-    env: params.env,
-    pluginIds: persisted.plugins
-      .filter((plugin) =>
-        isBundledProviderCompatPlugin({
-          origin: plugin.origin,
-          providers: plugin.contributions?.providers,
-          contracts: plugin.contributions?.contracts,
-        }),
-      )
-      .map((plugin) => plugin.pluginId),
-    activation: "defaults",
+    env: params.env ?? process.env,
   });
-  const normalizedConfig = normalizePluginsConfig(activationConfig?.plugins);
   return {
     ...persisted,
     policyHash: resolveInstalledPluginIndexPolicyHash(params.config, params.env),
     generatedAtMs: (params.now?.() ?? new Date()).getTime(),
     refreshReason: params.reason,
-    plugins: persisted.plugins.map((plugin) => ({
-      ...plugin,
-      enabled: resolveEffectiveEnableState({
-        id: plugin.pluginId,
-        origin: plugin.origin,
-        channelIds: plugin.contributions?.channels,
-        config: normalizedConfig,
-        rootConfig: activationConfig,
-        enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
-      }).enabled,
-    })),
+    plugins,
   };
 }
 
@@ -645,7 +626,7 @@ export async function refreshPersistedInstalledPluginIndexWithReceipt(
     );
     return receipt;
   };
-  return callerLease ? refresh(callerLease) : withPluginLifecycleLease(options, refresh);
+  return callerLease ? refresh(callerLease) : withPluginLifecycleLeaseAsync(options, refresh);
 }
 
 export function refreshPersistedInstalledPluginIndexWithLeaseSync(

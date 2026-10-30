@@ -159,7 +159,6 @@ export async function sendGatewayConversationMessage(params: {
       agentId: params.context.agentId,
       sessionKey: params.context.sourceSessionKey,
       senderIsOwner: params.context.senderIsOwner,
-      suppressTranscriptMirror: true,
       forceCoreDelivery: true,
       gatewayOwnedDelivery: true,
       requireQueuePersistence: true,

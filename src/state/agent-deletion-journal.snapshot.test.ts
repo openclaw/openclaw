@@ -8,7 +8,10 @@ import {
 } from "../test-utils/agent-deletion-journal.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState as withState } from "../test-utils/openclaw-test-state.js";
-import { createRetainedAgentDatabaseMatcherFromSnapshot as retainedMatcher } from "./agent-deletion-discovery.js";
+import {
+  createRetainedAgentDatabaseMatcherFromSnapshot as retainedMatcher,
+  listRetainedDeletedAgentIdsForCleanup,
+} from "./agent-deletion-discovery.js";
 import { reconstructAgentDeletionJournal } from "./agent-deletion-journal-recovery.js";
 import {
   completeAgentDeletionJournalInDatabase as completeJournal,
@@ -30,6 +33,26 @@ import {
   runOpenClawStateWriteTransaction as writeState,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath as stateSqlitePath } from "./openclaw-state-db.paths.js";
+
+it("observes committed cleanup IDs without decoding retained paths or using host SQL", async () => {
+  await withState({ scenario: "minimal" }, async (state) => {
+    const options = { env: state.env };
+    const read = () => withoutHostSql(() => listRetainedDeletedAgentIdsForCleanup(state.env));
+    beginJournal(journalInput(state, "retained"), options);
+    beginJournal({ ...journalInput(state, "removed"), deleteFiles: true }, options);
+    expect(await read()).toEqual(new Set());
+    writeState((writer) => {
+      completeJournal(writer, "retained", "delete-retained");
+      completeJournal(writer, "removed", "delete-removed");
+      writer.db
+        .prepare("UPDATE agent_deletion_journal SET database_paths_json = '[1]' WHERE agent_id = ?")
+        .run("retained");
+    }, options);
+    expect(await read()).toEqual(new Set(["retained"]));
+    expect(removeJournal("retained", "delete-retained", options)).toBe(true);
+    expect(await read()).toEqual(new Set());
+  });
+});
 
 it.each(["runtime", "runtime-discovery", "maintenance", "legacy"] as const)(
   "reads journal facts once per %s snapshot, including committed cleanup",

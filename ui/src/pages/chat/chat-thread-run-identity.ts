@@ -5,11 +5,8 @@ import {
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
-import {
-  userTurnRunId,
-  type ChatProjection,
-  type TurnInsertionBounds,
-} from "./chat-thread-items.ts";
+import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
+import type { ChatProjection, TurnInsertionBounds } from "./chat-thread-items.ts";
 import { chatItemStartsUserTurn, isInterSessionMessage } from "./chat-turn-boundary.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { readLiveTerminalRunId } from "./terminal-message-identity.ts";

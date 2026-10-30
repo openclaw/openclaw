@@ -5,6 +5,8 @@ export function useStreamAutoFollow(options: {
   enabled: () => boolean;
   identity: () => unknown;
   content?: () => unknown;
+  /** Virtualized streams own convergence as estimated row heights settle. */
+  scrollToEnd?: () => void;
 }) {
   let atBottom = true;
   let frame: number | undefined;
@@ -13,28 +15,40 @@ export function useStreamAutoFollow(options: {
       cancelAnimationFrame(frame);
     }
   });
+  function schedule(identity: unknown, force = false) {
+    // A virtualized trim can emit an anchor scroll before this frame runs.
+    const wasAtBottom = atBottom;
+    if (frame !== undefined) {
+      cancelAnimationFrame(frame);
+    }
+    frame = requestAnimationFrame(() => {
+      frame = undefined;
+      const container = options.container();
+      if (!container?.isConnected || options.identity() !== identity) {
+        return;
+      }
+      if (
+        !force &&
+        (!options.enabled() ||
+          (!wasAtBottom &&
+            container.scrollHeight - container.scrollTop - container.clientHeight >= 120))
+      ) {
+        return;
+      }
+      if (options.scrollToEnd) {
+        options.scrollToEnd();
+      } else {
+        container.scrollTop = container.scrollHeight;
+      }
+      atBottom = true;
+    });
+  }
   const follow = {
     reset() {
       atBottom = true;
     },
     schedule(force = false) {
-      if (frame !== undefined) {
-        cancelAnimationFrame(frame);
-      }
-      const identity = options.identity();
-      frame = requestAnimationFrame(() => {
-        frame = undefined;
-        const container = options.container();
-        if (!container?.isConnected || options.identity() !== identity) {
-          return;
-        }
-        const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
-        if (!force && (!options.enabled() || (!atBottom && distance >= 120))) {
-          return;
-        }
-        container.scrollTop = container.scrollHeight;
-        atBottom = true;
-      });
+      schedule(options.identity(), force);
     },
     handleScroll: (event: Event) => {
       const container = event.currentTarget;
@@ -46,7 +60,7 @@ export function useStreamAutoFollow(options: {
   if (options.content) {
     createEffect(
       () => [options.content?.(), options.identity()],
-      ([, identity], previous) => follow.schedule(identity !== previous?.[1]),
+      ([, identity], previous) => schedule(identity, identity !== previous?.[1]),
     );
   }
   return follow;

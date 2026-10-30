@@ -22,7 +22,7 @@ export function queueFeishuStreamingUpdate(params: {
       void session
         .update(text)
         .catch((error: unknown) =>
-          runtime.error?.(`feishu[${accountId}] streaming update failed: ${String(error)}`),
+          runtime.error(`feishu[${accountId}] streaming update failed: ${String(error)}`),
         );
     }
   });

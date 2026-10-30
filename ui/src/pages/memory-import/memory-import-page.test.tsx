@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -119,17 +120,12 @@ function createApplyResult(): MigrationsMemoryApplyResult {
 
 function createContext(request: ReturnType<typeof vi.fn>): TestContext {
   const client = { request } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
     assistantAgentId: "research",
     sessionKey: "agent:research:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const gatewayFixture = createApplicationGateway(snapshot);
   const listeners = new Set<() => void>();
   const subscribe = (notify: () => void) => {
@@ -144,6 +140,7 @@ function createContext(request: ReturnType<typeof vi.fn>): TestContext {
       }
     },
     gateway: gatewayFixture.gateway,
+    router: { subscribe: () => () => {} },
     agents: {
       state: {
         client,
@@ -432,7 +429,11 @@ describe("MemoryImportPage", () => {
 
     await openImportConfirmation(page);
     findButton(page, "import-confirm")?.click();
-    await waitForMemoryImport(() => expect(page.textContent).toContain("response lost"));
+    await waitForMemoryImport(() =>
+      expect(page.querySelector(".memory-import__confirm [role='alert']")?.textContent).toBe(
+        "response lost",
+      ),
+    );
     findButton(page, "import-confirm")?.click();
 
     await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(4));
@@ -672,6 +673,53 @@ describe("MemoryImportPage", () => {
         cleanupSolid();
         selection.dispose();
       }
+    },
+  );
+
+  it.each(["import", "backfill"] as const)(
+    "shows the next agent while the retired %s request is still pending",
+    async (operation) => {
+      const pending = createDeferredCore<unknown>();
+      const request = createRequest({
+        "migrations.memory.plan": (params) => createPlan(params.agentId),
+        "migrations.memory.apply": () => pending.promise,
+        "memory.sessionBackfill.apply": () => pending.promise,
+      });
+      const context = createContext(request);
+      context.agents.state.agentsList = agentRoster("research", "writer");
+      const page = await mountPage(context);
+      if (operation === "import") {
+        await openImportConfirmation(page);
+        findButton(page, "import-confirm")!.click();
+        await waitForButton(page, "import-confirm", true);
+      } else {
+        await waitForButton(page, "backfill-apply", false);
+        findButton(page, "backfill-apply")!.click();
+        await waitForButton(page, "backfill-apply", true);
+      }
+
+      context.agentSelection.state.selectedId = "writer";
+      context.notify();
+      await waitForMemoryImport(() => {
+        expect(page.textContent).toContain("/tmp/openclaw-writer");
+        expect(page.textContent).not.toContain("/tmp/openclaw-research");
+        expect(findButton(page, "import-confirm")).toBeNull();
+      });
+      await waitForButton(page, "import-provider-button", false);
+      pending.resolve(
+        operation === "import"
+          ? createApplyResult()
+          : {
+              days: 0,
+              candidates: 0,
+              staged: 0,
+              perDay: [],
+              cursor: { advanced: false, exhausted: true, hasMore: false },
+            },
+      );
+      await pending.promise;
+      flush();
+      expect(page.textContent).toContain("/tmp/openclaw-writer");
     },
   );
 

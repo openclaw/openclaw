@@ -1,9 +1,39 @@
 import type { DatabaseSync } from "node:sqlite";
-import { ensureColumn, tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+
+export const statePredicateColumnMigration = {
+  version: 21,
+  tables: ["meeting_transcript_sessions", "meeting_transcript_summaries", "delivery_queue_entries"],
+  columns: [
+    ...[
+      "source_account_id",
+      "source_guild_id",
+      "source_channel_id",
+      "source_meeting_url",
+      "source_thread_ts",
+      "source_file_id",
+      "metadata_agent_id",
+    ].map((column) => `meeting_transcript_sessions.${column}`),
+    "meeting_transcript_summaries.overview",
+    "delivery_queue_entries.retention_id_prefix",
+    "delivery_queue_entries.retention_max_age_ms",
+    "delivery_queue_entries.retention_max_entries",
+  ],
+  migrate: migratePredicateColumnsV21,
+  applied: "Derived meeting transcript selectors and bounded delivery retention columns (v21)",
+};
 
 /** Complete the derived projection before any writer or column-only reader runs. */
 export function migratePredicateColumnsV21(db: DatabaseSync, previousVersion: number): boolean {
-  if (previousVersion >= 21) {
+  // The historical v21 branch published its marker before these JSON projections.
+  const missing =
+    previousVersion === 21 &&
+    statePredicateColumnMigration.columns.some((name) => {
+      const separator = name.indexOf(".");
+      const table = name.slice(0, separator);
+      return tableExists(db, table) && !tableHasColumn(db, table, name.slice(separator + 1));
+    });
+  if (previousVersion >= 21 && !missing) {
     return false;
   }
   let changed = false;

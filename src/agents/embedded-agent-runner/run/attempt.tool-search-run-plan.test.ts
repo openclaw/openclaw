@@ -1,12 +1,16 @@
-import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
+import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
 import { AuthStorage } from "../../sessions/auth-storage.js";
 import { ModelRegistry } from "../../sessions/model-registry.js";
+import {
+  createClientToolDefinition as clientTool,
+  createStubTool as tool,
+} from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
@@ -14,22 +18,7 @@ import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-const tool = (name: string): AnyAgentTool => ({
-  name,
-  label: name,
-  description: "Tool inventory fixture",
-  parameters: Type.Object({}),
-  execute: async () => ({ content: [], details: undefined }),
-});
-const clientTools = [
-  {
-    type: "function" as const,
-    function: {
-      name: "client_pick_file",
-      parameters: { type: "object", properties: {} },
-    },
-  },
-];
+const clientTools = [clientTool("client_pick_file")];
 async function plan(
   options: {
     visibleTools?: AnyAgentTool[];
@@ -37,20 +26,42 @@ async function plan(
     catalogToolCount?: number;
     codeMode?: boolean;
     directory?: boolean;
-    allow?: string[];
+    allow?: string[] | null;
+    config?: OpenClawConfig;
+    configAllow?: string[];
+    agentAllow?: string[];
+    toolsEnabled?: boolean;
+    disableTools?: boolean;
+    effectiveToolsAllow?: string[];
+    sandboxed?: boolean;
+    clientTools?: typeof clientTools;
+    toolSearch?: NonNullable<OpenClawConfig["tools"]>["toolSearch"];
   } = {},
 ) {
   const visibleTools = options.visibleTools ?? [tool("dispatch_action")];
   const uncompactedTools = options.uncompactedTools ?? [];
   const config: OpenClawConfig = {
+    ...options.config,
     tools: {
+      allow: options.configAllow,
       codeMode: options.codeMode ?? false,
-      toolSearch: { enabled: !options.codeMode, mode: options.directory ? "directory" : "tools" },
+      toolSearch: options.toolSearch ?? {
+        enabled: !options.codeMode,
+        mode: options.directory ? "directory" : "tools",
+      },
+      ...options.config?.tools,
+    },
+    agents: options.config?.agents ?? {
+      entries: { main: { tools: { allow: options.agentAllow } } },
     },
   };
   const admission = prepareSystemAgentRunAdmission(config, "catalog-plan", "main", "catalog-test");
   const abort = new AbortController();
-  const surface = createAgentHarnessToolSurfaceRuntimeCore({ config, modelToolsEnabled: true });
+  const surface = createAgentHarnessToolSurfaceRuntimeCore({
+    config,
+    modelToolsEnabled: options.toolsEnabled ?? true,
+  });
+  const runClientTools = options.clientTools ?? clientTools;
   try {
     const authStorage = AuthStorage.inMemory();
     const attempt = {
@@ -73,12 +84,13 @@ async function plan(
         baseUrl: "https://example.test/v1",
       }),
       thinkLevel: "off",
-      toolsAllow: options.allow ?? ["missing_tool"],
+      toolsAllow: options.allow === null ? undefined : (options.allow ?? ["missing_tool"]),
+      disableTools: options.disableTools,
       authProfileStore: { version: 1, profiles: {} },
       authStorage,
       modelRegistry: ModelRegistry.inMemory(authStorage),
     } satisfies EmbeddedRunAttemptParams;
-    const seed = surface.compactTools([]);
+    const seed = surface.compactTools(uncompactedTools);
     const preparedToolBase = {
       toolHookContext: {
         awaitSessionDiffBaseline: undefined,
@@ -107,11 +119,11 @@ async function plan(
       skillInstructionDeliveryCache: new Map<string, Promise<boolean>>(),
       cronCreatorToolAllowlist: [],
       cronCreatorToolAllowlistCaptureRef: {},
-      effectiveToolsAllow: undefined,
+      effectiveToolsAllow: options.effectiveToolsAllow,
       forceDirectMessageTool: false,
       requireExplicitMessageTarget: false,
       inheritedToolAllowlist: [],
-      inheritedPublicationToolRef: {},
+      additionalInheritedToolNamesRef: [],
       localModelLeanEnabled: false,
       localModelLeanPreserveToolNames: [],
       replaySafetyOptions: { declaredReplaySafe: () => undefined },
@@ -138,12 +150,13 @@ async function plan(
       toolSearchControlsEnabledForRun: surface.toolSearchControlsEnabled,
       toolSearchRuntimeConfig: surface.plan.toolSearchRuntimeConfig,
       nestedToolActivityState: createAttemptNestedToolActivityState(),
-      toolsEnabled: true,
+      toolsEnabled: options.toolsEnabled ?? true,
       toolsRaw: uncompactedTools,
     } satisfies Parameters<typeof prepareEmbeddedAttemptToolCatalog>[0]["preparedToolBase"];
     const result = await prepareEmbeddedAttemptToolCatalog({
       attempt,
       setup: createAttemptSetupFixture({
+        sandbox: options.sandboxed ? createSandboxTestContext() : null,
         getProviderRuntimeHandle: () => ({
           provider: attempt.provider,
           modelId: attempt.modelId,
@@ -151,11 +164,14 @@ async function plan(
         }),
       }),
       preparedToolBase,
-      bundleTools: { clientTools, uncompactedEffectiveTools: uncompactedTools },
+      bundleTools: { clientTools: runClientTools, uncompactedEffectiveTools: uncompactedTools },
       abortSignal: abort.signal,
       executeCodeModeTool: async () => ({ content: [], details: undefined }),
     });
-    return result.toolSearchRunPlan;
+    return {
+      ...result.toolSearchRunPlan,
+      emptyExplicitToolAllowlistError: result.emptyExplicitToolAllowlistError,
+    };
   } finally {
     abort.abort();
     surface.cleanup();
@@ -164,6 +180,81 @@ async function plan(
 }
 
 describe("embedded attempt tool catalog", () => {
+  it("keeps unselected clients direct without promoting MCP or client capabilities", async () => {
+    const remote = tool("sessions_spawn");
+    setPluginToolMeta(remote, {
+      pluginId: "remote-plugin",
+      optional: false,
+      mcp: {
+        serverName: "remote",
+        safeServerName: "remote",
+        toolName: "spawn",
+        operation: "tool",
+      },
+    });
+    const result = await plan({
+      visibleTools: [remote, tool("native_direct")],
+      clientTools: [clientTool("sessions_yield")],
+      toolSearch: { mode: "tools", include: [{ source: "mcp" }] },
+      allow: [],
+    });
+    expect([...result.visibleAllowedToolNames]).toEqual([
+      "sessions_spawn",
+      "native_direct",
+      "sessions_yield",
+    ]);
+    expect([...result.capabilityToolNames]).toEqual(["native_direct"]);
+  });
+
+  it("keeps only deferred clients out of visible/live allowlists, not replay", async () => {
+    const result = await plan({
+      clientTools: [...clientTools, clientTool("client_direct")],
+      toolSearch: {
+        mode: "tools",
+        include: [{ source: "client" }],
+        exclude: [{ name: "client_direct" }],
+      },
+      allow: [],
+    });
+    expect([...result.visibleAllowedToolNames]).toEqual(["dispatch_action", "client_direct"]);
+    expect([...result.liveAllowedToolNames]).toEqual(["dispatch_action", "client_direct"]);
+    expect([...result.replayAllowedToolNames]).toEqual([
+      "client_pick_file",
+      "client_direct",
+      "dispatch_action",
+    ]);
+    expect([...result.capabilityToolNames]).toEqual(["dispatch_action"]);
+    expect(result.hasCallableTools).toBe(true);
+  });
+
+  it.each([
+    ["an explicit allowlist", { allow: ["read"] }, null],
+    ["additive plugin grants", { alsoAllow: ["optional_plugin_tool"] }, null],
+    ["a denied command-time request", { allow: ["read"] }, ["read"]],
+  ] satisfies Array<[string, NonNullable<OpenClawConfig["tools"]>, string[] | null]>)(
+    "resolves a deny-all agent under %s",
+    async (_name, tools, allow) => {
+      const result = await plan({
+        visibleTools: [],
+        clientTools: [],
+        allow,
+        config: {
+          tools,
+          agents: { entries: { main: { tools: { deny: ["*"] } } } },
+        },
+      });
+      expect(result.hasCallableTools).toBe(false);
+      expect(result.visibleAllowedToolNames.size).toBe(0);
+      if (allow) {
+        expect(result.emptyExplicitToolAllowlistError?.message).toContain(
+          "runtime toolsAllow: read",
+        );
+      } else {
+        expect(result.emptyExplicitToolAllowlistError).toBeNull();
+      }
+    },
+  );
+
   it("carries native catalog capabilities without widening direct execution authority", async () => {
     const foreignTool = tool("sessions_yield");
     setPluginToolMeta(foreignTool, { pluginId: "bundle-mcp", optional: false });
@@ -191,7 +282,7 @@ describe("embedded attempt tool catalog", () => {
   it.each([
     { name: "explicit client", cataloged: true, entries: ["client_pick_file"] },
     { name: "wildcard directory client", cataloged: false, entries: ["client_*"] },
-    { name: "explicit control", cataloged: true, entries: ["dispatch_action"] },
+    { name: "explicit control", cataloged: true, entries: ["dispatch_action", "missing_tool"] },
   ])("recognizes $name as callable", async ({ cataloged, entries }) => {
     const result = await plan({
       directory: !cataloged,
@@ -201,6 +292,7 @@ describe("embedded attempt tool catalog", () => {
       cataloged ? ["dispatch_action"] : ["dispatch_action", "client_pick_file"],
     );
     expect(result.hasCallableTools).toBe(true);
+    expect(result.emptyExplicitToolAllowlistError).toBeNull();
   });
 
   it("keeps ambiguous deferred names replayable but not directly callable", async () => {
@@ -220,5 +312,72 @@ describe("embedded attempt tool catalog", () => {
     ]);
     expect([...result.replayAllowedToolNames]).toContain("sessions_spawn");
     expect([...result.capabilityToolNames]).toEqual(["fake_plugin_tool", "sessions_spawn"]);
+  });
+});
+
+async function diagnostic(options: Parameters<typeof plan>[0] = {}) {
+  const result = await plan({ visibleTools: [], allow: [], ...options });
+  return result.emptyExplicitToolAllowlistError;
+}
+
+describe("explicit tool allowlist diagnostics", () => {
+  it.each([
+    ["skill_workshop", true, false, "sandboxed run without library-authoring authority"],
+    ["skill_*", true, false, "sandboxed run without library-authoring authority"],
+    ["query_db", true, false, "no registered tools matched"],
+    ["skill_workshop", false, false, "selected model does not support tools"],
+    ["skill_workshop", true, true, "tools are disabled for this run"],
+  ] as const)(
+    "reports the relevant gate for %s (enabled=%s, disabled=%s)",
+    async (entry, toolsEnabled, disableTools, expected) => {
+      const error = await diagnostic({
+        allow: [entry],
+        toolsEnabled,
+        disableTools,
+        sandboxed: true,
+      });
+      expect(error?.message).toContain(expected);
+      expect(error?.message).toContain(`runtime toolsAllow: ${entry}`);
+    },
+  );
+
+  it.each([
+    {
+      name: "unmatched config allowlist",
+      options: { configAllow: [" query_db ", ""], allow: ["missing_tool"] },
+      messages: [
+        "No callable tools remain",
+        "tools.allow: query_db; runtime toolsAllow: missing_tool",
+        "no registered tools matched",
+      ],
+    },
+    {
+      name: "model without tools",
+      options: { agentAllow: ["query_db"], toolsEnabled: false },
+      messages: ["agents.main.tools.allow: query_db", "the selected model does not support tools"],
+    },
+  ])("fails closed for $name", async ({ options, messages }) => {
+    const error = await diagnostic(options);
+    for (const message of messages) {
+      expect(error?.message).toContain(message);
+    }
+  });
+
+  it.each([
+    { configAllow: ["lobster", "llm-task"], disableTools: true },
+    { configAllow: ["*", "read", "cron"], effectiveToolsAllow: [] },
+    {},
+  ])("allows intentionally tool-less or unrestricted runs: %j", async (options) => {
+    expect(await diagnostic(options)).toBeNull();
+  });
+
+  it("still enforces command-time allowlists for explicitly tool-less runs", async () => {
+    const error = await diagnostic({
+      configAllow: ["read"],
+      allow: ["query_db"],
+      effectiveToolsAllow: [],
+    });
+    expect(error?.message).toContain("runtime toolsAllow: query_db");
+    expect(error?.message).not.toContain("tools.allow: read");
   });
 });

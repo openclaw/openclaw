@@ -15,7 +15,6 @@ import {
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { TtsProviderAttempt, TtsResult, TtsStatusEntry } from "../../tts/tts-runtime-types.js";
-import { setTtsMaxLength as persistTtsMaxLength } from "../../tts/tts-settings-writes.js";
 
 const ttsMocks = vi.hoisted(() => ({
   getLastTtsAttempt: vi.fn(),
@@ -29,11 +28,7 @@ const ttsMocks = vi.hoisted(() => ({
   resolveTtsConfig: vi.fn(),
   resolveTtsPrefsPathAsync: vi.fn(),
   setLastTtsAttempt: vi.fn(),
-  setSummarizationEnabled: vi.fn(),
-  setTtsEnabled: vi.fn(),
-  setTtsMaxLength: vi.fn(),
-  setTtsPersona: vi.fn(),
-  setTtsProvider: vi.fn(),
+  updateTtsPrefsAsync: vi.fn(),
   textToSpeech: vi.fn(),
 }));
 
@@ -48,6 +43,10 @@ vi.mock("../../tts/provider-registry.js", () => ({
 }));
 
 vi.mock("../../tts/tts.js", () => ttsMocks);
+vi.mock("../../tts/tts-settings-write-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/tts-settings-write-worker.js")>()),
+  updateTtsPrefsAsync: ttsMocks.updateTtsPrefsAsync,
+}));
 
 const { handleTtsCommands } = await import("./commands-tts.js");
 const PRIMARY_TTS_PROVIDER = "acme-speech";
@@ -154,7 +153,7 @@ describe("handleTtsCommands status fallback reporting", () => {
     expect((await reply("/tts limit 2000chars")).text).toBe(
       "❌ Limit must be between 100 and 4096 characters.",
     );
-    expect(ttsMocks.setTtsMaxLength).not.toHaveBeenCalled();
+    expect(ttsMocks.updateTtsPrefsAsync).not.toHaveBeenCalled();
   });
 
   it("replies with repair guidance without overwriting malformed preferences", async () => {
@@ -162,9 +161,16 @@ describe("handleTtsCommands status fallback reporting", () => {
     const malformed = '{"tts":{"provider":"custom",';
     fs.writeFileSync(prefsPath, malformed);
     ttsMocks.resolveTtsPrefsPathAsync.mockResolvedValue(prefsPath);
-    ttsMocks.setTtsMaxLength.mockImplementationOnce(persistTtsMaxLength);
+    const { updateTtsPrefsAsync } = await vi.importActual<
+      typeof import("../../tts/tts-settings-write-worker.js")
+    >("../../tts/tts-settings-write-worker.js");
+    ttsMocks.updateTtsPrefsAsync.mockImplementationOnce(updateTtsPrefsAsync);
 
     const result = await handleTtsCommands(buildTtsParams("/tts limit 2000"), true);
+
+    await expect(ttsMocks.updateTtsPrefsAsync.mock.results[0]?.value).rejects.toThrow(
+      "Repair the file or its permissions",
+    );
 
     expect(expectReply(result).text).toContain("Repair the preference file or its permissions");
     expect(fs.readFileSync(prefsPath, "utf8")).toBe(malformed);
@@ -258,7 +264,9 @@ describe("handleTtsCommands status fallback reporting", () => {
 
     expect((await reply("/tts persona")).text).toContain("alfred (Alfred) provider=google");
     await reply("/tts persona alfred");
-    expect(ttsMocks.setTtsPersona).toHaveBeenCalledWith("/tmp/tts-prefs.json", "alfred");
+    expect(ttsMocks.updateTtsPrefsAsync).toHaveBeenCalledWith("/tmp/tts-prefs.json", {
+      persona: "alfred",
+    });
   });
 
   it.each([

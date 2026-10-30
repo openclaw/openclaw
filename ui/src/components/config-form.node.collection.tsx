@@ -1,14 +1,13 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo } from "solid-js";
+import { copyWithPathPatch } from "../lib/config-form-utils.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
-import { ConfigFormArrayIdentity } from "./config-form-array-identity.ts";
 import {
   ConfigCollectionDraft,
   type ConfigCollectionDraftHandle,
   type ConfigFormCollectionDraftCommit,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
-import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
 import { arrayItemSchema } from "./config-form.array-items.ts";
 import {
   arrayConstraintCandidates,
@@ -43,6 +42,57 @@ import { Icon } from "./solid/icon.tsx";
 import { SettingsEmpty } from "./solid/settings-ui.tsx";
 
 const UNSET_ARRAY_SOURCE_IDENTITY = Symbol("unset-array-source");
+
+/** One rendered array owns row DOM identity, including unchanged cloned snapshots. */
+class ConfigFormArrayIdentity {
+  private readonly identities = new WeakMap<unknown[], readonly symbol[]>();
+  private previous: unknown[] = [];
+
+  read(value: unknown[]): readonly symbol[] {
+    const existing = this.identities.get(value);
+    if (existing?.length === value.length) {
+      this.previous = value;
+      return existing;
+    }
+    const previousKeys = this.identities.get(this.previous) ?? [];
+    // Reserve unchanged positions so a new equal value cannot steal a survivor's key.
+    const remaining = new Set(
+      this.previous.flatMap((entry, index) =>
+        configValuesEqual(entry, value[index]) ? [] : [index],
+      ),
+    );
+    const keys = value.map((entry, index) => {
+      const match = configValuesEqual(entry, this.previous[index])
+        ? index
+        : [...remaining].find((candidate) => configValuesEqual(entry, this.previous[candidate]));
+      if (match === undefined) {
+        return Symbol("array-row");
+      }
+      remaining.delete(match);
+      return previousKeys[match]!;
+    });
+    this.identities.set(value, keys);
+    this.previous = value;
+    return keys;
+  }
+
+  patch(
+    value: unknown[],
+    keys: readonly symbol[],
+    onPatch: (value: unknown[]) => boolean | void,
+  ): boolean {
+    // Publish tokens before a synchronous render; rejected candidates must not
+    // replace the original array's ownership, even when its values are equal.
+    const previous = this.previous;
+    this.identities.set(value, keys);
+    const accepted = onPatch(value) !== false;
+    if (!accepted) {
+      this.identities.delete(value);
+      this.previous = previous;
+    }
+    return accepted;
+  }
+}
 
 type CollectionProps = {
   params: ConfigNodeRenderParams;
@@ -164,7 +214,7 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
         (candidate.length > arrayValue.length &&
           arrayValue.every((entry, index) => configValuesEqual(entry, candidate[index])))),
   );
-  const wholeArrayDefault =
+  const atomicCandidate =
     constrainedCandidate ??
     (value === undefined &&
     params.isRequired &&
@@ -172,7 +222,6 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
     isSupportedConfigValueValid(schema, [])
       ? []
       : undefined);
-  const atomicCandidate = wholeArrayDefault;
   const canAppend = maximumItems === undefined || arrayValue.length < maximumItems;
   const requiresDraft = atomicCandidate === undefined && autoCandidate === undefined;
   const nextItemSchema = itemSchemaAt(arrayValue.length);
@@ -218,7 +267,7 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
       }
       nextValue[itemIndex] = nextItem.value;
     }
-    if (canApplyArrayCandidate(schema, arrayValue, nextValue, uniqueItems, true)) {
+    if (canApplyArrayCandidate(schema, arrayValue, nextValue, true)) {
       return patch(nextValue, rowIdentities);
     }
     return false;
@@ -226,7 +275,6 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
 
   return {
     arrayValue,
-    arraySourceIdentity,
     inherited,
     label,
     help,
@@ -237,23 +285,16 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
     rowIdentities,
     patch,
     minimumItems,
-    uniqueItems,
     itemSchemaAt,
     atomicCandidate,
     canAppend,
-    requiresDraft,
-    autoCandidate,
     draftId,
     draftProps,
     patchArrayItem,
     commitDraft(draft: ConfigFormCollectionDraftCommit) {
       const nextValue = [...arrayValue, draft.value];
-      const canApply =
-        !(uniqueItems && arrayValue.some((item) => configValuesEqual(item, draft.value))) &&
-        (maximumItems === undefined || arrayValue.length < maximumItems) &&
-        isSupportedConfigValueValid(nextItemSchema, draft.value) &&
-        (nextValue.length < minimumItems || isSupportedConfigValueValid(schema, nextValue));
-      return canApply && patch(nextValue, [...rowIdentities, Symbol("array-row")]);
+      // ConfigCollectionDraft validated the item and complete append candidate synchronously.
+      return patch(nextValue, [...rowIdentities, Symbol("array-row")]);
     },
     add(openDraft: () => void) {
       if (atomicCandidate) {
@@ -286,13 +327,7 @@ function ConfigArrayRow(
 ): JSX.Element {
   const nextValue = createMemo(() => props.content.arrayValue.toSpliced(props.index, 1));
   const canRemove = createMemo(() =>
-    canApplyArrayCandidate(
-      props.params.schema,
-      props.content.arrayValue,
-      nextValue(),
-      props.content.uniqueItems,
-      false,
-    ),
+    canApplyArrayCandidate(props.params.schema, props.content.arrayValue, nextValue(), false),
   );
   const node = createMemo(() => {
     const schema = props.content.itemSchemaAt(props.index);

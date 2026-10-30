@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import * as gitWorker from "../../infra/git-worker.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import * as publicationSnapshot from "../github-repository-publication-snapshot.js";
@@ -125,7 +126,10 @@ async function legacyPayload(f: Awaited<ReturnType<typeof fixture>>) {
 
 async function sourceInventory(root: string) {
   const entries = [];
-  for (const relative of ["", ...(await fs.readdir(root, { recursive: true })).toSorted()]) {
+  for (const relative of [
+    "",
+    ...(await listDirectoryTreeStrict(root)).map((walkEntry) => walkEntry.relativePath).toSorted(),
+  ]) {
     const absolute = path.join(root, relative);
     const stat = await fs.lstat(absolute, { bigint: true });
     entries.push({

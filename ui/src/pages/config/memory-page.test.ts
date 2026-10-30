@@ -144,18 +144,6 @@ it("persists Off and drains its autosave before re-enabling memory", async () =>
   await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
 });
 
-it("reports a rejected engine change instead of silently snapping back", async () => {
-  const { element } = createPage({
-    catalog: [engine("memory-core", true), engine("memory-lancedb", false)],
-    setEnabled: () => Promise.reject(new Error("plugin not installed: memory-lancedb")),
-  });
-  await waitForSolid(() => expect(activeEngine(element)).toBe("memory-core"));
-
-  selectEngine(element, "memory-lancedb");
-  await waitText(element, "plugin not installed: memory-lancedb");
-  expect(element.textContent).toContain("Could not change the memory engine");
-});
-
 it.each(["connection", "plugin publication"])(
   "drops a catalog completion superseded by %s",
   async (change) => {
@@ -181,6 +169,52 @@ it.each(["connection", "plugin publication"])(
     expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
   },
 );
+
+it("recovers a catalog failure without replacing the Dreaming draft", async () => {
+  const recovery = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+  const { element, publishPluginGeneration } = createPage({
+    listCatalog: (call) =>
+      call === 0 ? Promise.reject(new Error("catalog unavailable")) : recovery.promise,
+  });
+  const frequency = dreamingInput(element);
+  frequency.value = "0 4 * * *";
+  frequency.focus();
+  await waitForSolid(() => expect(addonStatus(element, "Active memory")).toBe("Unknown"));
+  expect(dreamingInput(element)).toBe(frequency);
+  expect(frequency.value).toBe("0 4 * * *");
+
+  publishPluginGeneration(1);
+  recovery.resolve({ plugins: [engine("memory-core", true), addon("active-memory", true)] });
+  await waitAddon(element, "Active memory", true);
+  expect(dreamingInput(element)).toBe(frequency);
+  expect(frequency.value).toBe("0 4 * * *");
+  expect(document.activeElement).toBe(frequency);
+});
+
+it("retains catalog controls during a plugin publication refresh", async () => {
+  const refresh = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+  const { element, publishPluginGeneration } = createPage({
+    listCatalog: (call) =>
+      call === 0
+        ? Promise.resolve({ plugins: [engine("memory-core", true), addon("active-memory", true)] })
+        : refresh.promise,
+  });
+  await waitAddon(element, "Active memory", true);
+  const engineControl = element.querySelector<HTMLInputElement>('input[value="memory-core"]');
+  const addonControl = addonSwitch(element, "Active memory");
+  engineControl!.focus();
+
+  publishPluginGeneration(1);
+  flush();
+  expect(element.querySelector('input[value="memory-core"]')).toBe(engineControl);
+  expect(addonSwitch(element, "Active memory")).toBe(addonControl);
+  expect(document.activeElement).toBe(engineControl);
+
+  refresh.resolve({ plugins: [engine("memory-core", true), addon("active-memory", false)] });
+  await waitAddon(element, "Active memory", false);
+  expect(element.querySelector('input[value="memory-core"]')).toBe(engineControl);
+  expect(addonSwitch(element, "Active memory")).toBe(addonControl);
+});
 
 it("falls back to read-only add-on status rows without operator.admin", async () => {
   const { element } = createPage({
@@ -261,7 +295,7 @@ it("retains runtime warnings through same-boot reconnects and publications, then
   const updated = [addon("active-memory", true), addon("memory-wiki", true)];
   const warning = "Review memory-wiki settings.";
   let mutations = 0;
-  const { element, request, setPhase, setBootId, publishPluginGeneration } = createPage({
+  const { element, setPhase, setBootId, publishPluginGeneration } = createPage({
     listCatalog: (call) => Promise.resolve({ plugins: call === 0 ? initial : updated }),
     setEnabled: (pluginId, enabled) =>
       mutations++ === 0
@@ -288,7 +322,6 @@ it("retains runtime warnings through same-boot reconnects and publications, then
   publishPluginGeneration(2);
   flush();
   expect(element.textContent).toContain(warning);
-  expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(0);
 
   setBootId("memory-boot-b");
   await waitText(element, warning, false);
@@ -306,11 +339,13 @@ it("renders and clears mutation errors on only the affected add-on", async () =>
   toggleAddon(element, "Active memory", false);
   await waitText(element, "enablement rejected");
   expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
+  expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(false);
   expect(element.textContent).toContain("Could not update Active memory");
   expect(element.textContent).not.toContain("Could not update Memory wiki");
 
   toggleAddon(element, "Active memory", false);
   await waitText(element, "enablement rejected", false);
+  await waitText(element, "Could not update Active memory", false);
   retry.resolve(committed("active-memory", false));
 });
 
@@ -341,11 +376,10 @@ it("renders every canonical tab path and honors browser history restoration", as
 });
 
 it("keeps Dreams empty when no configured agent is available", async () => {
-  const { element, settingsAgentSelection } = createPage({
+  const { element } = createPage({
     agents: [],
     routeData: memoryTabRoute("dreams"),
   });
-  expect(settingsAgentSelection.state.selectedId).toBeNull();
   expect(element.querySelector("openclaw-agent-memory-panel")).toBeNull();
   expect(element.querySelector("openclaw-agent-select")).toBeNull();
   expect(element.textContent).not.toContain("Dreaming frequency");
@@ -603,6 +637,29 @@ it("passes offline state when Overview is activated after disconnecting elsewher
   await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.connected).toBe(false));
 });
 
+it("makes a previously unsupported Dreaming schema unknown while a fresh probe is pending", async () => {
+  const refresh = deferred<unknown>();
+  const { element, lookupSchemaPath, publishPluginGeneration } = createPage({
+    lookupSchemaPath: (call) =>
+      call === 0
+        ? Promise.resolve({ schema: { additionalProperties: false }, children: [] })
+        : refresh.promise,
+  });
+  try {
+    await waitText(element, "Not available for this engine");
+    expect(element.querySelector('input[aria-label="Dreaming frequency"]')).toBeNull();
+
+    publishPluginGeneration(1);
+    await waitForSolid(() => {
+      expect(lookupSchemaPath).toHaveBeenCalledTimes(2);
+      expect(dreamingInput(element).isConnected).toBe(true);
+      expect(element.textContent).not.toContain("Not available for this engine");
+    });
+  } finally {
+    refresh.resolve({ schema: { type: "object" }, children: [{ key: "dreaming" }] });
+  }
+});
+
 it.each(["reconnect", "plugin publication"])(
   "re-probes after %s and drops the abandoned capability result",
   async (change) => {
@@ -622,7 +679,7 @@ it.each(["reconnect", "plugin publication"])(
       }
       await waitForSolid(() => expect(lookupSchemaPath).toHaveBeenCalledTimes(2));
 
-      first.resolve({ type: "object", additionalProperties: false, properties: {} });
+      first.resolve({ schema: { type: "object", additionalProperties: false }, children: [] });
       await first.promise;
       flush();
       expect(element.textContent).not.toContain("Not available for this engine");

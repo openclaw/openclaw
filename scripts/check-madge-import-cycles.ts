@@ -17,6 +17,7 @@ import {
 } from "./lib/native-typescript.mts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const children = channel("child_process");
 const scanRoots = ["src", "extensions", "ui"] as const;
 const sourceExtensions = [".ts", ".tsx"] as const;
 const ignoredPathPartPattern =
@@ -59,7 +60,6 @@ async function createImportGraph(files: readonly string[]): Promise<Map<string, 
   const executable = resolveInstalledNativeTypeScriptCompiler().executable;
   const observed: ChildProcess[] = [];
   const compilers: { child: ChildProcess; closed: Promise<void> }[] = [];
-  const children = channel("child_process");
   const observeCompiler = (message: unknown) => {
     if (
       message &&

@@ -66,21 +66,6 @@ function isExpectedMantisInterrupt(
   return false;
 }
 
-function formatUnexpectedMantisInterruptError(
-  error: unknown,
-  interruptReason: MantisCliInterruptError,
-): string {
-  const lines = [formatErrorMessage(error)];
-  if (error instanceof AggregateError) {
-    for (const [index, nestedError] of error.errors.entries()) {
-      if (!isExpectedMantisInterrupt(nestedError, interruptReason)) {
-        lines.push(`${index + 1}. ${formatErrorMessage(nestedError)}`);
-      }
-    }
-  }
-  return lines.join("\n");
-}
-
 export async function runWithMantisCliInterrupts(
   run: (signal: AbortSignal) => Promise<void>,
 ): Promise<void> {
@@ -117,9 +102,16 @@ export async function runWithMantisCliInterrupts(
         process.stderr.write(`Mantis ${interruptedBy} error details: ${errorPath}\n`);
       }
     } else {
-      process.stderr.write(
-        `Mantis ${interruptedBy} cleanup failed:\n${formatUnexpectedMantisInterruptError(error, interruptReason ?? new MantisCliInterruptError(interruptedBy))}\n`,
-      );
+      const reason = interruptReason ?? new MantisCliInterruptError(interruptedBy);
+      const lines = [formatErrorMessage(error)];
+      if (error instanceof AggregateError) {
+        for (const [index, nestedError] of error.errors.entries()) {
+          if (!isExpectedMantisInterrupt(nestedError, reason)) {
+            lines.push(`${index + 1}. ${formatErrorMessage(nestedError)}`);
+          }
+        }
+      }
+      process.stderr.write(`Mantis ${interruptedBy} cleanup failed:\n${lines.join("\n")}\n`);
     }
   } finally {
     process.off("SIGINT", onSigint);

@@ -16,11 +16,11 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import { findNormalizedProviderKey } from "openclaw/plugin-sdk/provider-model-metadata";
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import {
   fetchLmstudioModels,
+  LmstudioModelLoadError,
   prepareLmstudioModelForInference,
   type LmstudioPreparedModel,
 } from "./models.fetch.js";
@@ -40,19 +40,6 @@ import {
 const log = createSubsystemLogger("memory/embeddings");
 
 type LmstudioEmbeddingClient = Omit<RemoteEmbeddingClient, "fetchImpl">;
-type MemoryCoreAcquireLocalService = (
-  target: {
-    providerId: string;
-    baseUrl: string;
-    headers?: HeadersInit;
-    /** Reports managed-companion readiness waits; request work stays outside. */
-    onReadinessWait?: (waiting: boolean) => void;
-  },
-  signal?: AbortSignal | null,
-) => Promise<{ release: () => void } | undefined>;
-type LocalServiceAwareEmbeddingOptions = MemoryEmbeddingProviderCreateOptions & {
-  acquireLocalService?: MemoryCoreAcquireLocalService;
-};
 export const DEFAULT_LMSTUDIO_EMBEDDING_MODEL = LMSTUDIO_DEFAULT_EMBEDDING_MODEL;
 
 /** Normalizes LM Studio embedding model refs and accepts `lmstudio/` prefix. */
@@ -91,16 +78,6 @@ async function resolveLmstudioApiKey(
   }
 }
 
-function resolveEmbeddingPreloadContextLength(params: {
-  model: string;
-  models: readonly ModelDefinitionConfig[] | undefined;
-}): number | undefined {
-  const configuredModel = params.models?.find(
-    (entry) => normalizeLmstudioModel(entry.id) === params.model,
-  );
-  return configuredModel?.contextTokens ?? configuredModel?.contextWindow;
-}
-
 function resolveConfiguredLmstudioProvider(options: MemoryEmbeddingProviderCreateOptions) {
   const providers = options.config.models?.providers;
   if (!providers) {
@@ -132,27 +109,9 @@ function resolveLmstudioEmbeddingBaseUrl(configuredBaseUrl?: string): string {
   return `${resolveLmstudioInferenceBase(configuredBaseUrl)}${query}`;
 }
 
-async function resolveLmstudioEmbeddingModelKey(
-  params: LmstudioEmbeddingClient & { apiKey?: string },
-): Promise<string> {
-  const discovered = await fetchLmstudioModels({
-    baseUrl: params.baseUrl,
-    apiKey: params.apiKey,
-    headers: params.headers,
-    ssrfPolicy: params.ssrfPolicy,
-  });
-  if (!discovered.reachable || (discovered.status !== undefined && discovered.status >= 400)) {
-    return params.model;
-  }
-  return resolveLmstudioCanonicalModelKey({
-    modelKey: params.model,
-    models: discovered.models,
-  });
-}
-
 /** Creates the LM Studio embedding provider client and preloads the target model before return. */
 export async function createLmstudioEmbeddingProvider(
-  options: LocalServiceAwareEmbeddingOptions,
+  options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: LmstudioEmbeddingClient }> {
   const resolvedProvider = resolveConfiguredLmstudioProvider(options);
   const providerConfig = resolvedProvider?.config;
@@ -218,10 +177,10 @@ export async function createLmstudioEmbeddingProvider(
     headers,
     ssrfPolicy,
   };
-  const requestedContextLength = resolveEmbeddingPreloadContextLength({
-    model,
-    models: providerConfig?.models,
-  });
+  const configuredModel = providerConfig?.models?.find(
+    (entry) => normalizeLmstudioModel(entry.id) === model,
+  );
+  const requestedContextLength = configuredModel?.contextTokens ?? configuredModel?.contextWindow;
   const localServiceTarget =
     providerConfig?.localService && !remoteBaseUrl
       ? {
@@ -293,11 +252,8 @@ export async function createLmstudioEmbeddingProvider(
       } catch (error) {
         signal?.throwIfAborted();
         // Cache identity is frozen at construction, including after a failed load.
-        if (initializeIdentity && error instanceof Error && "resolvedModelKey" in error) {
-          const resolvedModelKey = error.resolvedModelKey;
-          if (typeof resolvedModelKey === "string" && resolvedModelKey.trim()) {
-            client.model = resolvedModelKey.trim();
-          }
+        if (initializeIdentity && error instanceof LmstudioModelLoadError) {
+          client.model = error.resolvedModelKey;
         }
         const details = { baseUrl, model: client.model, error: formatErrorMessage(error) };
         if (initializeIdentity) {
@@ -323,13 +279,23 @@ export async function createLmstudioEmbeddingProvider(
     // only the stable wire/cache identity here; JIT still owns the actual load.
     try {
       await withLocalServiceLease(undefined, async () => {
-        client.model = await resolveLmstudioEmbeddingModelKey({
+        const discovered = await fetchLmstudioModels({
           baseUrl,
           apiKey,
           headers: headerOverrides,
           ssrfPolicy,
-          model,
         });
+        if (
+          !discovered.reachable ||
+          (discovered.status !== undefined && discovered.status >= 400)
+        ) {
+          client.model = model;
+        } else {
+          client.model = resolveLmstudioCanonicalModelKey({
+            modelKey: model,
+            models: discovered.models,
+          });
+        }
       });
     } catch (error) {
       log.debug("lmstudio embedding variant discovery failed; using requested model", {

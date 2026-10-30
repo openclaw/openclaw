@@ -6,6 +6,7 @@ import { resolveDistArtifactLockPath } from "../scripts/lib/dist-artifact-owners
 import { listTsdownOutputRoots } from "../scripts/tsdown-build.mts";
 import { runUpdateGatewayBuild } from "../scripts/update-gateway-build.mts";
 import * as gatewayBindings from "../src/daemon/managed-gateway-bindings.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "../src/infra/update-managed-service-handoff-lease.js";
 import { CommandProcessCleanupError } from "../src/process/exec-result.js";
 import { retainCommandProcessCleanup } from "../src/process/exec-spawn.js";
 import * as nativeExec from "../src/process/exec.js";
@@ -60,12 +61,18 @@ const commandSuccess = (stdout = "") => ({
 beforeEach(() => {
   scratch = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-build-"));
   workdir = path.join(scratch, "checkout");
+  vi.stubEnv("TMPDIR", scratch);
+  const database = resolveManagedUpdateLeaseDatabasePath();
+  if (!fs.realpathSync(path.dirname(database)).startsWith(fs.realpathSync(scratch) + path.sep)) {
+    throw new Error("Non-private handoff database");
+  }
   shimDir = path.join(scratch, "bin");
   fs.mkdirSync(shimDir);
   vi.spyOn(process, "cwd").mockReturnValue(workdir);
 });
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   fs.rmSync(scratch, { recursive: true, force: true });
 });
 
@@ -76,140 +83,153 @@ describe("source update build output transaction", () => {
   const readOutput = (output: string) => read(`${output}/marker`);
   const backups = () =>
     fs.readdirSync(workdir).filter((name) => name.startsWith(".update-build-backup."));
-  beforeEach(() => fs.mkdirSync(workdir));
-
-  it("refuses publication when a shared consumer starts during candidate import", async () => {
-    const command = nativeExec.runCommandWithTimeout;
-    const git = async (directory: string, ...args: string[]) => {
-      const result = await command(["git", "-C", directory, ...args], {
-        cwd: directory,
-        timeoutMs: 5_000,
-        env: { ...process.env, GIT_CONFIG_COUNT: "0" },
-      });
-      expect(result.code, result.stderr).toBe(0);
-      return result.stdout.trim();
-    };
-    const writeRuntime = (directory: string, sha: string, marker: string) => {
-      writeFiles(directory, {
-        "dist/entry.js": "// fixture runtime\n",
-        "dist/control-ui/index.html": "ready",
-        "dist/build-info.json": JSON.stringify({ commit: sha, buildId: sha }),
-        "dist/.buildstamp": JSON.stringify({ head: sha }),
-        "dist/.runtime-postbuildstamp": JSON.stringify({ head: sha }),
-        "dist/marker": marker,
-      });
-    };
-    await git(workdir, "init", "--initial-branch=main");
-    await git(workdir, "config", "user.name", "OpenClaw Test");
-    await git(workdir, "config", "user.email", "openclaw@example.com");
-    await git(workdir, "config", "commit.gpgsign", "false");
-    writeFiles(workdir, {
-      "package.json": JSON.stringify({
-        name: "openclaw",
-        version: "2026.9.1",
-        packageManager: "pnpm@12.4.0",
-      }),
-      "pnpm-workspace.yaml": "packages: []\n",
-      ".gitignore": "dist/\nnode_modules/\n.artifacts/\n",
-    });
-    await git(workdir, "add", ".");
-    await git(workdir, "commit", "-m", "original");
-    const before = await git(workdir, "rev-parse", "HEAD");
-    await git(workdir, "checkout", "-b", "target");
-    writeFiles(workdir, { "target.txt": "candidate source\n" });
-    await git(workdir, "add", "target.txt");
-    await git(workdir, "commit", "-m", "target");
-    const target = await git(workdir, "rev-parse", "HEAD");
-    await git(workdir, "checkout", "main");
-    writeRuntime(workdir, before, "original");
-    writeFiles(workdir, { "node_modules/marker": "original dependency" });
-    const inodes = () => ["dist/marker", "node_modules/marker"].map(inode);
-    const originalInodes = inodes();
-    let consumerLive = false;
-    let imported = false;
-    const observed: boolean[] = [];
-    const siblingEnv = { HOME: path.join(scratch, "sibling-home"), OPENCLAW_PROFILE: "sibling" };
-    vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([
-      { env: siblingEnv },
-    ]);
-    vi.spyOn(gatewayBindings, "readManagedGatewayBindingState").mockImplementation(async () => {
-      observed.push(consumerLive);
-      return {
-        installed: true,
-        loadState: { status: "loaded" },
-        running: consumerLive,
-        env: siblingEnv,
-        command: {
-          programArguments: [process.execPath, path.join(workdir, "dist/entry.js"), "gateway"],
-        },
-        runtime: {
-          status: consumerLive ? "running" : "stopped",
-          pid: consumerLive ? 631 : undefined,
-        },
-      };
-    });
-    vi.spyOn(nativeExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-      if (argv[0] === "pnpm") {
-        const directory = typeof options === "number" ? undefined : options.cwd;
-        expect(directory).toBeDefined();
-        expect(directory).not.toBe(workdir);
-        if (argv.includes("install")) {
-          writeFiles(directory!, { "node_modules/marker": "candidate dependency" });
-        }
-        if (argv.includes("build")) {
-          writeRuntime(directory!, await git(directory!, "rev-parse", "HEAD"), "candidate");
-        }
-        return commandSuccess(argv.includes("--version") ? "12.4.0" : "");
-      }
-      const result = await command(argv, options);
-      if (argv.includes("index-pack")) {
-        expect(result.code, result.stderr).toBe(0);
-        imported = true;
-        consumerLive = true;
-      }
-      return result;
-    });
-    const lifecycle: string[] = [];
-    lifecycleMock.mockImplementation(async ({ args }: { args: string[] }) => {
-      lifecycle.push(args[1]!);
-      if (args[1] === "restart-selected") {
-        expect(await git(workdir, "rev-parse", "HEAD")).toBe(before);
-        expect(readOutput("dist")).toBe("original");
-        expect(read("node_modules/marker")).toBe("original dependency");
-      }
-      return 0;
-    });
-    const [outcome] = await Promise.allSettled([
-      runUpdateGatewayBuild("stop-selected", "restart-selected", shimDir, target),
-    ]);
-    expect(imported).toBe(true);
-    expect(consumerLive).toBe(true);
-    expect(lifecycle).toEqual(["stop-selected", "restart-selected"]);
-    expect({
-      outcome: outcome.status,
-      rejection: outcome.status === "rejected" ? String(outcome.reason) : undefined,
-      lastObservedConsumerLive: observed.at(-1),
-      head: await git(workdir, "rev-parse", "HEAD"),
-      targetSourceExists: exists("target.txt"),
-      runtime: readOutput("dist"),
-      dependency: read("node_modules/marker"),
-      inodes: inodes(),
-    }).toEqual({
-      outcome: "rejected",
-      rejection: expect.stringContaining("another managed Gateway"),
-      lastObservedConsumerLive: true,
-      head: before,
-      targetSourceExists: false,
-      runtime: "original",
-      dependency: "original dependency",
-      inodes: originalInodes,
-    });
-    expect(
-      fs
-        .readdirSync(path.join(workdir, ".git/objects/pack"))
-        .filter((name) => name.endsWith(".keep")),
-    ).toEqual([]);
+  beforeEach(() => {
+    fs.mkdirSync(workdir);
+    // TMPDIR can itself be inside the invoking checkout. Keep synthetic custody local.
+    fs.mkdirSync(path.join(workdir, ".git"));
   });
+
+  it.each(["shared consumer", "migration refusal", "admission unavailable"])(
+    "preserves the incumbent on %s",
+    async (failure) => {
+      const command = nativeExec.runCommandWithTimeout;
+      const git = async (directory: string, ...args: string[]) => {
+        const result = await command(["git", "-C", directory, ...args], {
+          cwd: directory,
+          timeoutMs: 5_000,
+          env: { ...process.env, GIT_CONFIG_COUNT: "0" },
+        });
+        expect(result.code, result.stderr).toBe(0);
+        return result.stdout.trim();
+      };
+      const writeRuntime = (directory: string, sha: string, marker: string) => {
+        writeFiles(directory, {
+          "dist/entry.js": `console.log(${JSON.stringify(
+            JSON.stringify({
+              protocol: 1,
+              verdict: failure === "migration refusal" ? "refuse" : "admit",
+              reasons:
+                failure === "migration refusal"
+                  ? [{ code: "heartbeat-migration", message: "Conflicting automation scratch" }]
+                  : [],
+              warnings: [],
+              facts: { candidateVersion: "2026.9.1", installedVersion: "2026.9.1", checks: [] },
+            }),
+          )}); process.exit(${failure === "migration refusal" ? 3 : failure === "admission unavailable" ? 2 : 0});`,
+          "dist/control-ui/index.html": "ready",
+          "dist/build-info.json": JSON.stringify({ commit: sha, buildId: sha }),
+          "dist/.buildstamp": JSON.stringify({ head: sha }),
+          "dist/.runtime-postbuildstamp": JSON.stringify({ head: sha }),
+          "dist/marker": marker,
+        });
+      };
+      await git(workdir, "init", "--initial-branch=main");
+      await git(workdir, "config", "user.name", "OpenClaw Test");
+      await git(workdir, "config", "user.email", "openclaw@example.com");
+      await git(workdir, "config", "commit.gpgsign", "false");
+      writeFiles(workdir, {
+        "package.json": JSON.stringify({
+          name: "openclaw",
+          version: "2026.9.1",
+          packageManager: "pnpm@12.4.0",
+          openclaw: { updateAdmissionProtocol: 1 },
+        }),
+        "pnpm-workspace.yaml": "packages: []\n",
+        ".gitignore": "dist/\nnode_modules/\n.artifacts/\n",
+      });
+      await git(workdir, "add", ".");
+      await git(workdir, "commit", "-m", "original");
+      const before = await git(workdir, "rev-parse", "HEAD");
+      await git(workdir, "checkout", "-b", "target");
+      writeFiles(workdir, { "target.txt": "candidate source\n" });
+      await git(workdir, "add", "target.txt");
+      await git(workdir, "commit", "-m", "target");
+      const target = await git(workdir, "rev-parse", "HEAD");
+      await git(workdir, "checkout", "main");
+      writeRuntime(workdir, before, "original");
+      writeFiles(workdir, { "node_modules/marker": "original dependency" });
+      const inodes = () => ["dist/marker", "node_modules/marker"].map(inode);
+      const originalInodes = inodes();
+      let consumerLive = false;
+      let imported = false;
+      const observed: boolean[] = [];
+      const siblingEnv = { HOME: path.join(scratch, "sibling-home"), OPENCLAW_PROFILE: "sibling" };
+      vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([
+        { env: siblingEnv },
+      ]);
+      vi.spyOn(gatewayBindings, "readManagedGatewayBindingState").mockImplementation(async () => {
+        observed.push(consumerLive);
+        return {
+          installed: true,
+          loadState: { status: "loaded" },
+          running: consumerLive,
+          env: siblingEnv,
+          command: {
+            programArguments: [process.execPath, path.join(workdir, "dist/entry.js"), "gateway"],
+          },
+          runtime: {
+            status: consumerLive ? "running" : "stopped",
+            pid: consumerLive ? 631 : undefined,
+          },
+        };
+      });
+      vi.spyOn(nativeExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+        if (argv[0] === "pnpm") {
+          const directory = typeof options === "number" ? undefined : options.cwd;
+          expect(directory).toBeDefined();
+          expect(directory).not.toBe(workdir);
+          if (argv.includes("install")) {
+            writeFiles(directory!, { "node_modules/marker": "candidate dependency" });
+          }
+          if (argv.includes("build")) {
+            writeRuntime(directory!, await git(directory!, "rev-parse", "HEAD"), "candidate");
+          }
+          return commandSuccess(argv.includes("--version") ? "12.4.0" : "");
+        }
+        const result = await command(argv, options);
+        if (argv.includes("index-pack")) {
+          expect(result.code, result.stderr).toBe(0);
+          imported = true;
+          consumerLive = true;
+        }
+        return result;
+      });
+      const lifecycle: string[] = [];
+      lifecycleMock.mockImplementation(async ({ args }: { args: string[] }) => {
+        lifecycle.push(args[1]!);
+        if (args[1] === "restart-selected") {
+          expect(await git(workdir, "rev-parse", "HEAD")).toBe(before);
+          expect(readOutput("dist")).toBe("original");
+          expect(read("node_modules/marker")).toBe("original dependency");
+        }
+        return 0;
+      });
+      const reachedPublication = failure === "shared consumer";
+      await expect(
+        runUpdateGatewayBuild("stop-selected", "restart-selected", shimDir, target),
+      ).rejects.toThrow(
+        reachedPublication
+          ? "another managed Gateway"
+          : failure === "migration refusal"
+            ? "Conflicting automation scratch"
+            : "Candidate admission unavailable (exit-2)",
+      );
+      expect(imported).toBe(reachedPublication);
+      expect(consumerLive).toBe(reachedPublication);
+      expect(lifecycle).toEqual(reachedPublication ? ["stop-selected", "restart-selected"] : []);
+      expect(observed.at(-1)).toBe(reachedPublication ? true : undefined);
+      expect(await git(workdir, "rev-parse", "HEAD")).toBe(before);
+      expect(exists("target.txt")).toBe(false);
+      expect(readOutput("dist")).toBe("original");
+      expect(read("node_modules/marker")).toBe("original dependency");
+      expect(inodes()).toEqual(originalInodes);
+      expect(
+        fs
+          .readdirSync(path.join(workdir, ".git/objects/pack"))
+          .filter((name) => name.endsWith(".keep")),
+      ).toEqual([]);
+    },
+  );
 
   it.each(["throw", "late", "joined"] as const)(
     "retains reference-update custody only for canonical uncertainty (%s)",

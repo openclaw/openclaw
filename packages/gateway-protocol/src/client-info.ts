@@ -47,6 +47,19 @@ export const GATEWAY_CLIENT_MODES = {
   TEST: "test",
 } as const;
 
+export function isNativeAppUiClient(client?: {
+  id?: string | null;
+  mode?: string | null;
+}): boolean {
+  return (
+    client?.mode === GATEWAY_CLIENT_MODES.UI &&
+    (client.id === GATEWAY_CLIENT_IDS.MACOS_APP ||
+      client.id === GATEWAY_CLIENT_IDS.LINUX_APP ||
+      client.id === GATEWAY_CLIENT_IDS.IOS_APP ||
+      client.id === GATEWAY_CLIENT_IDS.ANDROID_APP)
+  );
+}
+
 export type GatewayClientMode = (typeof GATEWAY_CLIENT_MODES)[keyof typeof GATEWAY_CLIENT_MODES];
 
 export type GatewayClientInfo = {
@@ -75,12 +88,16 @@ export const GATEWAY_CLIENT_CAPS = {
   AGENT_KIND: "agent-kind",
   APPROVALS: "approvals",
   CHAT_ONLY_ASSISTANT_TEXT: "chat-only-assistant-text",
+  CHAT_QUEUE_STATUS: "chat-queue-status",
   EXEC_APPROVALS: "exec-approvals",
+  HEALTH_SUMMARY: "health-summary",
   HELLO_HEALTH_ON_DEMAND: "hello-health-on-demand",
+  HELLO_PRESENCE_SELF: "hello-presence-self",
   INLINE_WIDGETS: "inline-widgets",
   MODEL_CATALOG_SNAPSHOT: "model-catalog-snapshot",
   MODEL_SELECTION_POLICY: "model-selection-policy",
   MODEL_WAIT_STATUS: "model-wait-status",
+  NO_QUESTION_INPUT: "no-question-input",
   RUN_TOOL_BINDINGS: "run-tool-bindings",
   ROSTER_MESSAGE_BODIES_OPTIONAL: "roster-message-bodies-optional",
   SESSION_SCOPED_EVENTS: "session-scoped-events",
@@ -100,20 +117,18 @@ export const GATEWAY_CLIENT_CAPS = {
 
 export type GatewayClientCap = (typeof GATEWAY_CLIENT_CAPS)[keyof typeof GATEWAY_CLIENT_CAPS];
 
-const GATEWAY_CLIENT_ID_SET = new Set<GatewayClientId>(Object.values(GATEWAY_CLIENT_IDS));
-const GATEWAY_CLIENT_MODE_SET = new Set<GatewayClientMode>(Object.values(GATEWAY_CLIENT_MODES));
+const GATEWAY_CLIENT_ID_BY_VALUE = new Map<string, GatewayClientId>(
+  Object.values(GATEWAY_CLIENT_IDS).map((value) => [value, value]),
+);
+const GATEWAY_CLIENT_MODE_BY_VALUE = new Map<string, GatewayClientMode>(
+  Object.values(GATEWAY_CLIENT_MODES).map((value) => [value, value]),
+);
 
 /** Normalizes untrusted client ids and rejects unknown values. */
 export function normalizeGatewayClientId(raw?: string | null): GatewayClientId | undefined {
   // Handshake input is intentionally case-insensitive, but policy decisions use
   // the canonical lowercase ids from the closed registry above.
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (!normalized) {
-    return undefined;
-  }
-  return GATEWAY_CLIENT_ID_SET.has(normalized as GatewayClientId)
-    ? (normalized as GatewayClientId)
-    : undefined;
+  return GATEWAY_CLIENT_ID_BY_VALUE.get(normalizeOptionalLowercaseString(raw) ?? "");
 }
 
 /** Normalizes legacy client-name fields through the canonical client-id registry. */
@@ -123,13 +138,7 @@ export function normalizeGatewayClientName(raw?: string | null): GatewayClientNa
 
 /** Normalizes untrusted client modes and rejects unknown values. */
 export function normalizeGatewayClientMode(raw?: string | null): GatewayClientMode | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (!normalized) {
-    return undefined;
-  }
-  return GATEWAY_CLIENT_MODE_SET.has(normalized as GatewayClientMode)
-    ? (normalized as GatewayClientMode)
-    : undefined;
+  return GATEWAY_CLIENT_MODE_BY_VALUE.get(normalizeOptionalLowercaseString(raw) ?? "");
 }
 
 /** Checks a client-advertised capability list without treating missing caps as errors. */

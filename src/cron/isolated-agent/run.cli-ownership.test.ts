@@ -1,79 +1,46 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunHandleActive,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import type { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
-import {
-  clearFastTestEnv,
-  isCliProviderMock,
-  loadRunCronIsolatedAgentTurn,
-  makeCronSession,
-  makeCronSessionEntry,
-  mockRunCronFallbackPassthrough,
-  patchSessionEntryMock,
-  resetRunCronIsolatedAgentTurnHarness,
-  resolveAllowedModelRefMock,
-  resolveConfiguredModelRefMock,
-  resolveCronSessionMock,
-  resolveThinkingDefaultMock,
-  restoreFastTestEnv,
-  runCliAgentMock,
-} from "./run.test-harness.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
+import * as harness from "./run.test-harness.js";
 
-const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const runCronIsolatedAgentTurn = await harness.loadRunCronIsolatedAgentTurn();
 
 const sessionId = "cron-cli-diagnostic-session";
 
-function makeCliOwnershipParams(): RunCronAgentTurnParams {
-  const cfg = { session: { store: "/tmp/store.json" } };
-  setRuntimeConfigSnapshot(cfg);
-  return {
-    deliveryAttemptFence: null,
-    cfg,
-    deps: {},
-    job: {
-      id: "cli-diagnostic-job",
-      name: "CLI diagnostic ownership",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+function makeCliOwnershipParams() {
+  return makeIsolatedAgentParamsFixture({
+    job: makeIsolatedAgentJobFixture({
       sessionTarget: "session:existing-cron-session",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: "summarize", model: "test-cli/test-model" },
-      state: {},
-    },
+    }),
     message: "summarize",
     sessionKey: "existing-cron-session",
-  };
+  });
 }
 
 describe("cron project: runCronIsolatedAgentTurn CLI ownership", () => {
-  let previousFastTestEnv: string | undefined;
-
+  let cronSession: ReturnType<typeof harness.makeCronSession>;
+  setupRunCronIsolatedAgentTurnSuite();
   beforeEach(() => {
-    previousFastTestEnv = clearFastTestEnv();
-    resetRunCronIsolatedAgentTurnHarness();
-    isCliProviderMock.mockImplementation((provider: string) => provider === "test-cli");
-    resolveConfiguredModelRefMock.mockReturnValue({ provider: "test-cli", model: "test-model" });
-    resolveAllowedModelRefMock.mockReturnValue({
-      ref: { provider: "test-cli", model: "test-model" },
+    harness.isCliProviderMock.mockImplementation((provider: string) => provider === "test-cli");
+    const ref = { provider: "test-cli", model: "test-model" };
+    harness.resolveConfiguredModelRefMock.mockReturnValue(ref);
+    harness.resolveAllowedModelRefMock.mockReturnValue({ ref });
+    harness.resolveThinkingDefaultMock.mockReturnValue("off");
+    cronSession = harness.makeCronSession({
+      sessionEntry: harness.makeCronSessionEntry({ sessionId }),
+      isNewSession: true,
     });
-    resolveThinkingDefaultMock.mockReturnValue("off");
-    resolveCronSessionMock.mockReturnValue(
-      makeCronSession({ sessionEntry: makeCronSessionEntry({ sessionId }), isNewSession: true }),
-    );
-    mockRunCronFallbackPassthrough();
-  });
-
-  afterEach(() => {
-    restoreFastTestEnv(previousFastTestEnv);
+    harness.resolveCronSessionMock.mockReturnValue(cronSession);
+    harness.mockRunCronFallbackPassthrough();
   });
 
   it.each([
@@ -83,11 +50,6 @@ describe("cron project: runCronIsolatedAgentTurn CLI ownership", () => {
     const writeStarted = createDeferred();
     const releaseWrite = createDeferred();
     const upstream = new AbortController();
-    const cronSession = makeCronSession({
-      sessionEntry: makeCronSessionEntry({ sessionId }),
-      isNewSession: true,
-    });
-    resolveCronSessionMock.mockReturnValue(cronSession);
     const binding: CliSessionBinding = {
       sessionId: "native-cli-session",
       reseedReceipt: {
@@ -97,42 +59,29 @@ describe("cron project: runCronIsolatedAgentTurn CLI ownership", () => {
         userTurnDisposition: "persisted",
       },
     };
-    const persist = expectDefined(
-      patchSessionEntryMock.getMockImplementation(),
-      "expected persistence fixture",
-    );
+    const persist = expectDefined(harness.patchSessionEntryMock.getMockImplementation(), "persist");
     let continuityCommitted = false;
     const holdContinuityWrite: typeof patchSessionEntryCore = async (scope, update, options) => {
-      const assertCommitAllowed = expectDefined(
-        options?.workerGuard?.assertCurrent,
-        "expected continuity commit guard",
-      );
+      const assertCurrent = expectDefined(options?.workerGuard?.assertCurrent, "commit guard");
       writeStarted.resolve();
       await releaseWrite.promise;
-      assertCommitAllowed();
+      assertCurrent();
       const committed = await persist(scope, update, options);
       continuityCommitted = true;
       return committed;
     };
-    runCliAgentMock.mockImplementationOnce(async (params) => {
-      expect(params.diagnosticOwner).toEqual(
-        expect.objectContaining({ sessionId, generation: expect.anything() }),
-      );
+    harness.runCliAgentMock.mockImplementationOnce(async (params) => {
+      expect(params.diagnosticOwner).toMatchObject({ sessionId, generation: expect.anything() });
+      expect(params.inputProvenance).toMatchObject({ kind: "internal_system", sourceTool: "cron" });
       expect(params.abortSignal).toBeInstanceOf(AbortSignal);
       expect(params.abortSignal.aborted).toBe(false);
       expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
-      patchSessionEntryMock.mockImplementationOnce(holdContinuityWrite);
+      harness.patchSessionEntryMock.mockImplementationOnce(holdContinuityWrite);
       return {
         payloads: [{ text: "summary done" }],
         meta: {
-          durationMs: 1,
           executionTrace: { runner: "cli" },
-          agentMeta: {
-            provider: "test-cli",
-            model: "test-model",
-            cliSessionBinding: binding,
-            usage: { input: 1, output: 1 },
-          },
+          agentMeta: { provider: "test-cli", model: "test-model", cliSessionBinding: binding },
         },
       };
     });
@@ -170,7 +119,7 @@ describe("cron project: runCronIsolatedAgentTurn CLI ownership", () => {
   });
 
   it("preserves handle cancellation as a terminal abort when the CLI rejects", async () => {
-    runCliAgentMock.mockImplementationOnce(async (params) => {
+    harness.runCliAgentMock.mockImplementationOnce(async (params) => {
       expect(params.abortSignal.aborted).toBe(false);
       expect(abortEmbeddedAgentRun(sessionId)).toBe(true);
       expect(params.abortSignal.aborted).toBe(true);
@@ -179,8 +128,10 @@ describe("cron project: runCronIsolatedAgentTurn CLI ownership", () => {
 
     const result = await runCronIsolatedAgentTurn(makeCliOwnershipParams());
 
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("agent run aborted | OPENCLAW_DIRECT_ABORT");
+    expect(result).toMatchObject({
+      status: "error",
+      error: "agent run aborted | OPENCLAW_DIRECT_ABORT",
+    });
     expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
   });
 });

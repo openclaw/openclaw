@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { hostname } from "node:os";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isGatewayProtocolResponseError } from "../../packages/gateway-client/src/protocol-request.js";
+import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
@@ -14,7 +15,7 @@ import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.js";
-import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { ignoreNonCleanupCommandError } from "../process/exec-result.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
 import { isPidAlive } from "../shared/pid-alive.js";
@@ -162,6 +163,8 @@ async function resolveScheduledTaskGatewayOwnership(
   return {
     owner,
     pids,
+    port,
+    env: ownerEnv,
     changed,
     acquireTerminationExclusion() {
       if (process.platform === "win32" && starts.size === 0) {
@@ -312,12 +315,9 @@ export async function readBoundedScheduledTaskProcess(
           // Best-effort command reading only reads/parses the launcher file. Do
           // not race strict native queries or release their children unjoined.
           () =>
-            readScheduledTaskCommand(env, { timeoutMs: remaining() }).catch((error: unknown) => {
-              if (hasCommandProcessCleanupError(error)) {
-                throw error;
-              }
-              return null;
-            }),
+            readScheduledTaskCommand(env, { timeoutMs: remaining() }).catch(
+              ignoreNonCleanupCommandError,
+            ),
           deadlineMs,
           () => performance.now(),
         )
@@ -507,21 +507,35 @@ export async function terminateScheduledTaskGatewayListeners(
     try {
       await stop?.beforeMutation?.();
       const owner = ownership.owner;
-      if (stop && windows && owner && ownership.pids.includes(owner.pid)) {
+      // Native recovery may lack the database engine selection. The file lock
+      // still targets a captured task process; the Gateway revalidates its owner.
+      const lock =
+        stop && windows && !owner && ownership.pids.length > 0
+          ? await readActiveGatewayLockIdentity({
+              env: ownership.env,
+              requireInspection: true,
+            }).catch(() => undefined)
+          : undefined;
+      const target = owner
+        ? { pid: owner.pid, ownerId: owner.owner, port: owner.port }
+        : lock?.ownerId && lock.port === ownership.port
+          ? lock
+          : undefined;
+      if (stop && windows && target && ownership.pids.includes(target.pid)) {
         let dispatched = false;
         try {
           const { callGatewayCli } = await import("../gateway/call.js");
           await callGatewayCli({
             method: "gateway.stop.request",
-            params: { target: { pid: owner.pid, ownerId: owner.owner, port: owner.port } },
-            localPortOverride: owner.port,
+            params: { target: { pid: target.pid, ownerId: target.ownerId, port: target.port } },
+            localPortOverride: target.port,
             sharedStateMode: "read-only",
             allowLocalBackendAuthNone: true,
             requiredMethods: ["gateway.stop.request"],
             assertDispatchCurrent: () => {
               assertGatewayServiceUpdateCurrent();
               assertCurrent?.();
-              ownership.assertOwnerCurrent(owner.pid);
+              ownership.assertOwnerCurrent(target.pid);
               dispatched = true;
             },
           });
@@ -531,7 +545,7 @@ export async function terminateScheduledTaskGatewayListeners(
             dispatched = false;
           }
         }
-        await waitForProcessExit(owner.pid, dispatched ? GATEWAY_SERVICE_STOP_TIMEOUT_MS : 0);
+        await waitForProcessExit(target.pid, dispatched ? GATEWAY_SERVICE_STOP_TIMEOUT_MS : 0);
       }
       if (stop && !windows) {
         await stop.end();

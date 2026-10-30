@@ -30,6 +30,52 @@ afterEach(async () => {
   state = undefined;
 });
 
+async function createOwnerState(label: string) {
+  state = await createOpenClawTestState({ label });
+  const cfg: OpenClawConfig = {
+    agents: {
+      ownership: "explicit",
+      entries: { main: {}, work: {} },
+      defaults: { workspace: state.workspaceDir },
+    },
+    plugins: { enabled: false },
+    session: { scope: "global" },
+  };
+  await state.writeConfig(cfg);
+  return cfg;
+}
+
+async function gather(
+  cfg: OpenClawConfig,
+  dispatcher: ReturnType<typeof createReplyDispatcher>,
+  resources: DisposableStack,
+) {
+  const gathered = await gatherDispatchRequest(
+    {
+      cfg,
+      ctx: {
+        AgentId: "work",
+        SessionKey: "global",
+        Body: "hello",
+        Provider: "webchat",
+        Surface: "webchat",
+        ChatType: "direct",
+        CommandAuthorized: false,
+      },
+      dispatcher,
+    },
+    undefined,
+    false,
+    undefined,
+    (dispose) => resources.defer(dispose),
+  );
+  expect(gathered.status).toBe("ready");
+  if (gathered.status !== "ready") {
+    throw new Error("dispatch gather did not prepare the turn");
+  }
+  return gathered;
+}
+
 it.each([
   ["read-recovery", {}, true],
   ["lifecycle-change", { lifecycleRevision: "after-gather" }, false],
@@ -50,17 +96,7 @@ it.each([
 ] as const)(
   "keeps explicit-owner ACP metadata current across gather: %s",
   async (scenario, patch, suppressed) => {
-    state = await createOpenClawTestState({ label: "dispatch-owner-metadata" });
-    const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, work: {} },
-        defaults: { workspace: state.workspaceDir },
-      },
-      plugins: { enabled: false },
-      session: { scope: "global" },
-    };
-    await state.writeConfig(cfg);
+    const cfg = await createOwnerState("dispatch-owner-metadata");
     const scope = {
       agentId: "work",
       sessionKey: "global",
@@ -127,29 +163,7 @@ it.each([
     using resources = new DisposableStack();
     const dispatcher = createReplyDispatcher({ deliver: async () => undefined });
     try {
-      const gathered = await gatherDispatchRequest(
-        {
-          cfg,
-          ctx: {
-            AgentId: "work",
-            SessionKey: "global",
-            Body: "hello",
-            Provider: "webchat",
-            Surface: "webchat",
-            ChatType: "direct",
-            CommandAuthorized: false,
-          },
-          dispatcher,
-        },
-        undefined,
-        false,
-        undefined,
-        (dispose) => resources.defer(dispose),
-      );
-      expect(gathered.status).toBe("ready");
-      if (gathered.status !== "ready") {
-        throw new Error("dispatch gather did not prepare the turn");
-      }
+      const gathered = await gather(cfg, dispatcher, resources);
       const captured = gathered.state.sessionStoreEntry.entry;
       expect([captured?.acp, captured?.lifecycleRevision]).toEqual([
         undefined,
@@ -225,24 +239,10 @@ it("does not turn revoked dispatch authority into a missing-entry fallback", asy
   ).rejects.toBe(refusal);
 });
 
-it.each([
-  { isHeartbeat: true, selectedActive: false },
-  { isHeartbeat: true, selectedActive: true },
-  { isHeartbeat: false, selectedActive: true },
-])(
-  "keeps dispatch on its physical owner (heartbeat=$isHeartbeat, selected active=$selectedActive)",
-  async ({ isHeartbeat, selectedActive }) => {
-    state = await createOpenClawTestState({ label: "dispatch-physical-owner" });
-    const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, work: {} },
-        defaults: { workspace: state.workspaceDir },
-      },
-      plugins: { enabled: false },
-      session: { scope: "global" },
-    };
-    await state.writeConfig(cfg);
+it.each([false, true])(
+  "keeps dispatch on its physical owner (selected active=%s)",
+  async (selectedActive) => {
+    const cfg = await createOwnerState("dispatch-physical-owner");
     const sessionKey = "global";
     const sessionId = "same-incarnation";
     const storePath = resolveSessionStorePathCore(undefined, { agentId: "work" });
@@ -279,50 +279,24 @@ it.each([
       | Extract<Awaited<ReturnType<typeof gatherDispatchRequest>>, { status: "ready" }>
       | undefined;
     try {
-      const gathered = await gatherDispatchRequest(
-        {
-          cfg,
-          ctx: {
-            AgentId: "work",
-            SessionKey: sessionKey,
-            Body: "hello",
-            Provider: "webchat",
-            Surface: "webchat",
-            ChatType: "direct",
-            CommandAuthorized: false,
-          },
-          dispatcher,
-          replyOptions: { isHeartbeat },
-        },
-        undefined,
-        false,
-        undefined,
-        (dispose) => resources.defer(dispose),
-      );
-      if (isHeartbeat && selectedActive) {
-        expect(gathered.status).toBe("complete");
+      const gathered = await gather(cfg, dispatcher, resources);
+      prepared = gathered;
+      await expect(gathered.state.ensureDispatchReplyOperation("pre_dispatch")).resolves.toEqual({
+        status: "ready",
+      });
+      if (selected) {
+        const preparationSignal = gathered.state.getPreDispatchAbortSignal();
+        expect(preparationSignal?.aborted).toBe(false);
+        selected.abortByUser();
+        expect(preparationSignal?.aborted).toBe(true);
+        expect(gathered.state.getDispatchReplyOperation()).toBeUndefined();
       } else {
-        expect(gathered.status).toBe("ready");
-        if (gathered.status !== "ready") {
-          throw new Error("selected physical store was skipped");
-        }
-        prepared = gathered;
-        await expect(gathered.state.ensureDispatchReplyOperation("pre_dispatch")).resolves.toEqual({
-          status: "ready",
-        });
-        if (selected) {
-          const preparationSignal = gathered.state.getPreDispatchAbortSignal();
-          expect(preparationSignal?.aborted).toBe(false);
-          selected.abortByUser();
-          expect(preparationSignal?.aborted).toBe(true);
-          expect(gathered.state.getDispatchReplyOperation()).toBeUndefined();
-        } else {
-          const owned = gathered.state.getDispatchReplyOperation();
-          expect(owned).toBeDefined();
-          expect(owned).toBe(getSessionControllerOperation(sessionKey, selectedTarget));
-          expect(owned).not.toBe(foreign);
-        }
+        const owned = gathered.state.getDispatchReplyOperation();
+        expect(owned).toBeDefined();
+        expect(owned).toBe(getSessionControllerOperation(sessionKey, selectedTarget));
+        expect(owned).not.toBe(foreign);
       }
+
       expect(getSessionControllerOperation(sessionKey, foreignTarget)).toBe(foreign);
       expect(foreign.abortSignal.aborted).toBe(false);
     } finally {

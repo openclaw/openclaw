@@ -6,6 +6,7 @@ import type {
   ControlUiSessionPullRequestSnapshot,
   ControlUiSessionPullRequests,
 } from "./control-ui-contract.js";
+import { recordSessionPrDiagnostic } from "./control-ui-session-pr-diagnostics.js";
 import {
   prepareControlUiSessionPrServiceTarget,
   type ControlUiSessionPrTarget,
@@ -14,18 +15,13 @@ import {
 import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-prs.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
-export type LoadSessionPullRequests = (
-  params: ControlUiSessionPullRequestsParams,
-  cacheSignal: AbortSignal | undefined,
-  read: ControlUiSessionPrReadContext,
-) => Promise<ControlUiSessionPullRequests>;
-
 export async function loadSessionPullRequests(
   params: ControlUiSessionPullRequestsParams,
   cacheSignal: AbortSignal | undefined,
   read: ControlUiSessionPrReadContext,
 ): Promise<ControlUiSessionPullRequests> {
   read.assertCurrent();
+  recordSessionPrDiagnostic("loader-import-started", read.target);
   const { loadControlUiSessionPullRequests } = await import("./control-ui-session-prs.js");
   return loadControlUiSessionPullRequests(params, { cacheSignal, read });
 }
@@ -53,7 +49,46 @@ export type PreparedSessionPrState = {
   snapshot?: ControlUiSessionPullRequestSnapshot;
   branchSnapshot?: ControlUiSessionPullRequestSnapshot;
   prepared?: boolean;
+  assertReadAuthority?: () => void;
 };
+
+export type WatchedKeyState = PreparedSessionPrState & {
+  sessionKeysByConnId: Map<string, Set<string>>;
+  refreshedAt?: number;
+  cancelRefresh?: () => void;
+  delivery?: Promise<void>;
+};
+
+/** Index each connection's requested keys on the cell that retains its snapshot. */
+export function addControlUiSessionPrMembership(
+  state: Pick<PreparedSessionPrState, "connIds"> & {
+    sessionKeysByConnId: Map<string, Set<string>>;
+  },
+  connId: string,
+  sessionKey: string,
+): void {
+  let keys = state.sessionKeysByConnId.get(connId);
+  if (!keys) {
+    keys = new Set();
+    state.sessionKeysByConnId.set(connId, keys);
+  }
+  keys.add(sessionKey);
+  state.connIds.add(connId);
+}
+
+/** Retire the unused cell through the same owner that retains its prepared readers. */
+export function retireControlUiSessionPrState<
+  State extends PreparedSessionPrState & { cancelRefresh?: () => void },
+>(state: State | undefined, keyStates: Map<string, State>): void {
+  if (!state || state.prepared || state.connIds.size > 0) {
+    return;
+  }
+  state.cancelRefresh?.();
+  state.cacheLifetime.abort(null);
+  if (keyStates.get(state.target.identity) === state) {
+    keyStates.delete(state.target.identity);
+  }
+}
 
 /** Retain only branch facts across audience/mode changes on the same physical source. */
 export function retainControlUiSessionPrBranchSnapshot(
@@ -74,6 +109,7 @@ export function retainControlUiSessionPrBranchSnapshot(
     state.branchSnapshot !== previous.branchSnapshot
   ) {
     state.branchSnapshot = previous.branchSnapshot;
+    state.assertReadAuthority = previous.assertReadAuthority;
     state.snapshot = undefined;
   }
 }
@@ -86,7 +122,11 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
     target: ControlUiSessionPrTarget,
     operation: (assertCurrent: () => void, sourceIdentity: string) => Promise<T>,
   ) => Promise<T>;
-  load: LoadSessionPullRequests;
+  load: (
+    params: ControlUiSessionPullRequestsParams,
+    cacheSignal: AbortSignal | undefined,
+    read: ControlUiSessionPrReadContext,
+  ) => Promise<ControlUiSessionPullRequests>;
   keyStates: Map<string, State>;
   stateForTarget: (target: ControlUiSessionPrTarget) => State;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
@@ -97,6 +137,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
   const preparedTargets = new Map<string, string>();
   const writeSnapshot = (state: State, snapshot: ControlUiSessionPullRequestSnapshot) => {
     const changed = JSON.stringify(state.snapshot) !== JSON.stringify(snapshot);
+    recordSessionPrDiagnostic("snapshot-published", state.target);
     state.snapshot = snapshot;
     if (changed && state.prepared) {
       sessionChanges.emit({
@@ -122,7 +163,12 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
       writeSnapshot(branchState, snapshot);
     }
   };
-  const publishSnapshot = (state: State, snapshot: ControlUiSessionPullRequestSnapshot) => {
+  const publishSnapshot = (
+    state: State,
+    snapshot: ControlUiSessionPullRequestSnapshot,
+    assertReadAuthority?: () => void,
+  ) => {
+    state.assertReadAuthority = assertReadAuthority;
     writeSnapshot(state, snapshot);
     // Branch-only loaders (including injected ones) need no separate projection callback.
     if (!snapshot.taskPullRequests) {
@@ -137,12 +183,14 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
   ): Promise<ControlUiSessionPullRequestSnapshot> => {
     const state = keyStates.get(target.identity);
     const previous = state?.snapshot;
+    let assertReadAuthority: (() => void) | undefined;
     const assertActive = () => {
       if (scope.isClosing) {
         throw new Error("Session pull-request owner is closed");
       }
       assertCurrent();
       target.assertCurrent?.();
+      assertReadAuthority?.();
     };
     const publish = (snapshot: ControlUiSessionPullRequestSnapshot) => {
       // A retry may replace stale facts, but never a newer watcher publication.
@@ -153,7 +201,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
         state.snapshot === previous &&
         state.target.identity === target.identity
       ) {
-        publishSnapshot(state, snapshot);
+        publishSnapshot(state, snapshot, assertReadAuthority);
       }
     };
     assertActive();
@@ -176,6 +224,9 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
                 publishBranchSnapshot(target, pushedSnapshot(branch));
               },
               assertCurrent: assertReadCurrent,
+              retainReadAuthority: (guard) => {
+                assertReadAuthority = guard;
+              },
             });
             assertReadCurrent();
             const snapshot = pushedSnapshot(result);
@@ -184,7 +235,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
           } catch {
             assertReadCurrent();
             publish(UNAVAILABLE_SNAPSHOT);
-            return { ...UNAVAILABLE_SNAPSHOT };
+            return UNAVAILABLE_SNAPSHOT;
           }
         });
       }),
@@ -220,7 +271,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
         }
       }
     }
-    if (target.source === null) {
+    if (target.source === null && !target.githubPullRequest) {
       state.snapshot ??= { pullRequests: [], rateLimited: false, status: "ready" };
     }
     const getProjection = deps.getSessionRowProjection;

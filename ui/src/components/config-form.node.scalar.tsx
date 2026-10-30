@@ -41,13 +41,12 @@ import { configFieldId, hintForPath, schemaType } from "./config-form.shared.ts"
 function coerceTextInputValue(
   value: string,
   schema: ConfigNodeRenderParams["schema"],
-  currentValue?: unknown,
-  editHint?: ScalarEditHint,
+  editHint: ScalarEditHint,
 ): string | number | boolean | undefined {
   const trimmed = value.trim();
   const variants = schema.anyOf ?? schema.oneOf ?? [];
   const stringCandidateValid = isSupportedConfigValueValid(schema, value);
-  const currentBranch = editHint ? editHint.branch : scalarValueBranch(currentValue);
+  const currentBranch = editHint.branch;
   const booleanCandidate = trimmed === "true" ? true : trimmed === "false" ? false : undefined;
   if (booleanCandidate !== undefined && isSupportedConfigValueValid(schema, booleanCandidate)) {
     let booleanBranchValid = false;
@@ -96,10 +95,6 @@ function coerceTextInputValue(
     return value;
   }
   return numberCandidate ?? value;
-}
-
-function numericConstraintMessage(value: number, schema: ConfigNodeRenderParams["schema"]): string {
-  return isSupportedConfigValueValid(schema, value) ? "" : t("configForm.invalidNumber");
 }
 
 type NumericInputState = { parsed?: number; message: string };
@@ -210,7 +205,7 @@ function ScalarInput(props: {
     const invalidString = t("configForm.invalidString");
     const invalidNumber = t("configForm.invalidNumber");
     const textInputState = (raw: string, editHint: ScalarEditHint) => {
-      const candidate = coerceTextInputValue(raw, schema, effectiveValue, editHint);
+      const candidate = coerceTextInputValue(raw, schema, editHint);
       const valid = isSupportedConfigValueValid(schema, candidate);
       const clearOptional = raw === "" && !isRequired && !valid;
       return {
@@ -288,7 +283,9 @@ function ScalarInput(props: {
       const next = resolveNumericInputState(target, props.params);
       if (props.stepped && next.parsed !== undefined) {
         next.parsed = normalizeNumericValue(next.parsed, props.params.schema);
-        next.message = numericConstraintMessage(next.parsed, props.params.schema);
+        next.message = isSupportedConfigValueValid(props.params.schema, next.parsed)
+          ? ""
+          : t("configForm.invalidNumber");
         target.value = formatConfigValueText(next.parsed);
       }
       if (draft.setValidity(target, next.message) && (allowClear || next.parsed !== undefined)) {
@@ -350,6 +347,9 @@ function ScalarInput(props: {
     get "aria-label"() {
       return state().field.label;
     },
+    get "aria-required"() {
+      return state().field.required ? ("true" as const) : undefined;
+    },
     get "aria-describedby"() {
       return [state().field.helpId, state().errorId].filter(Boolean).join(" ");
     },
@@ -374,6 +374,9 @@ function ScalarInput(props: {
         !props.params.compact &&
         props.params.value === undefined &&
         state().effectiveValue !== undefined &&
+        event.currentTarget instanceof HTMLInputElement &&
+        event.currentTarget.value === "" &&
+        !event.currentTarget.validity.badInput &&
         (event.key === "ArrowUp" || event.key === "ArrowDown")
       ) {
         event.preventDefault();
@@ -529,6 +532,7 @@ export function SelectInput(props: {
         <select
           class="settings-select"
           aria-label={field().label}
+          aria-required={field().required ? "true" : undefined}
           aria-describedby={field().helpId}
           disabled={props.params.disabled}
           value={selectedValue()}

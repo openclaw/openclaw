@@ -2,6 +2,19 @@
   "minimumPostgresVersion": 16,
   "fragments": [
     {
+      "id": "local_workspace_projections",
+      "tables": [
+        "local_workspace_projections",
+        "local_workspace_manifest_nodes",
+        "local_workspace_tree_packs",
+        "local_workspace_source_path_sets"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-local_workspace_projections.postgres.sql"
+    },
+    {
       "id": "user_profiles",
       "tables": [
         "user_profiles",
@@ -56,6 +69,30 @@
       "file": "fragment-worker_environment_session_attachments.postgres.sql"
     },
     {
+      "id": "durable_background_processes",
+      "tables": [
+        "durable_background_processes"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-durable_background_processes.postgres.sql"
+    },
+    {
+      "id": "sandbox_persistent_execs",
+      "tables": [
+        "sandbox_persistent_execs"
+      ],
+      "indexes": [
+        "idx_sandbox_persistent_execs_container",
+        "idx_sandbox_persistent_execs_container_name",
+        "idx_sandbox_persistent_execs_source"
+      ],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-sandbox_persistent_execs.postgres.sql"
+    },
+    {
       "id": "user_background_images",
       "tables": [
         "user_background_images"
@@ -66,16 +103,6 @@
       ],
       "activation": "first-use",
       "file": "fragment-user_background_images.postgres.sql"
-    },
-    {
-      "id": "local_workspace_projections",
-      "tables": [
-        "local_workspace_projections"
-      ],
-      "indexes": [],
-      "dependencies": [],
-      "activation": "first-use",
-      "file": "fragment-local_workspace_projections.postgres.sql"
     },
     {
       "id": "update_runs",

@@ -29,12 +29,12 @@ class RequesterProfile {
     Object.freeze(this);
   }
 
-  static read(value: unknown, context: MsgContext): PreparedRequesterProfile | undefined {
+  static read(value: unknown, context?: MsgContext): PreparedRequesterProfile | undefined {
     if (typeof value !== "object" || value === null || !(#profile in value)) {
       return undefined;
     }
-    const binding = requesterBinding(context);
-    return value.#binding.every((part, index) => part === binding[index]) &&
+    const binding = context && requesterBinding(context);
+    return (!binding || value.#binding.every((part, index) => part === binding[index])) &&
       value.#profile.isCurrent()
       ? value.#profile
       : undefined;
@@ -48,4 +48,17 @@ export function bindRequesterProfile(context: MsgContext, profile: PreparedReque
 
 export function getRequesterProfile(context: MsgContext): PreparedRequesterProfile | undefined {
   return RequesterProfile.read(Reflect.get(context, REQUESTER_PROFILE), context);
+}
+
+/** Transfer verified ingress identity to its runtime carrier, never serialized requester facts. */
+export function transferRequesterProfile(context: MsgContext, carrier: object): void {
+  if (getRequesterProfile(context)) {
+    Object.assign(carrier, { [REQUESTER_PROFILE]: Reflect.get(context, REQUESTER_PROFILE) });
+  }
+}
+
+export function readTransferredRequesterProfile(
+  carrier: object,
+): PreparedRequesterProfile | undefined {
+  return RequesterProfile.read(Reflect.get(carrier, REQUESTER_PROFILE));
 }

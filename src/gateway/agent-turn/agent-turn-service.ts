@@ -1,15 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, type AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
-import { isMainSessionRecoveryReconciliationCandidate } from "../../agents/main-session-recovery/main-session-recovery-state.js";
-import type { MainSessionRecoveryOwnerLease } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
-import {
-  acquireSessionActorStorage,
-  runWithSessionActorStorage,
-} from "../../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
+import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { withPluginRetentionOwner } from "../../plugins/plugin-retention-diagnostics.js";
 import {
   getRpcSourceForGateway,
   isRpcSourceRegistered,
@@ -26,20 +23,19 @@ import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js
 import { prepareAgentSession } from "../server-methods/agent-session-prepare.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "../server-methods/shared-types.js";
 import { resolveAgentRunSessionCreation } from "../session-creation-provenance.js";
-import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
 import { AgentRequestReservationEndedError, replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
-import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import { prepareAgentRequestRouting } from "./agent-request-routing.js";
 import { prepareAgentRunDispatch } from "./agent-run-admission-phase.js";
 import { isGatewayAgentAbortRejection } from "./agent-run-dispatch-outcome.js";
 import { startAgentRunExecution } from "./agent-run-execution-phase.js";
 import {
   persistAgentSessionPhase,
+  type AgentSessionPersistParams,
   type AgentSessionPersistResult,
 } from "./agent-session-persist.js";
 import { finishAgentTurnPreparation } from "./agent-turn-admission-cleanup.js";
@@ -54,7 +50,8 @@ import { prepareAgentWaitForTurn } from "./agent-wait.js";
 
 export function createAgentTurnService(
   { context, isWebchatConnect }: Pick<GatewayRequestHandlerOptions, "context" | "isWebchatConnect">,
-  assertContextCurrent?: () => void,
+  // Accepted execution outlives its caller: pass Gateway lifetime here, never caller authority.
+  assertGatewayLifetimeCurrent?: () => void,
 ) {
   const startTurn = async ({
     controllerInput,
@@ -62,6 +59,7 @@ export function createAgentTurnService(
     replyExpectation,
     settleWakeReplay,
     assertAdmissionCurrent,
+    assertCancellationCurrent,
     executionSource,
     assertInputCommitAllowed,
     hasCurrentClientAuthority,
@@ -91,7 +89,6 @@ export function createAgentTurnService(
     assertInputCommitAllowed?.();
     const respond: RespondFn = (ok, payload, error, meta) =>
       io.emitAcceptance([ok, payload, error], meta);
-    const runFacts = { ...preflight };
     const {
       request,
       cfg,
@@ -100,18 +97,12 @@ export function createAgentTurnService(
       expectedSession,
       expectedExistingSessionId,
       normalizedSpawned,
-      isRestartRecoveryResumeRun,
       suppressVisibleSessionEffects,
       agentDedupeKeys,
-    } = runFacts;
+    } = preflight;
     // Cached replay returns before a new lifecycle generation is observed, matching
     // the idempotency path that preceded this service extraction.
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const initialSessionGroups = {
-      groupId: normalizedSpawned.groupId,
-      groupChannel: normalizedSpawned.groupChannel,
-      groupSpace: normalizedSpawned.groupSpace,
-    };
     const ownerConnId = typeof principal?.connId === "string" ? principal.connId : undefined;
     const ownerDeviceId =
       typeof principal?.connect?.device?.id === "string" ? principal.connect.device.id : undefined;
@@ -119,6 +110,7 @@ export function createAgentTurnService(
       ...preflight,
       reconcileDurableInput,
       assertAdmissionCurrent,
+      assertCancellationCurrent,
       ownerConnId,
       ownerDeviceId,
       context,
@@ -135,7 +127,7 @@ export function createAgentTurnService(
       onCancelled: dedupeLifecycle.cancelOwnedReservation,
     });
     const assertRequestCurrent = composeSessionSourceAssertion([
-      assertContextCurrent,
+      assertGatewayLifetimeCurrent,
       assertAdmissionCurrent,
       () => {
         const signal = preparationSource.input?.abortSignal;
@@ -178,7 +170,7 @@ export function createAgentTurnService(
       if (!storageActive) {
         throw new Error("Agent session storage admission ended");
       }
-      assertContextCurrent?.();
+      assertGatewayLifetimeCurrent?.();
     };
     const sessionStorage = await acquireSessionActorStorage(
       { sessionKey: routing.requestedSessionKey, agentId: routing.agentId },
@@ -221,7 +213,6 @@ export function createAgentTurnService(
       let agentId = routing.agentId;
       let requestedSessionKey = routing.requestedSessionKey;
       let preparedOffloadedRefs: OffloadedRef[] = [];
-      let mainRestartRecoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
       let releaseGatewayAdmission = () => {};
       let respondToAdmissionOutcome = () => false;
       const cronContinuation = createCronContinuationController({
@@ -280,12 +271,12 @@ export function createAgentTurnService(
           isNewSession: false,
           skipAgentInitialSessionTouch: false,
           admittedSessionId: requestedSessionId ?? runId,
-          ...initialSessionGroups,
+          groupId: normalizedSpawned.groupId,
+          groupChannel: normalizedSpawned.groupChannel,
+          groupSpace: normalizedSpawned.groupSpace,
         };
-        let effectiveBootstrapContextRunKind = request.bootstrapContextRunKind;
-        let restoredCronContinuationIdentity:
-          | Pick<RestoredCronContinuation, "lifecycleRevision" | "sessionId">
-          | undefined;
+        let effectiveBootstrapContextRunKind = preflight.bootstrapContextRunKind;
+        let restoredCronContinuationIdentity: AgentSessionPersistParams["restoredCronContinuationIdentity"];
         let cfgForAgent: OpenClawConfig | undefined;
         let freshChild = false;
         let sessionStorePath: string | undefined;
@@ -382,7 +373,7 @@ export function createAgentTurnService(
             mainSessionKey,
             touchInteraction,
           } = preparedSession;
-          let { entry } = preparedSession;
+          const { entry } = preparedSession;
           cfgForAgent = cfgLocal;
           freshChild = preparedSession.freshChild;
           sessionStorePath = storePath;
@@ -398,31 +389,6 @@ export function createAgentTurnService(
           if (sessionAuthorizationError) {
             io.emitAcceptance([false, undefined, sessionAuthorizationError]);
             return;
-          }
-          if (
-            !isRestartRecoveryResumeRun &&
-            entry &&
-            isMainSessionRecoveryReconciliationCandidate(entry)
-          ) {
-            // Replay can precede startup recovery. Restore the dead predecessor's
-            // custody before this admission touches its row or replaces its claim.
-            const { reconcileOrphanedGatewaySessionRecovery } =
-              await import("../session-recovery-service.js");
-            entry =
-              (await reconcileOrphanedGatewaySessionRecovery({
-                cfg: cfgLocal,
-                target: {
-                  agentId: sessionAgentId,
-                  storePath,
-                  canonicalKey: canonicalSessionKey,
-                  storeKeys,
-                },
-                entry,
-                authorizedPluginId: principal?.internal?.pluginRuntimeOwnerId,
-                commitGuard: assertRequestCurrent,
-                workerPlacementContext: resolveSessionWorkerPlacementContext(context),
-              })) ?? entry;
-            assertRequestCurrent();
           }
           effectiveBootstrapContextRunKind = preparedSession.effectiveBootstrapContextRunKind;
           restoredCronContinuationIdentity = preparedSession.restoredCronContinuationIdentity;
@@ -517,6 +483,7 @@ export function createAgentTurnService(
             return;
           }
           const persistedSession = await persistAgentSessionPhase({
+            controllerInput: earlyRunAbort?.entry?.input,
             freshChild: preparedSession.freshChild,
             onSessionCommitted: (committedEntry) => {
               session.sessionEntry = committedEntry;
@@ -550,7 +517,6 @@ export function createAgentTurnService(
               ? { operatorRoleActor: principal.internal.operatorRoleActor }
               : {}),
             lifecycleGeneration,
-            isRestartRecoveryResumeRun,
             runId,
             agentId,
             suppressVisibleSessionEffects,
@@ -565,9 +531,6 @@ export function createAgentTurnService(
             assertGatewayWorkAdmissionAllowed: admissionController.assertAllowed,
             respondToGatewayAdmissionOutcome: admissionController.respondToOutcome,
             setCronContinuationClaim: cronContinuation.setClaim,
-            setMainRestartRecoveryOwnerLease: (lease) => {
-              mainRestartRecoveryOwnerLease = lease;
-            },
             respond,
           });
           if (!persistedSession) {
@@ -599,7 +562,7 @@ export function createAgentTurnService(
         const { activeSessionAgentId } = delivery;
 
         const runParams = {
-          ...runFacts,
+          ...preflight,
           ...session,
           cfgForAgent,
           freshChild,
@@ -651,6 +614,7 @@ export function createAgentTurnService(
             dedupeLifecycle.markAccepted(accepted);
           },
           getOwnedAgentDedupeKeys: dedupeLifecycle.ownedReservationKeys,
+          releaseUnacceptedReservation: dedupeLifecycle.releaseUnacceptedReservation,
         });
         if (!preparedDispatch) {
           return;
@@ -667,10 +631,9 @@ export function createAgentTurnService(
               startAgentRunExecution({
                 ...runParams,
                 ...session,
-                assertContextCurrent,
+                assertGatewayLifetimeCurrent,
                 executionSource,
                 prepared: preparedDispatch,
-                mainRestartRecoveryOwnerLease,
                 agentId,
                 imageOrder,
                 media,
@@ -688,7 +651,6 @@ export function createAgentTurnService(
         });
         preparationSource.transfer();
         gatewayAdmissionTransferred = true;
-        mainRestartRecoveryOwnerLease = undefined;
       } catch (error) {
         if (!(error instanceof AgentRequestReservationEndedError)) {
           throw error;
@@ -699,7 +661,6 @@ export function createAgentTurnService(
       } finally {
         await finishAgentTurnPreparation({
           transferred: gatewayAdmissionTransferred,
-          lease: mainRestartRecoveryOwnerLease,
           cleanupRunAbort: () => earlyRunAbort?.cleanup(),
           releaseGatewayAdmission,
           releaseCronContinuation: cronContinuation.releaseWithRecovery,
@@ -710,7 +671,9 @@ export function createAgentTurnService(
       }
     };
     try {
-      await (sessionStorage ? runWithSessionActorStorage(sessionStorage, execute) : execute());
+      await withPluginRetentionOwner({ runId, serviceId: "gateway-agent-turn" }, () =>
+        sessionStorage ? runWithSessionActorStorage(sessionStorage, execute) : execute(),
+      );
     } finally {
       if (!gatewayAdmissionTransferred) {
         await releaseSessionStorage();

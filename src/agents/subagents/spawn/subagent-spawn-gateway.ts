@@ -17,7 +17,8 @@ import { isGatewayRpcUnavailableError } from "../../../gateway/transport-error.j
 import type { WorkerTurnExecutionIdentity } from "../../../gateway/worker-environments/placement-turn-claim-events.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
-import { captureRequesterOrigin } from "../../requester-origin.js";
+import { monotonicNow } from "../../../shared/monotonic-time.js";
+import { captureRequesterOrigin, requesterCreatorProfileId } from "../../requester-origin.js";
 import {
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
@@ -68,7 +69,13 @@ export function captureSubagentSpawnGatewayContext() {
           requesterOrigin,
         })
       : undefined;
-  return { gatewayContextResolver, operatorAuthority, requester };
+  return {
+    gatewayContextResolver,
+    operatorAuthority,
+    requester,
+    // Personal-tool selection changes authority, not who caused this delegation.
+    creatorProfileId: requesterCreatorProfileId(gatewayCaller?.requesterOrigin),
+  };
 }
 
 async function dispatchSubagentGateway(
@@ -194,7 +201,7 @@ async function dispatchSubagentGateway(
     const response = workerCapability
       ? await workerCapability.run(async (identity) => {
           if (
-            gatewayCaller?.agentId !== identity.agentId ||
+            gatewayCaller.agentId !== identity.agentId ||
             gatewayCaller.sessionKey !== identity.sessionKey ||
             gatewayCaller.operationalRunInstance !== identity.operationalRunInstance ||
             gatewayCaller.executionIdentityToken !== identity.executionIdentityToken ||
@@ -258,9 +265,13 @@ async function reconcileSubagentAgentDispatch(
     if (!isGatewayRpcUnavailableError(error)) {
       throw error;
     }
-    const deadline = Date.now() + SUBAGENT_AGENT_RECONCILE_TIMEOUT_MS;
+    // The reconcile budget is in-process only (never serialized or reported across
+    // processes), so anchor it to the monotonic clock. A wall-clock step (NTP sync)
+    // between iterations must not stretch the Gateway RPC timeout or the delay, nor
+    // prematurely kill a healthy reconciliation by shrinking remainingMs below zero.
+    const deadline = monotonicNow() + SUBAGENT_AGENT_RECONCILE_TIMEOUT_MS;
     while (true) {
-      const remainingMs = deadline - Date.now();
+      const remainingMs = deadline - monotonicNow();
       if (remainingMs <= 0) {
         throw error;
       }
@@ -283,7 +294,7 @@ async function reconcileSubagentAgentDispatch(
         );
       }
       await delay(
-        Math.min(SUBAGENT_AGENT_RECONCILE_INTERVAL_MS, Math.max(0, deadline - Date.now())),
+        Math.min(SUBAGENT_AGENT_RECONCILE_INTERVAL_MS, Math.max(0, deadline - monotonicNow())),
       );
     }
   }

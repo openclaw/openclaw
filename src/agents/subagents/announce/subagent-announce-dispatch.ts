@@ -18,6 +18,7 @@ type SubagentAnnounceDeliveryFailureReason =
   | "message_tool_delivery_missing"
   | "operator_authority_unavailable"
   | "requester_abandoned"
+  | "requester_transcript_conflict"
   | "requester_turn_pending"
   | "source_owner_changed"
   | "steer_dropped"
@@ -39,7 +40,6 @@ export type SubagentAnnounceDeliveryResult = {
   // makes trying a second path unsafe.
   terminal?: boolean;
   disposition?: SubagentAnnounceDeliveryDisposition;
-  missingMediaUrls?: string[];
   phases?: SubagentAnnounceDispatchPhaseResult[];
 };
 
@@ -78,7 +78,6 @@ export type SubagentAnnounceDirectParams = {
   isSourceSessionEffectsAllowed?: () => boolean;
   sourceReceiptAdmission?: GatewayToolCallerReceiptAdmission;
   /** Reconcile an already-admitted public settle turn; never dispatch or send. */
-  recoveryReceiptOnly?: true;
   /** Additional source guard released by the accepting Gateway or injection owner. */
   isSourceSessionAdmissionAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;

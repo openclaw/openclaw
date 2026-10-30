@@ -4,7 +4,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
-import type { HarnessCompletionRecovery } from "../../../config/sessions/restart-recovery-types.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -28,7 +27,6 @@ import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-ow
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
-import { createHarnessCompletionSourceAssertion } from "../../agent-harness-completion-recovery.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   type AgentRunTerminalOutcome,
@@ -424,32 +422,16 @@ describe("embedded run durable writer admission", () => {
   });
 
   it.each([false, true])(
-    "keeps recovery-source SQL outside worker grants and checks the prepared read (revoked=%s)",
+    "keeps source SQL outside worker grants and checks live authority (revoked=%s)",
     async (revoke) => {
-      const claim: HarnessCompletionRecovery = {
-        taskId: "completion-task",
-        taskRunId: "completion-task-run",
-        taskStatus: "succeeded",
-        sourceRunId: "announce:completion",
-        requesterSessionKey: sessionKey,
-        requesterAgentId: "main",
-        ...sessionRevision,
-      };
-      await seedWriter("run-a", {
-        restartRecoveryHarnessCompletion: claim,
-        restartRecoveryDeliveryRunId: claim.sourceRunId,
-      });
+      await seedWriter("run-a");
       let sourceCurrent = true;
-      const revoked = new Error("recovery source retired during preparation");
-      const assertSourceCurrent = createHarnessCompletionSourceAssertion({
-        claim,
-        storePath: fixture.storePath(),
-        priorAssertion() {
-          if (!sourceCurrent) {
-            throw revoked;
-          }
-        },
-      });
+      const revoked = new Error("source retired during preparation");
+      const assertSourceCurrent = () => {
+        if (!sourceCurrent) {
+          throw revoked;
+        }
+      };
       const prepared = prepareSystemAgentRunAdmission(
         {},
         "run-b",

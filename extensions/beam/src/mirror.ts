@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -125,7 +126,7 @@ export function beamMirrorId(catalogId: string, hostId: string, threadId: string
  * message text crosses the wire; reasoning, tool calls, tool results, and raw
  * payloads collapse into compact counts.
  */
-export function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptItem[]) {
+function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptItem[]) {
   const out: BeamTranscriptItem[] = [];
   const dropped = new Map<string, number>();
   let truncated = items.some((item) => item.truncated);
@@ -158,7 +159,7 @@ export function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptIte
 }
 
 /** Drop oldest items until the payload fits the receiver's item and byte caps. */
-export function fitBeamMirrorUpload(upload: BeamUpload): BeamUpload {
+function fitBeamMirrorUpload(upload: BeamUpload): BeamUpload {
   const items = upload.items.slice(-BEAM_MAX_ITEMS);
   const fitted: BeamUpload = { ...upload, items };
   let bytes = Buffer.byteLength(JSON.stringify(fitted), "utf8");
@@ -213,13 +214,10 @@ type TrackedMirrorSession = {
 export function createBeamMirrorRunner(params: {
   runtime: { config: Pick<PluginRuntime["config"], "current"> };
   logger: { warn: (message: string) => void; info: (message: string) => void };
-  fetchFn?: typeof fetch;
   now?: () => number;
-  listCatalogs?: () => ActiveSessionCatalog[];
   signal: AbortSignal;
 }) {
   const now = params.now ?? Date.now;
-  const listCatalogs = params.listCatalogs ?? listActiveSessionCatalogs;
   const tracked = new Map<string, TrackedMirrorSession>();
   const { signal } = params;
   let lastWarnAt = 0;
@@ -242,14 +240,8 @@ export function createBeamMirrorRunner(params: {
   ) => {
     tracked.delete(key);
     tracked.set(key, { candidate, fingerprint, expiresAt: now() + BEAM_RETENTION_MS });
-    if (tracked.size <= MIRROR_RETRY_CAP) {
-      return;
-    }
     // At capacity, retry order is best effort; retain the just-acknowledged upload.
-    for (const oldest of tracked.keys()) {
-      tracked.delete(oldest);
-      break;
-    }
+    pruneMapToMaxSize(tracked, MIRROR_RETRY_CAP);
   };
 
   const warnThrottled = (message: string) => {
@@ -279,7 +271,6 @@ export function createBeamMirrorRunner(params: {
     try {
       guarded = await fetchWithSsrFGuard({
         url: endpoint,
-        fetchImpl: params.fetchFn,
         timeoutMs: MIRROR_UPLOAD_TIMEOUT_MS,
         signal,
         policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(endpoint),
@@ -394,7 +385,7 @@ export function createBeamMirrorRunner(params: {
         return;
       }
       const activeSinceMs = now() - mirror.activeWindowMinutes * 60_000;
-      const catalogs = listCatalogs().filter(
+      const catalogs = listActiveSessionCatalogs().filter(
         (catalog) =>
           // Never mirror the local beam receiver back out: a two-gateway pair
           // would otherwise re-mirror each other's rows forever.

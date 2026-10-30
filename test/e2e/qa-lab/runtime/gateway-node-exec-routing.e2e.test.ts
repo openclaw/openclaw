@@ -112,7 +112,8 @@ it(
             executablePath: process.execPath,
             argsPrefix: ["dist/index.js"],
             cwd: repoRoot,
-            usePackagedPlugins: true,
+            // Node routing needs no packaged-install repair.
+            usePackagedPlugins: false,
           },
           transportBaseUrl: "http://127.0.0.1",
           controlUiEnabled: false,
@@ -198,7 +199,7 @@ it(
         expect(await effects(first.home)).toBe("sole\n");
 
         const canvasIdentity = loadOrCreateDeviceIdentity({
-          path: path.join(root, "canvas.sqlite"),
+          path: path.join(root, "canvas", "client", "credentials.sqlite"),
         });
         const startCanvas = () => {
           const client = new GatewayClient({

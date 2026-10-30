@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { symlinkSync } from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -6,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import * as workerCpu from "../../infra/worker-cpu.js";
 import {
   beginSessionEffect,
   runSessionMutation,
@@ -39,47 +41,26 @@ import { observeSessionMaintenanceCompletion } from "./session-accessor.sqlite-m
 import * as maintenanceKick from "./session-accessor.sqlite-maintenance-kick.js";
 import { registerSessionMaintenancePreparationTests } from "./session-accessor.sqlite-maintenance-preparation.test-support.js";
 import { registerSessionMaintenanceProtectionTests } from "./session-accessor.sqlite-maintenance-protection.test-support.js";
-import { observeSessionMaintenancePlanningWorker } from "./session-accessor.sqlite-maintenance.test-support.js";
+import {
+  maintenanceFixture,
+  maintenancePolicy,
+  observeSessionMaintenancePlanningWorker,
+} from "./session-accessor.sqlite-maintenance.test-support.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
-import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-function maintenanceFixture(state: OpenClawTestState) {
-  const storePath = path.join(state.sessionsDir(), "sessions.json");
-  const scope = (sessionKey: string) => ({ sessionKey, storePath });
-  const seed = (
-    sessionKey: string,
-    sessionId: string,
-    updatedAt = Date.now(),
-    fields: Partial<Parameters<typeof replaceSessionEntrySync>[1]> = {},
-  ) => {
-    const target = scope(sessionKey);
-    replaceSessionEntrySync(target, { sessionId, updatedAt, ...fields });
-    return target;
-  };
-  return { state, storePath, scope, seed, databaseOptions: { agentId: "main", env: state.env } };
+function cleanup(...callbacks: Array<() => void>) {
+  return { [Symbol.dispose]: () => callbacks.forEach((callback) => callback()) };
 }
 
 function withMaintenanceFixture(
   run: (fixture: ReturnType<typeof maintenanceFixture>) => Promise<void>,
 ) {
   return withOpenClawTestState({ scenario: "minimal" }, (state) => run(maintenanceFixture(state)));
-}
-
-function maintenancePolicy(
-  pruneAfter = "1s",
-  overrides: Parameters<typeof resolveMaintenanceConfigFromInput>[0] = {},
-) {
-  return resolveMaintenanceConfigFromInput({
-    mode: "enforce",
-    maxEntries: 100,
-    pruneAfter,
-    ...overrides,
-  });
 }
 
 function observeMaintenance(
@@ -109,6 +90,7 @@ it.for(["cold", "warm-cap", "removal"] as const)(
     const remove = scenario === "removal" || scenario === "warm-cap";
     await withMaintenanceFixture(async ({ state, scope, seed }) => {
       const active = seed("agent:main:maintenance-worker-active", "active");
+      let databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
       const stale = scope("agent:main:subagent:maintenance-worker-stale");
       const locked = scope("agent:main:maintenance-worker-locked");
       const protectedEntry = scope("agent:main:maintenance-worker-protected");
@@ -119,19 +101,23 @@ it.for(["cold", "warm-cap", "removal"] as const)(
       };
       if (scenario === "removal") {
         seedStale(1);
+        const alias = path.join(state.root, "agent-alias");
+        symlinkSync(path.dirname(databasePath), alias, "junction");
+        databasePath = path.join(alias, path.basename(databasePath));
+        active.storePath = databasePath;
       }
       const policy = maintenancePolicy("1h", { maxEntries: scenario === "warm-cap" ? 3 : 100 });
       if (scenario === "warm-cap") {
         await maintain(active, "warm", policy, { workerGuard: {} });
         vi.restoreAllMocks();
-      }
-      if (scenario === "warm-cap") {
         seed(locked.sessionKey, "locked", Date.now() - 3, { modelSelectionLocked: true });
         seed(protectedEntry.sessionKey, "protected", Date.now() - 2);
         seedStale(Date.now() - 1);
       }
       const planningPhases: string[] = [];
       const workerThreadIds: number[] = [];
+      const writeOutcomes: { kind: "committed" | "not-committed"; admitted: boolean }[] = [];
+      let writeAdmitted = false;
       let foregroundProgressed = false;
       observeSessionMaintenancePlanningWorker({
         async afterPrepare() {
@@ -149,11 +135,16 @@ it.for(["cold", "warm-cap", "removal"] as const)(
           }
         },
         beforeExecute: () => planningPhases.push("planning"),
+        beforeAdmission: (request) => {
+          writeAdmitted ||= request.stage === "transaction";
+        },
         afterExecute: (result) => {
           workerThreadIds.push(result.workerThreadId);
+          writeOutcomes.push({ kind: result.kind, admitted: writeAdmitted });
         },
       });
-      const completed = observeMaintenance();
+      const spawned = vi.spyOn(workerCpu, "createCpuTrackedWorker");
+      const completed = observeSessionMaintenanceCompletion(databasePath);
       const observation = new AsyncLocalStorage<boolean>();
       const kick = maintenanceKick.kickSessionEntryMaintenanceAfterWrite;
       vi.spyOn(maintenanceKick, "kickSessionEntryMaintenanceAfterWrite").mockImplementation(
@@ -169,18 +160,17 @@ it.for(["cold", "warm-cap", "removal"] as const)(
         capture: () => (scenario === "warm-cap" ? [protectedEntry.sessionKey] : []),
         dispose() {},
       }));
-      const result = await (async () => {
-        try {
-          await patchSessionEntryCore(active, () => ({ label: "updated" }), {
-            maintenanceConfig: policy,
-            workerGuard: {},
-          });
-          return await racePromiseWithAbortSignal(completed, signal);
-        } finally {
-          unregister();
-          sql.restore();
-        }
-      })();
+      let result: Awaited<typeof completed>;
+      try {
+        await patchSessionEntryCore(active, () => ({ label: "updated" }), {
+          maintenanceConfig: policy,
+          workerGuard: {},
+        });
+        result = await racePromiseWithAbortSignal(completed, signal);
+      } finally {
+        unregister();
+        sql.restore();
+      }
       expect(
         parentSql.filter((query) =>
           /(?:from|update|into) "(?:session_nodes|session_transcript_archives)"/iu.test(query),
@@ -189,8 +179,11 @@ it.for(["cold", "warm-cap", "removal"] as const)(
       if (!remove) {
         expect(parentSql).toEqual([]);
       }
-      expect(planningPhases).toEqual(["prepared", "planning"]);
+      expect(planningPhases).toEqual(remove ? ["prepared", "planning"] : ["prepared"]);
       expect(workerThreadIds[0]).toBeGreaterThan(0);
+      expect(writeOutcomes).toEqual([
+        { kind: remove ? "committed" : "not-committed", admitted: remove },
+      ]);
       const expectedLabel = scenario === "warm-cap" ? "foreground progressed" : "updated";
       expect(loadSessionEntry(active)?.label).toBe(expectedLabel);
       if (scenario === "warm-cap") {
@@ -205,11 +198,13 @@ it.for(["cold", "warm-cap", "removal"] as const)(
         expect(scenario === "warm-cap" ? result.capped : result.pruned).toBe(1);
         expect(loadSessionEntry(stale)).toBeUndefined();
         expect(result.archivedTranscripts).toHaveLength(1);
-        expect(
-          readSessionArchiveContentSync(result.archivedTranscripts[0]!.archivedPath)
-            .trim()
-            .split("\n"),
-        ).toEqual([JSON.stringify(staleEvent)]);
+        const archived = readSessionArchiveContentSync(result.archivedTranscripts[0]!.archivedPath);
+        expect(archived.trim()).toBe(JSON.stringify(staleEvent));
+        const archiveStarts = spawned.mock.calls.filter(([, options]) => {
+          const data: unknown = options?.workerData;
+          return isRecord(data) && data.operation === "materialize";
+        });
+        expect(archiveStarts).toHaveLength(0);
       }
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
@@ -238,8 +233,7 @@ describe("automatic worker planning protections", () => {
 
   it.each([
     "registry",
-    "recovery-cycle",
-    "recovery-run",
+    "resume-marker",
     "provider",
     "work-key",
     "work-id",
@@ -252,38 +246,21 @@ describe("automatic worker planning protections", () => {
       `agent:main:maintenance-protection-active-${protection}`,
       `active-${protection}`,
     );
-    const protectedKey = protection.startsWith("recovery")
-      ? `agent:main:hook:maintenance-protected-${protection}`
-      : `agent:main:subagent:maintenance-protected-${protection}`;
+    const protectedKey =
+      protection === "resume-marker"
+        ? `agent:main:hook:maintenance-protected-${protection}`
+        : `agent:main:subagent:maintenance-protected-${protection}`;
     const protectedId = `maintenance-protected-id-${protection}`;
     const aliasKey = `agent:main:subagent:maintenance-protected-alias-${protection}`;
     const sibling = `agent:main:subagent:maintenance-unprotected-${protection}`;
-    const recovery = (
-      terminal: boolean,
-    ): Partial<Parameters<typeof replaceSessionEntrySync>[1]> => {
-      if (protection === "recovery-cycle") {
-        return {
-          mainRestartRecovery: {
-            cycleId: terminal ? "finished" : "waiting",
-            revision: 1,
-            chargedAttempts: 0,
-            ...(terminal ? { tombstone: { reason: "exhausted" } } : {}),
-          },
-        };
-      }
-      const runId = terminal ? "terminal" : "awaiting-recovery";
-      return protection === "recovery-run"
-        ? {
-            restartRecoveryRuns: [{ runId, lifecycleGeneration: "previous-gateway" }],
-            ...(terminal ? { restartRecoveryTerminalRunIds: [runId] } : {}),
-          }
-        : {};
-    };
-    seed(protectedKey, protectedId, 1, recovery(false));
+    seed(protectedKey, protectedId, 1);
+    if (protection === "resume-marker") {
+      seed(protectedKey, protectedId, 1, { resumeAfterRestart: { queuedInputIds: [] } });
+    }
     if (protection.endsWith("-id")) {
       seed(aliasKey, protectedId, 1);
     }
-    seed(sibling, `unprotected-${protection}`, 1, recovery(true));
+    seed(sibling, `unprotected-${protection}`, 1);
     const run = async () => {
       const completed = observeMaintenance();
       await patchSessionEntryCore(
@@ -338,11 +315,8 @@ describe("automatic worker planning protections", () => {
       });
       release = () => lease.release();
     }
-    try {
-      await run();
-    } finally {
-      release();
-    }
+    using _ = cleanup(release);
+    await run();
   });
 });
 
@@ -373,21 +347,18 @@ it("rolls back archive metadata when a run registers at planning commit", async 
         }
       },
     });
-    try {
-      await maintain(active, "updated", maintenancePolicy());
-      expect(protectedNow).toBe(true);
-      expect(loadSessionEntry(scope(protectedKey))?.archivedAt).toBeUndefined();
-      expect(loadSessionEntry(scope(staleKey))?.archivedAt).toEqual(expect.any(Number));
-    } finally {
-      clearAgentRunContext("maintenance-live-run");
-    }
+    using _ = cleanup(() => clearAgentRunContext("maintenance-live-run"));
+    await maintain(active, "updated", maintenancePolicy());
+    expect(protectedNow).toBe(true);
+    expect(loadSessionEntry(scope(protectedKey))?.archivedAt).toBeUndefined();
+    expect(loadSessionEntry(scope(staleKey))?.archivedAt).toEqual(expect.any(Number));
   });
 });
 
 it.each([
   { mutation: "backdate", boundary: "before-authorization" },
-  { mutation: "restore", boundary: "after-settlement" },
-  { mutation: "backdate", boundary: "missing-after-settlement" },
+  { mutation: "restore", boundary: "after-result" },
+  { mutation: "backdate", boundary: "cold-after-result" },
 ] as const)(
   "keeps $mutation authority at $boundary across real Worker planning",
   async ({ mutation, boundary }) => {
@@ -402,7 +373,7 @@ it.each([
         mutation === "restore" ? 1 : Date.now(),
         mutation === "restore" ? { archivedAt: 2, archiveReason: "age-retention" } : {},
       );
-      const warm = boundary !== "missing-after-settlement";
+      const warm = boundary !== "cold-after-result";
       let warmWorkerThreadId: number | undefined;
       if (warm) {
         const reclaim = reclamationRun.runSqliteSessionReclamation;
@@ -427,20 +398,15 @@ it.each([
       };
       const workerThreadIds: number[] = [];
       observeSessionMaintenancePlanningWorker({
-        beforeExecute() {
+        afterPrepare() {
           if (boundary === "before-authorization" && !changed) {
             mutate();
           }
         },
-        async afterExecute(result, native) {
+        afterExecute(result) {
           workerThreadIds.push(result.workerThreadId);
-          if (boundary !== "before-authorization" && result.kind === "committed" && !changed) {
-            expect(native.admission?.committed).toMatchObject({
-              facts: { kind: "session-entry-replacements" },
-            });
-            expect(native.admission?.settlement).toMatchObject({ kind: "completed" });
-            expect(await native.retained?.settled).toEqual({ kind: "completed" });
-            // Native COMMIT has completed; parent result adoption has not run yet.
+          if (boundary !== "before-authorization" && result.kind === "not-committed" && !changed) {
+            // Empty planning has finished; parent age-fact adoption has not run yet.
             mutate();
           }
         },
@@ -492,25 +458,22 @@ it("retains a managed backdate during synchronous maintenance publication reentr
       replaceSessionEntrySync(victim, { sessionId: "victim", updatedAt: 1 });
       observed.push({ before, after: loadSessionEntry(victim)?.updatedAt });
     });
-    try {
-      await maintain(
-        active,
-        "publish",
-        policy,
-        {},
-        (result) => result.archived === 1 && loadSessionEntry(victim)?.archivedAt !== undefined,
-      );
-      expect(observed).toEqual([{ before: undefined, after: 1 }]);
-      expect(loadSessionEntry(victim)?.archivedAt).toEqual(expect.any(Number));
-      expect(loadSessionEntry(stale)?.archivedAt).toEqual(expect.any(Number));
-    } finally {
-      unsubscribe();
-    }
+    using _ = cleanup(unsubscribe);
+    await maintain(
+      active,
+      "publish",
+      policy,
+      {},
+      (result) => result.archived === 1 && loadSessionEntry(victim)?.archivedAt !== undefined,
+    );
+    expect(observed).toEqual([{ before: undefined, after: 1 }]);
+    expect(loadSessionEntry(victim)?.archivedAt).toEqual(expect.any(Number));
+    expect(loadSessionEntry(stale)?.archivedAt).toEqual(expect.any(Number));
   });
 });
 
 it("publishes exact archived keys without worktrees after Worker planning", async () => {
-  await withMaintenanceFixture(async ({ state, storePath, seed, databaseOptions }) => {
+  await withMaintenanceFixture(async ({ seed, databaseOptions, plan }) => {
     const active = seed("agent:main:keyed-active", "active");
     const stale = seed("agent:main:keyed-stale", "stale", 1);
     const database = openOpenClawAgentDatabase(databaseOptions);
@@ -520,18 +483,7 @@ it("publishes exact archived keys without worktrees after Worker planning", asyn
     try {
       const result = await reclamationRun.runSqliteSessionReclamation({
         diagnostics,
-        plan: {
-          kind: "maintenance-plan",
-          databaseOptions: reclamation.resolveSessionReclamationDatabaseOptions(databaseOptions),
-          materializedPlans: [],
-          input: {
-            activeSessionKey: active.sessionKey,
-            archiveDirectory: state.sessionsDir(),
-            maintenance: maintenancePolicy(),
-            preservation: { providerKeys: [], workIdentities: [], lifecycleIdentities: [] },
-            storePath,
-          },
-        },
+        plan: plan(active.sessionKey, maintenancePolicy()),
       });
       expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
       expect(result).toMatchObject({
@@ -561,18 +513,8 @@ it("publishes exact archived keys without worktrees after Worker planning", asyn
 
 it("publishes only committed removal keys after Worker finalization", async () => {
   await withMaintenanceFixture(async ({ seed, databaseOptions }) => {
-    const removedEntry = { sessionId: "removed", updatedAt: 1 };
-    const previousEntry = { sessionId: "changed", updatedAt: 1 };
-    const removed = seed(
-      "agent:main:keyed-removed",
-      removedEntry.sessionId,
-      removedEntry.updatedAt,
-    );
-    const changed = seed(
-      "agent:main:keyed-changed",
-      previousEntry.sessionId,
-      previousEntry.updatedAt,
-    );
+    const removed = seed("agent:main:keyed-removed", "removed", 1);
+    const changed = seed("agent:main:keyed-changed", "changed", 1);
     const database = openOpenClawAgentDatabase(databaseOptions);
     const entries = [
       { sessionKey: removed.sessionKey, expectedEntry: loadSessionEntry(removed) },
@@ -584,7 +526,11 @@ it("publishes only committed removal keys after Worker finalization", async () =
       entries,
       materializedPlans: [],
     });
-    replaceSessionEntrySync(changed, { ...previousEntry, label: "changed after planning" });
+    replaceSessionEntrySync(changed, {
+      sessionId: "changed",
+      updatedAt: 1,
+      label: "changed after planning",
+    });
     const published: SessionRowChange[] = [];
     const unsubscribe = sessionChanges.subscribe((change) => published.push(change));
     const identities: SessionIdentityMutation[] = [];
@@ -633,7 +579,7 @@ it("publishes only committed removal keys after Worker finalization", async () =
         expect.objectContaining({
           kind: "delete",
           agentId: "main",
-          previous: { sessionId: removedEntry.sessionId, sessionKeys: [removed.sessionKey] },
+          previous: { sessionId: "removed", sessionKeys: [removed.sessionKey] },
         }),
       ]);
       expect(loadSessionEntry(removed)).toBeUndefined();

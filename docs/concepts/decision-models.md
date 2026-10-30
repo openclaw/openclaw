@@ -44,6 +44,10 @@ Explicit `decision_evaluate` remains independent of Labs.
 
 Configure the provider plugin before selecting its model:
 
+- [Liquid AI](/providers/liquid-ai) connects directly to hosted d1 and d1 Ultra.
+  Install the plugin candidate from a compatible development checkout and
+  configure a Liquid AI API key. Text/JSON and inline image evidence use the
+  native Decision endpoint; connecting it does not change the chat model.
 - [ONNX](/plugins/onnx) runs local CPU classifiers in a persistent subprocess.
   Follow its development-checkout or compatible-package setup, then explicitly
   download the model or prepare a local export. Inference needs no hosted API credential.
@@ -336,7 +340,8 @@ Provider limits differ:
 | SubQ        | 2–255               | 2–10         | Up to 16 questions; text/JSON state; question IDs at most 100 characters           |
 | TypeSafe AI | 2–255               | 2–10         | Subject to the host's batch limits and the vendor input contract                   |
 
-The host bounds JSON evidence to one MiB, 20,000 nodes, depth 32, and 256 questions.
+The host bounds JSON evidence to one MiB, 20,000 nodes, and depth 32. V1 accepts
+up to 256 questions; V2 accepts up to 400, subject to the selected provider's limit.
 Version 2 image state has a separate four-MiB decoded image limit. It admits at most four
 requests per provider and caps each deadline at 30 seconds. Optional assistance
 leaves the fourth slot for requested evaluations; under contention, the tool

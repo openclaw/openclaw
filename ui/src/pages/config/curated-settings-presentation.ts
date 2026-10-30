@@ -1,5 +1,3 @@
-import type { ImportGlobFunction } from "vite/types/importGlob.js";
-
 /** Bundled host-placement templates, independent of runtime plugin activation. */
 /** Display-only fallback: never a JSON Schema default or a config write. */
 export type CuratedSettingsDefault =
@@ -12,33 +10,30 @@ export type CuratedSettingsDefault =
       fallbackKey: string;
     };
 
-type CuratedSettingsFieldBase = {
+export type CuratedSettingsField = {
   path: readonly string[];
   labelKey: string;
   helpKey: string;
-};
-
-export type CuratedSettingsField = CuratedSettingsFieldBase &
-  (
-    | { kind: "text"; displayDefault: CuratedSettingsDefault }
-    | {
-        kind: "model";
-        displayDefault: CuratedSettingsDefault;
-        placeholderKey: string;
-        customLabelKey: string;
-      }
-    | {
-        kind: "number";
-        displayDefault: number;
-        bounds: { integer: boolean; min: number; max?: number };
-      }
-    | { kind: "toggle"; displayDefault: boolean }
-    | {
-        kind: "segmented";
-        displayDefault: string;
-        options: readonly { value: string; labelKey: string }[];
-      }
-  );
+} & (
+  | { kind: "text"; displayDefault: CuratedSettingsDefault }
+  | {
+      kind: "model";
+      displayDefault: CuratedSettingsDefault;
+      placeholderKey: string;
+      customLabelKey: string;
+    }
+  | {
+      kind: "number";
+      displayDefault: number;
+      bounds: { integer: boolean; min: number; max?: number };
+    }
+  | { kind: "toggle"; displayDefault: boolean }
+  | {
+      kind: "segmented";
+      displayDefault: string;
+      options: readonly { value: string; labelKey: string }[];
+    }
+);
 
 export type CuratedSettingsPresentation = {
   id: string;
@@ -53,12 +48,6 @@ export type CuratedSettingsPresentation = {
     fields: readonly CuratedSettingsField[];
   }[];
 };
-
-declare global {
-  interface ImportMeta {
-    glob: ImportGlobFunction;
-  }
-}
 
 // Available while disconnected or before the runtime catalog/schema arrives.
 // The distinct filename keeps settings templates outside the add-on metadata glob.

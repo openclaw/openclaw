@@ -86,10 +86,11 @@ export function BoardWidgetMenu(props: {
   ref: (handle: MenuHandle) => void;
 }) {
   const id = createUniqueId();
-  const items = createMemo(() => boardWidgetMenuEntries(props));
+  const items = createMemo(() => boardWidgetMenuEntries(props), { lazy: true });
   return (
     <Menu
       id={id}
+      lazy
       ref={props.ref}
       class="board-widget__menu"
       panelClass="board-widget__menu-panel"

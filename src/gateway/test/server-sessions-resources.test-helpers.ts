@@ -39,7 +39,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { gatewayFixtureLifetime } from "../gateway-fixture-lifetime.test-support.js";
-import { getGatewayRecoveryRuntime } from "../server-recovery-runtime-context.js";
+import { getGatewayLifecycleRuntime } from "../server-lifecycle-runtime-context.js";
 import type { GatewayServerHarness } from "../server.e2e-ws-harness.js";
 import { removeSessionFixtureDirectory } from "../session-fixture-directory.test-support.js";
 import { disposeSessionReadContexts } from "../session-read-contexts.test-support.js";
@@ -80,7 +80,7 @@ export async function settleGatewaySessionStoreFixture(dir: string) {
   }
   // Participant persistence outlives request roots; retain selectors until its FIFO settles.
   await drainOpenClawAgentWriteQueuesForTest(ownsPath);
-  const runtime = getGatewayRecoveryRuntime();
+  const runtime = getGatewayLifecycleRuntime();
   const projection = getSessionRowProjection(runtime && getGatewayContextResolver(runtime)?.());
   if (projection) {
     await waitForSessionTranscriptIndexReconcilesInStateDir(root);
@@ -117,7 +117,8 @@ export async function releaseGatewaySessionStoreFixture(dir: string) {
   await projection?.ensureMaterialized();
   await closeOpenClawAgentDatabasesAsync(root);
 
-  // Client identity fixtures use shared-state SQLite, even with legacy .json names.
+  // Retain shared-state cleanup for every recorded fixture path. Local credential
+  // operations close their bounded owner before returning and retain no handle here.
   // The lifecycle subscription replays the owner's recorded open paths synchronously.
   const sharedDatabasePaths = new Set<string>();
   registerOpenClawStateDatabaseLifecycleListener((event) => {

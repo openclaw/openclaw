@@ -46,6 +46,7 @@ import {
   resolveSessionPlacementTurnSettlementAssertion,
 } from "../../session-placement-forced-terminal-settlement.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
+import { withReleasableExecutionCapacity } from "./execution-capacity.js";
 import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,
@@ -55,9 +56,7 @@ import {
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { claimAgentSessionWriter } from "./session-bootstrap.js";
 
-type LaneParams = RunEmbeddedAgentParams & {
-  sessionFile: string;
-};
+type LaneParams = RunEmbeddedAgentParams & { sessionFile: string };
 
 export function createEmbeddedRunLaneController<TParams extends LaneParams>(options: {
   getLifecycleGeneration: () => string;
@@ -75,6 +74,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     sessionKey: initialParams.sessionKey,
     runId: initialParams.runId,
     requesterSessionKey: initialParams.spawnedBy ?? undefined,
+    modelFallbackCandidate: initialParams.isFinalFallbackAttempt !== undefined,
   };
   const sessionLanePolicy = resolveEmbeddedRunSessionLanePolicy(
     initialParams.trigger,
@@ -92,19 +92,14 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   let laneTaskStartedAtMs = laneTaskProgressAtMs;
   let laneTaskAbortedAtMs: number | undefined;
   let laneTaskTimeoutError: CommandLaneTaskTimeoutError | undefined;
-  const createLaneTimeoutError = (cause: "owner-deadline" | "release-signal" | "abort-grace") => {
-    const details = {
+  const createLaneTimeoutError = (cause: "owner-deadline" | "release-signal" | "abort-grace") =>
+    new CommandLaneTaskTimeoutError(options.globalLane, {
       elapsedMs: Math.max(0, Date.now() - laneTaskStartedAtMs),
       taskBudgetMs: laneTaskTimeoutMs,
-    };
-    return cause === "abort-grace"
-      ? new CommandLaneTaskTimeoutError(options.globalLane, {
-          ...details,
-          cause,
-          graceMs: EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
-        })
-      : new CommandLaneTaskTimeoutError(options.globalLane, { ...details, cause });
-  };
+      ...(cause === "abort-grace"
+        ? { cause, graceMs: EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS }
+        : { cause }),
+    });
   let laneTaskDeadline: CommandQueueTaskDeadline | undefined;
   const boundedLaneDeadline = () =>
     laneTaskDeadline?.kind === "bounded" ? laneTaskDeadline.deadlineAtMs : undefined;
@@ -121,6 +116,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   let executionWatchdog: SessionControllerWatchdog | undefined;
   let activeWatchdogAttempt: SessionControllerWatchdogAttempt | undefined;
   let ownedGlobalCapacityWaits = 0;
+  let activeGlobalCapacityTickets = 0;
   const pendingGlobalExecutions = new Set<Promise<unknown>>();
   const trackGlobalExecution = <T>(run: Promise<T>): Promise<T> => {
     const release = () => pendingGlobalExecutions.delete(run);
@@ -152,9 +148,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     releaseQueuedRunContext?.(outcome);
     releaseQueuedRunContext = undefined;
   };
-  const abandonQueuedContext = () => {
-    releaseQueuedContext("abandoned");
-  };
+  const abandonQueuedContext = () => releaseQueuedContext("abandoned");
 
   const noteLaneTaskProgress = () => {
     laneTaskProgressAtMs = Date.now();
@@ -190,13 +184,17 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     let deadlineOwned = false;
     let timeoutCleanupRequested = false;
     const operation = options.getParams().replyOperation;
-    const isCurrent = () =>
+    const isAttemptCurrent = () =>
       state === "active" &&
       activeAttemptOwner === owner &&
       !signal.aborted &&
-      isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
+      isAgentEventLifecycleGenerationCurrent(lifecycleGeneration);
+    const isCurrent = () =>
+      isAttemptCurrent() &&
       authority !== undefined &&
-      getAdmittedRunDelegatedAuthority(input.admittedRunContext) === authority;
+      getAdmittedRunDelegatedAuthority(input.admittedRunContext) === authority &&
+      // A source callback can synchronously retire this attempt without closing its run.
+      isAttemptCurrent();
     recoverAttemptDeadline = async () => {
       if (!operation || !timeoutCleanupRequested || !isCurrent()) {
         return false;
@@ -238,6 +236,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         attempt.setExecutionDeadline(boundedLaneDeadline());
       },
       isCurrent,
+      isAttemptCurrent,
       abortSignal: signal,
       onAttemptDeadlineChanged,
       onAttemptTimeout: (_reason: Error) => {
@@ -268,13 +267,10 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
           activeAttemptOwner = undefined;
           recoverAttemptDeadline = undefined;
           if (deadlineOwned) {
-            activeWatchdogAttempt?.setExecutionDeadline(undefined);
+            setLaneTaskDeadline(undefined);
           }
           activeWatchdogAttempt = undefined;
           noteLaneTaskProgress();
-          if (deadlineOwned) {
-            setLaneTaskDeadline(undefined);
-          }
         }
       },
     };
@@ -290,9 +286,9 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     return laneTaskTimeoutError;
   };
   const throwIfAborted = () => {
-    // Bind only this lane's admitted claim; queued children can inherit a closed parent.
-    assertPlacementCurrent?.();
     if (!abortSignal.aborted) {
+      // Cancellation retains its original reason even after cleanup closes the claim.
+      assertPlacementCurrent?.();
       return;
     }
     const reason = resolveLaneTimeoutError() ?? abortSignal.reason;
@@ -310,19 +306,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     options.getParams().preparedRunAdmission?.assertSourceCurrent();
   };
 
-  const withRunLaneWait = (opts?: CommandQueueEnqueueOptions) => {
-    const params = options.getParams();
-    if (!opts?.onWait && !params.onLaneWait) {
-      return opts;
-    }
-    return {
-      ...opts,
-      onWait: (waitMs, queuedAhead) => {
-        opts?.onWait?.(waitMs, queuedAhead);
-        options.getParams().onLaneWait?.({ waitMs, queuedAhead, waiting: true });
-      },
-    } satisfies CommandQueueEnqueueOptions;
-  };
   const noteLaneWaitIfBusy = (lane: string) => {
     const params = options.getParams();
     if (!params.onLaneWait) {
@@ -341,6 +324,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     task: () => Promise<EmbeddedAgentRunResult>,
     opts?: CommandQueueEnqueueOptions,
   ) => {
+    let capacityHeld = false;
     // Global-lane admission is healthy waiting, not run execution. Keep reply
     // staleness and stuck recovery fenced until this queue grants capacity.
     let waitingForGlobalLaneAdmission = true;
@@ -366,6 +350,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       waitingForGlobalLaneAdmission = false;
       capacityWait?.close();
       if (ownsCapacityWait) {
+        ownsCapacityWait = false;
         ownedGlobalCapacityWaits -= 1;
       }
     };
@@ -437,7 +422,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
             laneTaskStartedAtMs = startedAt;
             const execution = (operation?.watchdog ?? executionWatchdog)?.beginExecution(
               () =>
-                laneTaskDeadline?.kind === "unlimited"
+                !capacityHeld || laneTaskDeadline?.kind === "unlimited"
                   ? undefined
                   : (laneTaskDeadline?.deadlineAtMs ??
                     Math.max(startedAt, laneTaskProgressAtMs) +
@@ -482,8 +467,8 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       if (!enqueue) {
         noteLaneWaitIfBusy(options.globalLane);
       }
-      // Global capacity is held until raw task settlement; operation timeouts cannot release it.
-      const queueOptions = withRunLaneWait({
+      // Only explicit preparation waits release capacity; timeouts retain raw-task custody.
+      const queueOptions: CommandQueueEnqueueOptions = {
         taskIdentity,
         abortSignal,
         maxConcurrent: options.getParams().swarmExecutionLane?.maxConcurrent,
@@ -495,19 +480,50 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
           noteCapacityWait();
           opts?.onQueued?.();
         },
-        onWait: opts?.onWait,
+        onWait: (waitMs, queuedAhead) => {
+          opts?.onWait?.(waitMs, queuedAhead);
+          options.getParams().onLaneWait?.({ waitMs, queuedAhead, waiting: true });
+        },
         warnAfterMs: opts?.warnAfterMs,
-      });
-      const trackedTask = () => trackGlobalExecution(taskWithCurrentLifecycle());
-      const queuedRun = enqueue
-        ? enqueue(trackedTask, queueOptions)
-        : enqueueCommandInLane(options.globalLane, trackedTask, queueOptions);
-      void trackGlobalExecution(queuedRun);
-      return await queuedRun;
+      };
+      let started = false;
+      const queuedRun = withReleasableExecutionCapacity(
+        (ticket) => {
+          waitingForGlobalLaneAdmission = true;
+          const runTicket = async () => {
+            capacityHeld = true;
+            activeGlobalCapacityTickets += 1;
+            noteLaneTaskProgress();
+            try {
+              if (started) {
+                endCapacityWait();
+                assertCurrent();
+                finishGlobalLaneAdmission();
+                options.getParams().replyOperation?.markGlobalLaneWaitEnded();
+                options.getParams().onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
+              }
+              started = true;
+              return await ticket();
+            } finally {
+              capacityHeld = false;
+              activeGlobalCapacityTickets -= 1;
+            }
+          };
+          const queued = enqueue
+            ? enqueue(runTicket, queueOptions)
+            : enqueueCommandInLane(options.globalLane, runTicket, queueOptions);
+          return queued.catch((error: unknown) => {
+            // Cancel raw work before the capacity owner joins its cleanup.
+            if (isCommandLaneTaskTimeoutError(error)) {
+              laneTaskAbortController.abort(error);
+            }
+            throw error;
+          });
+        },
+        () => trackGlobalExecution(taskWithCurrentLifecycle()),
+      );
+      return await trackGlobalExecution(queuedRun);
     } catch (error) {
-      if (isCommandLaneTaskTimeoutError(error)) {
-        laneTaskAbortController.abort(error);
-      }
       throw (abortSignal.aborted && resolveLaneTimeoutError()) || error;
     } finally {
       finishGlobalLaneAdmission();
@@ -559,6 +575,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
           });
       const execution = watchdog.beginExecution(() => {
         if (
+          (pendingGlobalExecutions.size > 0 && activeGlobalCapacityTickets === 0) ||
           ownedGlobalCapacityWaits > 0 ||
           operation?.phase === "waiting_for_deferred_maintenance" ||
           operation?.phase === "waiting_for_global_lane" ||

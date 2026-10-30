@@ -1,10 +1,11 @@
-import { constants } from "node:fs";
-import { access as fsAccess, readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
+import { readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
+import * as os from "node:os";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
-import { getKeybindings, type Keybinding } from "@earendil-works/pi-tui";
+import type { Component, Keybinding, Text } from "@earendil-works/pi-tui";
 import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classify";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
+import { shortenPathWithHome } from "../../../infra/home-display.js";
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
 import type { ImageContent, TextContent } from "../../../llm/types.js";
 import {
@@ -20,8 +21,11 @@ import {
   interactiveAgentTheme,
   type Theme,
 } from "../../modes/interactive/theme/theme.js";
+import { loadTuiRuntime } from "../../modes/interactive/tui-runtime.js";
 import { getReadmePath } from "../../package-metadata.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { sanitizeBinaryOutput } from "../../shell-utils.js";
+import { bindAgentToolReplaySafety } from "../../tool-replay-safety.js";
 import type { ToolResultBudget } from "../../tool-result-limits.js";
 import { processImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeType } from "../../utils/mime.js";
@@ -41,21 +45,40 @@ import {
 } from "./path-utils.js";
 import { readLocalFile } from "./read-file.js";
 import { createBoundedReadTextPage } from "./read-page.js";
-import {
-  getTextOutput,
-  invalidArgText,
-  replaceTabs,
-  reuseTextComponent,
-  shortenPath,
-  str,
-  trimTrailingEmptyLines,
-} from "./render-utils.js";
 import type { ReadToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { readToolInputSchema, readToolOutputSchema } from "./tool-schemas.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
 
+/** Returns a display string for string/nullish values, or null for unsupported values. */
+function str(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value == null) {
+    return "";
+  }
+  return null;
+}
+
+/** Replaces tabs with stable spaces so terminal layout does not shift by tab stop. */
+function replaceTabs(text: string): string {
+  return text.replace(/\t/g, "   ");
+}
+
+function trimTrailingEmptyLines(lines: readonly string[]): string[] {
+  return lines.slice(0, lines.findLastIndex((line) => line !== "") + 1);
+}
+
+function reuseTextComponent(lastComponent: Component | undefined, content: string): Text {
+  const { Text } = loadTuiRuntime();
+  const text = (lastComponent as Text | undefined) ?? new Text("", 0, 0); // SAFETY: Render slots only reuse the component returned by this renderer.
+  text.setText(content);
+  return text;
+}
+
 function keyText(keybinding: Keybinding): string {
+  const { getKeybindings } = loadTuiRuntime();
   return getKeybindings()
     .getKeys(keybinding)
     .join("/")
@@ -71,21 +94,6 @@ function keyHint(keybinding: Keybinding, description: string): string {
   );
 }
 
-function createReadToolDetails(
-  content: (TextContent | ImageContent)[],
-  textDetails?: Extract<ReadToolDetails, { kind: "text" | "truncated" }>,
-): ReadToolDetails {
-  const text = content.find((part): part is TextContent => part.type === "text")?.text ?? "";
-  const image = content.find((part): part is ImageContent => part.type === "image");
-  if (image) {
-    return { kind: "image", content: text, mimeType: image.mimeType };
-  }
-  if (textDetails) {
-    return textDetails;
-  }
-  return { kind: "text", content: text };
-}
-
 function normalizeReadError(error: unknown, filePath: string): Error {
   if (hasErrnoCode(error, "EISDIR")) {
     return new Error(
@@ -95,19 +103,14 @@ function normalizeReadError(error: unknown, filePath: string): Error {
   return toErrorObject(error, "Non-Error rejection");
 }
 
-function regularFileReadError(filePath: string): Error {
-  return new Error(`Read only supports regular files; no read was attempted: ${filePath}`);
-}
-
 async function assertLocalReadableFile(filePath: string): Promise<void> {
   const stat = await fsStat(filePath);
   if (stat.isDirectory()) {
     throw Object.assign(new Error(`Read requires a file: ${filePath}`), { code: "EISDIR" });
   }
   if (!stat.isFile()) {
-    throw regularFileReadError(filePath);
+    throw new Error(`Read only supports regular files; no read was attempted: ${filePath}`);
   }
-  await fsAccess(filePath, constants.R_OK);
 }
 
 async function suggestLocalReadPaths(filePath: string): Promise<string[]> {
@@ -201,8 +204,9 @@ function formatReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): st
 
 function formatReadCall(args: ReadRenderArgs | undefined, theme: Theme): string {
   const rawPath = str(args?.file_path ?? args?.path);
-  const path = rawPath !== null ? shortenPath(rawPath) : null;
-  const invalidArg = invalidArgText(theme);
+  const path =
+    rawPath !== null ? shortenPathWithHome(rawPath, { home: os.homedir(), prefix: "~" }) : null;
+  const invalidArg = theme.fg("error", "[invalid arg]");
   const pathDisplay =
     path === null ? invalidArg : path ? theme.fg("accent", path) : theme.fg("toolOutput", "...");
   return `${theme.fg("toolTitle", theme.bold("read"))} ${pathDisplay}${formatReadLineRange(args, theme)}`;
@@ -360,7 +364,29 @@ function formatReadResult(
   }
 
   const rawPath = str(args?.file_path ?? args?.path);
-  const output = getTextOutput(result, showImages);
+  const textBlocks = result.content.filter((c) => c.type === "text");
+  const imageBlocks = result.content.filter((c) => c.type === "image");
+
+  let output = textBlocks
+    .map((c) => sanitizeBinaryOutput(c.text || "", { ansiMode: "compat" }).replace(/\r/g, ""))
+    .join("\n");
+
+  const { getCapabilities, getImageDimensions, imageFallback } = loadTuiRuntime();
+  const caps = getCapabilities();
+  if (imageBlocks.length > 0 && (!caps.images || !showImages)) {
+    // When inline images are unavailable, preserve visible evidence that media was returned.
+    const imageIndicators = imageBlocks
+      .map((img) => {
+        const mimeType = img.mimeType ?? "image/unknown";
+        const dims =
+          img.data && img.mimeType
+            ? (getImageDimensions(img.data, img.mimeType) ?? undefined)
+            : undefined;
+        return imageFallback(mimeType, dims);
+      })
+      .join("\n");
+    output = output ? `${output}\n${imageIndicators}` : imageIndicators;
+  }
   const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
   const renderedLines = lang ? highlightCode(replaceTabs(output), lang) : output.split("\n");
   const lines = trimTrailingEmptyLines(renderedLines);
@@ -392,7 +418,7 @@ export function createReadToolDefinition(
   const autoResizeImages = options?.autoResizeImages ?? true;
   const ops = options?.operations ?? defaultReadOperations;
   const maxBytes = options?.maxBytes ?? DEFAULT_MAX_BYTES;
-  return {
+  const definition: ToolDefinition<typeof readToolInputSchema, ReadToolDetails> = {
     name: "read",
     label: "read",
     description: `Read text/image file (jpg/png/gif/webp/bmp); images attach to model context. Text caps ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB. Continue with offset/limit, or cursor within a long line.`,
@@ -471,7 +497,7 @@ export function createReadToolDefinition(
               : detectSupportedImageMimeType(buffer));
             const attachment = mimeType ? undefined : await classifyAttachmentBytes({ buffer });
             let content: (TextContent | ImageContent)[];
-            let textDetails: Parameters<typeof createReadToolDetails>[1];
+            let textDetails: Extract<ReadToolDetails, { kind: "text" | "truncated" }> | undefined;
             const modelHasVision = options?.modelHasVision ?? ctx?.model?.input.includes("image");
             const nonVisionImageNote =
               modelHasVision === false
@@ -608,7 +634,15 @@ export function createReadToolDefinition(
             }
 
             assertFileToolNotAborted(signal);
-            return { content, details: createReadToolDetails(content, textDetails) };
+            const text =
+              content.find((part): part is TextContent => part.type === "text")?.text ?? "";
+            const image = content.find((part): part is ImageContent => part.type === "image");
+            return {
+              content,
+              details: image
+                ? { kind: "image", content: text, mimeType: image.mimeType }
+                : (textDetails ?? { kind: "text", content: text }),
+            };
           } catch (error: unknown) {
             throw normalizeReadError(error, path);
           }
@@ -639,6 +673,7 @@ export function createReadToolDefinition(
       return reuseTextComponent(context.lastComponent, content);
     },
   };
+  return options?.operations ? definition : bindAgentToolReplaySafety(definition, "bounded-read");
 }
 
 export function createReadTool(

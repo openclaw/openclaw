@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   constants as fsConstants,
   cpSync,
@@ -9,7 +9,46 @@ import {
 } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { afterAll } from "vitest";
+import { parse } from "yaml";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
+
+type PerformanceWorkflowStep = {
+  name?: string;
+  id?: string;
+  if?: string;
+  run?: string;
+  env?: Record<string, string>;
+  uses?: string;
+  with?: Record<string, string>;
+  "continue-on-error"?: boolean | string;
+};
+type PerformanceWorkflow = {
+  env?: Record<string, string>;
+  jobs: Record<
+    string,
+    {
+      env?: Record<string, string>;
+      if?: string;
+      needs?: string | string[];
+      outputs?: Record<string, string>;
+      permissions?: Record<string, string>;
+      "runs-on"?: string;
+      steps: PerformanceWorkflowStep[];
+      strategy?: { matrix?: { include?: Array<Record<string, string>> } };
+    }
+  >;
+};
+const PERFORMANCE_WORKFLOW = ".github/workflows/openclaw-performance.yml";
+export function readPerformanceWorkflow(source = readFileSync(PERFORMANCE_WORKFLOW, "utf8")) {
+  return parse(source) as PerformanceWorkflow;
+}
+export function runPerformanceShell(run: string | undefined, env: NodeJS.ProcessEnv, cwd?: string) {
+  return spawnSync("bash", ["-c", run ?? ""], {
+    cwd,
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+  });
+}
 
 type PerformanceTemplate = {
   root: string;

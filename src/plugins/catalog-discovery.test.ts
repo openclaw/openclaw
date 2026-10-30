@@ -7,20 +7,15 @@ import {
   type PluginsInspectResult,
   type PluginsListResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { createPluginDeclaredSurface } from "../../test/helpers/plugin-declared-surface.js";
 import {
   joinClawHubPluginCatalog,
   joinLocalPluginDetail,
   resolvePluginDiscoveryIdentity,
 } from "./catalog-discovery.js";
+import { createRemotePluginCatalogFixture } from "./catalog-discovery.test-support.js";
 
-const remote = {
-  packageName: "@alice/memory-plus",
-  displayName: "Memory Plus",
-  family: "code-plugin" as const,
-  isOfficial: false,
-  categories: ["memory"],
-  runtimeId: "memory-plus",
-};
+const remote = createRemotePluginCatalogFixture();
 
 function catalogState(plugins: PluginCatalogEntry[], mutationAllowed = true): PluginsListResult {
   return { plugins, diagnostics: [], mutationAllowed };
@@ -56,7 +51,7 @@ describe("plugin discovery identity and local join", () => {
       const inspection: PluginsInspectResult = {
         ok: true,
         plugin,
-        declared: {
+        declared: createPluginDeclaredSurface({
           channels: ["sibling-channel"],
           providers: ["media-models", "sibling-models"],
           tools,
@@ -67,13 +62,8 @@ describe("plugin discovery identity and local join", () => {
             "videoGenerationProviders: sibling-video",
             ...(includeTools ? ["tools: media_render"] : []),
           ],
-          hooks: [],
           mcpServers: ["supported", "unsupported"],
-          cliCommands: [],
-          cliBackends: [],
-          skills: [],
-          dangerousConfigFlags: [],
-        },
+        }),
         ...(includeOverview
           ? {
               overview: {

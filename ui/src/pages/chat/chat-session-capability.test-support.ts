@@ -36,6 +36,8 @@ export function createSessionCapabilityFixture(
     },
     captureConnectionScope: () => null,
     isConnectionScopeCurrent: () => false,
+    captureReconcile: (): ReturnType<SessionCapability["captureReconcile"]> =>
+      overrides.reconcile ?? (() => false),
     subscribe: () => () => undefined,
     // Synthetic capabilities have no supplemental roster unless the test supplies one.
     observeRow: (): SessionRowObservation => ({
@@ -48,6 +50,7 @@ export function createSessionCapabilityFixture(
     }),
     observeList: () => ({ refresh: async () => {}, dispose: () => {} }),
     deletionState: () => undefined,
+    acknowledgeHiddenRuns: async () => [],
     think: () => undefined,
     settingsPreview: () => undefined,
     archiveVisibility: archiveState.visibility,

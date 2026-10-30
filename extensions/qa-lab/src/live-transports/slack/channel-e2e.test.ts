@@ -3,6 +3,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSlackChannelE2e } from "./channel-e2e.js";
 import { runSlackScenario } from "./scenario-runtime.js";
+import { slackRequest, slackResponse } from "./slack-capture.test-helpers.js";
 import { readSlackQaNativeWrites, type SlackNativeWrite } from "./slack-live.capture.js";
 import type { SlackMessage } from "./slack-live.contracts.js";
 
@@ -22,7 +23,6 @@ const nativeWrite = (
 });
 
 function fixture(capturedEvents?: Array<Record<string, unknown>>) {
-  const controller = new AbortController();
   const messages: SlackMessage[] = [];
   const writes: SlackNativeWrite[] = [];
   let leaseAlive = true;
@@ -78,7 +78,6 @@ function fixture(capturedEvents?: Array<Record<string, unknown>>) {
     cleanupSutClient: sutClient as never,
     assertActive: assertLease,
     assertLease,
-    signal: controller.signal,
     waitReady: async () => {},
     outputDir: tempDirs.make("slack-e2e-"),
     scenarioId: "ownership",
@@ -228,42 +227,36 @@ describe("Slack agent E2E ownership", () => {
       const events: Array<Record<string, unknown>> = [];
       const f = fixture(events);
       const root = await f.session.driver.send({ text: "owned root", mention: false });
-      events.push({
-        id: 1,
-        flowId: "gateway-write",
-        host: "slack.com",
-        kind: "request",
-        method: "POST",
-        path: "/api/chat.postMessage",
-        dataText: new URLSearchParams({
+      events.push(
+        slackRequest(1, "chat.postMessage", {
           channel: "C_QA",
           thread_ts: root.id,
           ts: "2.000000",
           text: "private-body",
           token: "private-token",
-        }).toString(),
-      });
+        }),
+      );
       if (terminal === "accepted-after-error") {
         events.push({
           id: 2,
-          flowId: "gateway-write",
+          flowId: "1",
           kind: "error",
           errorText: "Authorization: private-token",
         });
       }
-      events.push({
-        id: 3,
-        flowId: "gateway-write",
-        kind: "response",
-        status: terminal === "server-error" ? 503 : 200,
-        dataText: JSON.stringify({
-          ok: terminal === "accepted-after-error",
-          channel: "C_QA",
-          ts: "2.000000",
-          error: terminal === "partial-failure" ? "fatal_error" : "missing_scope",
-          detail: "private-error",
-        }),
-      });
+      events.push(
+        slackResponse(
+          1,
+          {
+            ok: terminal === "accepted-after-error",
+            channel: "C_QA",
+            ts: "2.000000",
+            error: terminal === "partial-failure" ? "fatal_error" : "missing_scope",
+            detail: "private-error",
+          },
+          terminal === "server-error" ? 503 : 200,
+        ),
+      );
 
       if (outcome === "uncertain") {
         await expect(f.session.cleanup()).rejects.toThrow("1 uncertain operations");

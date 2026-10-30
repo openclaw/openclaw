@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -122,6 +123,62 @@ function prepareWorkspaceResult(params: {
     currentManifestRaw: params.current.raw,
   });
 }
+
+it("applies a mixed workspace delta without per-entry worker verification", async () => {
+  const baseFiles = {
+    "edit.txt": "base edit\n",
+    "delete.txt": "delete me\n",
+    "rename-old.txt": "rename me\n",
+    "conflict.txt": "base conflict\n",
+    "unchanged.txt": "keep me\n",
+  };
+  const additions = Object.fromEntries(
+    Array.from({ length: 8 }, (_, index) => [`add-${index}.txt`, `added ${index}\n`]),
+  );
+  const currentFiles = {
+    ...additions,
+    "edit.txt": "worker edit\n",
+    "rename-new.txt": "rename me\n",
+    "conflict.txt": "worker conflict\n",
+    "unchanged.txt": "keep me\n",
+  };
+  await writeWorkspaceFiles(local, baseFiles);
+  await writeWorkspaceFiles(staged, currentFiles);
+  const base = { ...(await manifestFor(local)), baseCommit: "a".repeat(40) };
+  const current = { ...(await manifestFor(staged)), baseCommit: base.baseCommit };
+  await writeWorkspaceFiles(local, {
+    "conflict.txt": "local conflict\n",
+    "local-ignored.txt": "local only\n",
+  });
+  const operations: unknown[] = [];
+  const diagnostics = channel("openclaw.git.operation");
+  const record = (message: unknown) => operations.push(message);
+  diagnostics.subscribe(record);
+  let applied;
+  try {
+    applied = await apply(base, current);
+  } finally {
+    diagnostics.unsubscribe(record);
+  }
+  expect(applied.conflictPaths).toEqual(["conflict.txt"]);
+  await expectWorkspaceFiles(local, {
+    ...currentFiles,
+    "conflict.txt": "local conflict\n",
+    "local-ignored.txt": "local only\n",
+  });
+  for (const deleted of ["delete.txt", "rename-old.txt"]) {
+    await expect(fs.lstat(path.join(local, deleted))).rejects.toMatchObject({ code: "ENOENT" });
+  }
+  expect(applied.manifest.entries.map((entry) => entry.path).toSorted()).toEqual(
+    Object.keys(currentFiles).toSorted(),
+  );
+  expect(operations).toContainEqual(
+    expect.objectContaining({ operation: "workspace.reconcile.preflight", outcome: "ok" }),
+  );
+  expect(operations).not.toContainEqual(
+    expect.objectContaining({ operation: "workspace.manifest.file" }),
+  );
+});
 
 it("keeps local-only paths outside a Git workspace's accepted manifest", async () => {
   await fs.writeFile(path.join(local, "tracked.txt"), "tracked\n");
@@ -511,6 +568,8 @@ it("applies the three-way matrix while keeping local conflicts", async () => {
   await expect(fs.readlink(path.join(local, "link"))).resolves.toBe("local-target");
   expect(result.manifest).toEqual(await manifestFor(local));
   await result.verifyLocalStable();
+  await fs.writeFile(path.join(local, "conflict.txt"), "changed after acceptance");
+  await expect(result.verifyLocalStable()).rejects.toThrow("Gateway workspace changed");
 });
 
 it("preserves a local directory deletion instead of recreating the worker ancestor", async () => {

@@ -41,22 +41,29 @@ function applyAuthorizationBatch(
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     }
-    if (next !== null) {
-      assertExecApprovalsHostPolicyUnchanged(current.file, next);
+    if (next !== null || item.requireCommit) {
       try {
-        assertExecApprovalsMutationAllowed({ db, current: current.file, next });
+        assertExecApprovalsMutationAllowed({
+          db,
+          current: current.file,
+          next: next ?? current.file,
+          ...(item.requireCommit ? { agentId: item.agentId } : {}),
+        });
       } catch (error) {
         if (!(error instanceof ExecApprovalsMutationFencedError)) {
           throw error;
         }
         return { ok: false, message: error.message };
       }
+    }
+    if (next !== null) {
+      assertExecApprovalsHostPolicyUnchanged(current.file, next);
       const raw = serializeExecApprovals(next);
       if (!current.exists || current.raw !== raw) {
         current = snapshotFromExecApprovalsRow({ path: current.path, row: { raw_json: raw } });
       }
     }
-    return { ok: true, snapshot: current };
+    return { ok: true, file: current.file };
   });
   return { snapshot: current, outcomes };
 }
@@ -71,6 +78,7 @@ export function commitExecAuthorizationsInWorker(
   const mayWrite = input.items.some(
     (item) =>
       item.matches.length > 0 ||
+      item.requireCommit === true ||
       (item.allowAlwaysDecision !== undefined && item.allowAlwaysDecision.kind !== "one-shot"),
   );
   if (!mayWrite) {

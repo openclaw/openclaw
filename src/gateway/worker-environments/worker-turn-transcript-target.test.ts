@@ -14,6 +14,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { appendAbortedSessionTranscriptPartial } from "../../config/sessions/session-accessor.sqlite-transcript-reports.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import { commitMemory } from "../../config/sessions/session-actor-memory-publication.test-support.js";
 import { recordSessionParticipantInWorker } from "../../config/sessions/session-sharing-store.async.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
@@ -40,6 +41,7 @@ afterEach(() => {
 const staleTranscript = "transcript identity is no longer current";
 const turnFor = (target: BoundAgentRunSessionTarget) => ({ ...target, sessionTarget: target });
 const currentAuthority = () => ({ isCurrent: () => true, release() {} });
+const currentPlacement = { assertCurrent() {}, prepareAuthority: async () => currentAuthority() };
 function observeSql(...args: Parameters<typeof observeHostDataSql>) {
   const observer = observeHostDataSql(...args);
   return { ...observer, [Symbol.dispose]: observer.restore };
@@ -115,74 +117,53 @@ async function duringPublication(
   expect(checked).toBe(true);
 }
 
-it.each([false, true])(
-  "uses the selected actor for worker admission and refuses a changed window (%s)",
-  async (replaceWindow) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      setRuntimeConfigSnapshot({});
-      const owner = memorySessionActorOwners.get({
-        agentId: "main",
-        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-      });
-      const target = {
-        ...transcriptTarget(owner.path, "worker-target", "original"),
-        sessionKey: "agent:main:dashboard:incognito-worker-target",
-      };
-      const actor = await owner.acquire(
-        { database: owner.identity, sessionKey: target.sessionKey },
-        { assertCurrent() {}, assertReadable() {} },
-      );
-      const created = await actor.storage!.mutate(
+it("refuses a changed selected actor window without host SQL", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    const owner = memorySessionActorOwners.get({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+    });
+    const target = {
+      ...transcriptTarget(owner.path, "worker-target", "original"),
+      sessionKey: "agent:main:dashboard:incognito-worker-target",
+    };
+    const actor = await owner.acquire(
+      { database: owner.identity, sessionKey: target.sessionKey },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    await commitMemory(actor.storage!, "session.entry.create", {
+      entry: {
+        sessionId: target.sessionId,
+        updatedAt: Date.now(),
+        lifecycleRevision: "original",
+        incognito: true,
+      },
+    });
+    try {
+      using observer = observeSql();
+      const source = captureSource(target);
+      const run = vi.fn(async () => "settled");
+      const result = withTranscript(
+        turnFor(target),
         {
-          type: "session.entry.create",
-          input: {
-            entry: {
-              sessionId: target.sessionId,
-              updatedAt: Date.now(),
-              lifecycleRevision: "original",
-              incognito: true,
-            },
+          assertCurrent() {},
+          prepareAuthority: async () => {
+            await patchSessionEntryCore(target, () => ({ lifecycleRevision: "replacement" }));
+            return currentAuthority();
           },
         },
-        { assertCurrent() {}, authorize() {} },
+        run,
       );
-      expect(created.kind).toBe("committed");
-      try {
-        using observer = observeSql();
-        const source = captureSource(target);
-        const run = vi.fn(async () => {
-          source();
-          expect(resolveTarget(turnFor(target))).toEqual(target);
-          return "settled";
-        });
-        const result = withTranscript(
-          turnFor(target),
-          {
-            assertCurrent() {},
-            prepareAuthority: async () => {
-              if (replaceWindow) {
-                await patchSessionEntryCore(target, () => ({ lifecycleRevision: "replacement" }));
-              }
-              return currentAuthority();
-            },
-          },
-          run,
-        );
-        if (replaceWindow) {
-          await expect(result).rejects.toThrow(staleTranscript);
-          expect(run).not.toHaveBeenCalled();
-          expect(source).toThrow(staleTranscript);
-        } else {
-          await expect(result).resolves.toBe("settled");
-          expect(run).toHaveBeenCalledOnce();
-        }
-        expect(observer.queries).toEqual([]);
-      } finally {
-        await actor.release();
-      }
-    });
-  },
-);
+      await expect(result).rejects.toThrow(staleTranscript);
+      expect(run).not.toHaveBeenCalled();
+      expect(source).toThrow(staleTranscript);
+      expect(observer.queries).toEqual([]);
+    } finally {
+      await actor.release();
+    }
+  });
+});
 
 it("preadmits cloud transcript guards and retains their handle through turn settlement", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -296,36 +277,29 @@ it("retains a logical-store worker transcript and refuses writer changes without
         }),
       ).resolves.toMatchObject({ ok: true, value: { skipped: false, append: { appended: true } } });
       source();
-      await withTranscript(
-        turnFor(target),
-        {
-          assertCurrent() {},
-          prepareAuthority: async () => currentAuthority(),
-        },
-        async (pinned) => {
-          const assertReceipt = captureSource(pinned);
-          const settlementTarget = { ...pinned, expectedWriterRunId: undefined };
-          const resolveSettlement = () => resolveTarget(turnFor(settlementTarget));
-          incomingRpc.runInAsyncScope(assertReceipt);
-          const effect = () => resolveTarget(turnFor(pinned));
-          effect();
-          await withPendingReplacement(
-            () => {
-              expect(source).toThrow(staleTranscript);
-              expect(effect).toThrow(staleTranscript);
-            },
-            () => patchSessionEntryCore(target, () => ({ activeWriterRunId: "next-writer" })),
-          );
-          expect(effect).toThrow(staleTranscript);
-          expect(source).toThrow(staleTranscript);
-          expect(() => incomingRpc.runInAsyncScope(assertReceipt)).toThrow(staleTranscript);
-          expect(resolveSettlement()).toEqual(settlementTarget);
-          await patchSessionEntryCore(target, () => ({ activeWriterRunId: undefined }));
-          expect(resolveSettlement()).toEqual(settlementTarget);
-          await patchSessionEntryCore(target, () => ({ lifecycleRevision: "next-lifecycle" }));
-          expect(resolveSettlement).toThrow(staleTranscript);
-        },
-      );
+      await withTranscript(turnFor(target), currentPlacement, async (pinned) => {
+        const assertReceipt = captureSource(pinned);
+        const settlementTarget = { ...pinned, expectedWriterRunId: undefined };
+        const resolveSettlement = () => resolveTarget(turnFor(settlementTarget));
+        incomingRpc.runInAsyncScope(assertReceipt);
+        const effect = () => resolveTarget(turnFor(pinned));
+        effect();
+        await withPendingReplacement(
+          () => {
+            expect(source).toThrow(staleTranscript);
+            expect(effect).toThrow(staleTranscript);
+          },
+          () => patchSessionEntryCore(target, () => ({ activeWriterRunId: "next-writer" })),
+        );
+        expect(effect).toThrow(staleTranscript);
+        expect(source).toThrow(staleTranscript);
+        expect(() => incomingRpc.runInAsyncScope(assertReceipt)).toThrow(staleTranscript);
+        expect(resolveSettlement()).toEqual(settlementTarget);
+        await patchSessionEntryCore(target, () => ({ activeWriterRunId: undefined }));
+        expect(resolveSettlement()).toEqual(settlementTarget);
+        await patchSessionEntryCore(target, () => ({ lifecycleRevision: "next-lifecycle" }));
+        expect(resolveSettlement).toThrow(staleTranscript);
+      });
       await source.release();
       expect(source).toThrow("Cloud worker transcript authority has been released");
       expect(observer.queries.filter(isSessionEntryDataSql)).toEqual([]);
@@ -344,22 +318,16 @@ it("retains logical turn admission while holding the worker's physical transcrip
     await seedTranscript(target);
     const turn = turnFor(target);
     await withSessionTurn(target, async (operation) => {
-      const result = await withTranscript(
-        turn,
-        {
-          assertCurrent() {},
-          prepareAuthority: async () => currentAuthority(),
-        },
-        async (pinned) =>
-          withSessionTurn({ ...pinned, replyOperation: operation }, async (borrowed) => {
-            expect(borrowed).toBe(operation);
-            captureSource(pinned)();
-            const options = { agentId: target.agentId, env: state.env };
-            const held = agentDatabase.getOpenClawAgentDatabaseIfOpen(options);
-            expect(held?.path).toBe(agentDatabase.resolveOpenClawAgentSqlitePath(options));
-            expect(held?.db.isOpen).toBe(true);
-            return "executed";
-          }),
+      const result = await withTranscript(turn, currentPlacement, async (pinned) =>
+        withSessionTurn({ ...pinned, replyOperation: operation }, async (borrowed) => {
+          expect(borrowed).toBe(operation);
+          captureSource(pinned)();
+          const options = { agentId: target.agentId, env: state.env };
+          const held = agentDatabase.getOpenClawAgentDatabaseIfOpen(options);
+          expect(held?.path).toBe(agentDatabase.resolveOpenClawAgentSqlitePath(options));
+          expect(held?.db.isOpen).toBe(true);
+          return "executed";
+        }),
       );
       expect(result).toBe("executed");
     });

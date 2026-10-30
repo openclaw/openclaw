@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage } from "node:http";
@@ -29,9 +30,91 @@ const encodeDataUrl = (body: Buffer, mime = "image/png") =>
   `data:${mime};base64,${body.toString("base64")}`;
 const png = (side: number, pixels: Buffer) => encodePngRgba(pixels, side, side);
 
-function avatarFixture(basePath = "") {
+function projectSelected(avatar: string, cfg = avatarFixture().cfg) {
+  return resolveGatewayAssistantAvatar({ cfg, identity: { agentId: "main", avatar, emoji: "🦞" } });
+}
+
+it("inlines the selected local file", async () => {
+  const { projectInline, workspace } = avatarFixture("", { avatar: "avatar.png" });
+  fs.writeFileSync(path.join(workspace, "avatar.png"), APNG_BYTES);
+
+  expect(await projectInline()).toMatchObject({
+    avatar: encodeDataUrl(APNG_BYTES),
+    resolution: { kind: "local", source: "avatar.png" },
+  });
+});
+
+it("preserves a selected emoji over a lower-priority IDENTITY.md file", async () => {
+  const { projectInline, workspace } = avatarFixture("", { emoji: "🦞" });
+  fs.writeFileSync(path.join(workspace, "identity.png"), APNG_BYTES);
+  fs.writeFileSync(path.join(workspace, "IDENTITY.md"), "- Avatar: identity.png\n");
+
+  expect(await projectInline()).toEqual({ avatar: "🦞", resolution: null });
+});
+
+it.each([
+  ["remote URL", "https://example.com/avatar.png"],
+  ["data URI", encodeDataUrl(APNG_BYTES)],
+])("preserves a selected %s", async (_name, avatar) => {
+  expect(await avatarFixture("", { avatar }).projectInline()).toMatchObject({
+    avatar,
+    resolution: { source: avatar },
+  });
+});
+
+it.each([
+  ["data:text/plain,avatar", "unsupported_data_url"],
+  ["slack://avatar.png", "unsupported_uri"],
+  ["/avatar/main/extra", "outside_workspace"],
+  ["//evil.example/avatar/main", "outside_workspace"],
+  ["//[", "outside_workspace"],
+  ["/avatar\\main", "outside_workspace"],
+])("rejects selected avatar %s", async (avatar, reason) => {
+  expect(await projectSelected(avatar)).toEqual({
+    avatar: "🦞",
+    resolution: { kind: "none", reason, source: avatar },
+  });
+});
+
+it.each([undefined, "🦞"])(
+  "uses the fallback for missing local avatars (emoji=%s)",
+  async (emoji) => {
+    expect(await avatarFixture("", { avatar: "missing.png", emoji }).projectInline()).toEqual({
+      avatar: emoji ?? "A",
+      resolution: { kind: "none", reason: "missing", source: "missing.png" },
+    });
+  },
+);
+
+it("reports pinned-read rejection instead of claiming the avatar is local", async () => {
+  const { projectInline, workspace } = avatarFixture("", { avatar: "avatar.png" });
+  fs.writeFileSync(path.join(workspace, "original.png"), APNG_BYTES);
+  fs.linkSync(path.join(workspace, "original.png"), path.join(workspace, "avatar.png"));
+
+  expect(await projectInline()).toEqual({
+    avatar: "A",
+    resolution: { kind: "none", reason: "unreadable", source: "avatar.png" },
+  });
+});
+
+it.each(["/avatar/main", "/openclaw/avatar/main"])(
+  "preserves same-origin route %s",
+  async (avatar) => {
+    const { cfg } = avatarFixture();
+    cfg.gateway = { controlUi: { basePath: "/openclaw" } };
+
+    expect(await projectSelected(avatar, cfg)).toEqual({
+      avatar: "/openclaw/avatar/main",
+      resolution: null,
+    });
+  },
+);
+
+function avatarFixture(basePath = "", initialIdentity: { avatar?: string; emoji?: string } = {}) {
   const workspace = tempRoots.make("openclaw-avatar-");
-  const entries: NonNullable<OpenClawConfig["agents"]>["entries"] = {};
+  const entries: NonNullable<OpenClawConfig["agents"]>["entries"] = {
+    main: { workspace, identity: initialIdentity },
+  };
   const config: OpenClawConfig = {
     ...(basePath ? { gateway: { controlUi: { basePath } } } : {}),
     agents: { entries },
@@ -39,6 +122,13 @@ function avatarFixture(basePath = "") {
   const auth = { mode: "token" as const, token: "test-token", allowTailscale: false };
   return {
     workspace,
+    cfg: config,
+    async projectInline(this: void) {
+      return resolveGatewayAssistantAvatar({
+        cfg: config,
+        identity: await resolveAssistantIdentity({ cfg: config, agentId: "main" }),
+      });
+    },
     setAvatar(this: void, avatar: string | undefined, agentId = "main") {
       const identity = entries[agentId]?.identity;
       if (identity) {
@@ -205,6 +295,19 @@ it.each([
   if (sourceKind !== "local") {
     expect(response.setHeader).toHaveBeenCalledWith("content-type", mime);
   }
+});
+
+it("serves an unversioned data avatar thumbnail", async () => {
+  const fixture = avatarFixture("/control");
+  fixture.setAvatar(encodeDataUrl(APNG_BYTES));
+
+  const response = await fixture.request("/control/avatar/main");
+
+  expect(response.res.statusCode).toBe(200);
+  expect(response.setHeader).toHaveBeenCalledWith("content-type", "image/png");
+  expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-cache");
+  expect(response.setHeader).toHaveBeenCalledWith("vary", "Authorization, Cookie");
+  expect(response.end).toHaveBeenCalledWith(expect.any(Buffer));
 });
 
 it.each(["local", "data"])(

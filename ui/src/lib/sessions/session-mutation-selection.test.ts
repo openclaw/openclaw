@@ -12,6 +12,7 @@ import {
 } from "./session-rpc.test-support.ts";
 const selectionHarness = (handlers: Parameters<typeof sessionRpcHarness>[0]) =>
   sessionRpcHarness(handlers, createTestGatewayClient);
+const writerRow = (id: string) => ({ ...row(id), key: `agent:writer:${id}` });
 function targetOptions(target: GatewaySessionRow) {
   return { agentId: "main", expectedSessionId: target.sessionId };
 }
@@ -32,14 +33,19 @@ it.each(
       delete: {},
     }[operation];
     const base = { ...original, archived: false, category: undefined };
-    const writer = { key: "agent:writer:first", sessionId: "writer", kind: "direct" as const };
+    const writer = writerRow("first");
     const reply = createDeferred<unknown>();
+    const dispatched = createDeferred();
     const blocked = createDeferred<SessionsListResult>();
     let holdMain = false;
     let committed = false;
+    const dispatchMutation = () => {
+      dispatched.resolve();
+      return reply.promise;
+    };
     const { sessions, request } = selectionHarness({
-      "sessions.patch": () => reply.promise,
-      "sessions.delete": () => reply.promise,
+      "sessions.patch": dispatchMutation,
+      "sessions.delete": dispatchMutation,
       "sessions.subscribe": () => ({ subscribed: true }),
       "sessions.list": (raw) => {
         const params = (raw ?? {}) as Record<string, unknown>;
@@ -76,20 +82,16 @@ it.each(
       if (foreground !== "queued") {
         await selecting;
       }
+      await dispatched.promise;
       committed = true;
       reply.resolve(
         operation === "delete"
           ? { ok: true, deleted: true, key: original.key }
-          : ack(original, {
-              label: "Renamed",
-              archived: operation === "archive",
-              category: operation === "category" ? "Moved" : undefined,
-            }),
+          : ack(original, changes),
       );
       await vi.advanceTimersByTimeAsync(5_000);
       if (foreground === "queued") {
-        // The mutation has reached reconciliation while the old primary request
-        // still holds the foreground selection in the roster queue.
+        // Reconciliation precedes release of the old foreground request.
         expect(sessions.listSnapshot(managed).result?.ts).toBe(2);
       }
       blocked.resolve(sessionsResult([original], 1));
@@ -163,7 +165,7 @@ it.each(["success", "failure", "retired"] as const)(
     const canonical = createDeferred<SessionsListResult>();
     let canonicalRequested = false;
     const original = row("permission-tie", { updatedAt: 1, permissionMode: "guarded" });
-    const writer = { key: "agent:writer:main", sessionId: "writer-main", kind: "direct" as const };
+    const writer = writerRow("main");
     let acknowledged = false;
     const { sessions, emitEvent, publish } = selectionHarness({
       "sessions.patch": () => reply.promise,
@@ -173,15 +175,7 @@ it.each(["success", "failure", "retired"] as const)(
           return canonical.promise;
         }
         return sessionsResult(
-          (raw as { agentId?: string })?.agentId === "writer"
-            ? [writer]
-            : [
-                {
-                  ...original,
-                  updatedAt: acknowledged ? 2 : 1,
-                  permissionMode: acknowledged ? "workspace" : "guarded",
-                },
-              ],
+          (raw as { agentId?: string })?.agentId === "writer" ? [writer] : [original],
           acknowledged ? 2 : 1,
         );
       },
@@ -249,11 +243,7 @@ it.each(["global", "queued-global", "queued-append", "queued-append-rename"] as 
     });
     const changes = rename ? { label: "Renamed target" } : { permissionMode: "workspace" as const };
     const confirmed = { ...target, ...changes, updatedAt: 2 };
-    const other = {
-      key: append ? "agent:main:other" : "agent:writer:other",
-      kind: "direct" as const,
-      sessionId: "other",
-    };
+    const other = append ? row("other") : writerRow("other");
     let acknowledged = false;
     let hold = false;
     const { sessions, emitEvent } = selectionHarness({

@@ -334,9 +334,9 @@ surfaces:
           - name: Plugin web routes
             coverageIds: [gateway.plugin-web-routes]
             description: Canvas and other plugin HTTP surfaces served by the Gateway.
-          - name: Canvas and A2UI routes
-            coverageIds: [gateway.canvas-and-a2ui-routes]
-            description: Hosted widget documents, A2UI renderer assets, and browser-hosted plugin routes under the Gateway HTTP server.
+          - name: Canvas routes
+            coverageIds: [gateway.canvas-routes]
+            description: Hosted widget documents and browser-hosted plugin routes under the Gateway HTTP server.
         docs:
           - docs/gateway/index.md
           - docs/concepts/architecture.md
@@ -347,7 +347,7 @@ surfaces:
           - control ui gateway
           - webchat gateway
           - plugin http route gateway
-          - canvas a2ui gateway
+          - canvas gateway
         category_note: hosted-web-surface.md
         human_lts_override: true
       - name: Gateway RPC APIs and Events
@@ -1114,9 +1114,9 @@ surfaces:
       - name: Canvas plugin
         id: canvas-plugin
         features:
-          - name: Hosted widget and A2UI surfaces
-            coverageIds: [plugins.hosted-canvas-and-a2ui-surfaces]
-            description: Canvas plugin registers authenticated A2UI renderer assets and presents core-hosted widget documents on macOS panels.
+          - name: Hosted widget surfaces
+            coverageIds: [plugins.hosted-canvas-surfaces]
+            description: Canvas plugin presents core-hosted widget documents on macOS panels.
           - name: Agent canvas tool
             coverageIds: [plugins.agent-canvas-tool]
             description: Canvas plugin registers the agent-facing `canvas` tool for present, hide, and navigate panel control.
@@ -1135,7 +1135,6 @@ surfaces:
         search_anchors:
           - Canvas plugin
           - hosted canvas documents
-          - A2UI
           - canvas tool
           - canvas node commands
         category_note: canvas-plugin.md
@@ -5466,7 +5465,7 @@ surfaces:
         search_anchors:
           - macos companion app widget panel
           - hosted widget document panel
-        category_note: canvas-a2ui.md
+        category_note: widget-panel.md
         human_lts_override: false
       - name: Local Setup
         id: local-setup
@@ -11021,26 +11020,22 @@ surfaces:
         features:
           - name: Embedding provider selection
             coverageIds: [local-models.embedding-provider-selection]
-            description: Covers Embedding provider selection across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, local `memoryFlush` model overrides, and related local embeddings and memory behavior.
+            description: Covers Embedding provider selection across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, and related local embeddings and memory behavior.
           - name: Memory search readiness
             coverageIds: [local-models.memory-search-readiness]
-            description: Covers Memory search readiness across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, local `memoryFlush` model overrides, and related local embeddings and memory behavior.
-          - name: memoryFlush model override
-            coverageIds: [local-models.memoryflush-model-override]
-            description: Covers memoryFlush model override across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, local `memoryFlush` model overrides, and related local embeddings and memory behavior.
+            description: Covers Memory search readiness across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, and related local embeddings and memory behavior.
           - name: Fallback lexical search
             coverageIds: [local-models.fallback-lexical-search]
-            description: Covers Fallback lexical search across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, local `memoryFlush` model overrides, and related local embeddings and memory behavior.
+            description: Covers Fallback lexical search across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, and related local embeddings and memory behavior.
           - name: Provider mismatch guidance
             coverageIds: [local-models.provider-mismatch-guidance]
-            description: Covers Provider mismatch guidance across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, local `memoryFlush` model overrides, and related local embeddings and memory behavior.
+            description: Covers Provider mismatch guidance across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, and related local embeddings and memory behavior.
         docs:
           - docs/concepts/memory.md
           - docs/gateway/doctor.md
         search_anchors:
           - Embedding provider selection
           - Memory search readiness
-          - memoryFlush model override
           - Fallback lexical search
           - Provider mismatch guidance
         category_note: local-embeddings-and-memory-provider-usage.md

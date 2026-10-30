@@ -5,6 +5,26 @@ openclaw-board-view {
   width: 100%;
 }
 
+/* Scroll owner for the board face. Widget/tab menus stay usable because
+   native popovers render them in the top layer, so this overflow cannot clip them.
+   Inline padding lives on .board-view below: macOS overlay scrollbars render
+   inside the scroll container's padding and would float away from the edge. */
+.board-document__content > openclaw-board-view,
+.board-session-surface__board > openclaw-board-view {
+  display: block;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 12px 0 16px;
+}
+
+.board-document__content .board-view,
+.board-session-surface__board .board-view {
+  padding-inline: 16px;
+}
+
 .board-view {
   --board-line: color-mix(in srgb, var(--border) 84%, transparent);
   --board-surface: color-mix(in srgb, var(--panel) 94%, transparent);
@@ -24,7 +44,6 @@ openclaw-board-view {
 }
 
 .board-view--loading {
-  opacity: 0;
   pointer-events: none;
 }
 
@@ -117,9 +136,7 @@ openclaw-board-view {
   --oc-overlay-distance: 0px;
 
   min-width: 190px;
-  padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
 }
@@ -199,6 +216,10 @@ openclaw-board-widget-cell {
   opacity: 0.88;
   transform: scale(0.995);
   z-index: 8;
+}
+
+.board-widget__chrome {
+  display: contents;
 }
 
 .board-widget__bar {
@@ -323,6 +344,14 @@ openclaw-board-widget-cell {
   overflow: auto;
 }
 
+/* Fixed grid tracks already reserve the report viewport. Keep distant charts
+   out of layout until they approach the board's scrollport. */
+.board-widget__body--fixed-report {
+  contain: strict;
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 0px;
+}
+
 .board-widget__body--scrollable .board-widget__grant {
   box-sizing: border-box;
   height: auto;
@@ -348,7 +377,14 @@ openclaw-board-widget-cell {
   min-height: 0;
 }
 
+.board-view--loading .board-widget__frame-pane > .board-widget__frame {
+  z-index: 3;
+}
+
 .board-widget__frame-pane > .board-widget__frame {
+  /* Paint over the placeholder without waiting for host readiness. */
+  background: transparent;
+  position: relative;
   flex: 1;
   min-height: 0;
 }
@@ -450,13 +486,20 @@ openclaw-board-widget-cell {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  /* Focus keeps keyboard actions reachable; menu-open and dragging keep chrome
-     pinned when interaction leaves the card bounds. Inline-size containment
-     lets the pill drop to its minimal form on narrow cards; grid tracks set
-     the card's width, so containment changes no layout. */
+  /* Keep responsive chrome's query container separate from report content.
+     WebKit otherwise recalculates every report descendant on board resize. */
   .board-widget {
-    container-type: inline-size;
     grid-template-rows: minmax(0, 1fr);
+    isolation: isolate;
+  }
+
+  .board-widget__chrome {
+    container-type: inline-size;
+    display: block;
+    inset: 0;
+    pointer-events: none;
+    position: absolute;
+    z-index: 5;
   }
 
   /* Fine pointers center a compact overlay; coarse pointers keep the base 38px
@@ -474,6 +517,7 @@ openclaw-board-widget-cell {
     max-width: calc(100% - 176px);
     opacity: 0;
     padding: 0 5px;
+    pointer-events: auto;
     position: absolute;
     top: 7px;
     transform: translateX(-50%);

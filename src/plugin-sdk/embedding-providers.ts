@@ -1,3 +1,5 @@
+export type { AcquireConfiguredProviderLocalService } from "../agents/provider-local-service-target.js";
+
 export {
   getEmbeddingProvider,
   listEmbeddingProviders,

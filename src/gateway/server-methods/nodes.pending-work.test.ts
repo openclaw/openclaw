@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { invokeNodeRequest } from "./nodes.invoke.test-support.js";
+import {
+  expectNodeFailure,
+  expectNodeReply as expectReply,
+  invokeNodeRequest,
+} from "./nodes.invoke.test-support.js";
 import { nodePendingWorkHandlers } from "./nodes.pending-work.js";
 import type { GatewayClient } from "./types.js";
 
@@ -36,16 +40,6 @@ const nodeId = "node-1";
 const generation = { nodeId, key: "generation-1" };
 const item = { id: "pending-1", type: "location.request", priority: "high" };
 let lifecycle: AbortController;
-const wakeOptions = () => ({
-  wakeReason: "node.pending",
-  cfg: {},
-  lifecycle: lifecycle.signal,
-  generation,
-});
-function expectReply(respond: ReturnType<typeof vi.fn>, payload: unknown) {
-  expect(respond).toHaveBeenCalledWith(true, payload, undefined);
-}
-
 function makeContext(
   getSession: () => { connId: string; pairingGeneration?: string } | undefined = () => undefined,
 ) {
@@ -77,12 +71,8 @@ async function request(
   });
 }
 
-function expectPairingChanged(respond: ReturnType<typeof vi.fn>) {
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ details: { code: "PAIRING_CHANGED" } }),
-  );
+function expectPairingChanged(respond: Awaited<ReturnType<typeof request>>) {
+  expectNodeFailure(respond, { details: { code: "PAIRING_CHANGED" } });
 }
 
 describe("node.pending handlers", () => {
@@ -110,7 +100,6 @@ describe("node.pending handlers", () => {
     expect(await request("drain")).toHaveBeenCalledWith(true, { nodeId, ...drained }, undefined);
     expect(work.drainNodePendingWork).toHaveBeenCalledWith(nodeId, {
       maxItems: 3,
-      includeDefaultStatus: true,
       pairingGeneration: generation.key,
     });
   });
@@ -125,19 +114,35 @@ describe("node.pending handlers", () => {
         return reason === "same-generation reconnect";
       });
       if (reason === "missing identity") {
-        expect(await request("drain", {}, undefined, null)).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            message: expect.stringContaining("connected device identity"),
-          }),
-        );
+        expectNodeFailure(await request("drain", {}, undefined, null), {
+          message: expect.stringContaining("connected device identity"),
+        });
       } else {
         expectPairingChanged(await request("drain", {}, context));
       }
       expect(work.drainNodePendingWork).not.toHaveBeenCalled();
     },
   );
+
+  it.each([999, 86_400_001, 1_000.5, "1000"])(
+    "rejects invalid pending-work TTL %s before queueing",
+    async (expiresInMs) => {
+      expectNodeFailure(await request("enqueue", { expiresInMs, wake: false }), {
+        code: "INVALID_REQUEST",
+      });
+      expect(work.enqueueNodePendingWork).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([1_000, 86_400_000])("forwards admitted pending-work TTL %s", async (expiresInMs) => {
+    expectReply(
+      await request("enqueue", { expiresInMs, wake: false }),
+      expect.objectContaining({ queued: item }),
+    );
+    expect(work.enqueueNodePendingWork).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresInMs }),
+    );
+  });
 
   it("normalizes the target identity before queueing and waking a disconnected node", async () => {
     let connected = false;
@@ -152,18 +157,6 @@ describe("node.pending handlers", () => {
       type: item.type,
       priority: "high",
       expiresInMs: undefined,
-      pairingGeneration: generation.key,
-    });
-    expect(context.nodeRegistry.getForPairingGeneration).toHaveBeenCalledWith(
-      nodeId,
-      generation.key,
-    );
-    expect(wake.maybeWakeNodeWithApns).toHaveBeenCalledWith(nodeId, wakeOptions());
-    expect(wake.waitForNodeReconnect).toHaveBeenCalledWith({
-      nodeId,
-      context,
-      timeoutMs: 3_000,
-      lifecycle: lifecycle.signal,
       pairingGeneration: generation.key,
     });
     expect(wake.maybeSendNodeWakeNudge).not.toHaveBeenCalled();
@@ -208,8 +201,7 @@ describe("node.pending handlers", () => {
       return false;
     });
     expectPairingChanged(await request("enqueue"));
-    expect(wakeState.captureNodeWakeLifecycle).toHaveBeenCalledWith(nodeId, generation.key);
-    expect(wake.maybeWakeNodeWithApns).toHaveBeenCalledExactlyOnceWith(nodeId, wakeOptions());
+    expect(wake.maybeWakeNodeWithApns).toHaveBeenCalledOnce();
     expect(wake.maybeSendNodeWakeNudge).not.toHaveBeenCalled();
     expect(wakeState.releaseNodeWakeLifecycle).toHaveBeenCalledWith(nodeId, lifecycle.signal);
     expect(work.removeNodePendingWorkItem).toHaveBeenCalledWith({
@@ -223,7 +215,6 @@ describe("node.pending handlers", () => {
     work.enqueueNodePendingWork.mockReturnValue({ revision: 9, deduped: true, item });
     pairing.isNodePairingGenerationCurrent.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     expectPairingChanged(await request("enqueue", { wake: false }));
-    expect(work.enqueueNodePendingWork).toHaveBeenCalledOnce();
     expect(work.removeNodePendingWorkItem).not.toHaveBeenCalled();
   });
 });

@@ -7,7 +7,15 @@ import * as ts from "typescript/ast";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
 
-const ROOTS = ["ui/src", "extensions/workboard/browser", "extensions/x/src"];
+export const PLUGIN_UI_SOURCE_ROOTS = [
+  "extensions/workboard/browser",
+  "extensions/memory-core/browser",
+  "extensions/nostr/browser",
+  "extensions/whatsapp/browser",
+  "extensions/clawrouter/src/control-ui.tsx",
+  "extensions/x/src/control-ui.tsx",
+];
+const ROOTS = ["ui/src", ...PLUGIN_UI_SOURCE_ROOTS];
 const CODE = /\.(?:[cm]?[jt]s|[jt]sx)$/u;
 const MAX_BUFFER = 256 * 1024 * 1024;
 
@@ -429,7 +437,7 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
 }
 
 export function isTest(file: string) {
-  return /(?:\.(?:test|spec|fixture|test-support|test-helpers)\.|-test-(?:support|harness)\.)|(?:^|\/)(?:__tests__|test-helpers|fixtures|e2e)\//u.test(
+  return /(?:\.(?:test|spec|fixture|test-support|test-helpers|test-harness)\.|-test-(?:support|harness)\.)|(?:^|\/)(?:__tests__|test|test-helpers|fixtures|e2e)\//u.test(
     file,
   );
 }

@@ -3,6 +3,8 @@ import {
   openOpenClawAgentDatabaseReadOnly,
   retainOpenClawAgentDatabaseReadOnly,
   loadSqliteVecExtension,
+  readOpenClawAgentDatabaseIdentity,
+  withOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
   isPostgresSqlConnection,
@@ -13,10 +15,6 @@ import {
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_STATE_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import {
-  readOpenClawAgentDatabaseIdentity,
-  withOpenClawAgentDatabaseReadOnly,
-} from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -235,7 +233,6 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
                 : schema!.tables.has(MEMORY_INDEX_FTS_TABLE)),
             facts: hasIndex ? readMemoryDatabaseFacts(db) : undefined,
             identity: readOpenClawAgentDatabaseIdentity(opened.database),
-            schemaVersion: schema?.userVersion,
           },
         };
       }

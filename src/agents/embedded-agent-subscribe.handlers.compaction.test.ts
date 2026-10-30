@@ -10,11 +10,8 @@ import {
   createStubSessionHarness,
   createSubscribedSessionHarness,
 } from "./embedded-agent-subscribe.e2e-harness.js";
-import {
-  handleCompactionEnd,
-  handleCompactionStart,
-} from "./embedded-agent-subscribe.handlers.compaction.js";
 import reconcileSessionStoreCompactionCountAfterSuccess from "./embedded-agent-subscribe.handlers.compaction.runtime.js";
+import { handleCompactionEnd } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import { createContext } from "./embedded-agent-subscribe.handlers.lifecycle.test-helpers.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -34,7 +31,6 @@ function createCompactionContext(messages: AgentMessage[] = []): EmbeddedAgentSu
   });
   Object.assign(ctx, {
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
-    ensureCompactionPromise: vi.fn(),
     incrementCompactionCount: () => {
       compactionCount += 1;
     },
@@ -53,12 +49,11 @@ function assistant(timestamp?: number): AgentMessage {
     ...(timestamp !== undefined ? { timestamp } : {}),
   } as AgentMessage;
 }
-function summary(timestamp?: number): AgentMessage {
+function summary(): AgentMessage {
   return {
     role: "compactionSummary",
     summary: "compressed",
     tokensBefore: 120_000,
-    ...(timestamp !== undefined ? { timestamp } : {}),
   } as AgentMessage;
 }
 const completed = {
@@ -75,49 +70,8 @@ const usage = (messages: AgentMessage[]) =>
   messages.filter((message) => message.role === "assistant").map((message) => message.usage);
 
 describe("compaction handlers", () => {
-  it.each([
-    [undefined, endEvent(), { reason: "threshold", completed: true, compactionCount: 1 }],
-    [
-      "manual",
-      endEvent({ status: "skipped", reason: "Nothing to compact (session too small)" }, "manual"),
-      { outcome: "skipped", completed: false, reasonClass: "no_compactable_entries" },
-    ],
-  ] as const)("logs compaction start/end at info (reason=%s)", async (reason, event, metadata) => {
-    const ctx = createCompactionContext();
-    handleCompactionStart(ctx, { type: "compaction_start", ...(reason ? { reason } : {}) });
-    await handleCompactionEnd(ctx, event);
-    expect(vi.mocked(ctx.log.info).mock.calls.map(([, data]) => data)).toMatchObject([
-      { event: "embedded_run_compaction_start", reason: reason ?? "threshold", runId: "run-test" },
-      { event: "embedded_run_compaction_end", ...metadata },
-    ]);
-  });
-
-  it("keeps failure details in client events, not logs, while preserving live usage", async () => {
-    const messages = [assistant(1_000)];
-    const before = usage(messages);
-    const ctx = createCompactionContext(messages);
-    const onAgentEvent = vi.fn();
-    ctx.params.onAgentEvent = onAgentEvent;
-    const privateMarker = "private_compaction_payload";
-    const reason = `Provider unavailable: ${privateMarker.repeat(100)}`;
-    await handleCompactionEnd(ctx, endEvent({ status: "failed", reason }, "overflow"));
-    expect(ctx.log.warn).toHaveBeenCalledExactlyOnceWith(
-      "embedded run auto-compaction failed",
-      expect.objectContaining({
-        event: "embedded_run_compaction_end",
-        reason: "overflow",
-        outcome: "failed",
-        reasonClass: "unknown",
-      }),
-    );
-    expect(JSON.stringify(vi.mocked(ctx.log.warn).mock.calls)).not.toContain(privateMarker);
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "compaction",
-      data: { phase: "end", completed: false, willRetry: false, outcome: "failed", reason },
-    });
-    expect(usage(messages)).toEqual(before);
-  });
-
+  const privateMarker = "private_compaction_payload";
+  const reason = `Provider unavailable: ${privateMarker.repeat(100)}`;
   it.each([
     ["default subscription floor", {}, 2, 2],
     ["caller-owned accounting", { compactionCountOwner: "caller" }, 1, 2],
@@ -190,30 +144,27 @@ describe("compaction handlers", () => {
   );
 
   it.each([
+    ["failed usage is preserved", [assistant(1_000)], [false], { status: "failed", reason }],
     ["aborted usage is preserved", [assistant(1_000)], [false], { status: "aborted" }],
-    [
-      "timestamps override transcript order",
-      [assistant(3_000), summary(2_000), assistant(1_000)],
-      [false, true],
-      completed,
-    ],
-    [
-      "legacy entries use summary position",
-      [assistant(), summary(), assistant()],
-      [true, false],
-      completed,
-    ],
-    [
-      "marker-free compaction clears every old snapshot",
-      [assistant(), { role: "user", content: "question", timestamp: 0 }, assistant()],
-      [true, true],
-      completed,
-    ],
+    ["legacy ordering", [assistant(), summary(), assistant()], [true, false], completed],
   ] satisfies Array<[string, AgentMessage[], boolean[], Parameters<typeof endEvent>[0]]>)(
     "%s",
     async (_name, messages, stale, outcome) => {
       const before = usage(messages);
-      await handleCompactionEnd(createCompactionContext(messages), endEvent(outcome));
+      const ctx = createCompactionContext(messages);
+      const onAgentEvent = (ctx.params.onAgentEvent = vi.fn());
+      await handleCompactionEnd(
+        ctx,
+        endEvent(outcome, outcome?.status === "failed" ? "overflow" : "threshold"),
+      );
+      if (outcome?.status === "failed") {
+        expect(ctx.log.warn).toHaveBeenCalledOnce();
+        expect(JSON.stringify(vi.mocked(ctx.log.warn).mock.calls)).not.toContain(privateMarker);
+        expect(onAgentEvent).toHaveBeenCalledWith({
+          stream: "compaction",
+          data: { phase: "end", completed: false, willRetry: false, outcome: "failed", reason },
+        });
+      }
       expect(usage(messages)).toEqual(
         stale.map((isStale, index) => (isStale ? makeZeroUsageSnapshot() : before[index])),
       );

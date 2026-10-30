@@ -37,7 +37,7 @@ import {
   readSystemdUserLingerStatus,
   resolveSystemdUserServiceAccount,
 } from "../../daemon/systemd.js";
-import { loadDeviceIdentityIfPresent } from "../../infra/device-identity.js";
+import { loadDeviceIdentityIfPresentAsync } from "../../infra/device-identity-async.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { canReuseNodeHostDeviceToken } from "../../node-host/gateway-auth.js";
@@ -91,9 +91,9 @@ function renderNodeServiceStartHints(): string[] {
   return buildPlatformServiceStartHints({
     installHint: formatCliCommand("openclaw node install"),
     startCommand: formatCliCommand("openclaw node start"),
-    launchAgentPlistPath: `~/Library/LaunchAgents/${resolveNodeLaunchAgentLabel()}.plist`,
-    systemdServiceName: resolveNodeSystemdServiceName(),
-    windowsTaskName: resolveNodeWindowsTaskName(),
+    launchAgentPlistPath: `~/Library/LaunchAgents/${resolveNodeLaunchAgentLabel(process.env.OPENCLAW_PROFILE)}.plist`,
+    systemdServiceName: resolveNodeSystemdServiceName(process.env.OPENCLAW_PROFILE),
+    windowsTaskName: resolveNodeWindowsTaskName(process.env.OPENCLAW_PROFILE),
   });
 }
 
@@ -173,7 +173,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   let pinSnapshot;
   try {
     pinSnapshot = await withDaemonRuntimePinMigration(
-      { ...installEnv, ...resolveNodeServiceIdentityEnvironment() },
+      { ...installEnv, ...resolveNodeServiceIdentityEnvironment(installEnv) },
       () =>
         readDaemonRuntimePinForInstall(
           { kind: "node", env: installEnv },
@@ -202,9 +202,12 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     return;
   }
   let pinnedRuntimePath = opts.runtimePath ?? (opts.runtime ? undefined : pinSnapshot.pin?.path);
-  const runtimeRaw = opts.runtime || resolveGatewayDaemonRuntime([pinnedRuntimePath ?? ""]);
+  const runtimeRaw =
+    opts.runtime ||
+    pinSnapshot.pin?.runtime ||
+    resolveGatewayDaemonRuntime([pinnedRuntimePath ?? ""]);
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
-    fail('Invalid --runtime (use "node" or "bun")');
+    fail('Invalid --runtime (use "node", "bun", or "standalone")');
     return;
   }
 
@@ -261,7 +264,9 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   });
   const cliEntrypoint =
     restoreServiceCli?.entrypoint ??
-    (!devMode && !wrapperPath ? await resolveDurableNodeEntrypoint(installEnv) : undefined);
+    (!devMode && !wrapperPath && runtime !== "standalone"
+      ? await resolveDurableNodeEntrypoint(installEnv)
+      : undefined);
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     cliEntrypoint,
     host,
@@ -299,7 +304,9 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   });
   if (!opts.authFromEnv) {
     const savedGateway = (await loadNodeHostConfig(installEnv))?.gateway;
-    const identity = savedGateway ? loadDeviceIdentityIfPresent({ env: installEnv }) : null;
+    const identity = savedGateway
+      ? await loadDeviceIdentityIfPresentAsync({ env: installEnv })
+      : null;
     if (
       identity &&
       (await canReuseNodeHostDeviceToken({
@@ -370,7 +377,14 @@ export async function runNodeDaemonLifecycle(
   action: "uninstall" | "start" | "restart" | "stop",
   opts: NodeDaemonOutputOptions = {},
 ) {
-  const params = { serviceNoun: "Node", service: resolveNodeService(), opts };
+  const params = {
+    serviceNoun: "Node",
+    service: resolveNodeService(),
+    renderFailureHints: () => [
+      `Run ${formatCliCommand("openclaw node status")} to inspect the service, then retry.`,
+    ],
+    opts,
+  };
   if (action === "uninstall") {
     return await runServiceUninstall({
       ...params,
@@ -477,8 +491,8 @@ export async function runNodeDaemonStatus(opts: NodeDaemonOutputOptions = {}) {
     );
     for (const hint of buildPlatformRuntimeLogHints({
       env: hintEnv,
-      systemdServiceName: resolveNodeSystemdServiceName(),
-      windowsTaskName: resolveNodeWindowsTaskName(),
+      systemdServiceName: resolveNodeSystemdServiceName(process.env.OPENCLAW_PROFILE),
+      windowsTaskName: resolveNodeWindowsTaskName(process.env.OPENCLAW_PROFILE),
     })) {
       defaultRuntime.log(errorText(hint));
     }

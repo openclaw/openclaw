@@ -44,7 +44,9 @@ conservative defaults: text input, a 128k context window, and unknown cost.
 Embedding, image, video, audio, realtime, speech, transcription, moderation, and
 legacy completions models stay hidden, as do models past their OpenAI shutdown
 date. Search models stay hidden because they run only on Chat Completions; live,
-cyber, experiment, and alpha IDs stay hidden because Responses rejects them.
+unrecognized cyber, experiment, and alpha IDs stay hidden because they can fail
+on Responses. The documented `gpt-5.6-cyber` Daybreak model is included when the
+account lists it; approved Daybreak Red access is still required.
 GPT-3.5, GPT-4 (including GPT-4o and GPT-4.1), o1, o3, and o4 models stay hidden
 from the list because their tool capabilities differ from the modern models.
 You can still select one by its reference, for example as
@@ -57,34 +59,159 @@ set `tools.web.search.provider` to a managed provider such as `brave`, or
 `tools.web.search.enabled: false`, before using them (see
 [Native OpenAI web search](/tools/web#native-openai-web-search)).
 
-## Daybreak Blue and Red
+<a id="daybreak-blue-and-red" />
 
-Accounts provisioned for Daybreak can select `openai/gpt-daybreak-blue-latest` or
-`openai/gpt-daybreak-red-latest` with an OpenAI API-key profile. Both aliases use
-the Responses API and expose `low`, `medium`, `high`, `xhigh`, and `max` on the
-OpenClaw runtime. `/think ultra` remains a separate orchestration mode; it uses
-the highest supported native effort rather than sending `ultra` to the API.
+## Daybreak alias retirement
 
-On the OpenClaw runtime, Daybreak Blue supports Standard and Fast processing;
-Daybreak Red uses Standard. Neither alias supports Ultrafast. The Control UI
-disables unavailable speed choices, and requests apply the same limits: saved
-Ultrafast preferences use Fast on Blue and Standard on Red. Explicit low-level
-`serviceTier` / `service_tier` overrides remain operator-controlled and may be
-rejected by the API.
+OpenAI retires `openai/gpt-daybreak-blue-latest` and
+`openai/gpt-daybreak-red-latest` on **October 28, 2026**. Only the aliases
+retire; the underlying models remain available to approved accounts. OpenClaw
+marks the aliases deprecated and stops choosing Blue as an implicit cyber
+failover target. Explicit alias references remain unchanged; this is not an
+automatic switch to a different model.
 
-Daybreak aliases can resolve to different snapshots as access programs evolve.
-OpenClaw preserves the requested alias instead of replacing it with a snapshot.
-Blue keeps reasoning enabled; Red also supports `/think off`. Explicit configured
-effort capabilities remain authoritative, including narrower or empty lists.
-Alias cost estimates are unknown, not a claim that Daybreak requests are free;
-check the resolved model and current OpenAI pricing. Successful account discovery
-remains authoritative and this support does not grant Daybreak access. Native
-Codex continues to use its account catalog and native effort controls.
+Before the deadline:
 
-See the [Daybreak guide](https://developers.openai.com/api/docs/guides/daybreak)
-and the [Blue](https://developers.openai.com/api/docs/models/gpt-daybreak-blue-latest)
-and [Red](https://developers.openai.com/api/docs/models/gpt-daybreak-red-latest)
-model references.
+1. Check your Daybreak settings and the specific model IDs available under your
+   approved access. Do not infer a replacement from Blue/Red or another account's
+   catalog. Listing a model is not proof of Daybreak entitlement.
+2. Run `openclaw doctor --lint --only openai/daybreak-alias-retirement` to locate
+   configured aliases, saved session overrides, and scheduled jobs. The scan is
+   read-only and reports incomplete store reads. To migrate, supply an explicit
+   model and Access choice with [Doctor's model replacement option](/cli/doctor/running#daybreak-alias-migration).
+   Plain `doctor --fix` does not guess a successor or Access program. Locked
+   sessions, unavailable pinned accounts, conflicting target Access settings,
+   and disallowed successors are preserved for manual resolution. Rerun the
+   lint check after repair to find remaining references.
+3. For Responses API use, follow the
+   [Daybreak guide](https://developers.openai.com/api/docs/guides/daybreak),
+   including its account settings and request requirements. Preserve explicitly
+   configured reasoning capabilities and service tiers for the specific model;
+   the old aliases' capabilities are not a contract for every underlying model.
+4. Select an explicit access program in the chat Access control, or use Codex's
+   own Daybreak controls with an approved specific model. Selecting a model or
+   access program does not grant account access.
+
+When no explicit session Access choice is saved, automatic cyber recovery retries
+a replay-safe cyber refusal once on the same model and account with authorized
+Blue Access. An explicit choice, including Standard, is not escalated. It preserves the runtime, effort,
+speed, and saved session settings; ordinary configured model fallback remains
+separate. Run `openclaw doctor --fix` to remove the retired `cyberFailover.model`
+field from `agents.defaults.embeddedAgent.cyberFailover` (OpenClaw runtime) or
+`plugins.entries.codex.config.appServer.cyberFailover` (native Codex). Doctor
+preserves `mode` and `cooloffMs`, including explicit `mode: "off"`. See
+[model failover](/concepts/model-failover#automatic-cyber-policy-escalation)
+and [Codex runtime behavior](/plugins/codex-harness/runtime-behavior#automatic-daybreak-escalation).
+
+### Chat Access control
+
+The chat and new-session model controls provide a **Daybreak** toggle and an
+**Access** selector when the account advertises a Daybreak program for the selected
+model and runtime and your operator role permits it. Turning Daybreak off selects
+**Standard**; turning it on restores the last permitted Blue or Red choice. Saved
+choices remain scoped to the authenticated user and agent.
+
+An unset session choice follows the configured model/agent Access default. Without
+a configured default, supported OpenAI routes use Standard. An explicit session
+choice overrides the default; an explicit empty model `accessPrograms: {}` retains
+provider/native inheritance. If the saved choice becomes unavailable, select
+Standard rather than silently downgrading the request.
+
+The session choice survives `/new` and session reset, and is inherited by a fork
+unless replaced. Changes affect the next admitted turn, not an already-running
+model call. A `sessions_spawn` child on the same agent and model keeps the
+requester's saved Access; pass
+[`cyberAccessProgram`](/tools/subagents/tool-reference#tool-parameters) to choose
+a program for the child explicitly.
+
+Named operator roles grant Blue and Red independently through
+`gateway.roles.definitions.<role>.accessPrograms.cyber`. An omitted or empty grant
+list permits Standard only, including for admin-scoped roles or roles without
+model restrictions. The actual model must separately be allowed by the role's
+model policy, and provider entitlement is still required. Configured defaults do
+not bypass these grants. Server-side checks cover direct requests, creation,
+execution, and retained or recovered authority after permissions change.
+
+The OpenClaw runtime sends the program to its official Responses endpoint. Native
+Codex uses its supported turn-scoped access-program parameter. This OpenClaw
+integration supports explicit native programs with ChatGPT subscription and
+Platform API-key authentication. The managed Codex runtime enables API-key access
+programs by default; an explicitly disabled native feature remains authoritative.
+Native Codex checks its authenticated `model/list` access-program metadata before
+submitting a Daybreak turn. A stale saved selection fails visibly before submission.
+
+Entitlement comes only from authenticated `available_access_programs.cyber`
+metadata (or native Codex's `availableAccessPrograms.cyber`), scoped to the selected
+account, model, route, and runtime. Model listing membership or subscription type
+alone is not entitlement. For Platform API keys, OpenClaw reads explicit program
+metadata from the same authenticated Codex model endpoint used by the official
+Codex client. The public `/v1/models` response remains the model-availability
+authority: a capability row cannot add an unlisted model. The same API key scopes
+both reads to its organization and project. Configured API keys and environment
+credentials use their own discovery result, never another saved account's grants;
+custom endpoints and request-header overrides do not inherit these grants.
+
+This discovery uses read-only requests, not billable Responses probes. Successful
+Platform and ChatGPT HTTP observations are cached for up to 60 seconds by
+credential and endpoint; explicit catalog refresh bypasses that cache. This HTTP
+TTL does not periodically refresh an already published account catalog; its
+normal refresh and credential-change lifecycle still applies. A replaced
+credential, missing or empty program metadata, or a failed capability refresh
+never reuses another account's grants. Unknown or unavailable programs stay
+hidden, without removing ordinary model access. Provider-side access changes may
+also have their own propagation delay. Native Codex owns its separate model-list
+cache and account-change invalidation. Explicit model parameters remain available;
+the provider enforces entitlement on every actual request.
+
+### Responses access program and speed
+
+For the OpenClaw runtime on an official OpenAI Platform or ChatGPT subscription
+Responses endpoint, set the selected
+model's `params.accessPrograms.cyber` to `standard`, `daybreak_blue`, or
+`daybreak_red`. Omitting the setting defaults supported routes to Standard; use
+`accessPrograms: {}` to retain OpenAI's model/account/project defaults. Neither `accessPrograms` nor `cyber` accepts
+`null`. Native Codex also accepts this model setting on ChatGPT authentication,
+with the session override taking precedence. This setting never grants access.
+An explicit incompatible program or missing entitlement returns the provider
+error; OpenClaw does not silently switch to standard safeguards.
+
+Daybreak and speed are separate request settings. For example, an approved
+account using the publicly documented GPT-6.1 Sol route can request:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-6.1-sol": {
+          agentRuntime: { id: "openclaw" },
+          params: {
+            accessPrograms: { cyber: "daybreak_blue" },
+            serviceTier: "ultrafast", // "priority" for Fast
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+GPT-6.1 Sol and GPT-6 Astra require **Daybreak Red approval** and project
+access even though their request value is `daybreak_blue`; `daybreak_red` is not
+the correct value for those models. Match the program to the selected model in
+the [Daybreak guide](https://developers.openai.com/api/docs/guides/daybreak).
+The model and account must independently support the requested
+[Fast](https://developers.openai.com/api/docs/guides/fast-mode) or
+[Ultrafast](https://developers.openai.com/api/docs/guides/ultrafast-mode) tier.
+OpenClaw sends both settings without applying the retiring aliases' speed limits
+to specific model IDs. Provider authorization and fulfillment remain server-owned.
+
+Until retirement, explicitly selected aliases retain their existing Responses
+metadata: Blue keeps reasoning enabled and supports Standard/Fast; Red also
+supports reasoning off and uses Standard. Neither supports Ultrafast. Their
+unknown cost estimates do not mean requests are free. These legacy rows stay
+only to keep existing selections interpretable during migration, not to name a
+replacement or grant access.
 
 ## GPT-6 Astra
 
@@ -186,8 +313,12 @@ incompatible settings, or a changed model, route, session, or auth profile start
 a fresh request using the selected effort. Older transcripts without this
 metadata also start fresh after transport expiry.
 
-The native [Codex harness](/plugins/codex-harness) owns its own Responses loop;
-these built-in-runtime capabilities do not imply native Codex support.
+The native [Codex harness](/plugins/codex-harness) owns its own Responses loop.
+OpenClaw enables its cache-preserving reasoning-effort updates for managed
+threads, including when native code mode is disabled. Codex uses its model
+catalog to decide eligibility and keeps unsupported models on ordinary
+request-level effort. This does not enable the built-in-runtime async-tool or
+steering implementation inside Codex.
 
 ## GPT-6.1 Sol
 

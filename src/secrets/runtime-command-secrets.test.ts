@@ -91,37 +91,33 @@ function expectWebResolution(
   resolved: Awaited<ReturnType<typeof resolveCommandSecretsFromActiveRuntimeSnapshot>>,
   value: string,
 ) {
-  expect(resolved.assignments).toMatchObject([{ path: firecrawlPath, value }]);
-  expect(resolved.diagnostics).toEqual([]);
-  expect(resolved.inactiveRefPaths).toEqual([]);
+  expect(resolved).toMatchObject({
+    assignments: [{ path: firecrawlPath, value }],
+    diagnostics: [],
+    inactiveRefPaths: [],
+  });
 }
 
 describe("runtime command secrets", () => {
   afterEach(() => vi.unstubAllEnvs());
-  it("returns forced fallback assignments from the active gateway snapshot", async () => {
-    activateWebSnapshot(forcedFallbackConfig, "gateway-only-firecrawl-key");
-
-    const resolved = await resolveCommandSecretsFromActiveRuntimeSnapshot({
-      commandName: "infer web fetch",
-      targetIds: new Set([firecrawlPath]),
-      forcedActivePaths: new Set([firecrawlPath]),
-    });
-
-    expectWebResolution(resolved, "gateway-only-firecrawl-key");
-  });
-
-  it("re-resolves forced command-selected web provider paths with gateway env", async () => {
-    activateWebSnapshot(forcedWebProviderConfig, "gateway-selected-firecrawl-key");
-
-    const resolved = await resolveCommandSecretsFromActiveRuntimeSnapshot({
-      commandName: "infer web search",
-      targetIds: new Set([firecrawlPath]),
-      allowedPaths: new Set([firecrawlPath]),
-      forcedActivePaths: new Set([firecrawlPath]),
-    });
-
-    expectWebResolution(resolved, "gateway-selected-firecrawl-key");
-  });
+  it.each([
+    ["fetch", forcedFallbackConfig, "gateway-only-firecrawl-key", undefined],
+    ["search", forcedWebProviderConfig, "gateway-selected-firecrawl-key", new Set([firecrawlPath])],
+  ] as const)(
+    "resolves forced web %s paths with gateway env",
+    async (tool, config, key, allowedPaths) => {
+      activateWebSnapshot(config, key);
+      expectWebResolution(
+        await resolveCommandSecretsFromActiveRuntimeSnapshot({
+          commandName: `infer web ${tool}`,
+          targetIds: new Set([firecrawlPath]),
+          forcedActivePaths: new Set([firecrawlPath]),
+          allowedPaths,
+        }),
+        key,
+      );
+    },
+  );
 
   it("returns authoritative assignments from an incomplete runtime snapshot", async () => {
     const sourceConfig = asConfig({

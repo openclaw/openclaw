@@ -1,4 +1,4 @@
-import { createSignal, onSettled, runWithOwner } from "@solidjs/signals";
+import { createSignal } from "@solidjs/signals";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import { readNativeHistoryState } from "./native-web-chrome.ts";
@@ -11,18 +11,10 @@ export abstract class ShellPresentation {
   private connectionKind: GatewayStatusProps["kind"] | undefined;
   private connectionRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
   private connectionFlagTimer: ReturnType<typeof setTimeout> | undefined;
-  private readonly readRevision: () => number;
-  private readonly writeRevision: (next: (revision: number) => number) => number;
-  readonly shellRevision = () => this.readRevision();
-
-  constructor() {
-    const [read, write] = createSignal(0, { ownedWrite: true });
-    this.readRevision = read;
-    this.writeRevision = write;
-  }
+  private readonly revision = createSignal(0, { ownedWrite: true });
+  readonly shellRevision = this.revision[0];
   private disposed = false;
   private presentationMounted = false;
-  private pendingCommit: object | undefined;
   private commitPromise: Promise<boolean> = Promise.resolve(true);
   private resolveCommit: ((committed: boolean) => void) | undefined;
   private currentNavDrawerOpen = false;
@@ -141,7 +133,7 @@ export abstract class ShellPresentation {
 
   mountPresentation(): () => void {
     this.presentationMounted = true;
-    this.scheduleCommit();
+    this.invalidate();
     return () => {
       this.presentationMounted = false;
       this.suspendPresentation();
@@ -150,27 +142,11 @@ export abstract class ShellPresentation {
 
   protected abstract afterCommit(): void;
 
-  private scheduleCommit(): void {
-    if (this.disposed || !this.presentationMounted || this.pendingCommit) {
+  commitRenderedPresentation(): void {
+    if (this.disposed || !this.presentationMounted || !this.resolveCommit) {
       return;
     }
-    if (!this.resolveCommit) {
-      this.commitPromise = new Promise((resolve) => {
-        this.resolveCommit = resolve;
-      });
-    }
-    const commit = {};
-    this.pendingCommit = commit;
-    // Router notifications can run inside a render memo that retires before this commit.
-    runWithOwner(null, () =>
-      onSettled(() => {
-        if (this.pendingCommit !== commit) {
-          return;
-        }
-        this.pendingCommit = undefined;
-        this.afterCommit();
-      }),
-    );
+    this.afterCommit();
   }
 
   invalidate(): void {
@@ -182,18 +158,16 @@ export abstract class ShellPresentation {
         this.resolveCommit = resolve;
       });
     }
-    this.writeRevision((revision) => revision + 1);
-    this.scheduleCommit();
+    this.revision[1]((revision) => revision + 1);
   }
 
   protected resumePresentation(): void {
     this.disposed = false;
-    this.scheduleCommit();
+    this.invalidate();
   }
 
   protected suspendPresentation(): void {
     this.disposed = true;
-    this.pendingCommit = undefined;
     this.resolveCommit?.(false);
     this.resolveCommit = undefined;
     this.commitPromise = Promise.resolve(false);

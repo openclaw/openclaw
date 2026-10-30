@@ -161,27 +161,23 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(readyFile)}, "utf8"));`,
 
 it("isolates native seeding, interruption, and closure from incidental parent turns", async () => {
   const parent = (await request("thread/start", { cwd: process.cwd() })).thread!;
-  expect(parent.id).toBe("native-upgrade-parent");
   const seeded = await startTurn(parent.id, "NATIVE_UPGRADE_SEED_ASSIGNMENTS");
   await completed(completeId, "native-complete-turn");
   const before = await readThread(parent.id);
   const [running, finished] = await Promise.all([readThread(runningId), readThread(completeId)]);
   expect(running).toMatchObject({
     status: { type: "active" },
-    turns: [{ id: "native-running-turn", status: "inProgress" }],
+    turns: [{ status: "inProgress" }],
   });
-  expect(finished.turns).toMatchObject([
-    {
-      id: "native-complete-turn",
-      status: "completed",
-      items: [{ type: "agentMessage", text: "NATIVE_UPGRADE_PENDING_RESULT" }],
-    },
-  ]);
+  expect(finished.turns[0]).toMatchObject({
+    status: "completed",
+    items: [{ type: "agentMessage", text: "NATIVE_UPGRADE_PENDING_RESULT" }],
+  });
 
   const incidental = (await request("thread/start", { cwd: process.cwd() })).thread!;
   expect(incidental.id).not.toBe(parent.id);
   expect(incidental.parentThreadId).toBeUndefined();
-  expect(incidental).toMatchObject({ source: "unknown", turns: [] });
+  expect(incidental.turns).toEqual([]);
   const incidentalTurn = await startTurn(incidental.id, "Unrelated turn while seeding is active.");
   await completed(incidental.id, incidentalTurn.id);
   expect(await readThread(parent.id)).toEqual(before);

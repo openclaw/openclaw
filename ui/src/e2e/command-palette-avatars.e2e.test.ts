@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -154,9 +155,18 @@ suite.define(() => {
         }
         expect(await page.getByText("Search notices", { exact: false }).count()).toBe(0);
         expect(
-          await page.getByRole("status").filter({ hasText: "Indexing older messages" }).isVisible(),
+          await page
+            .getByRole("status")
+            .filter({ hasText: "Results may be incomplete" })
+            .isVisible(),
         ).toBe(true);
         expect(await input.isVisible()).toBe(true);
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.locator(".cmd-palette").screenshot({
+            animations: "disabled",
+            path: path.join(suite.artifactDir, `palette-completeness-${width}-${mode}.png`),
+          });
+        }
         await gateway.setMethodResponse("sessions.search", {
           ...transcript,
           truncated: true,
@@ -170,9 +180,7 @@ suite.define(() => {
         expect(
           await page.locator(".cmd-palette__search").getByRole("status").allTextContents(),
         ).toEqual([]);
-        expect(
-          await page.getByText(/Search notices|Indexing older messages|may be incomplete/).count(),
-        ).toBe(0);
+        expect(await page.getByText(/Search notices|may be incomplete/).count()).toBe(0);
         await input.focus();
         await input.press("ArrowDown");
         await input.press("Enter");

@@ -16,6 +16,7 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { createGatewayServerActiveWorkInspectors } from "../server-active-work.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestContext } from "./shared-types.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 
@@ -65,20 +66,12 @@ export const suspendHandlers: GatewayRequestHandlers = {
       params.target.pid !== process.pid ||
       params.target.processInstanceId !== getGatewayProcessInstanceId()
     ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "gateway process changed after preflight"),
-      );
+      respondError(respond, ErrorCodes.UNAVAILABLE, "gateway process changed after preflight");
       return;
     }
     const owner = context.hostLifecycle?.externalRestart;
     if (!owner) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "gateway host does not own process exit"),
-      );
+      respondError(respond, ErrorCodes.UNAVAILABLE, "gateway host does not own process exit");
       return;
     }
     const result = armGatewaySuspendHandoff({
@@ -87,7 +80,7 @@ export const suspendHandlers: GatewayRequestHandlers = {
       commit: params.commit,
     });
     if (!result.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, result.error));
+      respondError(respond, ErrorCodes.UNAVAILABLE, result.error);
       return;
     }
     suspendLog.info(
@@ -137,18 +130,10 @@ export const suspendHandlers: GatewayRequestHandlers = {
     const result = resumeGatewaySuspend(suspensionId);
     if (!result.ok) {
       if (result.reason === "gateway-restarting") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "gateway shutdown is committed"),
-        );
+        respondError(respond, ErrorCodes.UNAVAILABLE, "gateway shutdown is committed");
         return;
       }
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "gateway suspension id does not match"),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "gateway suspension id does not match");
       return;
     }
     suspendLog.info(

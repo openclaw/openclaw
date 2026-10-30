@@ -1,3 +1,5 @@
+import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
@@ -8,7 +10,38 @@ import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/
 import { normalizeElevatedLevel } from "../../auto-reply/thinking.shared.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { TalkAgentConsultAuthority } from "./client-gateway-control.js";
+import { resolveRealtimeVoiceAgentConsultToolsAllow } from "../../talk/agent-consult-tool.js";
+import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
+import { resolveChatSendCallerContext } from "../server-methods/gateway-client-identity.js";
+
+export type TalkAgentConsultAuthority = {
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  senderIsOwner: boolean;
+  toolsAllow?: string[];
+  replyCaller?: ReturnType<typeof resolveChatSendCallerContext>;
+};
+
+export function resolveTalkAgentConsultAuthority(
+  scopes: readonly string[] | undefined,
+  client?: Parameters<typeof resolveChatSendCallerContext>[0],
+): TalkAgentConsultAuthority {
+  const senderIsOwner = scopes?.includes(ADMIN_SCOPE) === true;
+  const replyCaller = client ? resolveChatSendCallerContext(client) : undefined;
+  if (replyCaller) {
+    // Talk has no task-suggestion acceptance UI, even when its hosting client does.
+    replyCaller.GatewayClientCaps = replyCaller.GatewayClientCaps.filter(
+      (cap) => cap !== GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+    );
+  }
+  if (senderIsOwner || scopes?.includes(WRITE_SCOPE) === true) {
+    return { senderIsOwner, ...(replyCaller ? { replyCaller } : {}) };
+  }
+  return {
+    senderIsOwner: false,
+    ...(replyCaller ? { replyCaller } : {}),
+    toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow("safe-read-only"),
+  };
+}
 
 /** Adapt the authenticated caller, not ASR text or a previous delivery route. */
 export function prepareTalkClientToolContext(params: {

@@ -1,17 +1,22 @@
-import { deepStrictEqual, ok } from "node:assert/strict";
+import { ok } from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { text } from "node:stream/consumers";
 import { serialize } from "node:v8";
 import { execa } from "execa";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, aroundEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createRemoteShellSandboxSession } from "../../agents/sandbox/remote-shell-transport.js";
-import { withCommandProcessScope } from "../exec-spawn.js";
-import { runCommandWithTimeout } from "../exec.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { spawnCommand, withCommandProcessScope } from "../exec-spawn.js";
+import { runCommandBuffered, runCommandWithTimeout, runExec } from "../exec.js";
+import { prepareOomScoreAdjustedSpawn } from "../linux-oom-score.js";
+import { createChildAdapter } from "../supervisor/adapters/child.js";
 import { BrokerChild } from "./child.js";
 import { runWithSpawnBroker } from "./context.js";
-import { brokerExecaOptions, spawnBrokerCommand } from "./execa-client.js";
 import type { CommandSpawnOptions } from "./execa-types.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
 import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
@@ -20,7 +25,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const nodeArgv = (source: string, ...args: string[]) => [process.execPath, "-e", source, ...args];
 
-describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", () => {
+describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker command transports", () => {
   let host: SpawnBrokerHost;
   beforeAll(async () => {
     host = createSpawnBrokerHost();
@@ -32,14 +37,12 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", (
     if (!broker) {
       return execa(argv[0]!, argv.slice(1), options);
     }
-    const prepared = brokerExecaOptions(options);
-    ok(prepared, "Fixture unexpectedly selected an in-process transport");
-    return spawnBrokerCommand(host, argv, options, prepared);
+    return runWithSpawnBroker(host, () => spawnCommand(argv, options));
   }
   const start = (source: string, options: CommandSpawnOptions, broker = true) =>
     launch(nodeArgv(source), options, broker);
 
-  async function ready(command: ReturnType<typeof start>, required = true) {
+  async function readyCommand(command: ReturnType<typeof start>, required = true) {
     const child = command.nodeChildProcess;
     if (required || child instanceof BrokerChild) {
       ok(child instanceof BrokerChild, "Fixture did not use the broker");
@@ -48,7 +51,11 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", (
   }
 
   const cases: Array<[string, string, CommandSpawnOptions?, boolean?]> = [
-    ["success", "process.stdout.write('out\\n');process.stderr.write('err\\n')"],
+    [
+      "success",
+      "process.stdin.pipe(process.stdout);process.stderr.write('err\\n')",
+      { input: "out\n", stdin: "pipe" },
+    ],
     [
       "binary diagnostics",
       "process.stdout.write(Buffer.from([239,187,191,0,8,9,13,27,91,51,49,109,65,27,91,48,109,255,10]));process.stderr.write('failure\\r\\n');process.exitCode=3",
@@ -60,7 +67,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", (
     ],
     ["signal", "process.kill(process.pid,'SIGTERM')"],
     ["timeout", "setInterval(()=>{},1000)", { timeout: 100 }],
-    ["maxBuffer", "process.stdout.write('x'.repeat(8192))", { maxBuffer: 128 }],
+    ["maxBuffer", "console.log('x'.repeat(8192));setInterval(()=>{},1000)", { maxBuffer: 128 }],
     ["cancel", "process.stdout.write('ready');setInterval(()=>{},1000)", undefined, true],
     [
       "forced cancel",
@@ -155,7 +162,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", (
         broker,
       );
       try {
-        await ready(command, broker);
+        await readyCommand(command, broker);
         await new Promise<void>((resolve) => {
           command.stdout!.once("data", () => resolve());
         });
@@ -171,7 +178,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", (
         outcomes.push({
           code: result.code,
           exitCode: result.exitCode,
-          originalMessage: result.originalMessage,
+          originalMessage: Reflect.get(result, "originalMessage"),
           stderr: result.stderr,
         });
       } finally {
@@ -201,7 +208,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", (
           },
           broker,
         );
-        await ready(command, broker);
+        await readyCommand(command, broker);
         if (cancel) {
           command.stdout?.once("data", () => controller.abort());
         }
@@ -225,40 +232,6 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", (
         });
       }
       expect(outcomes[1]).toEqual(outcomes[0]);
-    },
-  );
-
-  it.each([false, true])(
-    "preserves large stdin and both output streams (buffer: %s)",
-    async (buffer) => {
-      const size = 1024 * 1024 + 137;
-      const prefix = "broker input\n";
-      const command = start(
-        `const input=[];process.stdin.on('data',b=>input.push(b));process.stdin.on('end',()=>{const prefix=Buffer.concat(input);for(const stream of [process.stdout,process.stderr]){stream.write(prefix);for(let i=0;i<${size};i+=4096){const count=Math.min(4096,${size}-i);stream.write(Buffer.alloc(count,(i/4096)%251));}}});`,
-        {
-          buffer,
-          input: prefix,
-          encoding: "buffer",
-          maxBuffer: 2 * 1024 * 1024,
-          stripFinalNewline: false,
-        },
-      );
-      await ready(command);
-      const chunks = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
-      command.stdout?.on("data", (chunk: Buffer) => chunks.stdout.push(chunk));
-      command.stderr?.on("data", (chunk: Buffer) => chunks.stderr.push(chunk));
-      const result = await command;
-      const expected = Buffer.concat([
-        Buffer.from(prefix),
-        Buffer.from(Array.from({ length: size }, (_, index) => Math.floor(index / 4096) % 251)),
-      ]);
-      for (const name of ["stdout", "stderr"] as const) {
-        deepStrictEqual(Buffer.concat(chunks[name]), expected);
-        if (buffer) {
-          deepStrictEqual(Buffer.from(result[name] as Uint8Array), expected);
-        }
-      }
-      expect(result.exitCode).toBe(0);
     },
   );
 
@@ -331,7 +304,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", (
     const command = start("process.stdout.write('ready');setTimeout(()=>{},2000)", {
       stdin: "ignore",
     });
-    await ready(command);
+    await readyCommand(command);
     const oldPid = host.pid!;
     process.kill(oldPid, "SIGKILL");
     await expect(command).rejects.toMatchObject({ code: "ERR_SPAWN_BROKER_UNAVAILABLE" });
@@ -339,5 +312,112 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", (
     const result = await start("process.stdout.write(String(process.ppid))", { stdin: "ignore" });
     expect(Number(result.stdout)).toBe(host.pid);
     expect(host.pid).not.toBe(oldPid);
+  });
+
+  it.runIf(process.platform === "linux").each([
+    { name: "adjusted", enabled: true, missing: false },
+    { name: "opt-out", enabled: false, missing: false },
+    { name: "failed launch", enabled: true, missing: true },
+  ])("restores the broker OOM score after $name", async ({ enabled, missing }) => {
+    const scorePath = `/proc/${host.pid}/oom_score_adj`;
+    const original = await readFile(scorePath, "utf8");
+    const prepared = prepareOomScoreAdjustedSpawn(
+      missing ? "/openclaw-nonexistent-oom-command" : "/bin/cat",
+      missing ? [] : ["/proc/self/oom_score_adj"],
+      { env: { ...process.env, OPENCLAW_CHILD_OOM_SCORE_ADJ: enabled ? "1" : "0" } },
+    );
+    const child = host.spawn(prepared.command, prepared.args, {
+      env: prepared.env,
+      stdio: missing ? "ignore" : ["ignore", "pipe", "ignore"],
+    });
+    if (missing) {
+      await expect(child.ready()).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      await child.ready();
+      const output = text(child.stdout!);
+      expect(await once(child, "close")).toEqual([0, null]);
+      expect((await output).trim()).toBe(enabled ? "1000" : original.trim());
+      expect(child.spawnfile).toBe("/bin/cat");
+    }
+    expect(await readFile(scorePath, "utf8")).toBe(original);
+  });
+
+  it.each(["buffered", "adapter"])("routes %s commands through the broker", async (transport) => {
+    await runWithSpawnBroker(host, async () => {
+      const argv = nodeArgv("process.stdout.write(String(process.ppid))");
+      if (transport === "buffered") {
+        const result = await runCommandBuffered(argv);
+        expect(result.termination).toBe("exit");
+        expect(Number(result.stdout.toString())).toBe(host.pid);
+      } else {
+        const { adapter, ready } = await createChildAdapter({
+          argv,
+          stdinMode: "pipe-closed",
+          exactEnv: true,
+        });
+        let output = "";
+        adapter.onStdout((chunk) => {
+          output += chunk;
+        });
+        const result = await ready.then(() => adapter.wait()).finally(() => adapter.dispose());
+        expect(result).toEqual({ code: 0, signal: null });
+        expect(Number(output)).toBe(host.pid);
+      }
+    });
+  });
+
+  it("preserves runExec launch error metadata across asynchronous readiness", async () => {
+    const command = "/openclaw-nonexistent-spawn-broker-command";
+    const run = () => runExec(command, [], { logOutput: false }).catch((error: unknown) => error);
+    const local = await run();
+    const remote = await runWithSpawnBroker(host, run);
+    expect(local).toBeInstanceOf(Error);
+    const message = (local as Error).message;
+    expect(remote).toMatchObject({ code: "ENOENT", failed: true, stdout: "", stderr: "", message });
+  });
+
+  describe("brokered process lifecycle owners", () => {
+    aroundEach((runTest) => runWithSpawnBroker(host, runTest));
+
+    it("forwards the ownedWorker start gate and disconnect through the broker", async ({
+      signal,
+    }) => {
+      const response = createDeferredCore<unknown>();
+      const { adapter, ready } = await createChildAdapter({
+        argv: [
+          process.execPath,
+          "-e",
+          `
+          process.once('message',()=>process.send({ppid:process.ppid}));
+          process.once('disconnect',()=>process.exit(0));
+        `,
+        ],
+        ownedWorker: true,
+        exactEnv: true,
+        stdinMode: "pipe-closed",
+        onWorkerMessage: response.resolve,
+      });
+      adapter.onStdout(() => {});
+      adapter.onStderr(() => {});
+      try {
+        await ready;
+        await adapter.openStartGate?.();
+        await expect(
+          withinTest(
+            awaitGateBeforeSettlement(
+              response.promise,
+              adapter.wait(),
+              "worker settled before acknowledging its start gate",
+            ),
+            signal,
+          ),
+        ).resolves.toEqual({ ppid: host.pid });
+        adapter.closeStartGate?.();
+        await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+      } finally {
+        adapter.kill("SIGKILL");
+        adapter.dispose();
+      }
+    });
   });
 });

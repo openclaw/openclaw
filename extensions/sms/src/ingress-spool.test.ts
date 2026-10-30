@@ -1,4 +1,3 @@
-import { createHmac } from "node:crypto";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
@@ -6,12 +5,19 @@ import path from "node:path";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
+import { createFixtureLifetime } from "openclaw/plugin-sdk/test-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import type { SmsChannelRuntime } from "./inbound.js";
 import { createSmsIngressSpool } from "./ingress-spool.js";
 import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsWebhookHandler } from "./webhook.js";
-import { createSmsTestAccount } from "./webhook.test-support.js";
+import {
+  createSmsTestAccount,
+  createSmsTestForm,
+  signSmsTestForm,
+} from "./webhook.test-support.js";
 
 type SmsIngressPayload = {
   version: 1;
@@ -22,6 +28,7 @@ const account = createSmsTestAccount({ accountId: "default" });
 
 const stateDirs: string[] = [];
 const disposers: Array<() => void | Promise<void>> = [];
+const heldFixtures: Array<{ retire: () => void; drain: () => Promise<void> }> = [];
 type SmsIngressDeliver = NonNullable<Parameters<typeof createSmsIngressSpool>[0]["deliver"]>;
 type SmsIngressSpool = ReturnType<typeof createSmsIngressSpool>;
 
@@ -64,13 +71,7 @@ function createTestSpool(
 }
 
 function form(messageSid: string): Record<string, string> {
-  return {
-    AccountSid: account.accountSid,
-    From: "+15551234567",
-    To: "+15557654321",
-    Body: "hello",
-    MessageSid: messageSid,
-  };
+  return createSmsTestForm({ MessageSid: messageSid }, account);
 }
 
 async function drainSpool(spool: SmsIngressSpool): Promise<void> {
@@ -79,27 +80,40 @@ async function drainSpool(spool: SmsIngressSpool): Promise<void> {
 }
 
 async function listenSmsTestServer(server: ReturnType<typeof createServer>): Promise<string> {
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  disposers.push(async () => {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected a loopback HTTP server address");
-  }
-  return `http://127.0.0.1:${address.port}`;
+  const port = await listenOnLoopback(server);
+  disposers.push(() => server[Symbol.asyncDispose]());
+  return `http://127.0.0.1:${port}`;
 }
 
 afterEach(async () => {
-  for (const dispose of disposers.splice(0).toReversed()) {
-    await dispose();
+  const failures: unknown[] = [];
+  const fixtures = heldFixtures.splice(0);
+  // Stop cancellation cannot join a non-cooperative callback. Release its test gate
+  // and join the actual producer before removing the queue's state directory.
+  for (const fixture of fixtures) {
+    fixture.retire();
   }
-  for (const stateDir of stateDirs.splice(0).toReversed()) {
-    await rm(stateDir, { recursive: true, force: true });
+  // Snapshot each next stage only after the previous one joins late acquisitions.
+  for (const callbacks of [
+    () => fixtures.map((fixture) => fixture.drain),
+    () => disposers.splice(0).toReversed(),
+    () =>
+      stateDirs
+        .splice(0)
+        .toReversed()
+        .map((stateDir) => () => rm(stateDir, { recursive: true, force: true })),
+  ]) {
+    for (const dispose of callbacks()) {
+      try {
+        await dispose();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+  }
+  vi.useRealTimers();
+  if (failures.length) {
+    throw new AggregateError(failures, "SMS ingress fixture cleanup failed");
   }
 });
 
@@ -119,10 +133,14 @@ describe("createSmsIngressSpool", () => {
     );
     let mediaRequests = 0;
     let authenticatedMediaRequests = 0;
+    const accountSid = `AC${"c".repeat(32)}`;
     const mediaOrigin = await listenSmsTestServer(
       createServer((req, res) => {
         mediaRequests += 1;
-        if (req.headers.authorization?.startsWith("Basic ")) {
+        if (
+          req.headers.authorization ===
+          `Basic ${Buffer.from(`${accountSid}:${account.authToken}`).toString("base64")}`
+        ) {
           authenticatedMediaRequests += 1;
         }
         if (mediaRequests === 1) {
@@ -138,7 +156,7 @@ describe("createSmsIngressSpool", () => {
     const messageSid = `MM${"a".repeat(32)}`;
     const testAccount = {
       ...account,
-      accountSid: `AC${"c".repeat(32)}`,
+      accountSid,
       dmPolicy: "allowlist" as const,
       allowFrom: [sender],
     };
@@ -150,15 +168,24 @@ describe("createSmsIngressSpool", () => {
       },
       pairing: { readAllowFromStore: async () => [] },
       routing: {
-        resolveAgentRoute: () => ({
-          agentId: "main",
-          accountId: account.accountId,
-          sessionKey: `agent:main:sms:direct:${sender}`,
-        }),
+        resolveAgentRoute: (
+          input: Parameters<SmsChannelRuntime["routing"]["resolveAgentRoute"]>[0],
+        ) => {
+          expect(input.peer).toEqual({ kind: "direct", id: sender });
+          return {
+            agentId: "main",
+            accountId: account.accountId,
+            sessionKey: `agent:main:sms:direct:${sender}`,
+          };
+        },
       },
       media: {
-        saveRemoteMedia: async (options: Parameters<typeof saveRemoteMedia>[0]) =>
-          await saveRemoteMedia({
+        saveRemoteMedia: async (options: Parameters<typeof saveRemoteMedia>[0]) => {
+          expect(options).toMatchObject({
+            ssrfPolicy: { hostnameAllowlist: ["api.twilio.com"] },
+            requestInit: { signal: expect.any(AbortSignal) },
+          });
+          return await saveRemoteMedia({
             ...options,
             // The guard resolves Twilio before the loopback fetch override runs.
             lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
@@ -167,11 +194,22 @@ describe("createSmsIngressSpool", () => {
                 headers: init?.headers,
                 signal: init?.signal,
               }),
-          }),
+          });
+        },
       },
       inbound: {
         ingress: createPluginRuntimeMock().channel.inbound.ingress,
         buildContext: (input: Parameters<SmsChannelRuntime["inbound"]["buildContext"]>[0]) => {
+          expect(input).toMatchObject({
+            from: `sms:${sender}`,
+            sender: { id: sender },
+            conversation: { id: sender },
+            reply: { to: `sms:${sender}` },
+            route: {
+              routeSessionKey: `agent:main:sms:direct:${sender}`,
+              dispatchSessionKey: `agent:main:sms:direct:${sender}`,
+            },
+          });
           deliveries.push({
             id: String(input.extra?.MessageSid),
             body: input.message.bodyForAgent ?? input.message.rawBody,
@@ -184,11 +222,12 @@ describe("createSmsIngressSpool", () => {
           if (!turnInput) {
             throw new Error("expected normalized SMS turn");
           }
-          await input.adapter.resolveTurn(
+          const turn = await input.adapter.resolveTurn(
             turnInput,
             { kind: "message", canStartAgentTurn: true },
             {},
           );
+          expect(turn).toMatchObject({ route: { sessionKey: `agent:main:sms:direct:${sender}` } });
           await input.turnAdoptionLifecycle?.onAdopted();
         },
       },
@@ -221,15 +260,7 @@ describe("createSmsIngressSpool", () => {
     spool.start();
 
     async function postSignedCallback(callback: Record<string, string>) {
-      const signatureData =
-        testAccount.publicWebhookUrl +
-        Object.keys(callback)
-          .toSorted()
-          .map((key) => `${key}${callback[key] ?? ""}`)
-          .join("");
-      const signature = createHmac("sha1", testAccount.authToken)
-        .update(signatureData)
-        .digest("base64");
+      const { signature } = signSmsTestForm(callback, testAccount);
       return await fetch(testAccount.publicWebhookUrl, {
         method: "POST",
         headers: { "x-twilio-signature": signature },
@@ -309,27 +340,50 @@ describe("createSmsIngressSpool", () => {
     }
   });
 
-  it("does not let a non-cooperative delivery block route replacement shutdown", async () => {
-    const stateDir = await createStateDir();
-    let markDeliveryStarted!: () => void;
-    const deliveryStarted = new Promise<void>((resolve) => {
-      markDeliveryStarted = resolve;
+  it("does not let a non-cooperative delivery block route replacement shutdown", () => {
+    const lifetime = createFixtureLifetime();
+    const retirement = new AbortController();
+    const deliveryGate = Promise.withResolvers<void>();
+    let spool: SmsIngressSpool | undefined;
+    heldFixtures.push({
+      retire: () => {
+        retirement.abort(new Error("SMS ingress fixture retired"));
+        deliveryGate.resolve();
+      },
+      drain: async () => {
+        await lifetime.cleanup();
+        // This is supplemental monitor settlement, not a replacement for the
+        // exact callback join above after the monitor's non-waiting stop.
+        await spool?.waitForIdle();
+      },
     });
-    let deliverySignal: AbortSignal | undefined;
-    const spool = createTestSpool(stateDir, {
-      deliver: vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
-        deliverySignal = lifecycle.abortSignal;
-        markDeliveryStarted();
-        await new Promise<void>(() => {});
-      }),
+    return lifetime.run(async () => {
+      const stateDir = await createStateDir();
+      retirement.signal.throwIfAborted();
+      const { promise: deliveryStarted, resolve: markDeliveryStarted } =
+        Promise.withResolvers<void>();
+      let deliverySignal: AbortSignal | undefined;
+      spool = createTestSpool(stateDir, {
+        deliver: vi.fn<SmsIngressDeliver>((_message, lifecycle) =>
+          lifetime.run(async () => {
+            deliverySignal = lifecycle.abortSignal;
+            markDeliveryStarted();
+            await deliveryGate.promise;
+          }),
+        ),
+      });
+      spool.start();
+      await withinTest(
+        lifetime.track(spool.enqueue(form("SM-non-cooperative-stop"))),
+        retirement.signal,
+      );
+      await withinTest(deliveryStarted, retirement.signal);
+
+      await withinTest(lifetime.track(spool.stop()), retirement.signal);
+
+      expect(deliverySignal?.aborted).toBe(true);
+      deliveryGate.resolve();
     });
-    spool.start();
-    await spool.enqueue(form("SM-non-cooperative-stop"));
-    await deliveryStarted;
-
-    await spool.stop();
-
-    expect(deliverySignal?.aborted).toBe(true);
   });
 
   it.each(["SmsMessageSid"])("accepts the legacy %s event id alias", async (key) => {

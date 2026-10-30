@@ -14,7 +14,7 @@ import {
   executeOpenClawStateWorker as execute,
   runOpenClawStateWorkerOperation as runOperation,
 } from "../state/openclaw-state-worker-store.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { expectNoMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as fileDescriptor from "./file-descriptor.js";
 import type { SqliteWorkerReply } from "./sqlite-worker-contract.js";
 
@@ -41,26 +41,14 @@ function fixture() {
   };
 }
 
-async function withoutMainDatabaseWork(run: () => Promise<void>) {
-  const sql = observeMainThreadSql();
-  const hash = vi.spyOn(fileDescriptor, "hashFileDescriptorSync");
-  try {
-    await run();
-    sql.expectIdle();
-    expect(hash).not.toHaveBeenCalled();
-  } finally {
-    sql.restore();
-    hash.mockRestore();
-  }
-}
-
 it.each([false, true])("clears failures (existingOnly=%s)", async (existingOnly) => {
   const state = fixture();
   const inspect = vi.fn(async () => "unexpected domain call");
   const read = existingOnly
     ? () => runOperation(state.capture(), inspect, { existingOnly: true })
     : state.read;
-  await withoutMainDatabaseWork(async () => {
+  const hash = vi.spyOn(fileDescriptor, "hashFileDescriptorSync");
+  await expectNoMainThreadSql(async () => {
     if (!existingOnly) {
       expect(await read()).toEqual([]);
     }
@@ -75,6 +63,7 @@ it.each([false, true])("clears failures (existingOnly=%s)", async (existingOnly)
     expect(inspect).not.toHaveBeenCalled();
     expect(existsSync(state.pathname)).toBe(!existingOnly);
   });
+  expect(hash).not.toHaveBeenCalled();
 });
 
 it("rejects a queued domain job before dispatch after record and clear while completing the dispatched read", async () => {

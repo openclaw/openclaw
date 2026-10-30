@@ -17,6 +17,12 @@ imports inside their route's `component` loader.
 - Scope caches/requests to connection, agent, session. Before publishing: check owner + request generation; old results must not overwrite newer intent/another context.
 - Optimistic updates: retain visible recovery state + reconcile with authority. Old requests must not roll back newer edits. Failed writes follow Gateway [target and outcome contract](../src/gateway/AGENTS.md#write-target-and-outcome), never renderer-selected fallback account/connection.
 - Background updates may refresh scoped cache, never replace foreground selection/publish another context's state.
+- Routes wait only for first-paint data. Each source (session usage, provider plans, credentials, catalog) loads, refreshes and retries on its own; refreshing one never reloads another.
+
+## Layout Stability
+
+- Zero layout shift on load, navigation and data arrival: reserve space for late content, one loading boundary, loaded rows never return to skeletons, shell chrome keeps the same geometry on every route.
+- Prove with a `layout-shift` PerformanceObserver at 400, 820 and 1280 px, entering from other routes, against a real isolated Gateway on the current build with real-scale data. Models and Usage also load fully in < 200 ms under the same setup.
 
 ## Session Roster Refresh
 
@@ -59,6 +65,7 @@ imports inside their route's `component` loader.
 - `:has()` limits: stylelint's `selector-disallowed-list` enforces them on raw selectors (config comments say why). Apply the same limits by hand to nested `&` selectors, which stylelint cannot resolve.
 - New-tab links/controls: pointer cursors; state-changing controls: default arrow.
 - Colors: use `src/styles/base.css` tokens.
+- `main.runtime.ts` injects `components/kbd.css` document-wide; renderers never import it. Never JS-import a sheet `styles.css` already ships from a lazy module: the build copies it into that chunk (catalog bytes) and re-applies it late in the cascade. Resolve cascade ties by specificity, not duplicate loading.
 - Breakpoints: stylelint's allowed list owns the ladder; add a rung only in config, with a comment.
 - `node --import ./scripts/tsx.mjs scripts/audit-control-ui-dead-css.mts` advisory. Verify selectors before deleting; extend dynamic-stem detection, not allowlist.
 - Nest CSS only while rewriting section; no conversion sweeps.
@@ -66,7 +73,7 @@ imports inside their route's `component` loader.
 
 ## Modal Completion Actions
 
-- Place workflow completion actions last in `<openclaw-modal-actions>`, after content, status and validation errors. The native modal stylesheet owns right alignment, wrapping and label containment. Keep submit buttons inside their native form; no renderer or custom-element registration is needed. Caller styles own spacing, not competing alignment or mobile full-width rules. Header X/Expand and field-local controls are not completion actions. Scrollable panels respect `--openclaw-modal-height-limit` so the footer stays reachable. Set the intended width with `--openclaw-modal-width` on the native host and let child panels fill the shell instead of imposing a wider independent width.
+- Place workflow completion actions last in `<openclaw-modal-actions>`, after content, status and validation errors. Inside it, order dismissive and secondary buttons (Cancel, Close, Keep, Back, Retry) first and the primary or confirming action last, so the action sits at the trailing edge; destructive confirms follow the same order. The native modal stylesheet owns right alignment, wrapping and label containment. Keep submit buttons inside their native form; no renderer or custom-element registration is needed. Caller styles own spacing, not competing alignment or mobile full-width rules. Header X/Expand and field-local controls are not completion actions. Scrollable panels respect `--openclaw-modal-height-limit` so the footer stays reachable. Set the intended width with `--openclaw-modal-width` on the native host and let child panels fill the shell instead of imposing a wider independent width.
 
 ## Gateway Coupling
 
@@ -85,4 +92,4 @@ imports inside their route's `component` loader.
 ## Visual Proof
 
 - Large design changes: run the [UI stress test](../.agents/skills/control-ui-e2e/SKILL.md#ui-stress-test).
-- Never capture the retired Discord invitation artwork. Mock/E2E harnesses default to `communityInvite: false`; compact Community entry scenarios opt in with `communityInvite: true`. Capture only the current entry and on-demand sheet, with synthetic content.
+- Mock/E2E harnesses default to `communityInvite: false`; Community card scenarios opt in with `communityInvite: true`. Capture the current invitation artwork and dismissed state with synthetic content across the selected theme modes, exercising the real dismiss action for persistence proof.

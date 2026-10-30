@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -15,30 +15,42 @@ import { resolveDaemonRuntimePinStorePath } from "./runtime-pin-store.js";
 const runtimePath = "/runtime tools/node";
 const command = { programArguments: [runtimePath, "/app/openclaw.mjs", "gateway"] };
 const pin = { runtime: "node" as const, path: runtimePath };
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_PROFILE", `runtime-pin-test-${process.pid}`);
+});
+afterEach(() => vi.unstubAllEnvs());
+
 describe("transactional runtime pin state", () => {
-  it("keeps intent local with PostgreSQL selected and the shared database unavailable", async () => {
-    await withOpenClawTestState({ label: "runtime-pin-local" }, async (state) => {
-      fs.writeFileSync(
-        state.statePath("openclaw.json"),
-        JSON.stringify({
-          database: {
-            engine: "postgres",
-            postgres: { connection: "postgres://unreachable.invalid/openclaw" },
-          },
-        }),
-      );
-      const scope = { kind: "gateway" as const, env: state.env };
-      await withDaemonRuntimePinMigration(state.env, () => undefined);
-      const expected = readDaemonRuntimePin(scope, command);
-      commitDaemonRuntimePin(scope, { expected, pin }, command);
-      expect(readDaemonRuntimePin(scope, command).pin).toEqual(pin);
-      expect(fs.existsSync(state.statePath("state", "openclaw.sqlite"))).toBe(false);
-      if (process.platform !== "win32") {
-        expect(fs.statSync(resolveDaemonRuntimePinStorePath(state.env)).mode & 0o777).toBe(0o600);
-        expect(fs.statSync(state.statePath("control")).mode & 0o777).toBe(0o700);
-      }
-    });
-  });
+  it.each(["node", "standalone"] as const)(
+    "keeps %s intent local with PostgreSQL selected and the shared database unavailable",
+    async (runtime) => {
+      await withOpenClawTestState({ label: "runtime-pin-local" }, async (state) => {
+        fs.writeFileSync(
+          state.statePath("openclaw.json"),
+          JSON.stringify({
+            database: {
+              engine: "postgres",
+              postgres: { connection: "postgres://unreachable.invalid/openclaw" },
+            },
+          }),
+        );
+        const scope = { kind: "gateway" as const, env: state.env };
+        await withDaemonRuntimePinMigration(state.env, () => undefined);
+        const selectedPath = runtime === "standalone" ? "/runtime tools/openclaw" : runtimePath;
+        const selectedCommand =
+          runtime === "standalone" ? { programArguments: [selectedPath, "gateway"] } : command;
+        const expected = readDaemonRuntimePin(scope, selectedCommand);
+        const selectedPin = { runtime, path: selectedPath };
+        commitDaemonRuntimePin(scope, { expected, pin: selectedPin }, selectedCommand);
+        expect(readDaemonRuntimePin(scope, selectedCommand).pin).toEqual(selectedPin);
+        expect(fs.existsSync(state.statePath("state", "openclaw.sqlite"))).toBe(false);
+        if (process.platform !== "win32") {
+          expect(fs.statSync(resolveDaemonRuntimePinStorePath(state.env)).mode & 0o777).toBe(0o600);
+          expect(fs.statSync(state.statePath("control")).mode & 0o777).toBe(0o700);
+        }
+      });
+    },
+  );
 
   it("observes another writer's committed changes and rejects stale writes", async () => {
     await withOpenClawTestState({ label: "runtime-pin-current" }, async (state) => {

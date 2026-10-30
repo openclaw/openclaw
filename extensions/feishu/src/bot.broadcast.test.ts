@@ -185,59 +185,44 @@ describe("broadcast dispatch", () => {
     expectClaim(retrySusanClaim, true);
   });
 
-  it("keeps an adopted active lane committed when its no-visible fallback fails", async () => {
-    const { broadcastClaim, susanClaim, mainClaim } = mockBroadcastClaims("fallback-failure");
-    mockAgentReply("main", {
-      queuedFinal: false,
-      counts: { final: 0 },
-      noVisibleReplyFallbackEligible: true,
-    });
-    mockActiveDispatcher(vi.fn().mockRejectedValue(new Error("fallback send failed")));
+  it.each([
+    ["fallback-failure", "fallback send failed"],
+    ["setup-failure", "session path failed"],
+    ["undispatched", undefined],
+  ] as const)("settles each lane independently after %s", async (failure, error) => {
+    const { broadcastClaim, susanClaim, mainClaim } = mockBroadcastClaims(failure);
+    const cfg = createBroadcastConfig();
+    if (failure === "fallback-failure") {
+      mockAgentReply("main", {
+        queuedFinal: false,
+        counts: { final: 0 },
+        noVisibleReplyFallbackEligible: true,
+      });
+      mockActiveDispatcher(vi.fn().mockRejectedValue(new Error(error)));
+    } else if (failure === "setup-failure") {
+      cfg.broadcast = { ...cfg.broadcast, strategy: "sequential" };
+      mockResolveStorePath.mockImplementation((_store, options?: { agentId?: string }) => {
+        if (options?.agentId === "susan") {
+          throw new Error(error);
+        }
+        return "/tmp/feishu-session-store.json";
+      });
+    } else {
+      mockAgentReply("susan", { queuedFinal: false, counts: { final: 0 }, undispatched: true });
+    }
     const transport = createIngressLifecycle();
-
-    await expect(
-      dispatchBroadcast("fallback-failure", { turnAdoptionLifecycle: transport }),
-    ).rejects.toThrow("fallback send failed");
-
-    expect(susanClaim.commit).toHaveBeenCalledTimes(1);
+    const handling = dispatchBroadcast(failure, { cfg, turnAdoptionLifecycle: transport });
+    if (error) {
+      await expect(handling).rejects.toThrow(error);
+    } else {
+      await handling;
+    }
+    expectClaim(susanClaim, failure === "fallback-failure");
     expectClaim(mainClaim, true);
     expectClaim(broadcastClaim, false);
-    expect(transport.onAbandoned).toHaveBeenCalledTimes(1);
-  });
-
-  it("releases an agent claim when broadcast lane setup fails", async () => {
-    const { broadcastClaim, susanClaim, mainClaim } = mockBroadcastClaims("setup-failure");
-    mockResolveStorePath.mockImplementation((_store, options?: { agentId?: string }) => {
-      if (options?.agentId === "susan") {
-        throw new Error("session path failed");
-      }
-      return "/tmp/feishu-session-store.json";
-    });
-    const cfg = createBroadcastConfig();
-    cfg.broadcast = { ...cfg.broadcast, strategy: "sequential" };
-    const transport = createIngressLifecycle();
-
-    await expect(
-      dispatchBroadcast("setup-failure", { cfg, turnAdoptionLifecycle: transport }),
-    ).rejects.toThrow("session path failed");
-
-    expectClaim(susanClaim, false);
-    expect(mainClaim.commit).toHaveBeenCalledTimes(1);
-    expect(broadcastClaim.release).toHaveBeenCalledTimes(1);
-    expect(transport.onAbandoned).toHaveBeenCalledTimes(1);
-  });
-
-  it("abandons the shared claim when an agent lane is not dispatched", async () => {
-    const { broadcastClaim, susanClaim, mainClaim } = mockBroadcastClaims("undispatched");
-    mockAgentReply("susan", { queuedFinal: false, counts: { final: 0 }, undispatched: true });
-    const transport = createIngressLifecycle();
-
-    await dispatchBroadcast("undispatched", { turnAdoptionLifecycle: transport });
-
-    expectClaim(susanClaim, false);
-    expect(mainClaim.commit).toHaveBeenCalledTimes(1);
-    expectClaim(broadcastClaim, false);
-    expect(transport.onAdopted).not.toHaveBeenCalled();
+    if (failure === "undispatched") {
+      expect(transport.onAdopted).not.toHaveBeenCalled();
+    }
     expect(transport.onAbandoned).toHaveBeenCalledTimes(1);
   });
 

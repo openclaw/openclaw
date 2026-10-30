@@ -162,6 +162,7 @@ openclaw gateway diagnostics export --json
 
 <ParamField path="--output <path>" type="string">
   Output zip path. Defaults to a support export under the state directory.
+  Existing directories receive an automatically named archive. Quoted non-home paths preserve surrounding whitespace; blank values use the default.
 </ParamField>
 <a id="param-log-lines"></a>
 
@@ -211,6 +212,11 @@ It is designed to be shared. It keeps operational details useful for debugging â
 ### `gateway status`
 
 Shows the Gateway service (launchd/systemd/schtasks) plus an optional connectivity/auth check.
+
+Installed-service config, runtime intent, and log diagnostics use the service's
+own state selectors. An inspecting CLI's `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
+`OPENCLAW_PROFILE`, and `OPENCLAW_CONFIG_PATH` do not fill in selectors omitted
+from the service definition.
 
 ```bash
 openclaw gateway status
@@ -275,6 +281,7 @@ status does not bypass the live Gateway's artifact-publication safeguards.
     - Stays available for diagnostics even when the local CLI config is missing or invalid. Config problems are warnings with `openclaw doctor --fix` guidance; valid connection settings and the recorded service identity remain usable.
     - If service discovery cannot inspect a required file, such as a systemd environment file readable only by root, status reports the native service as unknown and continues with the caller's Gateway target and credentials. Observed service ownership refusals remain errors; status does not change file permissions or relax lifecycle checks.
     - Default output proves service state, WebSocket connect, and the auth capability visible at handshake time â€” not read/write/admin operations.
+    - Local service checks use loopback, including `bind: "custom"` and `bind: "tailnet"`, so capability reflects the same local device credentials as ordinary CLI calls. Use `--url` with explicit credentials to check another address; its capability can differ.
     - Checks are non-mutating for first-time device auth: they reuse an existing cached device token when one exists, but never create a new CLI device identity or read-only pairing record just to check status.
     - Resolves configured auth SecretRefs for check auth when possible. If a required SecretRef is unresolved, `--json` reports `rpc.authWarning` when check connectivity/auth fails; pass `--token`/`--password` explicitly or fix the secret source. Unresolved-auth warnings are suppressed once the check succeeds.
     - JSON output includes `gateway.version` when the running Gateway reports it; `--require-rpc` can fall back to the `status.runtimeVersion` RPC payload if the handshake check cannot supply version metadata.
@@ -317,6 +324,13 @@ openclaw gateway probe
 openclaw gateway probe --json
 openclaw gateway probe --port 18789
 ```
+
+`--timeout <ms>` (default `3000`) is one shared budget for discovery, SSH setup,
+connections, and read checks. Known targets are checked while discovery runs.
+When the budget expires, unfinished checks report a timeout; connection and SSH
+process cleanup can briefly extend the elapsed command time.
+Accepted budgets above the native timer limit retain their full duration rather
+than timing out immediately.
 
 <a id="param-port-2"></a>
 
@@ -489,6 +503,9 @@ Prepare an idle Gateway for a cooperative host freeze or snapshot. Without
 `--wait`, the CLI retries until the bounded deadline using one stable request
 ID. The value must be a non-negative number of seconds; an empty value is rejected.
 Use `--wait 0` for a single attempt without polling.
+
+Ctrl-C or SIGTERM stops further prepare attempts. An already dispatched prepare
+still settles and reports any acquired lease so you can resume it explicitly.
 
 ```bash
 openclaw gateway suspend

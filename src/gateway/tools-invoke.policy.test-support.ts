@@ -72,6 +72,10 @@ export function registerToolsInvokeUploadTests({
   const enableUploads = (enabled: boolean) => {
     getConfig().gateway = { uploads: { enabled } };
   };
+  const prepareUpload = (tool = "file_write", enabled = true) => {
+    setMainAllowedTools({ allow: [tool, "upload-fixture"] });
+    enableUploads(enabled);
+  };
   const registerMethod = (name: string, handler: GatewayRequestHandler, area: string) =>
     setMethodRegistry(
       createGatewayMethodRegistry([
@@ -89,8 +93,7 @@ export function registerToolsInvokeUploadTests({
     { label: "enabled", initiallyEnabled: true, enabled: true, internal: false },
     { label: "internal", initiallyEnabled: false, enabled: false, internal: true },
   ])("protects custom plugin final storage: $label", async (scenario) => {
-    setMainAllowedTools({ allow: ["client_blob_fixture", "upload-fixture"] });
-    enableUploads(scenario.initiallyEnabled);
+    prepareUpload("client_blob_fixture", scenario.initiallyEnabled);
     const fileName = scenario.label + ".txt";
     const destination = path.join(uploadDir, fileName);
     await fs.writeFile(destination, "original");
@@ -123,8 +126,7 @@ export function registerToolsInvokeUploadTests({
   it.each([false, true])(
     "carries HTTP input policy into nested archive storage (disabled=%s)",
     async (disabled) => {
-      setMainAllowedTools({ allow: ["file_write", "upload-fixture"] });
-      enableUploads(true);
+      prepareUpload();
       getConfig().skills = { install: { allowUploadedArchives: true } };
       registerMethod(
         "skills.upload.begin",
@@ -210,8 +212,7 @@ export function registerToolsInvokeUploadTests({
     [true, "workboard_attachment_add", { contentBase64: "cHJvb2Y=" }],
     [false, "message", { action: "send", media: "https://example.test/generated.png" }],
   ] as const)("preserves tool use (uploads=%s): %s", async (enabled, tool, args) => {
-    setMainAllowedTools({ allow: [tool, "upload-fixture"] });
-    enableUploads(enabled);
+    prepareUpload(tool, enabled);
     await expectOkInvokeResponse(await invokeToolAuthed({ tool, args }));
     const rpc = await invokeToolsRpc({ name: tool, args });
     expect(rpc?.[1]?.ok).toBe(true);
@@ -219,8 +220,7 @@ export function registerToolsInvokeUploadTests({
   });
 
   it("rechecks current upload config after awaited tool preparation", async () => {
-    setMainAllowedTools({ allow: ["file_write", "upload-fixture"] });
-    enableUploads(true);
+    prepareUpload();
     hookMocks.runBeforeToolCallHook.mockImplementationOnce(async (input) => {
       enableUploads(false);
       return { blocked: false, params: input.params };
@@ -234,8 +234,7 @@ export function registerToolsInvokeUploadTests({
   it.each([false, true])(
     "retains disabled upload policy through nested dispatch (hook=%s)",
     async (hookAddsBytes) => {
-      setMainAllowedTools({ allow: ["file_write", "upload-fixture"] });
-      enableUploads(true);
+      prepareUpload();
       const nodeDispatch = vi.fn<GatewayRequestHandler>(({ respond }) => {
         respond(true, { payload: { ok: true } });
       });

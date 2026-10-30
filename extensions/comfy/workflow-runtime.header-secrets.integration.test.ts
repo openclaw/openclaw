@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspect } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { buildComfyConfig, registerComfyProviders } from "./test-helpers.js";
 
 const comfyProviders = registerComfyProviders();
@@ -48,8 +48,7 @@ let failurePath: string | undefined;
 beforeAll(async () => {
   server = http.createServer((req, res) => {
     const json = (body: unknown, code = 200) => {
-      res.writeHead(code, { "content-type": "application/json" });
-      res.end(JSON.stringify(body));
+      res.writeHead(code, { "content-type": "application/json" }).end(JSON.stringify(body));
     };
     receivedAuthHeaders.push(req.headers.authorization);
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -78,17 +77,10 @@ beforeAll(async () => {
     }
     res.writeHead(404).end();
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  baseUrl = `http://127.0.0.1:${await listenOnLoopback(server)}`;
 });
 
-afterAll(async () => {
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-});
+afterAll(() => server[Symbol.asyncDispose]());
 
 beforeEach(() => {
   receivedAuthHeaders.length = 0;

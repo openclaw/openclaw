@@ -59,9 +59,16 @@ export function createUpdateCommandExecutionGuards(
       assertUpdateCommandRecoveryState(opts);
     }
   };
-  const assertCurrent = (phase?: "restore") => {
-    if (phase !== "restore" && run?.interrupted) {
+  const assertForwardCurrent = () => {
+    run?.deadline?.remainingMs();
+    run?.deadline?.signal.throwIfAborted();
+    if (run?.interrupted) {
       throw new UpdateRequesterRevokedError();
+    }
+  };
+  const assertCurrent = (phase?: "restore") => {
+    if (phase !== "restore") {
+      assertForwardCurrent();
     }
     executor?.assertCurrent();
     assertInvocation(phase);
@@ -126,7 +133,7 @@ export function createUpdateCommandExecutionGuards(
       env: capturedEnv,
       context,
       // Driver-only wait; these writes run in the worker, never on the Gateway event loop.
-      busyTimeoutMs: 120_000,
+      busyTimeoutMs: run?.busyTimeoutMs ?? 120_000,
       assertAccepting,
       retainSettlement: (completion: Promise<void>) =>
         retainMutableUpdateSignalWrite(run, completion),
@@ -177,6 +184,9 @@ export function createUpdateCommandExecutionGuards(
     waitForCurrent,
     // This is not native authority. The Doctor caller must first bind its child
     // through the real executor, which checks both retained and candidate owners.
-    assertBoundChildCurrent: () => assertInvocation(),
+    assertBoundChildCurrent: () => {
+      assertForwardCurrent();
+      assertInvocation();
+    },
   };
 }

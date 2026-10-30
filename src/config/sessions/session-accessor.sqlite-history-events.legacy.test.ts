@@ -1,13 +1,15 @@
 import { afterAll, beforeEach, expect, it } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
-import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
-import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
+import { appendTranscriptEvent } from "./session-accessor.js";
 import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.test-support.js";
 import {
   historyEventId,
+  historyMessage as messageEvent,
+  historyActivity,
+  persistHistory,
   readActiveTranscriptStats,
   readSessionTranscriptHistoryEventCount,
   readSessionTranscriptHistoryAnchorPage,
@@ -17,7 +19,10 @@ import {
 } from "./session-accessor.sqlite-history.test-support.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
-import { transcriptMessage } from "./transcript-message.test-support.js";
+import {
+  transcriptMessage,
+  messageEvent as createMessageEvent,
+} from "./transcript-message.test-support.js";
 
 afterAll(clearRuntimeConfigSnapshot);
 const scope = useHistoryEventScope();
@@ -38,33 +43,27 @@ async function seedRows(jsonRows: string[], updatedAt = 100) {
   return events;
 }
 
-function messageEvent(
-  id: string,
-  parentId: string | null,
-  content: string,
-  role: "user" | "assistant" = "user",
-) {
-  return { type: "message", id, parentId, message: { role, content } };
-}
-
 function toolResult(id: string, parentId: string, content: string, details?: unknown) {
-  return {
-    type: "message",
-    id,
-    parentId,
-    message: {
-      role: "toolResult",
-      toolCallId: id === "kept-result" ? "call-1" : id,
-      toolName: "read",
-      content: [{ type: "text", text: content }],
-      isError: false,
-      timestamp: id === "kept-result" ? 1 : 2,
-      ...(details === undefined ? {} : { details }),
-    },
-  };
+  return createMessageEvent(id, parentId, {
+    role: "toolResult",
+    toolCallId: id === "kept-result" ? "call-1" : id,
+    toolName: "read",
+    content: [{ type: "text", text: content }],
+    isError: false,
+    timestamp: id === "kept-result" ? 1 : 2,
+    ...(details === undefined ? {} : { details }),
+  });
 }
 
 const openDatabase = () => openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+const storedRows = (table = "transcript_events", columns = "*", scoped = true) =>
+  openDatabase()
+    .db.prepare(
+      `SELECT ${columns} FROM ${table}${scoped ? " WHERE session_id = ?" : ""} ORDER BY seq`,
+    )
+    .all(...(scoped ? [scope.sessionId] : []));
+const expectNoIdentities = () =>
+  expect(storedRows("transcript_event_identities", "*", false)).toEqual([]);
 const historyIds = () => readSessionTranscriptHistoryEvents(scope).map(historyEventId);
 const page = (messageId: string, maxMessages = 20) =>
   readSessionTranscriptHistoryAnchorPage(scope, { messageId, maxMessages });
@@ -80,24 +79,18 @@ const notice = (id: string, parentId: string, content: string, display = true) =
 it("resolves large anchor sets without parsing unrelated non-object legacy rows", async () => {
   const ignored = [null, 0, [], "ignored"];
   const anchors = Array.from({ length: 33 }, (_, index) => `anchor-${index}`);
-  const activities = anchors.map((afterEntryId, index) => ({
-    type: "message",
-    id: `activity-${index}`,
-    parentId: index === 0 ? anchors.at(-1) : `activity-${index - 1}`,
-    message: createNestedToolActivity({
-      runId: "run",
-      scopeId: `scope-${index}`,
-      afterEntryId,
-      startOrder: index,
-      toolCallId: `call-${index}`,
-      toolName: "read",
-      input: {},
-      result: { content: [] },
-      isError: false,
-      startedAt: 1,
-      timestamp: 2,
-    }),
-  }));
+  const activities = anchors.map((afterEntryId, index) =>
+    createMessageEvent(
+      `activity-${index}`,
+      index === 0 ? anchors.at(-1) : `activity-${index - 1}`,
+      historyActivity({
+        scopeId: `scope-${index}`,
+        afterEntryId,
+        startOrder: index,
+        toolCallId: `call-${index}`,
+      }),
+    ),
+  );
   const events = await seedRows(
     [
       ...ignored,
@@ -108,7 +101,7 @@ it("resolves large anchor sets without parsing unrelated non-object legacy rows"
     ].map((event) => JSON.stringify(event)),
     1,
   );
-  const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+  const { db } = openDatabase();
   // The retained projection predates these SQLite-valid, JS-invalid raw bytes.
   for (let seq = 0; seq < ignored.length; seq++) {
     const eventJson = `${events[seq]!.event_json}\0`;
@@ -119,7 +112,7 @@ it("resolves large anchor sets without parsing unrelated non-object legacy rows"
       seq,
     );
   }
-  const rawBefore = db.prepare("SELECT * FROM transcript_events ORDER BY seq").all();
+  const rawBefore = storedRows("transcript_events", "*", false);
   const history = readSessionTranscriptHistoryEvents(scope);
   expect(history.map(historyEventId)).toEqual([...anchors, ...activities.map(({ id }) => id)]);
   expect(history.slice(anchors.length).map((row) => row.displayPosition?.activity)).toEqual(
@@ -129,8 +122,8 @@ it("resolves large anchor sets without parsing unrelated non-object legacy rows"
       startOrder: index,
     })),
   );
-  expect(db.prepare("SELECT * FROM transcript_events ORDER BY seq").all()).toEqual(rawBefore);
-  expect(db.prepare("SELECT * FROM transcript_event_identities").all()).toEqual([]);
+  expect(storedRows("transcript_events", "*", false)).toEqual(rawBefore);
+  expectNoIdentities();
 });
 
 it.each(["boundary", "paired-result"])(
@@ -141,15 +134,14 @@ it.each(["boundary", "paired-result"])(
       { type: "session", version: 3, id: scope.sessionId },
       messageEvent("discarded", null, "Discard this older question."),
       messageEvent("kept-user", "discarded", "Keep this question and its completed tool call."),
-      {
-        type: "message",
-        id: "kept-assistant",
-        parentId: "kept-user",
-        message: makeAgentAssistantMessage({
+      createMessageEvent(
+        "kept-assistant",
+        "kept-user",
+        makeAgentAssistantMessage({
           content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
           stopReason: "toolUse",
         }),
-      },
+      ),
       toolResult(
         "kept-result",
         "kept-assistant",
@@ -177,8 +169,7 @@ it.each(["boundary", "paired-result"])(
         .prepare("SELECT json_valid(?) AS valid")
         .get(rows[overdepth === "boundary" ? 6 : 4]!.event_json),
     ).toEqual({ valid: 0 });
-    const raw = store.db.prepare("SELECT * FROM transcript_events ORDER BY seq");
-    const rawBefore = raw.all();
+    const rawBefore = storedRows("transcript_events", "*", false);
 
     expect(historyIds()).toEqual(["kept-user", "kept-assistant", "reset", "fresh"]);
     const retained = new Set(["kept-user", "kept-assistant", "kept-result", "fresh"]);
@@ -201,8 +192,8 @@ it.each(["boundary", "paired-result"])(
       "user",
     ]);
     expect(messages[2]).toMatchObject({ role: "toolResult", toolCallId: "call-1" });
-    expect(raw.all()).toEqual(rawBefore);
-    expect(store.db.prepare("SELECT * FROM transcript_event_identities").all()).toEqual([]);
+    expect(storedRows("transcript_events", "*", false)).toEqual(rawBefore);
+    expectNoIdentities();
   },
 );
 
@@ -230,24 +221,14 @@ it("reads appended imported reset windows without acquiring identity ownership",
     scope,
     notice("later-notice", "current-assistant", "Appended notice."),
   );
-  await persistSessionTranscriptTurn(scope, {
-    messages: [
-      transcriptMessage("later-assistant", "later-notice", {
-        role: "assistant",
-        content: "Appended answer.",
-      }),
-    ],
-    touchSessionEntry: false,
-  });
-  const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
-  const identities = database.db.prepare(
-    "SELECT * FROM transcript_event_identities WHERE session_id = ? ORDER BY seq",
-  );
-  const raw = database.db.prepare(
-    "SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq",
-  );
-  const identitiesBefore = identities.all(scope.sessionId);
-  const rawBefore = raw.all(scope.sessionId);
+  await persistHistory(scope, [
+    transcriptMessage("later-assistant", "later-notice", {
+      role: "assistant",
+      content: "Appended answer.",
+    }),
+  ]);
+  const identitiesBefore = storedRows("transcript_event_identities");
+  const rawBefore = storedRows();
   const currentIds = [
     "reset",
     "current-user",
@@ -271,8 +252,8 @@ it("reads appended imported reset windows without acquiring identity ownership",
       maxBytes: 100,
     }),
   ).toBeUndefined();
-  expect(identities.all(scope.sessionId)).toEqual(identitiesBefore);
-  expect(raw.all(scope.sessionId)).toEqual(rawBefore);
+  expect(storedRows("transcript_event_identities")).toEqual(identitiesBefore);
+  expect(storedRows()).toEqual(rawBefore);
 
   await replaceTranscriptEvents(scope, [
     events[0],
@@ -305,17 +286,41 @@ it("uses the last imported root type for custom then compaction history", async 
   expect(anchor.found).toBe(true);
   expect(anchor.events.map(historyEventId)).toEqual(expectedIds);
 
-  const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
-  expect(
-    database.db
-      .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
-      .all(scope.sessionId),
-  ).toEqual(rows.map((event_json) => ({ event_json })));
-  expect(
-    database.db
-      .prepare("SELECT * FROM transcript_event_identities WHERE session_id = ?")
-      .all(scope.sessionId),
-  ).toEqual([]);
+  expect(storedRows("transcript_events", "event_json")).toEqual(
+    rows.map((event_json) => ({ event_json })),
+  );
+  expectNoIdentities();
+});
+
+it("counts imported compaction bytes using the last root type across an append", async () => {
+  const rows = [
+    JSON.stringify({ type: "session", version: 3, id: scope.sessionId }),
+    JSON.stringify(messageEvent("discarded", null, "Discard this older question.")),
+    JSON.stringify(messageEvent("kept-user", "discarded", "Retained question.")),
+    '{"type":"custom","type":"message","id":"kept-assistant","parentId":"kept-user","message":{"role":"assistant","content":"Retained answer."}}',
+    JSON.stringify({
+      type: "compaction",
+      id: "compaction",
+      parentId: "kept-assistant",
+      firstKeptEntryId: "kept-user",
+      summary: "Retained context.",
+    }),
+  ];
+  await seedRows(rows);
+  const retainedBytes = rows.slice(2).reduce((total, row) => total + Buffer.byteLength(row) + 1, 0);
+  expect(readActiveTranscriptStats(scope)).toEqual({ eventCount: 3, sizeBytes: retainedBytes });
+
+  await persistHistory(scope, [
+    transcriptMessage("fresh", "compaction", { role: "user", content: "A fresh question." }),
+  ]);
+  const stored = storedRows("transcript_events", "event_json") as { event_json: string }[];
+  expect(stored.slice(0, rows.length)).toEqual(rows.map((event_json) => ({ event_json })));
+  expect(stored).toHaveLength(rows.length + 1);
+  const appended = stored.at(-1)!.event_json;
+  expect(readActiveTranscriptStats(scope)).toEqual({
+    eventCount: 4,
+    sizeBytes: retainedBytes + Buffer.byteLength(appended) + 1,
+  });
 });
 
 it("continues imported history when an append has no explicit parent", async () => {
@@ -324,24 +329,18 @@ it("continues imported history when an append has no explicit parent", async () 
     messageEvent("imported-answer", null, "Original migrated answer.", "assistant"),
   ];
   await seedRows(events.map((event) => JSON.stringify(event)));
-  await persistSessionTranscriptTurn(scope, {
-    messages: [
-      {
-        eventId: "next-question",
-        message: { role: "user", content: "Continue the existing conversation." },
-      },
-    ],
-    touchSessionEntry: false,
-  });
+  await persistHistory(scope, [
+    {
+      eventId: "next-question",
+      message: { role: "user", content: "Continue the existing conversation." },
+    },
+  ]);
   const history = readSessionTranscriptHistoryEvents(scope);
   expect(history.map(historyEventId)).toEqual(["imported-answer", "next-question"]);
   expect(history[1]?.event).toMatchObject({ parentId: "imported-answer" });
-  const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
-  expect(
-    database.db
-      .prepare("SELECT event_id FROM transcript_event_identities WHERE session_id = ? ORDER BY seq")
-      .all(scope.sessionId),
-  ).toEqual([{ event_id: "next-question" }]);
+  expect(storedRows("transcript_event_identities", "event_id")).toEqual([
+    { event_id: "next-question" },
+  ]);
 });
 
 it("retains imported reset context only for the exact first-kept ID", async () => {

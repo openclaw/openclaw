@@ -14,7 +14,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type, type Static } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
+import { SsrFBlockedError, type LookupFn } from "../../infra/net/ssrf.js";
 import { logWarn } from "../../logger.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
@@ -164,9 +164,6 @@ const WebFetchOutputSchema = Type.Object(
 );
 
 type WebFetchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["fetch"];
-type ResolveWebFetchDefinition =
-  (typeof import("../../web-fetch/runtime.js"))["resolveWebFetchDefinition"];
-type WebFetchProviderFallback = ReturnType<ResolveWebFetchDefinition>;
 const loadWebFetchRuntime = createLazyPromise(() => import("../../web-fetch/runtime.js"));
 const loadWebGuardedFetch = createLazyPromise(() => import("./web-guarded-fetch.js"));
 
@@ -219,24 +216,6 @@ function resolveFetchHeaders(fetch?: WebFetchConfig): Record<string, string> | u
 function looksLikeHtml(value: string): boolean {
   const head = normalizeLowercaseStringOrEmpty(value.trimStart().slice(0, 256));
   return head.startsWith("<!doctype html") || head.startsWith("<html");
-}
-
-function formatWebFetchErrorDetail(params: {
-  detail: string;
-  contentType?: string | null;
-}): string {
-  const { detail, contentType } = params;
-  if (!detail) {
-    return "";
-  }
-  let text = detail;
-  const contentTypeLower = normalizeOptionalLowercaseString(contentType);
-  if (contentTypeLower?.includes("text/html") || looksLikeHtml(detail)) {
-    const rendered = htmlToMarkdown(detail);
-    const withTitle = rendered.title ? `${rendered.title}\n${rendered.text}` : rendered.text;
-    text = markdownToText(withTitle);
-  }
-  return truncateWebFetchText(text.trim(), DEFAULT_ERROR_MAX_CHARS).text;
 }
 
 const WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD = wrapWebContent("", "web_fetch").length;
@@ -312,94 +291,9 @@ type WebFetchWrappedContent = Pick<
   "text" | "truncated" | "rawLength" | "length" | "spill"
 >;
 
-async function spillWebFetchContent(
-  value: string,
-  wrapped: WebFetchWrappedContent,
-  maxChars: number,
-  sourceTruncated: boolean,
-  output: PrivateTempFileOptions,
-): Promise<WebFetchWrappedContent> {
-  if (!wrapped.truncated) {
-    return sourceTruncated ? { ...wrapped, truncated: true } : wrapped;
-  }
-  // maxChars/maxCharsCap bound the model-visible return text. Recoverable spill
-  // uses this fixed file cap so vanished pages can still be read after truncation.
-  const content = truncateUtf16Safe(value, WEB_FETCH_SPILL_MAX_CHARS);
-  const spillChars = content.length;
-  let spillPath: string;
-  try {
-    spillPath = await writePrivateTempFile(
-      "openclaw-web-fetch",
-      wrapWebContent(content, "web_fetch"),
-      output,
-    );
-  } catch (error) {
-    output.assertCurrent?.();
-    if (!output.sandbox) {
-      throw error;
-    }
-    const notice = "\n\n[Full output unavailable in sandbox.]";
-    const visible = wrapWebFetchContent(value, maxChars - notice.length);
-    const text = `${visible.text}${notice}`;
-    return { ...visible, truncated: true, text, length: text.length };
-  }
-  const spillCapped = value.length > WEB_FETCH_SPILL_MAX_CHARS;
-  const isSpillTruncated = sourceTruncated || spillCapped;
-  const spillNote = sourceTruncated
-    ? " Spilled available content from truncated response."
-    : spillCapped
-      ? ` Spilled first ${spillChars} chars.`
-      : "";
-  const fullOutputFooter = formatFullOutputFooter(spillPath);
-  const footer = `\n\n[Showing truncated web_fetch content. ${fullOutputFooter}.${spillNote}]`;
-  const compactFooter = `[${fullOutputFooter}]`;
-  let visible = wrapped;
-  let text = wrapped.text;
-  if (footer.length <= maxChars) {
-    visible = wrapWebFetchContent(value, maxChars - footer.length);
-    text = `${visible.text}${footer}`;
-  } else if (compactFooter.length <= maxChars) {
-    visible = { ...wrapped, text: "", length: 0 };
-    text = compactFooter;
-  }
-  return {
-    ...visible,
-    truncated: true,
-    text,
-    length: text.length,
-    spill: {
-      path: spillPath,
-      chars: spillChars,
-      ...(isSpillTruncated ? { truncated: true } : {}),
-    },
-  };
-}
-
 function normalizeContentType(value: string | null | undefined): string | undefined {
   return value?.split(";", 1)[0]?.trim().toLowerCase() || undefined;
 }
-
-type WebFetchRuntimeParams = {
-  url: string;
-  extractMode: ExtractMode;
-  maxChars: number;
-  maxResponseBytes: number;
-  maxRedirects: number;
-  timeoutSeconds: number;
-  cacheTtlMs: number;
-  userAgent: string;
-  headers?: Record<string, string>;
-  readabilityEnabled: boolean;
-  config?: OpenClawConfig;
-  useTrustedEnvProxy: boolean;
-  ssrfPolicy?: SsrFPolicy;
-  providerCacheKey?: string;
-  lookupFn?: LookupFn;
-  signal?: AbortSignal;
-  resolveProviderFallback: () => Promise<WebFetchProviderFallback>;
-  output: PrivateTempFileOptions;
-  cacheScope?: string;
-};
 
 function normalizeProviderFinalUrl(value: unknown): string | undefined {
   const trimmed = normalizeOptionalString(value);
@@ -480,13 +374,66 @@ async function buildWebFetchPayload(params: {
   const title = wrapMetadata(payload.title);
   const bodyMaxChars = params.maxChars - (title?.length ?? 0) - (warning?.length ?? 0);
   const rawText = typeof payload.text === "string" ? payload.text : "";
-  const wrapped = await spillWebFetchContent(
-    rawText,
-    wrapWebFetchContent(rawText, bodyMaxChars),
-    bodyMaxChars,
-    payload.truncated === true,
-    params.output,
-  );
+  const initialWrapped = wrapWebFetchContent(rawText, bodyMaxChars);
+  const spillSourceTruncated = payload.truncated === true;
+  const spillOutput = params.output;
+  const spillWebFetchContent = async (): Promise<WebFetchWrappedContent> => {
+    if (!initialWrapped.truncated) {
+      return spillSourceTruncated ? { ...initialWrapped, truncated: true } : initialWrapped;
+    }
+    // maxChars/maxCharsCap bound the model-visible return text. Recoverable spill
+    // uses this fixed file cap so vanished pages can still be read after truncation.
+    const content = truncateUtf16Safe(rawText, WEB_FETCH_SPILL_MAX_CHARS);
+    const spillChars = content.length;
+    let spillPath: string;
+    try {
+      spillPath = await writePrivateTempFile(
+        "openclaw-web-fetch",
+        wrapWebContent(content, "web_fetch"),
+        spillOutput,
+      );
+    } catch (error) {
+      spillOutput.assertCurrent?.();
+      if (!spillOutput.sandbox) {
+        throw error;
+      }
+      const notice = "\n\n[Full output unavailable in sandbox.]";
+      const visible = wrapWebFetchContent(rawText, bodyMaxChars - notice.length);
+      const text = `${visible.text}${notice}`;
+      return { ...visible, truncated: true, text, length: text.length };
+    }
+    const spillCapped = rawText.length > WEB_FETCH_SPILL_MAX_CHARS;
+    const isSpillTruncated = spillSourceTruncated || spillCapped;
+    const spillNote = spillSourceTruncated
+      ? " Spilled available content from truncated response."
+      : spillCapped
+        ? ` Spilled first ${spillChars} chars.`
+        : "";
+    const fullOutputFooter = formatFullOutputFooter(spillPath);
+    const footer = `\n\n[Showing truncated web_fetch content. ${fullOutputFooter}.${spillNote}]`;
+    const compactFooter = `[${fullOutputFooter}]`;
+    let visible = initialWrapped;
+    let text = initialWrapped.text;
+    if (footer.length <= bodyMaxChars) {
+      visible = wrapWebFetchContent(rawText, bodyMaxChars - footer.length);
+      text = `${visible.text}${footer}`;
+    } else if (compactFooter.length <= bodyMaxChars) {
+      visible = { ...initialWrapped, text: "", length: 0 };
+      text = compactFooter;
+    }
+    return {
+      ...visible,
+      truncated: true,
+      text,
+      length: text.length,
+      spill: {
+        path: spillPath,
+        chars: spillChars,
+        ...(isSpillTruncated ? { truncated: true } : {}),
+      },
+    };
+  };
+  const wrapped = await spillWebFetchContent();
   const providerRawLength =
     resolveOptionalIntegerOption(payload.rawLength, { min: 0 }) ?? wrapped.rawLength;
   const url = params.requestedUrl;
@@ -538,263 +485,6 @@ async function buildWebFetchPayload(params: {
     text: wrapped.text,
     ...(warning ? { warning } : {}),
   };
-}
-
-async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
-  throwIfFetchAborted(params.signal);
-  const parsedUrl = URL.parse(params.url);
-  if (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol)) {
-    throw new Error("Invalid URL: must be http or https");
-  }
-  // Routing headers partition the process-wide cache without retaining their secrets.
-  const headersCacheKey = params.headers
-    ? sha256Hex(JSON.stringify(Object.entries(params.headers)))
-    : undefined;
-  // Append the operator header set after the existing cache discriminators so
-  // requests without custom headers keep their current cache key.
-  const cacheDiscriminators = [
-    params.cacheScope ? `sandbox:${params.cacheScope}` : "",
-    `user-agent:${sha256Hex(params.userAgent)}`,
-    params.providerCacheKey ? `provider:${params.providerCacheKey}` : "",
-    params.ssrfPolicy ? `ssrf-policy:${sha256Hex(JSON.stringify(params.ssrfPolicy))}` : "",
-    params.useTrustedEnvProxy ? "trusted-env-proxy" : "",
-    headersCacheKey ? `headers:${headersCacheKey}` : "",
-  ].filter(Boolean);
-  const cacheKey = normalizeCacheKey(
-    [
-      `fetch:${parsedUrl.href}:${params.extractMode}:${params.maxChars}`,
-      ...cacheDiscriminators,
-    ].join(":"),
-  );
-  const cached = readCache(FETCH_CACHE, cacheKey, params.cacheTtlMs);
-  if (cached) {
-    const spill = cached.value.spill;
-    const sandbox = params.output.sandbox;
-    const available =
-      !sandbox ||
-      !isRecord(spill) ||
-      typeof spill.path !== "string" ||
-      (
-        await sandbox.bridge?.stat({
-          filePath: spill.path,
-          cwd: sandbox.root,
-          expectedPolicyPath: spill.path,
-          signal: params.signal,
-        })
-      )?.type === "file";
-    params.output.assertCurrent?.();
-    if (available) {
-      return { ...cached.value, cached: true };
-    }
-  }
-
-  // Preserve the direct fetch's rejection; replacing it with signal.reason would
-  // discard the transport's own error detail.
-  const payload = await fetchWebPayload(params);
-  // Publish only after guard release: cancellation or cleanup failure must not
-  // leave a successful cache entry for a call that never returned its content.
-  throwIfFetchAborted(params.signal);
-  params.output.assertCurrent?.();
-  // Retry a failed sandbox save on the next call; never cache an unavailable spill.
-  if (!params.output.sandbox || !payload.truncated || payload.spill) {
-    writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-  }
-  return payload;
-}
-
-async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
-  const start = Date.now();
-  async function fetchProviderPayload(urlToFetch: string): Promise<Record<string, unknown> | null> {
-    const tookMs = Date.now() - start;
-    const providerFallback = await params.resolveProviderFallback();
-    throwIfFetchAborted(params.signal);
-    if (!providerFallback) {
-      return null;
-    }
-    let rawPayload: unknown;
-    try {
-      rawPayload = await providerFallback.definition.execute(
-        { url: urlToFetch, extractMode: params.extractMode, maxChars: params.maxChars },
-        { signal: params.signal },
-      );
-    } catch (error) {
-      // Cancellation wins over a provider failure arriving after the caller abandoned it.
-      throwIfFetchAborted(params.signal);
-      throw error;
-    }
-    throwIfFetchAborted(params.signal);
-    return await buildWebFetchPayload({
-      providerId: providerFallback.provider.id,
-      payload: rawPayload,
-      requestedUrl: params.url,
-      extractMode: params.extractMode,
-      maxChars: params.maxChars,
-      tookMs,
-      output: params.output,
-    });
-  }
-
-  let res: Response;
-  let release: () => Promise<void>;
-  let finalUrl = params.url;
-  try {
-    const { fetchWithWebToolsNetworkGuard } = await loadWebGuardedFetch();
-    const result = await fetchWithWebToolsNetworkGuard({
-      url: params.url,
-      maxRedirects: params.maxRedirects,
-      timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
-      lookupFn: params.lookupFn,
-      useEnvProxy: params.useTrustedEnvProxy,
-      policy: params.ssrfPolicy,
-      capture: params.headers
-        ? { sensitiveRequestHeaderNames: Object.keys(params.headers) }
-        : undefined,
-      init: {
-        // Preserve casing and order on the wire; operator headers are already collision-free.
-        headers: {
-          Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
-          "User-Agent": params.userAgent,
-          "Accept-Language": "en-US,en;q=0.9",
-          ...params.headers,
-        },
-      },
-    });
-    res = result.response;
-    finalUrl = result.finalUrl;
-    release = result.release;
-  } catch (error) {
-    if (error instanceof SsrFBlockedError || params.signal?.aborted) {
-      throw error;
-    }
-    const payload = await fetchProviderPayload(finalUrl);
-    if (payload) {
-      return payload;
-    }
-    throw error;
-  }
-
-  try {
-    if (!res.ok) {
-      throwIfFetchAborted(params.signal);
-      const payload = await fetchProviderPayload(params.url);
-      if (payload) {
-        return payload;
-      }
-      const rawDetailResult = await readResponseText(res, { maxBytes: DEFAULT_ERROR_MAX_BYTES });
-      throwIfFetchAborted(params.signal);
-      const detail = formatWebFetchErrorDetail({
-        detail: rawDetailResult.text,
-        contentType: res.headers.get("content-type"),
-      });
-      const wrappedDetail = wrapWebFetchContent(detail || res.statusText, DEFAULT_ERROR_MAX_CHARS);
-      throw new Error(`Web fetch failed (${res.status}): ${wrappedDetail.text}`);
-    }
-
-    const contentType = res.headers.get("content-type") ?? "application/octet-stream";
-    const normalizedContentType = normalizeContentType(contentType) ?? "application/octet-stream";
-    const bodyResult = await readResponseText(res, { maxBytes: params.maxResponseBytes });
-    throwIfFetchAborted(params.signal);
-    const body = bodyResult.text;
-    const responseTruncatedWarning = bodyResult.truncated
-      ? `Response body incomplete after ${bodyResult.bytesRead} bytes.`
-      : undefined;
-
-    let title: string | undefined;
-    let extractor = "raw";
-    let text = body;
-    if (normalizedContentType === "text/markdown") {
-      extractor = "cf-markdown";
-      if (params.extractMode === "text") {
-        text = markdownToText(body);
-      }
-    } else if (["text/html", "application/xhtml+xml"].includes(normalizedContentType)) {
-      if (!params.readabilityEnabled) {
-        const payload = await fetchProviderPayload(finalUrl);
-        if (payload) {
-          return payload;
-        }
-        throw new Error(
-          "Web fetch extraction failed: Readability disabled and no fetch provider is available.",
-        );
-      }
-      let extracted = await extractReadableContent({
-        html: body,
-        url: finalUrl,
-        extractMode: params.extractMode,
-        config: params.config,
-      });
-      if (!extracted?.text) {
-        let payload: Record<string, unknown> | null = null;
-        try {
-          payload = await fetchProviderPayload(finalUrl);
-        } catch {
-          throwIfFetchAborted(params.signal);
-        }
-        if (payload) {
-          return payload;
-        }
-        const basic = await extractBasicHtmlContent({
-          html: body,
-          extractMode: params.extractMode,
-        });
-        if (!basic?.text) {
-          const providerLabel =
-            (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
-          throw new Error(
-            `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
-          );
-        }
-        extracted = { ...basic, extractor: "raw-html" };
-      }
-      ({ text, title, extractor } = extracted);
-    } else if (
-      normalizedContentType === "application/json" ||
-      normalizedContentType.endsWith("+json")
-    ) {
-      // Structured +json subtypes are single JSON documents; sequence formats are not.
-      try {
-        // Keep pretty-printing without rounding or normalizing numeric source tokens.
-        // Numeric reviver calls always include source context on supported runtimes.
-        text = JSON.stringify(
-          JSON.parse(body, (_key, value: unknown, context?: { source: string }) =>
-            typeof value === "number" ? JSON.rawJSON(context!.source) : value,
-          ),
-          null,
-          2,
-        );
-        extractor = "json";
-      } catch {
-        text = body;
-        extractor = "raw";
-      }
-    }
-
-    return await buildWebFetchPayload({
-      payload: {
-        finalUrl,
-        status: res.status,
-        contentType: normalizedContentType,
-        title,
-        extractor,
-        text,
-        warning: responseTruncatedWarning,
-        truncated: bodyResult.truncated,
-      },
-      requestedUrl: params.url,
-      extractMode: params.extractMode,
-      maxChars: params.maxChars,
-      tookMs: Date.now() - start,
-      output: params.output,
-    });
-  } finally {
-    if (!res.bodyUsed) {
-      // Fallbacks and provider failures can abandon the upstream stream. Cancel
-      // without awaiting so a stalled cancellation cannot block guard release.
-      void res.body?.cancel().catch(() => undefined);
-    }
-    await release();
-  }
 }
 
 export function createWebFetchTool(options?: {
@@ -897,46 +587,309 @@ export function createWebFetchTool(options?: {
         { signal },
       );
       try {
-        const result = await runWebFetch({
-          url,
-          extractMode,
-          maxChars: resolveIntegerOption(
-            maxChars ?? executionFetch?.maxChars,
-            DEFAULT_FETCH_MAX_CHARS,
-            { min: 100, max: maxCharsCap },
-          ),
-          maxResponseBytes,
-          maxRedirects: resolveIntegerOption(
-            executionFetch?.maxRedirects,
-            DEFAULT_FETCH_MAX_REDIRECTS,
-            { min: 0 },
-          ),
-          timeoutSeconds: resolveTimeoutSeconds(
-            executionFetch?.timeoutSeconds,
-            DEFAULT_TIMEOUT_SECONDS,
-          ),
-          cacheTtlMs: resolveCacheTtlMs(executionFetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
-          userAgent,
-          headers: resolveFetchHeaders(executionFetch),
-          readabilityEnabled,
-          config,
-          useTrustedEnvProxy: executionFetch?.useTrustedEnvProxy === true,
-          ssrfPolicy: hostnameAllowlist
-            ? { ...executionFetch?.ssrfPolicy, hostnameAllowlist }
-            : executionFetch?.ssrfPolicy,
-          ...(providerCacheKey ? { providerCacheKey } : {}),
-          lookupFn: options?.lookupFn,
+        const fetchMaxChars = resolveIntegerOption(
+          maxChars ?? executionFetch?.maxChars,
+          DEFAULT_FETCH_MAX_CHARS,
+          { min: 100, max: maxCharsCap },
+        );
+        const maxRedirects = resolveIntegerOption(
+          executionFetch?.maxRedirects,
+          DEFAULT_FETCH_MAX_REDIRECTS,
+          { min: 0 },
+        );
+        const timeoutSeconds = resolveTimeoutSeconds(
+          executionFetch?.timeoutSeconds,
+          DEFAULT_TIMEOUT_SECONDS,
+        );
+        const cacheTtlMs = resolveCacheTtlMs(
+          executionFetch?.cacheTtlMinutes,
+          DEFAULT_CACHE_TTL_MINUTES,
+        );
+        const headers = resolveFetchHeaders(executionFetch);
+        const useTrustedEnvProxy = executionFetch?.useTrustedEnvProxy === true;
+        const ssrfPolicy = hostnameAllowlist
+          ? { ...executionFetch?.ssrfPolicy, hostnameAllowlist }
+          : executionFetch?.ssrfPolicy;
+        const lookupFn = options?.lookupFn;
+        const fetchOutput = {
+          ...(options?.sandboxed
+            ? { sandbox: { root: options.sandboxRoot, bridge: options.sandboxFsBridge } }
+            : {}),
+          assertCurrent,
           signal,
-          resolveProviderFallback,
-          cacheScope,
-          output: {
-            ...(options?.sandboxed
-              ? { sandbox: { root: options.sandboxRoot, bridge: options.sandboxFsBridge } }
-              : {}),
-            assertCurrent,
-            signal,
-          },
-        });
+        };
+        const fetchWebPayload = async (): Promise<Record<string, unknown>> => {
+          const start = Date.now();
+          async function fetchProviderPayload(
+            urlToFetch: string,
+          ): Promise<Record<string, unknown> | null> {
+            const tookMs = Date.now() - start;
+            const providerFallback = await resolveProviderFallback();
+            throwIfFetchAborted(signal);
+            if (!providerFallback) {
+              return null;
+            }
+            let rawPayload: unknown;
+            try {
+              rawPayload = await providerFallback.definition.execute(
+                { url: urlToFetch, extractMode, maxChars: fetchMaxChars },
+                { signal },
+              );
+            } catch (error) {
+              // Cancellation wins over a provider failure arriving after the caller abandoned it.
+              throwIfFetchAborted(signal);
+              throw error;
+            }
+            throwIfFetchAborted(signal);
+            return await buildWebFetchPayload({
+              providerId: providerFallback.provider.id,
+              payload: rawPayload,
+              requestedUrl: url,
+              extractMode,
+              maxChars: fetchMaxChars,
+              tookMs,
+              output: fetchOutput,
+            });
+          }
+
+          let res: Response;
+          let release: () => Promise<void>;
+          let finalUrl = url;
+          try {
+            const { fetchWithWebToolsNetworkGuard } = await loadWebGuardedFetch();
+            const result = await fetchWithWebToolsNetworkGuard({
+              url,
+              maxRedirects,
+              timeoutSeconds,
+              signal,
+              lookupFn,
+              useEnvProxy: useTrustedEnvProxy,
+              policy: ssrfPolicy,
+              capture: headers ? { sensitiveRequestHeaderNames: Object.keys(headers) } : undefined,
+              init: {
+                // Preserve casing and order on the wire; operator headers are already collision-free.
+                headers: {
+                  Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
+                  "User-Agent": userAgent,
+                  "Accept-Language": "en-US,en;q=0.9",
+                  ...headers,
+                },
+              },
+            });
+            res = result.response;
+            finalUrl = result.finalUrl;
+            release = result.release;
+          } catch (error) {
+            if (error instanceof SsrFBlockedError || signal?.aborted) {
+              throw error;
+            }
+            const payload = await fetchProviderPayload(finalUrl);
+            if (payload) {
+              return payload;
+            }
+            throw error;
+          }
+
+          try {
+            if (!res.ok) {
+              throwIfFetchAborted(signal);
+              const payload = await fetchProviderPayload(url);
+              if (payload) {
+                return payload;
+              }
+              const rawDetailResult = await readResponseText(res, {
+                maxBytes: DEFAULT_ERROR_MAX_BYTES,
+              });
+              throwIfFetchAborted(signal);
+              let detail = rawDetailResult.text;
+              const contentType = res.headers.get("content-type");
+              if (detail) {
+                let errorText = detail;
+                const contentTypeLower = normalizeOptionalLowercaseString(contentType);
+                if (contentTypeLower?.includes("text/html") || looksLikeHtml(detail)) {
+                  const rendered = htmlToMarkdown(detail);
+                  const withTitle = rendered.title
+                    ? `${rendered.title}\n${rendered.text}`
+                    : rendered.text;
+                  errorText = markdownToText(withTitle);
+                }
+                detail = truncateWebFetchText(errorText.trim(), DEFAULT_ERROR_MAX_CHARS).text;
+              }
+              const wrappedDetail = wrapWebFetchContent(
+                detail || res.statusText,
+                DEFAULT_ERROR_MAX_CHARS,
+              );
+              throw new Error(`Web fetch failed (${res.status}): ${wrappedDetail.text}`);
+            }
+
+            const bodyResult = await readResponseText(res, { maxBytes: maxResponseBytes });
+            throwIfFetchAborted(signal);
+            const body = bodyResult.text;
+            const normalizedContentType =
+              normalizeContentType(res.headers.get("content-type")) ??
+              (looksLikeHtml(body) ? "text/html" : "application/octet-stream");
+            const responseTruncatedWarning = bodyResult.truncated
+              ? `Response body incomplete after ${bodyResult.bytesRead} bytes.`
+              : undefined;
+
+            let title: string | undefined;
+            let extractor = "raw";
+            let text = body;
+            if (normalizedContentType === "text/markdown") {
+              extractor = "cf-markdown";
+              if (extractMode === "text") {
+                text = markdownToText(body);
+              }
+            } else if (["text/html", "application/xhtml+xml"].includes(normalizedContentType)) {
+              if (!readabilityEnabled) {
+                const payload = await fetchProviderPayload(finalUrl);
+                if (payload) {
+                  return payload;
+                }
+                throw new Error(
+                  "Web fetch extraction failed: Readability disabled and no fetch provider is available.",
+                );
+              }
+              let extracted = await extractReadableContent({
+                html: body,
+                url: finalUrl,
+                extractMode,
+                config,
+              });
+              if (!extracted?.text) {
+                let payload: Record<string, unknown> | null = null;
+                try {
+                  payload = await fetchProviderPayload(finalUrl);
+                } catch {
+                  throwIfFetchAborted(signal);
+                }
+                if (payload) {
+                  return payload;
+                }
+                const basic = await extractBasicHtmlContent({
+                  html: body,
+                  extractMode,
+                });
+                if (!basic?.text) {
+                  const providerLabel =
+                    (await resolveProviderFallback())?.provider.label ?? "provider fallback";
+                  throw new Error(
+                    `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
+                  );
+                }
+                extracted = { ...basic, extractor: "raw-html" };
+              }
+              ({ text, title, extractor } = extracted);
+            } else if (
+              normalizedContentType === "application/json" ||
+              normalizedContentType.endsWith("+json")
+            ) {
+              // Structured +json subtypes are single JSON documents; sequence formats are not.
+              try {
+                // Keep pretty-printing without rounding or normalizing numeric source tokens.
+                // Numeric reviver calls always include source context on supported runtimes.
+                text = JSON.stringify(
+                  JSON.parse(body, (_key, value: unknown, context?: { source: string }) =>
+                    typeof value === "number" ? JSON.rawJSON(context!.source) : value,
+                  ),
+                  null,
+                  2,
+                );
+                extractor = "json";
+              } catch {
+                text = body;
+                extractor = "raw";
+              }
+            }
+
+            return await buildWebFetchPayload({
+              payload: {
+                finalUrl,
+                status: res.status,
+                contentType: normalizedContentType,
+                title,
+                extractor,
+                text,
+                warning: responseTruncatedWarning,
+                truncated: bodyResult.truncated,
+              },
+              requestedUrl: url,
+              extractMode,
+              maxChars: fetchMaxChars,
+              tookMs: Date.now() - start,
+              output: fetchOutput,
+            });
+          } finally {
+            if (!res.bodyUsed) {
+              // Fallbacks and provider failures can abandon the upstream stream. Cancel
+              // without awaiting so a stalled cancellation cannot block guard release.
+              void res.body?.cancel().catch(() => undefined);
+            }
+            await release();
+          }
+        };
+        const runWebFetch = async (): Promise<Record<string, unknown>> => {
+          throwIfFetchAborted(signal);
+          const parsedUrl = URL.parse(url);
+          if (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol)) {
+            throw new Error("Invalid URL: must be http or https");
+          }
+          // Routing headers partition the process-wide cache without retaining their secrets.
+          const headersCacheKey = headers
+            ? sha256Hex(JSON.stringify(Object.entries(headers)))
+            : undefined;
+          // Append the operator header set after the existing cache discriminators so
+          // requests without custom headers keep their current cache key.
+          const cacheDiscriminators = [
+            cacheScope ? `sandbox:${cacheScope}` : "",
+            `user-agent:${sha256Hex(userAgent)}`,
+            providerCacheKey ? `provider:${providerCacheKey}` : "",
+            ssrfPolicy ? `ssrf-policy:${sha256Hex(JSON.stringify(ssrfPolicy))}` : "",
+            useTrustedEnvProxy ? "trusted-env-proxy" : "",
+            headersCacheKey ? `headers:${headersCacheKey}` : "",
+          ].filter(Boolean);
+          const cacheKey = normalizeCacheKey(
+            [
+              `fetch:${parsedUrl.href}:${extractMode}:${fetchMaxChars}`,
+              ...cacheDiscriminators,
+            ].join(":"),
+          );
+          const cached = readCache(FETCH_CACHE, cacheKey, cacheTtlMs);
+          if (cached) {
+            const spill = cached.value.spill;
+            const sandbox = fetchOutput.sandbox;
+            const available =
+              !sandbox ||
+              !isRecord(spill) ||
+              typeof spill.path !== "string" ||
+              (
+                await sandbox.bridge?.stat({
+                  filePath: spill.path,
+                  cwd: sandbox.root,
+                  expectedPolicyPath: spill.path,
+                  signal,
+                })
+              )?.type === "file";
+            fetchOutput.assertCurrent?.();
+            if (available) {
+              return { ...cached.value, cached: true };
+            }
+          }
+
+          // Preserve the direct fetch's rejection; replacing it with signal.reason would
+          // discard the transport's own error detail.
+          const payload = await fetchWebPayload();
+          // Publish only after guard release: cancellation or cleanup failure must not
+          // leave a successful cache entry for a call that never returned its content.
+          throwIfFetchAborted(signal);
+          fetchOutput.assertCurrent?.();
+          // Retry a failed sandbox save on the next call; never cache an unavailable spill.
+          if (!fetchOutput.sandbox || !payload.truncated || payload.spill) {
+            writeCache(FETCH_CACHE, cacheKey, payload, cacheTtlMs);
+          }
+          return payload;
+        };
+        const result = await runWebFetch();
         return jsonResult(result);
       } finally {
         clearProgressTimer();

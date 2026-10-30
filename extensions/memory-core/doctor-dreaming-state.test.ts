@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
-import { createDoctorContext, resetDoctorPluginState } from "./doctor-contract-api.test-support.js";
+import { useDoctorWorkspace } from "./doctor-contract-api.test-support.js";
 import {
   readDailyIngestionState,
   readSessionIngestionState,
@@ -24,34 +23,20 @@ if (!migration) {
 
 let rootDir = "";
 let workspaceDir = "";
-let env: NodeJS.ProcessEnv;
+const { fixture, context, params } = useDoctorWorkspace(
+  "openclaw-memory-core-dreaming-",
+  resetMemoryCoreDreamingStateForTests,
+);
 
-beforeEach(async () => {
-  await resetDoctorPluginState();
-  rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-core-dreaming-"));
-  workspaceDir = path.join(rootDir, "workspace");
-  await fs.mkdir(path.join(workspaceDir, "memory", ".dreams"), { recursive: true });
-  env = { ...process.env, OPENCLAW_STATE_DIR: path.join(rootDir, "state") };
+beforeEach(() => {
+  ({ rootDir, workspaceDir } = fixture);
   state.configureMemoryCoreDreamingState(context().openPluginStateKeyedStore);
 });
-
-afterEach(async () => {
-  await resetDoctorPluginState();
-  resetMemoryCoreDreamingStateForTests();
-  await fs.rm(rootDir, { recursive: true, force: true });
-});
-
-const context = () => createDoctorContext(env);
 const openStore = (namespace: string) =>
   context().openPluginStateKeyedStore({ namespace, maxEntries: 50_000 });
 
-const migrationParams = () => ({
-  config: { agents: { entries: { main: { workspace: workspaceDir } } } },
-  env,
-  stateDir: path.join(rootDir, "state"),
-  oauthDir: path.join(rootDir, "oauth"),
-  context: context(),
-});
+const migrationParams = () =>
+  params({ agents: { entries: { main: { workspace: workspaceDir } } } });
 const detect = () => migration.detectLegacyState(migrationParams());
 const migrate = () => migration.migrateLegacyState(migrationParams());
 const put = (namespace: string, key: string, value: object, workspace = workspaceDir) =>

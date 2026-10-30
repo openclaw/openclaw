@@ -3,19 +3,17 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi } from "vitest";
+import { createFixtureRequest } from "../../test/helpers/gateway-built-fixture.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import "../commands/agent.js";
+import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import { agentCliCommand } from "../commands/agent-via-gateway.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { resetConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { getTrackedWorkerPoolSnapshot } from "../infra/worker-cpu.js";
 import {
   closeSkillsWatchers,
@@ -27,6 +25,8 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
+import { resetGatewayTestState } from "./gateway.test-support.js";
+import { formatGatewayPendingCloseSteps } from "./restart-trace.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -34,14 +34,6 @@ import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.
 import "./server-start.js";
 
 const execFileAsync = promisify(execFile);
-
-function resetGatewayState(): void {
-  resetConfigOverrides();
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  clearSessionStoreCacheForTest();
-  resetAgentEventsForTest({ preserveListeners: true });
-}
 
 it(
   "refreshes canonical skills explicitly for managed worktrees and closes its discovery worker",
@@ -68,7 +60,25 @@ it(
       (gatewayClose ??= Promise.resolve().then(async () => {
         // A rejected acquisition may retain a server whose rollback did not finish.
         const started = gateway ?? (await gatewayStartup);
-        await started?.server.close({ reason: "skill refresh test cleanup" });
+        try {
+          await started?.server.close({ reason: "skill refresh test cleanup" });
+        } catch (error) {
+          console.error(
+            "Skill refresh Gateway cleanup failed",
+            JSON.stringify({
+              pending: formatGatewayPendingCloseSteps(),
+              discoveryWorkers: discoveryWorkers(),
+              errors: collectNestedErrorCandidates(error)
+                .slice(0, 8)
+                .map((nested) =>
+                  nested instanceof Error
+                    ? { name: nested.name, message: nested.message.slice(0, 500) }
+                    : { name: typeof nested },
+                ),
+            }),
+          );
+          throw error;
+        }
       }));
     return runQaGatewayTestFixture(
       context,
@@ -104,7 +114,7 @@ it(
         signal.throwIfAborted();
         await initializeGitWorkspace(workspace, signal);
         state.applyEnv();
-        resetGatewayState();
+        resetGatewayTestState();
         const lifecycleEvents: string[] = [];
         unregisterLifecycle = registerSkillsChangeListener((event) => {
           lifecycleEvents.push(event.reason);
@@ -146,8 +156,9 @@ it(
         });
         gateway = await gatewayStartup;
         signal.throwIfAborted();
+        const request = createFixtureRequest(gateway.client, signal);
 
-        const created = await gateway.client.request<{ key: string; worktree: { path: string } }>(
+        const created = await request<{ key: string; worktree: { path: string } }>(
           "sessions.create",
           {
             agentId: "main",
@@ -155,9 +166,7 @@ it(
             worktreeBaseRef: "HEAD",
             label: "Skill refresh",
           },
-          { signal },
         );
-        signal.throwIfAborted();
         const sessionKey = created.key;
         const worktreeSeedSkillFile = path.join(
           created.worktree.path,
@@ -167,23 +176,20 @@ it(
         );
         await writeSkill(worktreeSeedSkillFile, "seed-proof", "worktree-only-description");
         const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-        const activeClient = gateway.client;
         const turn = async (message: string) => {
-          signal.throwIfAborted();
           const runId = randomUUID();
-          const accepted = await activeClient.request<{ runId?: string; status?: string }>(
-            "agent",
-            { sessionKey, message, deliver: false, idempotencyKey: runId },
-            { signal },
-          );
-          signal.throwIfAborted();
+          const accepted = await request<{ runId?: string; status?: string }>("agent", {
+            sessionKey,
+            message,
+            deliver: false,
+            idempotencyKey: runId,
+          });
           expect(accepted.status).toBe("accepted");
-          const completed = await activeClient.request<{ status?: string }>(
+          const completed = await request<{ status?: string }>(
             "agent.wait",
             { runId: accepted.runId ?? runId, timeoutMs: 30_000 },
-            { timeoutMs: 35_000, signal },
+            { timeoutMs: 35_000 },
           );
-          signal.throwIfAborted();
           expect(completed.status).toBe("ok");
           return loadSessionEntry({ agentId: "main", sessionKey, storePath })?.skillsSnapshot;
         };
@@ -289,7 +295,7 @@ it(
         );
         await state?.cleanup();
         vi.restoreAllMocks();
-        resetGatewayState();
+        resetGatewayTestState();
       },
     );
   },

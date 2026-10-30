@@ -1,16 +1,12 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ArchiveLogger } from "../../infra/archive.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  installSkillArchiveFromPath,
-  type SkillArchiveInstallFailureKind,
-} from "./archive-install.js";
+import { installSkillArchiveFromPath } from "./archive-install.js";
 import { validateRequestedSkillSlug } from "./install-paths.js";
 import { SkillUploadRequestError } from "./upload-store-error.js";
 import {
-  defaultSkillUploadStore,
+  defaultSkillUploadStore as skillUploadStore,
   normalizeSkillUploadSha256,
-  type SkillUploadStore,
 } from "./upload-store.js";
 
 export const UPLOADED_SKILL_ARCHIVES_DISABLED_MESSAGE =
@@ -19,23 +15,6 @@ export const UPLOADED_SKILL_ARCHIVES_DISABLED_MESSAGE =
 export function areUploadedSkillArchivesEnabled(config: OpenClawConfig): boolean {
   return config.skills?.install?.allowUploadedArchives === true;
 }
-
-type UploadedSkillInstallResult =
-  | {
-      ok: true;
-      message: string;
-      stdout: string;
-      stderr: string;
-      code: 0;
-      slug: string;
-      targetDir: string;
-      sha256: string;
-    }
-  | {
-      ok: false;
-      error: string;
-      errorKind: SkillArchiveInstallFailureKind;
-    };
 
 export async function installUploadedSkillArchive(params: {
   uploadId: string;
@@ -46,25 +25,23 @@ export async function installUploadedSkillArchive(params: {
   workspaceDir: string;
   config: OpenClawConfig;
   log?: ArchiveLogger;
-  store?: SkillUploadStore;
   beforePersistentApply?: () => void;
-}): Promise<UploadedSkillInstallResult> {
-  const store = params.store ?? defaultSkillUploadStore;
+}) {
   if (!areUploadedSkillArchivesEnabled(params.config)) {
     return {
-      ok: false,
+      ok: false as const,
       error: UPLOADED_SKILL_ARCHIVES_DISABLED_MESSAGE,
-      errorKind: "unavailable",
+      errorKind: "unavailable" as const,
     };
   }
   try {
     params.beforePersistentApply?.();
     const requestedSlug = validateRequestedSkillSlug(params.slug);
     const requestedSha = normalizeSkillUploadSha256(params.sha256);
-    return await store.withCommittedUpload(params.uploadId, async (record, upload) => {
-      const rejectInvalid = async (error: string): Promise<UploadedSkillInstallResult> => {
+    return await skillUploadStore.withCommittedUpload(params.uploadId, async (record, upload) => {
+      const rejectInvalid = async (error: string) => {
         await upload.remove().catch(() => undefined);
-        return { ok: false, error, errorKind: "invalid-request" };
+        return { ok: false as const, error, errorKind: "invalid-request" as const };
       };
       if (record.slug !== requestedSlug) {
         return await rejectInvalid("install slug does not match upload slug");
@@ -104,18 +81,18 @@ export async function installUploadedSkillArchive(params: {
           await upload.remove().catch(() => undefined);
         }
         return {
-          ok: false,
+          ok: false as const,
           error: install.error,
           errorKind: install.failureKind,
         };
       }
       await upload.remove().catch(() => undefined);
       return {
-        ok: true,
+        ok: true as const,
         message: `Installed ${record.slug}`,
         stdout: "",
         stderr: "",
-        code: 0,
+        code: 0 as const,
         slug: record.slug,
         targetDir: install.targetDir,
         sha256: record.actualSha256,
@@ -124,12 +101,12 @@ export async function installUploadedSkillArchive(params: {
   } catch (err) {
     const error = err instanceof SkillUploadRequestError ? err.message : formatErrorMessage(err);
     return {
-      ok: false,
+      ok: false as const,
       error,
       errorKind:
         err instanceof SkillUploadRequestError || error.startsWith("Invalid skill slug")
-          ? "invalid-request"
-          : "unavailable",
+          ? ("invalid-request" as const)
+          : ("unavailable" as const),
     };
   }
 }

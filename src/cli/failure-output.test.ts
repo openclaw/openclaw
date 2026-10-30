@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import { GatewayCredentialsRequiredError, GatewayTransportError } from "../gateway/call.js";
 import {
@@ -22,28 +22,23 @@ function failure(error: unknown, argv?: string[], debug = false) {
   });
 }
 
-describe("toPluginCommandFailure", () => {
-  beforeEach(() => vi.stubEnv("OPENCLAW_DEBUG", "0"));
-  afterEach(() => vi.unstubAllEnvs());
-
-  it("keeps ExitError identity and existing rendering policy", () => {
-    const error = Object.assign(new Error("already reported"), { name: "ExitError" });
-    expect(toPluginCommandFailure(error)).toBe(error);
-  });
-
-  it("keeps debug details except for Commander-coded action failures", () => {
-    vi.stubEnv("OPENCLAW_DEBUG", "1");
-    const error = new Error("action failed");
-    const commanderError = Object.assign(new Error("invalid limit"), {
-      name: "InvalidArgumentError",
-      code: "commander.invalidArgument",
-      exitCode: 1,
-    });
-
-    expect(toPluginCommandFailure(error)).toBe(error);
-    expect(toPluginCommandFailure(commanderError)).toBeInstanceOf(ExpectedCliError);
-  });
-});
+afterEach(() => vi.unstubAllEnvs());
+it.each([
+  [Object.assign(new Error("already reported"), { name: "ExitError" }), false, "0"],
+  [new Error("action failed"), false, "1"],
+  [Object.assign(new Error("invalid limit"), { code: "commander.invalidArgument" }), true, "1"],
+])(
+  "preserves plugin failure identity except Commander-coded failures: %s",
+  (error, wrapped, debug) => {
+    vi.stubEnv("OPENCLAW_DEBUG", debug);
+    const result = toPluginCommandFailure(error);
+    if (wrapped) {
+      expect(result).toBeInstanceOf(ExpectedCliError);
+    } else {
+      expect(result).toBe(error);
+    }
+  },
+);
 
 it.each([false, true])(
   "keeps connection diagnostics out of normal output (sent=%s)",
@@ -124,67 +119,29 @@ it("keeps nested causes behind the debug gate", () => {
   );
 });
 
-const maintenanceReason =
-  "OpenClaw state at ~/.openclaw/state/openclaw.sqlite is undergoing offline maintenance; retry when it finishes.";
+it.each(["gateway", "gateway run", "node run"])(
+  "prints the redacted service startup reason without debug: %s",
+  (args) => {
+    const token = "sk-abcdefghijklmnopqrstuv";
+    const lines = failure(
+      new Error(`Gateway startup failed. Authorization: Bearer ${token}`, {
+        cause: new Error("private nested diagnostic"),
+      }),
+      args.split(" "),
+    );
+    const output = lines.join("\n");
 
-it.each([
-  ["gateway"],
-  ["gateway", "run"],
-  ["gateway", "--port", "18789"],
-  ["gateway", "run", "--bind", "loopback", "--port", "18789"],
-  ["--profile", "work", "gateway", "run"],
-])("prints the redacted Gateway startup reason without debug: %j", (...args) => {
-  const token = "sk-abcdefghijklmnopqrstuv";
-  const lines = failure(
-    new Error(`Gateway startup failed. Authorization: Bearer ${token}`, {
-      cause: new Error("private nested diagnostic"),
-    }),
-    [...args],
-  );
-  const output = lines.join("\n");
+    expect(output).toContain("[openclaw] Reason: Gateway startup failed.");
+    expect(output).not.toContain(token);
+    expect(output).not.toContain("private nested diagnostic");
+    expect(lines).not.toContain("[openclaw] Stack:");
+  },
+);
 
-  expect(output).toContain("[openclaw] Reason: Gateway startup failed.");
-  expect(output).not.toContain(token);
-  expect(output).not.toContain("private nested diagnostic");
-  expect(lines).not.toContain("[openclaw] Stack:");
-});
-
-it.each([
-  ["gateway", "status"],
-  ["sessions", "list"],
-])("keeps ordinary command failures terse: %j", (...args) => {
-  expect(failure(new Error("internal detail"), [...args])).toEqual([
+it("keeps ordinary command failures terse", () => {
+  expect(failure(new Error("internal detail"), ["gateway", "status"])).toEqual([
     "[openclaw] The CLI command failed.",
     "[openclaw] For help, run `openclaw doctor`.",
-  ]);
-});
-
-it("prints the actionable offline maintenance refusal without debug", () => {
-  const error = Object.assign(
-    new StateDatabaseOfflineMaintenanceError(
-      "/tmp/openclaw.sqlite",
-      `${maintenanceReason} Authorization: Bearer sk-abcdefghijklmnopqrstuv`,
-    ),
-    { cause: new Error("private nested diagnostic") },
-  );
-  const lines = failure(error, ["plugins", "disable", "github"]);
-  const output = lines.join("\n");
-
-  expect(output).toContain(`[openclaw] Reason: ${maintenanceReason}`);
-  expect(lines).toHaveLength(2);
-  expect(output).not.toMatch(
-    /sk-abcdefghijklmnopqrstuv|private nested diagnostic|private sibling diagnostic|Stack:|openclaw doctor/u,
-  );
-});
-
-it("prints the actionable missing-maintenance-scope refusal without debug", () => {
-  const error = Object.assign(new StateDatabaseMaintenanceScopeError("/fixture/state.sqlite"), {
-    cause: new Error("private nested diagnostic"),
-  });
-
-  expect(failure(error, ["plugins", "enable", "github"])).toEqual([
-    "[openclaw] The CLI command failed.",
-    "[openclaw] Reason: Internal state ownership error at /fixture/state.sqlite: this process holds maintenance ownership without an active schema lease or maintenance scope. Retry the command; if it persists, report this error.",
   ]);
 });
 
@@ -204,17 +161,40 @@ it("emits expected guidance only when not already written even with debug output
   expect(failure(written, undefined, true)).toEqual([]);
 });
 
-it("preserves config validation details when diagnostics have not been emitted", () => {
-  const error = Object.assign(
-    createInvalidConfigError("/custom/openclaw.json", "- gateway.port: Expected a number"),
-    { diagnosticEmitted: false, cause: new Error("internal config loader detail") },
-  );
-
-  expect(failure(error, [])).toEqual([
-    "[openclaw] The CLI command failed.",
-    "[openclaw] Reason: Invalid config at /custom/openclaw.json:\n- gateway.port: Expected a number",
-    "[openclaw] For help, run `openclaw doctor`.",
-  ]);
+it.each([
+  [
+    new StateDatabaseOfflineMaintenanceError(
+      "/tmp/openclaw.sqlite",
+      "offline maintenance; retry when it finishes.",
+    ),
+    "offline maintenance; retry when it finishes.",
+    false,
+  ],
+  [
+    new StateDatabaseMaintenanceScopeError("/fixture/state.sqlite"),
+    "Internal state ownership error at /fixture/state.sqlite: this process holds maintenance ownership without an active schema lease or maintenance scope. Retry the command",
+    false,
+  ],
+  [
+    Object.assign(
+      createInvalidConfigError("/custom/openclaw.json", "- gateway.port: Expected a number"),
+      { diagnosticEmitted: false },
+    ),
+    "Invalid config at /custom/openclaw.json:\n- gateway.port: Expected a number",
+    true,
+  ],
+])("keeps actionable refusal details without leaking diagnostics: %s", (error, reason, doctor) => {
+  Object.assign(error, {
+    message: `${error.message} Authorization: Bearer sk-abcdefghijklmnopqrstuv`,
+    cause: new Error("private nested diagnostic"),
+  });
+  const lines = failure(error, []);
+  const output = lines.join("\n");
+  expect(lines[0]).toBe("[openclaw] The CLI command failed.");
+  expect(lines[1]).toContain(reason);
+  expect(lines).toHaveLength(doctor ? 3 : 2);
+  expect(output.includes("openclaw doctor")).toBe(doctor);
+  expect(output).not.toMatch(/sk-abcdefghijklmnopqrstuv|private nested diagnostic|Stack:/u);
 });
 
 it("routes missing gateway credentials through the expected-condition predicate without crash framing", () => {

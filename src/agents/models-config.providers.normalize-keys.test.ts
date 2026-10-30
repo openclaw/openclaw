@@ -7,8 +7,7 @@ import { ModelsConfigSchema } from "../config/zod-schema.core.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { configForProviders, modelDefinition } from "./model-auth.fixtures.test-support.js";
-import { normalizeProviderCatalogModelsForConfig } from "./models-config.providers.catalog.js";
-import { normalizeProviders } from "./models-config.providers.normalize.js";
+import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
 // mock-isolation: normalization consumes hook results without loading the plugin runtime.
@@ -17,91 +16,102 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderConfigApiKeyWithPlugin: () => undefined,
 }));
 
-describe("normalizeProviders", () => {
+// mock-isolation: exercise real catalog planning without external provider discovery.
+vi.mock("./models-config.providers.implicit.js", () => ({
+  resolveImplicitProviders: async () => ({}),
+}));
+
+describe("provider normalization through catalog planning", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   type Providers = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
-  type ConfigModel = Providers[string]["models"][number];
   const provider = (overrides: Partial<Providers[string]> = {}): Providers[string] => ({
     baseUrl: "https://api.openai.com/v1",
     api: "openai-completions",
     models: [],
     ...overrides,
   });
-  const normalize = (
+  const plan = (
     providers: Providers,
-    options: Partial<Parameters<typeof normalizeProviders>[0]> = {},
+    options: Partial<Parameters<typeof planModelsJsonForTest>[0]> = {},
   ) =>
-    normalizeProviders({
-      providers,
+    planModelsJsonForTest({
       ...options,
+      cfg: options.cfg ?? configForProviders(providers),
+      sourceConfigForSecrets: options.sourceConfigForSecrets ?? {},
       agentDir: options.agentDir ?? tempDirs.make("provider-normalize-"),
+      env: options.env ?? {},
     });
-
-  it("keeps the latest provider config when duplicate keys only differ by whitespace", async () => {
-    const providers = {
-      openai: provider({ apiKey: "OPENAI_API_KEY" }), // pragma: allowlist secret
-      " openai ": provider({
-        baseUrl: "https://example.com/v1",
-        apiKey: "CUSTOM_OPENAI_API_KEY", // pragma: allowlist secret
-        models: [modelDefinition("gpt-4.1-mini")],
-      }),
+  const publish = async (
+    providers: Providers,
+    options: Partial<Parameters<typeof planModelsJsonForTest>[0]> = {},
+  ) => {
+    const result = await plan(providers, options);
+    if (result.action !== "write") {
+      throw new Error(`Expected a catalog write, received ${result.action}`);
+    }
+    return {
+      providers: ModelsConfigSchema.parse(JSON.parse(result.contents))?.providers,
+      contents: result.contents,
     };
-    const normalized = await normalize(providers);
-    expect(Object.keys(normalized ?? {})).toEqual(["openai"]);
-    expect(normalized?.openai).toMatchObject({
-      baseUrl: "https://example.com/v1",
-      apiKey: "CUSTOM_OPENAI_API_KEY",
-      models: [{ id: "gpt-4.1-mini" }],
-    });
+  };
+
+  const canonical = provider({ apiKey: "OPENAI_API_KEY" }); // pragma: allowlist secret
+  const alias = provider({
+    baseUrl: "https://example.com/v1",
+    apiKey: "CUSTOM_OPENAI_API_KEY", // pragma: allowlist secret
+    models: [modelDefinition("gpt-4.1-mini")],
+  });
+  it.each<[string, Providers, Providers[string]]>([
+    ["canonical before alias", { openai: canonical, " openai ": alias }, canonical],
+    ["canonical after alias", { " openai ": alias, openai: canonical }, canonical],
+    ["latest alias without canonical", { " openai": canonical, "openai ": alias }, alias],
+  ])("publishes one provider for %s", async (_label, providers, expected) => {
+    const published = await publish(providers);
+    expect(Object.keys(published.providers ?? {})).toEqual(["openai"]);
+    expect(published.providers?.openai).toEqual(expected);
   });
 
   it("deduplicates model rows and keeps repeated publication stable with secret ownership", async () => {
     const agentDir = tempDirs.make("provider-normalize-");
-    const pinned = modelDefinition("gemini-3-pro-preview", {
-      name: "Pinned Gemini",
-      contextWindow: 12345,
-      maxTokens: 2048,
-      reasoning: false,
-      cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
-    });
-    const expected = { ...structuredClone(pinned), id: "gemini-3.1-pro-preview" };
+    const pinned = modelDefinition("gemini-3.1-pro-preview", { name: "Pinned Gemini" });
+    const expected = structuredClone(pinned);
     const providers = {
       google: {
         baseUrl: "https://generativelanguage.googleapis.com/v1beta",
         api: "google-generative-ai",
         apiKey: "GOOGLE_API_KEY", // pragma: allowlist secret
         models: [
+          modelDefinition("gemini-3-pro-preview", { name: "Alias Gemini" }),
           pinned,
-          modelDefinition("gemini-3.1-pro-preview", {
-            name: "Discovered Gemini",
-            contextWindow: 1_048_576,
-            maxTokens: 65536,
-            reasoning: true,
-          }),
+          modelDefinition("gemini-3.1-pro-preview", { name: "Discovered Gemini" }),
         ],
       },
-      custom: { baseUrl: "https://models.example/v1", models: [] },
     } satisfies Providers;
 
-    const normalized = await normalize(providers, { agentDir, env: {} });
-    expect(normalized?.google?.models).toBe(providers.google.models);
-    const published = normalizeProviderCatalogModelsForConfig(normalized);
+    const published = await publish(providers, { agentDir });
 
-    // The first normalized row wins so explicit config details are not replaced by discovery.
-    expect(published?.google?.models).toEqual([expected]);
+    // Exact authored rows beat aliases; the first exact row keeps its configured details.
+    expect(published.providers?.google?.models).toEqual([expected]);
+    expect(published.providers?.google?.apiKey).toBe("GOOGLE_API_KEY");
 
-    expect(normalizeProviderCatalogModelsForConfig(published)).toBe(published);
-    const secretRefManagedProviders = new Set<string>();
-    const repeated = await normalizeProviders({
-      providers: published,
+    const repeated = await plan(providers, {
       agentDir,
-      env: {},
-      secretRefManagedProviders,
+      existingRaw: published.contents,
+      existingParsed: JSON.parse(published.contents),
     });
-    // A no-op object pass must still record marker ownership for secret preservation.
-    expect(repeated).toBe(published);
-    expect(normalizeProviderCatalogModelsForConfig(repeated)).toBe(published);
-    expect(secretRefManagedProviders.has("google")).toBe(true);
+    expect(repeated).toEqual({ action: "noop", pluginCatalogWrites: {} });
+
+    const existing = {
+      providers: { google: { ...providers.google, apiKey: "stale-inline-google-key" } },
+    };
+    const refreshed = await publish(providers, {
+      agentDir,
+      existingRaw: `${JSON.stringify(existing, null, 2)}\n`,
+      existingParsed: existing,
+    });
+    expect(refreshed.providers?.google?.apiKey).toBe("GOOGLE_API_KEY");
+    expect(refreshed.contents).not.toContain("stale-inline-google-key");
+    expect(refreshed.providers?.google?.models).toEqual([expected]);
   });
 
   it("replaces resolved env var value with env var name to prevent plaintext persistence", async () => {
@@ -113,16 +123,15 @@ describe("normalizeProviders", () => {
       OPENCLAW_SKIP_PROVIDERS: undefined,
       OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
     };
-    const secretRefManagedProviders = new Set<string>();
     const providers = {
       openai: provider({
         apiKey: "sk-test-secret-value-12345", // pragma: allowlist secret; simulates resolved ${OPENAI_API_KEY}
         models: [modelDefinition("gpt-4.1")],
       }),
     };
-    const normalized = await normalize(providers, { env, secretRefManagedProviders });
-    expect(normalized?.openai?.apiKey).toBe("OPENAI_API_KEY");
-    expect(secretRefManagedProviders.has("openai")).toBe(true);
+    const published = await publish(providers, { env });
+    expect(published.providers?.openai?.apiKey).toBe("OPENAI_API_KEY");
+    expect(published.contents).not.toContain("sk-test-secret-value-12345");
   });
 
   it("normalizes SecretRef-backed provider headers to non-secret marker values", async () => {
@@ -134,10 +143,12 @@ describe("normalizeProviders", () => {
         },
       }),
     };
-    const normalized = await normalize(providers);
+    const published = await publish(providers);
     // Env refs persist the env-name marker; non-env refs collapse to a non-secret sentinel.
-    expect(normalized?.openai?.headers?.Authorization).toBe("secretref-env:OPENAI_HEADER_TOKEN");
-    expect(normalized?.openai?.headers?.["X-Tenant-Token"]).toBe(NON_ENV_SECRETREF_MARKER);
+    expect(published.providers?.openai?.headers).toEqual({
+      Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+      "X-Tenant-Token": NON_ENV_SECRETREF_MARKER,
+    });
   });
 
   it.each([
@@ -180,54 +191,19 @@ describe("normalizeProviders", () => {
             providers: snapshot.config.models?.providers,
             sourceConfigForSecrets: snapshot.sourceConfig,
           };
-          const normalized = await normalizeProviders({
-            ...params,
+          const published = await publish(snapshot.config.models?.providers ?? {}, {
+            cfg: snapshot.config,
+            sourceConfigForSecrets: snapshot.sourceConfig,
             agentDir: state.agentDir(),
             env: state.env,
           });
           const enforced = enforceSourceManagedProviderSecrets(params);
           expect({
-            normalized: normalized?.custom?.headers?.["X.Trace"],
+            published: published.providers?.custom?.headers?.["X.Trace"],
             enforced: enforced?.custom?.headers?.["X.Trace"],
-          }).toEqual({ normalized: expected, enforced: expected });
+          }).toEqual({ published: expected, enforced: expected });
         },
       );
     },
   );
-
-  it("publishes schema-complete costs after duplicate model rows merge", () => {
-    const modelWithPartialCost = (id: string, cost: Partial<NonNullable<ConfigModel["cost"]>>) =>
-      ({ ...modelDefinition(id), cost }) as ConfigModel;
-    const tieredPricing = [
-      {
-        input: 8,
-        output: 40,
-        cacheRead: 0.1,
-        cacheWrite: 1,
-        range: [0, 1_000_000] as [number, number],
-      },
-    ];
-    const providers: Providers = {
-      custom: {
-        baseUrl: "https://models.example/v1",
-        models: [
-          modelWithPartialCost("partial", { input: 10, output: 50, tieredPricing }),
-          modelDefinition("unknown", { cost: undefined }),
-          modelWithPartialCost("duplicate", { input: 3, output: 15 }),
-          modelWithPartialCost("duplicate", { cacheRead: 0.3, cacheWrite: 3.75 }),
-        ],
-      },
-    };
-
-    expect(ModelsConfigSchema.safeParse({ providers }).success).toBe(true);
-    expect(normalizeProviderCatalogModelsForConfig(providers)?.custom?.models).toEqual([
-      modelDefinition("partial", {
-        cost: { input: 10, output: 50, cacheRead: 0, cacheWrite: 0, tieredPricing },
-      }),
-      modelDefinition("unknown", { cost: undefined }),
-      modelDefinition("duplicate", {
-        cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-      }),
-    ]);
-  });
 });

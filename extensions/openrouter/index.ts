@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOpenRouterModelFamilyId } from "openclaw/plugin-sdk/model-ref-parse";
 import type {
   ProviderDefaultThinkingPolicyContext,
@@ -9,6 +10,11 @@ import type {
 import { findNormalizedProviderValue } from "openclaw/plugin-sdk/provider-auth";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import {
+  readProviderJsonResponse,
+  resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   buildPassthroughGeminiSanitizingReplayPolicy,
   DEFAULT_CONTEXT_TOKENS,
@@ -22,7 +28,13 @@ import {
   SCHEMA_MAP_KEYS,
   SCHEMA_NESTED_KEYS,
 } from "openclaw/plugin-sdk/provider-tools";
-import { resolveProviderUsageApiKeyAuth } from "openclaw/plugin-sdk/provider-usage";
+import {
+  buildUsageHttpErrorSnapshot,
+  parseProviderUsageNonNegativeNumber,
+  resolveProviderUsageApiKeyAuth,
+  type ProviderUsageSnapshot,
+} from "openclaw/plugin-sdk/provider-usage";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildOpenRouterDecisionProvider, isOpenRouterDecisionModel } from "./decision-provider.js";
@@ -40,6 +52,7 @@ import {
   normalizeOpenRouterBaseUrl,
   OPENROUTER_BASE_URL,
   resolveOpenRouterApiBaseUrl,
+  resolveOpenRouterSsrfPolicy,
 } from "./provider-catalog.js";
 import {
   resolveOpenRouterConfiguredExtraParams,
@@ -48,7 +61,6 @@ import {
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
 import { resolveOpenRouterThinkingProfile } from "./thinking-policy.js";
-import { fetchOpenRouterUsage } from "./usage.js";
 import {
   buildOpenRouterVideoGenerationProvider,
   listOpenRouterVideoModelCatalog,
@@ -162,6 +174,46 @@ const OPENROUTER_FUSION_MODEL_ID = "openrouter/fusion";
 const OPENROUTER_CACHE_TTL_MODEL_FAMILY =
   /^(?:(?:anthropic|deepseek|moonshot(?:ai)?|x-ai|z-?ai)\/|google\/gemini-(?:2\.5|3))/;
 const MAX_PROMPT_MODEL_ID_DISPLAY_CHARS = 256;
+const OPENROUTER_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
+
+type EndpointResult =
+  | { ok: true; data: Record<string, unknown> }
+  | { ok: false; status: number }
+  | { ok: false; reason: "malformed" }
+  | { ok: false; reason: "transport"; error: string };
+
+type OpenRouterLimitReset = "daily" | "weekly" | "monthly";
+
+function resolveLimitReset(value: unknown): OpenRouterLimitReset | undefined {
+  return value === "daily" || value === "weekly" || value === "monthly" ? value : undefined;
+}
+
+function resolveKeyBudget(
+  data: Record<string, unknown> | undefined,
+): { used: number; limit: number; period?: OpenRouterLimitReset } | undefined {
+  const limit = parseProviderUsageNonNegativeNumber(data?.limit);
+  if (limit === undefined) {
+    return undefined;
+  }
+  const period = resolveLimitReset(data?.limit_reset);
+  const periodUsage = parseProviderUsageNonNegativeNumber(
+    period ? data?.[`usage_${period}`] : data?.usage,
+  );
+  const byokUsage =
+    data?.include_byok_in_limit !== true
+      ? undefined
+      : parseProviderUsageNonNegativeNumber(
+          period ? data[`byok_usage_${period}`] : data.byok_usage,
+        );
+  const remaining = parseProviderUsageNonNegativeNumber(data?.limit_remaining);
+  // `limit_remaining` already incorporates BYOK usage when the key is configured to count it.
+  const usage =
+    periodUsage === undefined && byokUsage === undefined
+      ? undefined
+      : (periodUsage ?? 0) + (byokUsage ?? 0);
+  const used = remaining === undefined ? usage : Math.max(0, limit - remaining);
+  return used === undefined ? undefined : { used, limit, ...(period ? { period } : {}) };
+}
 
 // Configured rows keep their sizing and opt-outs, but the OpenRouter model
 // catalog owns effort capabilities on its canonical transport.
@@ -212,6 +264,11 @@ type OpenRouterFusionPromptContext = {
 type OpenRouterFusionPromptContribution = {
   dynamicSuffix?: string;
 };
+
+function normalizeRouterBaseUrl<T extends { baseUrl?: string }>(value: T) {
+  const baseUrl = normalizeOpenRouterBaseUrl(value.baseUrl);
+  return baseUrl && baseUrl !== value.baseUrl ? { ...value, baseUrl } : undefined;
+}
 
 function normalizeOpenRouterResolvedModel<T extends ProviderRuntimeModel>(model: T): T | undefined {
   const normalizedBaseUrl = normalizeOpenRouterBaseUrl(model.baseUrl);
@@ -397,22 +454,9 @@ export default defineSingleProviderPluginEntry({
           normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
         );
       },
-      normalizeConfig: ({ providerConfig }) => {
-        const normalizedBaseUrl = normalizeOpenRouterBaseUrl(providerConfig.baseUrl);
-        return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
-          ? { ...providerConfig, baseUrl: normalizedBaseUrl }
-          : undefined;
-      },
+      normalizeConfig: ({ providerConfig }) => normalizeRouterBaseUrl(providerConfig),
       normalizeResolvedModel: ({ model }) => normalizeOpenRouterResolvedModel(model),
-      normalizeTransport: ({ api: apiLocal, baseUrl }) => {
-        const normalizedBaseUrl = normalizeOpenRouterBaseUrl(baseUrl);
-        return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
-          ? {
-              api: apiLocal,
-              baseUrl: normalizedBaseUrl,
-            }
-          : undefined;
-      },
+      normalizeTransport: ({ api, baseUrl }) => normalizeRouterBaseUrl({ api, baseUrl }),
       classifyFailoverReason: ({ provider, errorMessage }) => {
         if (provider?.trim().toLowerCase() !== PROVIDER_ID) {
           return undefined;
@@ -446,15 +490,146 @@ export default defineSingleProviderPluginEntry({
       isCacheTtlEligible: ({ modelId }) =>
         OPENROUTER_CACHE_TTL_MODEL_FAMILY.test(normalizeOpenRouterModelFamilyId(modelId) ?? ""),
       resolveUsageAuth: (ctx) => resolveProviderUsageApiKeyAuth(ctx, [ctx.env.OPENROUTER_API_KEY]),
-      fetchUsageSnapshot: async (ctx) =>
-        await fetchOpenRouterUsage({
-          token: ctx.token,
-          baseUrl: ctx.config.models?.providers?.openrouter?.baseUrl,
-          request: ctx.config.models?.providers?.openrouter?.request,
-          timeoutMs: ctx.timeoutMs,
-          signal: ctx.signal,
-          fetchFn: ctx.fetchFn,
-        }),
+      fetchUsageSnapshot: async (ctx) => {
+        const providerConfig = ctx.config.models?.providers?.openrouter;
+        const requestConfig = resolveProviderHttpRequestConfig({
+          provider: "openrouter",
+          capability: "other",
+          baseUrl: resolveOpenRouterApiBaseUrl(providerConfig?.baseUrl),
+          defaultBaseUrl: OPENROUTER_BASE_URL,
+          defaultHeaders: {
+            Accept: "application/json",
+            Authorization: `Bearer ${ctx.token}`,
+          },
+          request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
+        });
+        const ssrfPolicy = resolveOpenRouterSsrfPolicy(requestConfig, providerConfig?.request);
+        async function fetchEndpoint(path: "credits" | "key"): Promise<EndpointResult> {
+          let guardedResponse: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+          try {
+            guardedResponse = await fetchWithSsrFGuard({
+              url: `${requestConfig.baseUrl}/${path}`,
+              // Ambient proxy fetch wrappers replace dispatchers, so configured provider transport wins.
+              ...(requestConfig.dispatcherPolicy
+                ? { dispatcherPolicy: requestConfig.dispatcherPolicy }
+                : { fetchImpl: ctx.fetchFn }),
+              init: { headers: requestConfig.headers, redirect: "error" },
+              timeoutMs: ctx.timeoutMs,
+              signal: ctx.signal,
+              // The shared guard controls redirects manually; zero hops preserves fail-closed usage auth.
+              maxRedirects: 0,
+              policy: ssrfPolicy,
+              auditContext: "openrouter-usage",
+            });
+          } catch (error) {
+            return { ok: false, reason: "transport", error: formatErrorMessage(error) };
+          }
+          try {
+            const { response } = guardedResponse;
+            if (!response.ok) {
+              // release() aborts transport before cancelling unread capture-tee bodies.
+              // Awaiting one branch here can hold the error result until the other ends.
+              return { ok: false, status: response.status };
+            }
+            const root = readRecord(
+              await readProviderJsonResponse(response, "OpenRouter usage", {
+                maxBytes: OPENROUTER_USAGE_RESPONSE_MAX_BYTES,
+                chunkTimeoutMs: 0,
+              }),
+            );
+            const data = readRecord(root?.data);
+            return data ? { ok: true, data } : { ok: false, reason: "malformed" };
+          } catch {
+            return { ok: false, reason: "malformed" };
+          } finally {
+            await guardedResponse.release();
+          }
+        }
+        const [creditsResult, keyResult] = await Promise.all([
+          fetchEndpoint("credits"),
+          fetchEndpoint("key"),
+        ]);
+        if (!creditsResult.ok && !keyResult.ok) {
+          const status =
+            "status" in creditsResult
+              ? creditsResult.status
+              : "status" in keyResult
+                ? keyResult.status
+                : undefined;
+          if (status !== undefined) {
+            return buildUsageHttpErrorSnapshot({ provider: "openrouter", status });
+          }
+          const transportFailure = [creditsResult, keyResult].find(
+            (result) => "reason" in result && result.reason === "transport",
+          );
+          return {
+            provider: "openrouter",
+            displayName: "OpenRouter",
+            windows: [],
+            error: transportFailure
+              ? `Usage unavailable: ${transportFailure.error}`
+              : "Malformed usage response",
+          };
+        }
+        const credits = creditsResult.ok ? creditsResult.data : undefined;
+        const key = keyResult.ok ? keyResult.data : undefined;
+        const totalCredits = parseProviderUsageNonNegativeNumber(credits?.total_credits);
+        const totalUsage = parseProviderUsageNonNegativeNumber(credits?.total_usage);
+        const keyUsage = parseProviderUsageNonNegativeNumber(key?.usage);
+        const keyBudget = resolveKeyBudget(key);
+        const windows = [];
+        if (keyBudget) {
+          const periodLabel = keyBudget.period
+            ? `${keyBudget.period[0]?.toUpperCase()}${keyBudget.period.slice(1)} key budget`
+            : "API key budget";
+          windows.push({
+            label: periodLabel,
+            usedPercent:
+              keyBudget.limit === 0 ? 100 : Math.min(100, (keyBudget.used / keyBudget.limit) * 100),
+          });
+        }
+        const billing: NonNullable<ProviderUsageSnapshot["billing"]> = [];
+        if (totalCredits !== undefined && totalUsage !== undefined) {
+          billing.push({
+            type: "balance",
+            label: "Account balance",
+            amount: totalCredits - totalUsage,
+            unit: "USD",
+          });
+          billing.push({ type: "spend", label: "Account usage", amount: totalUsage, unit: "USD" });
+        }
+        if (keyBudget) {
+          billing.push({
+            type: "budget",
+            label: "API key budget",
+            used: keyBudget.used,
+            limit: keyBudget.limit,
+            unit: "USD",
+            ...(keyBudget.period ? { period: keyBudget.period } : {}),
+          });
+        } else if (keyUsage !== undefined) {
+          billing.push({ type: "spend", label: "API key usage", amount: keyUsage, unit: "USD" });
+        }
+        const keyLabel = typeof key?.label === "string" ? key.label.trim() : "";
+        const periodUsage: [string, number | undefined][] = [
+          ["today", parseProviderUsageNonNegativeNumber(key?.usage_daily)],
+          ["this week", parseProviderUsageNonNegativeNumber(key?.usage_weekly)],
+          ["this month", parseProviderUsageNonNegativeNumber(key?.usage_monthly)],
+        ];
+        const summary = periodUsage
+          .flatMap(([period, amount]) =>
+            amount === undefined ? [] : [`$${amount.toFixed(2)} ${period}`],
+          )
+          .join(" · ");
+        return {
+          provider: "openrouter",
+          displayName: "OpenRouter",
+          windows,
+          ...(billing.length > 0 ? { billing } : {}),
+          ...(summary ? { summary } : {}),
+          ...(keyLabel ? { plan: keyLabel } : {}),
+        };
+      },
     };
   },
   register(api) {

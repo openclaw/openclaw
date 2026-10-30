@@ -1,16 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import "../../styles.css";
 import "../../styles/settings.css";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
-import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
+import { createAgentViewTestProps } from "./agents-view.test-helpers.ts";
 import { AgentFiles } from "./panels-files.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let container: HTMLDivElement;
+type Params = Parameters<typeof AgentFiles>[0] &
+  Pick<
+    ReturnType<Parameters<typeof AgentFiles>[0]["readData"]>,
+    | "agentFilesList"
+    | "agentFileActive"
+    | "agentFileEditors"
+    | "agentFilesLoading"
+    | "agentFileRead"
+    | "agentFileOutcome"
+    | "agentFileSaving"
+    | "agentFileConflict"
+  >;
+
 let mounted: ReturnType<typeof mountSolid<Parameters<typeof AgentFiles>[0]>> | undefined;
 let tooltipProvider: HTMLElement;
 let viewport: { width: number; height: number };
@@ -63,17 +77,23 @@ function requireButton(selector: string): HTMLButtonElement {
 function renderPreview(
   draft: string,
   onChange = (_name: string, _content: string) => {},
-  overrides: Partial<Parameters<typeof AgentFiles>[0]> = {},
+  overrides: Partial<Params> = {},
 ) {
-  const props: Parameters<typeof AgentFiles>[0] = {
+  const props: Params = {
+    readData() {
+      return { ...createAgentViewTestProps().readData(), ...this };
+    },
+    presentationRetired: createAgentViewTestProps().presentationRetired,
     agentId: "main",
+    listRead: null,
     agentFilesList: {
       agentId: "main",
       workspace: "/synthetic/workspace",
       files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing: false }],
     },
     agentFilesLoading: false,
-    agentFilesError: null,
+    agentFileRead: null,
+    agentFileOutcome: null,
     agentFileActive: "AGENTS.md",
 
     agentFileSaving: false,

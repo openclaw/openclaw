@@ -1,16 +1,115 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncOptionsWithBufferEncoding } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, delimiter } from "node:path";
 import { expect } from "vitest";
 import { validReview } from "./pr-review-artifact-fixture.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
-export const cliFlags = (values: Record<string, string>) => Object.entries(values).flat();
+const cliFlags = (values: Record<string, string>) => Object.entries(values).flat();
+
+export function failRestore(root: string, env: NodeJS.ProcessEnv) {
+  const realGit = spawnSync("sh", ["-c", "command -v git"], {
+    env,
+    encoding: "utf8",
+  }).stdout.trim();
+  const path = join(root, "fail-restore");
+  writeFileSync(
+    path,
+    `#!/bin/bash\nif [ "$1" = --literal-pathspecs ] && [ "$2" = restore ]; then exit 72; fi\nexec '${realGit}' "$@"\n`,
+    { mode: 0o755 },
+  );
+  return { OPENCLAW_PR_GIT: path };
+}
+
+// Sign the exact requested bytes in a separate object store, never by splicing a signature.
+export function signBaselineRequest(
+  f: ReturnType<typeof createBaselineFixture>,
+  requestArgs: string[],
+) {
+  const gitBytes = (
+    cwd: string,
+    args: string[],
+    options: SpawnSyncOptionsWithBufferEncoding = {},
+  ) => {
+    const result = spawnSync("git", args, { cwd, env: f.env, ...options });
+    expect(result.status, result.stderr.toString()).toBe(0);
+    return result.stdout;
+  };
+  const pending = f.pass("prepare-baseline-signing-request", requestArgs);
+  const oid = /Awaiting signature: request=([a-f0-9]{40})/u.exec(pending.stdout)![1]!;
+  const requestPath = f.local(`prepare-baseline-signing.${oid}.json`);
+  const requestBytes = readFileSync(requestPath);
+  const request = JSON.parse(requestBytes.toString());
+  const spool = join(f.root, "signer.git");
+  mkdirSync(spool);
+  f.git(spool, "init", "-q", "--bare");
+  const unsigned = Buffer.from(request.unsignedCommit, "base64");
+  const split = unsigned.indexOf("\n\n");
+  const headers = unsigned.subarray(0, split).toString();
+  const tree = /^tree ([a-f0-9]{40})$/mu.exec(headers)![1]!;
+  const parents = [...headers.matchAll(/^parent ([a-f0-9]{40})$/gmu)].map((m) => m[1]!);
+  const pack = gitBytes(f.worktree, ["pack-objects", "--stdout", "--revs"], {
+    maxBuffer: 16 * 1024 * 1024,
+    input: [tree, ...parents].join("\n") + "\n",
+  });
+  gitBytes(spool, ["index-pack", "--stdin"], { input: pack });
+  const identity: NodeJS.ProcessEnv = {};
+  for (const role of ["author", "committer"]) {
+    const [, name, email, date] = new RegExp(`^${role} (.*) <([^>]*)> (.*)$`, "mu").exec(headers)!;
+    identity[`GIT_${role.toUpperCase()}_NAME`] = name;
+    identity[`GIT_${role.toUpperCase()}_EMAIL`] = email;
+    identity[`GIT_${role.toUpperCase()}_DATE`] = date;
+  }
+  const sign = (key: string) => {
+    const target = gitBytes(
+      spool,
+      [
+        "-c",
+        "gpg.format=ssh",
+        "commit-tree",
+        `-S${key}`,
+        tree,
+        ...parents.flatMap((parent) => ["-p", parent]),
+      ],
+      {
+        env: { ...f.env, ...identity },
+        input: unsigned.subarray(split + 2),
+      },
+    )
+      .toString()
+      .trim();
+    return { target, bytes: gitBytes(spool, ["cat-file", "commit", target]) };
+  };
+  const signed = sign(f.key);
+  const response = f.local("signed-commit");
+  writeFileSync(response, signed.bytes);
+  const bindingOid = gitBytes(f.worktree, ["hash-object", "--no-filters", "--stdin"], {
+    input: Buffer.from(request.binding, "base64"),
+  })
+    .toString()
+    .trim();
+  return {
+    requestPath,
+    requestBytes,
+    request,
+    signed,
+    response,
+    args: ["--request", oid, "--signed-commit", response],
+    identity,
+    sign,
+    bindingOid,
+    message: unsigned.subarray(split + 2).toString(),
+  };
+}
 
 // This fixture owns a real canonical wrapper, registered PR checkout, signing key,
 // local Git remote, and credential-free GitHub adapter. No owner entry is mocked.
-export function createBaselineFixture(root: string, productCount = 16) {
+export function createBaselineFixture(
+  root: string,
+  productCount = 16,
+  incomingSeverity: "IMPORTANT" | "BLOCKER" = "IMPORTANT",
+) {
   const repo = join(root, "repo");
   const home = join(root, "home");
   const bin = join(root, "bin");
@@ -100,6 +199,18 @@ const args = process.argv.slice(2);
 if (args[0] === 'auth') process.exit(1);
 if (args[0] === 'api' && args[1] === 'user') {
  console.log('HTTP/2.0 200 OK\\r\\n\\r\\n{"login":"fixture"}');
+} else if (args[0] === 'api' && args[1] === 'graphql') {
+ if (!args.some(arg => arg.startsWith('query=query('))) { console.error('Unexpected fixture GraphQL mutation'); process.exit(99); }
+ const live = path.join(root,'.local','merge-live.json');
+ const pullRequest = fs.existsSync(live) ? JSON.parse(fs.readFileSync(live,'utf8')) : {
+  id:'PR_fixture',number:42,url:'https://github.com/fixture/repo/pull/42',state:'OPEN',
+  headRefOid:git('rev-parse','topic'),baseRefName:'main',isDraft:false,mergeCommit:null,
+  autoMergeRequest:null,isInMergeQueue:false,isMergeQueueEnabled:false,
+  mergeable:'MERGEABLE',mergeStateStatus:'CLEAN'};
+ if (args.includes('--include')) process.stdout.write('HTTP/2.0 200 OK\\r\\n\\r\\n');
+ console.log(JSON.stringify({data:{repository:{id:'R_fixture',databaseId:1,
+  nameWithOwner:'fixture/repo',url:'https://github.com/fixture/repo',
+  ref:{target:{oid:git('rev-parse','main')}},pullRequest}}}));
 } else if (args.includes('repos/fixture/repo/pulls/42')) {
  const overrides = path.join(root,'.local','live.json');
  console.log(JSON.stringify({number:42,node_id:'PR_fixture',html_url:'https://github.com/fixture/repo/pull/42',state:'open',draft:false,
@@ -145,6 +256,11 @@ if (args[0] === 'api' && args[1] === 'user') {
       expect(readLocal(name)).toEqual(bytes);
     }
   };
+  const expectAbsent = (...names: string[]) => {
+    for (const name of names) {
+      expect(existsSync(local(name)), name).toBe(false);
+    }
+  };
   writeLocal("pr-meta.json", JSON.stringify(meta));
   writeLocal(
     "pr-meta.env",
@@ -156,7 +272,7 @@ if (args[0] === 'api' && args[1] === 'user') {
   review.issueValidation.status = "valid";
   review.findings.push({
     id: "I1",
-    severity: "IMPORTANT",
+    severity: incomingSeverity,
     title: "Broken behavior",
     area: product[0]!,
     fix: "Repair behavior",
@@ -284,6 +400,7 @@ if (args[0] === 'api' && args[1] === 'user') {
     writeLocal,
     snapshot,
     expectSnapshot,
+    expectAbsent,
     git,
     pass,
     run,

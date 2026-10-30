@@ -1,18 +1,15 @@
 import { vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import type { ConfigWriteNotification } from "../config/config.js";
+import { createSnapshot } from "../config/mutate.test-support.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { requireActivePluginChannelRegistry } from "../plugins/runtime.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
-import type { GatewayCronState } from "./server-cron.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 import type {
   GatewayPluginReloadResult,
   GatewayHotReloadPublication,
@@ -40,28 +37,6 @@ export function createHotReloadPublication(
   isCurrent = () => true,
 ): GatewayHotReloadPublication {
   return { sourceConfig, isCurrent, publish: async (commit) => await commit() };
-}
-
-export function createMonitorPublicationFailure() {
-  const database = openOpenClawStateDatabase();
-  const exec = (sql: string) =>
-    runOpenClawStateWriteTransaction(({ db }) => db.exec(sql), { database });
-  return {
-    install() {
-      // Persistent fault injection reaches cron workers; managed admission services
-      // outstanding grants instead of blocking the host needed to finish their write.
-      exec(`CREATE TRIGGER monitor_publication_failure BEFORE UPDATE ON cron_jobs
-          WHEN json_extract(NEW.job_json, '$.agentId') = 'second'
-            AND json_extract(NEW.job_json, '$.schedule.everyMs') = 7200000
-          BEGIN SELECT RAISE(FAIL, 'monitor write failed'); END`);
-    },
-    remove() {
-      exec("DROP TRIGGER monitor_publication_failure");
-    },
-    dispose() {
-      exec("DROP TRIGGER IF EXISTS monitor_publication_failure");
-    },
-  };
 }
 
 type ConfigWriteListener = (event: ConfigWriteNotification) => void;
@@ -115,7 +90,6 @@ export function createHotTailPlan(overrides: Partial<GatewayReloadPlan> = {}): G
     reloadHooks: false,
     restartGmailWatcher: false,
     restartCron: false,
-    restartHeartbeat: false,
     reloadPlugins: false,
     restartChannels: new Set(),
     disposeMcpRuntimes: false,
@@ -145,21 +119,7 @@ export function createValidConfigSnapshot(
   config: OpenClawConfig,
   hash: string,
 ): ConfigFileSnapshot {
-  return {
-    path: "/tmp/openclaw.json",
-    exists: true,
-    raw: JSON.stringify(config),
-    parsed: config,
-    sourceConfig: config,
-    resolved: config,
-    valid: true,
-    runtimeConfig: config,
-    config,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-    hash,
-  };
+  return createSnapshot({ sourceConfig: config, hash, raw: JSON.stringify(config) });
 }
 
 export function createConfigWriteNotification(
@@ -180,7 +140,6 @@ export function createConfigWriteNotification(
     revision,
     fingerprint,
     sourceFingerprint,
-    writtenAtMs: Date.now(),
     ...overrides,
     snapshot: overrides.snapshot ?? {
       ...createValidConfigSnapshot(sourceConfig, overrides.persistedHash ?? persistedHash),
@@ -233,7 +192,6 @@ export function createDefaultGatewayReloadState(
   return {
     hooksConfig: {} as never,
     hookClientIpConfig: {} as never,
-    heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
     cronState: createTestCronState(),
     ...overrides,
   };
@@ -247,7 +205,6 @@ export function createTestCronState(overrides: Partial<GatewayCronState> = {}): 
     reconcileExitWatchers: vi.fn(async () => {}),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
-    reconcileSystemJobs: vi.fn<GatewayCronState["reconcileSystemJobs"]>(async () => "converged"),
     ...overrides,
   };
 }

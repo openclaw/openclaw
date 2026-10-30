@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as bridgeApi from "../../plugin-sdk/browser-bridge.js";
+import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { BROWSER_BRIDGES, type CachedBrowserBridge } from "./browser-bridges.js";
 import * as engine from "./container-engine.js";
@@ -12,6 +13,7 @@ import * as registry from "./registry.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const oldId = "a".repeat(64);
 const newId = "b".repeat(64);
+const success = (stdout = "") => ({ code: 0, stdout, stderr: "" });
 const entry = {
   containerName: "retire-owned",
   backendId: "docker",
@@ -46,15 +48,20 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
-const quiesce = (assertCurrent = () => {}) =>
+const quiesce = (options: Partial<Parameters<typeof quiesceLocalWorkspace>[0]> = {}) =>
   quiesceLocalWorkspace({
     workspaceDir: entry.workspaceDir,
     retained: [],
     persist: () => {},
-    assertCurrent,
+    assertCurrent: () => {},
+    ...options,
   });
 
-async function setup(kind: "container" | "browser", running = true) {
+async function setup(
+  kind: "container" | "browser",
+  running = true,
+  prepareScope?: () => Promise<NodeJS.ProcessEnv>,
+) {
   const browser = kind === "browser";
   const update = browser ? registry.updateBrowserRegistry : registry.updateRegistry;
   const remove = browser ? registry.removeBrowserRegistryEntry : registry.removeRegistryEntry;
@@ -65,32 +72,42 @@ async function setup(kind: "container" | "browser", running = true) {
     BROWSER_BRIDGES.set(entry.sessionKey, capturedBridge);
   }
   const physical = new Set([oldId]);
+  const paused = new Set<string>();
   let named = oldId;
-  const hooks = { afterRemove: async () => {} };
+  const hooks = { beforeRemove: async () => {}, afterRemove: async () => {} };
   const command = vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
     const target = args.at(-1) === entry.containerName ? named : args.at(-1)!;
     if (args[0] === "inspect") {
       if (!physical.has(target)) {
         return { code: 1, stdout: "", stderr: "no such container" };
       }
-      return {
-        code: 0,
-        stdout: args.includes("{{.Id}}")
+      return success(
+        args.includes("{{.Id}}")
           ? target
           : args.includes("{{.State.Paused}}")
-            ? "false"
-            : target + " " + running + " false",
-        stderr: "",
-      };
+            ? String(paused.has(target))
+            : `${target} ${running} ${paused.has(target)}`,
+      );
+    }
+    if (args[0] === "pause") {
+      paused.add(target);
+    }
+    if (args[0] === "unpause") {
+      paused.delete(target);
     }
     if (args[0] === "rm") {
+      await hooks.beforeRemove();
       physical.delete(target);
       await hooks.afterRemove();
     }
-    return { code: 0, stdout: "", stderr: "" };
+    return success();
   });
   const authority = new AbortController();
-  const custody = await quiesce(() => authority.signal.throwIfAborted());
+  const selectedEnv = await prepareScope?.();
+  const persist = vi.fn();
+  const prepare = () =>
+    quiesce({ assertCurrent: () => authority.signal.throwIfAborted(), env: selectedEnv, persist });
+  const custody = await prepare();
   const replacePhysical = () => {
     physical.delete(oldId);
     physical.add(newId);
@@ -98,6 +115,8 @@ async function setup(kind: "container" | "browser", running = true) {
   };
   return {
     custody,
+    prepare,
+    persist,
     physical,
     command,
     capturedBridge,
@@ -115,35 +134,69 @@ async function setup(kind: "container" | "browser", running = true) {
   };
 }
 
-it.each([
-  ["container", "running"],
-  ["container", "stopped"],
-  ["container", "absent"],
-  ["browser", "running"],
-  ["browser", "stopped"],
-  ["browser", "absent"],
-] as const)("retires %s %s allocations without name fallback", async (kind, state) => {
+const kinds = ["container", "browser"] as const;
+it.each(kinds)("reuses published %s generation facts through pause and resume", async (kind) => {
+  const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  const h = await setup(kind);
+  h.command.mockImplementation(async (_engine, args) =>
+    success(args.includes("{{.State.Paused}}") ? "true" : ""),
+  );
+  await h.custody.resume();
+  expect(h.command.mock.calls.filter(([, args]) => args[0] === "pause")).toHaveLength(1);
+  expect(h.command.mock.calls.filter(([, args]) => args[0] === "unpause")).toHaveLength(1);
+  expect(
+    reads.mock.calls
+      .map(([, command]) => command.type)
+      .filter((type) => type.startsWith("sandboxRegistry.")),
+  ).toEqual(["sandboxRegistry.list", "sandboxRegistry.browsers"]);
+});
+
+it.each(
+  kinds.flatMap((kind) => ["running", "stopped", "absent"].map((state) => [kind, state] as const)),
+)("retires %s %s allocations without name fallback", async (kind, state) => {
   const h = await setup(kind, state === "running");
   let custody = h.custody;
   if (state === "absent") {
     h.physical.clear();
-    custody = await quiesce();
+    custody = await h.prepare();
     h.command.mockClear();
   }
   await custody.retire();
+  if (state === "running") {
+    expect(h.persist).toHaveBeenLastCalledWith([]);
+  }
+  h.revoke();
   await custody.resume();
   expect(h.physical.size).toBe(0);
   expect(h.removals()).toEqual(state === "absent" ? [] : [oldId]);
   expect(h.command.mock.calls.some(([, args]) => args[0] === "pause")).toBe(state === "running");
+  expect(h.command.mock.calls.some(([, args]) => args[0] === "unpause")).toBe(false);
   expect(await h.rows()).toEqual([]);
   expect(BROWSER_BRIDGES.size).toBe(0);
 });
-it.each([
-  ["container", "replacement"],
-  ["browser", "replacement"],
-  ["container", "revocation"],
-  ["browser", "revocation"],
-] as const)("preserves %s metadata after %s during removal", async (kind, change) => {
+it.each(["before", "after"] as const)(
+  "recovers owned pause receipts when retirement fails %s physical removal",
+  async (phase) => {
+    const h = await setup("container");
+    h.hooks[phase === "before" ? "beforeRemove" : "afterRemove"] = async () => {
+      throw new Error("retirement interrupted");
+    };
+    await expect(h.custody.retire()).rejects.toThrow("retirement interrupted");
+    expect(h.persist).toHaveBeenLastCalledWith([{ name: entry.containerName, id: oldId }]);
+    expect(await h.rows()).toHaveLength(1);
+    await h.custody.resume();
+    expect(h.persist).toHaveBeenLastCalledWith([]);
+    expect(h.physical.has(oldId)).toBe(phase === "before");
+    expect(
+      h.command.mock.calls
+        .filter(([, args]) => args[0] === "unpause")
+        .map(([, args]) => args.at(-1)),
+    ).toEqual(phase === "before" ? [oldId] : []);
+  },
+);
+it.each(
+  kinds.flatMap((kind) => ["replacement", "revocation"].map((change) => [kind, change] as const)),
+)("preserves %s metadata after %s during removal", async (kind, change) => {
   const h = await setup(kind);
   h.hooks.afterRemove = change === "replacement" ? h.replace : async () => h.revoke();
   await expect(h.custody.retire()).rejects.toThrow(
@@ -174,16 +227,46 @@ it.each(["before", "during", "rebound"] as const)(
     } else {
       vi.mocked(bridgeApi.stopBrowserBridgeServer).mockImplementationOnce(replace);
     }
-    await expect(h.custody.retire()).resolves.toBeUndefined();
+    if (when === "rebound") {
+      await expect(h.custody.retire()).rejects.toThrow("custody retained");
+    } else {
+      await expect(h.custody.retire()).resolves.toBeUndefined();
+    }
     expect(BROWSER_BRIDGES.get(entry.sessionKey)).toBe(
       when === "rebound" ? undefined : replacement,
     );
-    expect(BROWSER_BRIDGES.size).toBe(when === "rebound" ? 0 : 1);
     expect(h.physical).toEqual(new Set(when === "rebound" ? [newId] : []));
     expect(vi.mocked(bridgeApi.stopBrowserBridgeServer).mock.calls).toEqual(
       when === "before" ? [] : [[h.capturedBridge.bridge.server]],
     );
-    expect(await h.rows()).toEqual([]);
+    expect(await h.rows()).toEqual(when === "rebound" ? [expect.objectContaining(entry)] : []);
     expect(h.removals()).toEqual([oldId]);
+  },
+);
+
+it.each(kinds)(
+  "retires %s registry custody in its captured database while preserving an identical ambient row",
+  async (kind) => {
+    const selectedEnv = { ...process.env };
+    const ambientRoot = path.join(dirs.make("openclaw-retirement-ambient-"), "state");
+    const h = await setup(kind, false, async () => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", ambientRoot);
+      await (kind === "container"
+        ? registry.updateRegistry(entry)
+        : registry.updateBrowserRegistry(entry));
+      return selectedEnv;
+    });
+    const read = kind === "container" ? registry.readRegistry : registry.readBrowserRegistry;
+    const ambientEnv = { ...process.env };
+    const ambientBefore = await read({ env: ambientEnv });
+    expect((await read({ env: selectedEnv })).entries).toEqual([expect.objectContaining(entry)]);
+    expect(ambientBefore.entries).toEqual([expect.objectContaining(entry)]);
+
+    await h.custody.retire();
+
+    expect(h.physical.size).toBe(0);
+    expect(h.removals()).toEqual([oldId]);
+    expect(await read({ env: ambientEnv })).toEqual(ambientBefore);
+    expect((await read({ env: selectedEnv })).entries).toEqual([]);
   },
 );

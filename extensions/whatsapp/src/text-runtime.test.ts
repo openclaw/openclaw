@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertWebChannel,
@@ -13,20 +13,14 @@ import {
   toWhatsappJidWithLid,
 } from "./targets-runtime.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function tempDir(mappings: Record<string, string> = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-text-"));
-  tempDirs.push(dir);
+  const dir = tempDirs.make("openclaw-text-");
   for (const [key, value] of Object.entries(mappings)) {
     writeMapping(dir, key, value);
   }
   return dir;
 }
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
 function writeMapping(dir: string, key: string, value: string) {
   fs.writeFileSync(path.join(dir, `lid-mapping-${key}.json`), JSON.stringify(value));
 }
@@ -37,6 +31,10 @@ describe("WhatsApp text runtime", () => {
     ["", ""],
     ["`x`1 and `y`2", "```x```1 and ```y```2"],
     ["  indented", "  indented"],
+    [
+      "\\*literal\\* \\_name\\_ \\~gone\\~ \\`code\\`",
+      "\\*literal\\* \\_name\\_ \\~gone\\~ \\`code\\`",
+    ],
     ["\uE0000\uE001 \uE0001\uE001 \uE002 \uE003", "\uE0000\uE001 \uE0001\uE001 \uE002 \uE003"],
   ] as const)("renders %j through the WhatsApp capability profile", (input, expected) => {
     expect(markdownToWhatsApp(input)).toBe(expected);
@@ -67,6 +65,13 @@ describe("WhatsApp text runtime", () => {
     expect(
       markdownToWhatsAppChunks("**Alpha**\n\n**Beta**\n\n**Gamma**", 14, "bullets", "newline"),
     ).toEqual(["*Alpha*", "*Beta*", "*Gamma*"]);
+  });
+
+  it("keeps escaped markers atomic across formatted chunk boundaries", () => {
+    const chunks = markdownToWhatsAppChunks("**aaaa\\*bbbb**", 8);
+    expect(chunks.every((chunk) => chunk.length <= 8)).toBe(true);
+    expect(chunks.join("")).toContain("\\*");
+    expect(chunks.join("")).not.toMatch(/\p{Co}/u);
   });
 
   it("applies the chunk limit to whitespace-only text", () => {

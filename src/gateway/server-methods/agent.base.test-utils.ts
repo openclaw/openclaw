@@ -60,6 +60,62 @@ import type { GatewayRequestContext } from "./types.js";
 
 const mocks = getAgentTestMocks();
 
+async function holdMainSessionMutation(sessionKey: string) {
+  let releaseMutation = () => {};
+  const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
+  const mutation = runSessionMutation({
+    policy: "wait",
+    scope: getAgentTestStorePath(),
+    identities: [sessionKey, "existing-session-id"],
+    run: async () => {
+      markMutationStarted();
+      await new Promise<void>((release) => {
+        releaseMutation = release;
+      });
+    },
+  });
+  await mutationStarted;
+  return { mutation, releaseMutation };
+}
+
+function createVisionAgentContext(root: string): GatewayRequestContext {
+  useTestStateDir(root);
+  mockMainSessionEntry({
+    sessionId: "existing-session-id",
+    model: "vision-model",
+    modelProvider: "test",
+    modelOverride: "vision-model",
+    modelOverrideSource: "user",
+    providerOverride: "test",
+  });
+  mocks.updateSessionStore.mockResolvedValue(undefined);
+  mockSuccessfulAgentCommand();
+  return {
+    ...makeContext(),
+    loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(async () => [
+      {
+        id: "vision-model",
+        name: "vision-model",
+        provider: "test",
+        input: ["image"],
+      },
+    ]),
+  };
+}
+
+async function writeTerminalMainTranscript(root: string, sessionFile: string, now: number) {
+  const sessionsDir = `${root}/sessions`;
+  await fs.mkdir(sessionsDir, { recursive: true });
+  const transcriptPath = `${sessionsDir}/${sessionFile}`;
+  await fs.writeFile(
+    transcriptPath,
+    `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
+    "utf8",
+  );
+  await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
+  return sessionsDir;
+}
+
 describe("gateway agent handler", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-gateway-agent-base-");
   afterEach(describe0AfterEach0);
@@ -947,20 +1003,7 @@ describe("gateway agent handler", () => {
     mocks.updateSessionStore.mockClear();
     const sessionKey = "agent:main:main";
     const runId = "idem-abort-during-admission";
-    let releaseMutation = () => {};
-    const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
-    const mutation = runSessionMutation({
-      policy: "wait",
-      scope: getAgentTestStorePath(),
-      identities: [sessionKey, "existing-session-id"],
-      run: async () => {
-        markMutationStarted();
-        await new Promise<void>((release) => {
-          releaseMutation = release;
-        });
-      },
-    });
-    await mutationStarted;
+    const { mutation, releaseMutation } = await holdMainSessionMutation(sessionKey);
     const context = makeContext();
     const respond = vi.fn();
     const admission = await observeAgentLifecycleAdmission(runId);
@@ -1030,20 +1073,7 @@ describe("gateway agent handler", () => {
     mocks.agentCommand.mockClear();
     const sessionKey = "agent:main:main";
     const runId = "idem-expired-during-admission";
-    let releaseMutation = () => {};
-    const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
-    const mutation = runSessionMutation({
-      policy: "wait",
-      scope: getAgentTestStorePath(),
-      identities: [sessionKey, "existing-session-id"],
-      run: async () => {
-        markMutationStarted();
-        await new Promise<void>((release) => {
-          releaseMutation = release;
-        });
-      },
-    });
-    await mutationStarted;
+    const { mutation, releaseMutation } = await holdMainSessionMutation(sessionKey);
     const context = makeContext();
     const respond = vi.fn();
     const admission = await observeAgentLifecycleAdmission(runId);
@@ -1101,20 +1131,7 @@ describe("gateway agent handler", () => {
     mocks.agentCommand.mockClear();
     const sessionKey = "agent:main:main";
     const runId = "idem-terminal-during-admission";
-    let releaseMutation = () => {};
-    const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
-    const mutation = runSessionMutation({
-      policy: "wait",
-      scope: getAgentTestStorePath(),
-      identities: [sessionKey, "existing-session-id"],
-      run: async () => {
-        markMutationStarted();
-        await new Promise<void>((release) => {
-          releaseMutation = release;
-        });
-      },
-    });
-    await mutationStarted;
+    const { mutation, releaseMutation } = await holdMainSessionMutation(sessionKey);
     const context = makeContext();
     const respond = vi.fn();
     const admission = await observeAgentLifecycleAdmission(runId);
@@ -1191,13 +1208,13 @@ describe("gateway agent handler", () => {
   });
 
   it.each(["restart", "rpc"] as const)(
-    "adopts a recovery admission interrupted by %s before the RPC",
+    "adopts a runtime admission interrupted by %s before the RPC",
     async (stopReason) => {
       const reason =
         stopReason === "rpc" ? createAgentRunDirectAbortError() : createAgentRunRestartAbortError();
       const sessionKey = "agent:main:main";
       const sessionId = "existing-session-id";
-      const runId = "idem-recovery-admission-handoff";
+      const runId = "idem-runtime-admission-handoff";
       const scope = getAgentTestStorePath();
       primeMainAgentRun({ sessionId });
       mocks.agentCommand.mockClear();
@@ -1473,29 +1490,7 @@ describe("gateway agent handler", () => {
   });
 
   it("durably admits managed media for inline image agent runs", async () => {
-    const root = sessionDirs.make();
-    useTestStateDir(root);
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      model: "vision-model",
-      modelProvider: "test",
-      modelOverride: "vision-model",
-      modelOverrideSource: "user",
-      providerOverride: "test",
-    });
-    mocks.updateSessionStore.mockResolvedValue(undefined);
-    mockSuccessfulAgentCommand();
-    const context = {
-      ...makeContext(),
-      loadGatewayModelCatalog: vi.fn(async () => [
-        {
-          id: "vision-model",
-          name: "vision-model",
-          provider: "test",
-          input: ["image"],
-        },
-      ]),
-    } as unknown as GatewayRequestContext;
+    const context = createVisionAgentContext(sessionDirs.make());
 
     await invokeAgent(
       {
@@ -1538,29 +1533,7 @@ describe("gateway agent handler", () => {
   });
 
   it("durably admits managed media for offloaded image agent runs", async () => {
-    const root = sessionDirs.make();
-    useTestStateDir(root);
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      model: "vision-model",
-      modelProvider: "test",
-      modelOverride: "vision-model",
-      modelOverrideSource: "user",
-      providerOverride: "test",
-    });
-    mocks.updateSessionStore.mockResolvedValue(undefined);
-    mockSuccessfulAgentCommand();
-    const context = {
-      ...makeContext(),
-      loadGatewayModelCatalog: vi.fn(async () => [
-        {
-          id: "vision-model",
-          name: "vision-model",
-          provider: "test",
-          input: ["image"],
-        },
-      ]),
-    } as unknown as GatewayRequestContext;
+    const context = createVisionAgentContext(sessionDirs.make());
 
     await invokeAgent(
       {
@@ -1631,48 +1604,6 @@ describe("gateway agent handler", () => {
     expect(requireValue(capturedEntry, "updated session entry missing").acp).toEqual(
       existingAcpMeta,
     );
-  });
-
-  it("clears automatic recovery quarantine state when a user turn rotates the session id", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    setDateOnlyFakeClockActive(true);
-    vi.setSystemTime(new Date("2026-05-07T12:00:00.000Z"));
-    const staleEntry = {
-      sessionId: "quarantined-session-id",
-      updatedAt: 0,
-      sessionStartedAt: 0,
-      lastInteractionAt: 0,
-      abortedLastRun: true,
-      restartRecoveryRuns: [
-        { runId: "initial-wedged-run", lifecycleGeneration: "gen-1" },
-        { runId: "recovery-run-1", lifecycleGeneration: "gen-2" },
-      ],
-      mainRestartRecovery: {
-        automaticAttempts: 2,
-        lastAttemptAt: 3,
-        lastRunId: "recovery-run-1",
-      },
-      subagentRecovery: {
-        automaticAttempts: 2,
-        lastAttemptAt: 3,
-        wedgedAt: 4,
-        wedgedReason: "automatic_attempt_budget_exceeded",
-      },
-    };
-    mockMainSessionEntry(staleEntry);
-
-    const capturedEntry = await runMainAgentAndCaptureEntry("test-idem-rotated-recovery-clear");
-
-    expect(capturedEntry.sessionId).not.toBe("quarantined-session-id");
-    expect(capturedEntry.abortedLastRun).toBeUndefined();
-    expect(capturedEntry.restartRecoveryRuns).toBeUndefined();
-    expect(capturedEntry.mainRestartRecovery).toBeUndefined();
-    expect(capturedEntry.subagentRecovery).toEqual({
-      automaticAttempts: 2,
-      lastAttemptAt: 3,
-      wedgedAt: 4,
-      wedgedReason: "automatic_attempt_budget_exceeded",
-    });
   });
 
   it("drops a stale transcript path when a stale session rotates ids", async () => {
@@ -1809,17 +1740,8 @@ describe("gateway agent handler", () => {
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    const root = sessionDirs.make();
-    const sessionsDir = `${root}/sessions`;
-    await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = "terminal-main-session.jsonl";
-    const transcriptPath = `${sessionsDir}/${sessionFile}`;
-    await fs.writeFile(
-      transcriptPath,
-      `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
-      "utf8",
-    );
-    await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
+    const sessionsDir = await writeTerminalMainTranscript(sessionDirs.make(), sessionFile, now);
     const staleEntry = {
       sessionId: "terminal-main-session",
       sessionFile,
@@ -1871,17 +1793,8 @@ describe("gateway agent handler", () => {
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    const root = sessionDirs.make();
-    const sessionsDir = `${root}/sessions`;
-    await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = "terminal-main-session.jsonl";
-    const transcriptPath = `${sessionsDir}/${sessionFile}`;
-    await fs.writeFile(
-      transcriptPath,
-      `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
-      "utf8",
-    );
-    await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
+    const sessionsDir = await writeTerminalMainTranscript(sessionDirs.make(), sessionFile, now);
     const existingEntry = {
       sessionId: "terminal-main-session",
       sessionFile,
@@ -1936,17 +1849,8 @@ describe("gateway agent handler", () => {
       setDateOnlyFakeClockActive(true);
       vi.setSystemTime(now);
 
-      const root = sessionDirs.make();
-      const sessionsDir = `${root}/sessions`;
-      await fs.mkdir(sessionsDir, { recursive: true });
       const sessionFile = `terminal-main-${runKind}.jsonl`;
-      const transcriptPath = `${sessionsDir}/${sessionFile}`;
-      await fs.writeFile(
-        transcriptPath,
-        `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
-        "utf8",
-      );
-      await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
+      const sessionsDir = await writeTerminalMainTranscript(sessionDirs.make(), sessionFile, now);
       const existingEntry = {
         sessionId: "terminal-main-session",
         sessionFile,

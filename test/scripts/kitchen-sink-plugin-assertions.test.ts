@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -115,6 +116,7 @@ function runAssertInstalled({
   surfaceMode = "full",
   source = "npm",
   installPathRelative,
+  standaloneHost = false,
 }: {
   allInspectPayload?: unknown;
   diagnostics?: Array<{ level: string; message: string }>;
@@ -123,6 +125,7 @@ function runAssertInstalled({
   surfaceMode?: string;
   source?: "npm" | "clawhub";
   installPathRelative?: string;
+  standaloneHost?: boolean;
 } = {}) {
   const { parent, home, scratchRoot } = scanFixture();
   const label = "installed";
@@ -134,6 +137,16 @@ function runAssertInstalled({
       : home + path.sep + (installPathRelative ?? path.join(".openclaw", "extensions", pluginId));
   mkdirSync(path.join(home, ".openclaw", "extensions"), { recursive: true });
   mkdirSync(installPath, { recursive: true });
+  const expectedHostRoot = path.join(parent, "standalone", "runtime");
+  if (standaloneHost) {
+    mkdirSync(expectedHostRoot, { recursive: true });
+    mkdirSync(path.join(installPath, "node_modules"));
+    symlinkSync(
+      expectedHostRoot,
+      path.join(installPath, "node_modules", "openclaw"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+  }
   const payload = inspectPayload ?? fullSurfaceInspectPayload(pluginId);
   const writeReport = (suffix: string, value: unknown) =>
     writeJson(path.join(scratchRoot, `kitchen-sink-${label}-${suffix}.json`), value);
@@ -157,12 +170,24 @@ function runAssertInstalled({
               integrity: "sha256-test",
               resolvedAt: 1,
               version: "1.0.0",
+              ...(standaloneHost
+                ? {
+                    artifactKind: "npm-pack",
+                    artifactFormat: "tgz",
+                    clawpackSha256: "digest",
+                    clawpackSize: 0,
+                    npmIntegrity: "integrity",
+                    npmShasum: "shasum",
+                    npmTarballName: "package.tgz",
+                  }
+                : {}),
             }
           : {}),
       },
     },
   });
   return runAssertions("assert-installed", {
+    OPENCLAW_E2E_HOST_ROOT: standaloneHost ? expectedHostRoot : "",
     ...env,
     HOME: home,
     OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
@@ -310,6 +335,25 @@ it("requires the worker rejection in a synchronized exhaustive report", () => {
   );
 });
 
+it("tolerates optional Kitchen Sink 0.4.1 registrar probe diagnostics", () => {
+  const registrarProbeDiagnostics = [
+    "Gateway access policy requires an authorize handler",
+    "invalid versioned decision provider contract",
+    "storage provider registration missing label",
+  ];
+  const report = (messages: string[]) =>
+    runAssertInstalled({
+      diagnostics: diagnosticErrors([...REQUIRED_FULL_DIAGNOSTIC_CANARIES, ...messages]),
+    });
+  const tolerated = report(registrarProbeDiagnostics);
+  expect(tolerated.status, tolerated.stderr).toBe(0);
+  expectFailure(
+    report([...registrarProbeDiagnostics, "unrelated registrar failure"]),
+    "unexpected kitchen-sink diagnostic error: unrelated registrar failure",
+    "stderr",
+  );
+});
+
 const inspect = fullSurfaceInspectPayload();
 const canaries = diagnosticErrors(REQUIRED_FULL_DIAGNOSTIC_CANARIES);
 const rejections: Array<[string, Parameters<typeof runAssertInstalled>[0], string, string?]> = [
@@ -417,6 +461,16 @@ it("rejects ClawHub kitchen-sink install paths that resolve outside managed exte
   });
 
   expectFailure(result, "kitchen-sink ClawHub install path resolved outside", "stderr");
+});
+
+it("accepts an external ClawHub package peered to the expected standalone host", () => {
+  const result = runAssertInstalled({
+    source: "clawhub",
+    surfaceMode: "basic",
+    standaloneHost: true,
+  });
+
+  expect(result.status, result.stderr).toBe(0);
 });
 
 it("scans only the configured kitchen-sink scratch root", () => {

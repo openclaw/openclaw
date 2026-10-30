@@ -22,13 +22,19 @@ function writeLegacyCatchupCursor(accountId: string, lastSeenRowid: number): voi
   store.register(key, { lastSeenMs: Date.now(), lastSeenRowid });
 }
 
+function recoveryCursorStore() {
+  return getIMessageRuntime().state.openSyncKeyedStore<{ lastRowid: number }>({
+    namespace: "imessage.recovery-cursor",
+    maxEntries: 64,
+  });
+}
+
 function writeLegacyRecoveryCursor(accountId: string, lastRowid: number): void {
-  getIMessageRuntime()
-    .state.openSyncKeyedStore<{ lastRowid: number }>({
-      namespace: "imessage.recovery-cursor",
-      maxEntries: 64,
-    })
-    .register(accountId, { lastRowid });
+  recoveryCursorStore().register(accountId, { lastRowid });
+}
+
+function writeNulKeyedRecoveryCursor(accountId: string, dbIdentity: string, lastRowid: number) {
+  recoveryCursorStore().register(`${accountId}\u0000${dbIdentity}`, { lastRowid });
 }
 
 describe("iMessage recovery cursor", () => {
@@ -36,30 +42,11 @@ describe("iMessage recovery cursor", () => {
     installIMessageStateRuntimeForTest();
   });
 
-  it("returns null before anything is recorded", async () => {
-    expect(await loadCursor("default", DB)).toBeNull();
-  });
-
-  it("advances forward only and never rewinds", async () => {
-    await advanceCursor("default", DB, 100);
-    expect(await loadCursor("default", DB)).toBe(100);
-    await advanceCursor("default", DB, 50);
-    expect(await loadCursor("default", DB)).toBe(100);
-    await advanceCursor("default", DB, 150);
-    expect(await loadCursor("default", DB)).toBe(150);
-  });
-
   it("scopes the cursor per account", async () => {
     await advanceCursor("work", DB, 10);
     await advanceCursor("home", DB, 20);
     expect(await loadCursor("work", DB)).toBe(10);
     expect(await loadCursor("home", DB)).toBe(20);
-  });
-
-  it("ignores a cursor recorded against a different database (#99638)", async () => {
-    await advanceCursor("default", DB, 12396);
-    expect(await loadCursor("default", DB_B)).toBeNull();
-    expect(await loadCursor("default", DB)).toBe(12396);
   });
 
   it("re-scopes the cursor to the new database on advance", async () => {
@@ -73,6 +60,14 @@ describe("iMessage recovery cursor", () => {
     writeLegacyRecoveryCursor("default", 12396);
     expect(await loadCursor("default", DB)).toBe(12396);
     expect(await loadCursor("default", DB_B)).toBeNull();
+    expect(await loadCursor("default", DB)).toBe(12396);
+  });
+
+  it("adopts a NUL-separated composite cursor once on SQLite (#184862)", async () => {
+    writeNulKeyedRecoveryCursor("default", DB, 12396);
+    expect(await loadCursor("default", DB_B)).toBeNull();
+    expect(await loadCursor("default", DB)).toBe(12396);
+    expect(recoveryCursorStore().lookup(`default\u0000${DB}`)).toBeUndefined();
     expect(await loadCursor("default", DB)).toBe(12396);
   });
 

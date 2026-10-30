@@ -27,11 +27,23 @@ export async function resolveDiscordProviderCommandSpecs(params: {
   voiceEnabled: boolean;
 }) {
   const maxDiscordCommands = 100;
-  const pluginCommandSpecs = params.nativeEnabled
-    ? (await loadPluginCommandRuntime())
-        .createPluginCommandRuntime()
-        .listNativeCandidates("discord")
-    : [];
+  const pluginCommandSpecs: PluginCommandNativeCandidate[] = [];
+  if (params.nativeEnabled) {
+    const candidates = (await loadPluginCommandRuntime())
+      .createPluginCommandRuntime()
+      .listNativeCandidates("discord");
+    for (const command of candidates) {
+      if (command.name.length > 32) {
+        params.runtime.error?.(
+          danger(
+            `discord: plugin command "/${command.name.slice(0, 32)}…" exceeds the 32-character name limit. Set a shorter Discord native alias. Skipping.`,
+          ),
+        );
+        continue;
+      }
+      pluginCommandSpecs.push({ ...command, name: command.name.toLowerCase() });
+    }
+  }
   const onCollision = (normalizedName: string) => {
     params.runtime.error?.(
       danger(
@@ -69,7 +81,7 @@ export async function resolveDiscordProviderCommandSpecs(params: {
   // Defer first-pass diagnostics until the skill-limit decision. A collision can disappear
   // when fallback removes skills, so only the final retained command set should report it.
   const provisionalCollisions: string[] = [];
-  let skillCommands =
+  const skillCommands =
     params.nativeEnabled && params.nativeSkillsEnabled
       ? await prepareSkillCommandsForAgents({ cfg: params.cfg })
       : [];
@@ -84,7 +96,6 @@ export async function resolveDiscordProviderCommandSpecs(params: {
     params.nativeSkillsEnabled &&
     commandSpecs.length > maxDiscordCommands
   ) {
-    skillCommands = [];
     commandSpecs = mergePluginCommandSpecs(listPrimaryCommandSpecs([]), onCollision);
     params.runtime.log?.(
       warn(
@@ -103,5 +114,5 @@ export async function resolveDiscordProviderCommandSpecs(params: {
       ),
     );
   }
-  return { skillCommands, commandSpecs };
+  return { commandSpecs };
 }

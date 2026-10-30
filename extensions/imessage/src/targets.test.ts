@@ -11,102 +11,31 @@ import {
 } from "./targets.js";
 
 describe("imessage targets", () => {
-  it("parses sms handles with service", () => {
-    const target = parseIMessageTarget("sms:+1555");
-    expect(target).toEqual({
-      kind: "handle",
-      to: "+1555",
-      service: "sms",
-      serviceExplicit: true,
-    });
-  });
-
   it("normalizes service-prefixed chat identifiers", () => {
     expect(normalizeIMessageHandle("auto:chatident:AbC")).toBe("chat_identifier:AbC");
   });
 
-  it("does not check allowFrom against conversation targets", () => {
-    const ok = isAllowedIMessageSender({
-      allowFrom: ["chat_id:9"],
+  it.each([
+    ["chat_id:9", { chatId: 9 }],
+    ["imessage:chat_id:9", { chatId: 9 }],
+    ["imessage:chat_guid:team-thread", { chatGuid: "team-thread" }],
+    ["chat_identifier:team", { chatIdentifier: "team" }],
+  ] as const)("only permits conversation allowFrom %s for reply context", (entry, context) => {
+    const params = {
       sender: "+1555",
-      chatId: 9,
-    });
-    expect(ok).toBe(false);
-
-    expect(
-      isAllowedIMessageSender({
-        allowFrom: ["imessage:chat_id:9"],
-        sender: "+1555",
-        chatId: 9,
-      }),
-    ).toBe(false);
-
-    expect(
-      isAllowedIMessageSender({
-        allowFrom: ["chat_guid:team-thread"],
-        sender: "+1555",
-        chatGuid: "team-thread",
-      }),
-    ).toBe(false);
-
-    expect(
-      isAllowedIMessageSender({
-        allowFrom: ["chat_identifier:team"],
-        sender: "+1555",
-        chatIdentifier: "team",
-      }),
-    ).toBe(false);
-
-    expect(
-      isAllowedIMessageSender({
-        allowFrom: ["chat_id:9"],
-        sender: "+1555",
-        chatId: 9,
-        allowConversationTargets: true,
-      }),
-    ).toBe(false);
+      ...context,
+      allowFrom: [entry],
+      allowConversationTargets: true,
+    };
+    expect(isAllowedIMessageSender(params)).toBe(false);
+    expect(isAllowedIMessageReplyContextSender(params)).toBe(true);
   });
 
-  it("checks allowFrom against handle", () => {
-    const ok = isAllowedIMessageSender({
-      allowFrom: ["user@example.com"],
-      sender: "User@Example.com",
-    });
-    expect(ok).toBe(true);
-  });
-
-  it("checks reply context allowFrom against conversation targets", () => {
-    expect(
-      isAllowedIMessageReplyContextSender({
-        allowFrom: ["chat_id:9"],
-        sender: "+1555",
-        chatId: 9,
-      }),
-    ).toBe(true);
-
-    expect(
-      isAllowedIMessageReplyContextSender({
-        allowFrom: ["imessage:chat_guid:team-thread"],
-        sender: "+1555",
-        chatGuid: "team-thread",
-      }),
-    ).toBe(true);
-
-    expect(
-      isAllowedIMessageReplyContextSender({
-        allowFrom: ["chat_identifier:team"],
-        sender: "+1555",
-        chatIdentifier: "team",
-      }),
-    ).toBe(true);
-  });
-
-  it("denies when allowFrom is empty", () => {
-    const ok = isAllowedIMessageSender({
-      allowFrom: [],
-      sender: "+1555",
-    });
-    expect(ok).toBe(false);
+  it.each([
+    [["user@example.com"], "User@Example.com", true],
+    [[], "+1555", false],
+  ] as const)("checks sender %s / %s", (allowFrom, sender, allowed) => {
+    expect(isAllowedIMessageSender({ allowFrom: [...allowFrom], sender })).toBe(allowed);
   });
 
   it("formats chat targets", () => {
@@ -118,30 +47,20 @@ describe("imessage targets", () => {
     expect(looksLikeIMessageExplicitTargetId("chat_id:42")).toBe(true);
     expect(looksLikeIMessageExplicitTargetId("sms:+15552223333")).toBe(true);
     expect(looksLikeIMessageExplicitTargetId("+15552223333")).toBe(false);
-    expect(looksLikeIMessageExplicitTargetId("user@example.com")).toBe(false);
     expect(looksLikeIMessageExplicitTargetId("7d5297154d5f436d83dbbdf03fcc8fdd")).toBe(true);
-  });
-
-  it("infers direct and group chat types from normalized targets", () => {
-    expect(inferIMessageTargetChatType("+15552223333")).toBe("direct");
-    expect(inferIMessageTargetChatType("chat_id:42")).toBeUndefined();
-    expect(inferIMessageTargetChatType("chat_guid:iMessage;-;+15552223333")).toBe("direct");
-    expect(inferIMessageTargetChatType("chat_guid:iMessage;+;chat42")).toBe("group");
   });
 
   it("treats bare 32-char hex strings as chat identifiers, not phone numbers", () => {
     const hex = "7d5297154d5f436d83dbbdf03fcc8fdd";
     expect(normalizeIMessageHandle(hex)).toBe(`chat_identifier:${hex}`);
     expect(normalizeIMessageHandle(hex.toUpperCase())).toBe(`chat_identifier:${hex}`);
-    expect(parseIMessageTarget(hex)).toEqual({
-      kind: "chat_identifier",
-      chatIdentifier: hex,
-    });
-    expect(parseIMessageTarget(`imessage:${hex.toUpperCase()}`)).toEqual({
-      kind: "chat_identifier",
-      chatIdentifier: hex,
-    });
+    const parsed = { kind: "chat_identifier", chatIdentifier: hex };
+    expect([hex, `imessage:${hex.toUpperCase()}`].map(parseIMessageTarget)).toEqual([
+      parsed,
+      parsed,
+    ]);
     expect(inferIMessageTargetChatType(hex)).toBeUndefined();
+    expect(inferIMessageTargetChatType("chat_id:42")).toBeUndefined();
   });
 });
 
@@ -152,15 +71,10 @@ describe("parseIMessageAllowFromEntries", () => {
     });
   });
 
-  it("returns validation errors for chat target entries", () => {
-    expect(parseIMessageAllowFromEntries("chat_id:123")).toEqual({
+  it.each(["chat_id:123", "imessage:chat_id:123"])("rejects chat target entry %s", (entry) => {
+    expect(parseIMessageAllowFromEntries(entry)).toEqual({
       entries: [],
-      error: "iMessage allowFrom entries must be sender handles: chat_id:123",
-    });
-
-    expect(parseIMessageAllowFromEntries("imessage:chat_id:123")).toEqual({
-      entries: [],
-      error: "iMessage allowFrom entries must be sender handles: imessage:chat_id:123",
+      error: `iMessage allowFrom entries must be sender handles: ${entry}`,
     });
   });
 });

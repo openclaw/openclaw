@@ -2,7 +2,31 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 
+export type AgentStepSession = {
+  sessionId: string;
+  lifecycleRevision?: string;
+};
+
 export type SessionsSendToolOptions = {
+  swarmCollector?: boolean;
+  modelProvider?: string;
+  modelId?: string;
+  sessionId?: string;
+  runId?: string;
+  onYield?: import("./sessions-yield-tool.js").SessionsYieldCallback;
+  senderIsOwner?: boolean;
+  scheduledToolTargets?: import("../../cron/execution-context-registry.js").ScheduledToolTargets;
+  expectedTargetTask?: Omit<
+    import("../../gateway/in-process-subagent-resume.js").TrustedSubagentResume,
+    "caller"
+  >;
+  expectedTargetLifecycleRevision?: string | null;
+  expectedTargetRun?: Pick<
+    import("../subagents/registry/subagent-registry.types.js").SubagentRunRecord,
+    "runId" | "taskRunId" | "generation" | "createdAt"
+  > | null;
+  /** A retained replay uses its host-owned source assertion and cannot ask for fresh approval. */
+  retainedReplay?: true;
   workerPlacement?: boolean;
   agentId?: string;
   agentSessionKey?: string;

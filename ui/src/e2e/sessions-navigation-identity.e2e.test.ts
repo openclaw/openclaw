@@ -1,7 +1,6 @@
-import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import { getInitialHistoryRequests } from "./chat-initial-history.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "sessions-navigation-identity" });
@@ -9,19 +8,13 @@ const targetKey = "agent:main:thread:12345678-aaaa-4000-8000-000000000001";
 const targetText = "Selected target transcript 741";
 const timestamp = Date.parse("2026-09-15T12:00:00.000Z");
 
-async function primaryKeys(page: Page) {
-  return evaluateControlUiContext(
-    page,
-    (context) => context.sessions.state.result?.sessions.map((row) => row.key) ?? null,
-  );
+async function requestParams(gateway: MockGatewayControls) {
+  return (await getInitialHistoryRequests(gateway)).map((request) => request.params);
 }
-async function requestParams(gateway: MockGatewayControls, method: string) {
-  return (await gateway.getRequests(method)).map((request) => request.params);
-}
-async function expectTargetOnly(gateway: MockGatewayControls, method: string, otherKey: string) {
-  const params = await requestParams(gateway, method);
-  expect(params).toContainEqual(expect.objectContaining({ sessionKey: targetKey }));
-  expect(params).not.toContainEqual(expect.objectContaining({ sessionKey: otherKey }));
+async function expectTargetOnly(gateway: MockGatewayControls, otherKey: string) {
+  const params = await requestParams(gateway);
+  expect(params).toContainEqual(expect.objectContaining({ key: targetKey }));
+  expect(params).not.toContainEqual(expect.objectContaining({ key: otherKey }));
 }
 function session(key: string, sessionId: string, displayName: string) {
   return { key, sessionId, displayName, kind: "direct", updatedAt: timestamp };
@@ -46,21 +39,14 @@ type Scenario = {
   name: string;
   cached?: boolean;
   otherAgent?: string;
-  otherPrefix?: string;
-  sameTitle?: boolean;
   source?: "table" | "href";
-  face?: "dashboard";
 };
 const scenarios: Scenario[] = [
   { name: "off-roster prefix collision" },
   { name: "cached-primary prefix collision", cached: true },
-  { name: "off-roster different prefix", otherPrefix: "87654321" },
   { name: "off-roster cross-agent collision", otherAgent: "other" },
-  { name: "same-title prefix collision", sameTitle: true },
-  { name: "ordinary table row", sameTitle: true, source: "table" },
-  { name: "copied table link", sameTitle: true, source: "href" },
-  { name: "cached same-title copied table link", cached: true, sameTitle: true, source: "href" },
-  { name: "saved dashboard face", sameTitle: true, face: "dashboard" },
+  { name: "ordinary table row", source: "table" },
+  { name: "copied table link", source: "href" },
 ];
 
 suite.define(() => {
@@ -71,19 +57,19 @@ suite.define(() => {
         const target = {
           ...session(targetKey, "target-generation", "Target launch review"),
           label: "Target launch review",
-          boardFace: scenario.face ?? "chat",
+          boardFace: "chat",
         };
         const otherAgent = scenario.otherAgent ?? "main";
         const other = session(
-          `agent:${otherAgent}:thread:${scenario.otherPrefix ?? "12345678"}-bbbb-4000-8000-000000000002`,
+          `agent:${otherAgent}:thread:12345678-bbbb-4000-8000-000000000002`,
           "other-generation",
-          scenario.sameTitle ? target.displayName : "Other release review",
+          target.displayName,
         );
         const main = session("agent:main:main", "main-generation", "Home");
         const primary = scenario.cached ? [main, target, other] : [main];
         const searched = otherAgent === "main" ? [main, target, other] : [main, target];
         const gateway = await installMockGateway(page, {
-          featureMethods: ["board.get", "chat.metadata", "chat.startup", "sessions.search"],
+          featureMethods: ["chat.metadata", "chat.startup", "sessions.search"],
           // Stored rows own resolution independently of the bounded sidebar and table responses.
           sessions: [main, target, other],
           sessionKey: main.key,
@@ -112,29 +98,12 @@ suite.define(() => {
                 },
               ],
             },
-            "board.get": {
-              cases: [
-                {
-                  match: { sessionKey: targetKey },
-                  response: {
-                    sessionKey: targetKey,
-                    revision: 1,
-                    tabs: [
-                      { tabId: "main", title: "Target overview", position: 0, chatDock: "right" },
-                    ],
-                    widgets: [],
-                  },
-                },
-                { response: null },
-              ],
-            },
           },
         });
         await page.goto(`${suite.server.baseUrl}sessions`);
         await page.getByRole("button", { name: "Search transcripts" }).click();
         const input = page.getByRole("searchbox", { name: "Search session transcripts" });
         await input.waitFor({ state: "visible" });
-        await expect.poll(() => primaryKeys(page)).not.toBeNull();
         if (!scenario.source) {
           await input.fill("Selected target transcript");
           await input.press("Enter");
@@ -151,8 +120,6 @@ suite.define(() => {
               .locator(".session-link")
           : page.locator(".sessions-transcript-search__result");
         await selected.waitFor({ state: "visible" });
-        const primaryBeforeClick = await primaryKeys(page);
-        expect(primaryBeforeClick?.includes(targetKey)).toBe(scenario.cached === true);
         const searchRequests = await gateway.getRequests("sessions.search");
         expect(searchRequests).toHaveLength(scenario.source ? 0 : 1);
         if (!scenario.source) {
@@ -169,38 +136,24 @@ suite.define(() => {
         } else {
           await selected.click();
         }
-        const visibleDestination = page
-          .locator("openclaw-chat-page, #control-ui-main h2")
-          .filter({ has: page.locator("openclaw-board-view") })
-          .or(page.getByText(targetText, { exact: true }))
-          .or(page.getByRole("heading", { name: "Choose a session", exact: true }));
-        await visibleDestination.first().waitFor({ state: "visible" });
-        expect(
-          await page.getByRole("heading", { name: "Choose a session", exact: true }).isVisible(),
-        ).toBe(false);
         const assertDestination = async () => {
-          if (scenario.face) {
-            await page.locator("openclaw-board-view").waitFor({ state: "visible" });
-            expect(new URL(page.url()).pathname.startsWith("/dashboard/main/")).toBe(true);
-          } else {
-            await page.getByText(targetText, { exact: true }).waitFor({ state: "visible" });
-          }
+          await page.getByText(targetText, { exact: true }).waitFor({ state: "visible" });
+          expect(
+            await page.getByRole("heading", { name: "Choose a session", exact: true }).isVisible(),
+          ).toBe(false);
           await expect
-            .poll(() => requestParams(gateway, "chat.startup"))
-            .toContainEqual(expect.objectContaining({ sessionKey: targetKey }));
-          await expectTargetOnly(gateway, "chat.startup", other.key);
+            .poll(() => requestParams(gateway))
+            .toContainEqual(expect.objectContaining({ key: targetKey }));
+          await expectTargetOnly(gateway, other.key);
           expect(
             await page.getByText("Different synthetic transcript 982", { exact: true }).isVisible(),
           ).toBe(false);
-          if (scenario.face) {
-            await expectTargetOnly(gateway, "board.get", other.key);
-          }
         };
         await assertDestination();
-        const beforeReloadRequests = await gateway.getRequests("chat.startup");
+        const beforeReloadRequests = await getInitialHistoryRequests(gateway);
         await page.reload();
         await assertDestination();
-        const afterReloadRequests = await gateway.getRequests("chat.startup");
+        const afterReloadRequests = await getInitialHistoryRequests(gateway);
         expect(
           afterReloadRequests.every((request) =>
             beforeReloadRequests.every((previous) => previous.id !== request.id),

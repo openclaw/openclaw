@@ -1,3 +1,4 @@
+import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { prepareSessionEntryReplacementDatabase } from "../../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import {
   resolveSqliteReadScope,
@@ -6,10 +7,10 @@ import {
 import { prepareCronRootSessionGeneration } from "../../../config/sessions/session-delivery-generation.js";
 import { assertSessionEntryCohortScope } from "../../../config/sessions/session-entry-cohort-scope.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import type { OwnedSessionTranscriptWriteContext } from "../../../config/sessions/transcript-write-context-store.js";
 import {
   getOwnedSessionTranscriptInitialWriter,
   SessionTranscriptWriterClaimReboundError,
-  type OwnedSessionTranscriptWriteContext,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import { captureAgentRunTerminalPersistence } from "../../../infra/agent-run-terminal-writes.js";
@@ -69,7 +70,9 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
 }): Promise<{
   compactionTimeoutMs: number;
   assertCronRootCurrent?: () => void;
-  ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext;
+  ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext & {
+    sessionTarget: SessionTranscriptRuntimeTarget;
+  };
   transcriptLifecycle: ReturnType<typeof createEmbeddedAttemptTranscriptLifecycle>;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
 }> {
@@ -88,6 +91,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
       sessionFile,
       sessionId,
       sessionKey,
+      sessionPersistence,
       sessionTarget: originalSessionTarget,
     }));
   await externalAbortController.throwIfFiredAfterPrepCleanup();
@@ -120,9 +124,11 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
       }
     },
   });
-  const assertAdmittedActive = admittedRunContext
-    ? resolveAdmittedRunActiveAssertion(admittedRunContext, abortSignal)
-    : undefined;
+  const assertAdmittedActive =
+    preparedTarget?.assertCurrent ??
+    (admittedRunContext
+      ? resolveAdmittedRunActiveAssertion(admittedRunContext, abortSignal)
+      : undefined);
   const { writeContext: terminalWriter } = captureAgentRunTerminalPersistence(runId);
   const assertTerminalCurrent = composeSessionSourceAssertion([
     terminalWriter?.assertCurrent,
@@ -132,7 +138,9 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
     initialWriter
       ? initialWriter.withTranscriptWrite(() => transcriptLifecycle.withTranscriptWrite(operation))
       : transcriptLifecycle.withTranscriptWrite(operation);
-  const ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext = {
+  const ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext & {
+    sessionTarget: SessionTranscriptRuntimeTarget;
+  } = {
     sessionFile,
     sessionKey,
     sessionTarget: fencedSessionTarget,
@@ -142,7 +150,6 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
       [assertAdmittedActive, generation?.assertCurrent],
       (assertSources) => {
         abortSignal?.throwIfAborted();
-        preparedTarget?.assertCurrent();
         assertSources();
       },
     ),

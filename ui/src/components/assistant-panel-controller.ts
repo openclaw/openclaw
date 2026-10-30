@@ -4,12 +4,7 @@ import { isSessionRouteId, type RouteId } from "../app-route-paths.ts";
 import type { AssistantDockOwner } from "../app/assistant-dock.ts";
 import { chatInputOwnerForContext } from "../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import {
-  createLazyCustomElementRequests,
-  isOptionalElementDefined,
-} from "../app/lazy-custom-element.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
-import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import {
   prepareSessionNavigationHandoff,
@@ -31,24 +26,12 @@ import {
 } from "../pages/chat/chat-history-events.ts";
 import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import type { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
-import {
-  consumePluginHelpAutoOpen,
-  dismissPluginHelpAutoOpen,
-  subscribePluginHelp,
-} from "../pages/custodian/plugin-help-state.ts";
+import { subscribePluginHelp } from "../pages/custodian/plugin-help-state.ts";
 import { createDockLayout } from "./dock-layout.ts";
 import { assistantPanelLayout } from "./dock-panel-layout.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "../styles/rail-header.css";
 import "../styles/assistant-panel.css";
-
-const ASSISTANT_CONTENT_ELEMENT = {
-  tagName: "openclaw-assistant-panel-content",
-  get label() {
-    return t("assistantPanel.title");
-  },
-  loadModule: () => import("./assistant-panel-content.ts"),
-};
 
 type AssistantDestination =
   | "home"
@@ -98,10 +81,9 @@ export function createAssistantPanel(
     agentsList?: ApplicationContext["agents"]["state"]["agentsList"];
     hello?: ApplicationContext["gateway"]["snapshot"]["hello"];
   } = {};
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  let publish: (() => void) | undefined;
+  const notify = () => publish?.();
   const getContext = () => props.context ?? application;
-  const contentLoader = createLazyCustomElementRequests(element);
   const dockLayout = createDockLayout({
     layout: assistantPanelLayout,
     reservationPrefix: "assistant",
@@ -163,22 +145,7 @@ export function createAssistantPanel(
       if (wasOpen && !dockLayout.open) {
         claimInput("page");
       }
-      if (
-        typeof destination === "string" &&
-        context &&
-        props.custodianAvailable &&
-        !props.custodianSuppressed &&
-        window.innerWidth > 1100 &&
-        consumePluginHelpAutoOpen(context)
-      ) {
-        openDestination("custodian");
-      }
       startHomeAfterPrimaryChat();
-      contentLoader.requestWhileActive(
-        ASSISTANT_CONTENT_ELEMENT,
-        (dockLayout.open && (destination !== "home" || homeStarted)) ||
-          (props.custodianAvailable && props.minimizeRequestId > handledMinimizeRequestId),
-      );
       dockLayout.syncReservation();
       if (mounted) {
         subscribeSources();
@@ -198,6 +165,7 @@ export function createAssistantPanel(
     }
     sourceStops.forEach((stop) => stop?.());
     sources = { context, store };
+    // Source receipts synchronously retire target scopes and reconcile dock reservations.
     sourceStops = [
       context?.assistantDock?.attach(owner),
       context ? subscribePluginHelp(context, refresh) : undefined,
@@ -233,7 +201,6 @@ export function createAssistantPanel(
       }
       initialized = mounted = true;
       stops = [
-        contentLoader.subscribe(notify),
         listen(document, CHAT_ROUTE_READY_EVENT, refresh),
         listen(document, CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, refresh),
         listen(window, CUSTODIAN_PANEL_TOGGLE_EVENT, handleToggleRequest),
@@ -481,10 +448,6 @@ export function createAssistantPanel(
   }
 
   function setOpen(open: boolean): void {
-    const context = getContext();
-    if (!open && destination !== "home" && context) {
-      dismissPluginHelpAutoOpen(context);
-    }
     if (open && destination === "home") {
       homeStarted = true;
     }
@@ -498,13 +461,6 @@ export function createAssistantPanel(
     }
     publishSessionKey();
     refresh();
-  }
-
-  function contentDefined() {
-    return isOptionalElementDefined(ASSISTANT_CONTENT_ELEMENT);
-  }
-  function acceptStore(store: CustodianSessionStore) {
-    element.store = store;
   }
 
   function toggle(): void {
@@ -548,11 +504,13 @@ export function createAssistantPanel(
     homeStarted: () => homeStarted,
     homeTarget,
     available,
-    contentDefined,
+    contentDefined: () => customElements.get("openclaw-assistant-panel-content") !== undefined,
+    shouldLoadContent: () =>
+      (dockLayout.open && (destination !== "home" || homeStarted)) ||
+      (props.custodianAvailable && props.minimizeRequestId > handledMinimizeRequestId),
     get openSessionKey() {
       return openSessionKey();
     },
-    contentLoader,
     dockLayout,
     availableFor,
     claimInput,
@@ -563,16 +521,18 @@ export function createAssistantPanel(
     setOpen,
     toggle,
     handleToggleRequest,
-    acceptStore,
+    acceptStore(store: CustodianSessionStore) {
+      element.store = store;
+    },
     refresh,
     notify,
     attach,
     detach,
     inputsChanged,
     subscribe(listener: () => void) {
-      listeners.add(listener);
+      publish = listener;
       return () => {
-        listeners.delete(listener);
+        publish = undefined;
       };
     },
   };

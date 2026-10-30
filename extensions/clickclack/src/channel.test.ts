@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { clickClackPlugin } from "../channel-plugin-api.js";
+import { clickClackPlugin, parseClickClackTarget } from "../api.js";
 
 describe("ClickClack channel capabilities", () => {
+  it("parses channel targets", () => {
+    expect(parseClickClackTarget("channel:general")).toEqual({
+      chatType: "group",
+      kind: "channel",
+      id: "general",
+    });
+    expect(clickClackPlugin.messaging?.normalizeTarget?.("general")).toBe("channel:general");
+  });
+
   it("advertises media delivery through the public plugin descriptor", () => {
     expect(clickClackPlugin.capabilities).toEqual({
       chatTypes: ["direct", "group"],

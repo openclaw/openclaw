@@ -1,3 +1,34 @@
+.link-reader-panel {
+  container: link-reader / inline-size;
+}
+.lr-external {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  color: var(--text);
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.lr-external:hover {
+  background: var(--border);
+}
+.lr-external-provider {
+  display: none;
+}
+@container link-reader (max-width: 560px) {
+  .lr-external-label {
+    display: none;
+  }
+  .lr-external-provider {
+    display: inline;
+  }
+}
 .bp--right {
   top: var(--shell-topbar-height, 0);
   right: calc(
@@ -47,43 +78,137 @@
 .tabstrip-tab__label {
   max-width: 150px;
 }
-.lr-toolbar {
+.lr-address {
   display: flex;
+  flex: 1;
   align-items: center;
-  gap: 4px;
-  padding: 5px 8px;
-  border-bottom: 1px solid var(--border);
+  gap: var(--session-rail-group-gap, 8px);
+  min-width: 0;
+}
+.lr-provider {
+  display: flex;
+  flex: none;
+  color: var(--muted);
+}
+.lr-provider svg {
+  width: var(--session-rail-icon, 18px);
+  height: var(--session-rail-icon, 18px);
 }
 .lr-url {
   flex: 1;
   min-width: 0;
-  height: 30px;
+  width: 0;
+  height: var(--session-rail-control, 33px);
   box-sizing: border-box;
   border: 1px solid transparent;
-  border-radius: 14px;
-  padding: 3px 10px;
+  border-radius: 6px;
+  padding: 0;
   color: var(--text);
-  background: color-mix(in srgb, var(--text) 8%, transparent);
+  background: transparent;
   font: inherit;
-  font-size: 12px;
+  font-size: 14px;
 }
 .lr-url:focus {
-  border-color: var(--accent);
+  border-color: var(--border-strong);
   outline: none;
+  box-shadow: none;
 }
-.lr-external {
+.lr-url[data-overflow="true"]:not(:focus) {
+  mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+}
+.lr-rail-menu {
+  min-width: 224px;
+}
+.lr-rail-menu .oc-menu-item__icon svg {
+  width: 16px;
+  height: 16px;
+}
+.lr-toolbar--mobile {
+  display: flex;
+  flex: none;
+  align-items: center;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--border);
+  height: 40px;
+  padding: 0 8px;
+  gap: 0;
+  background: var(--rail-header-background);
+}
+.lr-toolbar--mobile .bp-icon {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0;
+  border-radius: 6px;
+  color: var(--muted);
+}
+.lr-toolbar--mobile .bp-icon svg {
+  width: 16px;
+  height: 16px;
+}
+.lr-toolbar--mobile .lr-history {
+  display: contents;
+}
+.lr-toolbar--mobile .lr-address {
+  gap: 6px;
+}
+.lr-toolbar--mobile .lr-url {
+  height: 32px;
+  font-size: 16px;
+}
+.lr-toolbar--mobile .lr-actions {
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 5px;
-  padding: 4px;
-  color: var(--text);
-  font-size: 12px;
-  text-decoration: none;
-  white-space: nowrap;
+  height: 32px;
+  padding: 0;
+  gap: 0;
+  border-radius: 6px;
+  background: transparent;
 }
-.lr-external:hover {
-  text-decoration: underline;
+.lr-initial {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+.lr-initial:not(.lr-initial--mobile) [slot="action"] {
+  width: 100%;
+  max-width: 360px;
+}
+.lr-initial-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  box-sizing: border-box;
+  padding: 4px 8px 4px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--bg);
+}
+.lr-initial-form:focus-within {
+  border-color: var(--muted);
+}
+.lr-initial-form .lr-url {
+  height: 36px;
+  border: 0;
+  font-size: 16px;
+}
+.lr-initial-form button {
+  flex: none;
+  height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  cursor: default;
+}
+.lr-initial-form button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
 }
 .lr-panels {
   display: flex;
@@ -305,18 +430,6 @@ a {
   .bp-icon {
     width: 34px;
     height: 34px;
-  }
-  .lr-toolbar {
-    flex-wrap: wrap;
-  }
-  .lr-url {
-    order: -1;
-    flex-basis: 100%;
-    font-size: 16px;
-    height: 36px;
-  }
-  .lr-external {
-    margin-left: auto;
   }
   .lr-content {
     padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px));

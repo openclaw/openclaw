@@ -44,7 +44,7 @@ type LlamaServerPropsWire = Record<string, unknown> & {
 };
 
 export type LlamaServerDiscoveredModel = {
-  config: ModelDefinitionConfig;
+  config: ModelDefinitionConfig & { input: Array<"text" | "image"> };
   status: LlamaServerModelStatus;
   failed: boolean;
 };

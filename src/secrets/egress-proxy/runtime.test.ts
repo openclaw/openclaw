@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 describe("secret egress runtime diagnostics", () => {
-  it("keeps routine forwarding at debug while counting every outcome", async () => {
+  it("keeps request audits at debug while counting every outcome and warning on certificates", async () => {
     mocks.stateDir = dirs.make("egress-runtime-");
     let audit: (event: SecretEgressProxyAuditEvent) => void = () => {
       throw new Error("worker not started");
@@ -52,7 +52,7 @@ describe("secret egress runtime diagnostics", () => {
             level: "debug",
           },
           { event: { kind: "forwarded", host: "example.com", substituted: true }, level: "debug" },
-          { event: { kind: "refused", host: "example.com", substituted: false }, level: "info" },
+          { event: { kind: "refused", host: "example.com", substituted: false }, level: "debug" },
           {
             event: {
               kind: "refused",

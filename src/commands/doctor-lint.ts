@@ -7,6 +7,8 @@ export async function runDoctorLintCli(
   runtime: RuntimeEnv,
   opts: DoctorLintCliOptions,
 ): Promise<number> {
+  const { preparePostgresPoolForUpdate } = await import("../infra/postgres-sync/pool.js");
+  await preparePostgresPoolForUpdate("openclaw doctor --fix");
   if (runtime === defaultRuntime && opts.json && resolveUpdateRehearsalRoot(process.env)) {
     const { hasCliProcessScope } = await import("../cli/runtime-cleanup-scope.js");
     if (hasCliProcessScope()) {

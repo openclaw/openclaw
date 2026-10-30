@@ -32,13 +32,6 @@ export function readSessionArchiveContentSync(filePath: string): string {
   return zstdCodec.decompress(fs.readFileSync(filePath)).toString("utf8");
 }
 
-export function decodeSessionArchiveBytes(bytes: Uint8Array, compressed: boolean): string {
-  if (!compressed) {
-    return Buffer.from(bytes).toString("utf8");
-  }
-  return zstdCodec.decompress(Buffer.from(bytes)).toString("utf8");
-}
-
 /**
  * Materializes a compressed archive as a plain JSONL cache file and returns
  * the readable path; plain archives pass through untouched. Source identity

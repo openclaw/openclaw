@@ -6,6 +6,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { decodePairingSetupCode } from "../pairing/setup-code.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import * as workerContext from "../state/openclaw-state-worker-context.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { loadDeviceIdentity } from "./device-authz.test-helpers.js";
 import {
@@ -80,7 +81,7 @@ async function expectJoined({ joinUrl, setupCode }: JoinSetupResult) {
   expect(response.headers.get("content-type")).toContain("application/json");
   expect(response.headers.get("cache-control")).toBe("no-store");
   const payload = decodePairingSetupCode(setupCode);
-  expect(await response.json()).toEqual(payload);
+  expect(await response.text()).toBe(JSON.stringify(payload));
   return payload;
 }
 
@@ -89,7 +90,7 @@ async function expectConcurrent(url: string, statuses: number[], bodies: Record<
   expect(responses.map(({ status }) => status).toSorted((a, b) => a - b)).toEqual(statuses);
   for (const response of responses) {
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(await response.json()).toEqual(bodies[response.status]);
+    expect(await response.text()).toBe(JSON.stringify(bodies[response.status]));
   }
 }
 
@@ -160,22 +161,19 @@ it("approves the joined node's initial surface but gates a later manifest escala
 });
 
 it("burns once and malformed payloads, expires opaquely, and serializes concurrent misses", async () => {
-  const expired = await mintJoinUrl();
-  accessJoinCode(expired.joinUrl, { expires_at_ms: 0 });
-
-  const expiredResponse = await fetch(expired.joinUrl);
-  expect([expiredResponse.status, await expiredResponse.json()]).toEqual([404, opaqueNotFound]);
-
-  for (const payloadJson of ["{malformed", null]) {
-    await expectJoined(await mintJoinUrl("/public-gateway"));
-    const malformed = await mintJoinUrl();
-    accessJoinCode(malformed.joinUrl, { payload_json: payloadJson });
-    const malformedResponse = await fetch(malformed.joinUrl);
-    expect([malformedResponse.status, await malformedResponse.json()]).toEqual([
-      404,
-      opaqueNotFound,
-    ]);
-    expect(accessJoinCode(malformed.joinUrl)).toEqual([]);
+  for (const [index, values] of [
+    { expires_at_ms: 0 },
+    { payload_json: "{malformed" },
+    { payload_json: null },
+  ].entries()) {
+    if (index > 0) {
+      await expectJoined(await mintJoinUrl("/public-gateway"));
+    }
+    const setup = await mintJoinUrl();
+    accessJoinCode(setup.joinUrl, values);
+    const response = await fetch(setup.joinUrl);
+    expect([response.status, await response.text()]).toEqual([404, JSON.stringify(opaqueNotFound)]);
+    expect(accessJoinCode(setup.joinUrl)).toEqual([]);
   }
 
   const raced = await mintJoinUrl();
@@ -189,4 +187,20 @@ it("burns once and malformed payloads, expires opaquely, and serializes concurre
     404: opaqueNotFound,
     429: { error: "rate_limited" },
   });
+
+  // Rate limiting keeps precedence even if capturing storage fails.
+  const blocked = await mintJoinUrl();
+  const capture = vi
+    .spyOn(workerContext, "captureOpenClawStateWorkerContext")
+    .mockImplementation(() => {
+      throw new Error("Synthetic storage failure");
+    });
+  onTestFinished(() => capture.mockRestore());
+  const response = await fetch(blocked.joinUrl);
+  expect([response.status, await response.text()]).toEqual([429, '{"error":"rate_limited"}']);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  capture.mockRestore();
+  expect(accessJoinCode(blocked.joinUrl)).toEqual([
+    { shortcode: shortcodeFromUrl(blocked.joinUrl) },
+  ]);
 });

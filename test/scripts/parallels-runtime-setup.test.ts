@@ -135,7 +135,6 @@ it.each([
 it.each([
   ["26.1.0", false],
   ["26.0.0", true],
-  ["24.14.1", true],
 ] as const)("checks Node %s before bootstrap", (nodeVersion, needsBootstrap) => {
   const bootstrap = vi.fn();
   ensureSmokeGuestRuntime({

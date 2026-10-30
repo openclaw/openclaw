@@ -1,10 +1,19 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import {
+  capturePluginRegistration,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { describe, expect, it, vi } from "vitest";
-import { elevenLabsMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import plugin from "./index.js";
 
 describe("elevenLabsMediaUnderstandingProvider", () => {
   installPinnedHostnameTestHooks();
+  const { mediaUnderstandingProviders } = capturePluginRegistration({
+    id: "elevenlabs",
+    register: plugin.register,
+  });
+  const provider = requireRegisteredProvider(mediaUnderstandingProviders, "elevenlabs");
   const request = {
     buffer: Buffer.from("audio"),
     fileName: "voice.mp3",
@@ -16,7 +25,7 @@ describe("elevenLabsMediaUnderstandingProvider", () => {
   it("posts multipart audio to ElevenLabs speech-to-text", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ text: "hello" }));
 
-    const result = await elevenLabsMediaUnderstandingProvider.transcribeAudio!({
+    const result = await provider.transcribeAudio!({
       ...request,
       language: "en",
       fetchFn: fetchMock,
@@ -36,11 +45,50 @@ describe("elevenLabsMediaUnderstandingProvider", () => {
     expect(form.get("file")).toBeInstanceOf(Blob);
   });
 
+  it("forwards supported provider query options to speech-to-text", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ text: "hello" }));
+
+    await provider.transcribeAudio!({
+      ...request,
+      query: { no_verbatim: true, tag_audio_events: false, diarize: true },
+      fetchFn: fetchMock,
+    });
+
+    const [, requestInit] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
+    const form = expectDefined(requestInit, "ElevenLabs request init").body as FormData;
+    expect(form.get("no_verbatim")).toBe("true");
+    expect(form.get("tag_audio_events")).toBe("false");
+    expect(form.get("diarize")).toBe("true");
+  });
+
+  it("ignores unsupported query keys and does not let them override dedicated fields", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ text: "hello" }));
+
+    await provider.transcribeAudio!({
+      ...request,
+      language: "en",
+      query: {
+        webhook: "https://example.com/hook",
+        model_id: "other_model",
+        language_code: "fr",
+        no_verbatim: ["true"],
+      },
+      fetchFn: fetchMock,
+    });
+
+    const [, requestInit] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
+    const form = expectDefined(requestInit, "ElevenLabs request init").body as FormData;
+    expect(form.get("model_id")).toBe("scribe_v2");
+    expect(form.get("language_code")).toBe("en");
+    expect(form.get("webhook")).toBeNull();
+    expect(form.get("no_verbatim")).toBeNull();
+  });
+
   it("rejects non-object successful speech-to-text JSON with a stable provider error", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([])));
 
     await expect(
-      elevenLabsMediaUnderstandingProvider.transcribeAudio!({
+      provider.transcribeAudio!({
         ...request,
         model: "scribe_v2",
         fetchFn: fetchMock,

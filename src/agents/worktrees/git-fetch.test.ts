@@ -14,6 +14,7 @@ import {
   ensureProjectCheckoutCommit,
   refreshProjectCheckout,
 } from "../../projects/project-clone-runtime.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { resolveWorktreeBase } from "./base-ref.js";
 import { runGit } from "./git.js";
 
@@ -236,14 +237,7 @@ it.each(["unavailable", "uncertain", "recorded uncertain"])(
         if (failure !== "unavailable") {
           throw uncertain;
         }
-        return {
-          stdout: "",
-          stderr: "remote object unavailable",
-          code: 128,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        return createCommandResult({ stderr: "remote object unavailable", code: 128 });
       }
       return run(argv, options);
     });

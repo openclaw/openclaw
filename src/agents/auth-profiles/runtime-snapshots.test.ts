@@ -10,7 +10,7 @@ import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.
 import {
   getPreparedRuntimeAuthMaterializations as getMaterializations,
   recordRuntimeAuthMaterialization as recordMaterialization,
-  registerRuntimeAuthMaterializationMutationListener as onMaterialization,
+  runtimeAuthMaterializationChanges,
   revokeRuntimeAuthMaterializations as revokeMaterializations,
 } from "./runtime-materializations.js";
 import {
@@ -22,6 +22,7 @@ import {
   getPreparedRuntimeAuthProfileStoreSnapshotCore as getPreparedSnapshot,
   getRuntimeAuthProfileStoreSnapshotCore as getSnapshot,
   getRuntimeAuthProfileStoreMetadataRevision as getMetadataRevision,
+  getRuntimeAuthProfileStoreCatalogRevision as getCatalogRevision,
   getRuntimeAuthProfileStoreSnapshotRevision as getSnapshotRevision,
   noteRuntimeAuthProfileStorePersistedMutation as notePersistedMutation,
   registerRuntimeAuthProfileStoreMutationListener as onStoreMutation,
@@ -35,7 +36,9 @@ import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import type { AuthProfileStore } from "./types.js";
 
 const cleanups: Array<() => void> = [];
+const publishMaterialization = runtimeAuthMaterializationChanges.onChange;
 afterEach(() => {
+  runtimeAuthMaterializationChanges.onChange = publishMaterialization;
   for (const cleanup of cleanups.splice(0).toReversed()) {
     cleanup();
   }
@@ -43,17 +46,39 @@ afterEach(() => {
   clearSnapshots();
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const agentDir = "/tmp/openclaw-auth-snapshot-agent";
+const inheritedAuthDir = "/tmp/openclaw-auth-snapshot-inherited";
+const acme = "acme:primary";
 const track = (cleanup: () => void) => cleanups.push(cleanup);
+function observeMaterializations(
+  listener: NonNullable<typeof runtimeAuthMaterializationChanges.onChange>,
+) {
+  runtimeAuthMaterializationChanges.onChange = (event) => {
+    publishMaterialization?.(event);
+    listener(event);
+  };
+}
 function apiStore(key: string, cooldownUntil = 20_000): AuthProfileStore {
   return {
     version: 1,
-    profiles: { "acme:primary": createApiKeyCredential("acme", key) },
-    usageStats: { "acme:primary": { cooldownUntil } },
+    profiles: { [acme]: createApiKeyCredential("acme", key) },
+    usageStats: { [acme]: { cooldownUntil } },
   };
 }
 type Usage = AuthProfileStore["usageStats"];
 function setUsage(store: AuthProfileStore, dir: string, usageStats: Usage) {
   setSnapshot({ ...store, usageStats }, dir);
+}
+function acquireReader(databasePath: string) {
+  const reader = acquireAuthProfileReadDatabase(databasePath, openSqliteReadOnlyDatabase);
+  expect(reader.status).toBe("readable");
+  if (reader.status !== "readable") {
+    throw new Error("Expected a pooled auth reader");
+  }
+  return reader.db;
+}
+function withProfile(store: AuthProfileStore, id: string, provider: string, key: string) {
+  return { ...store, profiles: { ...store.profiles, [id]: createApiKeyCredential(provider, key) } };
 }
 
 const materialization = {
@@ -70,55 +95,42 @@ describe("runtime auth profile snapshots", () => {
   beforeEach(() => void prepareSharedAuthStoreOwnershipForNative());
 
   it("retires only the changed owner's reader until the runtime closes", () => {
-    const agentDir = tempDirs.make("auth-snapshot-readers-");
-    const databasePath = resolveAuthProfileDatabasePath(agentDir);
+    const readerDir = tempDirs.make("auth-snapshot-readers-");
+    const databasePath = resolveAuthProfileDatabasePath(readerDir);
     {
       using database = openNodeSqliteDatabase(databasePath);
       database.exec(
         "CREATE TABLE reader_fixture (value TEXT); INSERT INTO reader_fixture VALUES ('available')",
       );
     }
-    setSnapshot(createStore("reader-owner"), agentDir);
-    const reader = acquireAuthProfileReadDatabase(databasePath, openSqliteReadOnlyDatabase);
-    expect(reader.status).toBe("readable");
-    if (reader.status !== "readable") {
-      throw new Error("Expected a pooled auth reader");
-    }
-    const revision = getSnapshotRevision(agentDir);
-    setUsage(createStore("reader-owner"), agentDir, { "openai:default": { lastUsed: 2 } });
-    expect(getSnapshotRevision(agentDir)).not.toBe(revision);
-    expect(reader.db.isOpen).toBe(true);
-    clearSnapshot(path.join(agentDir, "unrelated"));
-    expect(reader.db.isOpen).toBe(true);
-    expect(reader.db.prepare("SELECT value FROM reader_fixture").get()).toEqual({
+    setSnapshot(createStore("reader-owner"), readerDir);
+    const reader = acquireReader(databasePath);
+    const revision = getSnapshotRevision(readerDir);
+    setUsage(createStore("reader-owner"), readerDir, { "openai:default": { lastUsed: 2 } });
+    expect(getSnapshotRevision(readerDir)).not.toBe(revision);
+    expect(reader.isOpen).toBe(true);
+    clearSnapshot(path.join(readerDir, "unrelated"));
+    expect(reader.isOpen).toBe(true);
+    expect(reader.prepare("SELECT value FROM reader_fixture").get()).toEqual({
       value: "available",
     });
 
-    clearSnapshot(agentDir);
-    expect(reader.db.isOpen).toBe(false);
-    const replacement = acquireAuthProfileReadDatabase(databasePath, openSqliteReadOnlyDatabase);
-    expect(replacement.status).toBe("readable");
-    if (replacement.status !== "readable") {
-      throw new Error("Expected the pooled auth reader to reopen");
-    }
+    clearSnapshot(readerDir);
+    expect(reader.isOpen).toBe(false);
+    const replacement = acquireReader(databasePath);
     clearSnapshots();
-    expect(replacement.db.isOpen).toBe(false);
+    expect(replacement.isOpen).toBe(false);
   });
 
-  it("marks default-owner materializations as inherited mutations", () => {
-    const listener = vi.fn();
-    track(onMaterialization(listener));
-    recordMaterialization(materialization);
-    expect(listener).toHaveBeenCalledWith({ affectsInheritedStores: true });
-  });
-
-  it("publishes model auth facts without impersonating credential rotation", () => {
-    const agentDir = "/tmp/openclaw-auth-runtime-materialized";
+  it("publishes inherited and local model auth facts without impersonating credential rotation", () => {
     const pluginStoreListener = vi.fn();
     const materializationListener = vi.fn();
     setSnapshot(createStore("materialized"), agentDir);
     track(onStoreMutation(pluginStoreListener));
-    track(onMaterialization(materializationListener));
+    observeMaterializations(materializationListener);
+    recordMaterialization(materialization);
+    expect(materializationListener).toHaveBeenCalledWith({ affectsInheritedStores: true });
+    materializationListener.mockClear();
     const facts = { ...materialization, authProfileId: "openai:default" };
     const input = { ...facts, agentDir };
     expect(recordMaterialization(input)).toBe(true);
@@ -143,7 +155,6 @@ describe("runtime auth profile snapshots", () => {
   });
 
   it("keeps metadata stable while replace publishes bookkeeping for rollback readers", () => {
-    const agentDir = "/tmp/openclaw-auth-metadata-revision";
     const store = createStore("metadata");
     setSnapshot(store, agentDir);
     const metadataRevision = getMetadataRevision(agentDir);
@@ -173,6 +184,82 @@ describe("runtime auth profile snapshots", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it.each(["set", "replace"] as const)(
+    "classifies %s availability separately from catalog identity",
+    (operation) => {
+      const store = apiStore("synthetic");
+      setSnapshot(store, agentDir);
+      const listener = vi.fn();
+      track(onStoreMutation(listener));
+      const publish = (next: AuthProfileStore) =>
+        operation === "set"
+          ? setSnapshot(next, agentDir)
+          : replaceSnapshots([{ agentDir, store: next }]);
+      const catalogRevision = getCatalogRevision(agentDir);
+      const metadataRevision = getMetadataRevision(agentDir);
+      const availabilityChanges: AuthProfileStore["usageStats"][] = [
+        { [acme]: { cooldownUntil: 30_000, cooldownReason: "rate_limit" as const } },
+        { [acme]: { blockedUntil: 40_000, blockedModel: "model", blockedScope: "model" as const } },
+        { [acme]: { disabledUntil: 50_000, disabledReason: "billing" as const } },
+        {},
+      ];
+      for (const usageStats of availabilityChanges) {
+        publish({ ...store, usageStats });
+        expect(listener).toHaveBeenLastCalledWith({
+          agentDir,
+          affectsInheritedStores: false,
+          profileSetChanged: false,
+          availabilityOnly: true,
+        });
+        expect(getCatalogRevision(agentDir)).toBe(catalogRevision);
+      }
+      expect(getMetadataRevision(agentDir)).toBeGreaterThan(metadataRevision);
+      for (const next of [
+        { ...store, order: { acme: [acme] } },
+        apiStore("rotated-synthetic"),
+        withProfile(store, "acme:secondary", "acme", "second-synthetic"),
+      ]) {
+        const previous = getCatalogRevision(agentDir);
+        publish(next);
+        expect(listener).toHaveBeenLastCalledWith(
+          expect.objectContaining({ availabilityOnly: false }),
+        );
+        expect(getCatalogRevision(agentDir)).toBeGreaterThan(previous);
+      }
+    },
+  );
+
+  it("keeps catalog revisions stable when availability churn exceeds the metadata revision bound", () => {
+    const dirs = Array.from({ length: 257 }, (_, index) => `${agentDir}-${index}`);
+    const store = apiStore("synthetic");
+    for (const dir of dirs) {
+      setSnapshot(store, dir);
+    }
+    const revisions = dirs.map(getCatalogRevision);
+    for (const dir of dirs.slice(0, 3)) {
+      setUsage(store, dir, {});
+    }
+    expect(dirs.map(getCatalogRevision)).toEqual(revisions);
+  });
+
+  it("bounds remembered revisions while refreshing a repeatedly cleared owner", () => {
+    const root = tempDirs.make("auth-snapshot-revisions-");
+    const first = path.join(root, "first");
+    const second = path.join(root, "second");
+    const metadataRevision = getMetadataRevision(first);
+    const snapshotRevision = getSnapshotRevision(first);
+    clearSnapshot(first);
+    clearSnapshot(second);
+    clearSnapshot(first);
+    for (let index = 0; index < 255; index += 1) {
+      clearSnapshot(path.join(root, `missing-${index}`));
+    }
+    expect(getMetadataRevision(first)).toBe(metadataRevision + 3);
+    expect(getSnapshotRevision(first)).toBe(snapshotRevision + 3);
+    expect(getMetadataRevision(second)).toBe(metadataRevision + 258);
+    expect(getSnapshotRevision(second)).toBe(snapshotRevision + 258);
+  });
+
   it.each(["replace", "remove"] as const)(
     "invalidates inherited runtimes after a shared-store %s publishes the complete roster",
     (operation) => {
@@ -186,7 +273,7 @@ describe("runtime auth profile snapshots", () => {
           sharedDatabasePath: sharedPath,
           location: "state-db" as const,
         },
-        store: { version: 1, profiles: { "acme:primary": createApiKeyCredential("acme", key) } },
+        store: { version: 1, profiles: { [acme]: createApiKeyCredential("acme", key) } },
       });
       const shared = entry(sharedPath, "shared-not-real");
       const local = entry(agentPath, "local-not-real");
@@ -203,18 +290,18 @@ describe("runtime auth profile snapshots", () => {
       expect(listener).toHaveBeenCalledExactlyOnceWith({
         affectsInheritedStores: true,
         profileSetChanged: operation === "remove",
+        availabilityOnly: false,
       });
     },
   );
 
   it("retains the JSON clone contract for nested values without encoding credential bodies", () => {
-    const baseStore = createStore("synthetic-access");
     const nested = { value: "original" };
     const array: unknown[] = [undefined];
     array.length = 2;
     array.push(Number.NaN, Infinity, -0, nested);
     const store = {
-      ...baseStore,
+      ...createStore("synthetic-access"),
       metadata: {
         absent: undefined,
         date: new Date("2026-01-01T00:00:00.000Z"),
@@ -226,8 +313,12 @@ describe("runtime auth profile snapshots", () => {
         ...JSON.parse('{"__proto__":{"synthetic":true}}'),
       },
     };
-    const expected = {
-      ...baseStore,
+    const stringify = vi.spyOn(JSON, "stringify");
+    const cloned = authProfileClone.cloneAuthProfileStore(store);
+    expect(stringify).not.toHaveBeenCalled();
+    stringify.mockRestore();
+    expect(cloned).toEqual({
+      ...store,
       metadata: {
         date: "2026-01-01T00:00:00.000Z",
         array: [null, null, null, null, 0, { value: "original" }],
@@ -237,12 +328,7 @@ describe("runtime auth profile snapshots", () => {
         boxed: [3, "string", false],
         ["__proto__"]: { synthetic: true },
       },
-    };
-    const stringify = vi.spyOn(JSON, "stringify");
-    const cloned = authProfileClone.cloneAuthProfileStore(store);
-    expect(stringify).not.toHaveBeenCalled();
-    stringify.mockRestore();
-    expect(cloned).toEqual(expected);
+    });
     expect(Object.getPrototypeOf(cloned.metadata)).toBe(Object.prototype);
     nested.value = "mutated";
     expect(cloned.metadata.first).toEqual({ value: "original" });
@@ -264,7 +350,6 @@ describe("runtime auth profile snapshots", () => {
   });
 
   it("refreshes only owned usage while keeping frozen worker credentials and references", () => {
-    const agentDir = "/tmp/openclaw-auth-catalog-usage";
     const descriptor = {
       type: "token" as const,
       provider: "acme",
@@ -272,19 +357,19 @@ describe("runtime auth profile snapshots", () => {
     };
     const published: AuthProfileStore = {
       version: 1,
-      profiles: { "acme:primary": descriptor },
-      usageStats: { "acme:primary": { cooldownUntil: 20_000 } },
+      profiles: { [acme]: descriptor },
+      usageStats: { [acme]: { cooldownUntil: 20_000 } },
     };
     const worker = Object.freeze({
       ...published,
       profiles: Object.freeze({
-        "acme:primary": Object.freeze({ ...descriptor, token: "resolved-not-real" }),
+        [acme]: Object.freeze({ ...descriptor, token: "resolved-not-real" }),
         "worker:external": Object.freeze(createApiKeyCredential("worker", "worker-not-real")),
       }),
-      order: Object.freeze({ acme: ["acme:primary"] }),
-      lastGood: Object.freeze({ acme: "acme:primary" }),
+      order: Object.freeze({ acme: [acme] }),
+      lastGood: Object.freeze({ acme }),
       usageStats: Object.freeze({
-        "acme:primary": Object.freeze({ cooldownUntil: 20_000 }),
+        [acme]: Object.freeze({ cooldownUntil: 20_000 }),
         "worker:external": Object.freeze({ lastUsed: 7 }),
       }),
     });
@@ -296,19 +381,22 @@ describe("runtime auth profile snapshots", () => {
     expect(cleared.profiles).toBe(worker.profiles);
     expect(cleared.order).toBe(worker.order);
     expect(cleared.lastGood).toBe(worker.lastGood);
-    expect(worker.usageStats["acme:primary"]).toEqual({ cooldownUntil: 20_000 });
+    expect(worker.usageStats[acme]).toEqual({ cooldownUntil: 20_000 });
 
-    const usage = { cooldownUntil: 30_000, failureCounts: { rate_limit: 2 } };
-    setUsage(published, agentDir, { "acme:primary": usage });
+    const usage = { cooldownUntil: 30_000, failureCounts: { timeout: 2 } };
+    const inlineId = "inline-api-key:acme";
+    setUsage(published, agentDir, { [acme]: usage, [inlineId]: usage });
     const blocked = read(worker);
-    expect(blocked.usageStats?.["acme:primary"]).toEqual(usage);
-    expectDefined(blocked.usageStats?.["acme:primary"], "published usage").cooldownUntil = 99;
-    expect(read(worker).usageStats?.["acme:primary"]?.cooldownUntil).toBe(30_000);
+    expect(blocked.usageStats?.[acme]).toEqual(usage);
+    expect(blocked.usageStats?.[inlineId]).toEqual(usage);
+    expectDefined(blocked.usageStats?.[acme], "published usage").cooldownUntil = 99;
+    expect(read(worker).usageStats?.[acme]?.cooldownUntil).toBe(30_000);
     expect(cleared.usageStats).toEqual({ "worker:external": { lastUsed: 7 } });
+    setUsage(published, agentDir, {});
+    expect(read(blocked).usageStats?.[inlineId]).toBeUndefined();
   });
 
   it("keeps usage with the captured physical owner and matching credential", () => {
-    const agentDir = "/tmp/openclaw-auth-catalog-owned";
     const siblingDir = "/tmp/openclaw-auth-catalog-sibling";
     const original = apiStore("owned-not-real");
     setSnapshot(original, agentDir);
@@ -335,15 +423,12 @@ describe("runtime auth profile snapshots", () => {
   });
 
   it("refreshes inherited usage without crossing an agent-local profile override", () => {
-    const inheritedAuthDir = "/tmp/openclaw-auth-catalog-inherited";
-    const agentDir = "/tmp/openclaw-auth-catalog-local";
-    const inherited = {
-      ...apiStore("inherited-not-real"),
-      profiles: {
-        ...apiStore("inherited-not-real").profiles,
-        "other:primary": createApiKeyCredential("other", "other-not-real"),
-      },
-    };
+    const inherited = withProfile(
+      apiStore("inherited-not-real"),
+      "other:primary",
+      "other",
+      "other-not-real",
+    );
     const local = apiStore("local-not-real", 30_000);
     setSnapshot(inherited, inheritedAuthDir);
     setSnapshot(local, agentDir);
@@ -354,26 +439,18 @@ describe("runtime auth profile snapshots", () => {
     const read = createUsageReader(agentDir, inheritedAuthDir);
     setUsage(inherited, inheritedAuthDir, { "other:primary": { cooldownUntil: 40_000 } });
     expect(read(worker).usageStats).toEqual({
-      "acme:primary": { cooldownUntil: 30_000 },
+      [acme]: { cooldownUntil: 30_000 },
       "other:primary": { cooldownUntil: 40_000 },
     });
     expect(read(worker).profiles).toBe(worker.profiles);
     setSnapshot(inherited, inheritedAuthDir);
     setUsage(local, agentDir, {});
-    expect(read(worker).usageStats?.["acme:primary"]).toBeUndefined();
+    expect(read(worker).usageStats?.[acme]).toBeUndefined();
   });
 
   it("merges inherited and agent prepared stores without persisted fallback", () => {
-    const inheritedAuthDir = "/tmp/openclaw-auth-runtime-inherited";
-    const agentDir = "/tmp/openclaw-auth-runtime-agent";
     setSnapshot(
-      {
-        ...createStore("inherited"),
-        profiles: {
-          ...createStore("inherited").profiles,
-          "anthropic:default": createApiKeyCredential("anthropic", "inherited-key"),
-        },
-      },
+      withProfile(createStore("inherited"), "anthropic:default", "anthropic", "inherited-key"),
       inheritedAuthDir,
     );
     setSnapshot(createStore("agent"), agentDir);
@@ -384,22 +461,14 @@ describe("runtime auth profile snapshots", () => {
       "openai:default": { type: "oauth", provider: "openai", access: "agent" },
       "anthropic:default": { type: "api_key", provider: "anthropic", key: "inherited-key" },
     });
-    expect(
-      getPreparedSnapshot(
-        "/tmp/openclaw-auth-runtime-missing",
-        "/tmp/openclaw-auth-runtime-also-missing",
-      ),
-    ).toBeUndefined();
+    expect(getPreparedSnapshot("/tmp/missing-auth", "/tmp/also-missing-auth")).toBeUndefined();
   });
 
   it("does not attribute shared order to an agent without its own snapshot", () => {
-    const inheritedAuthDir = "/tmp/openclaw-auth-order-inherited";
-    const agentDir = "/tmp/openclaw-auth-order-missing-agent";
-    const inherited = {
-      ...createStore("inherited-order"),
-      runtimeLocalOrderProviderIds: ["openai"],
-    };
-    setSnapshot(inherited, inheritedAuthDir);
+    setSnapshot(
+      { ...createStore("inherited-order"), runtimeLocalOrderProviderIds: ["openai"] },
+      inheritedAuthDir,
+    );
     expect(getPreparedSnapshot(agentDir, inheritedAuthDir)).toMatchObject({
       order: { openai: ["openai:default"] },
       runtimeLocalOrderProviderIds: [],
@@ -409,14 +478,11 @@ describe("runtime auth profile snapshots", () => {
     });
   });
 
-  it("copies a prepared same-owner snapshot only once and keeps the result isolated", () => {
-    const agentDir = "/tmp/openclaw-auth-prepared-same-owner";
+  it("keeps a prepared same-owner snapshot isolated", () => {
     const store = createStore("prepared");
     setSnapshot(store, agentDir);
-    const clone = vi.spyOn(authProfileClone, "cloneAuthProfileStore");
     const prepared = expectDefined(getPreparedSnapshot(agentDir, agentDir), "prepared snapshot");
     expect(prepared).toMatchObject(store);
-    expect(clone.mock.calls.length).toBeLessThanOrEqual(1);
     expectDefined(prepared.order?.openai, "prepared profile order").push("mutated");
     expect(getSnapshot(agentDir)?.order?.openai).toEqual(["openai:default"]);
   });

@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { readTranscriptStatsBatchReadOnlySync } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import * as memoryStorage from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { readTranscriptStatsBatchReadOnlySync } from "openclaw/plugin-sdk/memory-core-host-transcript-stats";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
@@ -37,10 +37,13 @@ describe("memory manager retained worker reads", () => {
     const config = memoryConfig();
     const initial = await getFreshManager(config, "cli");
     await initial.sync({ reason: "baseline", force: true });
-    fixtures
-      .memoryIndexFixtureWriter(initial)
-      .prepare("UPDATE memory_index_sources SET hash = ''")
-      .run();
+    // Published source changes advance the revision used by retained corpus facts.
+    fixtures.memoryIndexFixtureWriter(initial).exec(`
+      BEGIN IMMEDIATE;
+      UPDATE memory_index_sources SET hash = '';
+      UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
+      COMMIT;
+    `);
     await initial.close();
     using observed = observeSql();
     const manager = await getFreshManager(config, "cli");

@@ -155,6 +155,21 @@ remains absent until the normal usage writer records it.
 
 Both methods accept `activeOnly: true` to select currently running or queued sessions before pagination. Activity comes from the live runtime owners, not a stored status flag. Ordinary listing behavior is unchanged when the option is omitted or false. Active-only results include each visible agent-owned `global` and `unknown` session with its raw key and captured `agentId`; callers identify rows by agent, key, and `sessionId` together. Literal `agent:<id>:global` and `agent:<id>:unknown` sessions remain different rows. Active-only raw sentinel rows omit the optional `childSessions` and `hasActiveSubagentRun` fields; use `hasActiveRun` for direct activity. Normal permissions, archive/inclusion filters, and page limits still apply. Sessionless/internal runs are outside the session index.
 
+Subagent child rows carry an optional `subagentRunState` from the subagent
+registry's current run for that child: `active` (running or queued), `paused`
+(the run called `sessions_yield` and waits for a continuation, either a message
+or its own children's results), `interrupted`, or `historical` (ended). A paused
+row keeps the `status` and `endedAt` its yielded turn recorded, usually
+`done`, so clients that do not know `paused` keep their current presentation.
+Clients that show a paused child should check `subagentRunState` before
+`status`, and should still let `hasActiveRun` win: a separate follow-up turn can
+run in a child whose delegated task stays paused. A continuation, completion,
+kill, or settlement replaces or clears the pause and publishes the row through
+`sessions.changed`; the pause survives a Gateway restart because the task can
+still be continued. The row exposes no acknowledgment text or other child
+content. `sessions.changed` events carry the same field. Rows without a
+subagent run omit it, and the `dashboard` row mode does not include it.
+
 Both methods accept `ownerFirst: true` to prepend up to 60 matching viewer-owned
 rows (or `limit`, when smaller) to the normal first page, deduplicated by session key. This applies only
 when `offset` is zero or omitted; later pages use normal pagination. Owned rows
@@ -190,6 +205,18 @@ Omitting the ID retains the legacy single-observer behavior.
 Older clients remain compatible with the updated Gateway; the updated SDK's
 ownership fields require an updated Gateway.
 
+Foreground readers can include `initialHistory` to receive the first `chat.startup`
+snapshot in the same acknowledgment. It accepts `cursor`, `knownState`, `limit`,
+`maxBytes`, `toolResultMaxChars`, and `inputRunIds`; the subscription's normalized
+session and agent select the transcript. The Gateway admits the observer before
+reading history, so subsequent live events cover activity after the snapshot.
+The response adds `initialHistory: { ok: true, payload }` or
+`initialHistory: { ok: false, error }`. A history error leaves the successful
+subscription active: retry the history read or release the returned observer.
+Clients that omit `initialHistory` keep the existing acknowledgment shape. This
+optional request requires a Gateway that supports it; it does not change wire
+protocol v4.
+
 Background narration consumers declare `mode: "narration"`. The Gateway replaces
 their token-level `chat` deltas and raw `agent` assistant events with
 `session.narration` snapshots. Each snapshot contains `sessionKey`, optional
@@ -206,7 +233,13 @@ or retractions; this final flush is exempt from the two-second interval.
 Newer tool activity or a change of run discards pending older text, so a delayed
 snapshot cannot replace a newer tool line or switch the sidebar back to an older run.
 Lifecycle, status, tool, final, abort, and error events retain their existing
-delivery. Raw thinking streams and in-progress preamble or answer-candidate text
+delivery. Narration-only tool events retain identity, phase, error and visibility
+metadata, but omit `args`, input `diff`, `partialResult`, and `result` bodies.
+Tool progress still arrives through activity items. Opening the session admits
+full streams before fetching history; persisted tool cards retrieve complete
+output on demand through `chat.message.get`. Full subscribers and clients that
+omit narration mode retain the existing tool payloads.
+Raw thinking streams and in-progress preamble or answer-candidate text
 are omitted; item completion and answer selection still arrive. Approval events
 still require `includeApprovals: true` and the normal
 approval authority. Queued narration is discarded on unsubscribe, mode changes,
@@ -339,6 +372,11 @@ or protocol-version change.
   `chat.metadata.changed` invalidates commands unless `commandsChanged: false`.
   Usage-only and model-only publications leave commands available without another
   metadata RPC.
+  Successful usage-cache refreshes publish the latest `usageUpdatedAt` for each
+  agent at most once per 500 ms collection window. The underlying commits and
+  usage reads remain immediate. A refresh failure first publishes that agent's
+  pending success, then its failure receipt, so clients retain the last successful commit.
+  Model, authentication, and command invalidations do not use this window.
   Top-level lifecycle and capacity fields
   remain event receipts, including explicit clearing values. When a nested row
   omits an optional field, honor its top-level clearing tombstone; nested values
@@ -376,7 +414,7 @@ or protocol-version change.
   happens to match. Missing rows, generation or revision mismatches, and uncertain
   presentation ownership require the existing authoritative refresh path.
   The Gateway bounds this per-connection record and sends full rows after first
-  delivery, a successful list read, reconnect, resubscribe, reset/delete, changed presentation or visibility,
+  delivery, a successful legacy list read, reconnect, resubscribe, reset/delete, changed presentation or visibility,
   eviction, or uncertain delivery. Unsubscribe and disconnect clear the record;
   session deletion invalidates remembered ancestors.
   Recap-only (`reason: "activity-summary"`) events keep their ancestor payloads,
@@ -456,6 +494,23 @@ or protocol-version change.
   Job definitions, run summaries, diagnostics, and delivery traces are omitted;
   use `cron.get`, `cron.list`, or `cron.runs` when displaying those details.
   Internal `cron_changed` plugin hooks still receive the full job snapshot.
+- `cron.inventory.changed`: payload-free notice after a committed cron definition
+  change, including add, update, retarget, remove, and enable/disable changes.
+  It reaches every operator connection admitted to read cron, including readers
+  who can no longer see a retargeted job. It contains no job ID, session, or job
+  content; clients refresh only their own authorized inventory. Normal runtime
+  `started`, `finished`, and `scheduled` events do not invalidate inventory.
+  State-only `updated` publications and unchanged declarative saves also stay
+  quiet. A run that actually disables a job publishes a definition invalidation;
+  completing an already-disabled job does not. The same committed-definition
+  comparison gates `sessions.changed` with reason `cron-binding`, including
+  both old and new bound sessions on retarget. Known jobs consume runtime facts
+  locally; unrelated unknown job IDs do not require a list read.
+  Support is advertised in `hello-ok.features.events`. Clients using this
+  contract debounce invalidations, share inventory reads by connection and query,
+  and defer hidden views until they become visible. When the event is absent
+  from the catalog, retain the older `cron`-event refresh behavior. The notice
+  uses the ordinary per-connection sequence and slow-client gap recovery.
 - `shutdown`: gateway shutdown notification.
 - `node.pair.requested` / `node.pair.resolved`: node pairing lifecycle.
 - `node.invoke.request`: node invoke request broadcast.
@@ -514,8 +569,13 @@ wrapper sends `full`. Both ends retain at most 1,024 rows in delivery-order LRU.
 The server also bounds its field-hash vectors to 2 MiB per connection; `retain:
 false` on a full wrapper instructs both ends to discard that baseline. No row-byte
 charge is sent. Subscription changes, ordinary fact updates (including broad
-notifications), hidden ancestors, and list reads invalidate ancestor certification
-but preserve wire baselines. Those baselines describe the last row delivered to
+notifications) and hidden ancestors invalidate ancestor certification but preserve
+wire baselines. For clients negotiating row deltas, list reads preserve ancestor
+certification too: replies cannot replace the socket's retained event rows. Before
+referencing an unchanged ancestor, the server checks that its wire baseline is
+still retained; eviction or `retain: false` requires a full ancestor again.
+Legacy clients keep the list-read reset because their ancestor receipts belong
+to admitted roster rows. Wire baselines describe the last row delivered to
 the socket; current authorized fields still determine every patch. A response can
 follow a newly delivered row on the same socket.
 Connection retirement clears the state. A dropped event invalidates server

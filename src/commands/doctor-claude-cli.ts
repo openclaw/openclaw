@@ -98,18 +98,22 @@ function resolveClaudeCliAgentIds(cfg: OpenClawConfig): string[] {
   return [];
 }
 
-function resolveClaudeCliWorkspaceTargets(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-}) {
-  const agentIds = resolveClaudeCliAgentIds(params.cfg);
-  const defaultAgentId = tryResolveDefaultAgentId(params.cfg);
-  return agentIds.map((agentId) => {
+export function noteClaudeCliHealth(
+  cfg: OpenClawConfig,
+  deps?: {
+    noteFn?: typeof note;
+    workspaceDir?: string;
+  },
+) {
+  const env = process.env;
+  const requestedWorkspaceDir = deps?.workspaceDir;
+  const agentIds = resolveClaudeCliAgentIds(cfg);
+  const workspaceDefaultAgentId = tryResolveDefaultAgentId(cfg);
+  const workspaceTargets = agentIds.map((agentId) => {
     const workspaceDir =
-      params.workspaceDir && agentIds.length === 1 && agentId === defaultAgentId
-        ? params.workspaceDir
-        : resolveAgentWorkspaceDir(params.cfg, agentId, params.env);
+      requestedWorkspaceDir && agentIds.length === 1 && agentId === workspaceDefaultAgentId
+        ? requestedWorkspaceDir
+        : resolveAgentWorkspaceDir(cfg, agentId, env);
     const projectDir = resolveClaudeCliProjectDirForWorkspace({
       workspaceDir,
     });
@@ -120,21 +124,6 @@ function resolveClaudeCliWorkspaceTargets(params: {
         [projectDir, probeDirectoryHealth(projectDir), "Claude project dir"],
       ] as const,
     };
-  });
-}
-
-export function noteClaudeCliHealth(
-  cfg: OpenClawConfig,
-  deps?: {
-    noteFn?: typeof note;
-    workspaceDir?: string;
-  },
-) {
-  const env = process.env;
-  const workspaceTargets = resolveClaudeCliWorkspaceTargets({
-    cfg,
-    env,
-    workspaceDir: deps?.workspaceDir,
   });
   if (workspaceTargets.length === 0) {
     return;

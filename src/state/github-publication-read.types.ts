@@ -1,3 +1,4 @@
+import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
 export type GitHubPublicationRow = DB["github_publication_requests"];
@@ -68,6 +69,11 @@ export type SharedGitHubPublicationReadInput = {
     archivedAt?: number;
     repositoryWorkspaceId?: string;
     lifecycleRevision?: string;
-    worktree?: { id: string; branch: string; repoRoot: string };
+    worktree?: {
+      id: string;
+      branch: string;
+      repoRoot: string;
+      githubPullRequest?: SessionGitHubPullRequestBinding;
+    };
   };
 };

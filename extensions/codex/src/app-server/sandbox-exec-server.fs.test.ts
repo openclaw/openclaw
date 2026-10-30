@@ -1,4 +1,3 @@
-// Codex tests cover sandbox exec server.fs plugin behavior.
 import type { SandboxFsBridge } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
@@ -10,6 +9,7 @@ import {
   execServerUrlFromClient,
   globPath,
   openSocket,
+  openSandboxSocket,
   rpc,
   specialPath,
   waitForSocketClose,
@@ -19,22 +19,27 @@ afterEach(async () => {
   await sandboxExecServerRegistry.closeAll();
 });
 
-async function openSandboxSocket(sandbox: ReturnType<typeof createSandboxContext>) {
-  const client = createClient();
-  await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-  const socket = await openSocket(execServerUrlFromClient(client));
-  await rpc(socket, "initialize", { clientName: "test" });
-  socket.send(JSON.stringify({ method: "initialized" }));
-  return socket;
-}
-
 const connect = (overrides: Parameters<typeof createSandboxContext>[0]) =>
   openSandboxSocket(createSandboxContext(overrides));
 
 type Socket = Awaited<ReturnType<typeof openSocket>>;
 type LegacyTarget = { filePath: string; cwd?: string; signal?: AbortSignal };
 const fileStat = (size: number) => ({ type: "file" as const, size, mtimeMs: 1 });
-const uri = (name: string) => `file:///workspace/${name}`;
+const uri = (name: string) => `file:///workspace${name ? `/${name}` : ""}`;
+function pendingIo<T>() {
+  const releases = new Map<string, (value: T) => void>();
+  const run = vi.fn(
+    (params: LegacyTarget & { maxBytes?: number }) =>
+      new Promise<T>((resolve) => {
+        releases.set(params.filePath, resolve);
+      }),
+  );
+  return { run, releases };
+}
+const fileRpc = (socket: Socket, method: string, name: string, params = {}) =>
+  rpc(socket, `fs/${method}`, { path: uri(name), ...params });
+const copy = (socket: Socket, source: string, destination: string, params = {}) =>
+  rpc(socket, "fs/copy", { sourcePath: uri(source), destinationPath: uri(destination), ...params });
 const openFile = (socket: Socket, handleId: string, path = uri(`${handleId}.txt`)) =>
   rpc(socket, "fs/open", { handleId, path });
 const readBlock = (socket: Socket, handleId: string, offset: number, len: number) =>
@@ -69,9 +74,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     const socket = await connect({
       stat: async () => ({ type: "file", size: 1234, mtimeMs: 5678 }),
     });
-    await expect(
-      rpc(socket, "fs/getMetadata", { path: "file:///workspace/attachment.txt" }),
-    ).resolves.toEqual({
+    await expect(fileRpc(socket, "getMetadata", "attachment.txt")).resolves.toEqual({
       isDirectory: false,
       isFile: true,
       isSymlink: false,
@@ -107,54 +110,41 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     // Deliberately model the interface shipped before canonical mutation pins:
     // no resolvePinnedMutationTarget method and no pinnedPath parameters.
     const legacyBridge = {
-      resolvePath: ({ filePath }: { filePath: string; cwd?: string }) => ({
+      resolvePath: ({ filePath }: LegacyTarget) => ({
         relativePath: filePath,
         containerPath: filePath,
       }),
       readFile: async () => Buffer.alloc(0),
+      rename: async () => undefined,
+      stat: async ({ filePath }: LegacyTarget) => ({
+        ...fileStat(1),
+        type: /\.[^/]+$/u.test(filePath) ? ("file" as const) : ("directory" as const),
+      }),
       copyFile,
       writeFile,
       mkdirp,
       remove,
-      rename: async () => undefined,
-      stat: async ({ filePath }: { filePath: string; cwd?: string; signal?: AbortSignal }) => ({
-        type: /\.[^/]+$/u.test(filePath) ? ("file" as const) : ("directory" as const),
-        size: 1,
-        mtimeMs: 1,
-      }),
     } satisfies SandboxFsBridge;
     const sandbox = { ...createSandboxContext({}), fsBridge: legacyBridge };
     const socket = await openSandboxSocket(sandbox);
-    await expect(write(socket, "file:///workspace/legacy.txt", "compatible")).resolves.toEqual({});
+    await expect(write(socket, uri("legacy.txt"), "compatible")).resolves.toEqual({});
     expect(writeFile).toHaveBeenCalledWith({
       filePath: "/workspace/legacy.txt",
       data: Buffer.from("compatible"),
       mkdir: false,
     });
     await expect(
-      rpc(socket, "fs/createDirectory", {
-        path: "file:///workspace/legacy-dir",
-        recursive: true,
-      }),
+      fileRpc(socket, "createDirectory", "legacy-dir", { recursive: true }),
     ).resolves.toEqual({});
     expect(mkdirp).toHaveBeenCalledWith({ filePath: "/workspace/legacy-dir" });
-    await expect(
-      rpc(socket, "fs/copy", {
-        sourcePath: "file:///workspace/source.txt",
-        destinationPath: "file:///workspace/copied.txt",
-      }),
-    ).resolves.toEqual({});
+    await expect(copy(socket, "source.txt", "copied.txt")).resolves.toEqual({});
     expect(copyFile).toHaveBeenCalledWith({
       sourcePath: "/workspace/source.txt",
       destinationPath: "/workspace/copied.txt",
       mkdir: true,
     });
     await expect(
-      rpc(socket, "fs/remove", {
-        path: "file:///workspace/legacy.txt",
-        recursive: false,
-        force: false,
-      }),
+      fileRpc(socket, "remove", "legacy.txt", { recursive: false, force: false }),
     ).resolves.toEqual({});
     expect(remove).toHaveBeenCalledWith({
       filePath: "/workspace/legacy.txt",
@@ -163,18 +153,29 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     });
   });
 
-  it("preserves missing-parent failures for file writes", async () => {
-    const writeFile = vi.fn(async () => undefined);
-    const socket = await connect({
-      stat: async ({ filePath }) =>
-        filePath === "/workspace" ? { type: "directory", size: 1, mtimeMs: 1 } : null,
-      writeFile,
-    });
-    await expect(write(socket, "file:///workspace/missing/note.txt", "hello")).rejects.toThrow(
-      "parent directory not found",
-    );
-    expect(writeFile).not.toHaveBeenCalled();
-  });
+  it.each(["writeFile", "createDirectory"] as const)(
+    "requires an existing parent for %s",
+    async (method) => {
+      const mutate = vi.fn(async () => undefined);
+      const directory = method === "createDirectory";
+      const socket = await connect({
+        stat: async ({ filePath }) =>
+          filePath === (directory ? "/workspace/existing" : "/workspace")
+            ? { type: "directory", size: 1, mtimeMs: 1 }
+            : null,
+        ...(directory ? { mkdirp: mutate } : { writeFile: mutate }),
+      });
+      const operation = directory
+        ? fileRpc(socket, method, "missing/child", { recursive: false })
+        : write(socket, uri("missing/note.txt"), "hello");
+      await expect(operation).rejects.toThrow("parent directory not found");
+      expect(mutate).not.toHaveBeenCalled();
+      if (directory) {
+        await fileRpc(socket, method, "existing/child", { recursive: false });
+        expect(mutate).toHaveBeenCalledWith({ filePath: "/workspace/existing/child" });
+      }
+    },
+  );
 
   it("denies copies whose canonical destination is policy-protected", async () => {
     const copyFile = vi.fn(async () => undefined);
@@ -186,9 +187,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
           : { policyPath: filePath, pinnedPath: filePath },
     });
     await expect(
-      rpc(socket, "fs/copy", {
-        sourcePath: "file:///workspace/source.txt",
-        destinationPath: "file:///workspace/alias/config",
+      copy(socket, "source.txt", "alias/config", {
         sandbox: makeWorkspacePolicy(specialPath("project_roots", ".git"), "read"),
       }),
     ).rejects.toThrow("Codex fs sandbox denied write access");
@@ -200,12 +199,11 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     const writeFile = vi.fn(async () => undefined);
     const socket = await connect({ remove, writeFile });
     const workspacePolicy = makeWorkspacePolicy(specialPath("project_roots", ".git"), "read");
+    await expect(write(socket, uri(".git/config"), "blocked", workspacePolicy)).rejects.toThrow(
+      "Codex fs sandbox denied write access",
+    );
     await expect(
-      write(socket, "file:///workspace/.git/config", "blocked", workspacePolicy),
-    ).rejects.toThrow("Codex fs sandbox denied write access");
-    await expect(
-      rpc(socket, "fs/remove", {
-        path: "file:///workspace",
+      fileRpc(socket, "remove", "", {
         recursive: true,
         force: true,
         sandbox: workspacePolicy,
@@ -230,10 +228,9 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
         "Codex fs sandbox denied read access",
       );
     }
-    await write(socket, "file:///workspace/private/nested/allowed.txt", "ok", policy);
+    await write(socket, uri("private/nested/allowed.txt"), "ok", policy);
     await expect(
-      rpc(socket, "fs/remove", {
-        path: "file:///workspace/private",
+      fileRpc(socket, "remove", "private", {
         recursive: true,
         force: true,
         sandbox: policy,
@@ -254,13 +251,13 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     });
     const policy = makeWorkspacePolicy({ type: "path", path: "file:///workspace/private" });
     for (const [method, params] of [
-      ["fs/open", { handleId: "read", path: "file:///workspace/allowed.txt" }],
-      ["fs/readFile", { path: "file:///workspace/allowed.txt" }],
-      ["fs/getMetadata", { path: "file:///workspace/allowed.txt" }],
+      ["open", { handleId: "read" }],
+      ["readFile", {}],
+      ["getMetadata", {}],
     ] as const) {
-      await expect(rpc(socket, method, { ...params, sandbox: policy })).rejects.toThrow(
-        "Codex fs sandbox denied read access",
-      );
+      await expect(
+        fileRpc(socket, method, "allowed.txt", { ...params, sandbox: policy }),
+      ).rejects.toThrow("Codex fs sandbox denied read access");
     }
     expect(stat).not.toHaveBeenCalled();
     expect(readFile).not.toHaveBeenCalled();
@@ -269,17 +266,18 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
   it("ignores non-granting Codex fs sandbox special entries", async () => {
     const writeFile = vi.fn(async () => undefined);
     const socket = await connect({ writeFile });
-    await rpc(socket, "fs/writeFile", {
-      path: "file:///workspace/allowed.txt",
-      dataBase64: Buffer.from("ok").toString("base64"),
-      sandbox: codexFsSandboxContext({
+    await write(
+      socket,
+      uri("allowed.txt"),
+      "ok",
+      codexFsSandboxContext({
         entries: [
           { path: specialPath("minimal"), access: "read" },
           { path: specialPath("unknown"), access: "read" },
           { path: specialPath("current_working_directory"), access: "write" },
         ],
       }),
-    });
+    );
     expect(writeFile).toHaveBeenCalledWith({
       filePath: "/workspace/allowed.txt",
       data: Buffer.from("ok"),
@@ -291,8 +289,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     const readFile = vi.fn(async () => Buffer.from("ok"));
     const socket = await connect({ readFile });
     await expect(
-      rpc(socket, "fs/readFile", {
-        path: "file:///workspace/key.pem",
+      fileRpc(socket, "readFile", "key.pem", {
         sandbox: makeWorkspacePolicy(globPath("**/*.[Pp")),
       }),
     ).rejects.toThrow("fs sandbox glob character class must be closed");
@@ -304,8 +301,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     const socket = await connect({ remove });
     const policy = makeWorkspacePolicy(globPath("**/*.pem"));
     await expect(
-      rpc(socket, "fs/remove", {
-        path: "file:///workspace/src",
+      fileRpc(socket, "remove", "src", {
         recursive: true,
         force: true,
         sandbox: policy,
@@ -369,10 +365,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       sandbox.fsBridge.copyFile = undefined;
     }
     const socket = await openSandboxSocket(sandbox);
-    await rpc(socket, "fs/copy", {
-      sourcePath: "file:///workspace/source.txt",
-      destinationPath: "file:///workspace/destination.txt",
-    });
+    await copy(socket, "source.txt", "destination.txt");
     expect(readFile).toHaveBeenCalledWith({
       filePath: "/workspace/source.txt",
       maxBytes: 512 * 1024 * 1024,
@@ -391,9 +384,9 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       readFile,
       stat: async () => fileStat(data.byteLength),
     });
-    await expect(
-      rpc(socket, "fs/readFile", { path: "file:///workspace/note.txt" }),
-    ).resolves.toEqual({ dataBase64: data.toString("base64") });
+    await expect(fileRpc(socket, "readFile", "note.txt")).resolves.toEqual({
+      dataBase64: data.toString("base64"),
+    });
     expect(readFile).toHaveBeenCalledWith({
       filePath: "/workspace/note.txt",
       maxBytes: 512 * 1024 * 1024,
@@ -404,37 +397,12 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     const readFile = vi.fn(async () => Buffer.from("too-large"));
     const socket = await connect({
       readFile,
-      stat: async () => ({
-        type: "file",
-        size: 512 * 1024 * 1024 + 1,
-        mtimeMs: 1,
-      }),
+      stat: async () => fileStat(512 * 1024 * 1024 + 1),
     });
-    await expect(
-      rpc(socket, "fs/readFile", { path: "file:///workspace/huge.bin" }),
-    ).rejects.toThrow("file is too large to read through Codex sandbox exec-server");
+    await expect(fileRpc(socket, "readFile", "huge.bin")).rejects.toThrow(
+      "file is too large to read through Codex sandbox exec-server",
+    );
     expect(readFile).not.toHaveBeenCalled();
-  });
-
-  it("does not create parent directories for non-recursive directory creation", async () => {
-    const mkdirp = vi.fn(async () => undefined);
-    const socket = await connect({
-      mkdirp,
-      stat: async ({ filePath }) =>
-        filePath === "/workspace/existing" ? { type: "directory", size: 1, mtimeMs: 1 } : null,
-    });
-    await expect(
-      rpc(socket, "fs/createDirectory", {
-        path: "file:///workspace/missing/child",
-        recursive: false,
-      }),
-    ).rejects.toThrow("parent directory not found");
-    expect(mkdirp).not.toHaveBeenCalled();
-    await rpc(socket, "fs/createDirectory", {
-      path: "file:///workspace/existing/child",
-      recursive: false,
-    });
-    expect(mkdirp).toHaveBeenCalledWith({ filePath: "/workspace/existing/child" });
   });
 });
 
@@ -568,17 +536,8 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
   });
 
   it("caps pending sandbox stats and retains their slots until cancellation settles", async () => {
-    const releaseStats = new Map<string, (stat: ReturnType<typeof fileStat>) => void>();
-    const signals: AbortSignal[] = [];
-    const stat = vi.fn(
-      ({ filePath, signal }: { filePath: string; signal?: AbortSignal }) =>
-        new Promise<ReturnType<typeof fileStat>>((resolve) => {
-          if (signal) {
-            signals.push(signal);
-          }
-          releaseStats.set(filePath, resolve);
-        }),
-    );
+    const { run: stat, releases: releaseStats } = pendingIo<ReturnType<typeof fileStat>>();
+    const signals = () => stat.mock.calls.flatMap(([{ signal }]) => (signal ? [signal] : []));
     const readFile = vi.fn(async () => Buffer.from("never read"));
     const socket = await connect({ readFile, stat });
 
@@ -596,10 +555,10 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
       sendOpen(socket, 20_000 + index, `stat-${index}`, uri(`stat-${index}.bin`));
     }
     await vi.waitFor(() => expect(stat).toHaveBeenCalledTimes(128));
-    expect(signals).toHaveLength(128);
+    expect(signals()).toHaveLength(128);
     expect(readFile).not.toHaveBeenCalled();
     await expect(rpc(socket, "fs/close", { handleId: "stat-0" })).resolves.toEqual({});
-    expect(signals[0]?.aborted).toBe(true);
+    expect(signals()[0]?.aborted).toBe(true);
     await expectError(openFile(socket, "stat-0", uri("reused.bin")), -32600);
     await expectError(
       openFile(socket, "stat-overflow", uri("overflow.bin")),
@@ -617,8 +576,8 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
     socket.close();
     await disconnected;
     await vi.waitFor(() => {
-      expect(signals).toHaveLength(129);
-      expect(signals.every((signal) => signal.aborted)).toBe(true);
+      expect(signals()).toHaveLength(129);
+      expect(signals().every((signal) => signal.aborted)).toBe(true);
     });
     for (const releaseStat of releaseStats.values()) {
       releaseStat(fileStat(1));
@@ -631,13 +590,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
 
   it("retains closed in-flight reservations until their sandbox reads settle", async () => {
     const halfBudget = 32 * 1024 * 1024;
-    const releaseReads = new Map<string, (data: Buffer) => void>();
-    const readFile = vi.fn(
-      ({ filePath }: { filePath: string; maxBytes?: number; signal?: AbortSignal }) =>
-        new Promise<Buffer>((resolve) => {
-          releaseReads.set(filePath, resolve);
-        }),
-    );
+    const { run: readFile, releases: releaseReads } = pendingIo<Buffer>();
     const socket = await connect({
       readFile,
       stat: async () => fileStat(halfBudget),
@@ -672,19 +625,11 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
   });
 
   it("aborts pending reads and never starts new sandbox reads after socket disconnect", async () => {
-    let releaseRead: ((data: Buffer) => void) | undefined;
-    let releaseStat: ((stat: ReturnType<typeof fileStat>) => void) | undefined;
-    const readFile = vi.fn(
-      (_params: { filePath: string; maxBytes?: number; signal?: AbortSignal }) =>
-        new Promise<Buffer>((resolve) => {
-          releaseRead = resolve;
-        }),
-    );
+    const { run: readFile, releases: reads } = pendingIo<Buffer>();
+    const { run: pendingStat, releases: stats } = pendingIo<ReturnType<typeof fileStat>>();
     const stat = vi.fn(({ filePath }: { filePath: string }) => {
       if (filePath.endsWith("stat-pending.txt")) {
-        return new Promise<ReturnType<typeof fileStat>>((resolve) => {
-          releaseStat = resolve;
-        });
+        return pendingStat({ filePath });
       }
       return Promise.resolve({ type: "file" as const, size: 5, mtimeMs: 1 });
     });
@@ -702,8 +647,8 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
     await disconnected;
     // The client can close before the server observes and cancels the peer connection.
     await vi.waitFor(() => expect(signal?.aborted).toBe(true));
-    releaseStat?.(fileStat(5));
-    releaseRead?.(Buffer.from("small"));
+    stats.get("/workspace/stat-pending.txt")?.(fileStat(5));
+    reads.get("/workspace/pending.txt")?.(Buffer.from("small"));
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });

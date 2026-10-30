@@ -1,9 +1,7 @@
 import {
-  isAgentHarnessCompletionCustodyCurrent,
   runWithAgentHarnessCompletionCustody,
   type AgentHarnessCompletionCustody,
 } from "../agents/agent-harness-completion-custody.js";
-import { reconcileHarnessCompletionDelivery } from "../agents/agent-harness-completion-delivery.js";
 import {
   assertAgentHarnessCompletionScope,
   assertHarnessCompletionSourceAdmission,
@@ -118,11 +116,15 @@ async function deliverAgentHarnessCompletionBound(
     const requesterSessionId = requester.entry?.sessionId;
     const requesterLifecycleRevision = requester.entry?.lifecycleRevision;
     const isRequesterCurrent = (rejectRetiredCustody = false) => {
-      if (completionCustody && !isAgentHarnessCompletionCustodyCurrent(completionCustody, scope)) {
-        if (rejectRetiredCustody) {
-          throw new Error("Harness completion custody retired");
+      if (completionCustody) {
+        try {
+          runWithAgentHarnessCompletionCustody(completionCustody, scope, () => undefined);
+        } catch (cause) {
+          if (rejectRetiredCustody) {
+            throw new Error("Harness completion custody retired", { cause });
+          }
+          return false;
         }
-        return false;
       }
       let current: ReturnType<typeof readRequesterCurrent>;
       try {
@@ -181,39 +183,6 @@ async function deliverAgentHarnessCompletionBound(
           recoveryBlocked: true,
           error: "completion requester locator is missing or replaced",
         };
-      }
-      if (requester.agentId && requester.storePath) {
-        const custody = await reconcileHarnessCompletionDelivery({
-          agentId: requester.agentId,
-          storePath: requester.storePath,
-          sessionKey: requester.canonicalKey,
-          sourceRunId: buildAnnounceIdempotencyKey(params.announceId),
-          taskRunId: childSessionKey,
-        });
-        if (!isRequesterCurrent()) {
-          return {
-            delivered: false,
-            path: "none",
-            recoveryBlocked: true,
-            error: "completion requester locator is missing or replaced",
-          };
-        }
-        if (custody === "delivered") {
-          return { delivered: true, path: "direct" };
-        }
-        if (custody !== "unowned") {
-          return {
-            delivered: false,
-            path: "none",
-            ...(custody === "pending"
-              ? { recoveryPending: true as const }
-              : { recoveryBlocked: true as const }),
-            error:
-              custody === "pending"
-                ? "completion is owned by requester recovery"
-                : "completion recovery receipt or owner is unresolved",
-          };
-        }
       }
       return await withAgentHarnessCompletionAdmission(
         {

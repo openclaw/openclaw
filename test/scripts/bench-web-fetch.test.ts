@@ -1,40 +1,29 @@
 // Bench Web Fetch tests cover the offline benchmark CLI contract.
-import { spawn } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { describe, expect } from "vitest";
+import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 
 const SCRIPT_PATH = "scripts/bench-web-fetch.ts";
+const it = createCommandTest();
 
-function runBenchWebFetch(...args: string[]) {
-  return new Promise<{ status: number | null; stderr: string; stdout: string }>(
-    (resolve, reject) => {
-      const child = spawn(process.execPath, ["--import", "tsx", SCRIPT_PATH, ...args], {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          FIRECRAWL_API_KEY: "test-firecrawl-key-that-should-be-ignored",
-          NODE_NO_WARNINGS: "1",
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.setEncoding("utf8");
-      child.stderr.setEncoding("utf8");
-      child.stdout.on("data", (chunk: string) => {
-        stdout += chunk;
-      });
-      child.stderr.on("data", (chunk: string) => {
-        stderr += chunk;
-      });
-      child.once("error", reject);
-      child.once("close", (status) => resolve({ status, stderr, stdout }));
+async function runBenchWebFetch(command: CommandFixture, ...args: string[]) {
+  const result = await command.run(process.execPath, ["--import", "tsx", SCRIPT_PATH, ...args], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      FIRECRAWL_API_KEY: "test-firecrawl-key-that-should-be-ignored",
+      NODE_NO_WARNINGS: "1",
     },
-  );
+  });
+  expect(result.error).toBeUndefined();
+  return result;
 }
 
 describe("web fetch benchmark script", () => {
-  it.concurrent("accepts the package-manager separator documented for pnpm scripts", async () => {
+  it.concurrent("accepts the package-manager separator documented for pnpm scripts", async ({
+    command,
+  }) => {
     const result = await runBenchWebFetch(
+      command,
       "--",
       "--case",
       "tool-create",
@@ -58,8 +47,8 @@ describe("web fetch benchmark script", () => {
     expect(report.cases[0]?.samplesMs).toHaveLength(1);
   });
 
-  it.concurrent("rejects duplicate singular flags without a stack trace", async () => {
-    const result = await runBenchWebFetch("--runs", "1", "--runs", "2");
+  it.concurrent("rejects duplicate singular flags without a stack trace", async ({ command }) => {
+    const result = await runBenchWebFetch(command, "--runs", "1", "--runs", "2");
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
@@ -67,13 +56,13 @@ describe("web fetch benchmark script", () => {
     expect(result.stderr).not.toContain("\n    at ");
   });
 
-  it.concurrent.each([
+  it.concurrent.for<readonly [string, string, string]>([
     ["--runs", "1e3", "--runs must be a positive integer"],
     ["--warmup", "1e3", "--warmup must be a non-negative integer"],
     ["--runs", "9007199254740993", "--runs must be a positive integer"],
     ["--warmup", "9007199254740993", "--warmup must be a non-negative integer"],
-  ])("rejects invalid benchmark count %s %s", async (flag, value, expectedError) => {
-    const result = await runBenchWebFetch(flag, value);
+  ])("rejects invalid benchmark count %s %s", async ([flag, value, expectedError], { command }) => {
+    const result = await runBenchWebFetch(command, flag, value);
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");

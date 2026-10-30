@@ -5,17 +5,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import * as announceDelivery from "../../agents/subagents/announce/subagent-announce-delivery.js";
 import { sourceOwnerChangedResult } from "../../agents/subagents/announce/subagent-announce-dispatch.js";
-import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import { restoreSubagentRunsFromDisk } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
-import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   getSubagentRunByRunId,
   initSubagentRegistry,
   resumeSubagentRun,
   registerSubagentRun,
 } from "../../agents/subagents/registry/subagent-registry.js";
-import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import {
+  settleSubagentRegistryPersistenceWork,
+  writeSubagentSessionEntry,
+} from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -209,6 +209,13 @@ describe("gateway agent follow-up activity", () => {
           canonicalKey: childSessionKey,
         }));
         if (persisted) {
+          await writeSubagentSessionEntry({
+            stateDir: root,
+            agentId: "main",
+            sessionKey: childSessionKey,
+            defaultSessionId: currentEntry.sessionId,
+            lifecycleRevision: currentEntry.lifecycleRevision,
+          });
           seedReleasedYieldedSubagentRun({
             previousRunId,
             childSessionKey,
@@ -280,7 +287,7 @@ describe("gateway agent follow-up activity", () => {
         };
         const terminal = createDeferred();
         const respond = vi.fn((ok, payload) => {
-          if (ok && payload?.status === "ok") {
+          if (!ok || payload?.status === "ok" || payload?.status === "error") {
             terminal.resolve();
           }
         });
@@ -354,11 +361,7 @@ describe("gateway agent follow-up activity", () => {
 describe("gateway agent completed-child delivery", () => {
   afterEach(describe0AfterEach0);
 
-  for (const boundary of [
-    "transcript read",
-    "delivery admission",
-    "restored transcript read",
-  ] as const) {
+  for (const boundary of ["transcript read", "delivery admission"] as const) {
     it(`announces both executions when follow-up starts during the first ${boundary}`, async ({
       signal,
     }) => {
@@ -544,9 +547,6 @@ describe("gateway agent completed-child delivery", () => {
         });
         let admitted = false;
         try {
-          if (boundary === "restored transcript read") {
-            await restoreSubagentRunsFromDisk({ runs: subagentRuns });
-          }
           resumeSubagentRun(firstRunId);
           await withinTest(paused.promise, signal);
           await invokeAgent(
@@ -564,15 +564,6 @@ describe("gateway agent completed-child delivery", () => {
             task: "Second task",
             execution: { status: "running" },
           });
-          if (boundary === "restored transcript read") {
-            expect(loadSubagentRegistryFromSqlite().get(firstRunId)).toMatchObject({
-              runId: firstRunId,
-              generation: 1,
-              execution: { status: "terminal", outcome: { status: "ok" } },
-              completion: { terminalReply: { disposition: "visible", text: "FIRST_ONLY" } },
-              delivery: { status: "pending" },
-            });
-          }
           release.resolve();
           await withinTest(firstAnnounceFinished.promise, signal);
           expect(handoffs).toHaveLength(1);

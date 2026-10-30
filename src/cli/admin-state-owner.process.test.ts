@@ -50,6 +50,7 @@ import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-cla
 import { writeAdminStateOwnerObservationPreload } from "./admin-state-owner.observation.test-support.js";
 import { adminStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { stateOwnerEnv } from "./cli-process-fixture.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterAll);
 const entrypoint = resolveRuntimeWorkerArgv(
@@ -89,6 +90,12 @@ const operations = [
   approvalWrite("approvals-set", ["set", "--stdin"]),
   approvalWrite("allowlist-add", ["allowlist", "add", pattern]),
   approvalWrite("allowlist-remove", ["allowlist", "remove", pattern]),
+  {
+    kind: "native-commit",
+    method: "exec.approvals.native.commit",
+    capability: GATEWAY_SERVER_CAPS.EXEC_APPROVALS_NATIVE_COMMIT,
+    args: ["approvals", "native", "--stdin", "--json"],
+  },
 ] as const;
 type Scenario = "live" | "offline" | "missing-capability" | "refused" | "lost-reply";
 
@@ -159,19 +166,9 @@ describe("administrative CLI state owner routing", () => {
   beforeAll(async () => {
     root = roots.make("openclaw-admin-owner-");
     claim = await acquireTestPortBlock({ offsets: [0, 1] });
-    env = {
-      PATH: process.env.PATH,
-      SystemRoot: process.env.SystemRoot,
-      HOME: root,
-      USERPROFILE: root,
-      OPENCLAW_HOME: root,
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+    env = stateOwnerEnv(root, {
       OPENCLAW_GATEWAY_TOKEN: token,
-      OPENCLAW_NO_RESPAWN: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      NODE_DISABLE_COMPILE_CACHE: "1",
-    };
+    });
     const preloadPath = await writeAdminStateOwnerObservationPreload(
       root,
       resolveGatewayLockPaths(env).ownerLockPath,
@@ -303,7 +300,11 @@ describe("administrative CLI state owner routing", () => {
   it.each(
     operations.flatMap((operation) => {
       const scenarios: Scenario[] = ["live", "offline", "missing-capability"];
-      if (["pairing-list", "pairing-approve", "approvals-set"].includes(operation.kind)) {
+      if (
+        ["pairing-list", "pairing-approve", "approvals-set", "native-commit"].includes(
+          operation.kind,
+        )
+      ) {
         scenarios.push("refused", "lost-reply");
       }
       return scenarios.map((mode) => Object.assign({}, operation, { mode }));
@@ -328,7 +329,11 @@ describe("administrative CLI state owner routing", () => {
         file: {
           version: 1,
           agents: {
-            "*": { allowlist: operation.kind === "allowlist-remove" ? [{ pattern }] : [] },
+            "*": {
+              allowlist: ["allowlist-remove", "native-commit"].includes(operation.kind)
+                ? [{ pattern }]
+                : [],
+            },
           },
         },
       },
@@ -336,7 +341,23 @@ describe("administrative CLI state owner routing", () => {
     const { result, succeeded } = await runOwned(
       operation.args,
       // Default CLI saves have always normalized legacy string allowlist entries.
-      JSON.stringify({ version: 1, agents: { "*": { allowlist: [pattern] } } }),
+      JSON.stringify(
+        operation.kind === "native-commit"
+          ? {
+              operation: "commit",
+              agentId: "main",
+              command: "native fixture",
+              uses: [{ match: { pattern }, resolvedPath: pattern }],
+              grants: [],
+              authorization: {
+                source: "current-policy",
+                security: "full",
+                ask: "off",
+                allowlistSatisfied: true,
+              },
+            }
+          : { version: 1, agents: { "*": { allowlist: [pattern] } } },
+      ),
     );
     const prefix = operation.method === "exec.approvals.set" ? ["exec.approvals.get"] : [];
     expect(methods).toEqual(
@@ -367,6 +388,18 @@ describe("administrative CLI state owner routing", () => {
       }
       if (succeeded && operation.kind === "pairing-approve") {
         expect(result.stdout).toContain(`Approved ${channel} sender sender.`);
+      }
+    } else if (operation.kind === "native-commit") {
+      const allowlist = readExecApprovalsSnapshot().file.agents?.["*"]?.allowlist;
+      expect(allowlist).toMatchObject([
+        {
+          pattern,
+          ...(applied ? { lastUsedCommand: "native fixture", lastResolvedPath: pattern } : {}),
+        },
+      ]);
+      expect(allowlist?.[0]?.lastUsedAt !== undefined).toBe(applied);
+      if (succeeded) {
+        expect(JSON.parse(result.stdout)).toEqual({ authorized: true });
       }
     } else {
       const expected =

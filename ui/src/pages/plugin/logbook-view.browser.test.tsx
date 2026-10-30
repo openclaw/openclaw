@@ -1,24 +1,15 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { i18n } from "../../i18n/index.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import "../../styles/base.css";
 import { Logbook } from "./logbook-view.tsx";
-
-let container: HTMLDivElement;
-let dispose: (() => void) | undefined;
-
-beforeEach(() => {
-  container = document.createElement("div");
-  document.body.append(container);
-});
+import { logbookClient, logbookStatus, logbookTimeline } from "./logbook.test-support.ts";
+const neverRetired = new Promise<void>(() => {});
 
 afterEach(() => {
-  dispose?.();
-  dispose = undefined;
-  container.remove();
+  cleanupSolid();
   vi.restoreAllMocks();
 });
 
@@ -33,44 +24,22 @@ it.each([
     await page.viewport(width, 700);
     vi.spyOn(i18n, "getLocale").mockReturnValue(locale);
     const day = "2026-01-01";
-    const status = {
-      captureEnabled: true,
-      capturePaused: false,
-      captureIntervalSeconds: 30,
-      analysisIntervalMinutes: 15,
-      retentionDays: 30,
-      pendingFrames: 0,
-      analysisRunning: false,
-      visionModelSource: "missing",
-      today: day,
-      todayCards: 1,
-      timeZone: "UTC",
-    };
-    const timeline = {
-      day,
-      cards: [
-        {
-          id: 1,
-          day,
-          startMs: Date.UTC(2026, 0, 1, 0, 0),
-          endMs: Date.UTC(2026, 0, 1, 0, 10),
-          title: "Reviewing the synthetic example project and its implementation notes ".repeat(4),
-          summary: "Synthetic activity for timestamp layout validation.",
-          detail: "",
-          category: "Coding",
-          distractions: [],
-        },
-      ],
-      stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
-    };
+    const status = logbookStatus(day);
+    const timeline = logbookTimeline(day, [
+      {
+        startMs: Date.UTC(2026, 0, 1, 0, 0),
+        endMs: Date.UTC(2026, 0, 1, 0, 10),
+        title: "Reviewing the synthetic example project and its implementation notes ".repeat(4),
+        summary: "Synthetic activity for timestamp layout validation.",
+      },
+    ]);
     const request = vi.fn(async (method: string) =>
-      method === "logbook.status" ? status : method === "logbook.days" ? { days: [] } : timeline,
+      method === "logbook.status" ? status : timeline,
     );
-    // SAFETY: This view fixture only invokes request on the browser client.
-    const client = { request } as unknown as GatewayBrowserClient;
-    dispose = mountSolid(() => <Logbook initialClient={client} />, {
-      container,
-    }).unmount;
+    const client = logbookClient(request);
+    const { container } = mountSolid(() => (
+      <Logbook initialClient={client} getRetired={() => neverRetired} />
+    ));
     await waitForSolid(() =>
       expect(container.querySelector(".logbook-card__header")).not.toBeNull(),
     );
@@ -81,6 +50,8 @@ it.each([
     const stripe = header.querySelector<HTMLElement>(".logbook-card__stripe")!;
     const title = header.querySelector<HTMLElement>(".logbook-card__title")!;
     const meta = header.querySelector<HTMLElement>(".logbook-card__meta")!;
+    const stripeRect = stripe.getBoundingClientRect();
+    const titleRect = title.getBoundingClientRect();
     expect(time.textContent?.trim()).toBe(expected);
     if (width <= 768) {
       expect(getComputedStyle(time).display).toBe("none");
@@ -89,17 +60,11 @@ it.each([
       const range = document.createRange();
       range.selectNodeContents(time);
       expect(range.getBoundingClientRect().width).toBeGreaterThan(0);
-      expect(range.getBoundingClientRect().right).toBeLessThanOrEqual(
-        stripe.getBoundingClientRect().left,
-      );
+      expect(range.getBoundingClientRect().right).toBeLessThanOrEqual(stripeRect.left);
     }
-    expect(stripe.getBoundingClientRect().width).toBeGreaterThan(0);
-    expect(title.getBoundingClientRect().left).toBeGreaterThan(
-      stripe.getBoundingClientRect().right,
-    );
-    expect(title.getBoundingClientRect().right).toBeLessThanOrEqual(
-      header.getBoundingClientRect().right,
-    );
+    expect(stripeRect.width).toBeGreaterThan(0);
+    expect(titleRect.left).toBeGreaterThan(stripeRect.right);
+    expect(titleRect.right).toBeLessThanOrEqual(header.getBoundingClientRect().right);
     expect(title.scrollWidth).toBeGreaterThan(title.clientWidth);
     expect(getComputedStyle(title).textOverflow).toBe("ellipsis");
     expect(getComputedStyle(title).overflow).toBe("hidden");

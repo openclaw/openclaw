@@ -30,6 +30,18 @@ async function seedMain(sessionId: string, entry: Partial<SessionEntry>, primary
 const resetMain = () =>
   directSessionReq<{ entry: SessionEntry }>("sessions.reset", { key: "main" });
 
+test("sessions.reset preserves a person-linked model account", async () => {
+  const selection = {
+    authProfileOverride: "openai:linked-person",
+    authProfileOverrideSource: "user-link",
+  } satisfies Partial<SessionEntry>;
+  const read = await seedMain("linked-account", selection);
+  const reset = await resetMain();
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry).toMatchObject(selection);
+  expect(read()).toMatchObject(selection);
+});
+
 test("sessions.reset stamps the creator's required sandbox only when materializing a new row", async () => {
   const { storePath } = await createSessionStoreDir();
   const profile = ensureProfileForEmail("sandboxed-reset-creator@example.test");
@@ -130,6 +142,12 @@ const ownedChildMetadata = {
       sessionId: "cli-session-123",
       authProfileId: "anthropic:work",
       extraSystemPromptHash: "prompt-hash",
+      reseedReceipt: {
+        version: 1,
+        promptHash: "a".repeat(64),
+        localSessionId: "sess-owned-child",
+        userTurnDisposition: "omitted",
+      },
     },
   },
   claudeCliSessionId: "cli-session-123",
@@ -236,6 +254,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   await writeSessionStore({
     entries: {
       "subagent:child": sessionStoreEntry("sess-owned-child", {
+        agentHarnessId: "codex",
         sessionFile: customSessionFile,
         ...ownedChildMetadata,
         forkedFromParent: undefined,
@@ -254,7 +273,15 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   const stored = loadSessionEntry({ sessionKey: "agent:main:subagent:child", storePath });
   for (const entry of [reset.payload?.entry, stored]) {
     expect(entry).not.toHaveProperty("sessionFile");
-    expect(entry).toMatchObject({ ...ownedChildMetadata, ...provenance });
+    expect(entry).not.toHaveProperty("agentHarnessId");
+    expect(entry).toMatchObject({
+      sessionId: "sess-owned-child",
+      ...ownedChildMetadata,
+      ...provenance,
+    });
+    // Spawned children retain CLI bindings and reseed receipts (fa56682b3ced).
+    expect(entry?.cliSessionIds).toEqual(ownedChildMetadata.cliSessionIds);
+    expect(entry?.cliSessionBindings).toEqual(ownedChildMetadata.cliSessionBindings);
   }
   expect(stored?.inheritedGitContributorProfileIds).toEqual(["original-contributor"]);
 });

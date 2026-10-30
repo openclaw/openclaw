@@ -30,6 +30,10 @@ export const cliRecoveryEntrypoints = {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../../extensions/memory-core/doctor-health-api",
   }),
+  openaiDoctorHealth: worker({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../extensions/openai/doctor-health-api",
+  }),
   signalExitBarrier: worker({
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "signal-exit-barrier",
@@ -165,6 +169,10 @@ export const gatewayDirectStopEntrypoints = {
     sourceWorkerName: "../sessions/session-controller.queries",
   }),
   runLoop: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "gateway-cli/run-loop" }),
+  restartIntent: worker({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/restart-intent",
+  }),
   restartPolicy: worker({
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../infra/restart",

@@ -33,13 +33,12 @@ function formatExecutionObservation(observation: SubagentExecutionObservation): 
 export function buildSubagentsStatusLine(params: {
   context: ControlledSubagentRunsReadContext;
   verboseEnabled: boolean;
-  now?: number;
 }): string | undefined {
   const { context, verboseEnabled } = params;
   if (context.runs.length === 0) {
     return undefined;
   }
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   const activeRuns = new Set(context.list.view.active);
   const active = activeRuns.size;
   const done = context.runs.filter(

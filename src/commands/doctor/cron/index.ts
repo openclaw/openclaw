@@ -11,6 +11,10 @@ import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
 import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
 import {
+  maybeRepairCronStoreSelection,
+  readCronStoreSelectionForDoctor,
+} from "./default-store-selection.js";
+import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
   readLegacyCronStorePath,
@@ -108,6 +112,18 @@ export async function collectLegacyCronStoreHealthFindings(params: {
 }): Promise<readonly HealthFinding[]> {
   let state: LegacyCronRepairState | null;
   try {
+    const selection = await readCronStoreSelectionForDoctor(params.cfg);
+    if (selection.status === "unresolved") {
+      return [
+        legacyCronStoreFinding({
+          message: selection.message,
+          path: selection.storePath,
+          requirement: "cron-default-partition-selected",
+          fixHint:
+            "Run openclaw doctor --fix in an interactive terminal and complete Select the default cron partition. --yes does not choose a partition.",
+        }),
+      ];
+    }
     state = await loadLegacyCronRepairState({ cfg: params.cfg, readOnly: true });
   } catch (err) {
     rethrowSqliteSchemaVersionError(err);
@@ -232,10 +248,13 @@ export async function collectLegacyCronStoreHealthFindings(params: {
 export async function maybeRepairLegacyCronStore(params: {
   cfg: OpenClawConfig;
   options: DoctorOptions;
-  prompter: Pick<DoctorPrompter, "confirm">;
+  prompter: Pick<DoctorPrompter, "confirm"> & Partial<Pick<DoctorPrompter, "selectRuntimeRepair">>;
 }) {
   let state: LegacyCronRepairState | null;
   try {
+    if (!(await maybeRepairCronStoreSelection(params))) {
+      return;
+    }
     state = await loadLegacyCronRepairState({ cfg: params.cfg });
   } catch (err) {
     rethrowSqliteSchemaVersionError(err);

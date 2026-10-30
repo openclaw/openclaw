@@ -63,6 +63,13 @@ function fixture() {
   }>();
   const finishCallback = createDeferredCore();
   const events: string[] = [];
+  const replies: Array<ReturnType<typeof createDeferredCore<void>>> = [];
+  let active: ReturnType<typeof observe<string>> | undefined;
+  const reply = () => {
+    const deferred = createDeferredCore();
+    replies.push(deferred);
+    return deferred;
+  };
   const onRenew = vi.fn(async (command: Command) => command.publish(Date.now() + leaseMs));
   const onVerify = vi.fn(async (command: Command) => command.publish(committedExpiry));
   const execute = (
@@ -109,7 +116,7 @@ function fixture() {
   });
   maintenance.own({}, "shared-resources", () => void events.push("actor-close"));
   const run = () =>
-    observe(
+    (active = observe(
       withOpenClawStateLeaseAsync(
         { scope: "core:mcp-oauth", key: "timer", leaseMs, waitMs: 0 },
         context,
@@ -119,8 +126,17 @@ function fixture() {
           return "completed";
         },
       ),
-    );
+    ));
   return {
+    reply,
+    async [Symbol.asyncDispose]() {
+      for (const deferred of replies) {
+        deferred.resolve();
+      }
+      finishCallback.resolve();
+      await active?.outcome;
+      await maintenance.close();
+    },
     run,
     enter: (result: ReturnType<typeof run>) => waitUntil(entered.promise, result),
     maintenance,
@@ -142,7 +158,7 @@ describe("async state lease timer", () => {
   ])(
     "retains ownership only when contention clears before expiry ($availableAfterMs ms)",
     async ({ availableAfterMs, remainsOwned }) => {
-      const f = fixture();
+      await using f = fixture();
       const availableAt = Date.now() + availableAfterMs;
       f.onRenew.mockImplementation(async (command) => {
         if (Date.now() < availableAt) {
@@ -154,128 +170,100 @@ describe("async state lease timer", () => {
         return command.publish(Date.now() + 3_000);
       });
       const result = f.run();
-      try {
-        const { lease, within } = await f.enter(result);
-        await within(() => vi.advanceTimersByTimeAsync(3_300));
-        expect(lease.signal.aborted).toBe(!remainsOwned);
-        if (remainsOwned) {
-          await within(() => lease.assertOwned());
-        } else {
-          await expect(within(() => lease.assertOwned())).rejects.toMatchObject(lostLease.error);
-        }
-        f.finishCallback.resolve();
-        expect(await result.outcome).toMatchObject(
-          remainsOwned ? { ok: true, value: "completed" } : lostLease,
-        );
-        expect(f.release).toHaveBeenCalledOnce();
-      } finally {
-        f.finishCallback.resolve();
-        await result.outcome;
-        await f.maintenance.close();
+      const { lease, within } = await f.enter(result);
+      await within(() => vi.advanceTimersByTimeAsync(3_300));
+      expect(lease.signal.aborted).toBe(!remainsOwned);
+      if (remainsOwned) {
+        await within(() => lease.assertOwned());
+      } else {
+        await expect(within(() => lease.assertOwned())).rejects.toMatchObject(lostLease.error);
       }
+      f.finishCallback.resolve();
+      expect(await result.outcome).toMatchObject(
+        remainsOwned ? { ok: true, value: "completed" } : lostLease,
+      );
+      expect(f.release).toHaveBeenCalledOnce();
     },
   );
 
-  it.each([false, true])(
-    "joins renewal before sealing public methods (committed before reply: %s)",
-    async (committedEarly) => {
-      const f = fixture();
-      const renewing = createDeferredCore();
-      const reply = createDeferredCore();
-      const verifying = createDeferredCore();
-      const finalReply = createDeferredCore();
-      f.onRenew.mockImplementationOnce(async (command) => {
-        const expiresAt = committedEarly ? command.publish(Date.now() + 3_000) : undefined;
-        renewing.resolve();
-        await reply.promise;
-        command.assertCurrent();
-        return expiresAt ?? command.publish(Date.now() + 3_000);
-      });
-      const result = f.run();
-      try {
-        const { lease, within } = await f.enter(result);
-        await within(() => vi.advanceTimersByTimeAsync(1_000));
-        await renewing.promise;
-        if (committedEarly) {
-          await within(() => vi.advanceTimersByTimeAsync(2_000));
-          expect(lease.signal.aborted).toBe(false);
-          expect(f.renew).toHaveBeenCalledOnce();
-          await within(() => lease.assertOwned());
-        }
-        f.finishCallback.resolve();
-        await within(() => lease.assertOwned());
-        expect(result.settled()).toBe(false);
-        expect(f.release).not.toHaveBeenCalled();
-        f.onVerify.mockImplementationOnce(async (command) => {
-          const expiresAt = command.publish(Date.now() + 3_000);
-          verifying.resolve();
-          await finalReply.promise;
-          command.assertCurrent();
-          return expiresAt;
-        });
-        reply.resolve();
-        await verifying.promise;
-        const verifies = f.verify.mock.calls.length;
-        await expect(within(() => lease.assertOwned())).rejects.toThrow(
-          "differs from its live owner",
-        );
-        await expect(within(() => lease.renew())).rejects.toThrow("differs from its live owner");
-        expect(f.verify).toHaveBeenCalledTimes(verifies);
-        await within(() => vi.advanceTimersByTimeAsync(1_000));
-        expect(f.renew).toHaveBeenCalledOnce();
-        finalReply.resolve();
-        expect(await result.outcome).toEqual({ ok: true, value: "completed" });
-        expect(f.release).toHaveBeenCalledOnce();
-        await f.maintenance.close();
-        expect(f.events).toEqual(["release", "actor-close"]);
-        expect(f.resources.size).toBe(0);
-      } finally {
-        reply.resolve();
-        finalReply.resolve();
-        f.finishCallback.resolve();
-        await result.outcome;
-        await f.maintenance.close();
-      }
-    },
-  );
+  it("joins renewal before sealing public methods after commit publication", async () => {
+    await using f = fixture();
+    const renewing = createDeferredCore();
+    const reply = f.reply();
+    const verifying = createDeferredCore();
+    const finalReply = f.reply();
+    f.onRenew.mockImplementationOnce(async (command) => {
+      const expiresAt = command.publish(Date.now() + 3_000);
+      renewing.resolve();
+      await reply.promise;
+      command.assertCurrent();
+      return expiresAt;
+    });
+    const result = f.run();
+    const { lease, within } = await f.enter(result);
+    await within(() => vi.advanceTimersByTimeAsync(1_000));
+    await renewing.promise;
+    await within(() => vi.advanceTimersByTimeAsync(2_000));
+    expect(lease.signal.aborted).toBe(false);
+    expect(f.renew).toHaveBeenCalledOnce();
+    await within(() => lease.assertOwned());
+    f.finishCallback.resolve();
+    await within(() => lease.assertOwned());
+    expect(result.settled()).toBe(false);
+    expect(f.release).not.toHaveBeenCalled();
+    f.onVerify.mockImplementationOnce(async (command) => {
+      const expiresAt = command.publish(Date.now() + 3_000);
+      verifying.resolve();
+      await finalReply.promise;
+      command.assertCurrent();
+      return expiresAt;
+    });
+    reply.resolve();
+    await verifying.promise;
+    const verifies = f.verify.mock.calls.length;
+    await expect(within(() => lease.assertOwned())).rejects.toThrow("differs from its live owner");
+    await expect(within(() => lease.renew())).rejects.toThrow("differs from its live owner");
+    expect(f.verify).toHaveBeenCalledTimes(verifies);
+    await within(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(f.renew).toHaveBeenCalledOnce();
+    finalReply.resolve();
+    expect(await result.outcome).toEqual({ ok: true, value: "completed" });
+    expect(f.release).toHaveBeenCalledOnce();
+    await f.maintenance.close();
+    expect(f.events).toEqual(["release", "actor-close"]);
+    expect(f.resources.size).toBe(0);
+  });
 
   it.each(["assertOwned", "result"] as const)(
     "rejects delayed %s after expiry even before the timer callback runs",
     async (boundary) => {
-      const f = fixture();
+      await using f = fixture();
       const checked = createDeferredCore();
-      const reply = createDeferredCore();
+      const reply = f.reply();
       const result = f.run();
-      try {
-        const { lease, within } = await f.enter(result);
-        f.onVerify.mockImplementationOnce(async (command) => {
-          const expiresAt = command.publish(Date.now() + 3_000);
-          checked.resolve();
-          await reply.promise;
-          return expiresAt;
-        });
-        const assertion =
-          boundary === "assertOwned" ? observe(within(() => lease.assertOwned())) : undefined;
-        if (boundary === "result") {
-          f.finishCallback.resolve();
-        }
-        await checked.promise;
-        vi.setSystemTime(Date.now() + 3_001);
-        expect(lease.signal.aborted).toBe(false);
-        reply.resolve();
-        if (assertion) {
-          expect(await assertion.outcome).toMatchObject(lostLease);
-          f.finishCallback.resolve();
-        }
-        expect(await result.outcome).toMatchObject(lostLease);
-        expect(lease.signal.aborted).toBe(true);
-        expect(f.release).toHaveBeenCalledOnce();
-      } finally {
-        reply.resolve();
+      const { lease, within } = await f.enter(result);
+      f.onVerify.mockImplementationOnce(async (command) => {
+        const expiresAt = command.publish(Date.now() + 3_000);
+        checked.resolve();
+        await reply.promise;
+        return expiresAt;
+      });
+      const assertion =
+        boundary === "assertOwned" ? observe(within(() => lease.assertOwned())) : undefined;
+      if (boundary === "result") {
         f.finishCallback.resolve();
-        await result.outcome;
-        await f.maintenance.close();
       }
+      await checked.promise;
+      vi.setSystemTime(Date.now() + 3_001);
+      expect(lease.signal.aborted).toBe(false);
+      reply.resolve();
+      if (assertion) {
+        expect(await assertion.outcome).toMatchObject(lostLease);
+        f.finishCallback.resolve();
+      }
+      expect(await result.outcome).toMatchObject(lostLease);
+      expect(lease.signal.aborted).toBe(true);
+      expect(f.release).toHaveBeenCalledOnce();
     },
   );
 });

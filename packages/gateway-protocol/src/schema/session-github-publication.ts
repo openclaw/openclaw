@@ -40,10 +40,43 @@ export const GitHubPublicationTitleSchema = Type.String({
 });
 export const GitHubPublicationBodySchema = Type.String({ minLength: 1, maxLength: 8 * 1024 });
 
+export const GitHubPullRequestInspectSchema = closedObject({
+  action: Type.Literal("inspect_pr"),
+  pullRequestUrl: Type.String({ minLength: 1, maxLength: 2048 }),
+});
+// API-observed owners include Enterprise Managed Users; linked-profile schemas stay separate.
+export const GITHUB_PULL_REQUEST_LOGIN_PATTERN = "^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,37}[A-Za-z0-9])?$";
+export const GitHubPullRequestPrepareSchema = closedObject({
+  action: Type.Literal("prepare_pr"),
+  pullRequestUrl: GitHubPullRequestInspectSchema.properties.pullRequestUrl,
+  conflictsResolved: Type.Optional(Type.Boolean()),
+  // Acknowledges returned conflicts; never selects the source to import.
+  expectedHeadCommit: Type.Optional(Type.String({ pattern: "^[a-f0-9]{40}$" })),
+});
+const GitHubPullRequestRefSchema = closedObject({
+  repository: NonEmptyString,
+  repositoryId: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  branch: NonEmptyString,
+  commit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
+});
+export const SessionGitHubPullRequestInspectResultSchema = closedObject({
+  url: NonEmptyString,
+  host: NonEmptyString,
+  number: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  author: closedObject({
+    accountId: PersonalGitHubAccountSchema.properties.accountId,
+    login: Type.String({ minLength: 1, maxLength: 39, pattern: GITHUB_PULL_REQUEST_LOGIN_PATTERN }),
+  }),
+  state: stringLiteralUnion(["open", "draft", "closed", "merged"]),
+  base: GitHubPullRequestRefSchema,
+  head: Type.Union([GitHubPullRequestRefSchema, Type.Null()]),
+});
+
 export const SessionGitHubPublishParamsSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   idempotencyKey: NonEmptyString,
+  workspacePath: Type.Optional(Type.String({ minLength: 1, maxLength: 2048 })),
   title: Type.Optional(GitHubPublicationTitleSchema),
   body: Type.Optional(GitHubPublicationBodySchema),
   draft: Type.Optional(Type.Boolean()),
@@ -81,7 +114,7 @@ export const GitHubPublicationEditSchema = closedObject({
 });
 export const GitHubPublicationReviewRequestSchema = closedObject({
   action: Type.Literal("request_review"),
-  requestId: PersonalGitHubGenerationSchema,
+  requestId: Type.Optional(PersonalGitHubGenerationSchema),
   expectedHeadCommit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
 });
 export const GITHUB_PUBLICATION_EVIDENCE_MAX_BYTES = 10_000_000;
@@ -92,11 +125,21 @@ export const GitHubPublicationEvidenceSchema = closedObject({
 });
 export const GitHubPublicationEvidenceUploadSchema = closedObject({
   action: Type.Literal("upload_evidence"),
-  requestId: PersonalGitHubGenerationSchema,
+  requestId: Type.Optional(PersonalGitHubGenerationSchema),
   expectedHeadCommit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
   evidence: GitHubPublicationEvidenceSchema,
 });
 export const SessionGitHubActionParamsSchema = Type.Union([
+  closedObject({
+    ...GitHubPullRequestPrepareSchema.properties,
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
+    ...GitHubPullRequestInspectSchema.properties,
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  }),
   closedObject({
     ...GitHubPublicationReviewRequestSchema.properties,
     sessionKey: NonEmptyString,
@@ -128,6 +171,15 @@ export const SessionGitHubBaseRefreshResultSchema = closedObject({
   repository: NonEmptyString,
   baseBranch: NonEmptyString,
   baseCommit: NonEmptyString,
+  changedPaths: Type.Array(Type.String()),
+  conflictPaths: Type.Array(Type.String()),
+  review: Type.Optional(closedObject({ mode: Type.Literal("local"), base: NonEmptyString })),
+});
+export const SessionGitHubPullRequestPrepareResultSchema = closedObject({
+  status: stringLiteralUnion(["prepared", "conflicts"]),
+  url: NonEmptyString,
+  headCommit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
+  headChanged: Type.Boolean(),
   changedPaths: Type.Array(Type.String()),
   conflictPaths: Type.Array(Type.String()),
   review: Type.Optional(closedObject({ mode: Type.Literal("local"), base: NonEmptyString })),
@@ -165,8 +217,7 @@ export const SessionGitHubPublicationPublishedSchema = closedObject({
   branch: NonEmptyString,
   headCommit: NonEmptyString,
 });
-export const SessionGitHubActionResultSchema = closedObject({
-  publication: SessionGitHubPublicationPublishedSchema,
+const SessionGitHubActionState = {
   publishingSessionKey: NonEmptyString,
   state: Type.Union([
     Type.Literal("draft"),
@@ -203,7 +254,21 @@ export const SessionGitHubActionResultSchema = closedObject({
       }),
     ]),
   ),
-});
+};
+export const SessionGitHubActionResultSchema = Type.Union([
+  closedObject({
+    ...SessionGitHubActionState,
+    publication: SessionGitHubPublicationPublishedSchema,
+  }),
+  closedObject({
+    ...SessionGitHubActionState,
+    pullRequest: closedObject({
+      url: NonEmptyString,
+      repository: NonEmptyString,
+      branch: NonEmptyString,
+    }),
+  }),
+]);
 export const SessionGitHubPublicationFailedSchema = closedObject({
   ...SessionGitHubPublicationBaseSchema,
   status: Type.Literal("failed"),
@@ -247,6 +312,75 @@ export const SessionGitHubStatusParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   requestId: PersonalGitHubGenerationSchema,
 });
+export const SessionGitHubReadinessParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  requestId: Type.Optional(PersonalGitHubGenerationSchema),
+});
+const SharedPublicationObservationSchema = Type.Union([
+  closedObject(
+    Type.Omit(SessionGitHubPublicationRequestedSchema, ["publisher", "message"]).properties,
+  ),
+  closedObject(
+    Type.Omit(SessionGitHubPublicationPublishingSchema, ["publisher", "message"]).properties,
+  ),
+  closedObject(Type.Omit(SessionGitHubPublicationPublishedSchema, ["publisher"]).properties),
+  closedObject(
+    Type.Omit(SessionGitHubPublicationFailedSchema, ["publisher", "message", "nextAction"])
+      .properties,
+  ),
+]);
+export const SessionGitHubReadinessResultSchema = closedObject({
+  policy: closedObject({ read: Type.Literal("admitted"), write: Type.Literal("unknown") }),
+  custody: Type.Union([
+    closedObject({
+      kind: Type.Literal("qualified"),
+      source: stringLiteralUnion(["worktree", "repository", "imported-pr"]),
+    }),
+    closedObject({ kind: stringLiteralUnion(["unbound_workspace", "archived", "changed"]) }),
+    closedObject({ kind: Type.Literal("unknown"), reason: Type.Literal("unavailable") }),
+  ]),
+  target: Type.Union([
+    closedObject({
+      kind: Type.Literal("supported"),
+      basis: stringLiteralUnion([
+        "registered-repository",
+        "repository-url",
+        "prepared-imported-pr",
+      ]),
+      freshness: stringLiteralUnion(["observed", "cached"]),
+    }),
+    closedObject({ kind: Type.Literal("unsupported") }),
+    closedObject({
+      kind: Type.Literal("unknown"),
+      reason: stringLiteralUnion(["not-qualified", "unavailable"]),
+    }),
+  ]),
+  request: Type.Union([
+    closedObject({
+      kind: Type.Literal("observed"),
+      selection: stringLiteralUnion(["exact", "current"]),
+      receipt: SharedPublicationObservationSchema,
+    }),
+    closedObject({ kind: Type.Literal("none"), selection: Type.Literal("current") }),
+    closedObject({
+      kind: Type.Literal("unknown"),
+      reason: stringLiteralUnion(["unavailable", "not-observable"]),
+      selectedRequestId: Type.Optional(PersonalGitHubGenerationSchema),
+    }),
+  ]),
+  remedies: Type.Array(
+    Type.Union([
+      closedObject({ kind: Type.Literal("select_bound_session") }),
+      closedObject({ kind: Type.Literal("inspect_source") }),
+      closedObject({ kind: Type.Literal("retry_read") }),
+      closedObject({ kind: Type.Literal("observe_request"), requestId: NonEmptyString }),
+    ]),
+    { maxItems: 3 },
+  ),
+});
+export type SessionGitHubReadinessResult = Static<typeof SessionGitHubReadinessResultSchema>;
+
 export const SessionGitHubConfirmParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
@@ -292,6 +426,12 @@ export const SessionGitHubOptionsResultSchema = closedObject({
 });
 
 export type SessionGitHubBaseRefreshResult = Static<typeof SessionGitHubBaseRefreshResultSchema>;
+export type SessionGitHubPullRequestInspectResult = Static<
+  typeof SessionGitHubPullRequestInspectResultSchema
+>;
+export type SessionGitHubPullRequestPrepareResult = Static<
+  typeof SessionGitHubPullRequestPrepareResultSchema
+>;
 export type GitHubPublicationPublisher = Static<typeof GitHubPublicationPublisherSchema>;
 export type GitHubPublicationAction = Static<typeof GitHubPublicationActionSchema>;
 export type GitHubPublicationEdit = Static<typeof GitHubPublicationEditSchema>;

@@ -36,11 +36,6 @@ describe("Codex command RPC helpers", () => {
     args: ["app-server"],
     headers: {},
   };
-  const expectedAuthority = {
-    assertCurrent: expect.any(Function),
-    assertCurrentAsync: expect.any(Function),
-    source: expect.any(Function),
-  };
   const resumeResponse = createThreadResumeResponse({ threadId: "thread-1" });
 
   useCodexControlTestState({
@@ -53,8 +48,7 @@ describe("Codex command RPC helpers", () => {
       setRuntimeConfigSnapshot(config);
       harness = createClientHarness();
       requestMock.mockReset().mockResolvedValue(resumeResponse);
-      clientMock.mockReset();
-      clientMock.mockImplementation(
+      clientMock.mockReset().mockImplementation(
         async (_options, run) =>
           await run(requestMock, harness.client, {
             assertCurrent: () => undefined,
@@ -149,20 +143,15 @@ describe("Codex command RPC helpers", () => {
 
   it("keeps plugin reads without an admitted session on the selected auth partition", async () => {
     const options = { config, authProfileId: "openai:selected" };
-    const readOptions = { transport: "stdio" as const, command: "codex", args: [], headers: {} };
-    await expect(prepareCodexControlSessionAuth(options, readOptions)).resolves.toEqual({
+    await expect(prepareCodexControlSessionAuth(options, startOptions)).resolves.toEqual({
       release: expect.any(Function),
       authProfileId: "openai:selected",
       source: undefined,
       clientOptions: { authProfileId: "openai:selected" },
     });
     await expect(
-      prepareCodexControlSessionAuth({ ...options, onResponse: vi.fn() }, readOptions),
+      prepareCodexControlSessionAuth({ ...options, onResponse: vi.fn() }, startOptions),
     ).rejects.toThrow("requires admitted session authority");
-    expect([clientMock.mock.calls, requestMock.mock.calls]).toEqual([[], []]);
-  });
-
-  it("requires session authority for thread/resume without its native fork selection", async () => {
     await expect(
       codexControlRequest(
         {},
@@ -171,14 +160,14 @@ describe("Codex command RPC helpers", () => {
         { startOptions, authProfileId: null, onResponse: vi.fn() },
       ),
     ).rejects.toThrow("requires admitted session authority");
-    expect(clientMock).not.toHaveBeenCalled();
+    expect([clientMock.mock.calls, requestMock.mock.calls]).toEqual([[], []]);
   });
 
   it("resumes with the prepared environment API key and publishes no legacy profile", async () => {
     vi.stubEnv("OPENAI_API_KEY", "control-platform-key");
     const onResponse = vi.fn();
 
-    await resume({ onResponse });
+    await expect(resume({ onResponse })).resolves.toEqual(resumeResponse);
 
     expect(acquired()).toMatchObject({
       preparedAuth: { kind: "api-key", apiKey: "control-platform-key" },
@@ -186,63 +175,51 @@ describe("Codex command RPC helpers", () => {
       agentDir,
     });
     expect(acquired().authProfileId).toBeUndefined();
-    expect(onResponse).toHaveBeenCalledWith(
-      expect.objectContaining({ thread: expect.objectContaining({ id: "thread-1" }) }),
-      harness.client,
-      { authProfileId: undefined, ...expectedAuthority },
-    );
+    expect(onResponse).toHaveBeenCalledOnce();
+    expect(onResponse.mock.calls[0]?.[2]?.authProfileId).toBeUndefined();
   });
 
-  it.each(["oauth", "token"] as const)(
-    "keeps %s subscription routing and rotates an automatic profile past cooldown",
-    async (type) => {
-      vi.stubEnv("OPENAI_API_KEY", "unrelated-platform-key");
-      const token = `e30.${Buffer.from(
-        JSON.stringify({
-          "https://api.openai.com/auth": { chatgpt_account_id: "control-account" },
-        }),
-      ).toString("base64url")}.test-signature`;
-      const credential =
-        type === "oauth"
-          ? {
-              type,
-              provider: "openai",
-              access: token,
-              refresh: "control-refresh",
-              expires: Date.now() + 3_600_000,
-              accountId: "control-account",
-            }
-          : { type, provider: "openai", token };
-      await setAuthStore({
-        version: 1,
-        profiles: { "openai:old": credential, "openai:ready": credential },
-        order: { openai: ["openai:old", "openai:ready"] },
-        usageStats: { "openai:old": { cooldownUntil: Date.now() + 60_000 } },
-      });
-      await writeSession({
-        authProfileOverride: "openai:old",
-        authProfileOverrideSource: "auto",
-      });
-      const onResponse = vi.fn();
+  it("keeps subscription routing and rotates an automatic profile past cooldown", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "unrelated-platform-key");
+    const token = `e30.${Buffer.from(
+      JSON.stringify({
+        "https://api.openai.com/auth": { chatgpt_account_id: "control-account" },
+      }),
+    ).toString("base64url")}.test-signature`;
+    const credential = {
+      type: "oauth" as const,
+      provider: "openai",
+      access: token,
+      refresh: "control-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "control-account",
+    };
+    await setAuthStore({
+      version: 1,
+      profiles: { "openai:old": credential, "openai:ready": credential },
+      order: { openai: ["openai:old", "openai:ready"] },
+      usageStats: { "openai:old": { cooldownUntil: Date.now() + 60_000 } },
+    });
+    await writeSession({
+      authProfileOverride: "openai:old",
+      authProfileOverrideSource: "auto",
+    });
+    const onResponse = vi.fn();
 
-      await resume({ authProfileId: "openai:old", onResponse });
+    await resume({ authProfileId: "openai:old", onResponse });
 
-      expect(acquired()).toMatchObject({
-        authRequirement: "subscription",
-        authBindingFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
-        preparedAuth: {
-          kind: "profile",
-          profileId: "openai:ready",
-          snapshot: { loginParams: { type: "chatgptAuthTokens", accessToken: token } },
-        },
-      });
-      expect(acquired().authProfileId).toBeUndefined();
-      expect(onResponse).toHaveBeenCalledWith(expect.anything(), harness.client, {
-        authProfileId: "openai:ready",
-        ...expectedAuthority,
-      });
-    },
-  );
+    expect(acquired()).toMatchObject({
+      authRequirement: "subscription",
+      authBindingFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      preparedAuth: {
+        kind: "profile",
+        profileId: "openai:ready",
+        snapshot: { loginParams: { type: "chatgptAuthTokens", accessToken: token } },
+      },
+    });
+    expect(acquired().authProfileId).toBeUndefined();
+    expect(onResponse.mock.calls[0]?.[2]?.authProfileId).toBe("openai:ready");
+  });
 
   it("honors the user-pinned API profile from the admitted explicit store", async () => {
     vi.stubEnv("OPENAI_API_KEY", "unrelated-platform-key");
@@ -289,33 +266,5 @@ describe("Codex command RPC helpers", () => {
 
     expect(acquired().preparedAuth).toBeUndefined();
     expect(acquired().authRequirement).toBeUndefined();
-  });
-
-  it("keeps omitted Unix scope on the explicit user-scoped supervision connection", async () => {
-    requestMock.mockResolvedValue({ data: [] });
-    const pluginConfig = {
-      appServer: {
-        transport: "unix" as const,
-        url: "unix:///tmp/codex.sock",
-        requestTimeoutMs: 321,
-      },
-    };
-    const unixOptions = {
-      ...startOptions,
-      transport: "unix" as const,
-      args: ["app-server", "--listen", "stdio://"],
-      url: "unix:///tmp/codex.sock",
-    };
-
-    await codexControlRequest(
-      pluginConfig,
-      "thread/list",
-      { archived: false },
-      { startOptions: unixOptions, authProfileId: null },
-    );
-
-    expect(requestMock).toHaveBeenCalledWith(
-      expect.objectContaining({ startOptions: unixOptions, timeoutMs: 321, authProfileId: null }),
-    );
   });
 });

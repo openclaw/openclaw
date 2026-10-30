@@ -104,6 +104,13 @@ Docker notes:
 - Optional image check: `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1`
 - Optional MCP/tool check: `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1`
 - Optional Guardian check: `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1`
+- Optional personal Stop witness:
+  `OPENCLAW_LIVE_CODEX_HARNESS_PERSONAL_STOP=1` selects
+  `src/gateway/gateway-personal-native-child-abort.live.test.ts`. It requires
+  `OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key`, `OPENAI_API_KEY`, and an explicit
+  `OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/<model>`. It checks cross-device Stop
+  of native child work while preserving another person's work. Ordinary Codex
+  harness selection leaves this specialized witness skipped.
 - Optional resume stress: `OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS=1` adds
   four history turns, then closes and restarts the Gateway and Codex app-server
   three times while requiring the same native thread id and conversation

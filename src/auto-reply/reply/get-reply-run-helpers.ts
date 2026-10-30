@@ -77,7 +77,7 @@ export function suppressUnresolvedPromptMedia(params: {
   return params.promptMedia.map((fact, promptIndex) =>
     params.inboundMediaIndexes[promptIndex] !== undefined &&
     params.unresolvedSourceIndexes.has(params.inboundMediaIndexes[promptIndex])
-      ? { ...fact, hydrationSuppressed: true }
+      ? { ...fact, hydrationSuppressed: true, unresolvedThisTurn: true }
       : fact,
   );
 }

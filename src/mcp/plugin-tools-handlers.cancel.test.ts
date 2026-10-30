@@ -11,17 +11,16 @@ import {
   createMcpConnection,
   createTool,
   toolResult,
+  textResult,
   outcome,
   waitForStart,
 } from "./tools-mcp.test-support.js";
 import { createToolsMcpServer } from "./tools-stdio-server.js";
 
 describe("plugin tools MCP cancellation", () => {
-  it.each(
-    ["handler", "descendant"].flatMap((mode) => [false, true].map((hosted) => ({ mode, hosted }))),
-  )(
-    "joins native $mode work before close and reconnect (SDK host: $hosted)",
-    async ({ mode, hosted }) => {
+  it.each([false, true])(
+    "joins native handler work before close and reconnect (SDK host: %s)",
+    async (hosted) => {
       let database = new DatabaseSync(":memory:");
       const started = createDeferred();
       const finish = createDeferred();
@@ -36,12 +35,8 @@ describe("plugin tools MCP cancellation", () => {
       };
       const tool = createTool("native_cleanup", async (_id, _params, requestSignal) => {
         signal = requestSignal;
-        pendingWork = mode === "handler" ? runNativeWork() : trackAsyncWork(runNativeWork);
-        if (mode === "handler") {
-          return await pendingWork;
-        }
-        void pendingWork.catch(() => {});
-        return toolResult("accepted");
+        pendingWork = runNativeWork();
+        return await pendingWork;
       });
       const sdkResourceHost = hosted ? new LegacyPluginSdkResourceHost() : undefined;
       const server = createToolsMcpServer({ name: "native-drain", tools: [tool], sdkResourceHost });
@@ -60,11 +55,6 @@ describe("plugin tools MCP cancellation", () => {
         const call = client.callTool({ name: tool.name, arguments: {} });
         const callResult = outcome(call);
         await waitForStart(started.promise, call);
-        if (mode === "descendant") {
-          expect(await callResult).toMatchObject({
-            result: { content: [{ type: "text", text: "accepted" }] },
-          });
-        }
         let siblingSettled = false;
         closing = server.close().then(() => database.close());
         siblingClose = server.close().then(() => {
@@ -72,10 +62,8 @@ describe("plugin tools MCP cancellation", () => {
         });
         await nextTurn();
         expect(server.transport).toBeUndefined();
-        if (mode === "handler") {
-          expect(signal?.aborted).toBe(true);
-          expect(await callResult).toHaveProperty("error");
-        }
+        expect(signal?.aborted).toBe(true);
+        expect(await callResult).toHaveProperty("error");
         expect.soft(siblingSettled).toBe(false);
         expect.soft(database.isOpen).toBe(true);
         finish.resolve();
@@ -90,7 +78,7 @@ describe("plugin tools MCP cancellation", () => {
         await expect(
           nextClient.callTool({ name: tool.name, arguments: {} }),
         ).resolves.toMatchObject({
-          content: [{ type: "text", text: mode === "handler" ? "done" : "accepted" }],
+          content: [{ type: "text", text: "done" }],
         });
         await pendingWork;
         expect(reads).toEqual([{ value: 42 }, { value: 42 }]);
@@ -114,9 +102,9 @@ describe("plugin tools MCP cancellation", () => {
       ["send-pending", "response-completed"].map((phase) => ({ hosted, phase })),
     ),
   )(
-    "keeps late descendant cancellation during $phase (SDK host: $hosted)",
+    "drains and reconnects late descendant work during $phase (SDK host: $hosted)",
     async ({ hosted, phase }) => {
-      const database = new DatabaseSync(":memory:");
+      let database = new DatabaseSync(":memory:");
       const host = hosted ? new LegacyPluginSdkResourceHost() : undefined;
       const lateListener = createDeferred();
       const listening = createDeferred();
@@ -182,6 +170,8 @@ describe("plugin tools MCP cancellation", () => {
       let restoreResponse = () => {};
       let call: Promise<unknown> | undefined;
       let closing: Promise<void> | undefined;
+      let siblingClose: Promise<void> | undefined;
+      let reconnected: Client | undefined;
       const reason = "cancel while response transport is pending";
       try {
         await connect();
@@ -203,7 +193,7 @@ describe("plugin tools MCP cancellation", () => {
         call = outcome(client.callTool({ name: tool.name }, { signal: controller.signal }));
         await waitForStart(responseEntered.promise, call);
         if (phase === "response-completed") {
-          expect(await call).toMatchObject({ result: { content: [{ text: "cached result" }] } });
+          expect(await call).toMatchObject({ result: textResult("cached result") });
           await client.ping();
         }
         expect(workSignal?.aborted).toBe(false);
@@ -230,19 +220,34 @@ describe("plugin tools MCP cancellation", () => {
         await call;
         await client.ping();
         closing = server.close().then(() => database.close());
+        let siblingSettled = false;
+        siblingClose = server.close().then(() => {
+          siblingSettled = true;
+        });
         await transportClosed.promise;
         await nextTurn();
+        expect(server.transport).toBeUndefined();
+        expect.soft(siblingSettled).toBe(false);
         expect(workSignal?.aborted).toBe(true);
         expect(database.isOpen).toBe(true);
         finish.resolve();
         await descendant;
-        await closing;
+        await Promise.all([closing, siblingClose]);
         if (!toolCallId) {
           throw new Error("tool.execute did not receive a call id");
         }
         expect(consumeTrackedToolExecutionStarted(toolCallId)).toBeUndefined();
         expect(reads).toEqual([{ value: 42 }]);
         expect(database.isOpen).toBe(false);
+        database = new DatabaseSync(":memory:");
+        const next = createMcpConnection(server);
+        reconnected = next.client;
+        await next.connect();
+        await expect(reconnected.callTool({ name: tool.name })).resolves.toMatchObject(
+          textResult("cached result"),
+        );
+        await descendant;
+        expect(reads).toEqual([{ value: 42 }, { value: 42 }]);
       } finally {
         lateListener.resolve();
         finish.resolve();
@@ -250,8 +255,10 @@ describe("plugin tools MCP cancellation", () => {
         releaseResponse.resolve();
         await descendant;
         await closing;
+        await siblingClose;
         await server.close();
         await client.close();
+        await reconnected?.close();
         await call;
         await host?.close();
         restoreResponse();

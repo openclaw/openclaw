@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it, vi } from "vitest";
-import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
-import type { onAgentEvent } from "../../../infra/agent-events.js";
+import { expect, it, vi, type Mock } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -12,53 +12,114 @@ import {
   createRequesterYieldTool,
   visibleChild,
 } from "./subagent-registry.requester-wake-receipts.test-support.js";
+import type { RequesterWakeFixture } from "./subagent-registry.requester-wake-session.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export function registerRequesterWakeSettlementBoundaryTests({
+export function registerRequesterWakeSettlementBoundaryTests<Response>({
   requesterSessionKey,
+  prepareChildSession,
+  wakeRequester,
+  flushAsync,
+  callGatewayMock,
+  setReleaseAgentCallGate,
   spawnVisibleChild,
+  settleTurn,
   emitCompleted,
   flushOwnedWork,
   waitForDeliveredCleanup,
   getRequesterWakeCalls,
   getAgentCalls,
-  getGatewayContext,
+  createGatewayContext,
   getLifecycleHandler,
   useGlobalSessionScope,
-}: {
-  requesterSessionKey: string;
-  spawnVisibleChild: (params: {
-    runId: string;
-    childSessionKey: string;
-    requesterTurnRunId: string;
-  }) => Promise<void>;
-  emitCompleted: (runId: string, childSessionKey: string, text: string) => void;
-  flushOwnedWork: () => Promise<void>;
-  waitForDeliveredCleanup: (runId: string) => Promise<void>;
-  getRequesterWakeCalls: () => GatewayRequest[];
-  getAgentCalls: () => GatewayRequest[];
-  getGatewayContext: () => GatewayRequestContext;
-  getLifecycleHandler: () => Parameters<typeof onAgentEvent>[0] | undefined;
+}: RequesterWakeFixture & {
+  callGatewayMock: Mock<(request: GatewayRequest) => Promise<Response>>;
+  flushAsync: () => Promise<void>;
+  setReleaseAgentCallGate: (release: () => void) => void;
   useGlobalSessionScope: () => void;
 }): void {
+  it("delivers an adopted self-yield follow-up once while ordinary announce is in flight", async () => {
+    vi.setSystemTime(100_000);
+    const context = createGatewayContext();
+    await registry.initSubagentRegistry();
+    await registry.activateSubagentRegistry(() => context);
+    const childSessionKey = "agent:main:subagent:self-yield-followup";
+    const kickoffRunId = "run-self-yield-kickoff";
+    const followupRunId = "run-self-yield-followup";
+    const sessionEntry = await prepareChildSession(childSessionKey, "sess-self-yield-followup");
+    const register = (runId: string, expectsCompletionMessage: boolean) =>
+      registry.registerSubagentRun(
+        createSubagentRunParams({
+          runId,
+          childSessionKey,
+          sessionEntry,
+          requesterAgentId: "main",
+          expectsCompletionMessage,
+          gatewayContextResolver: context.resolveGatewayContext,
+        }),
+      );
+    await register(kickoffRunId, true);
+    await registry.claimSubagentYield({
+      runId: kickoffRunId,
+      sessionKey: childSessionKey,
+      agentId: "main",
+      waitForMessage: true,
+      hasPendingWork: () => false,
+    });
+    await register(followupRunId, false);
+    getLifecycleHandler()!({
+      stream: "lifecycle",
+      runId: kickoffRunId,
+      seq: 1,
+      ts: Date.now(),
+      sessionKey: childSessionKey,
+      data: { phase: "end", endedAt: Date.now(), yielded: true },
+    });
+    await flushOwnedWork();
+
+    const ordinaryEntered = createDeferred();
+    const ordinaryRelease = createDeferred();
+    setReleaseAgentCallGate(() => ordinaryRelease.resolve());
+    const respond = callGatewayMock.getMockImplementation()!;
+    callGatewayMock.mockImplementation(async (request) => {
+      if (
+        request.method === "agent" &&
+        request.params?.idempotencyKey?.startsWith("announce:v1:")
+      ) {
+        ordinaryEntered.resolve();
+        await ordinaryRelease.promise;
+      }
+      return respond(request);
+    });
+    const wakes = vi
+      .mocked(maybeWakeRequesterAfterAllChildrenSettled)
+      .mockClear()
+      .mockImplementation(wakeRequester);
+    emitCompleted(followupRunId, childSessionKey, "follow-up completed");
+    const completion = flushOwnedWork();
+    try {
+      await awaitGateBeforeSettlement(
+        ordinaryEntered.promise,
+        completion,
+        "adopted follow-up settled without an ordinary announcement",
+      );
+      // Join all live wakes started before the delivery receipt commits.
+      await registry.testing.sweepOnceForTests();
+      await flushAsync();
+      await Promise.all(wakes.mock.results.map(({ value }) => value));
+    } finally {
+      ordinaryRelease.resolve();
+      await completion;
+    }
+    await flushOwnedWork();
+    expect(getAgentCalls()).toHaveLength(1);
+    await waitForDeliveredCleanup(followupRunId);
+  });
   const readRun = registry.getSubagentRunByRunId;
   async function settleYield(runId: string, children: ReturnType<typeof visibleChild>[]) {
     await createRequesterYieldTool(requesterSessionKey, runId).execute(runId, {});
-    const { withLocalSessionPlacementTurnSettlement } =
-      await import("../../session-placement-admission.js");
-    await withLocalSessionPlacementTurnSettlement(
-      {
-        sessionId: "sess-main",
-        sessionKey: requesterSessionKey,
-        agentId: "main",
-        runId,
-      },
-      async () => ({
-        acceptedSessionSpawns: children,
-        meta: { durationMs: 1, yielded: true },
-      }),
-    );
+    await settleTurn(runId, children);
   }
   const addRun = (
     runId: string,
@@ -203,7 +264,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
 
   it("wakes a yielded parent once after one running child is stopped", async () => {
     await registry.initSubagentRegistry();
-    await registry.activateSubagentRegistry(getGatewayContext);
+    await registry.activateSubagentRegistry(createGatewayContext);
     const requesterTurnRunId = "requester-stopped-pair";
     const stopped = visibleChild("stopped");
     const finished = visibleChild("finished");

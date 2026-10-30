@@ -21,10 +21,7 @@ import {
   resolveOwnedManagedUpdateEnv,
   resolveUpdatedInstallCommandEnv,
 } from "./update-command-service-env.js";
-import {
-  formatPostUpdateGatewayRecoveryInstructions,
-  recoverLaunchAgentAndRecheckGatewayHealth,
-} from "./update-command-service-recovery.js";
+import { recoverLaunchAgentAndRecheckGatewayHealth } from "./update-command-service-recovery.js";
 import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 
@@ -176,22 +173,6 @@ describe("resolveUpdatedInstallCommandEnv", () => {
   });
 });
 
-describe("formatPostUpdateGatewayRecoveryInstructions", () => {
-  const result: UpdateRunResult = {
-    status: "error",
-    mode: "git",
-    steps: [],
-    durationMs: 0,
-  };
-
-  it("keeps LaunchAgent recovery wording on macOS", () => {
-    const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "darwin");
-
-    expect(line).toContain("the LaunchAgent is installed but not loaded");
-    expect(line).toContain("logged-in macOS user session");
-  });
-});
-
 describe("recoverInstalledLaunchAgentAfterUpdate", () => {
   beforeEach(() => mockProcessPlatform("darwin"));
   afterEach(() => vi.restoreAllMocks());
@@ -271,9 +252,9 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
   it.each(["rejected", "unknown"] as const)(
     "reports and records an uninspectable LaunchAgent without repairing it (%s)",
     async (probe) => {
-      mockProcessPlatform("darwin");
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("update-probe-failure-") };
       const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      mockProcessPlatform("darwin");
       const service = createMockGatewayService();
       const readState = vi.spyOn(gatewayService, "readGatewayServiceState");
       const reason = "launchctl denied";
@@ -328,6 +309,10 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
         `LaunchAgent state could not be inspected: ${reason}`,
       );
       expect(output.mock.calls.flat().join("\n")).toContain("openclaw gateway status --deep");
+      expect(output.mock.calls.flat().join("\n")).toContain(
+        "the LaunchAgent is installed but not loaded",
+      );
+      expect(output.mock.calls.flat().join("\n")).toContain("logged-in macOS user session");
       expect(recover).not.toHaveBeenCalled();
       expect(start).not.toHaveBeenCalled();
     },

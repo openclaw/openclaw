@@ -17,6 +17,7 @@ on:
       - "packages/plugin-package-contract/src/**"
       - "scripts/generate-npm-package-lock.mjs"
       - "scripts/generate-npm-package-lock.mts"
+      - "scripts/lib/npm-lock-package-selection.mjs"
       - "scripts/lib/bounded-response.mjs"
       - "scripts/lib/npm-publish-plan.mjs"
       - "scripts/lib/npm-json-output.mts"
@@ -125,7 +126,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
 
 jobs:
   preview_plugins_npm:

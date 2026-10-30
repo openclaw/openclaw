@@ -26,17 +26,29 @@ let uploadDir: string;
 let inboundMediaDir: string;
 const chooser = { method: "POST", path: "/hooks/file-chooser", body: {} };
 const MARKER_CONTENT = "openclaw-browser-proxy-upload-v1\n";
+const markerPath = (directory: string) => path.join(directory, ".openclaw-browser-proxy-upload-v1");
 type StageRequest = Parameters<typeof uploads.stageBrowserProxyUploadRequest>[0];
+const discard = (staged: Parameters<typeof uploads.discardStagedBrowserProxyUpload>[0]) =>
+  uploads.discardStagedBrowserProxyUpload(staged);
+const recover = () => uploads.ensureBrowserProxyUploadCleanup();
+const expectMissing = (target: string) =>
+  expect(fs.lstat(target)).rejects.toHaveProperty("code", "ENOENT");
+const expectContents = (target: string, contents: string) =>
+  expect(fs.readFile(target, "utf8")).resolves.toBe(contents);
 
-beforeEach(async () => {
+async function initializeUploads(fakeDate = false) {
   const root = (fixture.root = tempDirs.make("browser-proxy-upload-"));
   uploadDir = path.join(root, "uploads");
   inboundMediaDir = path.join(root, "media", "inbound");
   vi.resetModules();
   uploads = await import("./browser-proxy-upload.js");
-  browserPaths = await import("./browser/paths.js");
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-});
+  if (!fakeDate) {
+    browserPaths = await import("./browser/paths.js");
+  }
+  vi.useFakeTimers({
+    toFake: fakeDate ? ["setTimeout", "clearTimeout", "Date"] : ["setTimeout", "clearTimeout"],
+  });
+}
 afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllTimers();
@@ -80,17 +92,14 @@ async function retainedDirectory(name: string, contents: string, marked = true) 
   const directory = path.join(uploadDir, ".proxy-uploads", `upload-${name}`);
   await fs.mkdir(directory, { recursive: true });
   if (marked) {
-    await fs.writeFile(
-      path.join(directory, ".openclaw-browser-proxy-upload-v1"),
-      MARKER_CONTENT,
-      "utf8",
-    );
+    await fs.writeFile(markerPath(directory), MARKER_CONTENT);
   }
   await fs.writeFile(path.join(directory, "report.txt"), contents, "utf8");
   return directory;
 }
 
 describe("browser proxy upload transport", () => {
+  beforeEach(() => initializeUploads());
   it("transfers Gateway inbound media bytes instead of resolving the URI on the node", async () => {
     await fs.mkdir(inboundMediaDir, { recursive: true });
     await fs.writeFile(path.join(inboundMediaDir, "report.txt"), "gateway inbound bytes", "utf8");
@@ -98,31 +107,7 @@ describe("browser proxy upload transport", () => {
     const prepared = await prepare({ paths: ["media://inbound/report.txt"] });
 
     expect(prepared.body).toEqual({});
-    expect(prepared.upload?.files).toEqual([
-      {
-        name: "report.txt",
-        contentBase64: Buffer.from("gateway inbound bytes").toString("base64"),
-      },
-    ]);
-  });
-
-  it("stages files under the node upload root with route-valid paths", async () => {
-    const staged = await stage({
-      body: { ref: "e12" },
-      upload: uploadFiles("node copy", "second copy"),
-    });
-    const stagedPaths = (staged.body as { paths: string[] }).paths;
-    expect(stagedPaths).toHaveLength(2);
-    expect(stagedPaths.map((filePath) => path.basename(filePath))).toEqual([
-      "report.txt",
-      "report.txt",
-    ]);
-    await expect(fs.readFile(stagedPaths[0] ?? "", "utf8")).resolves.toBe("node copy");
-    await expect(fs.readFile(stagedPaths[1] ?? "", "utf8")).resolves.toBe("second copy");
-    await expectRoutePaths(stagedPaths);
-
-    await uploads.discardStagedBrowserProxyUpload(staged);
-    await expect(fs.stat(staged.directory ?? "")).rejects.toHaveProperty("code", "ENOENT");
+    expect(prepared.upload?.files).toEqual(uploadFiles("gateway inbound bytes").files);
   });
 
   it("rejects ambiguous request bodies and invalid encodings before dispatch", async () => {
@@ -139,25 +124,19 @@ describe("browser proxy upload transport", () => {
   });
 
   it("rejects malformed Gateway path arrays instead of forwarding them to the node", async () => {
-    await fs.mkdir(uploadDir, { recursive: true });
-    const sourcePath = path.join(uploadDir, "report.txt");
-    await fs.writeFile(sourcePath, "gateway bytes", "utf8");
-
-    await expect(prepare({ paths: [sourcePath, 42] })).rejects.toThrow(
+    await expect(prepare({ paths: [path.join(uploadDir, "report.txt"), 42] })).rejects.toThrow(
       "browser proxy upload paths must contain only strings",
     );
   });
 
-  it("stages portable bounded filenames that survive upload route validation", async () => {
+  it("stages distinct files with portable bounded names and route-valid paths", async () => {
     const names = [
-      ["CLOCK$", "CLOCK$_"],
+      ["report.txt", "report.txt"],
+      ["nested/report.txt", "report.txt"],
       ["CONIN$.txt", "CONIN$_.txt"],
-      ["CONOUT$", "CONOUT$_"],
       ["NUL .txt", "NUL _.txt"],
-      ["COM¹.txt", "COM¹_.txt"],
       [`CON${" ".repeat(177)}x`, "CON_"],
       [`${"a".repeat(179)}.b`, "a".repeat(179)],
-      [`${"b".repeat(179)} c`, "b".repeat(179)],
       [`${"c".repeat(175)}🦞.d`, `${"c".repeat(175)}🦞`],
       ["😀".repeat(60), "😀".repeat(45)],
       [`${"a".repeat(176)}.\u00a0.x`, "a".repeat(176)],
@@ -167,33 +146,31 @@ describe("browser proxy upload transport", () => {
     const staged = await stage({
       upload: {
         envelope: BROWSER_PROXY_UPLOAD_ENVELOPE,
-        files: names.map(([name]) => ({ name, contentBase64: "aGVsbG8=" })),
+        files: names.map(([name]) => ({
+          name,
+          contentBase64: Buffer.from(name).toString("base64"),
+        })),
       },
     });
-    try {
-      const stagedPaths = (staged.body as { paths: string[] }).paths;
-      expect(stagedPaths.map((filePath) => path.basename(filePath))).toEqual(
-        names.map(([, expected]) => expected),
-      );
-      for (const filePath of stagedPaths) {
-        expect(Buffer.byteLength(path.basename(filePath))).toBeLessThanOrEqual(180);
-        await expect(fs.readFile(filePath, "utf8")).resolves.toBe("hello");
-      }
-      await expectRoutePaths(stagedPaths);
-    } finally {
-      await uploads.discardStagedBrowserProxyUpload(staged);
+    const stagedPaths = (staged.body as { paths: string[] }).paths;
+    expect(stagedPaths.map((filePath) => path.basename(filePath))).toEqual(
+      names.map(([, expected]) => expected),
+    );
+    for (const [index, filePath] of stagedPaths.entries()) {
+      expect(Buffer.byteLength(path.basename(filePath))).toBeLessThanOrEqual(180);
+      await expectContents(filePath, names[index]![0]);
     }
+    await expectRoutePaths(stagedPaths);
+    await discard(staged);
+    await expectMissing(staged.directory!);
   });
 
   it("keeps staging admission serialized after a queued request is cancelled", async () => {
-    const retainedDirectories: string[] = [];
     for (let index = 0; index < 63; index++) {
-      retainedDirectories.push(await retainedDirectory(`existing-${index}`, "retained"));
+      await retainedDirectory(`existing-${index}`, "retained");
     }
     const stagingRoot = path.join(uploadDir, ".proxy-uploads");
-    const request: Partial<StageRequest> = {
-      upload: uploadFiles("data"),
-    };
+    const request = { upload: uploadFiles("data") };
     const firstAdmitted = Promise.withResolvers<void>();
     const releaseFirst = Promise.withResolvers<void>();
     const mkdtemp = fs.mkdtemp;
@@ -224,18 +201,14 @@ describe("browser proxy upload transport", () => {
       cancelled.abort(new Error("cancel queued upload"));
       await rejected;
 
-      let thirdAdmissionStarted = false;
-      const thirdAdmissionRead = Promise.withResolvers<void>();
+      let thirdAdmissionRead: Promise<unknown> | undefined;
       const readdir = fs.readdir;
-      vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+      vi.spyOn(fs, "readdir").mockImplementation((...args) => {
+        const reading = readdir(...args);
         if (args[0] === stagingRoot) {
-          thirdAdmissionStarted = true;
+          thirdAdmissionRead = reading;
         }
-        const entries = await readdir(...args);
-        if (args[0] === stagingRoot) {
-          thirdAdmissionRead.resolve();
-        }
-        return entries;
+        return reading;
       });
       const third = new AbortController();
       const thirdQueued = observeQueue(third.signal);
@@ -246,26 +219,19 @@ describe("browser proxy upload transport", () => {
       await new Promise<void>((resolve) => {
         process.nextTick(resolve);
       });
-      if (thirdAdmissionStarted) {
-        await thirdAdmissionRead.promise;
-      }
+      await thirdAdmissionRead;
       releaseFirst.resolve();
       const results = await settled;
       expect(results.map((result) => result.status)).toEqual(["fulfilled", "rejected"]);
       expect(results[1]).toMatchObject({
-        reason: expect.objectContaining({
-          message: "RESOURCE_EXHAUSTED: browser proxy upload staging limit reached",
-        }),
+        reason: { message: "RESOURCE_EXHAUSTED: browser proxy upload staging limit reached" },
       });
     } finally {
       releaseFirst.resolve();
       for (const result of await Promise.allSettled(pending)) {
         if (result.status === "fulfilled") {
-          await uploads.discardStagedBrowserProxyUpload(result.value);
+          await discard(result.value);
         }
-      }
-      for (const directory of retainedDirectories) {
-        await uploads.discardStagedBrowserProxyUpload({ body: {}, directory });
       }
     }
   });
@@ -273,13 +239,9 @@ describe("browser proxy upload transport", () => {
   it("counts the ownership marker against retained-byte admission", async () => {
     const retained = await retainedDirectory("retained", "");
     await addSparsePadding(retained, 256 * 1024 * 1024 - Buffer.byteLength(MARKER_CONTENT) - 4);
-    try {
-      await expect(stage({ upload: uploadFiles("data") })).rejects.toThrow(
-        "browser proxy upload staging limit reached",
-      );
-    } finally {
-      await uploads.discardStagedBrowserProxyUpload({ body: {}, directory: retained });
-    }
+    await expect(stage({ upload: uploadFiles("data") })).rejects.toThrow(
+      "browser proxy upload staging limit reached",
+    );
   });
 
   it.each([true, false])(
@@ -289,12 +251,12 @@ describe("browser proxy upload transport", () => {
       const staleTime = new Date(Date.now() - 25 * 60 * 60 * 1000);
       await fs.utimes(directory, staleTime, staleTime);
 
-      await uploads.ensureBrowserProxyUploadCleanup();
+      await recover();
 
       if (marked) {
-        await expect(fs.stat(directory)).rejects.toHaveProperty("code", "ENOENT");
+        await expectMissing(directory);
       } else {
-        await expect(fs.readFile(path.join(directory, "report.txt"), "utf8")).resolves.toBe("keep");
+        await expectContents(path.join(directory, "report.txt"), "keep");
       }
     },
   );
@@ -310,17 +272,97 @@ describe("browser proxy upload transport", () => {
     await fs.utimes(oldestDirectory, new Date(now - 2_000), new Date(now - 2_000));
     await fs.utimes(newestDirectory, new Date(now - 1_000), new Date(now - 1_000));
 
-    await uploads.ensureBrowserProxyUploadCleanup();
+    await recover();
 
-    await expect(fs.stat(oldestDirectory)).rejects.toHaveProperty("code", "ENOENT");
-    await expect(fs.readFile(path.join(newestDirectory, "report.txt"), "utf8")).resolves.toBe(
-      "new",
-    );
+    await expectMissing(oldestDirectory);
+    await expectContents(path.join(newestDirectory, "report.txt"), "new");
   });
 
   it("leaves unrelated proxy requests unchanged", async () => {
     const body = { paths: ["/tmp/openclaw/uploads/report.txt"] };
     await expect(prepare(body, { path: "/act" })).resolves.toEqual({ body });
     await expect(stage({ body, path: "/act" })).resolves.toEqual({ body });
+  });
+});
+
+describe("browser proxy upload activity", () => {
+  const HOUR_MS = 60 * 60 * 1000;
+  const chmodFaultUnavailable = process.platform === "win32" || process.getuid?.() === 0;
+  const restricted: string[] = [];
+  const stageReport = () => stage({ body: { ref: "e1" }, upload: uploadFiles("report") });
+  beforeEach(() => initializeUploads(true));
+  afterEach(async () => {
+    for (const directory of restricted.splice(0)) {
+      await fs.chmod(directory, 0o700).catch(() => {});
+    }
+  });
+  async function restrictPermissions(target: string, mode: number) {
+    await fs.chmod(target, mode);
+    restricted.push(target);
+  }
+
+  const expectIdle = () => expect(uploads.hasBrowserProxyUploadWork()).toBe(false);
+  function expectBusyUntilDone(operation: Promise<void>) {
+    expect(uploads.hasBrowserProxyUploadWork()).toBe(true);
+    return operation.then(expectIdle);
+  }
+
+  it("keeps filesystem operations busy without treating retained files as active work", async () => {
+    expectIdle();
+    await expectBusyUntilDone(recover());
+    const staged = await stageReport();
+    expectIdle();
+    await expectContents(path.join(staged.directory!, "0", "report.txt"), "report");
+    await expectBusyUntilDone(discard(staged));
+    const retained = (await stageReport()).directory!;
+    await vi.advanceTimersByTimeAsync(24 * HOUR_MS);
+    await vi.waitFor(async () => {
+      await expectMissing(retained);
+      expectIdle();
+    });
+  });
+
+  it.skipIf(chmodFaultUnavailable)("retries cached recovery on the next upload", async () => {
+    const stagingRoot = path.join(uploadDir, ".proxy-uploads");
+    const expired = await retainedDirectory("expired", "");
+    const past = new Date(Date.now() - 25 * HOUR_MS);
+    await fs.utimes(expired, past, past);
+    await restrictPermissions(stagingRoot, 0o000);
+    const reads = vi.spyOn(fs, "readdir");
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await recover();
+    }
+    expect(reads.mock.calls.filter(([target]) => target === stagingRoot)).toHaveLength(1);
+    expectIdle();
+    await fs.chmod(stagingRoot, 0o700);
+    await stageReport();
+    await expectMissing(expired);
+    expectIdle();
+  });
+
+  it.skipIf(chmodFaultUnavailable)("retains deletion for retry while idle", async () => {
+    const staged = await stageReport();
+    const directory = staged.directory!;
+    const child = path.join(directory, "0");
+    await restrictPermissions(child, 0o500);
+    await expectBusyUntilDone(discard(staged));
+    await expectContents(markerPath(directory), MARKER_CONTENT);
+    await expectContents(path.join(child, "report.txt"), "report");
+    await fs.chmod(child, 0o700);
+    await discard(staged);
+    await expectMissing(directory);
+    expectIdle();
+  });
+
+  it("removes a replaced staging symlink without traversing the linked directory", async () => {
+    const staged = await stageReport();
+    await discard(staged);
+    const foreign = path.join(fixture.root, "uploads", "foreign");
+    await fs.mkdir(foreign);
+    await fs.writeFile(path.join(foreign, "keep.txt"), "keep");
+    await fs.symlink(foreign, staged.directory!, process.platform === "win32" ? "junction" : "dir");
+    await discard(staged);
+    await expectContents(path.join(foreign, "keep.txt"), "keep");
+    await expectMissing(staged.directory!);
   });
 });

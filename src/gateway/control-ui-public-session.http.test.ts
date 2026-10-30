@@ -25,6 +25,7 @@ import { createSessionRowProjectionFixture } from "./session-row-projection.test
 const reader = vi.hoisted(() => vi.fn());
 const shareActive = vi.hoisted(() => vi.fn());
 const tokenResolver = vi.hoisted(() => vi.fn());
+const widgetToken = vi.hoisted(() => vi.fn());
 const renderCard = vi.hoisted(() => vi.fn());
 vi.mock(import("./control-ui-public-session-card.js"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -38,6 +39,7 @@ vi.mock("./control-ui-public-session-read.js", () => ({
 // mock-isolation: The transport fixture supplies exact token outcomes without installation identity.
 vi.mock("./control-ui-public-session-token.js", () => ({
   resolvePublicSessionShareToken: tokenResolver,
+  mintPublicSessionWidgetToken: widgetToken,
 }));
 
 const TEST_CONFIG: OpenClawConfig = {
@@ -140,6 +142,7 @@ beforeEach(() => {
     const shareId = token.slice(3, 51);
     return /^[a-f0-9]{48}$/u.test(shareId) ? { ...LOCATOR, shareId } : null;
   });
+  widgetToken.mockReset().mockResolvedValue("v1.document-only");
 });
 
 afterEach(() => {
@@ -151,6 +154,39 @@ afterEach(() => {
 });
 
 describe("anonymous public session HTTP boundary", () => {
+  it("mints a document-scoped widget link under the configured base path", async () => {
+    reader.mockResolvedValue({
+      ...PUBLIC_SESSION,
+      messages: [{ role: "assistant", content: '[embed ref="chart" /]' }],
+    });
+    const response = await send(createPublicGateway("/control"), { path: requestPath("/control") });
+    expect(response.res.statusCode).toBe(200);
+    expect(widgetToken).toHaveBeenCalledWith(LOCATOR, "chart");
+    expect(response.getBody()).toContain(
+      'src="/control/share/session/media?widget=v1.document-only"',
+    );
+  });
+  it("keeps the page available but omits frames for disabled hosting or unmintable references", async () => {
+    reader.mockResolvedValue({
+      ...PUBLIC_SESSION,
+      messages: [{ role: "assistant", content: 'Chart below.\n\n[embed ref="chart" /]' }],
+    });
+    const disabled = await send(
+      createPublicGateway("", {
+        ...TEST_CONFIG,
+        plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
+      }),
+      { path: requestPath() },
+    );
+    expect(disabled.res.statusCode).toBe(200);
+    expect(disabled.getBody()).toContain("Chart below.");
+    expect(disabled.getBody()).not.toContain("<iframe");
+    expect(widgetToken).not.toHaveBeenCalled();
+    widgetToken.mockResolvedValue(undefined);
+    const unmintable = await send(createPublicGateway(), { path: requestPath() });
+    expect(unmintable.res.statusCode).toBe(200);
+    expect(unmintable.getBody()).not.toContain("<iframe");
+  });
   it.each(["", "/control"])(
     "serves only published text and keeps private APIs authenticated (%s)",
     async (basePath) => {
@@ -416,6 +452,18 @@ describe("anonymous public session HTTP boundary", () => {
     expect(revoked.getBody()).not.toContain("The public viewer is ready");
   });
 
+  it("serves a public transcript when its subagent completes during the read", async () => {
+    const server = createPublicGateway();
+    reader.mockImplementationOnce(async () => {
+      sessionChanges.emit({ sessionKey: LOCATOR.sessionKey, scope: "runtime" });
+      return PUBLIC_SESSION;
+    });
+    const response = await send(server);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.getBody()).toContain("The public viewer is ready.");
+    expect(reader).toHaveBeenCalledTimes(1);
+  });
+
   it("rebuilds a cached public document after its committed session changes", async () => {
     const server = createPublicGateway();
     const first = await send(server);
@@ -428,6 +476,31 @@ describe("anonymous public session HTTP boundary", () => {
     expect(changed.getBody()).toContain("Updated public title");
     expect(reader).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["read", "publication"] as const)(
+    "serves a fresh public document when metadata changes during %s",
+    async (phase) => {
+      const server = createPublicGateway();
+      const changed = { ...PUBLIC_SESSION, title: "Updated public title" };
+      reader.mockResolvedValue(changed);
+      if (phase === "read") {
+        reader.mockImplementationOnce(async () => {
+          sessionChanges.emit({ sessionKey: LOCATOR.sessionKey, scope: "session-entry" });
+          return PUBLIC_SESSION;
+        });
+      } else {
+        reader.mockResolvedValueOnce(PUBLIC_SESSION);
+        shareActive.mockImplementationOnce(() => {
+          sessionChanges.emit({ sessionKey: LOCATOR.sessionKey, scope: "session-entry" });
+          return true;
+        });
+      }
+      const response = await send(server);
+      expect(response.res.statusCode).toBe(200);
+      expect(response.getBody()).toContain("Updated public title");
+      expect(reader).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("truncates titles and messages without splitting UTF-16 surrogate pairs", async () => {
     const server = createPublicGateway();

@@ -1,4 +1,4 @@
-import { createMemo, For, Match, onCleanup, onSettled, Show, Switch } from "solid-js";
+import { createMemo, For, Match, onSettled, Show, Switch } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context-types.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
@@ -7,15 +7,16 @@ import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { bindSheetDismissGesture, slideSheetOut } from "../lib/motion/sheet-dismiss.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway, projectMentions, projectOverlays } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
-import {
-  projectAgents,
-  projectAgentIdentity,
-  projectSessions,
-} from "../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import {
+  sharedAgentIdentityProjection,
+  sharedAgentsProjection,
+  sharedSessionsRevision,
+} from "../lib/reactive/shared-application-projections.ts";
 import { registerModalSurface } from "./overlay-registry.ts";
 import "../styles/sidebar-menus.css";
 import "../styles/sidebar-issues.css";
@@ -55,6 +56,7 @@ export type SidebarAttentionPanelPosition = { left: number } & (
 );
 export type SidebarAttentionPanelParams = {
   entries: readonly SidebarInboxEntry[];
+  approvalPending?: boolean;
   onApprovalDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
   onClose: () => void;
   onDismiss: (dismissal: SidebarAttentionDismissal) => void;
@@ -123,26 +125,6 @@ function SidebarInboxItem(props: {
   readContext: () => ApplicationContext;
   isMentionDismissing: (id: string) => boolean;
 }) {
-  const outbox = createMemo(() => {
-    const entry = props.entry;
-    return entry.type === "outbox" ? entry : null;
-  });
-  const approval = createMemo(() => {
-    const entry = props.entry;
-    return entry.type === "approval" ? entry : null;
-  });
-  const attention = createMemo(() => {
-    const entry = props.entry;
-    return entry.type === "attention" ? entry : null;
-  });
-  const mention = createMemo(() => {
-    const entry = props.entry;
-    return entry.type === "mention" ? entry : null;
-  });
-  const scopeUpgrade = createMemo(() => {
-    const entry = props.entry;
-    return entry.type === "scopeUpgrade" ? entry : null;
-  });
   const dismiss = () => {
     const dismissal = props.entry.dismissal;
     if (dismissal) {
@@ -151,7 +133,7 @@ function SidebarInboxItem(props: {
   };
   return (
     <Switch>
-      <Match when={outbox()}>
+      <Match when={props.entry.type === "outbox" ? props.entry : null}>
         {(entry) => (
           <SidebarOutboxItem
             entry={entry()}
@@ -159,17 +141,18 @@ function SidebarInboxItem(props: {
           />
         )}
       </Match>
-      <Match when={approval()}>
+      <Match when={props.entry.type === "approval" ? props.entry : null}>
         {(entry) => (
           <SidebarApprovalItem
             approval={entry().approval}
+            pending={props.panel.approvalPending}
             context={props.readContext()}
             onNavigate={(route, options) => props.panel.onNavigate(route, options)}
             onDecision={props.panel.onApprovalDecision}
           />
         )}
       </Match>
-      <Match when={attention()}>
+      <Match when={props.entry.type === "attention" ? props.entry : null}>
         {(entry) => (
           <SidebarIssueItem
             item={entry()}
@@ -186,7 +169,7 @@ function SidebarInboxItem(props: {
           />
         )}
       </Match>
-      <Match when={mention()}>
+      <Match when={props.entry.type === "mention" ? props.entry : null}>
         {(entry) => (
           <SidebarMentionItem
             mention={entry().mention}
@@ -202,7 +185,7 @@ function SidebarInboxItem(props: {
           />
         )}
       </Match>
-      <Match when={scopeUpgrade()}>
+      <Match when={props.entry.type === "scopeUpgrade" ? props.entry : null}>
         {(entry) => (
           <SidebarScopeUpgradeItem
             state={entry().state}
@@ -258,25 +241,47 @@ export function SidebarAttentionPanel(
   context: ApplicationContext = useApplication(),
   mentionSource: MentionsCapability = context.sidebarAttention.activate(SidebarAttentionStoreOwner),
 ) {
-  onCleanup(() => props.listRef?.(null));
   let panel!: HTMLElement;
+  let backdrop: HTMLElement | undefined;
+  let grabber: HTMLElement | undefined;
+  let closing = false;
   const focus = createSidebarAttentionFocus(() => panel);
+  // On phones the panel is a bottom sheet: tapping outside or swiping the grabber
+  // slides it away before it closes.
+  const slideOutAndClose = () => {
+    if (closing) {
+      return;
+    }
+    closing = true;
+    void (isMobileNavLayout() ? slideSheetOut(panel, backdrop) : Promise.resolve()).then(() =>
+      props.onClose(),
+    );
+  };
   onSettled(() => {
     const releaseModal = registerModalSurface(panel);
     props.focusRef?.(focus);
+    const releaseGesture =
+      isMobileNavLayout() && grabber
+        ? bindSheetDismissGesture({
+            surface: panel,
+            handle: grabber,
+            backdrop: () => backdrop,
+            dismiss: () => props.onClose(),
+          })
+        : undefined;
     return () => {
+      props.listRef?.(null);
       props.focusRef?.(null);
       releaseModal();
+      releaseGesture?.();
     };
   });
   const mentions = projectMentions(mentionSource);
   const gateway = projectGateway(context.gateway);
   const overlays = context.overlays && projectOverlays(context.overlays);
-  const agents = context.agents && projectAgents(context.agents);
-  const sessions = context.sessions && projectSessions(context.sessions);
-  const identities =
-    context.agentIdentity &&
-    projectAgentIdentity({ identities: context.agentIdentity, agentId: null });
+  const agents = context.agents && sharedAgentsProjection(context.agents);
+  const sessions = context.sessions && sharedSessionsRevision(context.sessions);
+  const identities = context.agentIdentity && sharedAgentIdentityProjection(context.agentIdentity);
   const visibleEntries = createMemo(() =>
     props.entries.filter((entry) => sidebarInboxEntryMatchesTab(entry, props.selectedTab)),
   );
@@ -334,10 +339,11 @@ export function SidebarAttentionPanel(
   return (
     <SidebarAttentionFocusContext value={focus}>
       <button
+        ref={(element) => (backdrop = element)}
         type="button"
         class="sidebar-issues-panel__backdrop"
         aria-label={t("common.close")}
-        onClick={() => props.onClose()}
+        onClick={slideOutAndClose}
       />
       <openclaw-menu-surface>
         <section
@@ -350,7 +356,11 @@ export function SidebarAttentionPanel(
           style={panelStyle()}
           onKeyDown={(event) => props.onKeydown(event)}
         >
-          <div class="sidebar-issues-panel__grabber" aria-hidden="true" />
+          <div
+            ref={(element) => (grabber = element)}
+            class="sidebar-issues-panel__grabber"
+            aria-hidden="true"
+          />
           <header class="sidebar-issues-panel__header">
             <h2 id="sidebar-issues-panel-heading" class="sidebar-issues-panel__heading">
               <span class="sidebar-issues-panel__heading-icon" aria-hidden="true">
@@ -383,13 +393,9 @@ export function SidebarAttentionPanel(
                   class="sidebar-brand__icon"
                   aria-label={t("attention.mentions.notifications")}
                   href={pathForRoute("notifications", context.basePath)}
-                  onClick={(event) => {
-                    if (!shouldHandleNavigationClick(event)) {
-                      return;
-                    }
-                    event.preventDefault();
-                    props.onNavigate("notifications");
-                  }}
+                  onClick={(event) =>
+                    handleNavigationClick(event, () => props.onNavigate("notifications"))
+                  }
                 >
                   <Icon name="settings" />
                 </a>

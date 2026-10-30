@@ -28,6 +28,8 @@ Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent.
 
 If no AI provider is configured, Ask OpenClaw offers **Connect an AI provider**. If a configured runtime fails to start or verify, the conversation stays visible with the actual error and **Retry**. Sending stays disabled until verification succeeds. Retry checks the runtime without resending your earlier message or clearing your draft.
 
+Ask OpenClaw has its own identity. Greetings and command planning use the configured owner's model and runtime policy without loading that owner's workspace persona files, such as `SOUL.md` and `IDENTITY.md`.
+
 Onboarding suggestions can focus the recommended answer when nothing else has focus. If you have already focused the composer or another control, arriving suggestions leave your keyboard focus there.
 
 Each chat message carries the Control UI page you are currently viewing as an untrusted ambient hint, so requests like "configure this channel" or "why is this page empty?" resolve against the page you are looking at.
@@ -75,13 +77,18 @@ the Gateway's `PATH`; OpenClaw skips Bun's `node` shim, and an unavailable Node
 executable produces a startup error with installation guidance. Windows keeps
 `node-pty`. See [Bun compatibility](/install/bun-compatibility#known-limitations).
 
-Enablement changes hot-apply without restarting the Gateway. Disabling closes
-attached, detached, and conversation-owned terminals and cancels pending opens.
-Re-enabling allows fresh sessions; closed sessions do not return. Reload the
-Control UI page to pick up the updated content security policy.
+Changes to `gateway.terminal.enabled` hot-apply without restarting the Gateway.
+Disabling closes attached, detached, and conversation-owned terminals and
+cancels pending opens. Re-enabling allows fresh sessions; closed sessions do
+not return. Reload the Control UI page to pick up the updated content security
+policy.
 
 <Warning>
-The terminal is an unconfined host shell and inherits the Gateway process environment. Disable it with `gateway.terminal.enabled: false` on deployments where admin operators should not get a host shell. OpenClaw refuses terminal sessions for agents with `sandbox.mode: "all"`; changing an active agent to that mode closes its existing and in-flight terminal sessions.
+A Gateway-local terminal is an unconfined host shell that inherits the Gateway process environment. If the Gateway can read credentials or write configuration files, an operator with this shell can too. Direct file writes bypass Gateway API restrictions such as `OPENCLAW_CONFIG_READONLY`.
+
+If Gateway operators should not have this host access, start the Gateway with `OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS=1`. This deployment control blocks Gateway-local terminals while preserving authorized terminals on connected nodes. Gateway configuration cannot change it; change the launch environment and restart the Gateway to change it. [Gateway-hosted automation](/automation/cron-jobs/managing-jobs#configuration) requires a separate control.
+
+OpenClaw refuses terminal sessions for agents with `sandbox.mode: "all"`; changing an active agent to that mode closes its existing and in-flight terminal sessions.
 </Warning>
 
 Use **Ctrl + backtick** to toggle the **Terminal** tab in the selected Chat pane's unified side panel. You can also open **Terminal** from the panel's **+** menu. The shared panel docks right or bottom, resizes with the browser viewport, can expand over the Chat pane, and keeps multiple shell tabs. The dock remains available for ad-hoc operator shells. Starting a native CLI from **New session**, or opening a Claude Code or Codex catalog session in the terminal, opens the [main terminal page](/web/urls#terminal-urls), keeping the sidebar and application chrome while replacing the composer. See [Gateway configuration](/gateway/configuration-reference#gateway) for `gateway.terminal.enabled` and the optional `gateway.terminal.shell` override.
@@ -103,7 +110,7 @@ When you open a chat, the panel automatically reveals an available desktop assig
 
 Browser-tool results stay inline on desktop and mobile; they do not automatically open the Browser panel. Choose **Open** on a browser preview card, use the panel controls, or ask your agent to show it. A panel you explicitly opened still follows its saved per-session layout when you return or reload.
 
-Automatic desktop reveals reuse the existing panel and keep an already-selected tool in front. Automatically discovered desktops stay out of the saved layout, including after resizing or docking, so reloading validates the resource again before opening it. Mobile chat shows these panels full-width, just like manually opened panels; other narrow panes retain their bottom-docked layout. Minimizing the panel or closing a Browser or Desktop tab disables further automatic desktop reveals for that session in the current browser profile, including after reload; the **+** menu can still open them manually.
+Automatic desktop reveals reuse the existing panel and keep an already-selected tool in front. Automatically discovered desktops stay out of the saved layout, including after resizing or docking, so reloading validates the resource again before opening it. If discovery confirms that the desktop is no longer available, its automatic tab closes without affecting an explicitly selected desktop or disabling future automatic reveals. Mobile chat shows these panels full-width, just like manually opened panels; other narrow panes retain their bottom-docked layout. Minimizing the panel or closing a Browser or Desktop tab disables further automatic desktop reveals for that session in the current browser profile, including after reload; the **+** menu can still open them manually.
 
 Owner-authorized, unsandboxed agents can use the `terminal` tool to list, read, resize, or close terminals an operator already opened from the same Chat session's Terminal panel. Agents cannot open shells, and access remains exact-session scoped: an agent cannot inspect or control standalone operator terminals or terminals belonging to another session. Terminal input follows the effective session and host-exec permission policy: **Full access** (`full`, or YOLO) sends it immediately; **Guarded** (`guarded`) and **Workspace** (`workspace`, including accept-only or Guardian-reviewed flows) require an explicit, one-time approval for that exact input; **Read only** (`read-only`) or `tools.exec.mode: "deny"` forbids input entirely. Approving one input never grants unrestricted access to the terminal.
 

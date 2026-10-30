@@ -1,17 +1,12 @@
+import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  formatInboundMediaUnavailableText,
-  type MediaPlaceholderTextFact,
-} from "openclaw/plugin-sdk/channel-inbound";
-import {
-  buildMSTeamsGraphMessageUrl,
-  downloadMSTeamsAttachments,
   downloadMSTeamsBotFrameworkAttachments,
-  downloadMSTeamsGraphMedia,
-  extractMSTeamsHtmlAttachmentIds,
   isBotFrameworkPersonalChatId,
-  type MSTeamsHtmlAttachmentSummary,
-  type MSTeamsInboundMedia,
-} from "../attachments.js";
+} from "../attachments/bot-framework.js";
+import { downloadMSTeamsAttachments } from "../attachments/download.js";
+import { buildMSTeamsGraphMessageUrl, downloadMSTeamsGraphMedia } from "../attachments/graph.js";
+import { extractMSTeamsHtmlAttachmentIds } from "../attachments/html.js";
+import type { MSTeamsHtmlAttachmentSummary, MSTeamsInboundMedia } from "../attachments/types.js";
 import { formatUnknownError } from "../errors.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import {
@@ -178,18 +173,18 @@ export async function prepareMSTeamsInboundContent(params: {
   }
 
   const inboundMedia = mergeMSTeamsMediaFacts(params.advertisedMedia, resolvedMedia);
-  const nativeMediaForComparison = [
-    ...params.advertisedMedia,
-    ...resolvedMedia.slice(params.advertisedMedia.length).map((media) => ({
-      contentType: media.contentType,
-      kind: media.kind,
-    })),
-  ];
-  const agentBody = resolveMSTeamsInboundMediaBody({
-    body: params.rawBody,
-    nativeMedia: nativeMediaForComparison,
-    materializedMedia: inboundMedia,
-  });
+  const body = params.rawBody;
+  const expectedMediaCount = Math.max(params.advertisedMedia.length, resolvedMedia.length);
+  const unavailableCount =
+    inboundMedia.filter((media) => !media.path).length +
+    Math.max(0, expectedMediaCount - inboundMedia.length);
+  const agentBody =
+    unavailableCount === 0
+      ? body
+      : formatInboundMediaUnavailableText({
+          body,
+          notice: `[msteams ${unavailableCount > 1 ? `${unavailableCount} attachments` : "attachment"} unavailable]`,
+        });
   if (!agentBody && inboundMedia.length === 0) {
     params.log.debug?.("skipping empty message after Graph media recovery");
     return null;
@@ -209,23 +204,6 @@ function shouldAttemptMSTeamsGraphMediaFallback(params: {
     (conversationType === "channel" || conversationType === "groupchat") &&
     (params.htmlSummary?.htmlAttachments ?? 0) > 0
   );
-}
-
-function resolveMSTeamsInboundMediaBody(params: {
-  body: string;
-  nativeMedia: readonly MediaPlaceholderTextFact[];
-  materializedMedia: readonly MediaPlaceholderTextFact[];
-}): string {
-  const unavailableCount =
-    params.materializedMedia.filter((media) => !media.path).length +
-    Math.max(0, params.nativeMedia.length - params.materializedMedia.length);
-  if (unavailableCount === 0) {
-    return params.body;
-  }
-  return formatInboundMediaUnavailableText({
-    body: params.body,
-    notice: `[msteams ${unavailableCount > 1 ? `${unavailableCount} attachments` : "attachment"} unavailable]`,
-  });
 }
 
 function hasDefinitiveContentType(media: MSTeamsInboundMedia): boolean {

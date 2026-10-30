@@ -1,4 +1,5 @@
 import { clearAllCliSessions } from "./cli-session-binding.js";
+import { resolveSessionCreatorActor } from "./session-entry-provenance.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 import {
   SESSION_TOTAL_TOKENS_VERSION,
@@ -16,12 +17,11 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   activeWriterRunId: undefined,
   lastRunId: undefined,
   lifecycleRunId: undefined,
+  resumeAfterRestart: undefined,
   mainRestartRecovery: undefined,
-  pendingExecNotifications: undefined,
-  restartRecoveryOperatorSource: undefined,
-  restartRecoveryRequesterSource: undefined,
   pendingProjectGitUrl: undefined,
   pendingWorktree: undefined,
+  priorWorkspace: undefined,
   sessionDiffBaselineCapture: undefined,
   transcriptByteCompactionLatch: undefined,
 } satisfies Partial<InternalSessionEntry>;
@@ -34,26 +34,43 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "activeWriterRunId",
   "lastRunId",
   "lifecycleRunId",
+  "resumeAfterRestart",
   "mainRestartRecovery",
-  "pendingExecNotifications",
-  "restartRecoveryOperatorSource",
-  "restartRecoveryRequesterSource",
   "pendingProjectGitUrl",
   "pendingWorktree",
+  "priorWorkspace",
   "sessionDiffBaselineCapture",
   "transcriptByteCompactionLatch",
 ] as const satisfies readonly (keyof InternalSessionEntry)[];
 
-function stripPrivateSessionEntryFields(entry: InternalSessionEntry): SessionEntry;
+function stripPrivateSessionEntryFields(
+  entry: InternalSessionEntry,
+  identity: "public" | "execution",
+): SessionEntry;
 function stripPrivateSessionEntryFields(
   entry: Partial<InternalSessionEntry>,
+  identity: "public" | "execution",
 ): Partial<SessionEntry>;
 function stripPrivateSessionEntryFields(
   entry: Partial<InternalSessionEntry> & RetiredSessionMetadata,
+  identity: "public" | "execution",
 ): Partial<SessionEntry> {
   const projected = { ...entry };
   for (const key of PRIVATE_SESSION_ENTRY_KEYS) {
     delete projected[key];
+  }
+  // Existing databases may retain retired execution-recovery snapshots. Never expose them.
+  for (const key of Object.keys(projected)) {
+    if (
+      key === "pendingExecNotifications" ||
+      key === "subagentRecovery" ||
+      key.startsWith("restartRecovery")
+    ) {
+      Reflect.deleteProperty(projected, key);
+    }
+  }
+  if (identity === "public" && projected.createdActor) {
+    projected.createdActor = resolveSessionCreatorActor(projected.createdActor);
   }
   delete projected.thinkingLevelSelection;
   delete projected.compactionCheckpoints;
@@ -66,14 +83,19 @@ function stripPrivateSessionEntryFields(
   return projected;
 }
 
+/** Internal execution retains the immutable sandbox actor, not its display projection. */
+export function projectExecutionSessionEntry(entry: InternalSessionEntry): SessionEntry {
+  return stripPrivateSessionEntryFields(entry, "execution");
+}
+
 export function projectPublicSessionEntry(entry: InternalSessionEntry): SessionEntry {
-  return stripPrivateSessionEntryFields(entry);
+  return stripPrivateSessionEntryFields(entry, "public");
 }
 
 export function projectPublicSessionEntryPatch(
   patch: Partial<InternalSessionEntry>,
 ): Partial<SessionEntry> {
-  return stripPrivateSessionEntryFields(patch);
+  return stripPrivateSessionEntryFields(patch, "public");
 }
 
 // A completed context rewrite invalidates the previous run snapshot, not the transcript ledger.

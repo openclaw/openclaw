@@ -7,8 +7,11 @@ const fixture = vi.hoisted(() => ({
 }));
 
 // mock-isolation: The fixture supplies an existing actor to prove release timing without acquiring a database actor.
-vi.mock("../../../config/sessions/session-actor-storage-binding.js", () => ({
+vi.mock("../../../config/sessions/session-actor-storage-acquisition.js", () => ({
   acquireSessionActorStorage: async () => fixture.source,
+}));
+// mock-isolation: Binding preserves the fixture's independently controlled actor lifetime.
+vi.mock("../../../config/sessions/session-actor-storage-binding.js", () => ({
   runWithSessionActorStorage: (_source: unknown, run: () => Promise<unknown>) => run(),
 }));
 

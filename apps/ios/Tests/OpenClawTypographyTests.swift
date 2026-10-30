@@ -22,6 +22,15 @@ struct RootSidebarTypographyTests {
 }
 
 struct OpenClawTypographyTests {
+    @Test func `About support links use the branded shared row`() throws {
+        let settings = try String(contentsOf: Self.sourceURL("Design/SettingsProTabSections.swift"), encoding: .utf8)
+        let supportRow = try Self.extract(settings, from: "title: \"Support\"", to: "!)")
+        #expect(supportRow.contains("https://community.openclaw.ai/"))
+        let linkRow = try Self.extract(settings, from: "func aboutLinkRow(", to: "\n    }")
+        #expect(linkRow.filter { !$0.isWhitespace }.contains(
+            "Text(title).font(OpenClawType.subheadSemiBold)"))
+    }
+
     @Test func `Access actions use native branded controls`() throws {
         let settings = try String(contentsOf: Self.sourceURL("Design/SettingsProTabSections.swift"), encoding: .utf8)
         for label in ["Cancel sign-in", "Sign in to Cloudflare Access", "Sign out of Cloudflare Access"] {
@@ -187,7 +196,8 @@ struct OpenClawTypographyTests {
         #expect(typographySource.contains("maximumPointSize: 16"))
         #expect(typographySource.contains("maximumPointSize: 22"))
         #expect(typographySource.contains("maximumPointSize: 44"))
-        #expect(typographySource.contains("scaledFont(for: base, maximumPointSize: maximumPointSize)"))
+        #expect(typographySource
+            .contains("for: base, maximumPointSize: maximumPointSize, compatibleWith: UITraitCollection.current"))
         #expect(typographySource.contains("case let searchTextField as UISearchTextField"))
         #expect(!typographySource.contains("case let textField as UITextField"))
         #expect(!typographySource.contains("case let textView as UITextView"))

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createEmbeddedRunLaneController } from "../../agents/embedded-agent-runner/run/lane-controller.js";
 import { abortAndDrainEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.js";
@@ -15,8 +15,9 @@ import { withSessionTurn } from "../../sessions/session-controller.admission.js"
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
+import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
 import {
   advancePlacementFixtureToActive,
@@ -26,9 +27,14 @@ import { canRedispatchFailedWorkerPlacement } from "./session-placement-lifecycl
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { createWorkerPlacementRedispatch } from "./worker-placement-redispatch.js";
 import {
+  completeTurn,
+  createLauncher as createProvider,
+  installLauncherTest,
+  localResult,
+  runIdentity,
+} from "./worker-turn-launcher-flow.test-support.js";
+import {
   ENVIRONMENT_ID,
-  appendWorkerReply,
-  acknowledgeCompletedWorkerTurn,
   OWNER_EPOCH,
   MANIFEST_REF,
   attachedEnvironment,
@@ -37,15 +43,12 @@ import {
   seedActivePlacement,
   SESSION_ID,
   SESSION_KEY,
-  cleanupWorkerTurnLauncherTest,
-  createWorkerSessionTurnPlacementProvider,
   createWorkerTurnTunnel,
   reconcileUnchangedLocalWorkspace,
   type WorkerTurnLauncherOptions,
   database,
   placements,
   sessionTarget,
-  setupWorkerTurnLauncherTest,
   turn,
   unusedEnvironments,
   workerTurnRequest,
@@ -53,19 +56,7 @@ import {
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
-afterAll(closeStateDatabaseForTest);
-beforeEach(setupWorkerTurnLauncherTest);
-afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
-
-function createProvider(
-  options: Partial<Parameters<typeof createWorkerSessionTurnPlacementProvider>[0]> = {},
-) {
-  return createWorkerSessionTurnPlacementProvider({
-    environments: unusedEnvironments(),
-    placements,
-    ...options,
-  });
-}
+installLauncherTest();
 
 const createOperation = () =>
   createReplyOperation({ sessionId: SESSION_ID, sessionKey: SESSION_KEY, resetTriggered: false });
@@ -303,7 +294,7 @@ describe("local claim recovery before backend registration", () => {
         replyOperation: operation,
         abortSignal: operation.abortSignal,
       };
-      const run = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+      const run = vi.fn(localResult);
       try {
         if (timing === "before") {
           operation.abortByUser();
@@ -365,22 +356,14 @@ describe("worker pre-launch claim recovery", () => {
         entered.resolve();
         await resume.promise;
         if (stage === "dispatch") {
-          return {
-            stdout: "",
-            stderr: "",
-            code: 1,
-            signal: null,
-            killed: true,
-            termination: "exit",
-          };
+          return createCommandResult({ code: 1, killed: true });
         }
         throw new AggregateError(
           [new Error("cancel receipt unavailable")],
           "node cancellation unconfirmed",
         );
       }
-      const leafId = await appendWorkerReply("First turn complete", 41);
-      const result = await acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
+      const result = await completeTurn(request, "First turn complete", 41);
       await placements.markWorkspaceResultPending(request.turnClaim);
       return result;
     });
@@ -503,7 +486,7 @@ describe("worker pre-launch claim recovery", () => {
             blockedOperation = operation;
           }
           return provider.executeTurn(
-            { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: input.runId },
+            runIdentity(input.runId),
             { ...input, replyOperation: operation, abortSignal: signal },
             unexpectedLocalExecution,
           );
@@ -526,15 +509,38 @@ describe("worker pre-launch claim recovery", () => {
       }
       blocked = execute(second);
       const outcome = blocked.catch((error: unknown) => error);
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        outcome.then(() => {
-          throw new Error("worker settled before reaching cancellation gate");
-        }),
-      ]);
+        outcome,
+        "worker settled before reaching cancellation gate",
+      );
       const oldClaim = currentClaim();
+      const currentPlacement = placements.get(SESSION_ID);
+      const oldWorkerClaim = currentPlacement && projectWorkerSessionTurnClaim(currentPlacement);
       expect(oldClaim?.runId).toBe("blocked-second");
-      expect(await pendingResults()).toHaveLength(stage === "pending result" ? 1 : 0);
+      if (!oldClaim || !oldWorkerClaim) {
+        throw new Error("Expected the blocked turn claim");
+      }
+      const fenced =
+        stage === "workspace queue" || stage === "workspace mutation" || stage === "pending result";
+      const pendingBeforeCancellation = await pendingResults();
+      if (fenced) {
+        expect(pendingBeforeCancellation).toMatchObject([
+          {
+            sessionId: SESSION_ID,
+            environmentId: ENVIRONMENT_ID,
+            ownerEpoch: OWNER_EPOCH,
+            placementGeneration: oldWorkerClaim.placementGeneration,
+            claimId: oldWorkerClaim.claimId,
+            runId: oldWorkerClaim.runId,
+            workspaceAcceptedAtMs: null,
+            recoveryRequestedAtMs: null,
+            stagedResultRef: null,
+          },
+        ]);
+      } else {
+        expect(pendingBeforeCancellation).toEqual([]);
+      }
       const dispatched =
         stage === "dispatch boundary" ||
         stage === "dispatch" ||
@@ -605,28 +611,27 @@ describe("worker pre-launch claim recovery", () => {
         expect(launch).toHaveBeenCalledTimes(3);
         return;
       }
-      if (stage === "pending result") {
+      if (fenced) {
         expect(currentClaim()).toEqual(oldClaim);
         const pending = (await pendingResults())[0]!;
-        expect(pending.claimId).toBe(oldClaim?.claimId);
-        expect(pending.recoveryRequestedAtMs).not.toBeNull();
+        expect(pending).toMatchObject({
+          claimId: oldWorkerClaim.claimId,
+          runId: oldWorkerClaim.runId,
+          placementGeneration: oldWorkerClaim.placementGeneration,
+          recoveryRequestedAtMs: expect.any(Number),
+          workspaceAcceptedAtMs: null,
+        });
         expect(environments.destroy).not.toHaveBeenCalled();
         return;
       }
       expect(currentClaim()).toBeNull();
       successor = execute(turn("successor-third"));
       void successor.catch(() => undefined);
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         successorEntered.promise,
-        successor.then(
-          () => {
-            throw new Error("successor settled before reaching workspace gate");
-          },
-          (error: unknown) => {
-            throw error;
-          },
-        ),
-      ]);
+        successor,
+        "successor settled before reaching workspace gate",
+      );
       const replacement = currentClaim();
       expect(replacement?.runId).toBe("successor-third");
       resume.resolve();

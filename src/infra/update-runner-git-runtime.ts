@@ -4,6 +4,7 @@ import path from "node:path";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { hasErrnoCode, isErrno } from "./errno.js";
+import { throwSettledAggregate } from "./error-graph-internal.js";
 import { formatErrorMessage } from "./errors.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { isPathInside } from "./path-guards.js";
@@ -283,12 +284,7 @@ export async function prepareGitRuntimePromotion(
         assertCurrent();
       }),
     );
-    const failures = removed.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length) {
-      throw new AggregateError(failures, "Git runtime backup cleanup did not finish.");
-    }
+    throwSettledAggregate(removed, "Git runtime backup cleanup did not finish.");
   };
   const filter = (source: string, destination: string) => {
     if (

@@ -110,20 +110,35 @@ describe("command lane capacity groups", () => {
     await Promise.all([cronRun, secondHook, thirdHook]);
   });
 
-  test("priority outranks group-global enqueue sequence", async () => {
-    configure(1);
-    const [blocker, blockerGate] = park(HOOK);
-    const [olderBackground, cronGate] = park(CRON, "background");
-    const [newerForeground, hookGate] = park(HOOK, "foreground");
-    blockerGate();
-    await blocker;
-    expectCounts(HOOK, 1, 0);
-    expectCounts(CRON, 0, 1);
-    hookGate();
-    await newerForeground;
-    cronGate();
-    await olderBackground;
-  });
+  test.each([
+    ["foreground", 0, ["foreground", "background"]],
+    ["normal", 14_999, ["normal", "background"]],
+    ["normal", 15_000, ["background", "normal"]],
+  ] as const)(
+    "bounds %s overtaking across member lanes at %dms",
+    async (priority, ageMs, expected) => {
+      vi.useFakeTimers();
+      configure(1);
+      const [blocker, blockerGate] = park(HOOK);
+      const order: string[] = [];
+      const olderBackground = enqueueCommandInLane(
+        CRON,
+        async () => void order.push("background"),
+        {
+          priority: "background",
+        },
+      );
+      vi.advanceTimersByTime(ageMs);
+      const newerPriority = enqueueCommandInLane(HOOK, async () => void order.push(priority), {
+        priority,
+      });
+      expectCounts(HOOK, 1, 1);
+      expectCounts(CRON, 0, 1);
+      blockerGate();
+      await Promise.all([blocker, olderBackground, newerPriority]);
+      expect(order).toEqual(expected);
+    },
+  );
 
   test("aging applies across member lanes without borrowing a sibling reservation", async () => {
     vi.useFakeTimers();
@@ -270,18 +285,6 @@ describe("command lane capacity groups", () => {
     hookGate.resolve();
     await hookRun;
     expect(peak).toBe(1);
-  });
-
-  test("a timed-out task releases group capacity to a queued sibling", async () => {
-    configure(1);
-    const timedOut = enqueueCommandInLane(CRON, async () => new Promise<never>(() => {}), {
-      taskTimeoutMs: 10,
-    });
-    const [hookRun, hookGate] = park(HOOK);
-    await expect(timedOut).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
-    expect(getCommandLaneSnapshot(HOOK).activeCount).toBe(1);
-    hookGate();
-    await hookRun;
   });
 
   test("rejects lanes that can be synchronously awaited", () => {

@@ -13,6 +13,7 @@ import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { renderComposerFixture } from "./chat-composer.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
@@ -25,17 +26,16 @@ import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   consumePaneSessionHandoff,
-  focusChatComposerFromPrintableKeydown,
+  focusChatComposerFromKeydown,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
 import {
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
   createTestChatPane,
   createPaneTestHost,
   connectPaneTestView,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { resetChatComposerState } from "./components/chat-composer.tsx";
@@ -322,6 +322,9 @@ describe("chat pane retained presentation lifecycle", () => {
         pane.presented = false;
         pane.presented = true;
       }
+      // Committed hide releases the old presentation reader. The adopted send
+      // joins its successor, so wait for that admission rather than the retired load.
+      const resumed = getChatHistoryLoadState(state);
       if (outcome === "history failure") {
         history.reject(new Error("Catalog transcript unavailable"));
       } else {
@@ -337,6 +340,9 @@ describe("chat pane retained presentation lifecycle", () => {
         });
       }
       await loaded;
+      if (resumed.phase === "in-flight") {
+        await resumed.promise;
+      }
       await Promise.resolve();
 
       if (outcome === "ready") {
@@ -362,7 +368,9 @@ describe("chat pane retained presentation lifecycle", () => {
           });
         }
       }
-      expect(request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(1);
+      expect(request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(
+        outcome === "hide and return" ? 3 : 2,
+      );
     },
   );
 
@@ -409,7 +417,7 @@ describe("chat pane retained presentation lifecycle", () => {
     const focus = vi.spyOn(textarea, "focus");
     const target = activePane.appendChild(document.createElement("main"));
     target.addEventListener("keydown", (event) =>
-      focusChatComposerFromPrintableKeydown(activePane, event, textarea),
+      focusChatComposerFromKeydown(activePane, event, textarea),
     );
     const retainedPane = app.appendChild(document.createElement("div"));
     retainedPane.setAttribute("inert", "");
@@ -539,11 +547,13 @@ describe("chat pane retained presentation lifecycle", () => {
       pane.chatState.attach(state);
       pane.active = true;
 
-      openSessionWorkspaceFile(state, { path: "README.md" });
-      expect(getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "README.md", {
-        agentId: "main",
-      });
+      const opening = openSessionWorkspaceFile(state, { path: "README.md" });
       expect(isSidebarSlotVisible(state.sidebarLayout, "workspace")).toBe(true);
+      await vi.waitFor(() =>
+        expect(getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "README.md", {
+          agentId: "main",
+        }),
+      );
 
       if (retirement === "hidden") {
         pane.presented = false;
@@ -565,7 +575,7 @@ describe("chat pane retained presentation lifecycle", () => {
           content: "This retired preview must not return.",
         },
       });
-      await file.promise;
+      await opening;
 
       expect(state.sidebarContent).toBeNull();
       expect(state.sessionWorkspaceState?.previews).toEqual([]);

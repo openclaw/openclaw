@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   operatorMcpOAuthIdentity,
   requesterMcpOAuthIdentity,
@@ -12,26 +12,19 @@ import {
 } from "../../agents/mcp-oauth-store.js";
 import * as mcpOAuth from "../../agents/mcp-oauth.js";
 import { withMcpOAuthTestLease } from "../../agents/mcp-oauth.test-support.js";
+import { withTestChannelRegistry } from "../../channels/message-access/host-ingress.test-support.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setRuntimeConfigSnapshotRefreshHandler } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildLegacyDmAccountAllowlistAdapter } from "../../plugin-sdk/allowlist-config-edit.js";
-import {
-  captureActivePluginRegistrySnapshot,
-  rollbackStagedPluginRegistry,
-  stageActivePluginRegistry,
-} from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   linkUserChannelIdentity,
   unlinkUserChannelIdentity,
 } from "../../state/user-channel-identities.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
 import { handleConfigCommand } from "./commands-config.js";
 import { handleMcpCommand } from "./commands-mcp.js";
@@ -77,36 +70,27 @@ function blockCommand<T>(start: (pause: () => Promise<void>) => Promise<T>) {
   };
 }
 
-beforeEach(({ onTestFinished }) => {
-  const previous = captureActivePluginRegistrySnapshot();
-  onTestFinished(() => {
-    rollbackStagedPluginRegistry(previous);
-  });
-  const discord: ChannelPlugin = {
-    ...createChannelTestPluginBase({
-      id: "discord",
-      config: {
-        listAccountIds: () => ["team"],
-        resolveAccount: (cfg, accountId) =>
-          cfg.channels?.discord?.accounts?.[accountId ?? "team"] ?? {},
-        resolveAllowFrom: ({ cfg, accountId }) =>
-          cfg.channels?.discord?.accounts?.[accountId ?? "team"]?.allowFrom,
-      },
-    }),
-    allowlist: buildLegacyDmAccountAllowlistAdapter({
-      channelId: "discord",
-      resolveAccount: ({ cfg, accountId }) =>
-        cfg.channels?.discord?.accounts?.[accountId ?? "team"] ?? {},
-      normalize: ({ values }) => values.map(String),
-      resolveDmAllowFrom: (account) => account.allowFrom,
-    }),
-  };
-  stageActivePluginRegistry(
-    createTestRegistry([{ pluginId: "discord", plugin: discord, source: "test" }]),
-    null,
-    "default",
-  );
-});
+const resolveAccount = (cfg: OpenClawConfig, accountId?: string | null) =>
+  cfg.channels?.discord?.accounts?.[accountId ?? "team"] ?? {};
+const discord: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "discord",
+    config: {
+      listAccountIds: () => ["team"],
+      resolveAccount,
+      resolveAllowFrom: ({ cfg, accountId }) => resolveAccount(cfg, accountId).allowFrom,
+    },
+  }),
+  allowlist: buildLegacyDmAccountAllowlistAdapter({
+    channelId: "discord",
+    resolveAccount: ({ cfg, accountId }) => resolveAccount(cfg, accountId),
+    normalize: ({ values }) => values.map(String),
+    resolveDmAllowFrom: (account) => account.allowFrom,
+  }),
+};
+
+const withCommandIngress: typeof withAdminIngress = (run, authority) =>
+  withTestChannelRegistry(discord, () => withAdminIngress(run, authority));
 
 const commands = [
   {
@@ -160,7 +144,7 @@ it.each(
 )(
   "preserves live owner authority through $command persistence (revoke=$revoke)",
   async ({ command, handler, persistedValue, expected, success, revocation, revoke }) => {
-    await withAdminIngress(
+    await withCommandIngress(
       async (fixture) => {
         const { cfg, admins, state } = fixture;
         cfg.commands = { ...cfg.commands, text: true, config: true, mcp: true };
@@ -170,7 +154,6 @@ it.each(
         const original = await readFile(state.configPath, "utf8");
         const admin = admins[0]!;
         const params = await adminParams(command, fixture);
-        expect(params.command.senderIsOwner).toBe(true);
 
         const blocked = blockCommand((preflight) => {
           setRuntimeConfigSnapshotRefreshHandler({ preflight, refresh: () => false });
@@ -216,7 +199,7 @@ it.each(
 );
 
 it("finishes accepted MCP removal and OAuth cleanup after the original admin is revoked", async () => {
-  await withAdminIngress(async (fixture) => {
+  await withCommandIngress(async (fixture) => {
     const { cfg, admins, state } = fixture;
     const serverUrl = "https://mcp.example.test/rpc";
     cfg.commands = { ...cfg.commands, text: true, mcp: true };

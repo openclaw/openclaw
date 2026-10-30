@@ -8,10 +8,10 @@ import * as acpManager from "../../../acp/control-plane/manager.js";
 import { disposeAcpSessionManagerInstance } from "../../../acp/control-plane/manager.lifecycle.js";
 import { SessionActorQueue } from "../../../acp/control-plane/session-actor-queue.js";
 import * as runtimeRegistry from "../../../acp/runtime/registry.js";
-import * as acpSessionEntry from "../../../acp/runtime/session-meta-entry.js";
 import type { CliDeps } from "../../../cli/deps.types.js";
 import * as configRuntime from "../../../config/config.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
+import * as sessionEntryWorker from "../../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { withLocalGatewayRequestScope } from "../../../gateway/local-request-context.js";
@@ -41,12 +41,18 @@ import * as registryPersistence from "../registry/subagent-registry.persistence.
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import * as acpSpawnRuntime from "./acp-spawn-runtime.js";
 import { createAcpSpawnSessionBinding } from "./acp-spawn-store.test-support.js";
+import { spawnAcpDirect } from "./acp-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 // mock-isolation: Authority tests supply their own registry without loading installed plugins.
-vi.mock("../../runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: vi.fn<typeof loadAgentRuntimePluginRegistryHandle>(),
-}));
+vi.mock("../../runtime-plugins.js", () => {
+  const loadRegistry = vi.fn<typeof loadAgentRuntimePluginRegistryHandle>();
+  return {
+    loadAgentRuntimePluginRegistryHandle: loadRegistry,
+    loadAgentRuntimePluginRegistryHandleAsync: async (...args: Parameters<typeof loadRegistry>) =>
+      loadRegistry(...args),
+  };
+});
 
 const parentSessionKey = "agent:main:main";
 const parentScope = { agentId: "main", sessionKey: parentSessionKey };
@@ -126,6 +132,7 @@ afterEach(async () => {
 it.each([
   ["runtime", "abort"],
   ["row", "admission close"],
+  ["row", "live"],
   ["thread", "admission close"],
   ["thread", "live"],
   ["actor", "admission close"],
@@ -147,6 +154,7 @@ it.each([
     if (live) {
       await sessionAccessor.upsertSessionEntryCore(parentScope, {
         inheritedGitContributorProfileIds: ["unrelated-a", "unrelated-b"],
+        visibility: "draft",
       });
       await sessionAccessor.recordSessionParticipant(parentScope, {
         identity: { type: "profile", id: "human-contributor" },
@@ -237,14 +245,14 @@ it.each([
     }
     const lateMetadata = vi.fn();
     if (stage === "metadata") {
-      const update = acpSessionEntry.updateAcpSessionStoreEntry;
+      const update = sessionEntryWorker.withSessionEntryWorker;
       let held = false;
-      vi.spyOn(acpSessionEntry, "updateAcpSessionStoreEntry").mockImplementation(async (params) => {
-        const updated = await update(params);
+      vi.spyOn(sessionEntryWorker, "withSessionEntryWorker").mockImplementation(async (...args) => {
+        const updated = await update(...args);
         if (
           !held &&
-          params.mutation.kind === "touch" &&
-          params.scope.sessionKey === childKey &&
+          args[0].agentId === "fixture" &&
+          childKey &&
           ensuredSessions.includes(childKey)
         ) {
           held = true;
@@ -272,14 +280,17 @@ it.each([
       bindings.registerSessionBindingAdapter(bindingAdapter);
     }
     const pausesRuntime = stage === "runtime" || thread;
-    const initializesRuntime = pausesRuntime || stage === "metadata" || stage === "initialized";
+    const initializesRuntime =
+      live || pausesRuntime || stage === "metadata" || stage === "initialized";
     const ensuredSessions: string[] = [];
+    let initialChildVisibility: string | undefined;
     const closeRuntime = vi.fn(async () => {});
     const runtime: AcpRuntime = {
       ownerAwareSessions: 1,
       async ensureSession(input) {
         if (live) {
           const entry = readChild(input.sessionKey);
+          initialChildVisibility = entry?.visibility ?? "shared";
           expect({
             profiles: entry?.inheritedGitContributorProfileIds,
             participants: entry?.participants ?? [],
@@ -364,6 +375,11 @@ it.each([
         gatewayCaller.createAdmittedGatewayToolCallerIdentity({
           ...parentScope,
           admittedRunContext: admitted,
+          requesterOrigin: {
+            sessionKey: parentSessionKey,
+            operatorProfileId: "selected-user",
+            delegatedCreatorProfileId: "causal-human",
+          },
         }),
         () =>
           tool!.execute!("pending-acp", {
@@ -384,7 +400,11 @@ it.each([
         "ACP spawn settled before runtime initialization",
       );
       expect(subagentRuns.size).toBe(0);
-      expect(readChild(childSessionKey)).toBeDefined();
+      expect(readChild(childSessionKey)?.createdActor).toMatchObject({
+        type: "agent",
+        id: "main",
+        delegatedBy: { type: "human", source: "profile", id: "causal-human" },
+      });
       if (closure === "abort") {
         const reply = vi.fn();
         const request = { sessionKey: parentSessionKey, runId: parentRunId };
@@ -405,6 +425,12 @@ it.each([
       } else if (closure === "admission close") {
         admission.close();
         expect(parent.controller.signal.aborted).toBe(false);
+      } else if (stage === "row") {
+        // This child already exists; disabling new Drafts cannot revoke its first turn.
+        configRuntime.setRuntimeConfigSnapshot({
+          ...cfg,
+          session: { ...cfg.session, sharing: { drafts: false } },
+        });
       }
       expect(admissionContext.getAdmittedRunDelegatedAuthority(admitted) !== undefined).toBe(live);
       release.resolve();
@@ -417,6 +443,7 @@ it.each([
       await work.drain();
       if (live) {
         expect(result).toMatchObject({ details: { status: "accepted", childSessionKey } });
+        expect(initialChildVisibility).toBe("draft");
         const events = (await listSessionStateEventsSince(childSessionKey, "fixture", 0)).events;
         expect(events.map((event) => event.kind)).toEqual(["created", "child_spawned"]);
         const spawned = events[1]!;
@@ -434,6 +461,7 @@ it.each([
           material_sequence: spawned.sequence,
         });
         expect(sourceBoundary.entry).toMatchObject({
+          visibility: "draft",
           spawnedBy: parentSessionKey,
           parentSessionKey,
           spawnedBySessionId: "parent-session",
@@ -487,5 +515,55 @@ it.each([
         });
       }
     }
+  },
+);
+
+it.each(["disabled", "disabled at the initial write"])(
+  "refuses a new ACP Draft wrapper when Draft creation is %s",
+  async (policy) => {
+    const cfg = configRuntime.getRuntimeConfig();
+    const disabled = { ...cfg, session: { ...cfg.session, sharing: { drafts: false } } };
+    configRuntime.setRuntimeConfigSnapshot(policy === "disabled" ? disabled : cfg);
+    await sessionAccessor.upsertSessionEntryCore(parentScope, {
+      sessionId: "existing-draft",
+      visibility: "draft",
+    });
+    const before = sessionAccessor.loadSessionEntry(parentScope);
+    const ensureSession = vi.fn(async () => {
+      throw new Error("Disabled Draft creation reached external runtime initialization");
+    });
+    runtimeRegistry.registerAcpRuntimeBackend({
+      id: backendId,
+      runtime: {
+        ownerAwareSessions: 1,
+        ensureSession,
+        runTurn() {
+          throw new Error("No external turn belongs in this refusal test");
+        },
+        async cancel() {},
+        async close() {},
+      },
+    });
+    const upsert = sessionAccessor.upsertSessionEntryCore;
+    using initialWrite = vi
+      .spyOn(sessionAccessor, "upsertSessionEntryCore")
+      .mockImplementation(async (...args) => {
+        configRuntime.setRuntimeConfigSnapshot(disabled);
+        return upsert(...args);
+      });
+    const result = await spawnAcpDirect(
+      { task: "A fresh child must stay private", agentId: "fixture", mode: "run" },
+      { agentSessionKey: parentSessionKey },
+    );
+    expect(result).toMatchObject({
+      status: "error",
+      errorCode: "spawn_failed",
+      error: expect.stringContaining("session visibility is disabled: draft"),
+    });
+    expect(ensureSession).not.toHaveBeenCalled();
+    expect(initialWrite).toHaveBeenCalledTimes(policy === "disabled" ? 0 : 1);
+    expect(sessionAccessor.listSessionEntriesCore({ agentId: "fixture" })).toEqual([]);
+    expect(subagentRuns.size).toBe(0);
+    expect(sessionAccessor.loadSessionEntry(parentScope)).toEqual(before);
   },
 );

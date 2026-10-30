@@ -6,10 +6,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
-import type {
-  HarnessCompletionRecovery,
-  RestartRecoveryTerminalDeliveryEvidence,
-} from "../config/sessions/restart-recovery-types.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import type { AgentAssistantSourceReceipt } from "../infra/agent-events.types.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
@@ -156,6 +152,14 @@ function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrl
   );
 }
 
+export function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
+  return (
+    payload.isError === true ||
+    getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true ||
+    (payload.audioAsVoice === true && hasReplyPayloadMedia(payload))
+  );
+}
+
 /** Returns normalized TTS supplement metadata only when the payload has media to carry it. */
 export function getReplyPayloadTtsSupplement(
   payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls" | "ttsSupplement">,
@@ -229,12 +233,8 @@ export type SessionWriterDeliveryAuthority = {
         sessionId: string;
         lifecycleRevision?: string;
         activeWriterRunId?: string;
-        restartRecoveryHarnessCompletion?: HarnessCompletionRecovery;
-        restartRecoveryTerminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidence[];
       }
     | undefined;
-  /** Captured admitted completion authority, retained by the durable queue. */
-  harnessCompletion?: HarnessCompletionRecovery;
   expectedLifecycleRevision?: string;
   expectedSessionId: string;
   expectedWriterRunId?: string;
@@ -258,6 +258,8 @@ export type ReplyPayloadMetadata = {
   blockSourceText?: string;
   /** UTF-16 source range represented by this block within one assistant message. */
   blockSourceRange?: readonly [start: number, end: number];
+  /** An authored line break continues an already accepted source text block. */
+  streamedSourceBoundary?: true;
   /** Live source receipts retained until final text recovery settles. */
   blockReplySources?: readonly BlockReplySource[];
   /** Persisted assistant speech facts; never serialized into channel payloads. */
@@ -292,8 +294,6 @@ export type ReplyPayloadMetadata = {
   contextFreeCommand?: true;
   /** Host-owned acknowledgement after this final payload is confirmed delivered. */
   onFinalDeliverySuccess?: () => void;
-  /** Host-projected monitoring final; notification policy already normalized its text. */
-  heartbeatReply?: true;
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */
   assistantTranscriptIdempotencyKey?: string;
   /** Original session-writer claim that must still hold at final delivery. */
@@ -371,14 +371,10 @@ export type ReplyPayloadMetadata = {
   nonTerminalToolErrorWarning?: boolean;
   /** Host label or status about the run (truncation, restart, compaction); not the answer. */
   hostNotice?: true;
-  /** Runtime acknowledgment of a committed queue decision, independent of active reply delivery. */
-  queueAdmissionNotice?: true;
-  /** Unresolved mutating tool failure that makes a heartbeat run terminally failed. */
-  heartbeatTerminalToolFailure?: {
-    toolName: string;
-  };
-  /** Private scratch must survive reply copies without becoming serializable channel data. */
-  heartbeatScratchProposal?: string;
+  /** The channel notice has a canonical model-fallback transcript event in the Control UI. */
+  modelFallbackNotice?: true;
+  /** Runtime queue decision; successful acceptance can use a client's queue presentation. */
+  queueAdmissionNotice?: true | "queued";
 };
 
 // Source Gateways and native plugin SDK chunks must share the same payload identity.
@@ -529,6 +525,19 @@ export function retainSilentFinalPayloads(payloads: readonly ReplyPayload[]): Re
       ? [copyReplyPayloadMetadata(payload, nonTextPayload)]
       : [];
   });
+}
+
+/** Structured no_change suppresses unsent content; ordinary silence retains its media contract. */
+export function selectAutomationReplyPayloads(
+  payloads: ReplyPayload[],
+  noChange: boolean,
+  quiet: boolean,
+): ReplyPayload[] {
+  return noChange
+    ? payloads.filter((payload) => payload.isError)
+    : quiet
+      ? retainSilentFinalPayloads(payloads)
+      : payloads;
 }
 
 /** Marks a host-owned payload as deliverable even when normal source replies are suppressed. */

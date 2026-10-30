@@ -33,17 +33,16 @@ type ToolLoopBatchAdmission = InternalBeforeToolBatchResult & {
   releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
 };
 
-async function evaluateToolLoopCall(
+type ToolLoopRuntime = Awaited<ReturnType<typeof loadBeforeToolCallRuntime>>;
+
+function evaluateToolLoopCall(
   call: ToolLoopCall,
   ctx: HookContext,
+  runtime: ToolLoopRuntime,
   stateOverride?: SessionState,
-): Promise<ToolLoopIntervention | ToolLoopWarning | undefined> {
-  if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
-    return undefined;
-  }
+): ToolLoopIntervention | ToolLoopWarning | undefined {
   const toolName = normalizeToolPolicyName(call.toolName || "tool");
-  const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop } =
-    await loadBeforeToolCallRuntime();
+  const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop } = runtime;
   // Project history for atomic admission, but keep warning buckets on the session owner.
   const sessionState = getDiagnosticSessionState({
     sessionKey: ctx.sessionKey,
@@ -100,28 +99,24 @@ async function evaluateToolLoopCall(
   return undefined;
 }
 
-async function recordToolLoopCall(call: ToolLoopCall, ctx: HookContext): Promise<void> {
-  if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
-    return;
-  }
-  const { getDiagnosticSessionState, recordToolCall } = await loadBeforeToolCallRuntime();
-  recordToolCall(
-    getDiagnosticSessionState({ sessionKey: ctx.sessionKey, sessionId: ctx.sessionId }),
-    normalizeToolPolicyName(call.toolName || "tool"),
-    call.params,
-    call.toolCallId,
-    ctx.runId ? { runId: ctx.runId } : undefined,
-  );
-}
-
 /** Preserve the existing single-call admission path for harnesses without batch control. */
 export async function admitSingleToolCallLoop(
   call: ToolLoopCall,
   ctx: HookContext,
 ): Promise<ToolLoopIntervention | ToolLoopWarning | undefined> {
-  const intervention = await evaluateToolLoopCall(call, ctx);
+  if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
+    return undefined;
+  }
+  const runtime = await loadBeforeToolCallRuntime();
+  const intervention = evaluateToolLoopCall(call, ctx, runtime);
   if (intervention?.kind !== "critical-tool-loop") {
-    await recordToolLoopCall(call, ctx);
+    runtime.recordToolCall(
+      runtime.getDiagnosticSessionState({ sessionKey: ctx.sessionKey, sessionId: ctx.sessionId }),
+      normalizeToolPolicyName(call.toolName || "tool"),
+      call.params,
+      call.toolCallId,
+      ctx.runId ? { runId: ctx.runId } : undefined,
+    );
   }
   return intervention;
 }
@@ -140,13 +135,14 @@ export async function admitToolCallBatch(
   if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
     return {};
   }
+  const runtime = await loadBeforeToolCallRuntime();
   const {
     getDiagnosticSessionState,
     markDiagnosticArgumentChurnObservation,
     reconcileToolCallExecutionParams,
     recordToolCall,
     recordToolCallOutcome,
-  } = await loadBeforeToolCallRuntime();
+  } = runtime;
   const warningThreshold = TOOL_LOOP_WARNING_THRESHOLD;
   const sessionState = getDiagnosticSessionState({
     sessionKey: ctx.sessionKey,
@@ -187,13 +183,14 @@ export async function admitToolCallBatch(
   const warnings: ToolLoopWarning[] = [];
   for (const call of calls) {
     const toolName = normalizeToolPolicyName(call.toolCall.name || "tool");
-    const intervention = await evaluateToolLoopCall(
+    const intervention = evaluateToolLoopCall(
       {
         toolName,
         params: call.args,
         toolCallId: call.toolCall.id,
       },
       ctx,
+      runtime,
       projectedState,
     );
     if (intervention?.kind === "critical-tool-loop") {
@@ -259,7 +256,7 @@ export async function admitToolCallBatch(
       }
       return;
     }
-    const churn = reconcileToolCallExecutionParams(sessionState, {
+    const active = reconcileToolCallExecutionParams(sessionState, {
       toolName: admitted.toolName,
       toolParams: readyCall.args,
       toolCallId: readyCall.toolCallId,
@@ -271,7 +268,7 @@ export async function admitToolCallBatch(
       sessionKey: ctx.sessionKey,
       sessionId: ctx.sessionId,
       runId: ctx.runId,
-      active: churn.active,
+      active,
     });
     committedIds.add(readyCall.toolCallId);
   };

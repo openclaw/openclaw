@@ -10,7 +10,7 @@ import {
 } from "../infra/sqlite-worker-state-context.js";
 import { GatewayRetainedWorkScope, type AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { registerOpenClawStateDatabaseAsyncResource } from "../state/openclaw-state-db-cache.js";
+import { registerOpenClawStatePathAsyncResource } from "../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 
@@ -39,27 +39,19 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
     },
     scope: () => work.scope,
   };
-  const unregister = registerOpenClawStateDatabaseAsyncResource({
-    async close(identity) {
-      if (
-        !identity ||
-        identity.key === admission.identity.key ||
-        identity.canonicalPath === admission.identity.canonicalPath
-      ) {
-        await work.beginDrainAll();
-        if (work.hasGateways) {
-          // A store reopen retires admitted work, not the Gateways that still own cleanup.
-          work.reopen();
-        } else {
-          for (const [key, candidate] of lifetimes) {
-            if (candidate === owner) {
-              lifetimes.delete(key);
-            }
-          }
-          unregister();
+  const unregister = registerOpenClawStatePathAsyncResource(admission, async () => {
+    await work.beginDrainAll();
+    if (work.hasGateways) {
+      // A store reopen retires admitted work, not the Gateways that still own cleanup.
+      work.reopen();
+    } else {
+      for (const [key, candidate] of lifetimes) {
+        if (candidate === owner) {
+          lifetimes.delete(key);
         }
       }
-    },
+      unregister();
+    }
   });
   return owner;
 }

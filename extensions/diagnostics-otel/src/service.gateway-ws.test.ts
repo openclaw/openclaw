@@ -1,10 +1,3 @@
-import { metrics } from "@opentelemetry/api";
-import {
-  AggregationTemporality,
-  InMemoryMetricExporter,
-  MeterProvider,
-  PeriodicExportingMetricReader,
-} from "@opentelemetry/sdk-metrics";
 import {
   emitDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,
@@ -12,179 +5,123 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { emitInternalDiagnosticEventForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, test } from "vitest";
-import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
+import {
+  collectTestMetrics,
+  installRealOtelSdkTestHarness,
+  installTestMeter,
+} from "./service.real-sdk.test-support.js";
 import { startOtelService } from "./service.test-helpers.js";
 
 installRealOtelSdkTestHarness();
 const emit = (event: Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0]) =>
   emitTrustedDiagnosticEventWithPrivateData(event, {});
-
-test("exports trusted WebSocket event totals and the current operator socket count", async () => {
-  const reader = new PeriodicExportingMetricReader({
-    exporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
-  });
-  const meterProvider = new MeterProvider({ readers: [reader] });
-  metrics.disable();
-  metrics.setGlobalMeterProvider(meterProvider);
-  const { service, ctx } = await startOtelService({ metrics: true });
-  try {
-    emit({ type: "gateway.ws.connections", operators: 2 });
-    emit({
-      type: "gateway.ws.event",
-      event: "chat",
-      count: 2,
-      bytes: 256,
-      frameBytes: {
-        "256": 2,
-        "512": 2,
-        "1024": 2,
-        "2048": 2,
-        "4096": 2,
-        "8192": 2,
-        "16384": 2,
-        "65536": 2,
-        "+Inf": 2,
-      },
-    });
-    emit({ type: "gateway.ws.event", event: "chat", count: 1, bytes: 128 });
-    emit({ type: "gateway.ws.event", event: "chat", count: 0, bytes: 0, wireBytes: 100 });
-    emit({ type: "gateway.ws.event", event: "chat", count: 0, bytes: 0, wireBytes: 50 });
-    emit({ type: "gateway.ws.event", event: "other", count: 1, bytes: 64 });
-    emit({ type: "gateway.ws.connections", operators: 0 });
-    for (const emitUntrusted of [emitDiagnosticEvent, emitInternalDiagnosticEventForTest]) {
-      emitUntrusted({
-        type: "gateway.ws.event",
-        event: "private-untrusted",
-        count: 99,
-        bytes: 999,
-        wireBytes: 999,
-        frameBytes: { "256": 99 },
-      });
-      emitUntrusted({ type: "gateway.ws.connections", operators: 99 });
-    }
-    for (const [event, reason] of [
+type WsEvent = Extract<Parameters<typeof emit>[0], { type: "gateway.ws.event" }>;
+const frame = { type: "gateway.ws.event", event: "chat", count: 2, bytes: 256 } as const;
+function observeFrames(fields: Omit<WsEvent, "type" | "count" | "bytes">) {
+  const observation = { ...frame, ...fields };
+  emit(observation);
+  emit({ ...observation, count: 1, bytes: 128 });
+  emitDiagnosticEvent(observation);
+}
+const eventAttrs = (event: string, extra: Record<string, string> = {}) => ({
+  "openclaw.gateway.ws.event": event,
+  ...extra,
+});
+const eventMetric = (unit: string, values: Record<string, number>) => [
+  unit,
+  Object.entries(values).map(([event, value]) => [eventAttrs(event), value]),
+];
+const presencePoints = (value: number) =>
+  ["delta", "reset", "legacy"].map((mode) => [{ "openclaw.gateway.ws.mode": mode }, value]);
+const sessionPoints = (value: number) =>
+  (
+    [
       ["sessions.changed", "agent.run.started"],
       ["session.message", "assistant"],
-    ] as const) {
-      for (const delivery of ["subscribed", "roster"] as const) {
-        const observation = {
-          type: "gateway.ws.event",
-          event,
-          count: 2,
-          bytes: 256,
-          sessionEvent: { reason, delivery },
-        } as const;
-        emit(observation);
-        emit({ ...observation, count: 1, bytes: 128 });
-        emitDiagnosticEvent(observation);
-      }
-    }
-    for (const presenceMode of ["delta", "reset", "legacy"] as const) {
-      const observation = {
-        type: "gateway.ws.event",
-        event: "presence",
-        count: 2,
-        bytes: 256,
-        presenceMode,
-      } as const;
-      emit(observation);
-      emit({ ...observation, count: 1, bytes: 128 });
-      emitDiagnosticEvent(observation);
-    }
-    await waitForDiagnosticEventsDrained();
+    ] as const
+  ).flatMap(([event, reason]) =>
+    ["subscribed", "roster"].map((delivery) => [
+      eventAttrs(event, {
+        "openclaw.gateway.ws.reason": reason,
+        "openclaw.gateway.ws.delivery": delivery,
+      }),
+      value,
+    ]),
+  );
 
-    const { resourceMetrics, errors } = await reader.collect();
-    expect(errors).toEqual([]);
-    const wsMetrics = resourceMetrics.scopeMetrics
-      .flatMap((scope) => scope.metrics)
-      .filter((metric) => metric.descriptor.name.startsWith("openclaw.gateway.ws."));
-    expect(
-      Object.fromEntries(
-        wsMetrics.map((metric) => [
-          metric.descriptor.name,
-          {
-            unit: metric.descriptor.unit,
-            points: metric.dataPoints.map(({ attributes, value }) => ({ attributes, value })),
-          },
-        ]),
-      ),
-    ).toEqual({
-      ...Object.fromEntries(
-        [
-          ["openclaw.gateway.ws.session_event_frames", "1", 3],
-          ["openclaw.gateway.ws.session_event_bytes", "By", 384],
-        ].map(([name, unit, value]) => [
-          name,
-          {
-            unit,
-            points: [
-              ["sessions.changed", "agent.run.started"],
-              ["session.message", "assistant"],
-            ].flatMap(([event, reason]) =>
-              ["subscribed", "roster"].map((delivery) => ({
-                attributes: {
-                  "openclaw.gateway.ws.event": event,
-                  "openclaw.gateway.ws.reason": reason,
-                  "openclaw.gateway.ws.delivery": delivery,
-                },
-                value,
-              })),
-            ),
-          },
-        ]),
-      ),
-      ...Object.fromEntries(
-        [
-          ["openclaw.gateway.ws.presence_frames", "1", 3],
-          ["openclaw.gateway.ws.presence_bytes", "By", 384],
-        ].map(([name, unit, value]) => [
-          name,
-          {
-            unit,
-            points: ["delta", "reset", "legacy"].map((mode) => ({
-              attributes: { "openclaw.gateway.ws.mode": mode },
-              value,
-            })),
-          },
-        ]),
-      ),
-      "openclaw.gateway.ws.events": {
-        unit: "1",
-        points: [
-          { attributes: { "openclaw.gateway.ws.event": "chat" }, value: 3 },
-          { attributes: { "openclaw.gateway.ws.event": "other" }, value: 1 },
-          { attributes: { "openclaw.gateway.ws.event": "sessions.changed" }, value: 6 },
-          { attributes: { "openclaw.gateway.ws.event": "session.message" }, value: 6 },
-          { attributes: { "openclaw.gateway.ws.event": "presence" }, value: 9 },
-        ],
-      },
-      "openclaw.gateway.ws.event_bytes": {
-        unit: "By",
-        points: [
-          { attributes: { "openclaw.gateway.ws.event": "chat" }, value: 384 },
-          { attributes: { "openclaw.gateway.ws.event": "other" }, value: 64 },
-          { attributes: { "openclaw.gateway.ws.event": "sessions.changed" }, value: 768 },
-          { attributes: { "openclaw.gateway.ws.event": "session.message" }, value: 768 },
-          { attributes: { "openclaw.gateway.ws.event": "presence" }, value: 1152 },
-        ],
-      },
-      "openclaw.gateway.ws.event_wire_bytes": {
-        unit: "By",
-        points: [{ attributes: { "openclaw.gateway.ws.event": "chat" }, value: 150 }],
-      },
-      "openclaw.gateway.ws.event_frame_bytes": {
-        unit: "1",
-        points: ["256", "512", "1024", "2048", "4096", "8192", "16384", "65536", "+Inf"].map(
-          (le) => ({ attributes: { "openclaw.gateway.ws.event": "chat", le }, value: 2 }),
-        ),
-      },
-      "openclaw.gateway.ws.operator_connections": {
-        unit: "1",
-        points: [{ attributes: {}, value: 0 }],
-      },
+test("exports trusted WebSocket event totals and the current operator socket count", async () => {
+  const { reader } = installTestMeter();
+  await startOtelService({ metrics: true });
+  emit({ type: "gateway.ws.connections", operators: 2 });
+  emit({
+    ...frame,
+    frameBytes: Object.fromEntries(
+      ["256", "512", "1024", "2048", "4096", "8192", "16384", "65536", "+Inf"].map((le) => [le, 2]),
+    ),
+  });
+  emit({ type: "gateway.ws.event", event: "chat", count: 1, bytes: 128 });
+  emit({ type: "gateway.ws.event", event: "chat", count: 0, bytes: 0, wireBytes: 100 });
+  emit({ type: "gateway.ws.event", event: "chat", count: 0, bytes: 0, wireBytes: 50 });
+  emit({ type: "gateway.ws.event", event: "other", count: 1, bytes: 64 });
+  emit({ type: "gateway.ws.connections", operators: 0 });
+  for (const emitUntrusted of [emitDiagnosticEvent, emitInternalDiagnosticEventForTest]) {
+    emitUntrusted({
+      type: "gateway.ws.event",
+      event: "private-untrusted",
+      count: 99,
+      bytes: 999,
+      wireBytes: 999,
+      frameBytes: { "256": 99 },
     });
-  } finally {
-    await service.stop?.(ctx);
-    await meterProvider.shutdown();
+    emitUntrusted({ type: "gateway.ws.connections", operators: 99 });
   }
+  for (const [event, reason] of [
+    ["sessions.changed", "agent.run.started"],
+    ["session.message", "assistant"],
+  ] as const) {
+    for (const delivery of ["subscribed", "roster"] as const) {
+      observeFrames({ event, sessionEvent: { reason, delivery } });
+    }
+  }
+  for (const presenceMode of ["delta", "reset", "legacy"] as const) {
+    observeFrames({ event: "presence", presenceMode });
+  }
+  await waitForDiagnosticEventsDrained();
+  const wsMetrics = await collectTestMetrics(reader, "openclaw.gateway.ws.");
+  expect(
+    Object.fromEntries(
+      wsMetrics.map(({ descriptor: { name, unit }, dataPoints }) => [
+        name,
+        [unit, dataPoints.map(({ attributes, value }) => [attributes, value])],
+      ]),
+    ),
+  ).toEqual({
+    "openclaw.gateway.ws.session_event_frames": ["1", sessionPoints(3)],
+    "openclaw.gateway.ws.session_event_bytes": ["By", sessionPoints(384)],
+    "openclaw.gateway.ws.presence_frames": ["1", presencePoints(3)],
+    "openclaw.gateway.ws.presence_bytes": ["By", presencePoints(384)],
+    "openclaw.gateway.ws.events": eventMetric("1", {
+      chat: 3,
+      other: 1,
+      "sessions.changed": 6,
+      "session.message": 6,
+      presence: 9,
+    }),
+    "openclaw.gateway.ws.event_bytes": eventMetric("By", {
+      chat: 384,
+      other: 64,
+      "sessions.changed": 768,
+      "session.message": 768,
+      presence: 1152,
+    }),
+    "openclaw.gateway.ws.event_wire_bytes": eventMetric("By", { chat: 150 }),
+    "openclaw.gateway.ws.event_frame_bytes": [
+      "1",
+      ["256", "512", "1024", "2048", "4096", "8192", "16384", "65536", "+Inf"].map((le) => [
+        eventAttrs("chat", { le }),
+        2,
+      ]),
+    ],
+    "openclaw.gateway.ws.operator_connections": ["1", [[{}, 0]]],
+  });
 });
