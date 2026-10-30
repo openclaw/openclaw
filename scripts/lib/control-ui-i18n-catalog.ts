@@ -30,6 +30,7 @@ import { registerChatProviderReviewEnglish } from "../../ui/src/i18n/locales/en-
 import { registerChatQuestionsEnglish } from "../../ui/src/i18n/locales/en-chat-questions.ts";
 import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
+import { registerChatSketchEnglish } from "../../ui/src/i18n/locales/en-chat-sketch.ts";
 import { registerChatToolContentEnglish } from "../../ui/src/i18n/locales/en-chat-tool-content.ts";
 import { registerChatToolLabelsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-labels.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
@@ -135,6 +136,7 @@ const sourceFiles = [
   "en-chat-command-results.ts",
   "en-chat-commands.ts",
   "en-chat-composer.ts",
+  "en-chat-sketch.ts",
   "en-chat-details.ts",
   "en-chat-goals.ts",
   "en-chat-message-metadata.ts",
@@ -565,6 +567,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         permissions: registerChatPermissionsEnglish.catalog.chat.permissions,
       },
     },
+    registerChatSketchEnglish.catalog,
     registerChatGoalsEnglish.catalog,
     registerChatProviderReviewEnglish.catalog,
     registerCodeBlocksEnglish.catalog,

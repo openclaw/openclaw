@@ -119,7 +119,7 @@ it.each(
         [...host.querySelectorAll(".agent-chat__attach-menu-option")].map(
           (item) => item.textContent,
         ),
-      ).toEqual(["Add attachment…"]);
+      ).toEqual(["Add attachment…", "Draw a sketch"]);
     } else {
       expect(action.textContent).toBe(imagesOnly ? "Photo" : "Media");
     }
