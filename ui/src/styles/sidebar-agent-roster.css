@@ -8,9 +8,9 @@ openclaw-sidebar-agent-roster {
   position: relative;
   display: grid;
   grid-template-columns: var(--roster-avatar-size) minmax(0, 1fr);
-  grid-template-rows: 44px;
+  grid-template-rows: 46px;
   align-items: center;
-  column-gap: 10px;
+  column-gap: 8px;
   margin-inline: -6px;
   padding-inline: 6px 13px;
   border-radius: var(--radius-md);
@@ -33,12 +33,62 @@ openclaw-sidebar-agent-roster {
   flex-basis: var(--roster-avatar-size);
   width: var(--roster-avatar-size);
   height: var(--roster-avatar-size);
-  font-size: 17px;
+  font-size: 15px;
 }
 
 /* An emoji agent sits on the same disc as a photo avatar. */
 .sidebar-agent-roster__avatar .identity-avatar--agent.is-fallback {
-  background: color-mix(in srgb, var(--text) 7%, transparent);
+  font-size: 17px;
+}
+
+/* Session rows in the roster keep the list's grid and stay on one line. */
+.sidebar-recent-session.sidebar-recent-session--team {
+  gap: 0;
+  padding: 0 4px 0 var(--sidebar-session-row-inset);
+}
+.sidebar-recent-session--team .sidebar-recent-session__text,
+.sidebar-recent-session--team .sidebar-recent-session__details {
+  display: contents;
+}
+.sidebar-recent-session--team .sidebar-recent-session__title-row {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0;
+}
+.sidebar-recent-session--team .sidebar-recent-session__details-endcap {
+  align-self: center;
+  overflow: visible;
+  min-height: 0;
+  margin: 0 0 0 16px;
+  padding-inline-end: 7px;
+}
+.sidebar-recent-session--team:has(> .sidebar-child-session-toggle) .sidebar-recent-session__details-endcap {
+  padding-inline-end: 4px;
+}
+.sidebar-recent-session--team openclaw-viewer-facepile:not(:has(.viewer-facepile)),
+.sidebar-recent-session--team
+  .sidebar-recent-session__details-endcap:not(
+    :has(> :not(openclaw-viewer-facepile), .viewer-facepile)
+  ) {
+  display: none;
+}
+.sidebar-recent-session.sidebar-recent-session--team > .sidebar-recent-session__aside {
+  right: 8px;
+}
+.sidebar-recent-session.sidebar-recent-session--team:has(> .sidebar-child-session-toggle)
+  > .sidebar-recent-session__aside {
+  right: 36px;
+}
+.sidebar-recent-session--team:is(:hover, :focus-within) .sidebar-recent-session__title-row {
+  padding-right: var(--session-row-actions-reserve);
+}
+.sidebar-session-team-state .session-css-icon,
+.sidebar-session-team-state .sidebar-session-attention__icon {
+  width: 14px;
+  height: 14px;
+}
+.sidebar-agent-roster + .sidebar-recent-sessions {
+  margin-top: 12px;
 }
 
 .sidebar-agent-roster__name {

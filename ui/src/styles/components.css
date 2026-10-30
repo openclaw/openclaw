@@ -159,9 +159,20 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 /* An emoji agent owner sits on the same disc as a photo avatar. */
-.sidebar-recent-session .identity-avatar--agent.is-fallback {
+.identity-avatar--agent.is-fallback {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.sidebar-recent-session .identity-avatar--agent.is-fallback {
   font-size: 10px;
+}
+
+.sidebar-recent-session .session-glyph__content:has(> .identity-avatar--agent) {
+  width: 18px;
+  height: 18px;
 }
 
 .session-owner-stack {
