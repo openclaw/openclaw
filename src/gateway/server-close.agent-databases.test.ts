@@ -77,6 +77,7 @@ import {
 } from "./server-close.metadata.test-support.js";
 import type { GatewayServer } from "./server-public.js";
 import * as lifecyclePersistence from "./session-lifecycle-persistence-owner.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 
 async function closeFixture(name: string) {
   const fixture = await createGatewayMetadataCloseFixture(name);
@@ -559,7 +560,7 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
   }
 }, 300_000);
 
-it.skipIf(process.platform !== "linux")(
+it.skipIf(process.platform === "win32")(
   "releases restart-aborted run leases before sidecar settlement and completes managed SIGTERM cleanup",
   async ({ signal }) => {
     const fixture = await closeFixture("gateway-agent-resource-close");
@@ -662,6 +663,7 @@ it.skipIf(process.platform !== "linux")(
         plan: createSessionMaintenanceStatisticsOperation({ ...options, path: agent.path }),
       });
       expect(agentLeases.all(agent.path)).toEqual(writerLeases);
+      await getSessionRowProjection(kernel.gatewayRequestContext)?.ensureMaterialized();
       // Abort releases the run claim before independent sidecar cleanup completes.
       unregister = kernel.registerConnectionDependentSidecars({
         async stop() {

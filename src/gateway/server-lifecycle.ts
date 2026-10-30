@@ -415,7 +415,6 @@ export async function prepareGatewayLifecycle(params: {
     talkClose.beginClose();
     void stopModelAccountsForClose();
     void closeAuthProfileUsage(params.sdkResourceHost);
-    runtime.scheduler.beginClose();
     void runtimeState.maintenance?.stopPeriodicTasks();
     void mentionInbox.dispose();
     healthWork.beginClose();
@@ -430,7 +429,6 @@ export async function prepareGatewayLifecycle(params: {
     void runtimeState.controlUiSessionPullRequests?.stop();
     runtimeState.sessionViewerPresence?.stop();
     runtime.stopPresencePublications();
-    cronReconciliation.invalidate();
     return prelude;
   };
   let configReloaderStopPromise: Promise<void> | null = null;
@@ -524,6 +522,8 @@ export async function prepareGatewayLifecycle(params: {
     fenceSessionSuspensionWritesForGatewayShutdown();
     lifecycle.closePreludeStarted = true;
     requestEntryLifetime.beginClose();
+    runtime.scheduler.beginClose();
+    cronReconciliation.invalidate();
     const preparation = await shutdownRuntime.prepareGatewayClose(
       {
         resolveGatewayContext: runtime.resolvePluginGatewayContext,
@@ -541,13 +541,13 @@ export async function prepareGatewayLifecycle(params: {
           });
         },
         terminateRunningSubagentsForShutdown: async () => {
+          // Persistence has settled or timed out; release marker retention before run claims.
+          void Promise.resolve(markClosePreludeStarted(optsValue)).catch(() => {});
           const { terminateLiveSubagentsForShutdown } =
             await import("../agents/subagents/registry/subagent-registry.js");
           await terminateLiveSubagentsForShutdown(runtime.resolvePluginGatewayContext);
         },
         cancelReceivedWork: (reason) => {
-          // The run-shutdown owner has committed markers or exhausted its deadline.
-          void Promise.resolve(markClosePreludeStarted(optsValue)).catch(() => {});
           // Entry is fenced; retained principals still need their binding to settle.
           runtime.connectionWork.beginClose(reason);
         },
