@@ -120,6 +120,20 @@ export function ownsStoredSessionGeneration(
   );
 }
 
+/** Authorized deletion may remove an inert predecessor fence without claiming its generation. */
+export function assertCodexBindingMayBeDeleted(
+  identity: CodexAppServerBindingIdentity,
+  stored: StoredCodexAppServerBinding | undefined,
+): void {
+  if (
+    !stored ||
+    (!ownsStoredSessionGeneration(identity, stored) &&
+      (stored.state !== "cleared" || stored.retired !== true))
+  ) {
+    throw new Error("Codex binding generation changed before session deletion");
+  }
+}
+
 /** Legacy effect guards; prepared readers also observe raw SDK binding writes. */
 export function readCurrentCodexAppServerBinding(
   state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup">,

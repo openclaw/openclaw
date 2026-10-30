@@ -1,0 +1,2 @@
+45
+# Existing real SQLite tables cover legacy retired-predecessor deletion, non-retired refusal, and exact rollback with lease-release fence retention.
