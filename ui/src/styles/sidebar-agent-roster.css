@@ -11,6 +11,7 @@ openclaw-sidebar-agent-roster {
   grid-template-rows: 44px;
   align-items: center;
   column-gap: 10px;
+  margin-inline: -6px;
   padding-inline: 6px 13px;
   border-radius: var(--radius-md);
   color: var(--muted);
