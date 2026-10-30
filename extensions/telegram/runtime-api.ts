@@ -63,6 +63,7 @@ export {
 export { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 export {
   createForumTopicTelegram,
+  deleteForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
   editMessageReplyMarkupTelegram,

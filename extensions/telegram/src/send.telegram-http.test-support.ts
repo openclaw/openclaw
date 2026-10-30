@@ -168,6 +168,7 @@ export function useTelegramHttpFixture() {
           method === "sendChatAction" ||
           method === "answerCallbackQuery" ||
           method === "editForumTopic" ||
+          method === "deleteForumTopic" ||
           method === "setMyCommands" ||
           method === "deleteMyCommands"
             ? true

@@ -22,23 +22,17 @@ import {
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
-import {
-  createTelegramActionGate,
-  resolveDefaultTelegramAccountId,
-  resolveTelegramPollActionGateState,
-} from "./accounts.js";
+import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import { TELEGRAM_MESSAGE_ACTION_MAP } from "./action-names.js";
 import {
   readTelegramChatId,
-  readTelegramForumTopicIconColor,
   readTelegramPositiveIntegerParam,
   readTelegramReplyToMessageId,
   readTelegramSendMediaUrls,
   readTelegramThreadId,
 } from "./action-params.js";
+import { handleTelegramForumTopicAction } from "./action-runtime-forum-topics.js";
 import {
   appendTelegramDroppedControlFallback,
   buildTelegramControlDegradation,
@@ -63,9 +57,7 @@ import { resolveTelegramPollVisibility } from "./poll-visibility.js";
 import { renderTelegramAccountProgressDraftPreview } from "./progress-draft-preview.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import {
-  createForumTopicTelegram,
   deleteMessageTelegram,
-  editForumTopicTelegram,
   editMessageReplyMarkupTelegram,
   editMessageTelegram,
   getTelegramAllowedReactions,
@@ -77,7 +69,6 @@ import { TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST } from "./status-reaction-varian
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
-import { updateTopicName } from "./topic-name-cache.js";
 
 const TELEGRAM_EMOJI_LIST_LIMIT = 100;
 const TELEGRAM_REACTION_HINT_LIMIT = 20;
@@ -88,6 +79,7 @@ const TELEGRAM_DEFAULT_REACTIONS = TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST.map((e
 const TELEGRAM_ACTION_ALIASES = {
   ...TELEGRAM_MESSAGE_ACTION_MAP,
   createForumTopic: "createForumTopic",
+  deleteForumTopic: "deleteForumTopic",
   deleteMessage: "deleteMessage",
   editForumTopic: "editForumTopic",
   editMessage: "editMessage",
@@ -107,13 +99,6 @@ function normalizeTelegramActionName(action: string): TelegramActionName {
     throw new Error(`Unsupported Telegram action: ${action}`);
   }
   return normalized;
-}
-
-function resolveActionTopicNameCacheScope(cfg: OpenClawConfig, accountId?: string | null): string {
-  const resolvedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
-  return resolveStorePath(cfg.session?.store, {
-    agentId: resolveTelegramAccountOwnerAgentId({ cfg, accountId: resolvedAccountId }),
-  });
 }
 
 function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | null): string {
@@ -733,59 +718,20 @@ export async function handleTelegramAction(
     return jsonResult({ ok: true, ...stats });
   }
 
-  if (action === "createForumTopic" || action === "editForumTopic") {
-    if (!isActionEnabled(action)) {
-      throw new Error(`Telegram ${action} is disabled.`);
-    }
-    const chatId = readTelegramChatId(params);
-    if (action === "createForumTopic") {
-      const name =
-        readStringParam(params, "name") ??
-        readStringParam(params, "threadName", { required: true, label: "name" });
-      const iconColor = readTelegramForumTopicIconColor(params);
-      const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
-      const token = requireToken();
-      const result = await createForumTopicTelegram(chatId ?? "", name, {
-        ...apiOptions,
-        token,
-        iconColor,
-        iconCustomEmojiId,
-      });
-      return jsonResult({
-        ok: true,
-        topicId: result.topicId,
-        name: result.name,
-        chatId: result.chatId,
-      });
-    }
-    const messageThreadId = readTelegramThreadId(params);
-    if (typeof messageThreadId !== "number") {
-      throw new Error("messageThreadId or threadId is required.");
-    }
-    const name = readStringParam(params, "name") ?? readStringParam(params, "threadName");
-    const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
-    const token = requireToken();
-    const result = await editForumTopicTelegram(chatId ?? "", messageThreadId, {
-      ...apiOptions,
-      token,
-      name,
-      iconCustomEmojiId,
+  if (
+    action === "createForumTopic" ||
+    action === "editForumTopic" ||
+    action === "deleteForumTopic"
+  ) {
+    return handleTelegramForumTopicAction({
+      action,
+      params,
+      cfg,
+      accountId,
+      apiOptions,
+      requireToken,
+      isActionEnabled,
     });
-    if (result.chatId) {
-      const patch = {
-        ...(name ? { name } : {}),
-        ...(iconCustomEmojiId ? { iconCustomEmojiId } : {}),
-      };
-      if (Object.keys(patch).length > 0) {
-        await updateTopicName(
-          result.chatId,
-          result.messageThreadId,
-          patch,
-          resolveActionTopicNameCacheScope(cfg, accountId),
-        ).catch(() => {});
-      }
-    }
-    return jsonResult(result);
   }
 
   throw new Error(`Unsupported Telegram action: ${String(action)}`);

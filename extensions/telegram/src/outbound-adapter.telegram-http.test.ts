@@ -718,17 +718,34 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       actionCfg.agents = { ownership: "explicit", entries: { main: {}, ops: {} } };
       actionCfg.bindings = [{ agentId: "ops", match: { channel: "telegram", accountId: "work" } }];
       actionCfg.channels!.telegram!.accounts = { work: { botToken: "654321:topic-owner" } };
-      actionCfg.channels!.telegram!.actions = { createForumTopic: true, editForumTopic: true };
+      actionCfg.channels!.telegram!.actions = {
+        createForumTopic: true,
+        editForumTopic: true,
+      };
       fixture.responseFor = (method) =>
         method === "createForumTopic"
           ? { message_thread_id: 99, name: "Primary", icon_color: 7322096 }
           : undefined;
-      const topic = (name: "topic-create" | "topic-edit", params: Record<string, unknown>) =>
-        action(name, { chatId: "-1001", ...params }, { accountId: "work" });
+      const topic = (
+        name: "topic-create" | "topic-edit" | "topic-delete",
+        params: Record<string, unknown>,
+      ) => action(name, { chatId: "-1001", ...params }, { accountId: "work" });
       await topic("topic-create", { name: "Primary", threadName: "Alias" });
       await topic("topic-edit", { threadId: 99, threadName: "Renamed" });
       await topic("topic-edit", { threadId: 99, iconCustomEmojiId: "5231419410191111111" });
-      expectMethods("createForumTopic", "editForumTopic", "editForumTopic");
+      await topic("topic-delete", { threadId: 99 });
+      expectMethods("createForumTopic", "editForumTopic", "editForumTopic", "deleteForumTopic");
+      expectFields({ message_thread_id: 99 }, 3);
+      await expect(topic("topic-delete", { threadId: 1 })).rejects.toThrow(/General/);
+      await expect(topic("topic-delete", { to: "-1002", threadId: 99 })).rejects.toThrow(
+        /conflicting destination/,
+      );
+      await expect(topic("topic-delete", { to: "-1001:topic:5", threadId: 99 })).rejects.toThrow(
+        /conflicts with threadId/,
+      );
+      actionCfg.channels!.telegram!.actions!.deleteMessage = false;
+      await expect(topic("topic-delete", { threadId: 99 })).rejects.toThrow(/disabled/);
+      expect(requests).toHaveLength(4);
       expect(requests[0]!.fields.name).toBe("Primary");
       expectFields({ message_thread_id: 99, icon_custom_emoji_id: "5231419410191111111" }, 2);
       resetTelegramTopicNameCacheForTest();

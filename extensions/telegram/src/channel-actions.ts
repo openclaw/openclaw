@@ -124,6 +124,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       ...(discovery.isEnabled("sticker", false) ? (["sticker", "sticker-search"] as const) : []),
       ...(discovery.isEnabled("createForumTopic") ? ["topic-create" as const] : []),
       ...(discovery.isEnabled("editForumTopic") ? ["topic-edit" as const] : []),
+      ...(discovery.isEnabled("editForumTopic") && discovery.isEnabled("deleteMessage")
+        ? ["topic-delete" as const]
+        : []),
     ];
     const schema: ChannelMessageToolSchemaContribution[] = [];
     if (discovery.pollEnabled) {

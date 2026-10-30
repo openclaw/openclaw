@@ -89,6 +89,7 @@ describe("Telegram registered action authority and input contracts", () => {
     { action: "sticker", params: { fileId: "fixture-sticker" }, revoke: true },
     { action: "topic-create", params: { name: "Guarded topic" }, revoke: true },
     { action: "topic-edit", params: { threadId: 77, name: "Guarded topic" }, revoke: true },
+    { action: "topic-delete", params: { threadId: 77 }, revoke: true },
     { action: "react", params: { messageId: 456, emoji: "👍" }, revoke: true },
   ] as const)(
     "retains host authority after $action chat lookup (revoked: $revoke)",
