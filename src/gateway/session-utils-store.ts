@@ -369,6 +369,8 @@ export async function listAgentsForGateway(
   options?: {
     modelCatalogByAgentId?: SessionListModelCatalog;
     includeSystem?: boolean;
+    /** False omits avatar sources and URLs without resolving or reading images. */
+    includeAvatars?: boolean;
     httpAvatarBasePath?: string;
     /** Limit enrichment while retaining the Gateway's canonical routing metadata. */
     agentIds?: ReadonlySet<string>;
@@ -393,6 +395,7 @@ export async function listAgentsForGateway(
   );
   const rosterIds = new Set(roster.map((entry) => entry.id));
   const identityById = new Map<string, GatewayAgentRow["identity"]>();
+  const includeAvatars = options?.includeAvatars !== false;
   for (const entry of listAgentEntries(cfg)) {
     if (!entry?.id) {
       continue;
@@ -401,7 +404,7 @@ export async function listAgentsForGateway(
     if (!rosterIds.has(agentId)) {
       continue;
     }
-    const avatar = normalizeOptionalString(entry.identity?.avatar);
+    const avatar = includeAvatars ? normalizeOptionalString(entry.identity?.avatar) : undefined;
     const httpAvatar =
       avatar && options?.httpAvatarBasePath !== undefined
         ? (
@@ -412,14 +415,15 @@ export async function listAgentsForGateway(
             })
           ).avatar
         : undefined;
-    const avatarUrl = httpAvatar ?? (await resolveAgentAvatarUrlFromSource(cfg, agentId, avatar));
+    const avatarUrl = includeAvatars
+      ? (httpAvatar ?? (await resolveAgentAvatarUrlFromSource(cfg, agentId, avatar)))
+      : undefined;
     const identity = entry.identity
       ? {
           name: normalizeOptionalString(entry.identity.name),
           theme: normalizeOptionalString(entry.identity.theme),
           emoji: normalizeOptionalString(entry.identity.emoji),
-          avatar: httpAvatar ?? avatar,
-          avatarUrl,
+          ...(includeAvatars ? { avatar: httpAvatar ?? avatar, avatarUrl } : {}),
         }
       : undefined;
     identityById.set(agentId, identity);

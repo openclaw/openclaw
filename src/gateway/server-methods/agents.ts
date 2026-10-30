@@ -144,6 +144,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
             );
       const projectionOptions = {
         modelCatalogByAgentId,
+        includeAvatars: params.includeAvatars,
         includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
         httpAvatarBasePath:
           client?.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI

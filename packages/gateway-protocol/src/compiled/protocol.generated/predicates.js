@@ -731,7 +731,7 @@ var External = [
     /^.*$/u,
     /(^agentId$|^sessionKey$)/u,
     /(^runId$|^timeoutMs$)/u,
-    /(^includeSessionPlacement$)/u,
+    /(^includeAvatars$|^includeSessionPlacement$)/u,
     /(^name$|^agentId$|^onboarding$|^expectedOwnerId$|^workspace$|^model$|^emoji$|^avatar$)/u,
     /(^agentId$|^name$|^workspace$|^model$|^agentRuntime$|^emoji$|^avatar$)/u,
     /(^agentId$|^prompt$)/u,
@@ -4181,6 +4181,9 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_237, unique_238) => External[116].test(unique_237) || check_2(value[unique_237]),
     ) &&
+    (value.includeAvatars === void 0 ||
+      !("includeAvatars" in value) ||
+      check_181(value.includeAvatars)) &&
     (value.includeSessionPlacement === void 0 ||
       !("includeSessionPlacement" in value) ||
       check_181(value.includeSessionPlacement)),
