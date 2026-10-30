@@ -1,7 +1,10 @@
+import {
+  buildMediaGenerationNormalizationMetadata,
+  resolveMediaGeometryOverrides,
+} from "../../packages/media-generation-core/src/normalization.js";
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveMediaGeometryOverrides } from "../media-generation/geometry-normalization.js";
 import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
 import {
   getImageGenerationProvider,
@@ -9,7 +12,6 @@ import {
   withImageGenerationProviders,
 } from "../media-generation/registry.js";
 import {
-  buildMediaGenerationNormalizationMetadata,
   resolveMediaProviderRequestTimeoutMs,
   resolveReferenceImageCapabilityError,
   runMediaGenerationCandidates,
