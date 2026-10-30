@@ -148,7 +148,7 @@ it("runs the registered native ONNX worker and joins cancellation before replace
       closed = true;
     });
     const controller = new AbortController();
-    const originalSend = child.send;
+    const originalSend = child.send.bind(child);
     let dispatched = false;
     child.send = new Proxy(originalSend, {
       apply(target, thisArg, args) {
