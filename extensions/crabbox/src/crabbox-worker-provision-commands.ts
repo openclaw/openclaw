@@ -63,7 +63,7 @@ type ProvisionInspectContext = Omit<LeaseCommandContext, "id"> & {
 };
 
 // Crabbox states describe lease usability, not proven cleanup: released leases can retain
-// resources, and Machine0 maps both DELETING and DELETED to `deleted`. Always stop explicitly.
+// resources, and Machine0 maps both DELETING and DELETED to `deleted`. Cleanup needs separate proof.
 const NON_RUNNABLE_STATES = new Set([
   "archived",
   "cleanup",

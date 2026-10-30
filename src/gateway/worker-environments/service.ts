@@ -157,7 +157,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     return next;
   };
 
-  const saveError = createWorkerEnvironmentErrorRecorder(store);
+  const saveError = createWorkerEnvironmentErrorRecorder(store, warn);
 
   const credentialBroker = createWorkerCredentialBroker({
     ...options,

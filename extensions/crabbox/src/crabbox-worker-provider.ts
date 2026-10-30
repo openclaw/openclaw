@@ -656,6 +656,10 @@ export function createCrabboxWorkerProvider(
       lease.signal?.throwIfAborted();
       if (!inspected || isNonRunnableState(inspected.state)) {
         await heartbeats.stop(context.id);
+        if (inspected?.releaseConfirmed) {
+          await warmImages.release({ ...context, signal: lease.signal });
+          return { status: "destroyed" };
+        }
         return { status: "unknown" };
       }
       // `ready` is an SSH probe; every recognized nonterminal lease remains active.

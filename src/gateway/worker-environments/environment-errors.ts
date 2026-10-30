@@ -48,6 +48,7 @@ export function hasForcedWorkerEnvironmentAbandonment(
 
 export function createWorkerEnvironmentErrorRecorder(
   store: Pick<WorkerEnvironmentStore, "recordError">,
+  warn: (message: string) => void,
 ) {
   return async (record: WorkerEnvironmentRecord, error: unknown, assertCurrent?: () => void) => {
     assertCurrent?.();
@@ -55,7 +56,7 @@ export function createWorkerEnvironmentErrorRecorder(
     if (record.teardownTerminalState === "failed" && record.lastError) {
       return record;
     }
-    return store.recordError({
+    const updated = await store.recordError({
       environmentId: record.environmentId,
       state: record.state,
       error: hasForcedWorkerEnvironmentAbandonment(record)
@@ -63,5 +64,9 @@ export function createWorkerEnvironmentErrorRecorder(
         : boundedWorkerError(error),
       assertCurrent,
     });
+    if (updated.lastError !== record.lastError) {
+      warn(`Worker environment operation failed (${record.environmentId}): ${String(error)}`);
+    }
+    return updated;
   };
 }

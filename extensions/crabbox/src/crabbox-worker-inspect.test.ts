@@ -32,6 +32,20 @@ describe("Crabbox worker inspect", () => {
     expect(parseInspectJson(inspectJson({ sshUser })).sshUser).toBeUndefined();
   });
 
+  it.each([
+    { cleanupStartedAt: "2026-10-30T00:00:00Z" },
+    { cleanupError: "provider cleanup failed" },
+    { cleanupRetryAt: "2026-10-30T00:01:00Z" },
+    { releaseDeletesServer: false },
+    { releaseDeletesServer: "true" },
+    { cleanupError: null },
+  ])("does not confirm incomplete or retained release %j", (pending) => {
+    expect(
+      parseInspectJson(inspectJson({ state: "released", serverId: "0", ...pending }))
+        .releaseConfirmed,
+    ).not.toBe(true);
+  });
+
   it("retains only effective lifetime policy fields and sanitizes notices", () => {
     const parsed = parseInspectJson(
       inspectJson({

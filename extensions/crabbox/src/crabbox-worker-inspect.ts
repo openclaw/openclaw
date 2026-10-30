@@ -92,10 +92,18 @@ export function parseInspectJson(stdout: string) {
 
   const failureError = nonEmptyString(value.failureError);
   const lifetime = parseCrabboxLeaseLifetime(value);
+  // Match Crabbox's coordinator release confirmation, not merely lease usability.
+  const releaseConfirmed =
+    state === "released" &&
+    (value.releaseDeletesServer === undefined || value.releaseDeletesServer === true) &&
+    [value.cleanupStartedAt, value.cleanupError, value.cleanupRetryAt].every(
+      (field) => field === undefined || field === "",
+    );
   return {
     id,
     state,
     tailscaleEnabled,
+    ...(releaseConfirmed ? { releaseConfirmed: true } : {}),
     ...(Object.keys(lifetime).length ? { lifetime } : {}),
     ...(failureError
       ? {
