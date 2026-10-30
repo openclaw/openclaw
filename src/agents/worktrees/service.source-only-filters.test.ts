@@ -301,9 +301,9 @@ it("does not execute a clean filter inserted after publication preflight", async
     await git(created.path, "rev-parse", "--git-path", "index"),
   );
   const before = await fs.readFile(index);
-  const run = commands.runCommandWithTimeout;
+  const run = commands.runCommandBuffered;
   let injected = false;
-  vi.spyOn(commands, "runCommandWithTimeout").mockImplementation(async (...args) => {
+  vi.spyOn(commands, "runCommandBuffered").mockImplementation(async (...args) => {
     if (!injected && args[0][0] === "git" && args[0].includes("add") && args[0].includes("-A")) {
       injected = true;
       await configure("repository", "clean", created.path);

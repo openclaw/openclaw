@@ -1,7 +1,12 @@
 import { ChildProcess } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withWorktreeGitConfig } from "../agents/worktrees/checkout-git-config.js";
 import { materializeManagedWorktree } from "../agents/worktrees/checkout-materialize.js";
+import { captureSettledGitHubPublicationWorkspaceSnapshot } from "../gateway/github-publication-git-transport.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
 import { runExec } from "./exec.js";
@@ -28,7 +33,7 @@ class CommandChild extends ChildProcess {
   override killed = false;
 }
 
-function createCommand() {
+function createCommand(install = true) {
   const child = new CommandChild();
   const output = { stdout: "", stderr: "" };
   child.stdout.on("data", (chunk: Buffer) => (output.stdout += chunk.toString()));
@@ -59,7 +64,7 @@ function createCommand() {
     }
     return true;
   });
-  spawnMock.mockImplementation((_argv, options: { cancelSignal?: AbortSignal }) => {
+  const spawn = (_argv: unknown, options: { cancelSignal?: AbortSignal }) => {
     options.cancelSignal?.addEventListener("abort", kill, { once: true });
     return Object.assign(completion.promise, {
       nodeChildProcess: child,
@@ -68,8 +73,11 @@ function createCommand() {
       stderr: child.stderr,
       kill,
     });
-  });
-  return { child, exit, emitExit, settle, kill };
+  };
+  if (install) {
+    spawnMock.mockImplementation(spawn);
+  }
+  return { child, exit, emitExit, settle, kill, spawn };
 }
 
 beforeEach(() => {
@@ -77,6 +85,78 @@ beforeEach(() => {
   spawnMock.mockReset();
 });
 afterEach(() => vi.useRealTimers());
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+it.each([
+  ["progress", 240_000],
+  ["managed", 240_000],
+  ["idle", 180_001],
+  ["absolute", 600_000],
+] as const)(
+  "publication snapshot bounds %s staging without changing the source index",
+  async (ending, duration) => {
+    const success = ending === "progress" || ending === "managed";
+    const cwd = tempDirs.make("publication-timeout-");
+    const index = path.join(cwd, "index");
+    await fs.writeFile(index, "source index");
+    const staged = createDeferredCore<ReturnType<typeof createCommand>>();
+    spawnMock.mockImplementation((argv: string[], options: { cancelSignal?: AbortSignal }) => {
+      const command = createCommand(false);
+      const result = command.spawn(argv, options);
+      if (argv.includes("add")) {
+        staged.resolve(command);
+      } else {
+        const output =
+          argv.includes("HEAD^{commit}") || argv.includes("write-tree")
+            ? "b".repeat(40)
+            : argv.at(-1) === "index"
+              ? index
+              : argv.at(-1)?.startsWith("info/")
+                ? path.join(cwd, "absent")
+                : "";
+        void Promise.resolve().then(() => {
+          command.child.stdout.end(output);
+          command.child.stderr.end();
+          command.exit(argv.includes("config") ? 1 : 0);
+        });
+      }
+      return result;
+    });
+    const result = withWorktreeGitConfig(cwd, false, {}, (policy) =>
+      captureSettledGitHubPublicationWorkspaceSnapshot(
+        { cwd },
+        ending === "managed" ? policy : undefined,
+      ),
+    ).catch((error: unknown) => error);
+    const command = await staged.promise;
+    for (let elapsed = 0; elapsed < duration; elapsed += 40_000) {
+      await vi.advanceTimersByTimeAsync(Math.min(40_000, duration - elapsed));
+      if (ending !== "idle") {
+        command.child.stdout.emit("data", Buffer.from("add 'artifact.txt'\n"));
+      }
+    }
+    if (success) {
+      command.child.stdout.end();
+      command.child.stderr.end();
+      command.exit(0);
+    } else {
+      await vi.runAllTimersAsync();
+    }
+    await expect(result).resolves.toMatchObject(
+      success
+        ? { workspaceTree: "b".repeat(40) }
+        : {
+            message: expect.stringMatching(
+              ending === "idle"
+                ? /snapshot.*timed out waiting for output.*retry/isu
+                : /snapshot.*timed out after 600 seconds.*retry/isu,
+            ),
+          },
+    );
+    expect(command.kill).toHaveBeenCalledTimes(success ? 0 : 1);
+    expect(await fs.readFile(index, "utf8")).toBe("source index");
+  },
+);
 
 it.each([
   ["idle", "no-output-timeout"],
