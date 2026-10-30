@@ -78,11 +78,10 @@ if (specPath && path.basename(process.argv[2] ?? "") === "handoff.json") {
         assert(bytes <= 4 * 1024 * 1024, "updater result exceeds the owning helper's bound");
         chunks.push(chunk);
       });
-      // oxlint-disable-next-line typescript/unbound-method -- Every invocation below restores the original child receiver.
-      const emit = child.emit;
-      child.emit = function (event, ...values) {
+      const emit = child.emit.bind(child);
+      child.emit = (event, ...values) => {
         if (event !== "close") {
-          return emit.call(this, event, ...values);
+          return emit(event, ...values);
         }
         void (async () => {
           try {
@@ -105,7 +104,7 @@ if (specPath && path.basename(process.argv[2] ?? "") === "handoff.json") {
           } catch (error) {
             fs.writeFileSync(spec.noticeReceipt, JSON.stringify({ observerError: String(error) }));
           } finally {
-            emit.call(this, event, ...values);
+            emit(event, ...values);
           }
         })();
         return true;
