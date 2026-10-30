@@ -7,6 +7,7 @@ import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
+import ai.openclaw.app.voice.TalkModeRoute
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -14,7 +15,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 
 data class GatewayTalkSetupReadiness(
-  val realtimeTalk: GatewayTalkSetupState,
+  val talk: GatewayTalkSetupState,
   val dictation: GatewayTalkSetupState,
 ) {
   companion object {
@@ -22,7 +23,7 @@ data class GatewayTalkSetupReadiness(
       issue: GatewayTalkSetupIssue = GatewayTalkSetupIssue.CatalogNotLoaded,
     ): GatewayTalkSetupReadiness =
       GatewayTalkSetupReadiness(
-        realtimeTalk = GatewayTalkSetupState.Unverified(issue),
+        talk = GatewayTalkSetupState.Unverified(issue),
         dictation = GatewayTalkSetupState.Unverified(issue),
       )
   }
@@ -47,6 +48,7 @@ sealed interface GatewayTalkSetupState {
 enum class GatewayTalkSetupTarget(
   val title: NativeText,
 ) {
+  TALK(nativeText("Talk")),
   REALTIME_TALK(nativeText("Realtime Talk")),
   DICTATION(nativeText("Dictation")),
 }
@@ -71,6 +73,8 @@ sealed interface GatewayTalkSetupIssue {
   data object CatalogNotLoaded : GatewayTalkSetupIssue
 
   data object CatalogLoadFailed : GatewayTalkSetupIssue
+
+  data object ConfigLoadFailed : GatewayTalkSetupIssue
 
   data class UnknownProvider(
     val target: GatewayTalkSetupTarget,
@@ -111,7 +115,7 @@ fun gatewayTalkSetupDescription(state: GatewayTalkSetupState): String = gatewayT
 
 internal fun gatewayTalkSetupDescriptionText(state: GatewayTalkSetupState): NativeText =
   when (state) {
-    is GatewayTalkSetupState.Ready -> nativeText("\${state.provider.label} via Gateway relay", verbatimText(state.provider.label))
+    is GatewayTalkSetupState.Ready -> nativeText("\${state.provider.label} via Gateway", verbatimText(state.provider.label))
     is GatewayTalkSetupState.NeedsSetup -> gatewayTalkSetupIssueDescriptionText(state.issue)
     is GatewayTalkSetupState.Unverified -> gatewayTalkSetupIssueDescriptionText(state.issue)
   }
@@ -121,15 +125,47 @@ internal fun gatewayTalkSetupIssueDescriptionText(issue: GatewayTalkSetupIssue):
     is GatewayTalkSetupIssue.Targeted -> issue.reason.description.copy(formatArgs = listOf(issue.target.title))
     GatewayTalkSetupIssue.CatalogNotLoaded -> nativeText("Gateway talk catalog not loaded")
     GatewayTalkSetupIssue.CatalogLoadFailed -> nativeText("Could not load Gateway talk catalog")
+    GatewayTalkSetupIssue.ConfigLoadFailed -> nativeText("Could not load Gateway Talk configuration")
     is GatewayTalkSetupIssue.UnknownProvider -> nativeText("Gateway selected unknown provider \${issue.providerId}", verbatimText(issue.providerId))
     is GatewayTalkSetupIssue.ConfigureSelectedProvider -> nativeText("Configure \${issue.providerLabel} on the Gateway", verbatimText(issue.providerLabel))
   }
 
-internal fun parseGatewayTalkSetupReadiness(catalog: JsonObject?): GatewayTalkSetupReadiness {
+internal fun parseGatewayTalkSetupReadiness(
+  route: TalkModeRoute?,
+  catalog: JsonObject?,
+): GatewayTalkSetupReadiness {
   if (catalog == null) return GatewayTalkSetupReadiness.unverified()
   return GatewayTalkSetupReadiness(
-    realtimeTalk =
-      parseTalkCatalogGroup(catalog = catalog, key = "realtime", target = GatewayTalkSetupTarget.REALTIME_TALK),
+    talk =
+      when (route) {
+        null -> {
+          GatewayTalkSetupState.Unverified(GatewayTalkSetupIssue.ConfigLoadFailed)
+        }
+
+        TalkModeRoute.RealtimeRelay -> {
+          parseTalkCatalogGroup(catalog, "realtime", GatewayTalkSetupTarget.REALTIME_TALK)
+        }
+
+        TalkModeRoute.NativeConfigured, TalkModeRoute.NativeAndroidFallback, TalkModeRoute.NativeGatewayFallback -> {
+          // Native Talk captures speech on the device, independent of Gateway transcription.
+          val speech = parseTalkCatalogGroup(catalog, "speech", GatewayTalkSetupTarget.TALK)
+          val issue = (speech as? GatewayTalkSetupState.NeedsSetup)?.issue
+          if (issue is GatewayTalkSetupIssue.Targeted &&
+            issue.reason in
+            listOf(
+              GatewayTalkSetupTargetIssue.NoProvider,
+              GatewayTalkSetupTargetIssue.ConfigureProvider,
+              GatewayTalkSetupTargetIssue.UnsupportedProvider,
+            )
+          ) {
+            // Missing/unsupported providers retain TalkSpeakClient's device-TTS fallback.
+            // A selected, known but unconfigured provider still needs setup.
+            GatewayTalkSetupState.Unverified(issue)
+          } else {
+            speech
+          }
+        }
+      },
     dictation =
       parseTalkCatalogGroup(catalog = catalog, key = "transcription", target = GatewayTalkSetupTarget.DICTATION),
   )

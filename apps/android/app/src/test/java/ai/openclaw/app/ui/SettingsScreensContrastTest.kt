@@ -293,7 +293,7 @@ class SettingsScreensContrastTest {
         }
       }
       assertEquals(GatewayTalkSetupReadiness.unverified(), model.talkSetupReadiness.value)
-      for (key in listOf("Realtime Talk", "Dictation", "Gateway talk catalog not loaded", "Unverified", "Wake listener", "Pauses during other voice activity.", "Add wake phrase", "Save wake words")) {
+      for (key in listOf("Talk", "Dictation", "Gateway talk catalog not loaded", "Unverified", "Wake listener", "Pauses during other voice activity.", "Add wake phrase", "Save wake words")) {
         val label = nativeString(key)
         val nodes = composeRule.onAllNodesWithText(label, useUnmergedTree = true)
         assertTrue("$key must have a rendered caller", nodes.fetchSemanticsNodes().isNotEmpty())
@@ -305,7 +305,7 @@ class SettingsScreensContrastTest {
       }
       val wakeStatus = composeRule.runOnIdle { model.voiceWakeStatusText.value }
       composeRule.onNodeWithText(wakeStatus, useUnmergedTree = true).assertCompleteText(wakeStatus)
-      for (key in listOf("Realtime Talk", "Dictation", "Wake listener", "Save wake words")) {
+      for (key in listOf("Talk", "Dictation", "Wake listener", "Save wake words")) {
         composeRule.onNodeWithText(nativeString(key)).assertIsNotEnabled()
       }
       for ((action, description) in listOf("Mute speaker" to "Replies play aloud", "Enable speaker" to "Assistant speech muted")) {
