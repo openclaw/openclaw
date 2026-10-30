@@ -19,13 +19,23 @@ function coerceFiniteValue(value: unknown): number | undefined {
 }
 
 function num(n: number): string {
+  // `formatTokenCount` owns the unit rollover: 999_950 must not print as "1000k".
   if (Math.abs(n) >= 1_000_000) {
     const compact = formatTokenCount(Math.abs(n));
     return n < 0 ? `-${compact}` : compact;
   }
   if (Math.abs(n) >= 1000) {
     const v = n / 1000;
-    return Math.abs(v) < 10 ? `${v.toFixed(1)}k` : `${Math.round(v)}k`;
+    if (Math.abs(v) < 10) {
+      return `${v.toFixed(1)}k`;
+    }
+    const rounded = Math.round(v);
+    if (Math.abs(rounded) < 1000) {
+      return `${rounded}k`;
+    }
+    // Rounding crossed into the million band; defer to the shared formatter for the same suffix.
+    const compact = formatTokenCount(Math.abs(n));
+    return n < 0 ? `-${compact}` : compact;
   }
   return String(Math.trunc(n));
 }

@@ -25,7 +25,12 @@ it.each<[string, Record<string, unknown>, string]>([
   ["x|num", { x: 2_000_000 }, "2.0m"],
   ["x|num", { x: -1_500_000 }, "-1.5m"],
   ["x|num", { x: -10_500 }, "-10k"],
-  ["x|num", { x: 999_950 }, "1000k"],
+  // 999_950..999_999 rounds to 1000k; the shared token formatter rolls that into 1.0m instead.
+  ["x|num", { x: 999_949 }, "1.0m"],
+  ["x|num", { x: 999_950 }, "1.0m"],
+  ["x|num", { x: 999_999 }, "1.0m"],
+  ["x|num", { x: -999_950 }, "-1.0m"],
+  ["x|num", { x: 10_000 }, "10k"],
   ["x|num", { x: true }, "1"],
   ["x|fixed", { x: true }, "1.00"],
   ["x|dur", { x: true }, "0m"],
