@@ -3,6 +3,7 @@ import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "@openclaw/retry";
+import { prepareRuntimeAuthProfileExecution } from "../../config/sessions/session-entry-current-runtime.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { mergePathPrepend } from "../../infra/path-prepend.js";
 import {
@@ -11,7 +12,7 @@ import {
 } from "../../plugin-sdk/windows-spawn.js";
 import type { CliBackendTurnStatus } from "../../plugins/cli-backend-turn-status.types.js";
 import type {
-  CliBackendExecute,
+  CliBackendExecuteV2,
   CliBackendMessageInjection,
   CliBackendToolPermissionRequest,
   CliBackendToolPermissionResult,
@@ -382,7 +383,7 @@ function createPluginUserInputHandler(params: {
 /** Runs a prepared plugin transport while keeping cancellation and approvals host-owned. */
 export async function executePluginOwnedProcess(params: {
   context: PreparedCliRunContext;
-  execute: CliBackendExecute;
+  execute: CliBackendExecuteV2;
   executionCommand: string;
   executionArgv0?: string;
   executionArgs: readonly string[];
@@ -564,10 +565,14 @@ export async function executePluginOwnedProcess(params: {
       params.mcpCapture?.beginCapture(params.mcpCapture.captureKey, assertCaptureCurrent);
     }
     const historyWriter = params.context.cliHistoryWriter;
-    await historyWriter?.assertReadable();
-    assertCurrent();
-    const started = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+    const prepareExecutionAdmission = async () => {
       assertCurrent();
+      await historyWriter?.assertReadable();
+      await prepareRuntimeAuthProfileExecution(run, assertCurrent);
+      assertCurrent();
+    };
+    const started = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+      await prepareExecutionAdmission();
       const execution = params.execute({
         command,
         argv0: params.executionArgv0,
@@ -585,9 +590,9 @@ export async function executePluginOwnedProcess(params: {
         useResume: params.useResume,
         abortSignal: signal,
         assertCurrent,
-        // Host-internal, not in the plugin SDK type, like the forwarded auth credential: a
-        // native login can change after the check above, so the bundled Claude runtime
-        // repeats it where saved turn context leaves, at prompt send and the prompt hook answer.
+        prepareExecutionAdmission,
+        // Host-internal: native login can change after preparation, so the
+        // bundled runtime checks again where saved context leaves the host.
         ...(historyWriter?.bindsNativeLogin
           ? {
               assertPrivateInputCurrent: () =>

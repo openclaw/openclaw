@@ -62,6 +62,7 @@ import {
   loadEmbeddedAgentRuntime,
   loadSessionUpdatesRuntime,
 } from "./get-reply-run-helpers.js";
+import { registerReplyAuthAdmissionCases } from "./get-reply-run.auth-admission.test-support.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { registerPendingRequesterAuthorityCases } from "./get-reply-run.requester-authority.test-support.js";
 import { registerSteeringIntentProducerCases } from "./get-reply-run.steering-intent.test-support.js";
@@ -1350,21 +1351,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.replyThreadingOverride).toEqual({ implicitCurrentMessage: "deny" });
   });
 
-  it("does not leave an active reply operation after auth preparation fails", async () => {
-    const { resolveSessionAuthSelection } =
-      await import("../../agents/auth-profiles/session-override.js");
-    const sessionId = "reply-operation-auth-failure";
-    const activeBefore = sessionQueries.listActiveReplyRunSessionKeys().length;
-    vi.mocked(resolveSessionAuthSelection).mockRejectedValueOnce(new Error("auth failed"));
-
-    await expect(
-      runPrepared({
-        sessionId,
-      }),
-    ).rejects.toThrow("auth failed");
-
-    expect(sessionQueries.listActiveReplyRunSessionKeys().length).toBe(activeBefore);
-  });
+  registerReplyAuthAdmissionCases({ requireRunReplyAgentCall });
 
   it("routes a channel-configured interrupt through session-work admission", async () => {
     const runtime = await embeddedRuntime();

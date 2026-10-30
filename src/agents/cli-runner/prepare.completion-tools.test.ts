@@ -523,7 +523,7 @@ describe("restricted CLI tool preparation", () => {
         resolveRuntimeCliBackends: () => [
           {
             ...claudeBackend,
-            prepareExecution: nativeBackend.prepareExecution,
+            prepareExecutionV2: nativeBackend.prepareExecutionV2,
             resolveExecutionArgs: nativeBackend.resolveExecutionArgs,
             transformSystemPrompt: nativeBackend.transformSystemPrompt,
             resolveManagedNativeTools: nativeBackend.resolveManagedNativeTools,

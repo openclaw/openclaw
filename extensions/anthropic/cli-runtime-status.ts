@@ -32,10 +32,12 @@ export function createClaudeTurnStatus(
       const submittedInputs = turn.submittedInputUuids.size;
       const inputStarted = turn.inputStarted;
       const isCurrent = () => {
+        // Cancellation retires status before the owner's authority assertion can throw.
+        if (context.abortSignal?.aborted || turn.interrupted) {
+          return false;
+        }
         context.assertCurrent?.();
         return (
-          !context.abortSignal?.aborted &&
-          !turn.interrupted &&
           session.handle.generation === generation &&
           turn.promptInputUuid === inputUuid &&
           turn.submittedInputUuids.size === submittedInputs &&

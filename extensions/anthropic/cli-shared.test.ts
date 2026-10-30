@@ -26,7 +26,7 @@ const argv = (...parts: string[]) => parts.flatMap((part) => part.split(" "));
 const backend = buildAnthropicCliBackend();
 
 type Backend = ReturnType<typeof buildAnthropicCliBackend>;
-type PrepareContext = Parameters<NonNullable<Backend["prepareExecution"]>>[0];
+type PrepareContext = Parameters<NonNullable<Backend["prepareExecutionV2"]>>[0];
 type Credential =
   | { type: "oauth"; provider: string; access: string; refresh: string; expires: number }
   | { type: "token"; provider: string; token: string }
@@ -68,7 +68,7 @@ function prepare(
     isolatedCompletionSystemPrompt?: string;
   } = {},
 ) {
-  return adapter.prepareExecution?.({
+  return adapter.prepareExecutionV2?.({
     workspaceDir: "/tmp/openclaw-claude-cli",
     provider: "claude-cli",
     modelId: "claude-opus-4-7",

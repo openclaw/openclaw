@@ -592,28 +592,37 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         job: input.job,
         cronSession,
       });
-      const authSelection = input.job.runtimeAuthority
-        ? undefined
-        : input.job.inferenceBinding
-          ? {
-              profileId: input.job.inferenceBinding.profileId,
-              source: input.job.inferenceBinding.source,
-            }
-          : await resolveCronAuthSelection({
+      const normalAuthSelection =
+        !input.job.runtimeAuthority && !input.job.inferenceBinding
+          ? await resolveCronAuthSelection({
               agentId,
               cfg: admittedConfig,
               provider,
               modelId: model,
               ...(provider === resolvedModelSelection.provider &&
               resolvedModelSelection.configuredProfileId
-                ? { configuredProfileId: resolvedModelSelection.configuredProfileId }
+                ? {
+                    configuredProfileId: resolvedModelSelection.configuredProfileId,
+                    configuredProfileIsDefault:
+                      resolvedModelSelection.modelSource === "default" ||
+                      resolvedModelSelection.modelSource === "agent" ||
+                      resolvedModelSelection.modelSource === "subagent",
+                  }
                 : {}),
               agentDir,
               cronSession,
               sessionKey: agentSessionKey,
               isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
-            });
-      const authProfileId = authSelection?.profileId;
+            })
+          : undefined;
+      const authSelection = input.job.runtimeAuthority
+        ? undefined
+        : input.job.inferenceBinding
+          ? {
+              authProfileId: input.job.inferenceBinding.profileId,
+              authProfileIdSource: input.job.inferenceBinding.source,
+            }
+          : normalAuthSelection;
       const liveSelection: LiveSessionModelSelection = {
         provider,
         model,
@@ -622,8 +631,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           entry: runtimeSessionEntry,
           cfg: admittedConfig,
         }),
-        authProfileId,
-        authProfileIdSource: authSelection?.source,
+        ...authSelection,
       };
       const runContinuationSession = usesExactRunSession
         ? createCronRunContinuationSession({

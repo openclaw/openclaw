@@ -4,6 +4,7 @@ import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "../../auto-reply/reply/session-event-handoff.js";
+import { prepareRuntimeAuthProfileExecution } from "../../config/sessions/session-entry-current-runtime.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -419,11 +420,21 @@ export async function executeCliProcess(params: {
         const managedRun = await runWithAgentToolSourceExecutionScope(params.assertCurrent, () =>
           withChildProcessOperation("agent.cli", () =>
             supervisor.spawn({
-              assertCurrent: params.assertCurrent,
-              prepareSpawn: params.argsPrompt
-                ? context.cliHistoryWriter?.assertReadable
+              assertCurrent: assertProcessCurrent,
+              prepareSpawn: async () => {
+                if (params.argsPrompt) {
+                  await context.cliHistoryWriter?.assertReadable();
+                }
+                await prepareRuntimeAuthProfileExecution(runParams, assertProcessCurrent);
+                assertProcessCurrent();
+              },
+              prepareInput: params.stdin
+                ? async () => {
+                    await context.cliHistoryWriter?.assertReadable();
+                    await prepareRuntimeAuthProfileExecution(runParams, assertProcessCurrent);
+                    assertProcessCurrent();
+                  }
                 : undefined,
-              prepareInput: params.stdin ? context.cliHistoryWriter?.assertReadable : undefined,
               runId: runParams.runId,
               scopeKey,
               replaceExistingScope: Boolean(params.useResume && scopeKey),

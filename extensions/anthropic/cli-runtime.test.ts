@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
-  CliBackendExecuteContext,
+  CliBackendExecuteContextV2,
   CliBackendMessageInjection,
   CliBackendToolPermissionResult,
   CliBackendTurnStatus,
@@ -15,6 +15,7 @@ import {
   type FixtureReceiptChannel,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { ClaudeCliExecuteContext } from "./cli-process.js";
 import { CLAUDE_PROTOCOL_FIXTURE } from "./cli-runtime.protocol.test-support.js";
 import {
   collectClaudeCli,
@@ -23,7 +24,7 @@ import {
   resultDetail,
   waitForProcessExit,
 } from "./cli-runtime.test-support.js";
-import { executeClaudeCli, type ClaudeCliExecuteContext } from "./cli.runtime.js";
+import { executeClaudeCli } from "./cli.runtime.js";
 
 const harness = createCliTestHarness("openclaw-claude-protocol-");
 const createLiveSession = harness.liveSession.bind(harness);
@@ -48,11 +49,11 @@ const denied = (): CliBackendToolPermissionResult => ({
   behavior: "deny",
   message: "Fixture denied.",
 });
-const allowInput: NonNullable<CliBackendExecuteContext["requestToolPermission"]> = async ({
+const allowInput: NonNullable<CliBackendExecuteContextV2["requestToolPermission"]> = async ({
   toolInput,
 }) => ({ behavior: "allow", updatedInput: toolInput });
 const permission = (
-  handler: CliBackendExecuteContext["requestToolPermission"] = async () => denied(),
+  handler: CliBackendExecuteContextV2["requestToolPermission"] = async () => denied(),
 ) => vi.fn(handler);
 async function createContext(
   scenario = "normal",
@@ -66,7 +67,7 @@ async function createContext(
       systemPrompt: SYSTEM,
       liveSession,
       requestToolPermission: permission(),
-      requestUserInput: vi.fn<CliBackendExecuteContext["requestUserInput"]>(async () => ({
+      requestUserInput: vi.fn<CliBackendExecuteContextV2["requestUserInput"]>(async () => ({
         status: "cancelled",
         message: "No question expected.",
       })),
@@ -77,20 +78,20 @@ async function createContext(
   return { ...context, liveSession };
 }
 const collect = (
-  context: CliBackendExecuteContext,
-  overrides?: Partial<CliBackendExecuteContext>,
+  context: CliBackendExecuteContextV2,
+  overrides?: Partial<CliBackendExecuteContextV2>,
 ) => collectClaudeCli(overrides ? { ...context, ...overrides } : context);
 const runDetail = async (
-  context: CliBackendExecuteContext,
-  overrides?: Partial<CliBackendExecuteContext>,
+  context: CliBackendExecuteContextV2,
+  overrides?: Partial<CliBackendExecuteContextV2>,
 ) => resultDetail(await collect(context, overrides));
-const fixtureFile = (context: CliBackendExecuteContext, name: string) =>
+const fixtureFile = (context: CliBackendExecuteContextV2, name: string) =>
   path.join(context.cwd, name);
-const readFixture = (context: CliBackendExecuteContext, name: string) =>
+const readFixture = (context: CliBackendExecuteContextV2, name: string) =>
   readFile(fixtureFile(context, name), "utf8");
-const releaseFixture = (context: CliBackendExecuteContext, name: string) =>
+const releaseFixture = (context: CliBackendExecuteContextV2, name: string) =>
   writeFile(fixtureFile(context, `${name}.release`), "release");
-function expectRetired(context: CliBackendExecuteContext, pid: number) {
+function expectRetired(context: CliBackendExecuteContextV2, pid: number) {
   expect(context.liveSession?.current()).toBeUndefined();
   expect(() => process.kill(pid, 0)).toThrow();
 }
@@ -115,9 +116,9 @@ function expectFinalResults(records: Record<string, unknown>[], count?: number) 
 }
 
 async function expectWarmResume(
-  context: CliBackendExecuteContext,
+  context: CliBackendExecuteContextV2,
   detail: Record<string, unknown>,
-  overrides: Partial<CliBackendExecuteContext> = {},
+  overrides: Partial<CliBackendExecuteContextV2> = {},
 ) {
   const handle = context.liveSession?.current();
   expect(handle?.isIdle()).toBe(true);
@@ -128,7 +129,10 @@ async function expectWarmResume(
   return next;
 }
 
-async function startInjection(scenario: string, overrides: Partial<CliBackendExecuteContext> = {}) {
+async function startInjection(
+  scenario: string,
+  overrides: Partial<CliBackendExecuteContextV2> = {},
+) {
   let injection: CliBackendMessageInjection | undefined;
   const context = await createContext(scenario, {
     ...overrides,
@@ -147,7 +151,7 @@ async function startInjection(scenario: string, overrides: Partial<CliBackendExe
 }
 
 async function fixtureReadyBeforeSettlement(
-  context: CliBackendExecuteContext,
+  context: CliBackendExecuteContextV2,
   fileName: string,
   operation: PromiseLike<unknown>,
   signal: AbortSignal,
@@ -748,6 +752,14 @@ describe("Claude native stdio boundary", () => {
       expect(detail.injectedContext).toEqual(expected);
       expect(detail.injectedRerunContext).toEqual(hook ? expected : undefined);
       expect(injection.isAvailable()).toBe(false);
+      if (samePrompt) {
+        await expect(
+          injection.queueMessage("Input retained after the turn ended.", async (submit) =>
+            submit(),
+          ),
+        ).rejects.toThrow("The Claude CLI turn cannot accept more input.");
+        expect(await readFixture(context, "user.received")).toBe(context.prompt);
+      }
     },
   );
 

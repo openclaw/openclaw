@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "../../agents/auth-profiles/source-check.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
+import { bindConfiguredModelAuthProfileScope } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
@@ -128,6 +129,7 @@ export async function resolveCronAuthSelection(params: {
   provider: string;
   modelId: string;
   configuredProfileId?: string;
+  configuredProfileIsDefault?: boolean;
   agentDir: string;
   cronSession: MutableCronSession;
   sessionKey: string;
@@ -142,12 +144,13 @@ export async function resolveCronAuthSelection(params: {
     return undefined;
   }
   const runtime = await cronAuthProfileRuntimeLoader.load();
-  return await runtime.resolveSessionAuthSelection({
+  const selection = await runtime.resolveSessionAuthSelection({
     agentId: params.agentId,
     cfg: params.cfg,
     provider: params.provider,
     modelId: params.modelId,
     ...(params.configuredProfileId ? { configuredProfileId: params.configuredProfileId } : {}),
+    configuredProfileIsDefault: params.configuredProfileIsDefault,
     agentDir: params.agentDir,
     sessionEntry: params.cronSession.sessionEntry,
     sessionStore: params.cronSession.store,
@@ -155,6 +158,15 @@ export async function resolveCronAuthSelection(params: {
     storePath: params.cronSession.storePath,
     isNewSession: params.isNewSession,
   });
+  if (!selection) {
+    return undefined;
+  }
+  const runtimeSelection = {
+    authProfileId: selection.profileId,
+    authProfileIdSource: selection.source,
+  };
+  bindConfiguredModelAuthProfileScope(runtimeSelection, selection.configuredPrimaryProvider);
+  return runtimeSelection;
 }
 
 export async function retireRolledCronSessionMcpRuntime(params: {

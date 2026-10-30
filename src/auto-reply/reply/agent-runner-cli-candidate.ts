@@ -1,5 +1,6 @@
 import {
   cliBackendAcceptsAuthProfileForwarding,
+  resolveCliExecutionAuthProfile,
   resolveCliExecutionAuthProfileId,
 } from "../../agents/cli-execution-auth.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../../agents/cli-runner/mcp-grant-context.js";
@@ -22,6 +23,8 @@ import {
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { readConfiguredModelAuthProfileProvider } from "../../config/sessions/auth-profile-override-provenance.js";
+import { bindRuntimeAuthProfileExecution } from "../../config/sessions/session-entry-current-runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
@@ -52,6 +55,10 @@ export async function runCliFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
     cliExecutionProvider: string;
     lifecycleGeneration: string;
+    providerScopedAuthProfile: Pick<
+      AgentFallbackCandidateCommonParams["candidateRun"],
+      "authProfileId" | "authProfileIdSource"
+    >;
     onSessionWriter: (writer: CompactionAccountingTarget) => void;
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
@@ -212,6 +219,19 @@ export async function runCliFallbackCandidate(
             activeSessionEntry: sessionEntry,
           });
         const scheduledInference = params.scheduledInference;
+        const selectedCliProfile =
+          !scheduledInference && allowCliAuthProfileForwarding
+            ? await resolveCliExecutionAuthProfile({
+                cliExecutionProvider: params.cliExecutionProvider,
+                authProfileProvider: params.provider,
+                config: params.runtimeConfig,
+                agentDir: params.candidateRun.agentDir,
+                selected: readConfiguredModelAuthProfileProvider(params.candidateRun, sessionEntry)
+                  ? params.providerScopedAuthProfile
+                  : params.candidateRun,
+                sessionBinding: cliSessionBinding,
+              })
+            : undefined;
         // The CLI owner must see explicit pins before provider scoping can discard them.
         // A recorded account runs only when this backend forwards exactly that account.
         const authProfileId = scheduledInference
@@ -228,14 +248,9 @@ export async function runCliFallbackCandidate(
                 : undefined,
             )
           : allowCliAuthProfileForwarding
-            ? await resolveCliExecutionAuthProfileId({
-                cliExecutionProvider: params.cliExecutionProvider,
-                authProfileProvider: params.provider,
-                config: params.runtimeConfig,
-                agentDir: params.candidateRun.agentDir,
-                selected: params.candidateRun,
-                sessionBinding: cliSessionBinding,
-              })
+            ? selectedCliProfile?.kind === "forwarded"
+              ? selectedCliProfile.profileId
+              : undefined
             : resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {
                 config: params.runtimeConfig,
               }).authProfileId;
@@ -246,6 +261,14 @@ export async function runCliFallbackCandidate(
             profileId: authProfileId,
           });
         }
+        const executionAuth = scheduledInference
+          ? {}
+          : bindRuntimeAuthProfileExecution(
+              { authProfileId },
+              sessionTarget,
+              initialSessionEntry,
+              selectedCliProfile?.profileId ?? authProfileId,
+            );
         const diagnosticOwner = params.deferredLifecycle.handoffToCli();
         // A forked child carries the parent's binding with a one-shot fork marker;
         // honor it here or the child resumes inside the parent's native thread.
@@ -391,6 +414,7 @@ export async function runCliFallbackCandidate(
           runParams: {
             ...buildFallbackCandidateTurnParams(params),
             ...buildReplyRunStateParams(turn.followupRun.run),
+            ...executionAuth,
             diagnosticOwner,
             sessionId: turn.followupRun.run.sessionId,
             sessionKey,

@@ -3,6 +3,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
+import { prepareRuntimeAuthProfileExecution } from "../../config/sessions/session-entry-current-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertContextEngineHostSupport,
@@ -28,10 +29,7 @@ import {
 } from "../../gateway/mcp-http.runtime.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
-import type {
-  CliBackendPreparedExecution,
-  CliBackendPromptContext,
-} from "../../plugins/cli-backend.types.js";
+import type { CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
@@ -168,7 +166,7 @@ import { captureCliRunToolAuthority } from "./tool-authority.js";
 import {
   captureCliRunStartTime,
   type CliReusableSession,
-  type CliSecretInput,
+  type PreparedCliBackendExecution,
   type PreparedCliRunContext,
   type RunCliAgentParams,
 } from "./types.js";
@@ -179,11 +177,6 @@ const CALLER_SURFACE_TOOL_NAMES = new Set([
   "suggest_task",
   "dismiss_task",
 ]);
-
-type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
-  isolatedCompletionEnforced?: true;
-  secretInput?: CliSecretInput;
-};
 
 type RunCliAgentPrepareParams = RunCliAgentParams & {
   /** Ring-zero tool transport supplied only by the OpenClaw orchestrator. */
@@ -297,6 +290,7 @@ async function prepareCliRunContextWithinReadFence(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
+  const prepareExecution = backendResolved.prepareExecutionV2 ?? backendResolved.prepareExecution;
   params = prepareCliRunModelAuthority(params);
   const backendAuthPolicy = resolveBundledCliBackendAuthPolicy(backendResolved.id);
   const canEnforceExactToolAvailability = cliBackendSupportsExactToolAvailability(backendResolved);
@@ -338,6 +332,10 @@ async function prepareCliRunContextWithinReadFence(
   });
   params.assertCurrent?.();
   params.abortSignal?.throwIfAborted();
+  await prepareRuntimeAuthProfileExecution(params, () => {
+    params.assertCurrent?.();
+    params.abortSignal?.throwIfAborted();
+  });
   if (nodeClaudePlacement && params.cliToolAvailability) {
     // Only the personal Workshop has an invocation-bound node callback adapter.
     params = {
@@ -395,7 +393,7 @@ async function prepareCliRunContextWithinReadFence(
     authStore = await loadScopedAuthStore({ profileId: effectiveAuthProfileId });
   } else if (
     backendResolved.autoSelectAuthProfile !== false &&
-    (backendResolved.authEpochMode === "profile-only" || backendResolved.prepareExecution)
+    (backendResolved.authEpochMode === "profile-only" || prepareExecution)
   ) {
     authStore = await loadScopedAuthStore();
     effectiveAuthProfileId =
@@ -962,7 +960,7 @@ async function prepareCliRunContextWithinReadFence(
     contextFiles,
   });
   let cleanupPreparedResources: (() => Promise<void>) | undefined;
-  let preparedExecution: PrivateCliBackendPreparedExecution | undefined;
+  let preparedExecution: PreparedCliBackendExecution | undefined;
   try {
     const mcpClient =
       mcpLoopbackRuntime && mcpGrant
@@ -1147,25 +1145,25 @@ async function prepareCliRunContextWithinReadFence(
       executionMode,
       toolAvailability: params.cliToolAvailability,
       env: preparedBackend.env,
-      // Bundled owners may project this through a native per-process system-prompt
-      // channel. Keep it private so exact isolated inference does not expand the SDK.
-      ...(params.isolatedCompletion
-        ? {
-            isolatedCompletionCwd: cwd,
-            isolatedCompletionModelId: normalizedModel,
-            isolatedCompletionPrompt: params.prompt,
-            isolatedCompletionSystemPrompt: params.extraSystemPrompt ?? "",
-          }
-        : {}),
-    } satisfies Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
+    } satisfies Parameters<NonNullable<typeof prepareExecution>>[0];
+    const privatePrepareExecutionContext = params.isolatedCompletion
+      ? {
+          ...prepareExecutionContext,
+          // Bundled owners may project this through a native per-process system-prompt
+          // channel. Keep it private so exact isolated inference does not expand the SDK.
+          isolatedCompletionCwd: cwd,
+          isolatedCompletionModelId: normalizedModel,
+          isolatedCompletionPrompt: params.prompt,
+          isolatedCompletionSystemPrompt: params.extraSystemPrompt ?? "",
+        }
+      : prepareExecutionContext;
     try {
       params.assertCurrent?.();
       // Only bundled backends receive this private credential bridge.
       const backendPrepareContext = backendAuthPolicy
-        ? { ...prepareExecutionContext, authCredential }
-        : prepareExecutionContext;
-      preparedExecution =
-        (await backendResolved.prepareExecution?.(backendPrepareContext)) ?? undefined;
+        ? { ...privatePrepareExecutionContext, authCredential }
+        : privatePrepareExecutionContext;
+      preparedExecution = (await prepareExecution?.(backendPrepareContext)) ?? undefined;
     } catch (error) {
       if (error instanceof CliBackendAuthProfilePreparationError && effectiveAuthProfileId) {
         // Preserve the selected-profile fact across lazy plugin preparation so

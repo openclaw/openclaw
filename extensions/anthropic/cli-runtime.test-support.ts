@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import type {
-  CliBackendExecuteContext,
+  CliBackendExecuteContextV2,
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionHandle,
-  CliBackendPreparedExecution,
+  CliBackendPreparedExecutionV2,
 } from "openclaw/plugin-sdk/cli-backend";
 import { expect, vi } from "vitest";
 import { isProcessAlive as running } from "../test-support/process.test-support.js";
@@ -15,7 +15,7 @@ import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { executeClaudeCli } from "./cli.runtime.js";
 
 export async function collectClaudeCli(
-  context: CliBackendExecuteContext,
+  context: CliBackendExecuteContextV2,
   secretInput?: Parameters<typeof executeClaudeCli>[1],
   execute = executeClaudeCli,
 ) {
@@ -32,14 +32,21 @@ export function createCliTestHarness(prefix = "openclaw-claude-stderr-") {
   return {
     async context(
       source: string,
-      overrides: Partial<CliBackendExecuteContext> = {},
+      overrides: Partial<CliBackendExecuteContextV2> = {},
       env: Record<string, string> = {},
-    ): Promise<CliBackendExecuteContext> {
+    ): Promise<CliBackendExecuteContextV2> {
       const root = await realpath(await mkdtemp(path.join(os.tmpdir(), prefix)));
       roots.push(root);
       const command = path.join(root, "claude.mjs");
       await writeFile(command, source);
-      return {
+      const context: CliBackendExecuteContextV2 = {
+        assertCurrent() {
+          this.abortSignal?.throwIfAborted();
+        },
+        async prepareExecutionAdmission() {
+          this.assertCurrent();
+          this.abortSignal?.throwIfAborted();
+        },
         command: process.execPath,
         args: [command],
         cwd: root,
@@ -61,6 +68,7 @@ export function createCliTestHarness(prefix = "openclaw-claude-stderr-") {
         requestUserInput: async () => ({ status: "cancelled", message: "No input in this probe." }),
         ...overrides,
       };
+      return context;
     },
     liveSession(cleanup?: () => Promise<void>): CliBackendLiveSessionCapability {
       let current: CliBackendLiveSessionHandle | undefined;
@@ -108,18 +116,18 @@ export function createCliTestHarness(prefix = "openclaw-claude-stderr-") {
 }
 
 export async function prepareClaudeCli(
-  context: CliBackendExecuteContext,
+  context: CliBackendExecuteContextV2,
   authCredential: { type: "token"; token: string } | { type: "api_key"; key: string },
   backend = buildAnthropicCliBackend(),
 ) {
-  const prepared = (await backend.prepareExecution?.({
+  const prepared = (await backend.prepareExecutionV2?.({
     workspaceDir: context.cwd,
     provider: "claude-cli",
     modelId: context.modelId,
     executionMode: "agent",
     authCredential,
-  } as Parameters<NonNullable<typeof backend.prepareExecution>>[0])) as
-    | (CliBackendPreparedExecution & { secretInput?: ClaudeCliSecretInput })
+  } as Parameters<NonNullable<typeof backend.prepareExecutionV2>>[0])) as
+    | (CliBackendPreparedExecutionV2 & { secretInput?: ClaudeCliSecretInput })
     | undefined;
   const { execute, secretInput, cleanup } = prepared ?? {};
   if (!execute || !secretInput || !cleanup) {

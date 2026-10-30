@@ -1,9 +1,16 @@
-import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
+import type { CliBackendExecuteContextV2 } from "openclaw/plugin-sdk/cli-backend";
 import { expect, it, vi } from "vitest";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
-function authorizerFor(requestUserInput: CliBackendExecuteContext["requestUserInput"]) {
-  return createClaudeCliUserInputAuthorizer({
+function authorizerFor(requestUserInput: CliBackendExecuteContextV2["requestUserInput"]) {
+  const context: CliBackendExecuteContextV2 = {
+    assertCurrent() {
+      this.abortSignal?.throwIfAborted();
+    },
+    async prepareExecutionAdmission() {
+      this.assertCurrent();
+      this.abortSignal?.throwIfAborted();
+    },
     command: "/usr/local/bin/claude",
     args: [],
     cwd: "/tmp",
@@ -15,7 +22,8 @@ function authorizerFor(requestUserInput: CliBackendExecuteContext["requestUserIn
     timeoutMs: 30_000,
     requestToolPermission: async () => ({ behavior: "allow", updatedInput: {} }),
     requestUserInput,
-  });
+  };
+  return createClaudeCliUserInputAuthorizer(context);
 }
 
 const options = (...labels: string[]) =>
@@ -31,7 +39,7 @@ const question = (overrides: Record<string, unknown> = {}) => ({
 const malformed = (overrides: Record<string, unknown>) => ({ questions: [question(overrides)] });
 const mappedAnswers = (proof: string) => ({ "Runner?": "A", "Proof?": proof });
 const answered = (...proof: string[]) =>
-  vi.fn<CliBackendExecuteContext["requestUserInput"]>(async () => ({
+  vi.fn<CliBackendExecuteContextV2["requestUserInput"]>(async () => ({
     status: "answered",
     answers: { question_1: ["A"], question_2: proof },
   }));

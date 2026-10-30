@@ -1,10 +1,6 @@
 /** Executes one isolated cron prompt with model fallback candidates. */
 import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
-import {
-  cliBackendAcceptsAuthProfileForwarding,
-  resolveCliExecutionAuthProfileId,
-} from "../../agents/cli-execution-auth.js";
 import { resolveCliRuntimeToolsAllow } from "../../agents/cli-runner/tool-policy.js";
 import { settleCliSessionResult } from "../../agents/cli-session-store.js";
 import {
@@ -54,6 +50,9 @@ import {
 } from "./run-admission.js";
 import {
   createCronCandidateExecutionResolver,
+  prepareCronCandidateAuthSelection,
+  prepareCronCliCandidateAuth,
+  resolveCronCliAuthProfile,
   createCronRuntimeOverrideResolver,
 } from "./run-candidate-runtime.js";
 import { finalizeCronPromptForResolvedTools } from "./run-delivery-trace.js";
@@ -347,6 +346,10 @@ export function createCronPromptExecutor(
           modelOverride,
           runOptions.agentHarnessRuntimeOverride,
         );
+        const readCandidateAuthProfile =
+          !params.job.runtimeAuthority && !binding
+            ? prepareCronCandidateAuthSelection(params, providerOverride)
+            : undefined;
         const candidateConfiguredThinkLevel =
           params.immutableThinkLevel ??
           resolveConfiguredThinkingDefault({
@@ -496,11 +499,6 @@ export function createCronPromptExecutor(
               userTurnTranscriptRecorder.hasPersisted() || userTurnTranscriptRecorder.isBlocked(),
           }) satisfies Partial<Parameters<CronEmbeddedRuntime["runEmbeddedAgent"]>[0]>;
         if (cliExecution) {
-          const allowCliAuthProfileForwarding = cliBackendAcceptsAuthProfileForwarding({
-            provider: executionProvider,
-            config: params.cfgWithAgentDefaults,
-            agentId: params.agentId,
-          });
           // Keep CLI work visible to recovery until execution and settlement finish.
           const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
             runId,
@@ -527,31 +525,29 @@ export function createCronPromptExecutor(
                 const cliSessionBinding = params.cronSession.isNewSession
                   ? undefined
                   : await getCliSessionBinding(params.cronSession.sessionEntry, executionProvider);
-                const resolveForwardedProfile = (
-                  selected: Parameters<typeof resolveCliExecutionAuthProfileId>[0]["selected"],
-                ) =>
-                  allowCliAuthProfileForwarding
-                    ? resolveCliExecutionAuthProfileId({
-                        cliExecutionProvider: executionProvider,
-                        authProfileProvider: providerOverride,
-                        config: params.cfgWithAgentDefaults,
-                        agentDir: params.agentDir,
-                        sessionBinding: cliSessionBinding,
-                        selected,
-                      })
-                    : Promise.resolve(undefined);
+                const candidateAuthInput = {
+                  params,
+                  sessionTarget,
+                  executionProvider,
+                  provider: providerOverride,
+                  binding: cliSessionBinding,
+                };
                 // A recorded account runs only when this backend forwards exactly that account.
-                const authProfileId = inference
-                  ? await inference.resolveCliAuthProfile(resolveForwardedProfile)
-                  : await resolveForwardedProfile(
-                      params.liveSelection.authProfileId
-                        ? {
-                            authProfileId: params.liveSelection.authProfileId,
-                            authProfileIdSource:
-                              params.liveSelection.authProfileIdSource === "user" ? "user" : "auto",
-                          }
-                        : undefined,
-                    );
+                const candidateAuth = inference
+                  ? {
+                      authProfileId: await inference.resolveCliAuthProfile(async (selected) => {
+                        const profile = await resolveCronCliAuthProfile({
+                          ...candidateAuthInput,
+                          selected,
+                        });
+                        return profile?.kind === "forwarded" ? profile.profileId : undefined;
+                      }),
+                    }
+                  : await prepareCronCliCandidateAuth({
+                      ...candidateAuthInput,
+                      selected: readCandidateAuthProfile?.().cli,
+                    });
+                const { authProfileId } = candidateAuth;
                 if (trigger === "cron" && !binding && authProfileId) {
                   throw createUnrecordedScheduledAccountRefusal({
                     runtime: executionProvider,
@@ -564,6 +560,7 @@ export function createCronPromptExecutor(
                     ? cliSessionBinding
                     : undefined;
                 const candidateResult = await runCliAgent({
+                  ...candidateAuth,
                   ...buildCommonRunParams(),
                   // The CLI backend marks internal provenance as non-user input.
                   inputProvenance: params.inputProvenance,
@@ -651,6 +648,7 @@ export function createCronPromptExecutor(
         });
         // Embedded runs receive both the explicit route and the current-channel
         // id so message-tool policy can target the same chat as fallback delivery.
+        const candidateAuthProfile = readCandidateAuthProfile?.().embedded;
         const result = await runEmbeddedAgent({
           ...buildCommonRunParams(),
           promptCacheKey,
@@ -673,10 +671,10 @@ export function createCronPromptExecutor(
           resolvedModelSelection: runOptions.resolvedModelSelection,
           cyberAccessProgram:
             runOptions.cyberAccessProgram ?? params.cronSession.sessionEntry.cyberAccessProgram,
-          authProfileId: runOptions.authProfileId ?? params.liveSelection.authProfileId,
+          authProfileId: runOptions.authProfileId ?? candidateAuthProfile?.authProfileId,
           authProfileIdSource: runOptions.authProfileId
             ? "user"
-            : params.liveSelection.authProfileIdSource,
+            : candidateAuthProfile?.authProfileIdSource,
           ...inference?.runParams,
           // Cron keeps overload failures local while sharing real credential failures.
           authProfileFailurePolicy: runOptions.authProfileFailurePolicy ?? "local_transient",

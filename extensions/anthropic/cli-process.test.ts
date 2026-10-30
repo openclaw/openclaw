@@ -1,6 +1,6 @@
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
-import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
+import type { CliBackendExecuteContextV2 } from "openclaw/plugin-sdk/cli-backend";
 import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OwnedStdioProcess } from "openclaw/plugin-sdk/process-runtime";
@@ -69,6 +69,7 @@ const PROTOCOL_CHILD = `
 const STARTUP_HOOK_CHILD = String.raw`
   ${PROTOCOL_SETUP}
   import { writeFileSync } from "node:fs";
+  writeFileSync("fixture.pid", String(process.pid));
   let turn = 0;
   for await (const line of createInterface({ input: process.stdin })) {
     const message = JSON.parse(line);
@@ -112,7 +113,7 @@ function expectDiagnostic(error: unknown, included: string[], excluded: string[]
 }
 
 async function transportFor(
-  context: CliBackendExecuteContext,
+  context: CliBackendExecuteContextV2,
   options: Partial<Parameters<typeof createClaudeCliTransport>[0]> = {},
 ) {
   const transport = await createClaudeCliTransport({
@@ -158,13 +159,72 @@ function observeChild(
   });
 }
 
-function attachLiveSession(context: CliBackendExecuteContext) {
+function attachLiveSession(context: CliBackendExecuteContextV2) {
   const liveSession = harness.liveSession();
   context.liveSession = liveSession;
   return () => liveSession.current();
 }
 
 describe("Claude subprocess diagnostics through the direct CLI transport", () => {
+  it.for(["cold startup", "warm prompt"] as const)(
+    "rejects denied host admission before %s reaches the native child",
+    async (boundary, { signal }) => {
+      const context = await contextForChild(STARTUP_HOOK_CHILD, signal);
+      const current = attachLiveSession(context);
+      let pid: number | undefined;
+      if (boundary === "warm prompt") {
+        const first = await collect(context);
+        pid = Number(JSON.parse(String(first.at(-1)?.result)).pid);
+        expect(pid).toBeGreaterThan(0);
+        expect(current()?.isIdle()).toBe(true);
+        expect(await readFile(path.join(context.cwd, "user.received"), "utf8")).toBe(
+          context.prompt,
+        );
+      }
+      const entered = createDeferred<void>();
+      const releaseAdmission = createDeferred<void>();
+      const reason = new Error("Synthetic host refused execution admission.");
+      const running = collect({
+        ...context,
+        prompt: "Input denied by the host.",
+        prepareExecutionAdmission: async () => {
+          entered.resolve();
+          await releaseAdmission.promise;
+          throw reason;
+        },
+      });
+      const outcome = running.catch((error: unknown) => error);
+      try {
+        await withinTest(
+          Promise.race([
+            entered.promise,
+            running.then(() => {
+              throw new Error("Native input completed without host admission.");
+            }),
+          ]),
+          signal,
+        );
+        expect(context.abortSignal?.aborted).toBe(false);
+        releaseAdmission.resolve();
+        expect(await withinTest(outcome, signal)).toBe(reason);
+        expect(current()).toBeUndefined();
+        if (pid !== undefined) {
+          expect(await readFile(path.join(context.cwd, "fixture.pid"), "utf8")).toBe(String(pid));
+          expect(await readFile(path.join(context.cwd, "user.received"), "utf8")).toBe(
+            context.prompt,
+          );
+          expect(() => process.kill(pid, 0)).toThrow();
+        } else {
+          await expect(access(path.join(context.cwd, "fixture.pid"))).rejects.toThrow();
+          await expect(access(path.join(context.cwd, "user.received"))).rejects.toThrow();
+        }
+      } finally {
+        releaseAdmission.resolve();
+        await outcome;
+      }
+    },
+  );
+
   it("orders startup hooks before first and warm turns", async ({ signal }) => {
     const context = await contextForChild(STARTUP_HOOK_CHILD, signal);
     attachLiveSession(context);

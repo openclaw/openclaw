@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import type {
-  CliBackendExecuteContext,
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
@@ -11,8 +10,8 @@ import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
-import type { ClaudeCliSecretInput } from "./cli-process.js";
-import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
+import type { ClaudeCliExecuteContext, ClaudeCliSecretInput } from "./cli-process.js";
+import { createClaudeCliUserInput, prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
 import { createClaudeTurnStatus } from "./cli-runtime-status.js";
 import * as tasks from "./cli-runtime-tasks.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
@@ -20,14 +19,6 @@ import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
 
-/**
- * Host-internal, like the forwarded auth credential and not part of the plugin SDK: a host
- * whose history owner can change while the run lasts (a native login) passes a check for
- * where saved turn context leaves after startup, the prompt send and the prompt hook answer.
- */
-export type ClaudeCliExecuteContext = CliBackendExecuteContext & {
-  assertPrivateInputCurrent?: () => void;
-};
 type ClaudeCliTurn = {
   context: ClaudeCliExecuteContext;
   controller: AbortController;
@@ -51,7 +42,7 @@ type ClaudeCliTurn = {
     string,
     {
       text: string;
-      promptContext?: CliBackendExecuteContext["promptContext"];
+      promptContext?: ClaudeCliExecuteContext["promptContext"];
       started: ReturnType<typeof createDeferred<void>>;
     }
   >;
@@ -96,7 +87,7 @@ function activeTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
     return undefined;
   }
   try {
-    turn.context.assertCurrent?.();
+    turn.context.assertCurrent();
     return turn;
   } catch {
     return undefined;
@@ -241,23 +232,6 @@ async function handleRequest(
   throw new Error("Unknown Claude CLI hook callback.");
 }
 
-function createUserInput(
-  context: CliBackendExecuteContext,
-  text: string,
-  uuid: string,
-  hostGenerated = false,
-) {
-  return {
-    type: "user",
-    message: { role: "user", content: text },
-    parent_tool_use_id: null,
-    uuid,
-    // Claude saves synthetic input as a meta row: the model reads it, history never shows it.
-    ...(hostGenerated ? { isSynthetic: true } : {}),
-    ...(context.sessionId ? { session_id: context.sessionId } : {}),
-  };
-}
-
 function rejectInjectedInputs(turn: ClaudeCliTurn, error: Error) {
   for (const input of turn.injectedInputs.values()) {
     input.started.reject(error);
@@ -273,13 +247,15 @@ async function injectInput(
   turn: ClaudeCliTurn,
   text: string,
   withCurrent: (submit: () => void) => Promise<void>,
-  options?: Pick<CliBackendExecuteContext, "promptOrigin" | "promptContext">,
+  options?: Pick<ClaudeCliExecuteContext, "promptOrigin" | "promptContext">,
 ): Promise<void> {
   const uuid = randomUUID();
   const started = createDeferred<void>();
   // Closing can reject the receipt while the write is still pending.
   void started.promise.catch(() => {});
   let written: Promise<void> | undefined;
+  await turn.context.prepareExecutionAdmission();
+  turn.context.assertCurrent();
   await withCurrent(() => {
     // Native lifecycle is the receipt; recheck availability after host preparation.
     if (!session.transport || !canInjectInput(session, turn)) {
@@ -288,7 +264,7 @@ async function injectInput(
     turn.injectedInputs.set(uuid, { text, started, promptContext: options?.promptContext });
     turn.submittedInputUuids.add(uuid);
     written = session.transport.send(
-      createUserInput(turn.context, text, uuid, options?.promptOrigin === "host"),
+      createClaudeCliUserInput(turn.context, text, uuid, options?.promptOrigin === "host"),
     );
     // Host admission cleanup may await after the synchronous write.
     void written.catch(() => {});
@@ -611,7 +587,7 @@ export async function* executeClaudeCli(
   context: ClaudeCliExecuteContext,
   secretInput?: ClaudeCliSecretInput,
 ): AsyncIterable<Record<string, unknown>> {
-  context.assertCurrent?.();
+  context.assertCurrent();
   context.abortSignal?.throwIfAborted();
   const capability = context.liveSession;
   const existing = capability?.current();
@@ -622,7 +598,7 @@ export async function* executeClaudeCli(
   if (!reusable && capability) {
     await capability.restart();
   }
-  context.assertCurrent?.();
+  context.assertCurrent();
   const session = reusable ?? createSession(capability);
   session.capability = capability;
   if (session.closed || session.currentTurn) {
@@ -661,6 +637,11 @@ export async function* executeClaudeCli(
       let transport = session.transport;
       if (!transport) {
         const { args, excludeDynamicSections } = prepareClaudeCliTransportArgs(context);
+        await context.prepareExecutionAdmission();
+        context.assertCurrent();
+        if (session.closed || session.currentTurn !== turn) {
+          throw turn.error ?? new Error("Claude CLI closed during startup.");
+        }
         session.transportStartup = createClaudeCliTransport({
           context,
           args,
@@ -721,7 +702,8 @@ export async function* executeClaudeCli(
         }
         await transport.initialize();
       }
-      context.assertCurrent?.();
+      await context.prepareExecutionAdmission();
+      context.assertCurrent();
       context.assertPrivateInputCurrent?.();
       if (session.closed || session.currentTurn !== turn) {
         throw turn.error ?? new Error("Claude CLI closed before its prompt was accepted.");
@@ -729,7 +711,7 @@ export async function* executeClaudeCli(
       context.registerTurnStatus?.(createClaudeTurnStatus(context, session, turn));
       context.registerTurnInterrupt?.({
         async interrupt() {
-          context.assertCurrent?.();
+          context.assertCurrent();
           if (session.currentTurn !== turn && turn.sawTerminalResult) {
             return;
           }
@@ -757,7 +739,9 @@ export async function* executeClaudeCli(
         },
       });
       const hostGenerated = context.promptOrigin === "host";
-      await transport.send(createUserInput(context, context.prompt, turn.inputUuid, hostGenerated));
+      await transport.send(
+        createClaudeCliUserInput(context, context.prompt, turn.inputUuid, hostGenerated),
+      );
       context.registerMessageInjection?.({
         isAvailable: () => canInjectInput(session, turn),
         queueMessage: (text, withCurrent, options) =>

@@ -164,7 +164,7 @@ it("steers configured, session and explicit inputs through current authority int
     operation.setPhase("running");
     const fixture = path.join(root, "claude-steering.mjs");
     await writeFile(fixture, CLI);
-    const prepared = await buildAnthropicCliBackend().prepareExecution?.({
+    const prepared = await buildAnthropicCliBackend().prepareExecutionV2?.({
       workspaceDir: root,
       provider: "claude-cli",
       modelId: context.normalizedModel,
@@ -511,7 +511,7 @@ it("steers a spawned Claude child for its requester and refuses other sources", 
     lifecycle.handoffToCli();
     const fixture = path.join(root, "claude-child.mjs");
     await writeFile(fixture, CLI);
-    const prepared = await buildAnthropicCliBackend().prepareExecution?.({
+    const prepared = await buildAnthropicCliBackend().prepareExecutionV2?.({
       workspaceDir: root,
       provider: "claude-cli",
       modelId: context.normalizedModel,

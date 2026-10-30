@@ -3,7 +3,7 @@ import {
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { createAbortError } from "../../infra/abort-signal.js";
-import type { CliBackendExecute } from "../../plugins/cli-backend.types.js";
+import type { CliBackendExecuteV2 } from "../../plugins/cli-backend.types.js";
 import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
 import type { PluginInstanceConsumer } from "../../plugins/plugin-instance.types.js";
 import type { ReplyBackendHandle } from "../../sessions/session-controller.contracts.js";
@@ -79,7 +79,7 @@ export function createCliRunCurrentAssertion(
 export function resolveCliExecutionTarget(context: {
   params: Pick<RunCliAgentParams, "sessionEntry" | "controlOperation">;
   backendId: string;
-  execute?: CliBackendExecute;
+  execute?: CliBackendExecuteV2;
 }): CliExecutionTarget {
   const entry = context.params.sessionEntry;
   // Claude placement owns its CLI, auth, transcript, and exec tools together.
@@ -106,7 +106,7 @@ export function resolveCliExecutionTarget(context: {
  * until the turn's cleanup releases it; the owner's physical cleanup waits for it.
  */
 export function retainCliPluginExecutionConsumer(
-  execute: CliBackendExecute | undefined,
+  execute: CliBackendExecuteV2 | undefined,
 ): PluginInstanceConsumer | undefined {
   const owner = execute ? getPluginValueInstance(execute) : undefined;
   if (!owner) {
