@@ -742,6 +742,8 @@ node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
 
 This workload delivers the 645-delta Markdown reply at 150 deltas/s in bursts
 of five, with reasoning, 24 tool calls and results, and an image arriving midway.
+It requires `--viewport desktop`: mobile's modal navigation drawer prevents
+simultaneous composer and sidebar input.
 It checks native composer typing, the sidebar's Show more action, complete text,
 tool results, reasoning, tail following, and image decoding. The outer action
 includes the final image inspection; streaming probe metrics stop before that

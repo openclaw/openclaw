@@ -103,6 +103,11 @@ if (!Number.isInteger(pairs) || pairs < 1 || new Set(engines).size !== engines.l
 if (!["desktop", "mobile", "both"].includes(values.viewport)) {
   throw new Error("Invalid viewport");
 }
+if (values.steps?.split(",").includes("streaming-mixed-fast") && values.viewport !== "desktop") {
+  throw new Error(
+    "streaming-mixed-fast requires --viewport desktop: concurrent composer and sidebar input needs non-modal navigation",
+  );
+}
 if (values["control-bundle-dir"]?.length && !values["compare-bundle-dir"]) {
   throw new Error("--control-bundle-dir requires --compare-bundle-dir");
 }
