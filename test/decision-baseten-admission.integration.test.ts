@@ -3,7 +3,6 @@ import { setImmediate } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import baseten from "../extensions/baseten/index.js";
-import { upsertAuthProfileWithLockOrThrow } from "../src/agents/auth-profiles/upsert-with-lock.js";
 import { trackDecisionUsage } from "../src/agents/decision-inference.test-support.js";
 import { acquireAgentRunPreparedModelRuntime } from "../src/agents/prepared-model-runtime.js";
 import { closeProviderTransportDispatcherPool } from "../src/agents/provider-transport-dispatcher-pool.js";
@@ -82,7 +81,7 @@ it.each(["allowed", "auth-reflection", "header-reflection", "replaced", "abort-r
                   auth: {
                     mode: "header",
                     headerName: "X-Fixture-Auth",
-                    prefix: "Token ",
+                    prefix: "Token-",
                     value: "synthetic-replacement-secret",
                   },
                   headers: { "X-Fixture-Secret": "synthetic-configured-secret" },
@@ -216,15 +215,20 @@ it.each(["allowed", "auth-reflection", "header-reflection", "replaced", "abort-r
             ]);
             expect(received).toHaveLength(0);
             if (change === "replaced") {
-              await upsertAuthProfileWithLockOrThrow({
-                profileId,
-                agentDir: state.agentDir(agentId),
-                credential: {
-                  type: "api_key",
-                  provider: "baseten",
-                  key: "synthetic-new-profile-secret",
+              // Test workers persist through the fixture owner, not host-only agent admission.
+              await state.writeAuthProfiles(
+                {
+                  version: 1,
+                  profiles: {
+                    [profileId]: {
+                      type: "api_key",
+                      provider: "baseten",
+                      key: "synthetic-new-profile-secret",
+                    },
+                  },
                 },
-              });
+                agentId,
+              );
             }
             allowDns.resolve();
             if (change === "abort-release") {
@@ -263,7 +267,7 @@ it.each(["allowed", "auth-reflection", "header-reflection", "replaced", "abort-r
                 method: "POST",
                 authorization: undefined,
                 headers: {
-                  "x-fixture-auth": "Token synthetic-replacement-secret",
+                  "x-fixture-auth": "Token-synthetic-replacement-secret",
                   "x-fixture-secret": "synthetic-configured-secret",
                 },
                 body: {
