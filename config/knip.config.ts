@@ -141,7 +141,9 @@ const repositoryScriptEntries = [
   // The channel-turn benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-channel-turn.mts!",
   "scripts/perf/session-actor-retention-seed.ts!",
+  "scripts/perf/session-cold-navigation.ts!",
   "scripts/perf/session-cold-selection.ts!",
+  "scripts/perf/session-cold-subscribe.mjs!",
   "scripts/perf/session-entry-projection-measure.ts!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.
   "scripts/bench-decision-transport.mts!",
