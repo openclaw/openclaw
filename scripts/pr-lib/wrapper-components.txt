@@ -1877,7 +1877,9 @@ src/shared/permit-pool.ts
 src/shared/pid-alive.ts
 src/shared/regexp.ts
 src/shared/rosetta-translation.ts
+src/shared/run-failure-notice.ts
 src/shared/sandbox-workspace-paths.ts
+src/shared/session-startup-error-presentation.ts
 src/shared/settle-within.ts
 src/shared/store-writer-acquisitions.ts
 src/shared/store-writer-queue.ts

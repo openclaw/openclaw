@@ -5,10 +5,14 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
+import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import { isAssistantTextContentBlockType as isAssistantTextContentType } from "../shared/chat-message-content.js";
+import { readRunFailureNotice, type RunFailureNotice } from "../shared/run-failure-notice.js";
+import { resolveSessionStartupErrorPresentation } from "../shared/session-startup-error-presentation.js";
 
 export { isAssistantTextContentType };
 
@@ -279,4 +283,46 @@ function hasForwardedMessageProvenance(message: Record<string, unknown>): boolea
     (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") ||
     isCronRunMessage(message)
   );
+}
+
+/** Allow only certified failure presentation and its bounded, redacted startup cause. */
+export function projectChatRunFailureDetails(
+  entry: Record<string, unknown>,
+  maxChars: number,
+):
+  | {
+      details: { errorKind?: "state_contention"; diagnostic: string };
+      notice?: RunFailureNotice;
+      truncated: boolean;
+    }
+  | undefined {
+  if (entry.role !== "custom" || entry.customType !== "run-failed-before-reply") {
+    return undefined;
+  }
+  const details = readRecord(entry.details);
+  if (details?.errorKind === "state_contention") {
+    return {
+      details: { errorKind: "state_contention", diagnostic: STATE_CONTENTION_DIAGNOSTIC },
+      truncated: false,
+    };
+  }
+  if (typeof details?.diagnostic !== "string") {
+    return undefined;
+  }
+  const startup = resolveSessionStartupErrorPresentation(details.diagnostic);
+  if (!startup || entry.content !== startup.message) {
+    return undefined;
+  }
+  const diagnostic = truncateChatHistoryText(
+    redactSensitiveText(details.diagnostic, { mode: "tools" }),
+    Math.min(maxChars, 512),
+  );
+  const notice = readRunFailureNotice(entry);
+  return {
+    details: { diagnostic: diagnostic.text },
+    notice: notice
+      ? { runId: notice.runId, summary: `${startup.message}\n\n${diagnostic.text}` }
+      : undefined,
+    truncated: diagnostic.truncated,
+  };
 }

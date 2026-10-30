@@ -12,8 +12,11 @@ import {
 import type { CustomMessageReportAppend } from "../config/sessions/session-accessor.sqlite-transcript-reports.types.js";
 import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { isProviderRefusalNoticeText } from "../shared/assistant-error-format.js";
+import { resolveSessionStartupErrorPresentation } from "../shared/session-startup-error-presentation.js";
 import { sanitizeSessionRunError, truncateSessionRunError } from "./session-run-error-format.js";
 import { STATE_CONTENTION_SUMMARY } from "./session-run-error-presentation.js";
 
@@ -36,12 +39,18 @@ export async function recordGatewaySessionRunFailure(
   const storageFailure = classifyGatewayStorageFailure(params.error);
   const sanitized = sanitizeSessionRunError(params.error) || "unknown error";
   const error = truncateSessionRunError(sanitized, 512);
+  const diagnostic = truncateSessionRunError(
+    redactSensitiveText(formatErrorMessage(params.error), { mode: "tools" }),
+    512,
+  );
+  const startupFailure = resolveSessionStartupErrorPresentation(diagnostic);
   const report: CustomMessageReportAppend = {
     customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
     content:
       params.errorKind === "state_contention"
         ? STATE_CONTENTION_SUMMARY
         : (renderAssistantRequestFailureCopy({ storageFailure }) ??
+          startupFailure?.message ??
           renderCodexAppServerFailureCopy(sanitized) ??
           (isProviderRefusalNoticeText(sanitized)
             ? `Your request couldn't be completed: ${sanitized}`
@@ -54,7 +63,12 @@ export async function recordGatewaySessionRunFailure(
           "Your request couldn't be completed."),
     display: params.suppressErrorNotice !== true,
     excludeFromContext: true,
-    details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
+    details: {
+      runId,
+      error,
+      ...(startupFailure ? { diagnostic } : {}),
+      ...(params.errorKind ? { errorKind: params.errorKind } : {}),
+    },
   };
   const result = await withSessionTranscriptWriteAssertion(
     params.target,

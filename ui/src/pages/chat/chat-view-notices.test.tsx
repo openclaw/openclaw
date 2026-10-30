@@ -223,6 +223,31 @@ it.each([
   });
 });
 
+it.each([false, true])("updates startup recovery when the error changes (mobile=%s)", (mobile) => {
+  const error = "thread not loaded: synthetic-thread";
+  const { container, publish } = publishedComposer(
+    {
+      connected: true,
+      runError: { summary: error },
+    },
+    mobile,
+  );
+  const copy = container.querySelector(".chat-composer-neighbor-card__copy, .chat-error__recovery");
+  expect(container.querySelector(".chat-error")?.textContent).toContain(
+    "OpenClaw couldn't find the saved conversation data needed to continue.",
+  );
+  expect(copy?.textContent).toContain("Start a new conversation and send your request again.");
+  expect(copy?.closest("details")).toBeNull();
+  expect(container.querySelector("details")?.open).toBe(false);
+  expect(container.querySelector("pre")?.textContent).toContain(error);
+  publish({ connected: true, messages: [], runError: { summary: "Ordinary failure" } });
+  flush();
+  expect(
+    container.querySelector(".chat-composer-neighbor-card__copy, .chat-error__recovery"),
+  ).toBeNull();
+  expect(container.textContent).toContain("Ordinary failure");
+});
+
 it.each(["chatgpt_business_usage_limit", "chatgpt_consumer_usage_limit"] as const)(
   "keeps %s recovery beside a transcript error and resets dismissal for a new run",
   async (kind) => {

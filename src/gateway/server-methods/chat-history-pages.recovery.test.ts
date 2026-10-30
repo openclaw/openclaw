@@ -79,7 +79,7 @@ async function withTranscript(
     append: (id: string, message: Record<string, unknown>) => Promise<unknown>;
     read: (options?: PageOptions) => ReturnType<typeof readChatHistoryPageKernel>;
     raw: () => ReturnType<typeof readSessionMessagesAsync>;
-    fail: (runId: string) => Promise<void>;
+    fail: (runId: string, error?: string) => Promise<void>;
   }) => Promise<void>,
   entryOptions: Pick<InternalSessionEntry, "sessionStartedAt" | "lifecycleRunId"> = {},
 ) {
@@ -128,7 +128,7 @@ async function withTranscript(
           { readers: anchorReader, resolveCurrentUserProfileDisplay },
         ),
       raw: () => readSessionMessagesAsync(scope, { mode: "full", reason: "recovery immutability" }),
-      fail: async (runId) => {
+      fail: async (runId, error = "All model attempts failed") => {
         entry.lifecycleRunId = undefined;
         entry.lastRunId = runId;
         entry.status = "failed";
@@ -136,7 +136,7 @@ async function withTranscript(
         await recordGatewaySessionRunFailure({
           target: scope,
           runId,
-          error: "All model attempts failed",
+          error,
         });
       },
     });
@@ -144,6 +144,40 @@ async function withTranscript(
 }
 
 describe("historical page recovery context", () => {
+  it.each([
+    [
+      "thread not loaded: synthetic-thread | password=synthetic-password",
+      "OpenClaw couldn't find the saved conversation data needed to continue.",
+      "thread not loaded: synthetic-thread",
+    ],
+    [
+      "managed worktree allocation lease core:managed-worktrees:create/capacity was lost | password=synthetic-password",
+      "Couldn't finish preparing the code workspace.",
+      "core:managed-worktrees:create/capacity",
+    ],
+  ])(
+    "preserves redacted startup diagnostics through persisted chat.history: %s",
+    async (error, title, diagnostic) => {
+      await withTranscript([["user", user]], async ({ read, fail }) => {
+        await fail("startup-run", error);
+        const page = await read({ max: 20, offset: 0, messageId: undefined });
+        const failure = page.messages.find(
+          (message) => readRunFailureNotice(message)?.runId === "startup-run",
+        );
+        expect(failure).toBeDefined();
+        expect(failure).toHaveProperty("content", expect.stringContaining(title));
+        expect(failure).toHaveProperty("content", expect.not.stringContaining(diagnostic));
+        expect(failure).toHaveProperty("details", {
+          diagnostic: expect.stringContaining(diagnostic),
+        });
+        const notice = readRunFailureNotice(failure);
+        expect(notice?.summary).toContain(title);
+        expect(notice?.summary).toContain(diagnostic);
+        expect(JSON.stringify(failure)).not.toContain("synthetic-password");
+      });
+    },
+  );
+
   it("hides active attempt diagnostics on reload and publishes one persisted final notice", async () => {
     const partial = { ...failed, content: [{ type: "text", text: "Useful partial output" }] };
     await withTranscript(

@@ -8,7 +8,6 @@ import { prepareAgentRunReplyText } from "../agents/agent-run-terminal-reply.js"
 import { normalizeContextUsage } from "../agents/usage.js";
 import { buildInboundMediaUriFromPath } from "../media/inbound-media-path.js";
 import { parseInboundMediaUri } from "../media/inbound-media-uri.js";
-import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import {
   isSilentAssistantTranscriptMessage,
   parseAssistantTextSignature,
@@ -29,6 +28,7 @@ import {
   hasTranscriptMediaFacts,
   isAssistantTextContentType,
   isProjectedForwardedMessage,
+  projectChatRunFailureDetails,
   shouldPreserveAssistantControlReplyText,
   stripAssistantMediaDirectivesForDisplay,
   stripPrivateToolCallContextForDisplay,
@@ -494,14 +494,10 @@ export function sanitizeChatHistoryMessage(
       !conflictDetails && messageHasToolResultShape(entry)
         ? projectToolResultDetails(entry.details, maxChars, entry)
         : undefined;
-    // Only the terminal owner's presentation category crosses this report boundary.
-    // Correlation is projected separately; raw diagnostics and report fields stay private.
-    const runFailureDetails =
-      entry.role === "custom" &&
-      entry.customType === "run-failed-before-reply" &&
-      readRecord(entry.details)?.errorKind === "state_contention"
-        ? { errorKind: "state_contention", diagnostic: STATE_CONTENTION_DIAGNOSTIC }
-        : undefined;
+    const runFailure = projectChatRunFailureDetails(entry, maxChars);
+    if (runFailure?.notice) {
+      entry.openclawRunError = runFailure.notice;
+    }
     const modelChange =
       entry.role === "custom" && entry.customType === "session-model-change"
         ? readRecord(entry.details)
@@ -511,14 +507,14 @@ export function sanitizeChatHistoryMessage(
         ? { from: modelChange.from, to: modelChange.to }
         : undefined;
     const projectedDetails =
-      conflictDetails ?? toolResultDetails?.details ?? runFailureDetails ?? modelChangeDetails;
+      conflictDetails ?? toolResultDetails?.details ?? runFailure?.details ?? modelChangeDetails;
     if (projectedDetails) {
       entry.details = projectedDetails;
     } else {
       delete entry.details;
     }
     changed = true;
-    truncated ||= toolResultDetails?.truncated === true;
+    truncated ||= toolResultDetails?.truncated === true || runFailure?.truncated === true;
   }
 
   for (const field of ["usage", "cost"] as const) {

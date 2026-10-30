@@ -464,6 +464,35 @@ describe("session lifecycle state", () => {
     },
   );
 
+  it.each([
+    [
+      "thread not loaded: synthetic-thread",
+      "OpenClaw couldn't find the saved conversation data needed to continue.",
+    ],
+    [
+      "managed worktree allocation lease core:managed-worktrees:create/capacity was lost",
+      "Couldn't finish preparing the code workspace.",
+    ],
+  ])(
+    "persists startup recovery guidance rather than runtime identifiers: %s",
+    async (error, title) => {
+      const failed = await persistLifecycle(
+        { sessionId: "session-id", updatedAt: 1000 },
+        {
+          ts: 2000,
+          sessionId: "session-id",
+          data: { phase: "error", error, endedAt: 2000 },
+        },
+      );
+      expect(failed.status).toBe("failed");
+      expect(failed.lastRunError).toContain(title);
+      expect(failed.lastRunError).toContain("your request again");
+      expect(failed.lastRunError?.length).toBeLessThanOrEqual(160);
+      expect(failed.lastRunError).not.toContain("lease");
+      expect(failed.lastRunError).not.toContain("synthetic-thread");
+    },
+  );
+
   it("retains yielded continuation custody without recording a terminal outcome", async () => {
     const yielded = await persistLifecycle(
       {

@@ -43,6 +43,44 @@ describe("failover user copy", () => {
     ).toBe(`⚠️ ${message}`);
   });
 
+  it.each([
+    [
+      "thread not loaded: synthetic-thread",
+      "OpenClaw couldn't find the saved conversation data needed to continue. Start a new conversation and send your request again.",
+    ],
+    [
+      "managed worktree allocation lease core:managed-worktrees:create/capacity was lost",
+      "Couldn't finish preparing the code workspace. Send your request again to retry workspace setup.",
+    ],
+    [
+      "managed worktree allocation lease core:managed-worktrees:mutation/synthetic-worktree expired",
+      "Couldn't finish preparing the code workspace. Send your request again to retry workspace setup.",
+    ],
+  ])("gives recovery guidance without internal identifiers for %s", (raw, expected) => {
+    expect(sanitizedCopy(raw, { errorContext: true })).toBe(expected);
+    expect(sanitizedCopy(raw)).toBe(raw);
+  });
+
+  it("keeps normalized startup diagnostics out of the compact summary", () => {
+    const copy =
+      "OpenClaw couldn't find the saved conversation data needed to continue. Start a new conversation and send your request again.";
+    expect(
+      sanitizedCopy(
+        `${copy}\n\nCodexAppServerRpcError: thread not loaded: synthetic-thread: code=-32600`,
+        { errorContext: true },
+      ),
+    ).toBe(copy);
+  });
+
+  it.each([
+    "thread not found: synthetic-thread",
+    "plugin lifecycle lease plugins/example was lost",
+    "managed worktree allocation lease operation was aborted",
+    "managed worktree allocation lease foreign/scope was lost",
+  ])("does not mislabel unrelated failures: %s", (raw) => {
+    expect(sanitizedCopy(raw, { errorContext: true })).toBe(raw);
+  });
+
   it("renders only the allowlisted selected-profile code", () => {
     expect(codeCopy("selected_auth_profile_unavailable")).toBe(
       "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",

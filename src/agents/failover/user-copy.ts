@@ -14,6 +14,7 @@ import {
   parseApiErrorInfo,
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
+import { resolveSessionStartupErrorPresentation } from "../../shared/session-startup-error-presentation.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { ERROR_DETAILS_HINT, ERROR_PREFIX_RE } from "./assistant-request-failure-copy.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
@@ -258,6 +259,10 @@ export function renderSanitizedUserFacingText(
     return shouldRewriteRawPayloadWithoutErrorContext(trimmed)
       ? formatRawAssistantErrorForUi(trimmed)
       : sanitized;
+  }
+  const startupFailure = resolveSessionStartupErrorPresentation(trimmed);
+  if (startupFailure) {
+    return startupFailure.message;
   }
   for (const format of [
     formatCommandErrorForUser,

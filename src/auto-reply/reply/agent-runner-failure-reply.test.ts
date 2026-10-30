@@ -35,6 +35,21 @@ it("shows unshrinkable request guidance without verbose diagnostics", () => {
   ).toBe(`⚠️ ${reason}`);
 });
 
+it.each([
+  [
+    "thread not loaded: synthetic-thread",
+    "OpenClaw couldn't find the saved conversation data needed to continue. Send /new to start a new conversation, then send your request again.",
+  ],
+  [
+    "managed worktree allocation lease core:managed-worktrees:create/capacity was lost",
+    "Couldn't finish preparing the code workspace. Send your request again to retry workspace setup.",
+  ],
+])("delivers startup recovery within the current channel: %s", (message, expected) => {
+  const reply = buildExternalRunFailureReply({ message, error: new Error(message) });
+  expect(reply.isGenericRunnerFailure).toBe(false);
+  expect(reply.text).toBe(expected);
+});
+
 it("keeps wrapped skill delivery-limit guidance visible without diagnostics", () => {
   const limit = new SkillResourceDeliveryLimitError();
   const error = new Error("private-diagnostic-canary", { cause: limit });
