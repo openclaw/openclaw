@@ -259,9 +259,6 @@ export async function connectIrcClient(options: IrcClientOptions) {
       });
   };
 
-  // Silence is a duration: the monotonic clock keeps liveness decisions intact when the
-  // system clock steps (a forward step must not kill a healthy connection, a backward
-  // step must not hide a dead one).
   let lastReceivedAt = performance.now();
   const livenessTimer = setInterval(() => {
     if (!ready || closed) {
