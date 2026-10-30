@@ -877,6 +877,7 @@ src/gateway/model-account-connect-errors.ts
 src/gateway/operator-scopes.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
+src/gateway/worker-environments/environment-recipe.ts
 src/gateway/worker-environments/local-workspace-fingerprints.ts
 src/gateway/worker-environments/placement-authority-owner.ts
 src/gateway/worker-environments/placement-inventory-changed-error.ts
@@ -891,6 +892,7 @@ src/gateway/worker-environments/placement-workspace-journal.types.ts
 src/gateway/worker-environments/placement-workspace-result-owner.ts
 src/gateway/worker-environments/placement-workspace-result-store.ts
 src/gateway/worker-environments/placement-workspace-result.ts
+src/gateway/worker-environments/preparation-identity.schema.ts
 src/gateway/worker-environments/session-attachment.ts
 src/gateway/worker-environments/state.ts
 src/gateway/worker-environments/store-commit-authority.ts
@@ -1310,6 +1312,7 @@ src/infra/temp-artifact-cleanup.ts
 src/infra/test-runtime-env.ts
 src/infra/tls-certificate-errors.ts
 src/infra/tmp-openclaw-dir.ts
+src/infra/update-capture-space.ts
 src/infra/update-channels.ts
 src/infra/update-database-generations.ts
 src/infra/update-doctor-config-schema.ts
@@ -1888,6 +1891,7 @@ src/state/agent-creation-claim.ts
 src/state/agent-database-admission-error.ts
 src/state/agent-database-admission.ts
 src/state/agent-database-preparation-context.ts
+src/state/agent-database-startup-observation.ts
 src/state/agent-database-startup.ts
 src/state/agent-deletion-cleanup-admission.ts
 src/state/agent-deletion-cleanup.ts
@@ -2032,6 +2036,8 @@ src/state/openclaw-state-db-existing-write.ts
 src/state/openclaw-state-db-failure.ts
 src/state/openclaw-state-db-fast-path.ts
 src/state/openclaw-state-db-handle.ts
+src/state/openclaw-state-db-historical-imports.ts
+src/state/openclaw-state-db-image-snapshot-migration.ts
 src/state/openclaw-state-db-index-ordering-migrations.ts
 src/state/openclaw-state-db-initialization.ts
 src/state/openclaw-state-db-integrity-admission.ts

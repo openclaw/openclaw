@@ -11,6 +11,32 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it.each([560, 1024])("keeps earlier own actions reachable by touch at %ipx", async (width) => {
+    await suite.withPage(
+      {
+        ...createControlUiE2eContextOptions(),
+        viewport: { width, height: 900 },
+        hasTouch: true,
+        isMobile: true,
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          sessionKey: "agent:main:main",
+          historyMessages: ["First note.", "Second note."].map((text, index) =>
+            chatMessage("user", text, { __openclaw: { id: "touch-" + index, seq: index + 1 } }),
+          ),
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        await page.locator(".chat-bubble").filter({ hasText: "First note." }).tap();
+        const earlier = page.locator('[data-message-actions-for="msg:id:touch-0:0"]');
+        await earlier.getByRole("button", { name: "Reply to message", exact: true }).click();
+        await expect
+          .poll(() => page.locator(".chat-reply-preview__text").textContent())
+          .toBe("First note.");
+      },
+    );
+  });
+
   it("paints saved reactions with cached messages and reconciles changes made while away", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const sessionKey = "agent:main:main";
@@ -61,7 +87,7 @@ suite.define(() => {
     });
   });
 
-  it("toggles reactions through both picker modes and receives a peer reaction live", async () => {
+  it("keeps message actions scoped while toggling reactions and receiving a peer reaction", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const sessionKey = "agent:main:main";
       const sessionId = "reaction-session";
@@ -70,12 +96,35 @@ suite.define(() => {
       const identity = { type: "profile", id: "profile-avery" } as const;
       const gateway = await installMockGateway(page, {
         sessionKey,
+        authMethod: "trusted-proxy",
+        authMode: "trusted-proxy",
         presenceUsers: [{ self: true, id: identity.id, identity, name: "Avery" }],
         sessions: [{ key: sessionKey, sessionId, visibility: "shared", sharingRole: "owner" }],
         historyMessages: [
-          chatMessage("user", prompt, {
-            __openclaw: { id: messageId, seq: 1, senderName: "Riley", senderId: "profile-riley" },
-          }),
+          ...["First own note.", "Second own note.", "Last own note."].map((text, index) =>
+            chatMessage("user", text, {
+              timestamp: 1700000000000 + index * 60_000,
+              __openclaw: {
+                id: `own-note-${index}`,
+                seq: index + 1,
+                senderName: "Avery",
+                senderId: identity.id,
+                senderIdentity: identity,
+              },
+            }),
+          ),
+          ...["First checklist note.", prompt, "Last checklist note."].map((text, index) =>
+            chatMessage("user", text, {
+              timestamp: 1700000300000 + index * 60_000,
+              __openclaw: {
+                id: index === 1 ? messageId : `riley-note-${index}`,
+                seq: index + 4,
+                senderName: "Riley",
+                senderId: "profile-riley",
+                senderIdentity: { type: "profile", id: "profile-riley" },
+              },
+            }),
+          ),
         ],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -85,11 +134,71 @@ suite.define(() => {
         reactions.locator(
           `.chat-reaction-chip[aria-pressed="${pressed}"][aria-label="${emoji} 1"]`,
         );
-      await message.hover();
+      await message.locator(".chat-bubble").filter({ hasText: prompt }).hover();
+      const visibleMetadata = (group: Locator = message) =>
+        group.evaluate((element) => ({
+          actions: [...element.querySelectorAll("[data-message-actions-for]")]
+            .filter((row) =>
+              [...row.querySelectorAll("button")].some((button) =>
+                button.checkVisibility({ checkOpacity: true }),
+              ),
+            )
+            .map((row) => row.getAttribute("data-message-actions-for")),
+          times: [...element.querySelectorAll("time")]
+            .filter((time) => time.checkVisibility({ checkOpacity: true }))
+            .map((time) => time.getAttribute("datetime")),
+        }));
+      const middleMetadata = {
+        actions: [`msg:id:${messageId}:0`],
+        times: [new Date(1700000360000).toISOString()],
+      };
+      await expect.poll(() => visibleMetadata()).toEqual(middleMetadata);
+
+      const ownedActions = message.locator(`[data-message-actions-for="msg:id:${messageId}:0"]`);
+      await ownedActions.getByRole("button", { name: "Copy as markdown", exact: true }).focus();
+      await page.mouse.move(0, 0);
+      await expect.poll(() => visibleMetadata()).toEqual(middleMetadata);
+      await message.locator(".chat-bubble").filter({ hasText: "Last checklist note." }).hover();
+      await page.locator("textarea").first().focus();
+      await expect
+        .poll(() => visibleMetadata())
+        .toEqual({
+          actions: ["msg:id:riley-note-2:0"],
+          times: [new Date(1700000420000).toISOString()],
+        });
+
+      const desktopViewport = page.viewportSize()!;
+      await page.setViewportSize({ width: 560, height: 1000 });
+      await page.mouse.move(0, 0);
+      await expect
+        .poll(() =>
+          message.locator(".chat-sender-name.person-activity-link").evaluateAll((names) =>
+            names.map((name) => {
+              const box = name.getBoundingClientRect();
+              return name.contains(
+                document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+              );
+            }),
+          ),
+        )
+        .toEqual([false, false, true]);
+      const ownGroup = page.locator(".chat-group.user", { hasText: "First own note." });
+      await ownGroup.locator(".chat-bubble").filter({ hasText: "First own note." }).hover();
+      await expect
+        .poll(async () => (await visibleMetadata(ownGroup)).actions)
+        .toEqual(["msg:id:own-note-0:0"]);
+      await ownGroup
+        .locator('[data-message-actions-for="msg:id:own-note-0:0"]')
+        .getByRole("button", { name: "Copy as markdown", exact: true })
+        .focus();
+      await page.mouse.move(0, 0);
+      await expect
+        .poll(async () => (await visibleMetadata(ownGroup)).actions)
+        .toEqual(["msg:id:own-note-0:0"]);
+      await page.setViewportSize(desktopViewport);
+      await message.locator(".chat-bubble").filter({ hasText: prompt }).hover();
       // Without reactions the hover row carries the picker; once reacted, the chip row owns it.
-      const footerPicker = message.locator(
-        ".chat-group-footer-actions openclaw-message-reaction-picker",
-      );
+      const footerPicker = ownedActions.locator(".chat-reaction-action");
       const rowPicker = reactions.locator("openclaw-message-reaction-picker");
       // Each picker owns its popover; an unscoped lookup can match a sibling
       // popover that is still animating closed.
@@ -106,7 +215,7 @@ suite.define(() => {
       await chip("🎉", true).waitFor();
       await footerPicker.waitFor({ state: "detached" });
 
-      await message.hover();
+      await message.locator(".chat-bubble").filter({ hasText: prompt }).hover();
       await pick(rowPicker, "More…");
       // A complete emoji applies on input, so the OS picker needs no extra keystroke.
       await rowPicker.getByRole("searchbox", { name: "Search emoji…", exact: true }).fill("🦞");
@@ -133,6 +242,23 @@ suite.define(() => {
       });
       await chip("👀", false).waitFor();
       expect(await gateway.getRequests("session.reactions.list")).toHaveLength(listRequests);
+
+      await page.getByRole("textbox", { name: "Chat composer" }).focus();
+      await ownGroup.locator(".chat-bubble").filter({ hasText: "Last own note." }).hover();
+      const finalReply = ownGroup.locator(":scope > .chat-group-footer .chat-reply-btn");
+      const replyBounds = await finalReply.boundingBox();
+      await finalReply.hover();
+      expect(await finalReply.boundingBox()).toEqual(replyBounds);
+      await finalReply.click();
+      const replyPreview = page.locator(".chat-reply-preview");
+      await expect
+        .poll(() => replyPreview.locator(".chat-reply-preview__text").textContent())
+        .toBe("Last own note.");
+      await replyPreview.getByRole("button", { name: "Cancel reply" }).click();
+      await page.getByRole("textbox", { name: "Chat composer" }).focus();
+      await page.mouse.move(0, 0);
+      await message.getByRole("link", { name: "Riley", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-riley");
     });
   });
 });

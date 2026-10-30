@@ -11,6 +11,7 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { sessionContextReportsForGateway } from "./session-context-report.ts";
 
 const target = {
@@ -42,9 +43,48 @@ function setup(...reads: Promise<ReturnType<typeof response>>[]) {
   }
   const { gateway, publish } = createApplicationGateway();
   const client = createTestGatewayClient(request);
-  publish({ ...gateway.snapshot, phase: "connected", client });
+  publish({
+    ...gateway.snapshot,
+    phase: "connected",
+    client,
+    hello: gatewayHelloForMethods(["sessions.usage"]),
+  });
   return { gateway, publish, request, store: sessionContextReportsForGateway(gateway) };
 }
+
+it("does not read restricted context breakdowns and retires results across scope changes", async () => {
+  const { gateway, publish, request, store } = setup();
+  const owner = {};
+  onTestFinished(() => store.unwatch(owner));
+  const setScopes = (scopes: string[]) =>
+    publish({
+      ...gateway.snapshot,
+      hello: gatewayHelloForMethods(["sessions.usage"], scopes),
+    });
+  request.mockResolvedValue(response());
+  setScopes(["operator.sessions.read"]);
+  store.watch(owner, target);
+  store.watch(owner, { ...target, used: target.used + 100 });
+  await store.refresh(target);
+  expect(request).not.toHaveBeenCalled();
+  expect(store.get(target)).toMatchObject({ report: null, loading: false, failed: false });
+  setScopes(["operator.read"]);
+  await store.refresh(target);
+  expect(store.get(target).report).toEqual(report);
+  const pending = createDeferredCore<ReturnType<typeof response>>();
+  request.mockReturnValueOnce(pending.promise);
+  const read = store.refresh(target);
+  setScopes(["operator.sessions.read"]);
+  pending.resolve(response());
+  await read;
+  expect(store.get(target)).toMatchObject({ report: null, loading: false, failed: false });
+  const calls = request.mock.calls.length;
+  await store.refresh(target);
+  expect(request).toHaveBeenCalledTimes(calls);
+  setScopes(["operator.read"]);
+  await store.refresh(target);
+  expect(store.get(target).report).toEqual(report);
+});
 
 it("shares pending reads, cached tab return and explicit refresh while releasing final demand", async () => {
   const initial = createDeferredCore<ReturnType<typeof response>>();

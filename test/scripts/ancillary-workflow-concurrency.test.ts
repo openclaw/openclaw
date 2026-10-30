@@ -21,6 +21,11 @@ type WorkflowPolicy = {
 const fixtureSha = "a".repeat(40);
 const workflowPath = (name: string) => `.github/workflows/${name}.yml`;
 const WORKFLOWS: WorkflowPolicy[] = [
+  {
+    file: workflowPath("pr-tooling-darwin"),
+    prGroup: "PR tooling Darwin-pr-123",
+    manual: { mode: "absent" },
+  },
   ...[
     ["ci-check-testbox", "Blacksmith Testbox"],
     ["ci-check-arm-testbox", "Blacksmith ARM Testbox"],

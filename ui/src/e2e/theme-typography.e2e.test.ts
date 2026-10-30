@@ -289,7 +289,7 @@ suite.define(() => {
     await expectChrome(chatColor);
 
     // Use the shell's actual shortcut and browser history without rebuilding the runtime.
-    await page.locator(".shell-skip-link").focus();
+    await page.locator('.shell-skip-link[href="#control-ui-main"]').focus();
     await page.keyboard.press("ControlOrMeta+Shift+,");
     await waitForControlUiRoute(page, { pathname: "/settings/appearance", routeId: "appearance" });
     await expectChrome(pageColor);
@@ -343,7 +343,7 @@ suite.define(() => {
       sameShell: true,
     });
     await expectChrome(chatColor);
-    await page.locator(".shell-skip-link").focus();
+    await page.locator('.shell-skip-link[href="#control-ui-main"]').focus();
     await page.keyboard.press("ControlOrMeta+Shift+,");
     await waitForControlUiRoute(page, { pathname: "/settings/appearance", routeId: "appearance" });
     await expectChrome(pageColor);

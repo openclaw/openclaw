@@ -33,7 +33,6 @@ const lmstudioMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
   defaultModel: DEFAULT_LMSTUDIO_EMBEDDING_MODEL,
   transport: "remote",
   authProviderId: "lmstudio",
-  allowExplicitWhenConfiguredAuto: true,
   create: async (options) => {
     const providerId = options.provider?.trim() || "lmstudio";
     const { provider, client } = await createLmstudioEmbeddingProvider({

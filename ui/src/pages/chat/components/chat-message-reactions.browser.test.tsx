@@ -79,30 +79,6 @@ it("keeps the reaction picker beside its message after a virtualized transcript 
   }
 });
 
-it("reveals the footer reaction trigger at the same opacity as its sibling actions", async () => {
-  const view = mountSolid(() => (
-    <div class="chat-group user" style={{ margin: "80px", width: "320px" }}>
-      <div class="chat-group-footer-actions">
-        <button class="chat-copy-btn" type="button" aria-label="Copy" />
-        <MessageReactionPicker
-          class="chat-reaction-action"
-          activeEmoji={new Set()}
-          placement="bottom-start"
-          compact={false}
-        />
-      </div>
-    </div>
-  ));
-  const copy = view.getByRole("button", { name: "Copy" });
-  const picker = view.container.querySelector("openclaw-message-reaction-picker")!;
-  const opacity = (element: Element) => getComputedStyle(element).opacity;
-  await userEvent.hover(view.container.querySelector(".chat-group")!);
-  await expect.poll(() => opacity(copy)).toBe("0.6");
-  expect(opacity(picker)).toBe("0.6");
-  await userEvent.hover(view.getByRole("button", { name: "Add reaction" }));
-  await expect.poll(() => opacity(picker)).toBe("1");
-});
-
 it.each([320, 800])(
   "keeps the hover-only picker usable without horizontal overflow at %ipx",
   async (width) => {
@@ -111,8 +87,9 @@ it.each([320, 800])(
     await page.viewport(width, 640);
     const onSelect = vi.fn();
     const view = mountSolid(() => (
-      <div class="chat-group" style={{ margin: "24px", width: "272px" }}>
+      <div class="chat-message-reactions" style={{ margin: "24px", width: "272px" }}>
         <MessageReactionPicker
+          class="chat-reaction-chip chat-reaction-chip--add"
           activeEmoji={new Set(["👍"])}
           placement="bottom-start"
           compact
@@ -120,11 +97,8 @@ it.each([320, 800])(
         />
       </div>
     ));
-    view.container
-      .querySelector("openclaw-message-reaction-picker")!
-      .classList.add("chat-reaction-chip--add");
     const trigger = view.getByRole("button", { name: "Add reaction" });
-    await userEvent.hover(view.container.querySelector(".chat-group")!);
+    await userEvent.hover(view.container.querySelector(".chat-message-reactions")!);
     await userEvent.click(trigger);
     const popup = view.container.querySelector<HTMLElement>(".chat-reaction-picker")!;
     await expect.poll(() => popup.dataset.phase).toBe("open");

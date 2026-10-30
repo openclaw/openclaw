@@ -412,16 +412,20 @@ export function redactSupportDiagnosticLine(
     /\b(?:Command failed:|command (?:sh|cmd|powershell|bash)\b).*/giu,
     "[redacted-command]",
   );
-  // Loader errors lead with a library path, and can arrive as a later worker cause.
-  // Retain only the numeric ABI requirement before either boundary removes it.
+  // Causes can follow a path, URL, or progress banner (git prints "Cloning into" first),
+  // or arrive as a later worker cause. Retain closed causes before either boundary removes them.
   const missingGlibc = /\bversion [`'"](GLIBC_\d{1,3}(?:\.\d{1,3}){1,2})['"] not found\b/u.exec(
     value,
   )?.[1];
-  const diagnostic =
-    missingGlibc && !commandRedacted.includes(`${missingGlibc} not found`)
-      ? `${missingGlibc} not found; ${commandRedacted.trim()}`
-      : commandRedacted.trim();
-  return truncateUtf16Safe(diagnostic, maxLength);
+  const kept = commandRedacted.trim();
+  const causes = [
+    ...(missingGlibc ? [`${missingGlibc} not found`] : []),
+    ...readPublicSupportCauses(stripAnsi(value)),
+  ].filter(
+    (cause, index, all) =>
+      all.indexOf(cause) === index && !kept.toLowerCase().includes(cause.toLowerCase()),
+  );
+  return truncateUtf16Safe([...causes, kept].filter(Boolean).join("; "), maxLength);
 }
 
 const PUBLIC_ERROR_CODES = new Set([

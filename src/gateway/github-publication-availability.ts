@@ -200,7 +200,9 @@ export async function prepareGitHubPublicationSession(
     }
     const { path: sourcePath, agentId: sourceAgentId } = source;
     const databaseIdentity = `file:${source.databaseIdentity}`;
-    if (isArtifactPreservingStateRead("agent", sourcePath)) {
+    // Observational reads retain the source until response publication: a closed or
+    // replaced database must not keep serving facts read from the retired source.
+    if (isArtifactPreservingStateRead()) {
       // Registry publications carry physical facts; unrelated registrations are not revocation.
       assertSourcePublication = prepareOpenClawAgentDatabaseRegistrySnapshotRead({}, (mutation) =>
         mutation.sources.every(
@@ -214,8 +216,8 @@ export async function prepareGitHubPublicationSession(
               registered.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION),
         ),
       ).assertCurrent;
-      // Copied readers close before receipt observation; retain the original source's
-      // native retirement signal independently of the entry's writer postimages.
+      // Retain the original source's native retirement signal independently of the
+      // entry's writer postimages.
       releaseSource = registerOpenClawAgentDatabaseReadCandidateResource({
         path: sourcePath,
         revoke: retire,

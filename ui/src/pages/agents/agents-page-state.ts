@@ -17,6 +17,7 @@ import {
 import type { CronState } from "../../lib/cron/types.ts";
 import {
   canCallGatewayMethod,
+  canPresentGatewayMethod,
   type GatewayMethodOperatorScope,
 } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
@@ -210,6 +211,12 @@ export function createAgentsPageState(
       identitySaves = selectionDrafts.bindContext(context);
       selectionDrafts.observeGateway(gatewaySnapshot);
       syncGatewayState();
+      if (gatewaySnapshot.phase === "connected" && !canCall("tools.catalog", "operator.read")) {
+        toolsCatalog.reset();
+      }
+      if (gatewaySnapshot.phase === "connected" && !canCall("tools.effective", "operator.read")) {
+        effectiveTools.reset();
+      }
       if (becameConnected && Object.values(state.identityDraft).some((value) => value !== null)) {
         identity.schedule();
       }
@@ -225,10 +232,14 @@ export function createAgentsPageState(
     isCurrentRequest(client, generation, agentId, {});
   const toolsCatalog = createAgentToolsCatalog({
     scope: () => state,
+    canRead: () =>
+      canPresentGatewayMethod(context.gateway.snapshot, "tools.catalog", "operator.read"),
     isCurrent: isCurrentToolsRead,
   });
   const effectiveTools = createAgentEffectiveTools({
     scope: () => state,
+    canRead: () =>
+      canPresentGatewayMethod(context.gateway.snapshot, "tools.effective", "operator.read"),
     isCurrent: isCurrentToolsRead,
     isSessionAgent: (agentId) => agentId === chatAgentId(),
     isPresented: () => state.agentsPanel === "tools",

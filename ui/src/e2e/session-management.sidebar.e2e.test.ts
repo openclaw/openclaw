@@ -194,7 +194,7 @@ suite.define(() => {
       for (const child of [staleRunningChild, failedChild]) {
         expect(await child.getByRole("img", { name: "Active run" }).count()).toBe(0);
         expect(await child.locator("openclaw-elapsed-time").count()).toBe(0);
-        expect((await child.locator(".session-row-trail").textContent())?.trim()).toBeTruthy();
+        expect(await child.locator(".session-row-trail").count()).toBe(0);
       }
       await captureUiProof(suite, page, "child-sessions-expanded.png");
       await captureUiProof(suite, page, "child-sessions-run-state-precedence.png");

@@ -824,7 +824,7 @@ describe("mirrorTranscript", () => {
         {
           role: "assistant",
           content: [{ type: "thinking", thinking: "checking the answer" }],
-          __openclaw: { mirrorIdentity: "turn-1:reasoning", runId: "run-1" },
+          __openclaw: { mirrorIdentity: "turn-1:reasoning:reason-1", runId: "run-1" },
         },
         {
           role: "assistant",

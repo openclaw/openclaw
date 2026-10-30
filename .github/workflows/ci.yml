@@ -3652,6 +3652,7 @@ jobs:
           semantic-checks: "true"
           cache-mode: *cache_mode
           node-version: "${{ (matrix.runner == 'runson-c8i-8xlarge' || startsWith(matrix.check_name, 'checks-node-runson-cron-')) && env.NODE_VERSION || matrix.node_version || '24.22.1' }}"
+          native-secret-service: ${{ matrix.requires_native_secret_service == true && 'true' || 'false' }}
           install-bun: "false"
           # Only Node 24 consumes the trusted compile seed.
           dependency-cache: ${{ matrix.runner != 'runson-c8i-8xlarge' && (matrix.node_version == null || matrix.node_version == '24.x') && (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github' && runner.environment == 'self-hosted' && (github.event_name != 'workflow_dispatch' || ((needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1)) && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
@@ -5614,7 +5615,8 @@ jobs:
       - *apple_mermaid_cache_key
       - *apple_mermaid_cache_restore
 
-      - name: Identify iOS native cache inputs
+      - &ios_native_cache_inputs
+        name: Identify iOS native cache inputs
         id: ios-cache-inputs
         if: env.HISTORICAL_TARGET != 'true' && needs.preflight.outputs.frozen_target != 'true' && hashFiles('apps/shared/OpenClawWatchRTC/build.sh') != ''
         run: |
@@ -5634,7 +5636,7 @@ jobs:
         id: watch-rtc-cache
         if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
+        with: &watch_rtc_cache_inputs
           path: &watch_rtc_cache_paths |
             ~/.cargo/registry
             ${{ runner.temp }}/openclaw-watch-rtc-libraries
@@ -6124,6 +6126,7 @@ jobs:
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('xcode-27-xlarge'))) || ('xcode-27-xlarge') }}
     timeout-minutes: 90
     env:
+      HISTORICAL_TARGET: *historical_target
       BUNDLE_DEPLOYMENT: "true"
       BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile
     steps:
@@ -6164,6 +6167,26 @@ jobs:
           "$swift_tools_dir/swiftlint" version
 
       - *install_watch_rust_toolchain
+
+      - *ios_native_cache_inputs
+
+      - name: Restore Watch RTC build inputs
+        id: watch-rtc-cache
+        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with: *watch_rtc_cache_inputs
+
+      - name: Restore screenshot source packages
+        id: ios-packages-cache
+        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &ios_screenshot_packages_cache_path apps/ios/build/SnapshotDerivedData/SourcePackages
+          key: ios-screenshot-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/ios/**/Package.resolved', 'apps/ios/project.yml', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}
 
       # The default lane builds the simulator target once for all three families.
       - name: Capture iPhone, iPad, and Watch screenshots
@@ -6237,6 +6260,15 @@ jobs:
             apps/ios/build/screenshot-diagnostics.json
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Save screenshot source packages
+        if: steps.ios-cache-inputs.outputs.xcode != '' && steps.ios-packages-cache.outputs.cache-hit != 'true' && needs.preflight.outputs.cache_write_allowed == 'true' && needs.preflight.outputs.candidate_trust == 'main' && github.ref == 'refs/heads/main' && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name)
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *ios_screenshot_packages_cache_path
+          key: ${{ steps.ios-packages-cache.outputs.cache-primary-key }}
 
   ios-screenshot-evidence:
     permissions:

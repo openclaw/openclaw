@@ -6,6 +6,7 @@ import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { MessageGroup } from "./chat-message-group-view.tsx";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 import "../../../styles/base.css";
+import "../../../styles/components.css";
 import "../../../styles/chat/startup-layout.css";
 import "../../../styles/chat/message-layout.css";
 import "../../../styles/chat/grouped.css";

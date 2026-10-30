@@ -11,6 +11,8 @@ import type {
   GitHubPublicationCoordinator,
   GitHubPublicationTranscriptReport,
 } from "./github-publication.js";
+import type { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import type { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils.js";
 
 const GITHUB_PUBLICATION_RESPONSE_PREFIX = "github-publication:";
 
@@ -38,12 +40,13 @@ function formatGitHubPublicationResult(result: SessionGitHubPublicationResult): 
 
 export async function reportGitHubPublicationTranscript(
   loadSessionRuntime: () => Promise<{
-    resolveCanonicalSessionEntryFromStoreKeys: typeof import("./session-utils.js").resolveCanonicalSessionEntryFromStoreKeys;
-    resolveGatewaySessionStoreTargetInWorker: typeof import("./session-utils-store-worker.js").resolveGatewaySessionStoreTargetInWorker;
+    resolveCanonicalSessionEntryFromStoreKeys: typeof resolveCanonicalSessionEntryFromStoreKeys;
+    resolveGatewaySessionStoreTargetInWorker: typeof resolveGatewaySessionStoreTargetInWorker;
   }>,
-  coordinator: Pick<GitHubPublicationCoordinator, "markReportedAsync">,
+  coordinator: Pick<GitHubPublicationCoordinator, "markReportedAsync" | "readReportLifecycleAsync">,
   params: GitHubPublicationTranscriptReport,
 ): Promise<void> {
+  const lifecycleRevision = await coordinator.readReportLifecycleAsync(params);
   const memory = captureSessionActorStorageOwner(params, {
     assertCurrent() {},
     authorize() {},
@@ -70,6 +73,16 @@ export async function reportGitHubPublicationTranscript(
         };
       })();
   const { target, entry } = selected;
+  // A reset or rotation ended that transcript for good; the receipt stays readable by request id.
+  if (
+    entry &&
+    target.canonicalKey === params.sessionKey &&
+    (entry.sessionId !== params.sessionId ||
+      (entry.lifecycleRevision ?? null) !== lifecycleRevision)
+  ) {
+    await coordinator.markReportedAsync(params.result.requestId);
+    return;
+  }
   if (entry?.sessionId !== params.sessionId || target.canonicalKey !== params.sessionKey) {
     throw new Error("GitHub publication transcript owner changed");
   }
@@ -79,6 +92,7 @@ export async function reportGitHubPublicationTranscript(
       sessionId: params.sessionId,
       sessionKey: target.canonicalKey,
       storePath: target.storePath,
+      expectedLifecycleRevision: lifecycleRevision ?? undefined,
     },
     {
       kind: "assistant",

@@ -167,7 +167,7 @@ describe("update process state", () => {
     await fs.writeFile(
       entry,
       `import { admitUpdateCommandRun } from ${JSON.stringify(admissionModule)};
-const run = await admitUpdateCommandRun({ opts: { dryRun: true }, root: ${JSON.stringify(path.resolve("."))} });
+const run = await admitUpdateCommandRun({ env: process.env, opts: { dryRun: true }, root: ${JSON.stringify(path.resolve("."))} });
 process.stdout.write(JSON.stringify({ runId: run.runId }) + "\\n");
 process.stdin.resume();
 `,

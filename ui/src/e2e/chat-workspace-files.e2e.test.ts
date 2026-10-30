@@ -169,9 +169,18 @@ suite.define(() => {
       await file.click();
       const heading = page.getByRole("heading", { name: "Delivery notes", exact: true });
       await heading.waitFor();
+      await gateway.deferNext("sessions.files.download");
       await page.getByRole("button", { name: "More file actions", exact: true }).click();
       await page.getByRole("menuitem", { name: "Attach to session", exact: true }).click();
+      await gateway.waitForRequest("sessions.files.download");
+      await page.setViewportSize({ width: 1300, height: 900 });
+      await waitForLayoutSettled(page, "openclaw-chat-detail-panel");
+      await gateway.resolveDeferred("sessions.files.download");
       await page.getByRole("button", { name: "Remove notes.md", exact: true }).waitFor();
+      expect(await composer.inputValue()).toBe(
+        "Please review the delivery notes before publishing.",
+      );
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       const sent = await gateway.waitForRequest("chat.send");
       const runId = requireString(requireRecord(sent.params).idempotencyKey, "run ID");

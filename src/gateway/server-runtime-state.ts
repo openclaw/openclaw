@@ -436,7 +436,7 @@ export async function createGatewayHttpTransport(params: {
       getRuntimeConfig: loadRuntimeConfig,
       handleRequest: getGatewayHttpRequestHandler(httpServer),
       handleUpgrade: controlUiUpgradeHandler,
-      handleSandboxRequest: createSandboxHostHttpRequestHandler(),
+      handleSandboxRequest: createSandboxHostHttpRequestHandler({ clients: params.clients }),
       signal: requestLifetime
         ? AbortSignal.any([gatewayLifetime, requestLifetime])
         : gatewayLifetime,
@@ -463,6 +463,7 @@ export async function createGatewayHttpTransport(params: {
       const sandboxServers = bindHosts.map(() =>
         createSandboxHostHttpServer(
           params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+          { clients: params.clients },
         ),
       );
       // Register before binding so normal runtime cleanup closes a partially

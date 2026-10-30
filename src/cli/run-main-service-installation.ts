@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
+import { mergeGatewayServiceEnv } from "../daemon/service-env-merge.js";
 import {
   inspectGatewayServiceInstallationDrift,
+  resolveServiceEntrypointIndex,
   summarizeGatewayServiceLayout,
 } from "../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
@@ -12,6 +14,7 @@ import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { VERSION } from "../version.js";
 import { isGatewayRunInvocationArgv } from "./gateway-run-argv.js";
+import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 
 /** Resolve this Gateway's own manager, never a same-named unit in another scope. */
 async function readOwnGatewayServiceCommand(
@@ -85,7 +88,8 @@ export async function inspectCliGatewayServiceInstallation(
 ): Promise<GatewayServiceInstallation | undefined> {
   try {
     const service = resolveGatewayService();
-    const command = (await readOwnGatewayServiceCommand(env)) ?? (await service.readCommand(env));
+    const ownCommand = await readOwnGatewayServiceCommand(env);
+    const command = ownCommand ?? (await service.readCommand(env));
     const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
     const layout = await summarizeGatewayServiceLayout(command);
     const drift = root ? await inspectGatewayServiceInstallationDrift(layout, root) : undefined;
@@ -95,12 +99,39 @@ export async function inspectCliGatewayServiceInstallation(
     ) {
       return undefined;
     }
+    // A separate installed service does not inherit this CLI's state selectors.
+    // A positively identified running Gateway uses its own live process environment.
+    const serviceEnv = ownCommand
+      ? env
+      : mergeGatewayServiceEnv(
+          {
+            ...env,
+            OPENCLAW_HOME: undefined,
+            OPENCLAW_STATE_DIR: undefined,
+            OPENCLAW_PROFILE: undefined,
+            OPENCLAW_CONFIG_PATH: undefined,
+          },
+          command,
+        );
+    // The Windows service projection already applies command-line profiles.
+    if (!ownCommand && command && process.platform !== "win32") {
+      const entrypoint = resolveServiceEntrypointIndex(command.programArguments);
+      if (entrypoint !== undefined) {
+        const profile = parseCliProfileArgs([
+          "node",
+          ...command.programArguments.slice(entrypoint),
+        ]);
+        if (profile.ok && profile.profile) {
+          applyCliProfileEnv({ profile: profile.profile, env: serviceEnv });
+        }
+      }
+    }
     return {
       root: drift.serviceRoot,
       version: drift.serviceVersion,
       cliVersion: VERSION,
       databasePath: resolveIdentityPathViaExistingAncestorSync(
-        resolveOpenClawStateSqlitePath({ ...env, ...command?.environment }),
+        resolveOpenClawStateSqlitePath(serviceEnv),
       ),
     };
   } catch {

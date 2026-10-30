@@ -9,6 +9,11 @@ import { resolveZstdCodec } from "./zstd-codec.js";
 export const USAGE_COST_ROLLUP_VERSION = 11;
 const USAGE_COST_ROLLUP_FORMAT_VERSION = 1;
 export const USAGE_COST_ROLLUP_SCOPE = "session-cost-usage-rollup-v3";
+/**
+ * Fingerprint of a rollup whose totals no catalog price can change: every turn with usage
+ * recorded its own cost. It stays valid when pricing changes (a new build or catalog update).
+ */
+export const USAGE_COST_UNPRICED_FINGERPRINT = "unpriced";
 const zstd = resolveZstdCodec();
 
 export type UsageCostJsonlCheckpoint = {
@@ -137,7 +142,9 @@ export function decodeUsageCostRollupEnvelope(
       record.version !== USAGE_COST_ROLLUP_VERSION ||
       record.format !== USAGE_COST_ROLLUP_FORMAT_VERSION ||
       typeof record.pricingFingerprint !== "string" ||
-      (pricingFingerprint !== undefined && record.pricingFingerprint !== pricingFingerprint) ||
+      (pricingFingerprint !== undefined &&
+        record.pricingFingerprint !== pricingFingerprint &&
+        record.pricingFingerprint !== USAGE_COST_UNPRICED_FINGERPRINT) ||
       !isRecord(record.checkpoint) ||
       (record.checkpoint.kind !== "jsonl" && record.checkpoint.kind !== "sqlite") ||
       typeof record.scannedAt !== "number" ||

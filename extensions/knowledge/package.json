@@ -5,7 +5,7 @@
   "description": "OpenClaw evidence-backed knowledge vault and memory provider",
   "type": "module",
   "dependencies": {
-    "@openclaw/fs-safe": "0.26.13",
+    "@openclaw/fs-safe": "0.26.14",
     "dompurify": "3.4.17",
     "marked": "18.1.1",
     "typebox": "1.4.2",

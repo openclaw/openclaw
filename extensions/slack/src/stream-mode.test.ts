@@ -21,64 +21,45 @@ describe("resolveSlackStreamingConfig", () => {
 });
 
 describe("applyAppendOnlyStreamUpdate", () => {
-  it("starts with first incoming text", () => {
-    const next = applyAppendOnlyStreamUpdate({
-      incoming: "hello",
-      rendered: "",
-      source: "",
+  for (const { name, input, expected } of [
+    {
+      name: "starts with first incoming text",
+      input: { incoming: "hello", rendered: "", source: "" },
+      expected: { rendered: "hello", source: "hello", changed: true },
+    },
+    {
+      name: "uses cumulative incoming text when it extends prior source",
+      input: { incoming: "hello world", rendered: "hello", source: "hello" },
+      expected: { rendered: "hello world", source: "hello world", changed: true },
+    },
+    {
+      name: "ignores regressive shorter incoming text",
+      input: { incoming: "hello", rendered: "hello world", source: "hello world" },
+      expected: { rendered: "hello world", source: "hello world", changed: false },
+    },
+    {
+      name: "extends rendered when source continues after an appended chunk",
+      input: {
+        incoming: "next chunk grows",
+        rendered: "hello world\nnext chunk",
+        source: "next chunk",
+      },
+      expected: {
+        rendered: "hello world\nnext chunk grows",
+        source: "next chunk grows",
+        changed: true,
+      },
+    },
+    {
+      name: "appends non-prefix incoming chunks",
+      input: { incoming: "next chunk", rendered: "hello world", source: "hello world" },
+      expected: { rendered: "hello world\nnext chunk", source: "next chunk", changed: true },
+    },
+  ]) {
+    it(name, () => {
+      // Keep each invocation's input and expectation fresh, including retries.
+      const next = applyAppendOnlyStreamUpdate({ ...input });
+      expect(next).toEqual({ ...expected });
     });
-    expect(next).toEqual({ rendered: "hello", source: "hello", changed: true });
-  });
-
-  it("uses cumulative incoming text when it extends prior source", () => {
-    const next = applyAppendOnlyStreamUpdate({
-      incoming: "hello world",
-      rendered: "hello",
-      source: "hello",
-    });
-    expect(next).toEqual({
-      rendered: "hello world",
-      source: "hello world",
-      changed: true,
-    });
-  });
-
-  it("ignores regressive shorter incoming text", () => {
-    const next = applyAppendOnlyStreamUpdate({
-      incoming: "hello",
-      rendered: "hello world",
-      source: "hello world",
-    });
-    expect(next).toEqual({
-      rendered: "hello world",
-      source: "hello world",
-      changed: false,
-    });
-  });
-
-  it("extends rendered when source continues after an appended chunk", () => {
-    const next = applyAppendOnlyStreamUpdate({
-      incoming: "next chunk grows",
-      rendered: "hello world\nnext chunk",
-      source: "next chunk",
-    });
-    expect(next).toEqual({
-      rendered: "hello world\nnext chunk grows",
-      source: "next chunk grows",
-      changed: true,
-    });
-  });
-
-  it("appends non-prefix incoming chunks", () => {
-    const next = applyAppendOnlyStreamUpdate({
-      incoming: "next chunk",
-      rendered: "hello world",
-      source: "hello world",
-    });
-    expect(next).toEqual({
-      rendered: "hello world\nnext chunk",
-      source: "next chunk",
-      changed: true,
-    });
-  });
+  }
 });

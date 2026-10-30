@@ -24,6 +24,7 @@ import type {
   NativeGatewayAuthorization,
   NativeGatewayConnectAuth,
 } from "../app/native-gateway-auth.ts";
+import { isNativeMobileHost } from "../app/native-web-chrome.ts";
 import { i18n } from "../i18n/index.ts";
 import { bytesToHex } from "../lib/bytes-hex.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "../lib/nodes/index.ts";
@@ -248,7 +249,7 @@ export async function buildBrowserGatewayConnectPlan({
           "inline-widgets",
           "model-selection-policy",
           "model-wait-status",
-          "ui-commands",
+          ...(!isNativeMobileHost() ? ["ui-commands"] : []),
           "ultrafast",
           "usage-refreshing",
         ],

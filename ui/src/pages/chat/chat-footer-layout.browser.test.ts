@@ -206,6 +206,62 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
     });
   });
 
+  it.each([390, 1200])(
+    "keeps the editor inset when a %spx-wide pane crosses the short-pane height",
+    async (width) => {
+      // A phone keyboard leaves a conversation pane of roughly 300-340px; the
+      // draft must not jump against the composer frame as that pane crosses 320px.
+      // The keyboard shrinks the app shell, not the layout viewport, so device
+      // media queries stay those of the full screen.
+      await withBrowserPage(openBrowserPage(width, 844), async (page) => {
+        await page.setContent(`<style>${readUiCss()}</style>
+          <section class="chat" style="height:340px">${nest(
+            "chat-workbench > chat-workbench__main > chat-split-container > chat-main > chat-main__conversation-column",
+            conversation(
+              `<div class="chat-thread">${"<p>Earlier message</p>".repeat(20)}</div>${nest(
+                "chat-footer > agent-chat__composer-shell > agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar",
+                `${nest(
+                  "agent-chat__composer-input-row > agent-chat__composer-combobox",
+                  '<textarea placeholder="Message"></textarea>',
+                )}<div class="agent-chat__composer-footer"><button>Send</button></div>`,
+              )}`,
+            ),
+          )}</section>`);
+        const editor = async () => {
+          await waitForLayoutSettled(page, ".chat-main__conversation, .chat-footer");
+          return page.locator("textarea").evaluate((textarea) => {
+            const box = textarea.getBoundingClientRect();
+            const computed = getComputedStyle(textarea);
+            const paddingTop = Number.parseFloat(computed.paddingTop);
+            const paddingBottom = Number.parseFloat(computed.paddingBottom);
+            const surface = textarea.closest(".agent-chat__input")!.getBoundingClientRect();
+            return {
+              pane: textarea.closest(".chat-main__conversation")!.getBoundingClientRect().height,
+              textInset: box.top + paddingTop - surface.top,
+              paddingBottom,
+              lineRoom: textarea.clientHeight - paddingTop - paddingBottom,
+              line: Number.parseFloat(computed.lineHeight),
+              cap: Number.parseFloat(computed.maxHeight),
+            };
+          });
+        };
+        const tall = await editor();
+        expect(tall.pane).toBe(340);
+        await page.locator(".chat").evaluate((chat) => {
+          chat.style.height = "300px";
+        });
+        const short = await editor();
+        expect(short.pane).toBe(300);
+        expect(short.textInset).toBe(tall.textInset);
+        expect(short.paddingBottom).toBe(tall.paddingBottom);
+        expect(short.lineRoom).toBeGreaterThanOrEqual(short.line);
+        // The short pane still caps the editor at one complete line.
+        expect(short.cap).toBeLessThan(tall.cap);
+        expect(short.cap).toBe(short.line + 2 * short.paddingBottom);
+      });
+    },
+  );
+
   it("aligns and separates mobile cards above the composer after Chat styles load", async () => {
     await withBrowserPage(openBrowserPage(390, 844), async (page) => {
       // New Session can load composer styles before Chat's lazy layout stylesheet.

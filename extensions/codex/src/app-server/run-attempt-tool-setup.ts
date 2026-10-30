@@ -274,11 +274,17 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         assertCurrent: connection.assertLegacyCurrent,
         startOptions: connection.appServer.start,
         authProfileId: connection.startupClientAuthProfileId,
+        authRequirement: connection.startupAuthRequirement,
         agentDir,
         config: params.config,
         timeoutMs: connection.appServer.requestTimeoutMs,
       }),
-    releaseClient: (client) => releaseCodexProbeClient(client, connection.attemptClientFactory),
+    releaseClient: (client) =>
+      releaseCodexProbeClient(
+        client,
+        connection.attemptClientFactory,
+        connection.callerOwnedAttemptClient,
+      ),
     assertCurrent: () => {
       runAbortController.signal.throwIfAborted();
       connection.assertCurrent();

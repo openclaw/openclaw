@@ -2,6 +2,7 @@
 import fsSync, { type BigIntStats, type Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import {
   getPublishFileExclusiveFailureDetails,
@@ -54,6 +55,11 @@ import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { configureSqliteSnapshotPragmas } from "./sqlite-wal.js";
 
 export type { SqliteSnapshotValidator } from "./sqlite-snapshot.types.js";
+
+/** Reuse a bounded page cache when mappings are unavailable on an inspection copy. */
+export function configureSqliteSnapshotReadCache(database: DatabaseSync): void {
+  database.exec("PRAGMA cache_size = -16384; PRAGMA mmap_size = 268435456;");
+}
 
 export type SqliteReplacementReceipt = SqliteFileContent & {
   targetPath: string;

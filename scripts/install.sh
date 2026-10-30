@@ -1628,10 +1628,19 @@ resolve_node_package_engine() {
             engine="${BASH_REMATCH[1]}"
         fi
     else
+        # Missing npm is a bootstrap state, not evidence that the beta tag is absent.
+        if ! command -v npm >/dev/null 2>&1; then
+            return 0
+        fi
         # Consume --beta here so admission and installation use the same selected target.
         if [[ "$USE_BETA" == 1 ]]; then
             OPENCLAW_VERSION="$(bounded_probe_output 'beta tag' resolve_beta_version || true)"
-            OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
+            if [[ -n "$OPENCLAW_VERSION" ]]; then
+                ui_info "Beta tag detected (${OPENCLAW_VERSION})"
+            else
+                OPENCLAW_VERSION=latest
+                ui_warn "Could not resolve beta tag; using latest"
+            fi
             USE_BETA=0
         fi
         if can_resolve_registry_package_version "$OPENCLAW_VERSION"; then
@@ -1666,21 +1675,26 @@ node_binary_is_supported() {
 
 ensure_node() {
     load_nvm_for_node_detection || return 1
-    resolve_node_package_engine "$@"
-    if ! node_binary_is_supported node; then
-        use_supported_nvm_node || promote_supported_node_binary || true
-    fi
-    if ! check_node; then
-        if [[ "${NVM_DETECTED:-0}" == "1" ]]; then
-            install_node_with_existing_nvm || return 1
-        else
-            install_homebrew || return $?
-            install_node || return 1
+    local phase
+    for phase in bootstrap target; do
+        # Cold npm installs need a conservative runtime before target metadata is available.
+        if [[ "$phase" == bootstrap ]] && { [[ "$INSTALL_METHOD" != npm ]] || command -v npm >/dev/null 2>&1; }; then
+            continue
         fi
-    fi
-    if ! ensure_default_node_active_shell; then
-        return 1
-    fi
+        resolve_node_package_engine "$@"
+        if ! node_binary_is_supported node; then
+            use_supported_nvm_node || promote_supported_node_binary || true
+        fi
+        if ! check_node; then
+            if [[ "${NVM_DETECTED:-0}" == "1" ]]; then
+                install_node_with_existing_nvm || return 1
+            else
+                install_homebrew || return $?
+                install_node || return 1
+            fi
+        fi
+        ensure_default_node_active_shell || return 1
+    done
 }
 
 prepend_path_dir() {
@@ -3071,18 +3085,6 @@ resolve_package_install_spec() {
 
 install_openclaw() {
     local package_name="openclaw"
-    if [[ "$USE_BETA" == "1" ]]; then
-        local beta_version=""
-        beta_version="$(resolve_beta_version || true)"
-        if [[ -n "$beta_version" ]]; then
-            OPENCLAW_VERSION="$beta_version"
-            ui_info "Beta tag detected (${beta_version})"
-        else
-            OPENCLAW_VERSION="latest"
-            ui_info "No beta tag found; using latest"
-        fi
-    fi
-
     if [[ -z "${OPENCLAW_VERSION}" ]]; then
         OPENCLAW_VERSION="latest"
     fi

@@ -1479,6 +1479,8 @@ var External = [
     /(^sessionKey$|^agentId$|^requestId$)/u,
     /(^sessionKey$|^agentId$|^requestId$|^generation$|^account$|^requestDigest$)/u,
     /^[a-f0-9]+$/u,
+    /(^sessionKey$|^path$|^agentId$|^messageEntryId$|^html$|^allowScripts$)/u,
+    /(^sessionKey$|^path$|^agentId$|^messageEntryId$|^previewId$)/u,
     /(^minProtocol$|^maxProtocol$|^client$|^caps$|^includeSessionMessageBodies$|^commands$|^computerUse$|^workerRuns$|^permissions$|^pathEnv$|^role$|^scopes$|^modelCatalog$|^device$|^auth$|^locale$|^userAgent$)/u,
     /(^id$|^displayName$|^version$|^buildId$|^platform$|^deviceFamily$|^modelIdentifier$|^timeZone$|^mode$|^instanceId$)/u,
     /(^bundleHash$|^openclawVersion$|^protocolFeatures$|^bundlePrewarm$)/u,
@@ -17116,34 +17118,74 @@ var External = [
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
+    "sessionKey" in value &&
+    "path" in value &&
+    "html" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_1701, unique_1702) => External[864].test(unique_1701) || check_2(value[unique_1701]),
+    ) &&
+    check_6(value.sessionKey) &&
+    check_6(value.path) &&
+    (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
+    (value.messageEntryId === void 0 ||
+      !("messageEntryId" in value) ||
+      check_63(value.messageEntryId)) &&
+    check_2595(value.html) &&
+    (value.allowScripts === void 0 || !("allowScripts" in value) || check_181(value.allowScripts)),
+  check_2595 = (value) =>
+    typeof value == "string" &&
+    (value.length <= 2097152 || (value.length <= 4194304 && CodePointCount(value) <= 2097152)),
+  check_2596 = (value) => check_2597(value),
+  check_2597 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "sessionKey" in value &&
+    "path" in value &&
+    "previewId" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_1703, unique_1704) => External[865].test(unique_1703) || check_2(value[unique_1703]),
+    ) &&
+    check_6(value.sessionKey) &&
+    check_6(value.path) &&
+    (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
+    (value.messageEntryId === void 0 ||
+      !("messageEntryId" in value) ||
+      check_63(value.messageEntryId)) &&
+    check_39(value.previewId),
+  check_2598 = (value) => check_2599(value),
+  check_2599 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
     "minProtocol" in value &&
     "maxProtocol" in value &&
     "client" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1701, unique_1702) => External[864].test(unique_1701) || check_2(value[unique_1701]),
+      (unique_1705, unique_1706) => External[866].test(unique_1705) || check_2(value[unique_1705]),
     ) &&
     check_618(value.minProtocol) &&
     check_618(value.maxProtocol) &&
-    check_2595(value.client) &&
-    (value.caps === void 0 || !("caps" in value) || check_2598(value.caps)) &&
+    check_2600(value.client) &&
+    (value.caps === void 0 || !("caps" in value) || check_2603(value.caps)) &&
     (value.includeSessionMessageBodies === void 0 ||
       !("includeSessionMessageBodies" in value) ||
       check_181(value.includeSessionMessageBodies)) &&
     (value.commands === void 0 || !("commands" in value) || check_1184(value.commands)) &&
     (value.computerUse === void 0 || !("computerUse" in value) || check_321(value.computerUse)) &&
-    (value.workerRuns === void 0 || !("workerRuns" in value) || check_2599(value.workerRuns)) &&
+    (value.workerRuns === void 0 || !("workerRuns" in value) || check_2604(value.workerRuns)) &&
     (value.permissions === void 0 || !("permissions" in value) || check_868(value.permissions)) &&
     (value.pathEnv === void 0 || !("pathEnv" in value) || check_272(value.pathEnv)) &&
     (value.role === void 0 || !("role" in value) || check_63(value.role)) &&
     (value.scopes === void 0 || !("scopes" in value) || check_1184(value.scopes)) &&
     (value.modelCatalog === void 0 ||
       !("modelCatalog" in value) ||
-      check_2601(value.modelCatalog)) &&
-    (value.device === void 0 || !("device" in value) || check_2604(value.device)) &&
-    (value.auth === void 0 || !("auth" in value) || check_2605(value.auth)) &&
+      check_2606(value.modelCatalog)) &&
+    (value.device === void 0 || !("device" in value) || check_2609(value.device)) &&
+    (value.auth === void 0 || !("auth" in value) || check_2610(value.auth)) &&
     (value.locale === void 0 || !("locale" in value) || check_272(value.locale)) &&
     (value.userAgent === void 0 || !("userAgent" in value) || check_272(value.userAgent)),
-  check_2595 = (value) =>
+  check_2600 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17152,9 +17194,9 @@ var External = [
     "platform" in value &&
     "mode" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1703, unique_1704) => External[865].test(unique_1703) || check_2(value[unique_1703]),
+      (unique_1707, unique_1708) => External[867].test(unique_1707) || check_2(value[unique_1707]),
     ) &&
-    check_2596(value.id) &&
+    check_2601(value.id) &&
     (value.displayName === void 0 || !("displayName" in value) || check_63(value.displayName)) &&
     check_6(value.version) &&
     (value.buildId === void 0 || !("buildId" in value) || check_1953(value.buildId)) &&
@@ -17164,9 +17206,9 @@ var External = [
       !("modelIdentifier" in value) ||
       check_63(value.modelIdentifier)) &&
     (value.timeZone === void 0 || !("timeZone" in value) || check_327(value.timeZone)) &&
-    check_2597(value.mode) &&
+    check_2602(value.mode) &&
     (value.instanceId === void 0 || !("instanceId" in value) || check_63(value.instanceId)),
-  check_2596 = (value) =>
+  check_2601 = (value) =>
     value === "webchat-ui" ||
     value === "openclaw-control-ui" ||
     value === "openclaw-browser-copilot" ||
@@ -17184,7 +17226,7 @@ var External = [
     value === "test" ||
     value === "fingerprint" ||
     value === "openclaw-probe",
-  check_2597 = (value) =>
+  check_2602 = (value) =>
     value === "webchat" ||
     value === "cli" ||
     value === "ui" ||
@@ -17193,9 +17235,9 @@ var External = [
     value === "worker" ||
     value === "probe" ||
     value === "test",
-  check_2598 = (value) =>
-    Array.isArray(value) && value.every((unique_1705, index) => check_6(unique_1705)),
-  check_2599 = (value) =>
+  check_2603 = (value) =>
+    Array.isArray(value) && value.every((unique_1709, index) => check_6(unique_1709)),
+  check_2604 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17203,41 +17245,41 @@ var External = [
     "openclawVersion" in value &&
     "protocolFeatures" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1706, unique_1707) => External[866].test(unique_1706) || check_2(value[unique_1706]),
+      (unique_1710, unique_1711) => External[868].test(unique_1710) || check_2(value[unique_1710]),
     ) &&
     check_184(value.bundleHash) &&
     check_22(value.openclawVersion) &&
-    check_2600(value.protocolFeatures) &&
+    check_2605(value.protocolFeatures) &&
     (value.bundlePrewarm === void 0 ||
       !("bundlePrewarm" in value) ||
       check_188(value.bundlePrewarm)),
-  check_2600 = (value) =>
+  check_2605 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_1708, index) => check_22(unique_1708)) &&
+    value.every((unique_1712, index) => check_22(unique_1712)) &&
     value.length <= 64 &&
     new Set(value.map(Hash)).size === value.length,
-  check_2601 = (value) => check_2602(value) || check_2603(value),
-  check_2602 = (value) =>
+  check_2606 = (value) => check_2607(value) || check_2608(value),
+  check_2607 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1709, unique_1710) => External[867].test(unique_1709) || check_2(value[unique_1709]),
+      (unique_1713, unique_1714) => External[869].test(unique_1713) || check_2(value[unique_1713]),
     ) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
     (value.sessionKey === void 0 || !("sessionKey" in value) || check_63(value.sessionKey)),
-  check_2603 = (value) =>
+  check_2608 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "shortId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1711, unique_1712) => External[868].test(unique_1711) || check_2(value[unique_1711]),
+      (unique_1715, unique_1716) => External[870].test(unique_1715) || check_2(value[unique_1715]),
     ) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
     check_6(value.shortId) &&
     (value.slugHint === void 0 || !("slugHint" in value) || check_63(value.slugHint)),
-  check_2604 = (value) =>
+  check_2609 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17247,19 +17289,19 @@ var External = [
     "signedAt" in value &&
     "nonce" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1713, unique_1714) => External[869].test(unique_1713) || check_2(value[unique_1713]),
+      (unique_1717, unique_1718) => External[871].test(unique_1717) || check_2(value[unique_1717]),
     ) &&
     check_6(value.id) &&
     check_6(value.publicKey) &&
     check_6(value.signature) &&
     check_7(value.signedAt) &&
     check_6(value.nonce),
-  check_2605 = (value) =>
+  check_2610 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1715, unique_1716) => External[870].test(unique_1715) || check_2(value[unique_1715]),
+      (unique_1719, unique_1720) => External[872].test(unique_1719) || check_2(value[unique_1719]),
     ) &&
     (value.token === void 0 || !("token" in value) || check_272(value.token)) &&
     (value.bootstrapToken === void 0 ||
@@ -17273,8 +17315,8 @@ var External = [
     (value.agentRuntimeIdentityToken === void 0 ||
       !("agentRuntimeIdentityToken" in value) ||
       check_272(value.agentRuntimeIdentityToken)),
-  check_2606 = (value) => check_2607(value),
-  check_2607 = (value) =>
+  check_2611 = (value) => check_2612(value),
+  check_2612 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17282,16 +17324,16 @@ var External = [
     "openclawVersion" in value &&
     "protocolFeatures" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1717, unique_1718) => External[871].test(unique_1717) || check_2(value[unique_1717]),
+      (unique_1721, unique_1722) => External[873].test(unique_1721) || check_2(value[unique_1721]),
     ) &&
     check_184(value.bundleHash) &&
     check_22(value.openclawVersion) &&
-    check_2600(value.protocolFeatures) &&
+    check_2605(value.protocolFeatures) &&
     (value.bundlePrewarm === void 0 ||
       !("bundlePrewarm" in value) ||
       check_188(value.bundlePrewarm)),
-  check_2608 = (value) => check_2609(value),
-  check_2609 = (value) =>
+  check_2613 = (value) => check_2614(value),
+  check_2614 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17300,15 +17342,15 @@ var External = [
     "method" in value &&
     "params" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1719, unique_1720) => External[872].test(unique_1719) || check_2(value[unique_1719]),
+      (unique_1723, unique_1724) => External[874].test(unique_1723) || check_2(value[unique_1723]),
     ) &&
-    check_2610(value.type) &&
+    check_2615(value.type) &&
     check_22(value.id) &&
-    check_2611(value.method) &&
-    check_2612(value.params),
-  check_2610 = (value) => typeof value == "string" && value === "req",
-  check_2611 = (value) => typeof value == "string" && value === "connect",
-  check_2612 = (value) =>
+    check_2616(value.method) &&
+    check_2617(value.params),
+  check_2615 = (value) => typeof value == "string" && value === "req",
+  check_2616 = (value) => typeof value == "string" && value === "connect",
+  check_2617 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17318,14 +17360,14 @@ var External = [
     "role" in value &&
     "admission" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1721, unique_1722) => External[873].test(unique_1721) || check_2(value[unique_1721]),
+      (unique_1725, unique_1726) => External[875].test(unique_1725) || check_2(value[unique_1725]),
     ) &&
     check_618(value.minProtocol) &&
     check_618(value.maxProtocol) &&
-    check_2613(value.client) &&
+    check_2618(value.client) &&
     check_146(value.role) &&
-    check_2615(value.admission),
-  check_2613 = (value) =>
+    check_2620(value.admission),
+  check_2618 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17334,15 +17376,15 @@ var External = [
     "platform" in value &&
     "mode" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1723, unique_1724) => External[874].test(unique_1723) || check_2(value[unique_1723]),
+      (unique_1727, unique_1728) => External[876].test(unique_1727) || check_2(value[unique_1727]),
     ) &&
-    check_2614(value.id) &&
+    check_2619(value.id) &&
     check_22(value.version) &&
     check_22(value.platform) &&
     check_146(value.mode),
-  check_2614 = (value) => typeof value == "string" && value === "openclaw-worker",
-  check_2615 = (value) => check_2616(value) || check_2618(value),
-  check_2616 = (value) =>
+  check_2619 = (value) => typeof value == "string" && value === "openclaw-worker",
+  check_2620 = (value) => check_2621(value) || check_2623(value),
+  check_2621 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17354,20 +17396,20 @@ var External = [
     "sessionId" in value &&
     "runId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1725, unique_1726) => External[875].test(unique_1725) || check_2(value[unique_1725]),
+      (unique_1729, unique_1730) => External[877].test(unique_1729) || check_2(value[unique_1729]),
     ) &&
     check_287(value.environmentId) &&
-    check_2617(value.credential) &&
+    check_2622(value.credential) &&
     check_344(value.ownerEpoch) &&
     check_310(value.rpcSetVersion) &&
-    check_2607(value.handshake) &&
+    check_2612(value.handshake) &&
     check_13(value.sessionId) &&
     check_13(value.runId),
-  check_2617 = (value) =>
+  check_2622 = (value) =>
     typeof value == "string" &&
     (value.length >= 32 || (value.length >= 16 && CodePointCount(value) >= 16)) &&
     (value.length <= 256 || (value.length <= 512 && CodePointCount(value) <= 256)),
-  check_2618 = (value) =>
+  check_2623 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17379,59 +17421,59 @@ var External = [
     "sessionId" in value &&
     "runId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1727, unique_1728) => External[876].test(unique_1727) || check_2(value[unique_1727]),
+      (unique_1731, unique_1732) => External[878].test(unique_1731) || check_2(value[unique_1731]),
     ) &&
     check_287(value.environmentId) &&
-    check_2617(value.credential) &&
+    check_2622(value.credential) &&
     check_344(value.ownerEpoch) &&
     check_310(value.rpcSetVersion) &&
-    check_2607(value.handshake) &&
+    check_2612(value.handshake) &&
     check_287(value.sessionId) &&
     check_287(value.runId),
-  check_2619 = (value) => check_2620(value),
-  check_2620 = (value) =>
+  check_2624 = (value) => check_2625(value),
+  check_2625 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "sentAtMs" in value &&
     "status" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1729, unique_1730) => External[877].test(unique_1729) || check_2(value[unique_1729]),
+      (unique_1733, unique_1734) => External[879].test(unique_1733) || check_2(value[unique_1733]),
     ) &&
     check_7(value.sentAtMs) &&
-    check_2621(value.status) &&
+    check_2626(value.status) &&
     (value.githubGeneration === void 0 ||
       !("githubGeneration" in value) ||
       check_1912(value.githubGeneration)),
-  check_2621 = (value) => check_951(value) || check_2622(value) || check_1999(value),
-  check_2622 = (value) => typeof value == "string" && value === "busy",
-  check_2623 = (value) => check_2624(value),
-  check_2624 = (value) =>
+  check_2626 = (value) => check_951(value) || check_2627(value) || check_1999(value),
+  check_2627 = (value) => typeof value == "string" && value === "busy",
+  check_2628 = (value) => check_2629(value),
+  check_2629 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "task" in value &&
     "toolCallId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1731, unique_1732) => External[878].test(unique_1731) || check_2(value[unique_1731]),
+      (unique_1735, unique_1736) => External[880].test(unique_1735) || check_2(value[unique_1735]),
     ) &&
-    check_2625(value.task) &&
+    check_2630(value.task) &&
     (value.label === void 0 || !("label" in value) || check_102(value.label)) &&
     (value.agentId === void 0 || !("agentId" in value) || check_323(value.agentId)) &&
     (value.model === void 0 || !("model" in value) || check_102(value.model)) &&
     (value.runTimeoutSeconds === void 0 ||
       !("runTimeoutSeconds" in value) ||
-      check_2626(value.runTimeoutSeconds)) &&
+      check_2631(value.runTimeoutSeconds)) &&
     check_39(value.toolCallId),
-  check_2625 = (value) =>
+  check_2630 = (value) =>
     typeof value == "string" &&
     (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
     (value.length <= 8192 || (value.length <= 16384 && CodePointCount(value) <= 8192)),
-  check_2626 = (value) =>
+  check_2631 = (value) =>
     Number.isInteger(value) &&
     (!(Number.isFinite(value) || typeof value == "bigint") || (value >= 0 && value <= 86400)),
-  check_2627 = (value) => check_2628(value),
-  check_2628 = (value) =>
+  check_2632 = (value) => check_2633(value),
+  check_2633 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17439,44 +17481,44 @@ var External = [
     "message" in value &&
     "toolCallId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1733, unique_1734) => External[879].test(unique_1733) || check_2(value[unique_1733]),
+      (unique_1737, unique_1738) => External[881].test(unique_1737) || check_2(value[unique_1737]),
     ) &&
     check_1039(value.sessionKey) &&
-    check_2625(value.message) &&
+    check_2630(value.message) &&
     (value.timeoutSeconds === void 0 ||
       !("timeoutSeconds" in value) ||
-      check_2626(value.timeoutSeconds)) &&
+      check_2631(value.timeoutSeconds)) &&
     check_39(value.toolCallId),
-  check_2629 = (value) => check_2630(value),
-  check_2630 = (value) =>
+  check_2634 = (value) => check_2635(value),
+  check_2635 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "toolCallId" in value &&
     "action" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1735, unique_1736) => External[880].test(unique_1735) || check_2(value[unique_1735]),
+      (unique_1739, unique_1740) => External[882].test(unique_1739) || check_2(value[unique_1739]),
     ) &&
     check_39(value.toolCallId) &&
-    check_2631(value.action) &&
+    check_2636(value.action) &&
     (value.port === void 0 || !("port" in value) || check_1183(value.port)) &&
     (value.title === void 0 || !("title" in value) || check_102(value.title)) &&
     (value.description === void 0 || !("description" in value) || check_1917(value.description)) &&
-    (value.path === void 0 || !("path" in value) || check_2632(value.path)) &&
+    (value.path === void 0 || !("path" in value) || check_2637(value.path)) &&
     (value.id === void 0 || !("id" in value) || check_102(value.id)),
-  check_2631 = (value) => check_2476(value) || check_207(value) || check_2506(value),
-  check_2632 = (value) =>
+  check_2636 = (value) => check_2476(value) || check_207(value) || check_2506(value),
+  check_2637 = (value) =>
     typeof value == "string" &&
     (value.length <= 1024 || (value.length <= 2048 && CodePointCount(value) <= 1024)) &&
-    External[881].test(value),
-  check_2633 = (value) => check_2634(value),
-  check_2634 = (value) =>
+    External[883].test(value),
+  check_2638 = (value) => check_2639(value),
+  check_2639 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "toolCallId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1737, unique_1738) => External[882].test(unique_1737) || check_2(value[unique_1737]),
+      (unique_1741, unique_1742) => External[884].test(unique_1741) || check_2(value[unique_1741]),
     ) &&
     check_39(value.toolCallId) &&
     (value.action === void 0 || !("action" in value) || check_206(value.action)) &&
@@ -17484,33 +17526,33 @@ var External = [
     (value.deviceId === void 0 || !("deviceId" in value) || check_209(value.deviceId)) &&
     (value.include === void 0 || !("include" in value) || check_210(value.include)) &&
     (value.limit === void 0 || !("limit" in value) || check_215(value.limit)),
-  check_2635 = (value) => check_2636(value),
-  check_2636 = (value) =>
+  check_2640 = (value) => check_2641(value),
+  check_2641 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "command" in value &&
     "paramsJson" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1739, unique_1740) => External[883].test(unique_1739) || check_2(value[unique_1739]),
+      (unique_1743, unique_1744) => External[885].test(unique_1743) || check_2(value[unique_1743]),
     ) &&
-    check_2637(value.command) &&
-    check_2638(value.paramsJson) &&
-    (value.timeoutMs === void 0 || !("timeoutMs" in value) || check_2639(value.timeoutMs)) &&
+    check_2642(value.command) &&
+    check_2643(value.paramsJson) &&
+    (value.timeoutMs === void 0 || !("timeoutMs" in value) || check_2644(value.timeoutMs)) &&
     (value.idempotencyKey === void 0 ||
       !("idempotencyKey" in value) ||
       check_323(value.idempotencyKey)),
-  check_2637 = (value) =>
+  check_2642 = (value) =>
     typeof value == "string" && (value === "screen.snapshot" || value === "computer.act"),
-  check_2638 = (value) =>
+  check_2643 = (value) =>
     typeof value == "string" &&
     (value.length >= 4 || (value.length >= 2 && CodePointCount(value) >= 2)) &&
     (value.length <= 65536 || (value.length <= 131072 && CodePointCount(value) <= 65536)),
-  check_2639 = (value) =>
+  check_2644 = (value) =>
     Number.isInteger(value) &&
     (!(Number.isFinite(value) || typeof value == "bigint") || (value >= 1 && value <= 12e4)),
-  check_2640 = (value) => check_2641(value),
-  check_2641 = (value) =>
+  check_2645 = (value) => check_2646(value),
+  check_2646 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17519,21 +17561,21 @@ var External = [
     "baseLeafId" in value &&
     "messages" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1741, unique_1742) => External[884].test(unique_1741) || check_2(value[unique_1741]),
+      (unique_1745, unique_1746) => External[886].test(unique_1745) || check_2(value[unique_1745]),
     ) &&
     check_344(value.runEpoch) &&
     check_310(value.seq) &&
-    check_2642(value.baseLeafId) &&
-    check_2643(value.messages),
-  check_2642 = (value) => check_287(value) || check_13(value),
-  check_2643 = (value) =>
+    check_2647(value.baseLeafId) &&
+    check_2648(value.messages),
+  check_2647 = (value) => check_287(value) || check_13(value),
+  check_2648 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_1743, index) => check_2644(unique_1743)) &&
+    value.every((unique_1747, index) => check_2649(unique_1747)) &&
     value.length >= 1 &&
     value.length <= 64,
-  check_2644 = (value) =>
-    check_2645(value) || check_2652(value) || check_2667(value) || check_2692(value),
-  check_2645 = (value) =>
+  check_2649 = (value) =>
+    check_2650(value) || check_2657(value) || check_2672(value) || check_2697(value),
+  check_2650 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17541,35 +17583,35 @@ var External = [
     "content" in value &&
     "timestamp" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1744, unique_1745) => External[885].test(unique_1744) || check_2(value[unique_1744]),
+      (unique_1748, unique_1749) => External[887].test(unique_1748) || check_2(value[unique_1748]),
     ) &&
     check_74(value.role) &&
-    check_2646(value.content) &&
+    check_2651(value.content) &&
     check_7(value.timestamp) &&
     (value.operatorMessage === void 0 ||
       !("operatorMessage" in value) ||
-      check_2651(value.operatorMessage)),
-  check_2646 = (value) =>
+      check_2656(value.operatorMessage)),
+  check_2651 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_1746, index) => check_2647(unique_1746)) &&
+    value.every((unique_1750, index) => check_2652(unique_1750)) &&
     value.length >= 1 &&
     value.length <= 128,
-  check_2647 = (value) => check_2648(value) || check_2649(value),
-  check_2648 = (value) =>
+  check_2652 = (value) => check_2653(value) || check_2654(value),
+  check_2653 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "type" in value &&
     "text" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1747, unique_1748) => External[886].test(unique_1747) || check_2(value[unique_1747]),
+      (unique_1751, unique_1752) => External[888].test(unique_1751) || check_2(value[unique_1751]),
     ) &&
     check_315(value.type) &&
     check_316(value.text) &&
     (value.textSignature === void 0 ||
       !("textSignature" in value) ||
       check_1664(value.textSignature)),
-  check_2649 = (value) =>
+  check_2654 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17577,26 +17619,26 @@ var External = [
     "data" in value &&
     "mimeType" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1749, unique_1750) => External[887].test(unique_1749) || check_2(value[unique_1749]),
+      (unique_1753, unique_1754) => External[889].test(unique_1753) || check_2(value[unique_1753]),
     ) &&
     check_319(value.type) &&
-    check_2650(value.data) &&
+    check_2655(value.data) &&
     check_39(value.mimeType),
-  check_2650 = (value) =>
+  check_2655 = (value) =>
     typeof value == "string" &&
     (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
     (value.length <= 26214400 || (value.length <= 52428800 && CodePointCount(value) <= 26214400)),
-  check_2651 = (value) =>
+  check_2656 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "turnScoped" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1751, unique_1752) => External[888].test(unique_1751) || check_2(value[unique_1751]),
+      (unique_1755, unique_1756) => External[890].test(unique_1755) || check_2(value[unique_1755]),
     ) &&
     check_97(value.turnScoped),
-  check_2652 = (value) => check_2653(value) || check_2663(value),
-  check_2653 = (value) =>
+  check_2657 = (value) => check_2658(value) || check_2668(value),
+  check_2658 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17607,50 +17649,50 @@ var External = [
     "customType" in value &&
     "details" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1753, unique_1754) => External[889].test(unique_1753) || check_2(value[unique_1753]),
+      (unique_1757, unique_1758) => External[891].test(unique_1757) || check_2(value[unique_1757]),
     ) &&
     check_709(value.role) &&
-    check_2654(value.content) &&
+    check_2659(value.content) &&
     check_399(value.display) &&
     check_7(value.timestamp) &&
-    check_2655(value.customType) &&
-    check_2656(value.details),
-  check_2654 = (value) => check_12(value) || check_2646(value),
-  check_2655 = (value) => typeof value == "string" && value === "openclaw.runtime-context",
-  check_2656 = (value) =>
+    check_2660(value.customType) &&
+    check_2661(value.details),
+  check_2659 = (value) => check_12(value) || check_2651(value),
+  check_2660 = (value) => typeof value == "string" && value === "openclaw.runtime-context",
+  check_2661 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
-    (value.source === void 0 || !("source" in value) || check_2657(value.source)) &&
+    (value.source === void 0 || !("source" in value) || check_2662(value.source)) &&
     (value.runtimeContextCarrier === void 0 ||
       !("runtimeContextCarrier" in value) ||
       check_326(value.runtimeContextCarrier)) &&
-    (value.fragments === void 0 || !("fragments" in value) || check_2658(value.fragments)) &&
-    (check_2661(value) || check_2662(value)),
-  check_2657 = (value) => typeof value == "string" && value === "openclaw-runtime-context",
-  check_2658 = (value) =>
-    Array.isArray(value) && value.every((unique_1755, index) => check_2659(unique_1755)),
-  check_2659 = (value) =>
+    (value.fragments === void 0 || !("fragments" in value) || check_2663(value.fragments)) &&
+    (check_2666(value) || check_2667(value)),
+  check_2662 = (value) => typeof value == "string" && value === "openclaw-runtime-context",
+  check_2663 = (value) =>
+    Array.isArray(value) && value.every((unique_1759, index) => check_2664(unique_1759)),
+  check_2664 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "kind" in value &&
     "text" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1756, unique_1757) => External[890].test(unique_1756) || check_2(value[unique_1756]),
+      (unique_1760, unique_1761) => External[892].test(unique_1760) || check_2(value[unique_1760]),
     ) &&
-    check_2660(value.kind) &&
+    check_2665(value.kind) &&
     check_12(value.text),
-  check_2660 = (value) =>
+  check_2665 = (value) =>
     value === "runtime-instruction" ||
     value === "conversation-data" ||
     value === "heartbeat-outcome",
-  check_2661 = (value) =>
+  check_2666 = (value) =>
     !(typeof value == "object" && value !== null && !Array.isArray(value)) || "source" in value,
-  check_2662 = (value) =>
+  check_2667 = (value) =>
     !(typeof value == "object" && value !== null && !Array.isArray(value)) ||
     "runtimeContextCarrier" in value,
-  check_2663 = (value) =>
+  check_2668 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17661,28 +17703,28 @@ var External = [
     "customType" in value &&
     "details" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1758, unique_1759) => External[891].test(unique_1758) || check_2(value[unique_1758]),
+      (unique_1762, unique_1763) => External[893].test(unique_1762) || check_2(value[unique_1762]),
     ) &&
     check_709(value.role) &&
-    check_2654(value.content) &&
+    check_2659(value.content) &&
     check_399(value.display) &&
     check_7(value.timestamp) &&
-    check_2664(value.customType) &&
-    check_2665(value.details),
-  check_2664 = (value) => typeof value == "string" && value === "openclaw.system-update",
-  check_2665 = (value) =>
+    check_2669(value.customType) &&
+    check_2670(value.details),
+  check_2669 = (value) => typeof value == "string" && value === "openclaw.system-update",
+  check_2670 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "kind" in value &&
     "turnScoped" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1760, unique_1761) => External[892].test(unique_1760) || check_2(value[unique_1760]),
+      (unique_1764, unique_1765) => External[894].test(unique_1764) || check_2(value[unique_1764]),
     ) &&
-    check_2666(value.kind) &&
+    check_2671(value.kind) &&
     check_97(value.turnScoped),
-  check_2666 = (value) => value === "prompt-update" || value === "runtime-context",
-  check_2667 = (value) =>
+  check_2671 = (value) => value === "prompt-update" || value === "runtime-context",
+  check_2672 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17695,24 +17737,24 @@ var External = [
     "timestamp" in value &&
     "stopReason" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1762, unique_1763) => External[893].test(unique_1762) || check_2(value[unique_1762]),
+      (unique_1766, unique_1767) => External[895].test(unique_1766) || check_2(value[unique_1766]),
     ) &&
     check_1036(value.role) &&
-    check_2668(value.content) &&
+    check_2673(value.content) &&
     check_287(value.api) &&
     check_287(value.provider) &&
     check_287(value.model) &&
     (value.responseModel === void 0 ||
       !("responseModel" in value) ||
       check_323(value.responseModel)) &&
-    (value.responseId === void 0 || !("responseId" in value) || check_2675(value.responseId)) &&
+    (value.responseId === void 0 || !("responseId" in value) || check_2680(value.responseId)) &&
     (value.providerReplay === void 0 ||
       !("providerReplay" in value) ||
-      check_2676(value.providerReplay)) &&
-    check_2678(value.usage) &&
+      check_2681(value.providerReplay)) &&
+    check_2683(value.usage) &&
     check_7(value.timestamp) &&
-    (value.diagnostics === void 0 || !("diagnostics" in value) || check_2686(value.diagnostics)) &&
-    check_2690(value.stopReason) &&
+    (value.diagnostics === void 0 || !("diagnostics" in value) || check_2691(value.diagnostics)) &&
+    check_2695(value.stopReason) &&
     (value.errorMessage === void 0 ||
       !("errorMessage" in value) ||
       check_317(value.errorMessage)) &&
@@ -17721,30 +17763,30 @@ var External = [
     (value.errorBody === void 0 || !("errorBody" in value) || check_317(value.errorBody)) &&
     (value.retryAfterMs === void 0 ||
       !("retryAfterMs" in value) ||
-      check_2691(value.retryAfterMs)) &&
+      check_2696(value.retryAfterMs)) &&
     (value.itemId === void 0 || !("itemId" in value) || check_323(value.itemId)),
-  check_2668 = (value) =>
+  check_2673 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_1764, index) => check_2669(unique_1764)) &&
+    value.every((unique_1768, index) => check_2674(unique_1768)) &&
     value.length <= 128,
-  check_2669 = (value) => check_2648(value) || check_2670(value) || check_2672(value),
-  check_2670 = (value) =>
+  check_2674 = (value) => check_2653(value) || check_2675(value) || check_2677(value),
+  check_2675 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "type" in value &&
     "thinking" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1765, unique_1766) => External[894].test(unique_1765) || check_2(value[unique_1765]),
+      (unique_1769, unique_1770) => External[896].test(unique_1769) || check_2(value[unique_1769]),
     ) &&
-    check_2671(value.type) &&
+    check_2676(value.type) &&
     check_316(value.thinking) &&
     (value.thinkingSignature === void 0 ||
       !("thinkingSignature" in value) ||
       check_1664(value.thinkingSignature)) &&
     (value.redacted === void 0 || !("redacted" in value) || check_181(value.redacted)),
-  check_2671 = (value) => typeof value == "string" && value === "thinking",
-  check_2672 = (value) =>
+  check_2676 = (value) => typeof value == "string" && value === "thinking",
+  check_2677 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17753,9 +17795,9 @@ var External = [
     "name" in value &&
     "arguments" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1767, unique_1768) => External[895].test(unique_1767) || check_2(value[unique_1767]),
+      (unique_1771, unique_1772) => External[897].test(unique_1771) || check_2(value[unique_1771]),
     ) &&
-    check_2673(value.type) &&
+    check_2678(value.type) &&
     check_287(value.id) &&
     check_287(value.name) &&
     check_301(value.arguments) &&
@@ -17764,15 +17806,15 @@ var External = [
       check_1664(value.thoughtSignature)) &&
     (value.executionMode === void 0 ||
       !("executionMode" in value) ||
-      check_2674(value.executionMode)),
-  check_2673 = (value) => typeof value == "string" && value === "toolCall",
-  check_2674 = (value) => value === "sequential" || value === "parallel",
-  check_2675 = (value) =>
+      check_2679(value.executionMode)),
+  check_2678 = (value) => typeof value == "string" && value === "toolCall",
+  check_2679 = (value) => value === "sequential" || value === "parallel",
+  check_2680 = (value) =>
     typeof value == "string" &&
     (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
     (value.length <= 65536 || (value.length <= 131072 && CodePointCount(value) <= 65536)) &&
-    External[896].test(value),
-  check_2676 = (value) =>
+    External[898].test(value),
+  check_2681 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17783,7 +17825,7 @@ var External = [
     "api" in value &&
     "model" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1769, unique_1770) => External[897].test(unique_1769) || check_2(value[unique_1769]),
+      (unique_1773, unique_1774) => External[899].test(unique_1773) || check_2(value[unique_1773]),
     ) &&
     check_101(value.v) &&
     check_287(value.type) &&
@@ -17793,17 +17835,17 @@ var External = [
     check_287(value.provider) &&
     check_287(value.api) &&
     check_287(value.model) &&
-    (value.baseUrlHash === void 0 || !("baseUrlHash" in value) || check_2677(value.baseUrlHash)) &&
-    (value.sessionHash === void 0 || !("sessionHash" in value) || check_2677(value.sessionHash)) &&
+    (value.baseUrlHash === void 0 || !("baseUrlHash" in value) || check_2682(value.baseUrlHash)) &&
+    (value.sessionHash === void 0 || !("sessionHash" in value) || check_2682(value.sessionHash)) &&
     (value.authProfileHash === void 0 ||
       !("authProfileHash" in value) ||
-      check_2677(value.authProfileHash)),
-  check_2677 = (value) =>
+      check_2682(value.authProfileHash)),
+  check_2682 = (value) =>
     typeof value == "string" &&
     (value.length >= 4 || (value.length >= 2 && CodePointCount(value) >= 2)) &&
     (value.length <= 16 || (value.length <= 32 && CodePointCount(value) <= 16)) &&
-    External[898].test(value),
-  check_2678 = (value) =>
+    External[900].test(value),
+  check_2683 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17814,43 +17856,19 @@ var External = [
     "totalTokens" in value &&
     "cost" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1771, unique_1772) => External[899].test(unique_1771) || check_2(value[unique_1771]),
+      (unique_1775, unique_1776) => External[901].test(unique_1775) || check_2(value[unique_1775]),
     ) &&
     check_1369(value.input) &&
     check_1369(value.output) &&
     check_1369(value.cacheRead) &&
     check_1369(value.cacheWrite) &&
-    (value.usageReport === void 0 || !("usageReport" in value) || check_2679(value.usageReport)) &&
+    (value.usageReport === void 0 || !("usageReport" in value) || check_2684(value.usageReport)) &&
     (value.contextUsage === void 0 ||
       !("contextUsage" in value) ||
-      check_2681(value.contextUsage)) &&
+      check_2686(value.contextUsage)) &&
     check_1369(value.totalTokens) &&
-    check_2684(value.cost),
-  check_2679 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "state" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_1773, unique_1774) => External[900].test(unique_1773) || check_2(value[unique_1773]),
-    ) &&
-    check_2680(value.state),
-  check_2680 = (value) => check_540(value) || check_541(value),
-  check_2681 = (value) => check_2682(value) || check_2683(value),
-  check_2682 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "state" in value &&
-    "promptTokens" in value &&
-    "totalTokens" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_1775, unique_1776) => External[901].test(unique_1775) || check_2(value[unique_1775]),
-    ) &&
-    check_540(value.state) &&
-    check_1369(value.promptTokens) &&
-    check_1369(value.totalTokens),
-  check_2683 = (value) =>
+    check_2689(value.cost),
+  check_2684 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17858,8 +17876,32 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_1777, unique_1778) => External[902].test(unique_1777) || check_2(value[unique_1777]),
     ) &&
+    check_2685(value.state),
+  check_2685 = (value) => check_540(value) || check_541(value),
+  check_2686 = (value) => check_2687(value) || check_2688(value),
+  check_2687 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "state" in value &&
+    "promptTokens" in value &&
+    "totalTokens" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_1779, unique_1780) => External[903].test(unique_1779) || check_2(value[unique_1779]),
+    ) &&
+    check_540(value.state) &&
+    check_1369(value.promptTokens) &&
+    check_1369(value.totalTokens),
+  check_2688 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "state" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_1781, unique_1782) => External[904].test(unique_1781) || check_2(value[unique_1781]),
+    ) &&
     check_541(value.state),
-  check_2684 = (value) =>
+  check_2689 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17869,53 +17911,53 @@ var External = [
     "cacheWrite" in value &&
     "total" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1779, unique_1780) => External[903].test(unique_1779) || check_2(value[unique_1779]),
+      (unique_1783, unique_1784) => External[905].test(unique_1783) || check_2(value[unique_1783]),
     ) &&
     check_1369(value.input) &&
     check_1369(value.output) &&
     check_1369(value.cacheRead) &&
     check_1369(value.cacheWrite) &&
     check_1369(value.total) &&
-    (value.totalOrigin === void 0 || !("totalOrigin" in value) || check_2685(value.totalOrigin)),
-  check_2685 = (value) => typeof value == "string" && value === "provider-billed",
-  check_2686 = (value) =>
+    (value.totalOrigin === void 0 || !("totalOrigin" in value) || check_2690(value.totalOrigin)),
+  check_2690 = (value) => typeof value == "string" && value === "provider-billed",
+  check_2691 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_1781, index) => check_2687(unique_1781)) &&
+    value.every((unique_1785, index) => check_2692(unique_1785)) &&
     value.length <= 128,
-  check_2687 = (value) =>
+  check_2692 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "type" in value &&
     "timestamp" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1782, unique_1783) => External[904].test(unique_1782) || check_2(value[unique_1782]),
+      (unique_1786, unique_1787) => External[906].test(unique_1786) || check_2(value[unique_1786]),
     ) &&
     check_287(value.type) &&
     check_7(value.timestamp) &&
-    (value.error === void 0 || !("error" in value) || check_2688(value.error)) &&
+    (value.error === void 0 || !("error" in value) || check_2693(value.error)) &&
     (value.details === void 0 || !("details" in value) || check_454(value.details)),
-  check_2688 = (value) =>
+  check_2693 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "message" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1784, unique_1785) => External[905].test(unique_1784) || check_2(value[unique_1784]),
+      (unique_1788, unique_1789) => External[907].test(unique_1788) || check_2(value[unique_1788]),
     ) &&
     (value.name === void 0 || !("name" in value) || check_191(value.name)) &&
     check_316(value.message) &&
     (value.stack === void 0 || !("stack" in value) || check_317(value.stack)) &&
-    (value.code === void 0 || !("code" in value) || check_2689(value.code)),
-  check_2689 = (value) => check_740(value) || check_383(value),
-  check_2690 = (value) =>
+    (value.code === void 0 || !("code" in value) || check_2694(value.code)),
+  check_2694 = (value) => check_740(value) || check_383(value),
+  check_2695 = (value) =>
     value === "stop" ||
     value === "length" ||
     value === "toolUse" ||
     value === "error" ||
     value === "aborted",
-  check_2691 = (value) => check_344(value) || check_13(value),
-  check_2692 = (value) =>
+  check_2696 = (value) => check_344(value) || check_13(value),
+  check_2697 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17926,22 +17968,22 @@ var External = [
     "isError" in value &&
     "timestamp" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1786, unique_1787) => External[906].test(unique_1786) || check_2(value[unique_1786]),
+      (unique_1790, unique_1791) => External[908].test(unique_1790) || check_2(value[unique_1790]),
     ) &&
-    check_2693(value.role) &&
+    check_2698(value.role) &&
     check_287(value.toolCallId) &&
     check_287(value.toolName) &&
-    check_2694(value.content) &&
+    check_2699(value.content) &&
     (value.details === void 0 || !("details" in value) || check_321(value.details)) &&
     check_97(value.isError) &&
     check_7(value.timestamp),
-  check_2693 = (value) => typeof value == "string" && value === "toolResult",
-  check_2694 = (value) =>
+  check_2698 = (value) => typeof value == "string" && value === "toolResult",
+  check_2699 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_1788, index) => check_2647(unique_1788)) &&
+    value.every((unique_1792, index) => check_2652(unique_1792)) &&
     value.length <= 128,
-  check_2695 = (value) => check_2696(value),
-  check_2696 = (value) =>
+  check_2700 = (value) => check_2701(value),
+  check_2701 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17951,55 +17993,19 @@ var External = [
     "runId" in value &&
     "event" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1789, unique_1790) => External[907].test(unique_1789) || check_2(value[unique_1789]),
+      (unique_1793, unique_1794) => External[909].test(unique_1793) || check_2(value[unique_1793]),
     ) &&
     check_344(value.runEpoch) &&
     check_344(value.lastAckedSeq) &&
     check_310(value.seq) &&
     check_287(value.runId) &&
-    check_2697(value.event),
-  check_2697 = (value) =>
-    check_2698(value) ||
+    check_2702(value.event),
+  check_2702 = (value) =>
     check_2703(value) ||
-    check_2705(value) ||
-    check_2711(value) ||
-    check_2721(value),
-  check_2698 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "kind" in value &&
-    "payload" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_1791, unique_1792) => External[908].test(unique_1791) || check_2(value[unique_1791]),
-    ) &&
-    check_1036(value.kind) &&
-    check_2699(value.payload),
-  check_2699 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "text" in value &&
-    "delta" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_1793, unique_1794) => External[909].test(unique_1793) || check_2(value[unique_1793]),
-    ) &&
-    check_316(value.text) &&
-    check_316(value.delta) &&
-    (value.replace === void 0 || !("replace" in value) || check_326(value.replace)) &&
-    (value.mediaUrls === void 0 || !("mediaUrls" in value) || check_2700(value.mediaUrls)) &&
-    (value.phase === void 0 || !("phase" in value) || check_2702(value.phase)) &&
-    (value.itemId === void 0 || !("itemId" in value) || check_323(value.itemId)),
-  check_2700 = (value) =>
-    Array.isArray(value) &&
-    value.every((unique_1795, index) => check_2701(unique_1795)) &&
-    value.length <= 128,
-  check_2701 = (value) =>
-    typeof value == "string" &&
-    (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
-    (value.length <= 65536 || (value.length <= 131072 && CodePointCount(value) <= 65536)) &&
-    External[910].test(value),
-  check_2702 = (value) => value === "commentary" || value === "final_answer",
+    check_2708(value) ||
+    check_2710(value) ||
+    check_2716(value) ||
+    check_2726(value),
   check_2703 = (value) =>
     typeof value == "object" &&
     value !== null &&
@@ -18007,9 +18013,9 @@ var External = [
     "kind" in value &&
     "payload" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1796, unique_1797) => External[911].test(unique_1796) || check_2(value[unique_1796]),
+      (unique_1795, unique_1796) => External[910].test(unique_1795) || check_2(value[unique_1795]),
     ) &&
-    check_2671(value.kind) &&
+    check_1036(value.kind) &&
     check_2704(value.payload),
   check_2704 = (value) =>
     typeof value == "object" &&
@@ -18018,12 +18024,25 @@ var External = [
     "text" in value &&
     "delta" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1798, unique_1799) => External[912].test(unique_1798) || check_2(value[unique_1798]),
+      (unique_1797, unique_1798) => External[911].test(unique_1797) || check_2(value[unique_1797]),
     ) &&
     check_316(value.text) &&
     check_316(value.delta) &&
+    (value.replace === void 0 || !("replace" in value) || check_326(value.replace)) &&
+    (value.mediaUrls === void 0 || !("mediaUrls" in value) || check_2705(value.mediaUrls)) &&
+    (value.phase === void 0 || !("phase" in value) || check_2707(value.phase)) &&
     (value.itemId === void 0 || !("itemId" in value) || check_323(value.itemId)),
   check_2705 = (value) =>
+    Array.isArray(value) &&
+    value.every((unique_1799, index) => check_2706(unique_1799)) &&
+    value.length <= 128,
+  check_2706 = (value) =>
+    typeof value == "string" &&
+    (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
+    (value.length <= 65536 || (value.length <= 131072 && CodePointCount(value) <= 65536)) &&
+    External[912].test(value),
+  check_2707 = (value) => value === "commentary" || value === "final_answer",
+  check_2708 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18032,10 +18051,33 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_1800, unique_1801) => External[913].test(unique_1800) || check_2(value[unique_1800]),
     ) &&
+    check_2676(value.kind) &&
+    check_2709(value.payload),
+  check_2709 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "text" in value &&
+    "delta" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_1802, unique_1803) => External[914].test(unique_1802) || check_2(value[unique_1802]),
+    ) &&
+    check_316(value.text) &&
+    check_316(value.delta) &&
+    (value.itemId === void 0 || !("itemId" in value) || check_323(value.itemId)),
+  check_2710 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "kind" in value &&
+    "payload" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_1804, unique_1805) => External[915].test(unique_1804) || check_2(value[unique_1804]),
+    ) &&
     check_1170(value.kind) &&
-    check_2706(value.payload),
-  check_2706 = (value) => check_2707(value) || check_2708(value) || check_2709(value),
-  check_2707 = (value) =>
+    check_2711(value.payload),
+  check_2711 = (value) => check_2712(value) || check_2713(value) || check_2714(value),
+  check_2712 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18044,7 +18086,7 @@ var External = [
     "phase" in value &&
     "args" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1802, unique_1803) => External[914].test(unique_1802) || check_2(value[unique_1802]),
+      (unique_1806, unique_1807) => External[916].test(unique_1806) || check_2(value[unique_1806]),
     ) &&
     check_287(value.name) &&
     check_287(value.toolCallId) &&
@@ -18053,7 +18095,7 @@ var External = [
       check_326(value.hideFromChannelProgress)) &&
     check_368(value.phase) &&
     check_302(value.args),
-  check_2708 = (value) =>
+  check_2713 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18062,7 +18104,7 @@ var External = [
     "phase" in value &&
     "partialResult" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1804, unique_1805) => External[915].test(unique_1804) || check_2(value[unique_1804]),
+      (unique_1808, unique_1809) => External[917].test(unique_1808) || check_2(value[unique_1808]),
     ) &&
     check_287(value.name) &&
     check_287(value.toolCallId) &&
@@ -18071,7 +18113,7 @@ var External = [
       check_326(value.hideFromChannelProgress)) &&
     check_17(value.phase) &&
     check_302(value.partialResult),
-  check_2709 = (value) =>
+  check_2714 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18081,75 +18123,46 @@ var External = [
     "isError" in value &&
     "result" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1806, unique_1807) => External[916].test(unique_1806) || check_2(value[unique_1806]),
+      (unique_1810, unique_1811) => External[918].test(unique_1810) || check_2(value[unique_1810]),
     ) &&
     check_287(value.name) &&
     check_287(value.toolCallId) &&
     (value.hideFromChannelProgress === void 0 ||
       !("hideFromChannelProgress" in value) ||
       check_326(value.hideFromChannelProgress)) &&
-    check_2710(value.phase) &&
+    check_2715(value.phase) &&
     (value.meta === void 0 || !("meta" in value) || check_317(value.meta)) &&
     check_97(value.isError) &&
     check_302(value.result) &&
     (value.toolErrorSummary === void 0 ||
       !("toolErrorSummary" in value) ||
       check_317(value.toolErrorSummary)),
-  check_2710 = (value) => typeof value == "string" && value === "result",
-  check_2711 = (value) =>
+  check_2715 = (value) => typeof value == "string" && value === "result",
+  check_2716 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "kind" in value &&
     "payload" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_1808, unique_1809) => External[917].test(unique_1808) || check_2(value[unique_1808]),
-    ) &&
-    check_2712(value.kind) &&
-    check_2713(value.payload),
-  check_2712 = (value) => typeof value == "string" && value === "approval",
-  check_2713 = (value) => check_2714(value) || check_2718(value),
-  check_2714 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "kind" in value &&
-    "title" in value &&
-    "phase" in value &&
-    "status" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_1810, unique_1811) => External[918].test(unique_1810) || check_2(value[unique_1810]),
-    ) &&
-    check_2715(value.kind) &&
-    check_316(value.title) &&
-    (value.itemId === void 0 || !("itemId" in value) || check_323(value.itemId)) &&
-    (value.toolCallId === void 0 || !("toolCallId" in value) || check_323(value.toolCallId)) &&
-    (value.approvalId === void 0 || !("approvalId" in value) || check_323(value.approvalId)) &&
-    (value.approvalSlug === void 0 ||
-      !("approvalSlug" in value) ||
-      check_323(value.approvalSlug)) &&
-    (value.command === void 0 || !("command" in value) || check_317(value.command)) &&
-    (value.host === void 0 || !("host" in value) || check_317(value.host)) &&
-    (value.reason === void 0 || !("reason" in value) || check_317(value.reason)) &&
-    (value.scope === void 0 || !("scope" in value) || check_2716(value.scope)) &&
-    (value.message === void 0 || !("message" in value) || check_317(value.message)) &&
-    check_956(value.phase) &&
-    check_2717(value.status),
-  check_2715 = (value) => value === "exec" || value === "plugin" || value === "unknown",
-  check_2716 = (value) => value === "turn" || value === "session",
-  check_2717 = (value) => value === "pending" || value === "unavailable",
-  check_2718 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "kind" in value &&
-    "title" in value &&
-    "phase" in value &&
-    "status" in value &&
     Object.getOwnPropertyNames(value).every(
       (unique_1812, unique_1813) => External[919].test(unique_1812) || check_2(value[unique_1812]),
     ) &&
-    check_2715(value.kind) &&
+    check_2717(value.kind) &&
+    check_2718(value.payload),
+  check_2717 = (value) => typeof value == "string" && value === "approval",
+  check_2718 = (value) => check_2719(value) || check_2723(value),
+  check_2719 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "kind" in value &&
+    "title" in value &&
+    "phase" in value &&
+    "status" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_1814, unique_1815) => External[920].test(unique_1814) || check_2(value[unique_1814]),
+    ) &&
+    check_2720(value.kind) &&
     check_316(value.title) &&
     (value.itemId === void 0 || !("itemId" in value) || check_323(value.itemId)) &&
     (value.toolCallId === void 0 || !("toolCallId" in value) || check_323(value.toolCallId)) &&
@@ -18160,42 +18173,71 @@ var External = [
     (value.command === void 0 || !("command" in value) || check_317(value.command)) &&
     (value.host === void 0 || !("host" in value) || check_317(value.host)) &&
     (value.reason === void 0 || !("reason" in value) || check_317(value.reason)) &&
-    (value.scope === void 0 || !("scope" in value) || check_2716(value.scope)) &&
+    (value.scope === void 0 || !("scope" in value) || check_2721(value.scope)) &&
     (value.message === void 0 || !("message" in value) || check_317(value.message)) &&
-    check_2719(value.phase) &&
-    check_2720(value.status),
-  check_2719 = (value) => typeof value == "string" && value === "resolved",
-  check_2720 = (value) => value === "approved" || value === "denied" || value === "failed",
-  check_2721 = (value) =>
+    check_956(value.phase) &&
+    check_2722(value.status),
+  check_2720 = (value) => value === "exec" || value === "plugin" || value === "unknown",
+  check_2721 = (value) => value === "turn" || value === "session",
+  check_2722 = (value) => value === "pending" || value === "unavailable",
+  check_2723 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "kind" in value &&
+    "title" in value &&
+    "phase" in value &&
+    "status" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_1816, unique_1817) => External[921].test(unique_1816) || check_2(value[unique_1816]),
+    ) &&
+    check_2720(value.kind) &&
+    check_316(value.title) &&
+    (value.itemId === void 0 || !("itemId" in value) || check_323(value.itemId)) &&
+    (value.toolCallId === void 0 || !("toolCallId" in value) || check_323(value.toolCallId)) &&
+    (value.approvalId === void 0 || !("approvalId" in value) || check_323(value.approvalId)) &&
+    (value.approvalSlug === void 0 ||
+      !("approvalSlug" in value) ||
+      check_323(value.approvalSlug)) &&
+    (value.command === void 0 || !("command" in value) || check_317(value.command)) &&
+    (value.host === void 0 || !("host" in value) || check_317(value.host)) &&
+    (value.reason === void 0 || !("reason" in value) || check_317(value.reason)) &&
+    (value.scope === void 0 || !("scope" in value) || check_2721(value.scope)) &&
+    (value.message === void 0 || !("message" in value) || check_317(value.message)) &&
+    check_2724(value.phase) &&
+    check_2725(value.status),
+  check_2724 = (value) => typeof value == "string" && value === "resolved",
+  check_2725 = (value) => value === "approved" || value === "denied" || value === "failed",
+  check_2726 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "kind" in value &&
     "payload" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1814, unique_1815) => External[920].test(unique_1814) || check_2(value[unique_1814]),
+      (unique_1818, unique_1819) => External[922].test(unique_1818) || check_2(value[unique_1818]),
     ) &&
-    check_2722(value.kind) &&
-    check_2723(value.payload),
-  check_2722 = (value) => typeof value == "string" && value === "lifecycle",
-  check_2723 = (value) =>
-    check_2724(value) ||
-    check_2725(value) ||
+    check_2727(value.kind) &&
+    check_2728(value.payload),
+  check_2727 = (value) => typeof value == "string" && value === "lifecycle",
+  check_2728 = (value) =>
     check_2729(value) ||
-    check_2731(value) ||
-    check_2734(value),
-  check_2724 = (value) =>
+    check_2730(value) ||
+    check_2734(value) ||
+    check_2736(value) ||
+    check_2739(value),
+  check_2729 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "phase" in value &&
     "startedAt" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1816, unique_1817) => External[921].test(unique_1816) || check_2(value[unique_1816]),
+      (unique_1820, unique_1821) => External[923].test(unique_1820) || check_2(value[unique_1820]),
     ) &&
     check_368(value.phase) &&
     check_344(value.startedAt),
-  check_2725 = (value) =>
+  check_2730 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18208,25 +18250,25 @@ var External = [
     "attemptSummaries" in value &&
     "attempts" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1818, unique_1819) => External[922].test(unique_1818) || check_2(value[unique_1818]),
+      (unique_1822, unique_1823) => External[924].test(unique_1822) || check_2(value[unique_1822]),
     ) &&
-    check_2701(value.selectedProvider) &&
-    check_2701(value.selectedModel) &&
-    check_2701(value.activeProvider) &&
-    check_2701(value.activeModel) &&
+    check_2706(value.selectedProvider) &&
+    check_2706(value.selectedModel) &&
+    check_2706(value.activeProvider) &&
+    check_2706(value.activeModel) &&
     check_2063(value.phase) &&
     check_316(value.reasonSummary) &&
-    check_2726(value.attemptSummaries) &&
-    check_2727(value.attempts),
-  check_2726 = (value) =>
+    check_2731(value.attemptSummaries) &&
+    check_2732(value.attempts),
+  check_2731 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_1820, index) => check_316(unique_1820)) &&
+    value.every((unique_1824, index) => check_316(unique_1824)) &&
     value.length <= 128,
-  check_2727 = (value) =>
+  check_2732 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_1821, index) => check_2728(unique_1821)) &&
+    value.every((unique_1825, index) => check_2733(unique_1825)) &&
     value.length <= 128,
-  check_2728 = (value) =>
+  check_2733 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18234,16 +18276,16 @@ var External = [
     "model" in value &&
     "error" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1822, unique_1823) => External[923].test(unique_1822) || check_2(value[unique_1822]),
+      (unique_1826, unique_1827) => External[925].test(unique_1826) || check_2(value[unique_1826]),
     ) &&
-    check_2701(value.provider) &&
-    check_2701(value.model) &&
+    check_2706(value.provider) &&
+    check_2706(value.model) &&
     check_316(value.error) &&
     (value.reason === void 0 || !("reason" in value) || check_1686(value.reason)) &&
-    (value.authMode === void 0 || !("authMode" in value) || check_2675(value.authMode)) &&
+    (value.authMode === void 0 || !("authMode" in value) || check_2680(value.authMode)) &&
     (value.status === void 0 || !("status" in value) || check_1912(value.status)) &&
     (value.code === void 0 || !("code" in value) || check_1664(value.code)),
-  check_2729 = (value) =>
+  check_2734 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18253,18 +18295,18 @@ var External = [
     "activeModel" in value &&
     "phase" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1824, unique_1825) => External[924].test(unique_1824) || check_2(value[unique_1824]),
+      (unique_1828, unique_1829) => External[926].test(unique_1828) || check_2(value[unique_1828]),
     ) &&
-    check_2701(value.selectedProvider) &&
-    check_2701(value.selectedModel) &&
-    check_2701(value.activeProvider) &&
-    check_2701(value.activeModel) &&
-    check_2730(value.phase) &&
+    check_2706(value.selectedProvider) &&
+    check_2706(value.selectedModel) &&
+    check_2706(value.activeProvider) &&
+    check_2706(value.activeModel) &&
+    check_2735(value.phase) &&
     (value.previousActiveModel === void 0 ||
       !("previousActiveModel" in value) ||
-      check_2675(value.previousActiveModel)),
-  check_2730 = (value) => typeof value == "string" && value === "fallback_cleared",
-  check_2731 = (value) =>
+      check_2680(value.previousActiveModel)),
+  check_2735 = (value) => typeof value == "string" && value === "fallback_cleared",
+  check_2736 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18273,14 +18315,14 @@ var External = [
     "fallbackStepFromModel" in value &&
     "fallbackStepFinalOutcome" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1826, unique_1827) => External[925].test(unique_1826) || check_2(value[unique_1826]),
+      (unique_1830, unique_1831) => External[927].test(unique_1830) || check_2(value[unique_1830]),
     ) &&
-    check_2732(value.phase) &&
-    check_2732(value.fallbackStepType) &&
-    check_2701(value.fallbackStepFromModel) &&
+    check_2737(value.phase) &&
+    check_2737(value.fallbackStepType) &&
+    check_2706(value.fallbackStepFromModel) &&
     (value.fallbackStepToModel === void 0 ||
       !("fallbackStepToModel" in value) ||
-      check_2675(value.fallbackStepToModel)) &&
+      check_2680(value.fallbackStepToModel)) &&
     (value.fallbackStepFromFailureReason === void 0 ||
       !("fallbackStepFromFailureReason" in value) ||
       check_1686(value.fallbackStepFromFailureReason)) &&
@@ -18290,89 +18332,17 @@ var External = [
     (value.fallbackStepChainPosition === void 0 ||
       !("fallbackStepChainPosition" in value) ||
       check_1912(value.fallbackStepChainPosition)) &&
-    check_2733(value.fallbackStepFinalOutcome),
-  check_2732 = (value) => typeof value == "string" && value === "fallback_step",
-  check_2733 = (value) =>
+    check_2738(value.fallbackStepFinalOutcome),
+  check_2737 = (value) => typeof value == "string" && value === "fallback_step",
+  check_2738 = (value) =>
     value === "next_fallback" || value === "succeeded" || value === "chain_exhausted",
-  check_2734 = (value) => check_2735(value) || check_2739(value) || check_2741(value),
-  check_2735 = (value) =>
+  check_2739 = (value) => check_2740(value) || check_2744(value) || check_2746(value),
+  check_2740 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "endedAt" in value &&
     "phase" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_1828, unique_1829) => External[926].test(unique_1828) || check_2(value[unique_1828]),
-    ) &&
-    (value.startedAt === void 0 || !("startedAt" in value) || check_1912(value.startedAt)) &&
-    check_344(value.endedAt) &&
-    (value.stopReason === void 0 || !("stopReason" in value) || check_323(value.stopReason)) &&
-    (value.yielded === void 0 || !("yielded" in value) || check_326(value.yielded)) &&
-    (value.timeoutPhase === void 0 ||
-      !("timeoutPhase" in value) ||
-      check_2736(value.timeoutPhase)) &&
-    (value.providerStarted === void 0 ||
-      !("providerStarted" in value) ||
-      check_181(value.providerStarted)) &&
-    (value.aborted === void 0 || !("aborted" in value) || check_181(value.aborted)) &&
-    (value.toolErrorSummary === void 0 ||
-      !("toolErrorSummary" in value) ||
-      check_317(value.toolErrorSummary)) &&
-    (value.livenessState === void 0 ||
-      !("livenessState" in value) ||
-      check_2737(value.livenessState)) &&
-    (value.replayInvalid === void 0 ||
-      !("replayInvalid" in value) ||
-      check_326(value.replayInvalid)) &&
-    check_2738(value.phase) &&
-    (value.error === void 0 || !("error" in value) || check_317(value.error)),
-  check_2736 = (value) =>
-    value === "queue" ||
-    value === "preflight" ||
-    value === "provider" ||
-    value === "post_turn" ||
-    value === "gateway_draining",
-  check_2737 = (value) =>
-    value === "working" || value === "paused" || value === "blocked" || value === "abandoned",
-  check_2738 = (value) => typeof value == "string" && value === "finishing",
-  check_2739 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "endedAt" in value &&
-    "phase" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_1830, unique_1831) => External[927].test(unique_1830) || check_2(value[unique_1830]),
-    ) &&
-    (value.startedAt === void 0 || !("startedAt" in value) || check_1912(value.startedAt)) &&
-    check_344(value.endedAt) &&
-    (value.stopReason === void 0 || !("stopReason" in value) || check_323(value.stopReason)) &&
-    (value.yielded === void 0 || !("yielded" in value) || check_326(value.yielded)) &&
-    (value.timeoutPhase === void 0 ||
-      !("timeoutPhase" in value) ||
-      check_2736(value.timeoutPhase)) &&
-    (value.providerStarted === void 0 ||
-      !("providerStarted" in value) ||
-      check_181(value.providerStarted)) &&
-    (value.aborted === void 0 || !("aborted" in value) || check_181(value.aborted)) &&
-    (value.toolErrorSummary === void 0 ||
-      !("toolErrorSummary" in value) ||
-      check_317(value.toolErrorSummary)) &&
-    (value.livenessState === void 0 ||
-      !("livenessState" in value) ||
-      check_2737(value.livenessState)) &&
-    (value.replayInvalid === void 0 ||
-      !("replayInvalid" in value) ||
-      check_326(value.replayInvalid)) &&
-    check_2740(value.phase),
-  check_2740 = (value) => typeof value == "string" && value === "end",
-  check_2741 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "endedAt" in value &&
-    "phase" in value &&
-    "error" in value &&
     Object.getOwnPropertyNames(value).every(
       (unique_1832, unique_1833) => External[928].test(unique_1832) || check_2(value[unique_1832]),
     ) &&
@@ -18382,7 +18352,7 @@ var External = [
     (value.yielded === void 0 || !("yielded" in value) || check_326(value.yielded)) &&
     (value.timeoutPhase === void 0 ||
       !("timeoutPhase" in value) ||
-      check_2736(value.timeoutPhase)) &&
+      check_2741(value.timeoutPhase)) &&
     (value.providerStarted === void 0 ||
       !("providerStarted" in value) ||
       check_181(value.providerStarted)) &&
@@ -18392,7 +18362,79 @@ var External = [
       check_317(value.toolErrorSummary)) &&
     (value.livenessState === void 0 ||
       !("livenessState" in value) ||
-      check_2737(value.livenessState)) &&
+      check_2742(value.livenessState)) &&
+    (value.replayInvalid === void 0 ||
+      !("replayInvalid" in value) ||
+      check_326(value.replayInvalid)) &&
+    check_2743(value.phase) &&
+    (value.error === void 0 || !("error" in value) || check_317(value.error)),
+  check_2741 = (value) =>
+    value === "queue" ||
+    value === "preflight" ||
+    value === "provider" ||
+    value === "post_turn" ||
+    value === "gateway_draining",
+  check_2742 = (value) =>
+    value === "working" || value === "paused" || value === "blocked" || value === "abandoned",
+  check_2743 = (value) => typeof value == "string" && value === "finishing",
+  check_2744 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "endedAt" in value &&
+    "phase" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_1834, unique_1835) => External[929].test(unique_1834) || check_2(value[unique_1834]),
+    ) &&
+    (value.startedAt === void 0 || !("startedAt" in value) || check_1912(value.startedAt)) &&
+    check_344(value.endedAt) &&
+    (value.stopReason === void 0 || !("stopReason" in value) || check_323(value.stopReason)) &&
+    (value.yielded === void 0 || !("yielded" in value) || check_326(value.yielded)) &&
+    (value.timeoutPhase === void 0 ||
+      !("timeoutPhase" in value) ||
+      check_2741(value.timeoutPhase)) &&
+    (value.providerStarted === void 0 ||
+      !("providerStarted" in value) ||
+      check_181(value.providerStarted)) &&
+    (value.aborted === void 0 || !("aborted" in value) || check_181(value.aborted)) &&
+    (value.toolErrorSummary === void 0 ||
+      !("toolErrorSummary" in value) ||
+      check_317(value.toolErrorSummary)) &&
+    (value.livenessState === void 0 ||
+      !("livenessState" in value) ||
+      check_2742(value.livenessState)) &&
+    (value.replayInvalid === void 0 ||
+      !("replayInvalid" in value) ||
+      check_326(value.replayInvalid)) &&
+    check_2745(value.phase),
+  check_2745 = (value) => typeof value == "string" && value === "end",
+  check_2746 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "endedAt" in value &&
+    "phase" in value &&
+    "error" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_1836, unique_1837) => External[930].test(unique_1836) || check_2(value[unique_1836]),
+    ) &&
+    (value.startedAt === void 0 || !("startedAt" in value) || check_1912(value.startedAt)) &&
+    check_344(value.endedAt) &&
+    (value.stopReason === void 0 || !("stopReason" in value) || check_323(value.stopReason)) &&
+    (value.yielded === void 0 || !("yielded" in value) || check_326(value.yielded)) &&
+    (value.timeoutPhase === void 0 ||
+      !("timeoutPhase" in value) ||
+      check_2741(value.timeoutPhase)) &&
+    (value.providerStarted === void 0 ||
+      !("providerStarted" in value) ||
+      check_181(value.providerStarted)) &&
+    (value.aborted === void 0 || !("aborted" in value) || check_181(value.aborted)) &&
+    (value.toolErrorSummary === void 0 ||
+      !("toolErrorSummary" in value) ||
+      check_317(value.toolErrorSummary)) &&
+    (value.livenessState === void 0 ||
+      !("livenessState" in value) ||
+      check_2742(value.livenessState)) &&
     (value.replayInvalid === void 0 ||
       !("replayInvalid" in value) ||
       check_326(value.replayInvalid)) &&
@@ -18401,26 +18443,26 @@ var External = [
     (value.fallbackExhaustedFailure === void 0 ||
       !("fallbackExhaustedFailure" in value) ||
       check_326(value.fallbackExhaustedFailure)),
-  check_2742 = (value) => check_2743(value),
-  check_2743 = (value) =>
+  check_2747 = (value) => check_2748(value),
+  check_2748 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "requestId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1834, unique_1835) => External[929].test(unique_1834) || check_2(value[unique_1834]),
+      (unique_1838, unique_1839) => External[931].test(unique_1838) || check_2(value[unique_1838]),
     ) &&
     check_557(value.requestId) &&
     (value.terminalPolicy === void 0 ||
       !("terminalPolicy" in value) ||
-      check_2744(value.terminalPolicy)) &&
+      check_2749(value.terminalPolicy)) &&
     (value.drain === void 0 || !("drain" in value) || check_181(value.drain)),
-  check_2744 = (value) => check_2745(value) || check_2746(value),
-  check_2745 = (value) => typeof value == "string" && value === "preserve",
-  check_2746 = (value) => typeof value == "string" && value === "terminate",
-  check_2747 = (value) => check_2748(value),
-  check_2748 = (value) => check_2749(value) || check_2772(value) || check_2773(value),
-  check_2749 = (value) =>
+  check_2749 = (value) => check_2750(value) || check_2751(value),
+  check_2750 = (value) => typeof value == "string" && value === "preserve",
+  check_2751 = (value) => typeof value == "string" && value === "terminate",
+  check_2752 = (value) => check_2753(value),
+  check_2753 = (value) => check_2754(value) || check_2777(value) || check_2778(value),
+  check_2754 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18430,20 +18472,20 @@ var External = [
     "activeCount" in value &&
     "blockers" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1836, unique_1837) => External[930].test(unique_1836) || check_2(value[unique_1836]),
+      (unique_1840, unique_1841) => External[932].test(unique_1840) || check_2(value[unique_1840]),
     ) &&
-    check_2622(value.status) &&
-    check_2750(value.reason) &&
+    check_2627(value.status) &&
+    check_2755(value.reason) &&
     check_7(value.retryAfterMs) &&
     check_7(value.activeCount) &&
-    check_2753(value.blockers) &&
-    (value.writeCustody === void 0 || !("writeCustody" in value) || check_2770(value.writeCustody)),
-  check_2750 = (value) => check_2751(value) || check_2752(value),
-  check_2751 = (value) => typeof value == "string" && value === "active-work",
-  check_2752 = (value) => typeof value == "string" && value === "gateway-draining",
-  check_2753 = (value) =>
-    Array.isArray(value) && value.every((unique_1838, index) => check_2754(unique_1838)),
-  check_2754 = (value) =>
+    check_2758(value.blockers) &&
+    (value.writeCustody === void 0 || !("writeCustody" in value) || check_2775(value.writeCustody)),
+  check_2755 = (value) => check_2756(value) || check_2757(value),
+  check_2756 = (value) => typeof value == "string" && value === "active-work",
+  check_2757 = (value) => typeof value == "string" && value === "gateway-draining",
+  check_2758 = (value) =>
+    Array.isArray(value) && value.every((unique_1842, index) => check_2759(unique_1842)),
+  check_2759 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18451,18 +18493,13 @@ var External = [
     "count" in value &&
     "message" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1839, unique_1840) => External[931].test(unique_1839) || check_2(value[unique_1839]),
+      (unique_1843, unique_1844) => External[933].test(unique_1843) || check_2(value[unique_1843]),
     ) &&
-    check_2755(value.kind) &&
+    check_2760(value.kind) &&
     check_7(value.count) &&
     check_12(value.message),
-  check_2755 = (value) =>
+  check_2760 = (value) =>
     check_2256(value) ||
-    check_2756(value) ||
-    check_2757(value) ||
-    check_2758(value) ||
-    check_2759(value) ||
-    check_2760(value) ||
     check_2761(value) ||
     check_2762(value) ||
     check_2763(value) ||
@@ -18471,35 +18508,40 @@ var External = [
     check_2766(value) ||
     check_2767(value) ||
     check_2768(value) ||
-    check_2769(value),
-  check_2756 = (value) => typeof value == "string" && value === "reply",
-  check_2757 = (value) => typeof value == "string" && value === "embedded-run",
-  check_2758 = (value) => typeof value == "string" && value === "background-exec",
-  check_2759 = (value) => typeof value == "string" && value === "cron-run",
-  check_2760 = (value) => typeof value == "string" && value === "agent-run",
-  check_2761 = (value) => typeof value == "string" && value === "acp-run",
-  check_2762 = (value) => typeof value == "string" && value === "media-generation",
-  check_2763 = (value) => typeof value == "string" && value === "root-request",
-  check_2764 = (value) => typeof value == "string" && value === "session-admission",
-  check_2765 = (value) => typeof value == "string" && value === "session-mutation",
-  check_2766 = (value) => typeof value == "string" && value === "chat-run",
-  check_2767 = (value) => typeof value == "string" && value === "queued-turn",
-  check_2768 = (value) => typeof value == "string" && value === "terminal-persistence",
-  check_2769 = (value) => typeof value == "string" && value === "terminal-session",
-  check_2770 = (value) =>
-    Array.isArray(value) && value.every((unique_1841, index) => check_2771(unique_1841)),
-  check_2771 = (value) =>
+    check_2769(value) ||
+    check_2770(value) ||
+    check_2771(value) ||
+    check_2772(value) ||
+    check_2773(value) ||
+    check_2774(value),
+  check_2761 = (value) => typeof value == "string" && value === "reply",
+  check_2762 = (value) => typeof value == "string" && value === "embedded-run",
+  check_2763 = (value) => typeof value == "string" && value === "background-exec",
+  check_2764 = (value) => typeof value == "string" && value === "cron-run",
+  check_2765 = (value) => typeof value == "string" && value === "agent-run",
+  check_2766 = (value) => typeof value == "string" && value === "acp-run",
+  check_2767 = (value) => typeof value == "string" && value === "media-generation",
+  check_2768 = (value) => typeof value == "string" && value === "root-request",
+  check_2769 = (value) => typeof value == "string" && value === "session-admission",
+  check_2770 = (value) => typeof value == "string" && value === "session-mutation",
+  check_2771 = (value) => typeof value == "string" && value === "chat-run",
+  check_2772 = (value) => typeof value == "string" && value === "queued-turn",
+  check_2773 = (value) => typeof value == "string" && value === "terminal-persistence",
+  check_2774 = (value) => typeof value == "string" && value === "terminal-session",
+  check_2775 = (value) =>
+    Array.isArray(value) && value.every((unique_1845, index) => check_2776(unique_1845)),
+  check_2776 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "phase" in value &&
     "count" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1842, unique_1843) => External[932].test(unique_1842) || check_2(value[unique_1842]),
+      (unique_1846, unique_1847) => External[934].test(unique_1846) || check_2(value[unique_1846]),
     ) &&
     check_6(value.phase) &&
     check_7(value.count),
-  check_2772 = (value) =>
+  check_2777 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18510,58 +18552,58 @@ var External = [
     "activeCount" in value &&
     "blockers" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1844, unique_1845) => External[933].test(unique_1844) || check_2(value[unique_1844]),
+      (unique_1848, unique_1849) => External[935].test(unique_1848) || check_2(value[unique_1848]),
     ) &&
     check_1999(value.status) &&
     check_557(value.suspensionId) &&
     check_7(value.expiresAtMs) &&
     check_7(value.retryAfterMs) &&
     check_7(value.activeCount) &&
-    check_2753(value.blockers) &&
-    (value.writeCustody === void 0 || !("writeCustody" in value) || check_2770(value.writeCustody)),
-  check_2773 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "status" in value &&
-    "suspensionId" in value &&
-    "expiresAtMs" in value &&
-    "activeCount" in value &&
-    "blockers" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_1846, unique_1847) => External[934].test(unique_1846) || check_2(value[unique_1846]),
-    ) &&
-    check_951(value.status) &&
-    check_557(value.suspensionId) &&
-    check_7(value.expiresAtMs) &&
-    check_7(value.activeCount) &&
-    check_2753(value.blockers) &&
-    (value.writeCustody === void 0 || !("writeCustody" in value) || check_2770(value.writeCustody)),
-  check_2774 = (value) => check_2775(value),
-  check_2775 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "suspensionId" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_1848, unique_1849) => External[935].test(unique_1848) || check_2(value[unique_1848]),
-    ) &&
-    check_557(value.suspensionId) &&
-    (value.includeLifecycle === void 0 ||
-      !("includeLifecycle" in value) ||
-      check_181(value.includeLifecycle)),
-  check_2776 = (value) => check_2777(value),
-  check_2777 = (value) => check_2778(value) || check_2779(value) || check_2783(value),
+    check_2758(value.blockers) &&
+    (value.writeCustody === void 0 || !("writeCustody" in value) || check_2775(value.writeCustody)),
   check_2778 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "status" in value &&
+    "suspensionId" in value &&
+    "expiresAtMs" in value &&
+    "activeCount" in value &&
+    "blockers" in value &&
     Object.getOwnPropertyNames(value).every(
       (unique_1850, unique_1851) => External[936].test(unique_1850) || check_2(value[unique_1850]),
     ) &&
+    check_951(value.status) &&
+    check_557(value.suspensionId) &&
+    check_7(value.expiresAtMs) &&
+    check_7(value.activeCount) &&
+    check_2758(value.blockers) &&
+    (value.writeCustody === void 0 || !("writeCustody" in value) || check_2775(value.writeCustody)),
+  check_2779 = (value) => check_2780(value),
+  check_2780 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "suspensionId" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_1852, unique_1853) => External[937].test(unique_1852) || check_2(value[unique_1852]),
+    ) &&
+    check_557(value.suspensionId) &&
+    (value.includeLifecycle === void 0 ||
+      !("includeLifecycle" in value) ||
+      check_181(value.includeLifecycle)),
+  check_2781 = (value) => check_2782(value),
+  check_2782 = (value) => check_2783(value) || check_2784(value) || check_2788(value),
+  check_2783 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "status" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_1854, unique_1855) => External[938].test(unique_1854) || check_2(value[unique_1854]),
+    ) &&
     check_361(value.status),
-  check_2779 = (value) =>
+  check_2784 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18571,68 +18613,68 @@ var External = [
     "activeCount" in value &&
     "blockers" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1852, unique_1853) => External[937].test(unique_1852) || check_2(value[unique_1852]),
+      (unique_1856, unique_1857) => External[939].test(unique_1856) || check_2(value[unique_1856]),
     ) &&
     check_1999(value.status) &&
     (value.ownerId === void 0 || !("ownerId" in value) || check_751(value.ownerId)) &&
-    (value.phase === void 0 || !("phase" in value) || check_2780(value.phase)) &&
+    (value.phase === void 0 || !("phase" in value) || check_2785(value.phase)) &&
     check_7(value.expiresAtMs) &&
     check_7(value.retryAfterMs) &&
     check_7(value.activeCount) &&
-    check_2753(value.blockers) &&
-    (value.writeCustody === void 0 || !("writeCustody" in value) || check_2770(value.writeCustody)),
-  check_2780 = (value) => check_1999(value) || check_2781(value) || check_2782(value),
-  check_2781 = (value) => typeof value == "string" && value === "interrupting",
-  check_2782 = (value) => typeof value == "string" && value === "exiting",
-  check_2783 = (value) =>
+    check_2758(value.blockers) &&
+    (value.writeCustody === void 0 || !("writeCustody" in value) || check_2775(value.writeCustody)),
+  check_2785 = (value) => check_1999(value) || check_2786(value) || check_2787(value),
+  check_2786 = (value) => typeof value == "string" && value === "interrupting",
+  check_2787 = (value) => typeof value == "string" && value === "exiting",
+  check_2788 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "status" in value &&
     "expiresAtMs" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1854, unique_1855) => External[938].test(unique_1854) || check_2(value[unique_1854]),
+      (unique_1858, unique_1859) => External[940].test(unique_1858) || check_2(value[unique_1858]),
     ) &&
     check_951(value.status) &&
     (value.ownerId === void 0 || !("ownerId" in value) || check_751(value.ownerId)) &&
     check_7(value.expiresAtMs) &&
-    (value.writeCustody === void 0 || !("writeCustody" in value) || check_2770(value.writeCustody)),
-  check_2784 = (value) => check_2785(value),
-  check_2785 = (value) =>
+    (value.writeCustody === void 0 || !("writeCustody" in value) || check_2775(value.writeCustody)),
+  check_2789 = (value) => check_2790(value),
+  check_2790 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "suspensionId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1856, unique_1857) => External[939].test(unique_1856) || check_2(value[unique_1856]),
+      (unique_1860, unique_1861) => External[941].test(unique_1860) || check_2(value[unique_1860]),
     ) &&
     check_557(value.suspensionId),
-  check_2786 = (value) => check_2787(value),
-  check_2787 = (value) =>
+  check_2791 = (value) => check_2792(value),
+  check_2792 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "suspensionId" in value &&
     "target" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1858, unique_1859) => External[940].test(unique_1858) || check_2(value[unique_1858]),
+      (unique_1862, unique_1863) => External[942].test(unique_1862) || check_2(value[unique_1862]),
     ) &&
     check_557(value.suspensionId) &&
     (value.commit === void 0 || !("commit" in value) || check_326(value.commit)) &&
-    check_2788(value.target),
-  check_2788 = (value) =>
+    check_2793(value.target),
+  check_2793 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "pid" in value &&
     "processInstanceId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1860, unique_1861) => External[941].test(unique_1860) || check_2(value[unique_1860]),
+      (unique_1864, unique_1865) => External[943].test(unique_1864) || check_2(value[unique_1864]),
     ) &&
     check_618(value.pid) &&
     check_557(value.processInstanceId),
-  check_2789 = (value) => check_2790(value),
-  check_2790 = (value) =>
+  check_2794 = (value) => check_2795(value),
+  check_2795 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18640,9 +18682,9 @@ var External = [
     "id" in value &&
     "method" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1862, unique_1863) => External[942].test(unique_1862) || check_2(value[unique_1862]),
+      (unique_1866, unique_1867) => External[944].test(unique_1866) || check_2(value[unique_1866]),
     ) &&
-    check_2610(value.type) &&
+    check_2615(value.type) &&
     check_6(value.id) &&
     check_6(value.method) &&
     (value.params === void 0 || !("params" in value) || check_321(value.params)) &&
@@ -18650,45 +18692,45 @@ var External = [
     (value.expectedProfileId === void 0 ||
       !("expectedProfileId" in value) ||
       check_259(value.expectedProfileId)),
-  check_2791 = (value) => check_203(value),
-  check_2792 = (value) => check_1750(value),
-  check_2793 = (value) => check_1750(value),
-  check_2794 = (value) => check_2795(value),
-  check_2795 = (value) =>
+  check_2796 = (value) => check_203(value),
+  check_2797 = (value) => check_1750(value),
+  check_2798 = (value) => check_1750(value),
+  check_2799 = (value) => check_2800(value),
+  check_2800 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "nodeId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1864, unique_1865) => External[943].test(unique_1864) || check_2(value[unique_1864]),
+      (unique_1868, unique_1869) => External[945].test(unique_1868) || check_2(value[unique_1868]),
     ) &&
     check_6(value.nodeId),
-  check_2796 = (value) => check_2797(value),
-  check_2797 = (value) =>
+  check_2801 = (value) => check_2802(value),
+  check_2802 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "nodeId" in value &&
     "displayName" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1866, unique_1867) => External[944].test(unique_1866) || check_2(value[unique_1866]),
+      (unique_1870, unique_1871) => External[946].test(unique_1870) || check_2(value[unique_1870]),
     ) &&
     check_6(value.nodeId) &&
     check_6(value.displayName),
-  check_2798 = (value) => check_203(value),
-  check_2799 = (value) => check_2800(value),
-  check_2800 = (value) =>
+  check_2803 = (value) => check_203(value),
+  check_2804 = (value) => check_2805(value),
+  check_2805 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "tools" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1868, unique_1869) => External[945].test(unique_1868) || check_2(value[unique_1868]),
+      (unique_1872, unique_1873) => External[947].test(unique_1872) || check_2(value[unique_1872]),
     ) &&
-    check_2801(value.tools),
-  check_2801 = (value) =>
-    Array.isArray(value) && value.every((unique_1870, index) => check_2802(unique_1870)),
-  check_2802 = (value) =>
+    check_2806(value.tools),
+  check_2806 = (value) =>
+    Array.isArray(value) && value.every((unique_1874, index) => check_2807(unique_1874)),
+  check_2807 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18696,45 +18738,45 @@ var External = [
     "name" in value &&
     "description" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1871, unique_1872) => External[946].test(unique_1871) || check_2(value[unique_1871]),
+      (unique_1875, unique_1876) => External[948].test(unique_1875) || check_2(value[unique_1875]),
     ) &&
     check_6(value.pluginId) &&
-    check_2803(value.name) &&
+    check_2808(value.name) &&
     check_6(value.description) &&
     (value.parameters === void 0 || !("parameters" in value) || check_454(value.parameters)) &&
     (value.command === void 0 || !("command" in value) || check_63(value.command)) &&
-    (value.mcp === void 0 || !("mcp" in value) || check_2804(value.mcp)),
-  check_2803 = (value) =>
+    (value.mcp === void 0 || !("mcp" in value) || check_2809(value.mcp)),
+  check_2808 = (value) =>
     typeof value == "string" &&
     (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
     (value.length <= 64 || (value.length <= 128 && CodePointCount(value) <= 64)) &&
-    External[947].test(value),
-  check_2804 = (value) =>
+    External[949].test(value),
+  check_2809 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "server" in value &&
     "tool" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1873, unique_1874) => External[948].test(unique_1873) || check_2(value[unique_1873]),
+      (unique_1877, unique_1878) => External[950].test(unique_1877) || check_2(value[unique_1877]),
     ) &&
     check_6(value.server) &&
     check_6(value.tool),
-  check_2805 = (value) => check_2806(value),
-  check_2806 = (value) =>
+  check_2810 = (value) => check_2811(value),
+  check_2811 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "skills" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1875, unique_1876) => External[949].test(unique_1875) || check_2(value[unique_1875]),
+      (unique_1879, unique_1880) => External[951].test(unique_1879) || check_2(value[unique_1879]),
     ) &&
-    check_2807(value.skills),
-  check_2807 = (value) =>
+    check_2812(value.skills),
+  check_2812 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_1877, index) => check_2808(unique_1877)) &&
+    value.every((unique_1881, index) => check_2813(unique_1881)) &&
     value.length <= 64,
-  check_2808 = (value) =>
+  check_2813 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18742,29 +18784,29 @@ var External = [
     "description" in value &&
     "content" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1878, unique_1879) => External[950].test(unique_1878) || check_2(value[unique_1878]),
+      (unique_1882, unique_1883) => External[952].test(unique_1882) || check_2(value[unique_1882]),
     ) &&
-    check_2809(value.name) &&
+    check_2814(value.name) &&
     check_1039(value.description) &&
     check_1609(value.content),
-  check_2809 = (value) =>
+  check_2814 = (value) =>
     typeof value == "string" &&
     (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
     (value.length <= 64 || (value.length <= 128 && CodePointCount(value) <= 64)) &&
-    External[951].test(value),
-  check_2810 = (value) => check_2811(value),
-  check_2811 = (value) =>
+    External[953].test(value),
+  check_2815 = (value) => check_2816(value),
+  check_2816 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "environmentId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1880, unique_1881) => External[952].test(unique_1880) || check_2(value[unique_1880]),
+      (unique_1884, unique_1885) => External[954].test(unique_1884) || check_2(value[unique_1884]),
     ) &&
     check_6(value.environmentId) &&
     (value.control === void 0 || !("control" in value) || check_181(value.control)),
-  check_2812 = (value) => check_2813(value),
-  check_2813 = (value) =>
+  check_2817 = (value) => check_2818(value),
+  check_2818 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18773,7 +18815,7 @@ var External = [
     "expiresAtMs" in value &&
     "control" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1882, unique_1883) => External[953].test(unique_1882) || check_2(value[unique_1882]),
+      (unique_1886, unique_1887) => External[955].test(unique_1886) || check_2(value[unique_1886]),
     ) &&
     check_1340(value.transport) &&
     check_6(value.wsPath) &&
@@ -18781,43 +18823,43 @@ var External = [
     check_97(value.control) &&
     (value.canResize === void 0 || !("canResize" in value) || check_181(value.canResize)) &&
     (value.vncPassword === void 0 || !("vncPassword" in value) || check_63(value.vncPassword)),
-  check_2814 = (value) => check_2815(value),
-  check_2815 = (value) =>
+  check_2819 = (value) => check_2820(value),
+  check_2820 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "environmentId" in value &&
     "app" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1884, unique_1885) => External[954].test(unique_1884) || check_2(value[unique_1884]),
+      (unique_1888, unique_1889) => External[956].test(unique_1888) || check_2(value[unique_1888]),
     ) &&
     check_6(value.environmentId) &&
     check_1349(value.app),
-  check_2816 = (value) => check_2817(value),
-  check_2817 = (value) =>
+  check_2821 = (value) => check_2822(value),
+  check_2822 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "app" in value &&
     "status" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1886, unique_1887) => External[955].test(unique_1886) || check_2(value[unique_1886]),
+      (unique_1890, unique_1891) => External[957].test(unique_1890) || check_2(value[unique_1890]),
     ) &&
     check_1349(value.app) &&
     check_951(value.status),
-  check_2818 = (value) => check_2819(value),
-  check_2819 = (value) =>
+  check_2823 = (value) => check_2824(value),
+  check_2824 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "ids" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1888, unique_1889) => External[956].test(unique_1888) || check_2(value[unique_1888]),
+      (unique_1892, unique_1893) => External[958].test(unique_1892) || check_2(value[unique_1892]),
     ) &&
     check_1598(value.ids),
-  check_2820 = (value) => check_2795(value),
-  check_2821 = (value) => check_2822(value),
-  check_2822 = (value) =>
+  check_2825 = (value) => check_2800(value),
+  check_2826 = (value) => check_2827(value),
+  check_2827 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18825,7 +18867,7 @@ var External = [
     "command" in value &&
     "idempotencyKey" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1890, unique_1891) => External[957].test(unique_1890) || check_2(value[unique_1890]),
+      (unique_1894, unique_1895) => External[959].test(unique_1894) || check_2(value[unique_1894]),
     ) &&
     check_6(value.nodeId) &&
     check_6(value.command) &&
@@ -18845,8 +18887,8 @@ var External = [
     (value.turnSourceThreadId === void 0 ||
       !("turnSourceThreadId" in value) ||
       check_901(value.turnSourceThreadId)),
-  check_2823 = (value) => check_2824(value),
-  check_2824 = (value) =>
+  check_2828 = (value) => check_2829(value),
+  check_2829 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18854,48 +18896,48 @@ var External = [
     "nodeId" in value &&
     "ok" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1892, unique_1893) => External[958].test(unique_1892) || check_2(value[unique_1892]),
+      (unique_1896, unique_1897) => External[960].test(unique_1896) || check_2(value[unique_1896]),
     ) &&
     check_6(value.id) &&
     check_6(value.nodeId) &&
     check_97(value.ok) &&
     (value.payload === void 0 || !("payload" in value) || check_321(value.payload)) &&
     (value.payloadJSON === void 0 || !("payloadJSON" in value) || check_272(value.payloadJSON)) &&
-    (value.error === void 0 || !("error" in value) || check_2825(value.error)),
-  check_2825 = (value) =>
+    (value.error === void 0 || !("error" in value) || check_2830(value.error)),
+  check_2830 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1894, unique_1895) => External[959].test(unique_1894) || check_2(value[unique_1894]),
+      (unique_1898, unique_1899) => External[961].test(unique_1898) || check_2(value[unique_1898]),
     ) &&
     (value.code === void 0 || !("code" in value) || check_63(value.code)) &&
     (value.message === void 0 || !("message" in value) || check_63(value.message)) &&
-    (value.details === void 0 || !("details" in value) || check_2826(value.details)),
-  check_2826 = (value) =>
+    (value.details === void 0 || !("details" in value) || check_2831(value.details)),
+  check_2831 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "capabilities" in value &&
     "state" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1896, unique_1897) => External[960].test(unique_1896) || check_2(value[unique_1896]),
+      (unique_1900, unique_1901) => External[962].test(unique_1900) || check_2(value[unique_1900]),
     ) &&
-    check_2827(value.capabilities) &&
-    check_2828(value.state),
-  check_2827 = (value) =>
+    check_2832(value.capabilities) &&
+    check_2833(value.state),
+  check_2832 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_1898, index) => check_6(unique_1898)) &&
+    value.every((unique_1902, index) => check_6(unique_1902)) &&
     value.length >= 1 &&
     new Set(value.map(Hash)).size === value.length,
-  check_2828 = (value) =>
+  check_2833 = (value) =>
     value === "not-determined" ||
     value === "denied" ||
     value === "restart-required" ||
     value === "stale-grant" ||
     value === "disabled-in-openclaw",
-  check_2829 = (value) => check_2830(value),
-  check_2830 = (value) =>
+  check_2834 = (value) => check_2835(value),
+  check_2835 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18904,56 +18946,56 @@ var External = [
     "seq" in value &&
     "chunk" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1899, unique_1900) => External[961].test(unique_1899) || check_2(value[unique_1899]),
+      (unique_1903, unique_1904) => External[963].test(unique_1903) || check_2(value[unique_1903]),
     ) &&
     check_6(value.invokeId) &&
     check_6(value.nodeId) &&
     check_7(value.seq) &&
-    check_2831(value.chunk),
-  check_2831 = (value) =>
+    check_2836(value.chunk),
+  check_2836 = (value) =>
     typeof value == "string" &&
     (value.length <= 16384 || (value.length <= 32768 && CodePointCount(value) <= 16384)),
-  check_2832 = (value) => check_2833(value),
-  check_2833 = (value) =>
+  check_2837 = (value) => check_2838(value),
+  check_2838 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "event" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1901, unique_1902) => External[962].test(unique_1901) || check_2(value[unique_1901]),
+      (unique_1905, unique_1906) => External[964].test(unique_1905) || check_2(value[unique_1905]),
     ) &&
     check_6(value.event) &&
     (value.payload === void 0 || !("payload" in value) || check_321(value.payload)) &&
     (value.payloadJSON === void 0 || !("payloadJSON" in value) || check_272(value.payloadJSON)),
-  check_2834 = (value) => check_2835(value),
-  check_2835 = (value) => check_2836(value) || check_2840(value),
-  check_2836 = (value) =>
+  check_2839 = (value) => check_2840(value),
+  check_2840 = (value) => check_2841(value) || check_2845(value),
+  check_2841 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "idleSeconds" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1903, unique_1904) => External[963].test(unique_1903) || check_2(value[unique_1903]),
+      (unique_1907, unique_1908) => External[965].test(unique_1907) || check_2(value[unique_1907]),
     ) &&
-    check_2837(value.idleSeconds) &&
-    (value.source === void 0 || !("source" in value) || check_2838(value.source)) &&
+    check_2842(value.idleSeconds) &&
+    (value.source === void 0 || !("source" in value) || check_2843(value.source)) &&
     (value.saturated === void 0 || !("saturated" in value) || check_181(value.saturated)),
-  check_2837 = (value) =>
+  check_2842 = (value) =>
     Number.isInteger(value) &&
     (!(Number.isFinite(value) || typeof value == "bigint") || (value >= 0 && value <= 2592e3)),
-  check_2838 = (value) => check_2839(value) || check_71(value),
-  check_2839 = (value) => typeof value == "string" && value === "app",
-  check_2840 = (value) =>
+  check_2843 = (value) => check_2844(value) || check_71(value),
+  check_2844 = (value) => typeof value == "string" && value === "app",
+  check_2845 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "action" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1905, unique_1906) => External[964].test(unique_1905) || check_2(value[unique_1905]),
+      (unique_1909, unique_1910) => External[966].test(unique_1909) || check_2(value[unique_1909]),
     ) &&
     check_375(value.action),
-  check_2841 = (value) => check_2842(value),
-  check_2842 = (value) =>
+  check_2846 = (value) => check_2847(value),
+  check_2847 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -18961,10 +19003,10 @@ var External = [
     "memoryTotalBytes" in value &&
     "memoryFreeBytes" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1907, unique_1908) => External[965].test(unique_1907) || check_2(value[unique_1907]),
+      (unique_1911, unique_1912) => External[967].test(unique_1911) || check_2(value[unique_1911]),
     ) &&
-    check_2843(value.cpuCount) &&
-    (value.loadAverage === void 0 || !("loadAverage" in value) || check_2844(value.loadAverage)) &&
+    check_2848(value.cpuCount) &&
+    (value.loadAverage === void 0 || !("loadAverage" in value) || check_2849(value.loadAverage)) &&
     check_7(value.memoryTotalBytes) &&
     check_7(value.memoryFreeBytes) &&
     (value.diskTotalBytes === void 0 ||
@@ -18973,71 +19015,71 @@ var External = [
     (value.diskAvailableBytes === void 0 ||
       !("diskAvailableBytes" in value) ||
       check_426(value.diskAvailableBytes)) &&
-    External[966].check(value),
-  check_2843 = (value) =>
+    External[968].check(value),
+  check_2848 = (value) =>
     Number.isInteger(value) &&
     (!(Number.isFinite(value) || typeof value == "bigint") || (value >= 1 && value <= 4096)),
-  check_2844 = (value) =>
+  check_2849 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_1909, unique_1910) => unique_1910 < 3 || check_2(unique_1909)) &&
-    (value.length <= 0 || check_2845(value[0])) &&
-    (value.length <= 1 || check_2845(value[1])) &&
-    (value.length <= 2 || check_2845(value[2])) &&
+    value.every((unique_1913, unique_1914) => unique_1914 < 3 || check_2(unique_1913)) &&
+    (value.length <= 0 || check_2850(value[0])) &&
+    (value.length <= 1 || check_2850(value[1])) &&
+    (value.length <= 2 || check_2850(value[2])) &&
     value.length >= 3,
-  check_2845 = (value) => Number.isFinite(value) && value >= 0 && value <= 1e5,
-  check_2846 = (value) => check_2847(value),
-  check_2847 = (value) =>
+  check_2850 = (value) => Number.isFinite(value) && value >= 0 && value <= 1e5,
+  check_2851 = (value) => check_2852(value),
+  check_2852 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1911, unique_1912) => External[967].test(unique_1911) || check_2(value[unique_1911]),
+      (unique_1915, unique_1916) => External[969].test(unique_1915) || check_2(value[unique_1915]),
     ) &&
-    (value.maxItems === void 0 || !("maxItems" in value) || check_2848(value.maxItems)),
-  check_2848 = (value) =>
+    (value.maxItems === void 0 || !("maxItems" in value) || check_2853(value.maxItems)),
+  check_2853 = (value) =>
     Number.isInteger(value) &&
     (!(Number.isFinite(value) || typeof value == "bigint") || (value >= 1 && value <= 10)),
-  check_2849 = (value) => check_2850(value),
-  check_2850 = (value) =>
+  check_2854 = (value) => check_2855(value),
+  check_2855 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "nodeId" in value &&
     "type" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1913, unique_1914) => External[968].test(unique_1913) || check_2(value[unique_1913]),
+      (unique_1917, unique_1918) => External[970].test(unique_1917) || check_2(value[unique_1917]),
     ) &&
     check_6(value.nodeId) &&
-    check_2851(value.type) &&
-    (value.priority === void 0 || !("priority" in value) || check_2852(value.priority)) &&
-    (value.expiresInMs === void 0 || !("expiresInMs" in value) || check_2853(value.expiresInMs)) &&
+    check_2856(value.type) &&
+    (value.priority === void 0 || !("priority" in value) || check_2857(value.priority)) &&
+    (value.expiresInMs === void 0 || !("expiresInMs" in value) || check_2858(value.expiresInMs)) &&
     (value.wake === void 0 || !("wake" in value) || check_181(value.wake)),
-  check_2851 = (value) =>
+  check_2856 = (value) =>
     typeof value == "string" && (value === "status.request" || value === "location.request"),
-  check_2852 = (value) => typeof value == "string" && (value === "normal" || value === "high"),
-  check_2853 = (value) =>
+  check_2857 = (value) => typeof value == "string" && (value === "normal" || value === "high"),
+  check_2858 = (value) =>
     Number.isInteger(value) &&
     (!(Number.isFinite(value) || typeof value == "bigint") || (value >= 1e3 && value <= 864e5)),
-  check_2854 = (value) => check_203(value),
-  check_2855 = (value) => check_1750(value),
-  check_2856 = (value) => check_1750(value),
-  check_2857 = (value) => check_2858(value),
-  check_2858 = (value) =>
+  check_2859 = (value) => check_203(value),
+  check_2860 = (value) => check_1750(value),
+  check_2861 = (value) => check_1750(value),
+  check_2862 = (value) => check_2863(value),
+  check_2863 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "deviceId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1915, unique_1916) => External[969].test(unique_1915) || check_2(value[unique_1915]),
+      (unique_1919, unique_1920) => External[971].test(unique_1919) || check_2(value[unique_1919]),
     ) &&
     check_6(value.deviceId),
-  check_2859 = (value) => check_2860(value),
-  check_2860 = (value) =>
+  check_2864 = (value) => check_2865(value),
+  check_2865 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1917, unique_1918) => External[970].test(unique_1917) || check_2(value[unique_1917]),
+      (unique_1921, unique_1922) => External[972].test(unique_1921) || check_2(value[unique_1921]),
     ) &&
     (value.publicUrl === void 0 || !("publicUrl" in value) || check_63(value.publicUrl)) &&
     (value.preferRemoteUrl === void 0 ||
@@ -19046,157 +19088,157 @@ var External = [
     (value.includeQr === void 0 || !("includeQr" in value) || check_181(value.includeQr)) &&
     (value.bootstrapProfile === void 0 ||
       !("bootstrapProfile" in value) ||
-      check_2861(value.bootstrapProfile)) &&
+      check_2866(value.bootstrapProfile)) &&
     (value.joinUrl === void 0 || !("joinUrl" in value) || check_326(value.joinUrl)),
-  check_2861 = (value) =>
+  check_2866 = (value) =>
     typeof value == "string" && (value === "limited" || value === "node" || value === "voice-node"),
-  check_2862 = (value) => check_2863(value),
-  check_2863 = (value) =>
+  check_2867 = (value) => check_2868(value),
+  check_2868 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "setupId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1919, unique_1920) => External[971].test(unique_1919) || check_2(value[unique_1919]),
+      (unique_1923, unique_1924) => External[973].test(unique_1923) || check_2(value[unique_1923]),
     ) &&
     check_22(value.setupId),
-  check_2864 = (value) => check_2865(value),
-  check_2865 = (value) =>
+  check_2869 = (value) => check_2870(value),
+  check_2870 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "deviceId" in value &&
     "label" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1921, unique_1922) => External[972].test(unique_1921) || check_2(value[unique_1921]),
-    ) &&
-    check_6(value.deviceId) &&
-    check_829(value.label),
-  check_2866 = (value) => check_2867(value),
-  check_2867 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "deviceId" in value &&
-    "role" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_1923, unique_1924) => External[973].test(unique_1923) || check_2(value[unique_1923]),
-    ) &&
-    check_6(value.deviceId) &&
-    check_6(value.role) &&
-    (value.scopes === void 0 || !("scopes" in value) || check_1184(value.scopes)),
-  check_2868 = (value) => check_2869(value),
-  check_2869 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "deviceId" in value &&
-    "role" in value &&
-    Object.getOwnPropertyNames(value).every(
       (unique_1925, unique_1926) => External[974].test(unique_1925) || check_2(value[unique_1925]),
     ) &&
     check_6(value.deviceId) &&
-    check_6(value.role),
-  check_2870 = (value) => check_2795(value),
+    check_829(value.label),
   check_2871 = (value) => check_2872(value),
   check_2872 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
-    "nodeId" in value &&
+    "deviceId" in value &&
+    "role" in value &&
     Object.getOwnPropertyNames(value).every(
       (unique_1927, unique_1928) => External[975].test(unique_1927) || check_2(value[unique_1927]),
     ) &&
+    check_6(value.deviceId) &&
+    check_6(value.role) &&
+    (value.scopes === void 0 || !("scopes" in value) || check_1184(value.scopes)),
+  check_2873 = (value) => check_2874(value),
+  check_2874 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "deviceId" in value &&
+    "role" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_1929, unique_1930) => External[976].test(unique_1929) || check_2(value[unique_1929]),
+    ) &&
+    check_6(value.deviceId) &&
+    check_6(value.role),
+  check_2875 = (value) => check_2800(value),
+  check_2876 = (value) => check_2877(value),
+  check_2877 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "nodeId" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_1931, unique_1932) => External[977].test(unique_1931) || check_2(value[unique_1931]),
+    ) &&
     check_6(value.nodeId) &&
-    (value.file === void 0 || !("file" in value) || check_2873(value.file)) &&
-    (value.native === void 0 || !("native" in value) || check_2874(value.native)) &&
+    (value.file === void 0 || !("file" in value) || check_2878(value.file)) &&
+    (value.native === void 0 || !("native" in value) || check_2879(value.native)) &&
     (value.baseHash === void 0 || !("baseHash" in value) || check_63(value.baseHash)) &&
-    [check_2880(value), check_2882(value)].reduce(
-      (result, unique_1936, _) => (unique_1936 === !0 ? ++result : result),
+    [check_2885(value), check_2887(value)].reduce(
+      (result, unique_1940, _) => (unique_1940 === !0 ? ++result : result),
       0,
     ) === 1,
-  check_2873 = (value) =>
+  check_2878 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "version" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1929, unique_1930) => External[976].test(unique_1929) || check_2(value[unique_1929]),
+      (unique_1933, unique_1934) => External[978].test(unique_1933) || check_2(value[unique_1933]),
     ) &&
     check_101(value.version) &&
     (value.socket === void 0 || !("socket" in value) || check_1764(value.socket)) &&
     (value.defaults === void 0 || !("defaults" in value) || check_1765(value.defaults)) &&
     (value.agents === void 0 || !("agents" in value) || check_1766(value.agents)),
-  check_2874 = (value) =>
+  check_2879 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "rules" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1931, unique_1932) => External[977].test(unique_1931) || check_2(value[unique_1931]),
+      (unique_1935, unique_1936) => External[979].test(unique_1935) || check_2(value[unique_1935]),
     ) &&
     (value.defaultAction === void 0 ||
       !("defaultAction" in value) ||
-      check_2875(value.defaultAction)) &&
-    check_2877(value.rules),
-  check_2875 = (value) => check_1635(value) || check_42(value) || check_2876(value),
-  check_2876 = (value) => typeof value == "string" && value === "prompt",
-  check_2877 = (value) =>
-    Array.isArray(value) && value.every((unique_1933, index) => check_2878(unique_1933)),
-  check_2878 = (value) =>
+      check_2880(value.defaultAction)) &&
+    check_2882(value.rules),
+  check_2880 = (value) => check_1635(value) || check_42(value) || check_2881(value),
+  check_2881 = (value) => typeof value == "string" && value === "prompt",
+  check_2882 = (value) =>
+    Array.isArray(value) && value.every((unique_1937, index) => check_2883(unique_1937)),
+  check_2883 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "pattern" in value &&
     "action" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1934, unique_1935) => External[978].test(unique_1934) || check_2(value[unique_1934]),
+      (unique_1938, unique_1939) => External[980].test(unique_1938) || check_2(value[unique_1938]),
     ) &&
     check_6(value.pattern) &&
-    check_2879(value.action) &&
+    check_2884(value.action) &&
     (value.shells === void 0 || !("shells" in value) || check_1184(value.shells)) &&
     (value.description === void 0 || !("description" in value) || check_272(value.description)) &&
     (value.enabled === void 0 || !("enabled" in value) || check_181(value.enabled)),
-  check_2879 = (value) => check_1635(value) || check_42(value) || check_2876(value),
-  check_2880 = (value) =>
+  check_2884 = (value) => check_1635(value) || check_42(value) || check_2881(value),
+  check_2885 = (value) =>
     (!(typeof value == "object" && value !== null && !Array.isArray(value)) || "file" in value) &&
-    !check_2881(value),
-  check_2881 = (value) =>
+    !check_2886(value),
+  check_2886 = (value) =>
     !(typeof value == "object" && value !== null && !Array.isArray(value)) || "native" in value,
-  check_2882 = (value) =>
+  check_2887 = (value) =>
     (!(typeof value == "object" && value !== null && !Array.isArray(value)) ||
       ("native" in value && "baseHash" in value)) &&
-    !check_2883(value),
-  check_2883 = (value) =>
+    !check_2888(value),
+  check_2888 = (value) =>
     !(typeof value == "object" && value !== null && !Array.isArray(value)) || "file" in value,
-  check_2884 = (value) => check_2885(value),
-  check_2885 = (value) =>
+  check_2889 = (value) => check_2890(value),
+  check_2890 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1937, unique_1938) => External[979].test(unique_1937) || check_2(value[unique_1937]),
+      (unique_1941, unique_1942) => External[981].test(unique_1941) || check_2(value[unique_1941]),
     ) &&
     (value.path === void 0 || !("path" in value) || check_272(value.path)) &&
     (value.exists === void 0 || !("exists" in value) || check_181(value.exists)) &&
     (value.hash === void 0 || !("hash" in value) || check_272(value.hash)) &&
-    (value.file === void 0 || !("file" in value) || check_2873(value.file)) &&
+    (value.file === void 0 || !("file" in value) || check_2878(value.file)) &&
     (value.resolvedDefaults === void 0 ||
       !("resolvedDefaults" in value) ||
-      check_2886(value.resolvedDefaults)) &&
+      check_2891(value.resolvedDefaults)) &&
     (value.enabled === void 0 || !("enabled" in value) || check_181(value.enabled)) &&
     (value.baseHash === void 0 || !("baseHash" in value) || check_63(value.baseHash)) &&
     (value.defaultAction === void 0 ||
       !("defaultAction" in value) ||
-      check_2875(value.defaultAction)) &&
-    (value.rules === void 0 || !("rules" in value) || check_2887(value.rules)) &&
-    (value.constraints === void 0 || !("constraints" in value) || check_2888(value.constraints)) &&
+      check_2880(value.defaultAction)) &&
+    (value.rules === void 0 || !("rules" in value) || check_2892(value.rules)) &&
+    (value.constraints === void 0 || !("constraints" in value) || check_2893(value.constraints)) &&
     (value.message === void 0 || !("message" in value) || check_272(value.message)) &&
-    [check_2889(value), check_2897(value), check_2903(value)].reduce(
-      (result, unique_1944, _) => (unique_1944 === !0 ? ++result : result),
+    [check_2894(value), check_2902(value), check_2908(value)].reduce(
+      (result, unique_1948, _) => (unique_1948 === !0 ? ++result : result),
       0,
     ) === 1,
-  check_2886 = (value) =>
+  check_2891 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -19205,20 +19247,20 @@ var External = [
     "askFallback" in value &&
     "autoAllowSkills" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1939, unique_1940) => External[980].test(unique_1939) || check_2(value[unique_1939]),
+      (unique_1943, unique_1944) => External[982].test(unique_1943) || check_2(value[unique_1943]),
     ) &&
     check_1785(value.security) &&
     check_1787(value.ask) &&
     check_1785(value.askFallback) &&
     check_97(value.autoAllowSkills),
-  check_2887 = (value) =>
-    Array.isArray(value) && value.every((unique_1941, index) => check_2878(unique_1941)),
-  check_2888 = (value) =>
+  check_2892 = (value) =>
+    Array.isArray(value) && value.every((unique_1945, index) => check_2883(unique_1945)),
+  check_2893 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1942, unique_1943) => External[981].test(unique_1942) || check_2(value[unique_1942]),
+      (unique_1946, unique_1947) => External[983].test(unique_1946) || check_2(value[unique_1946]),
     ) &&
     (value.baseHashRequired === void 0 ||
       !("baseHashRequired" in value) ||
@@ -19232,91 +19274,91 @@ var External = [
     (value.dangerousAllowRulesAllowed === void 0 ||
       !("dangerousAllowRulesAllowed" in value) ||
       check_181(value.dangerousAllowRulesAllowed)),
-  check_2889 = (value) =>
+  check_2894 = (value) =>
     (!(typeof value == "object" && value !== null && !Array.isArray(value)) ||
       ("path" in value && "exists" in value && "hash" in value && "file" in value)) &&
-    !check_2890(value),
-  check_2890 = (value) =>
-    check_2891(value) ||
-    check_2892(value) ||
-    check_2893(value) ||
-    check_2894(value) ||
-    check_2895(value) ||
-    check_2896(value),
-  check_2891 = (value) =>
+    !check_2895(value),
+  check_2895 = (value) =>
+    check_2896(value) ||
+    check_2897(value) ||
+    check_2898(value) ||
+    check_2899(value) ||
+    check_2900(value) ||
+    check_2901(value),
+  check_2896 = (value) =>
     !(typeof value == "object" && value !== null && !Array.isArray(value)) || "enabled" in value,
-  check_2892 = (value) =>
+  check_2897 = (value) =>
     !(typeof value == "object" && value !== null && !Array.isArray(value)) || "baseHash" in value,
-  check_2893 = (value) =>
+  check_2898 = (value) =>
     !(typeof value == "object" && value !== null && !Array.isArray(value)) ||
     "defaultAction" in value,
-  check_2894 = (value) =>
+  check_2899 = (value) =>
     !(typeof value == "object" && value !== null && !Array.isArray(value)) || "rules" in value,
-  check_2895 = (value) =>
+  check_2900 = (value) =>
     !(typeof value == "object" && value !== null && !Array.isArray(value)) ||
     "constraints" in value,
-  check_2896 = (value) =>
+  check_2901 = (value) =>
     !(typeof value == "object" && value !== null && !Array.isArray(value)) || "message" in value,
-  check_2897 = (value) =>
+  check_2902 = (value) =>
     (!(typeof value == "object" && value !== null && !Array.isArray(value)) ||
       ("enabled" in value &&
         "hash" in value &&
         "defaultAction" in value &&
         "rules" in value &&
         check_515(value.enabled) &&
-        check_2898(value.hash))) &&
-    !check_2899(value),
-  check_2898 = (value) =>
+        check_2903(value.hash))) &&
+    !check_2904(value),
+  check_2903 = (value) =>
     typeof value != "string" ||
     value.length >= 2 ||
     (value.length >= 1 && CodePointCount(value) >= 1),
-  check_2899 = (value) =>
-    check_2900(value) ||
-    check_2901(value) ||
-    check_2883(value) ||
-    check_2902(value) ||
-    check_2896(value),
-  check_2900 = (value) =>
+  check_2904 = (value) =>
+    check_2905(value) ||
+    check_2906(value) ||
+    check_2888(value) ||
+    check_2907(value) ||
+    check_2901(value),
+  check_2905 = (value) =>
     !(typeof value == "object" && value !== null && !Array.isArray(value)) || "path" in value,
-  check_2901 = (value) =>
+  check_2906 = (value) =>
     !(typeof value == "object" && value !== null && !Array.isArray(value)) || "exists" in value,
-  check_2902 = (value) =>
+  check_2907 = (value) =>
     !(typeof value == "object" && value !== null && !Array.isArray(value)) ||
     "resolvedDefaults" in value,
-  check_2903 = (value) =>
-    (!(typeof value == "object" && value !== null && !Array.isArray(value)) ||
-      ("enabled" in value && check_2904(value.enabled))) &&
-    !check_2905(value),
-  check_2904 = (value) => value === !1,
-  check_2905 = (value) =>
-    check_2900(value) ||
-    check_2901(value) ||
-    check_2906(value) ||
-    check_2883(value) ||
-    check_2902(value) ||
-    check_2892(value) ||
-    check_2893(value) ||
-    check_2894(value) ||
-    check_2895(value),
-  check_2906 = (value) =>
-    !(typeof value == "object" && value !== null && !Array.isArray(value)) || "hash" in value,
-  check_2907 = (value) => check_2908(value),
   check_2908 = (value) =>
+    (!(typeof value == "object" && value !== null && !Array.isArray(value)) ||
+      ("enabled" in value && check_2909(value.enabled))) &&
+    !check_2910(value),
+  check_2909 = (value) => value === !1,
+  check_2910 = (value) =>
+    check_2905(value) ||
+    check_2906(value) ||
+    check_2911(value) ||
+    check_2888(value) ||
+    check_2907(value) ||
+    check_2897(value) ||
+    check_2898(value) ||
+    check_2899(value) ||
+    check_2900(value),
+  check_2911 = (value) =>
+    !(typeof value == "object" && value !== null && !Array.isArray(value)) || "hash" in value,
+  check_2912 = (value) => check_2913(value),
+  check_2913 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1945, unique_1946) => External[982].test(unique_1945) || check_2(value[unique_1945]),
+      (unique_1949, unique_1950) => External[984].test(unique_1949) || check_2(value[unique_1949]),
     ) &&
     (value.query === void 0 || !("query" in value) || check_1128(value.query)) &&
-    (value.category === void 0 || !("category" in value) || check_2909(value.category)) &&
+    (value.category === void 0 || !("category" in value) || check_2914(value.category)) &&
     (value.featured === void 0 || !("featured" in value) || check_181(value.featured)) &&
     (value.limit === void 0 || !("limit" in value) || check_632(value.limit)),
-  check_2909 = (value) =>
+  check_2914 = (value) =>
     typeof value == "string" &&
     (value.length <= 40 || (value.length <= 80 && CodePointCount(value) <= 40)),
-  check_2910 = (value) => check_2911(value),
-  check_2911 = (value) =>
+  check_2915 = (value) => check_2916(value),
+  check_2916 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -19326,18 +19368,18 @@ var External = [
     "manifest" in value &&
     "files" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1947, unique_1948) => External[983].test(unique_1947) || check_2(value[unique_1947]),
+      (unique_1951, unique_1952) => External[985].test(unique_1951) || check_2(value[unique_1951]),
     ) &&
     check_969(value.name) &&
-    (value.description === void 0 || !("description" in value) || check_2912(value.description)) &&
+    (value.description === void 0 || !("description" in value) || check_2917(value.description)) &&
     check_22(value.version) &&
-    check_2913(value.scope) &&
-    check_2915(value.manifest) &&
-    check_2916(value.files),
-  check_2912 = (value) =>
+    check_2918(value.scope) &&
+    check_2920(value.manifest) &&
+    check_2921(value.files),
+  check_2917 = (value) =>
     typeof value == "string" &&
     (value.length <= 64e3 || (value.length <= 128e3 && CodePointCount(value) <= 64e3)),
-  check_2913 = (value) =>
+  check_2918 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -19346,61 +19388,61 @@ var External = [
     "output" in value &&
     "authority" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1949, unique_1950) => External[984].test(unique_1949) || check_2(value[unique_1949]),
+      (unique_1953, unique_1954) => External[986].test(unique_1953) || check_2(value[unique_1953]),
     ) &&
-    check_2914(value.input) &&
-    check_2914(value.job) &&
-    check_2914(value.output) &&
-    check_2914(value.authority),
-  check_2914 = (value) =>
+    check_2919(value.input) &&
+    check_2919(value.job) &&
+    check_2919(value.output) &&
+    check_2919(value.authority),
+  check_2919 = (value) =>
     typeof value == "string" &&
     (value.length <= 64e3 || (value.length <= 128e3 && CodePointCount(value) <= 64e3)),
-  check_2915 = (value) =>
+  check_2920 = (value) =>
     typeof value == "string" &&
     (value.length <= 256e3 || (value.length <= 512e3 && CodePointCount(value) <= 256e3)),
-  check_2916 = (value) =>
+  check_2921 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_1951, index) => check_2917(unique_1951)) &&
+    value.every((unique_1955, index) => check_2922(unique_1955)) &&
     value.length <= 64,
-  check_2917 = (value) =>
+  check_2922 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "path" in value &&
     "content" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1952, unique_1953) => External[985].test(unique_1952) || check_2(value[unique_1952]),
+      (unique_1956, unique_1957) => External[987].test(unique_1956) || check_2(value[unique_1956]),
     ) &&
     check_49(value.path) &&
-    check_2915(value.content),
-  check_2918 = (value) => check_2919(value),
-  check_2919 = (value) =>
+    check_2920(value.content),
+  check_2923 = (value) => check_2924(value),
+  check_2924 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "agentId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1954, unique_1955) => External[986].test(unique_1954) || check_2(value[unique_1954]),
+      (unique_1958, unique_1959) => External[988].test(unique_1958) || check_2(value[unique_1958]),
     ) &&
     check_829(value.agentId) &&
     (value.sourceSessionKey === void 0 ||
       !("sourceSessionKey" in value) ||
       check_94(value.sourceSessionKey)),
-  check_2920 = (value) => check_2921(value),
-  check_2921 = (value) =>
+  check_2925 = (value) => check_2926(value),
+  check_2926 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "agentId" in value &&
     "draftId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1956, unique_1957) => External[987].test(unique_1956) || check_2(value[unique_1956]),
+      (unique_1960, unique_1961) => External[989].test(unique_1960) || check_2(value[unique_1960]),
     ) &&
     check_829(value.agentId) &&
-    check_2922(value.draftId),
-  check_2922 = (value) => typeof value == "string" && External[988].test(value),
-  check_2923 = (value) => check_2924(value),
-  check_2924 = (value) =>
+    check_2927(value.draftId),
+  check_2927 = (value) => typeof value == "string" && External[990].test(value),
+  check_2928 = (value) => check_2929(value),
+  check_2929 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -19409,50 +19451,15 @@ var External = [
     "content" in value &&
     "expectedRevision" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1958, unique_1959) => External[989].test(unique_1958) || check_2(value[unique_1958]),
-    ) &&
-    check_829(value.agentId) &&
-    check_2922(value.draftId) &&
-    check_2925(value.content) &&
-    check_60(value.expectedRevision),
-  check_2925 = (value) =>
-    typeof value == "string" &&
-    (value.length <= 1e6 || (value.length <= 2e6 && CodePointCount(value) <= 1e6)),
-  check_2926 = (value) => check_2927(value),
-  check_2927 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "agentId" in value &&
-    "draftId" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_1960, unique_1961) => External[990].test(unique_1960) || check_2(value[unique_1960]),
-    ) &&
-    check_829(value.agentId) &&
-    check_2922(value.draftId) &&
-    (value.choices === void 0 || !("choices" in value) || check_2928(value.choices)),
-  check_2928 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "name" in value &&
-    "description" in value &&
-    "excluded" in value &&
-    Object.getOwnPropertyNames(value).every(
       (unique_1962, unique_1963) => External[991].test(unique_1962) || check_2(value[unique_1962]),
     ) &&
-    check_969(value.name) &&
-    (value.displayName === void 0 || !("displayName" in value) || check_259(value.displayName)) &&
-    check_2914(value.description) &&
-    check_2929(value.excluded),
-  check_2929 = (value) =>
-    Array.isArray(value) &&
-    value.every((unique_1964, index) => check_2930(unique_1964)) &&
-    value.length <= 128,
+    check_829(value.agentId) &&
+    check_2927(value.draftId) &&
+    check_2930(value.content) &&
+    check_60(value.expectedRevision),
   check_2930 = (value) =>
     typeof value == "string" &&
-    (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
-    (value.length <= 640 || (value.length <= 1280 && CodePointCount(value) <= 640)),
+    (value.length <= 1e6 || (value.length <= 2e6 && CodePointCount(value) <= 1e6)),
   check_2931 = (value) => check_2932(value),
   check_2932 = (value) =>
     typeof value == "object" &&
@@ -19460,27 +19467,62 @@ var External = [
     !Array.isArray(value) &&
     "agentId" in value &&
     "draftId" in value &&
-    "reviewToken" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1965, unique_1966) => External[992].test(unique_1965) || check_2(value[unique_1965]),
+      (unique_1964, unique_1965) => External[992].test(unique_1964) || check_2(value[unique_1964]),
     ) &&
     check_829(value.agentId) &&
-    check_2922(value.draftId) &&
-    check_60(value.reviewToken) &&
-    (value.choices === void 0 || !("choices" in value) || check_2928(value.choices)),
-  check_2933 = (value) => check_2934(value),
+    check_2927(value.draftId) &&
+    (value.choices === void 0 || !("choices" in value) || check_2933(value.choices)),
+  check_2933 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "name" in value &&
+    "description" in value &&
+    "excluded" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_1966, unique_1967) => External[993].test(unique_1966) || check_2(value[unique_1966]),
+    ) &&
+    check_969(value.name) &&
+    (value.displayName === void 0 || !("displayName" in value) || check_259(value.displayName)) &&
+    check_2919(value.description) &&
+    check_2934(value.excluded),
   check_2934 = (value) =>
+    Array.isArray(value) &&
+    value.every((unique_1968, index) => check_2935(unique_1968)) &&
+    value.length <= 128,
+  check_2935 = (value) =>
+    typeof value == "string" &&
+    (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
+    (value.length <= 640 || (value.length <= 1280 && CodePointCount(value) <= 640)),
+  check_2936 = (value) => check_2937(value),
+  check_2937 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "agentId" in value &&
+    "draftId" in value &&
+    "reviewToken" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_1969, unique_1970) => External[994].test(unique_1969) || check_2(value[unique_1969]),
+    ) &&
+    check_829(value.agentId) &&
+    check_2927(value.draftId) &&
+    check_60(value.reviewToken) &&
+    (value.choices === void 0 || !("choices" in value) || check_2933(value.choices)),
+  check_2938 = (value) => check_2939(value),
+  check_2939 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "entries" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1967, unique_1968) => External[993].test(unique_1967) || check_2(value[unique_1967]),
+      (unique_1971, unique_1972) => External[995].test(unique_1971) || check_2(value[unique_1971]),
     ) &&
-    check_2935(value.entries),
-  check_2935 = (value) =>
-    Array.isArray(value) && value.every((unique_1969, index) => check_2936(unique_1969)),
-  check_2936 = (value) =>
+    check_2940(value.entries),
+  check_2940 = (value) =>
+    Array.isArray(value) && value.every((unique_1973, index) => check_2941(unique_1973)),
+  check_2941 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -19492,48 +19534,48 @@ var External = [
     "installs" in value &&
     "updatedAtMs" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1970, unique_1971) => External[994].test(unique_1970) || check_2(value[unique_1970]),
+      (unique_1974, unique_1975) => External[996].test(unique_1974) || check_2(value[unique_1974]),
     ) &&
-    check_2937(value.packageName) &&
+    check_2942(value.packageName) &&
     check_6(value.displayName) &&
     (value.iconUrl === void 0 || !("iconUrl" in value) || check_63(value.iconUrl)) &&
     (value.summary === void 0 || !("summary" in value) || check_272(value.summary)) &&
     (value.latestVersion === void 0 ||
       !("latestVersion" in value) ||
       check_63(value.latestVersion)) &&
-    check_2938(value.channel) &&
+    check_2943(value.channel) &&
     check_97(value.official) &&
     (value.ownerHandle === void 0 || !("ownerHandle" in value) || check_63(value.ownerHandle)) &&
     check_1369(value.downloads) &&
     check_1369(value.installs) &&
     (value.featuredAt === void 0 || !("featuredAt" in value) || check_640(value.featuredAt)) &&
     check_1369(value.updatedAtMs),
-  check_2937 = (value) => typeof value == "string" && External[995].test(value),
-  check_2938 = (value) => check_1133(value) || check_2939(value),
-  check_2939 = (value) => typeof value == "string" && value === "community",
-  check_2940 = (value) => check_2941(value),
-  check_2941 = (value) =>
+  check_2942 = (value) => typeof value == "string" && External[997].test(value),
+  check_2943 = (value) => check_1133(value) || check_2944(value),
+  check_2944 = (value) => typeof value == "string" && value === "community",
+  check_2945 = (value) => check_2946(value),
+  check_2946 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "packageName" in value &&
     "version" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1972, unique_1973) => External[996].test(unique_1972) || check_2(value[unique_1972]),
+      (unique_1976, unique_1977) => External[998].test(unique_1976) || check_2(value[unique_1976]),
     ) &&
-    check_2937(value.packageName) &&
+    check_2942(value.packageName) &&
     check_6(value.version),
-  check_2942 = (value) => check_2943(value),
-  check_2943 = (value) =>
+  check_2947 = (value) => check_2948(value),
+  check_2948 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "detail" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1974, unique_1975) => External[997].test(unique_1974) || check_2(value[unique_1974]),
+      (unique_1978, unique_1979) => External[999].test(unique_1978) || check_2(value[unique_1978]),
     ) &&
-    check_2944(value.detail),
-  check_2944 = (value) =>
+    check_2949(value.detail),
+  check_2949 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -19551,16 +19593,16 @@ var External = [
     "mcpServers" in value &&
     "scheduledJobs" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1976, unique_1977) => External[998].test(unique_1976) || check_2(value[unique_1976]),
+      (unique_1980, unique_1981) => External[1e3].test(unique_1980) || check_2(value[unique_1980]),
     ) &&
-    check_2937(value.packageName) &&
+    check_2942(value.packageName) &&
     check_6(value.displayName) &&
     (value.iconUrl === void 0 || !("iconUrl" in value) || check_63(value.iconUrl)) &&
     (value.summary === void 0 || !("summary" in value) || check_272(value.summary)) &&
     (value.latestVersion === void 0 ||
       !("latestVersion" in value) ||
       check_63(value.latestVersion)) &&
-    check_2938(value.channel) &&
+    check_2943(value.channel) &&
     check_97(value.official) &&
     (value.ownerHandle === void 0 || !("ownerHandle" in value) || check_63(value.ownerHandle)) &&
     check_1369(value.downloads) &&
@@ -19577,9 +19619,9 @@ var External = [
     check_7(value.plugins) &&
     check_7(value.mcpServers) &&
     check_7(value.scheduledJobs) &&
-    (value.contents === void 0 || !("contents" in value) || check_2945(value.contents)) &&
+    (value.contents === void 0 || !("contents" in value) || check_2950(value.contents)) &&
     (value.scanStatus === void 0 || !("scanStatus" in value) || check_63(value.scanStatus)),
-  check_2945 = (value) =>
+  check_2950 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -19588,59 +19630,59 @@ var External = [
     "integrations" in value &&
     "automations" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1978, unique_1979) => External[999].test(unique_1978) || check_2(value[unique_1978]),
+      (unique_1982, unique_1983) => External[1001].test(unique_1982) || check_2(value[unique_1982]),
     ) &&
-    check_2946(value.instructions) &&
-    check_2948(value.skills) &&
-    check_2950(value.integrations) &&
-    check_2954(value.automations),
-  check_2946 = (value) =>
-    Array.isArray(value) && value.every((unique_1980, index) => check_2947(unique_1980)),
-  check_2947 = (value) =>
+    check_2951(value.instructions) &&
+    check_2953(value.skills) &&
+    check_2955(value.integrations) &&
+    check_2959(value.automations),
+  check_2951 = (value) =>
+    Array.isArray(value) && value.every((unique_1984, index) => check_2952(unique_1984)),
+  check_2952 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "name" in value &&
     "source" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1981, unique_1982) => External[1e3].test(unique_1981) || check_2(value[unique_1981]),
+      (unique_1985, unique_1986) => External[1002].test(unique_1985) || check_2(value[unique_1985]),
     ) &&
     check_6(value.name) &&
     check_6(value.source) &&
     (value.excerpt === void 0 || !("excerpt" in value) || check_272(value.excerpt)),
-  check_2948 = (value) =>
-    Array.isArray(value) && value.every((unique_1983, index) => check_2949(unique_1983)),
-  check_2949 = (value) =>
+  check_2953 = (value) =>
+    Array.isArray(value) && value.every((unique_1987, index) => check_2954(unique_1987)),
+  check_2954 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "name" in value &&
     "version" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1984, unique_1985) => External[1001].test(unique_1984) || check_2(value[unique_1984]),
+      (unique_1988, unique_1989) => External[1003].test(unique_1988) || check_2(value[unique_1988]),
     ) &&
     check_6(value.name) &&
     check_6(value.version) &&
     (value.excerpt === void 0 || !("excerpt" in value) || check_272(value.excerpt)),
-  check_2950 = (value) =>
-    Array.isArray(value) && value.every((unique_1986, index) => check_2951(unique_1986)),
-  check_2951 = (value) =>
+  check_2955 = (value) =>
+    Array.isArray(value) && value.every((unique_1990, index) => check_2956(unique_1990)),
+  check_2956 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "name" in value &&
     "kind" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1987, unique_1988) => External[1002].test(unique_1987) || check_2(value[unique_1987]),
+      (unique_1991, unique_1992) => External[1004].test(unique_1991) || check_2(value[unique_1991]),
     ) &&
     check_6(value.name) &&
-    check_2952(value.kind) &&
+    check_2957(value.kind) &&
     (value.version === void 0 || !("version" in value) || check_63(value.version)),
-  check_2952 = (value) => check_47(value) || check_2953(value),
-  check_2953 = (value) => typeof value == "string" && value === "mcpServer",
-  check_2954 = (value) =>
-    Array.isArray(value) && value.every((unique_1989, index) => check_2955(unique_1989)),
-  check_2955 = (value) =>
+  check_2957 = (value) => check_47(value) || check_2958(value),
+  check_2958 = (value) => typeof value == "string" && value === "mcpServer",
+  check_2959 = (value) =>
+    Array.isArray(value) && value.every((unique_1993, index) => check_2960(unique_1993)),
+  check_2960 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -19648,13 +19690,13 @@ var External = [
     "schedule" in value &&
     "timezone" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1990, unique_1991) => External[1003].test(unique_1990) || check_2(value[unique_1990]),
+      (unique_1994, unique_1995) => External[1005].test(unique_1994) || check_2(value[unique_1994]),
     ) &&
     check_6(value.name) &&
     check_6(value.schedule) &&
     check_6(value.timezone),
-  check_2956 = (value) => check_2957(value),
-  check_2957 = (value) =>
+  check_2961 = (value) => check_2962(value),
+  check_2962 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -19663,25 +19705,25 @@ var External = [
     "kind" in value &&
     "name" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1992, unique_1993) => External[1004].test(unique_1992) || check_2(value[unique_1992]),
+      (unique_1996, unique_1997) => External[1006].test(unique_1996) || check_2(value[unique_1996]),
     ) &&
-    check_2937(value.packageName) &&
+    check_2942(value.packageName) &&
     check_6(value.version) &&
-    check_2958(value.kind) &&
+    check_2963(value.kind) &&
     check_6(value.name),
-  check_2958 = (value) => check_2959(value) || check_2141(value),
-  check_2959 = (value) => typeof value == "string" && value === "instruction",
-  check_2960 = (value) => check_2961(value),
-  check_2961 = (value) =>
+  check_2963 = (value) => check_2964(value) || check_2141(value),
+  check_2964 = (value) => typeof value == "string" && value === "instruction",
+  check_2965 = (value) => check_2966(value),
+  check_2966 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "preview" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1994, unique_1995) => External[1005].test(unique_1994) || check_2(value[unique_1994]),
+      (unique_1998, unique_1999) => External[1007].test(unique_1998) || check_2(value[unique_1998]),
     ) &&
-    check_2962(value.preview),
-  check_2962 = (value) =>
+    check_2967(value.preview),
+  check_2967 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -19689,22 +19731,22 @@ var External = [
     "name" in value &&
     "content" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1996, unique_1997) => External[1006].test(unique_1996) || check_2(value[unique_1996]),
+      (unique_2000, unique_2001) => External[1008].test(unique_2000) || check_2(value[unique_2000]),
     ) &&
-    check_2958(value.kind) &&
+    check_2963(value.kind) &&
     check_6(value.name) &&
     check_12(value.content),
-  check_2963 = (value) => check_2964(value),
-  check_2964 = (value) =>
+  check_2968 = (value) => check_2969(value),
+  check_2969 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1998, unique_1999) => External[1007].test(unique_1998) || check_2(value[unique_1998]),
+      (unique_2002, unique_2003) => External[1009].test(unique_2002) || check_2(value[unique_2002]),
     ) &&
     (value.target === void 0 || !("target" in value) || check_63(value.target)),
-  check_2965 = (value) => check_2966(value),
-  check_2966 = (value) =>
+  check_2970 = (value) => check_2971(value),
+  check_2971 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -19712,16 +19754,16 @@ var External = [
     "records" in value &&
     "summary" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2000, unique_2001) => External[1008].test(unique_2000) || check_2(value[unique_2000]),
+      (unique_2004, unique_2005) => External[1010].test(unique_2004) || check_2(value[unique_2004]),
     ) &&
-    check_2967(value.schemaVersion) &&
-    check_2968(value.records) &&
-    check_2992(value.summary),
-  check_2967 = (value) =>
+    check_2972(value.schemaVersion) &&
+    check_2973(value.records) &&
+    check_2997(value.summary),
+  check_2972 = (value) =>
     typeof value == "string" && value === "openclaw.templatesGatewayStatus.v1",
-  check_2968 = (value) =>
-    Array.isArray(value) && value.every((unique_2002, index) => check_2969(unique_2002)),
-  check_2969 = (value) =>
+  check_2973 = (value) =>
+    Array.isArray(value) && value.every((unique_2006, index) => check_2974(unique_2006)),
+  check_2974 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -19737,44 +19779,44 @@ var External = [
     "updatedAtMs" in value &&
     "resources" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2003, unique_2004) => External[1009].test(unique_2003) || check_2(value[unique_2003]),
+      (unique_2007, unique_2008) => External[1011].test(unique_2007) || check_2(value[unique_2007]),
     ) &&
     check_6(value.agentId) &&
     check_6(value.name) &&
     check_6(value.version) &&
-    check_2970(value.sourceKind) &&
-    check_2972(value.status) &&
-    check_2976(value.agentState) &&
-    check_2979(value.bootstrapState) &&
+    check_2975(value.sourceKind) &&
+    check_2977(value.status) &&
+    check_2981(value.agentState) &&
+    check_2984(value.bootstrapState) &&
     check_97(value.orphaned) &&
     check_7(value.addedAtMs) &&
     check_7(value.updatedAtMs) &&
-    check_2981(value.resources),
-  check_2970 = (value) => check_1969(value) || check_2971(value),
-  check_2971 = (value) => typeof value == "string" && value === "development",
-  check_2972 = (value) =>
+    check_2986(value.resources),
+  check_2975 = (value) => check_1969(value) || check_2976(value),
+  check_2976 = (value) => typeof value == "string" && value === "development",
+  check_2977 = (value) =>
     check_62(value) ||
-    check_2973(value) ||
-    check_2974(value) ||
-    check_373(value) ||
-    check_2975(value),
-  check_2973 = (value) => typeof value == "string" && value === "workspace_ready",
-  check_2974 = (value) => typeof value == "string" && value === "config_committed",
-  check_2975 = (value) => typeof value == "string" && value === "partial",
-  check_2976 = (value) => check_104(value) || check_2977(value) || check_2978(value),
-  check_2977 = (value) => typeof value == "string" && value === "modified",
-  check_2978 = (value) => typeof value == "string" && value === "missing",
-  check_2979 = (value) =>
-    check_62(value) ||
-    check_373(value) ||
     check_2978(value) ||
-    check_2977(value) ||
-    check_2980(value) ||
+    check_2979(value) ||
+    check_373(value) ||
+    check_2980(value),
+  check_2978 = (value) => typeof value == "string" && value === "workspace_ready",
+  check_2979 = (value) => typeof value == "string" && value === "config_committed",
+  check_2980 = (value) => typeof value == "string" && value === "partial",
+  check_2981 = (value) => check_104(value) || check_2982(value) || check_2983(value),
+  check_2982 = (value) => typeof value == "string" && value === "modified",
+  check_2983 = (value) => typeof value == "string" && value === "missing",
+  check_2984 = (value) =>
+    check_62(value) ||
+    check_373(value) ||
+    check_2983(value) ||
+    check_2982(value) ||
+    check_2985(value) ||
     check_112(value),
-  check_2980 = (value) => typeof value == "string" && value === "unsafe",
-  check_2981 = (value) =>
-    Array.isArray(value) && value.every((unique_2005, index) => check_2982(unique_2005)),
-  check_2982 = (value) =>
+  check_2985 = (value) => typeof value == "string" && value === "unsafe",
+  check_2986 = (value) =>
+    Array.isArray(value) && value.every((unique_2009, index) => check_2987(unique_2009)),
+  check_2987 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -19782,35 +19824,35 @@ var External = [
     "id" in value &&
     "state" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2006, unique_2007) => External[1010].test(unique_2006) || check_2(value[unique_2006]),
+      (unique_2010, unique_2011) => External[1012].test(unique_2010) || check_2(value[unique_2010]),
     ) &&
-    check_2983(value.kind) &&
+    check_2988(value.kind) &&
     check_6(value.id) &&
     check_6(value.state) &&
     (value.reason === void 0 || !("reason" in value) || check_63(value.reason)) &&
     (value.relationship === void 0 ||
       !("relationship" in value) ||
-      check_2987(value.relationship)) &&
-    (value.origin === void 0 || !("origin" in value) || check_2989(value.origin)) &&
+      check_2992(value.relationship)) &&
+    (value.origin === void 0 || !("origin" in value) || check_2994(value.origin)) &&
     (value.independentOwner === void 0 ||
       !("independentOwner" in value) ||
       check_181(value.independentOwner)),
-  check_2983 = (value) =>
+  check_2988 = (value) =>
     check_132(value) ||
-    check_2984(value) ||
+    check_2989(value) ||
     check_2141(value) ||
     check_47(value) ||
-    check_2985(value) ||
-    check_2986(value),
-  check_2984 = (value) => typeof value == "string" && value === "workspace-file",
-  check_2985 = (value) => typeof value == "string" && value === "mcp-server",
-  check_2986 = (value) => typeof value == "string" && value === "cron-job",
-  check_2987 = (value) => check_561(value) || check_2988(value),
-  check_2988 = (value) => typeof value == "string" && value === "referenced",
-  check_2989 = (value) => check_2990(value) || check_2991(value),
-  check_2990 = (value) => typeof value == "string" && value === "template-introduced",
-  check_2991 = (value) => typeof value == "string" && value === "pre-existing",
-  check_2992 = (value) =>
+    check_2990(value) ||
+    check_2991(value),
+  check_2989 = (value) => typeof value == "string" && value === "workspace-file",
+  check_2990 = (value) => typeof value == "string" && value === "mcp-server",
+  check_2991 = (value) => typeof value == "string" && value === "cron-job",
+  check_2992 = (value) => check_561(value) || check_2993(value),
+  check_2993 = (value) => typeof value == "string" && value === "referenced",
+  check_2994 = (value) => check_2995(value) || check_2996(value),
+  check_2995 = (value) => typeof value == "string" && value === "template-introduced",
+  check_2996 = (value) => typeof value == "string" && value === "pre-existing",
+  check_2997 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -19820,34 +19862,34 @@ var External = [
     "managed" in value &&
     "referenced" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2008, unique_2009) => External[1011].test(unique_2008) || check_2(value[unique_2008]),
+      (unique_2012, unique_2013) => External[1013].test(unique_2012) || check_2(value[unique_2012]),
     ) &&
     check_7(value.templates) &&
     check_7(value.healthy) &&
     check_7(value.attention) &&
     check_7(value.managed) &&
     check_7(value.referenced),
-  check_2993 = (value) => check_2994(value),
-  check_2994 = (value) =>
+  check_2998 = (value) => check_2999(value),
+  check_2999 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "source" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2010, unique_2011) => External[1012].test(unique_2010) || check_2(value[unique_2010]),
+      (unique_2014, unique_2015) => External[1014].test(unique_2014) || check_2(value[unique_2014]),
     ) &&
-    check_2941(value.source) &&
+    check_2946(value.source) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)),
-  check_2995 = (value) => check_2996(value),
-  check_2996 = (value) =>
+  check_3000 = (value) => check_3001(value),
+  check_3001 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "source" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2012, unique_2013) => External[1013].test(unique_2012) || check_2(value[unique_2012]),
+      (unique_2016, unique_2017) => External[1015].test(unique_2016) || check_2(value[unique_2016]),
     ) &&
-    check_2941(value.source) &&
+    check_2946(value.source) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
     (value.planIntegrity === void 0 ||
       !("planIntegrity" in value) ||
@@ -19857,13 +19899,13 @@ var External = [
       check_181(value.acknowledgeClawHubRisk)) &&
     (value.acknowledgeCapabilities === void 0 ||
       !("acknowledgeCapabilities" in value) ||
-      check_2997(value.acknowledgeCapabilities)) &&
+      check_3002(value.acknowledgeCapabilities)) &&
     (value.acknowledgeSkillWarnings === void 0 ||
       !("acknowledgeSkillWarnings" in value) ||
-      check_3005(value.acknowledgeSkillWarnings)),
-  check_2997 = (value) =>
-    Array.isArray(value) && value.every((unique_2014, index) => check_2998(unique_2014)),
-  check_2998 = (value) =>
+      check_3010(value.acknowledgeSkillWarnings)),
+  check_3002 = (value) =>
+    Array.isArray(value) && value.every((unique_2018, index) => check_3003(unique_2018)),
+  check_3003 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -19873,54 +19915,54 @@ var External = [
     "capabilityGrants" in value &&
     "capabilityGrantsByPluginId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2015, unique_2016) => External[1014].test(unique_2015) || check_2(value[unique_2015]),
+      (unique_2019, unique_2020) => External[1016].test(unique_2019) || check_2(value[unique_2019]),
     ) &&
     check_6(value.actionId) &&
     check_6(value.pluginId) &&
     check_6(value.reviewToken) &&
-    check_2999(value.capabilityGrants) &&
-    check_3004(value.capabilityGrantsByPluginId) &&
+    check_3004(value.capabilityGrants) &&
+    check_3009(value.capabilityGrantsByPluginId) &&
     (value.acknowledgeRiskWarning === void 0 ||
       !("acknowledgeRiskWarning" in value) ||
       check_326(value.acknowledgeRiskWarning)),
-  check_2999 = (value) =>
+  check_3004 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "hooks" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2017, unique_2018) => External[1015].test(unique_2017) || check_2(value[unique_2017]),
+      (unique_2021, unique_2022) => External[1017].test(unique_2021) || check_2(value[unique_2021]),
     ) &&
-    check_3000(value.hooks) &&
-    (value.llm === void 0 || !("llm" in value) || check_3002(value.llm)) &&
-    (value.subagent === void 0 || !("subagent" in value) || check_3003(value.subagent)),
-  check_3000 = (value) =>
+    check_3005(value.hooks) &&
+    (value.llm === void 0 || !("llm" in value) || check_3007(value.llm)) &&
+    (value.subagent === void 0 || !("subagent" in value) || check_3008(value.subagent)),
+  check_3005 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "allowPromptInjection" in value &&
     "allowConversationAccess" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2019, unique_2020) => External[1016].test(unique_2019) || check_2(value[unique_2019]),
+      (unique_2023, unique_2024) => External[1018].test(unique_2023) || check_2(value[unique_2023]),
     ) &&
-    check_3001(value.allowPromptInjection) &&
-    check_3001(value.allowConversationAccess),
-  check_3001 = (value) =>
+    check_3006(value.allowPromptInjection) &&
+    check_3006(value.allowConversationAccess),
+  check_3006 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "effective" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2021, unique_2022) => External[1017].test(unique_2021) || check_2(value[unique_2021]),
+      (unique_2025, unique_2026) => External[1019].test(unique_2025) || check_2(value[unique_2025]),
     ) &&
     check_97(value.effective) &&
     (value.configured === void 0 || !("configured" in value) || check_181(value.configured)),
-  check_3002 = (value) =>
+  check_3007 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2023, unique_2024) => External[1018].test(unique_2023) || check_2(value[unique_2023]),
+      (unique_2027, unique_2028) => External[1020].test(unique_2027) || check_2(value[unique_2027]),
     ) &&
     (value.allowModelOverride === void 0 ||
       !("allowModelOverride" in value) ||
@@ -19937,12 +19979,12 @@ var External = [
     (value.allowAgentIdOverride === void 0 ||
       !("allowAgentIdOverride" in value) ||
       check_181(value.allowAgentIdOverride)),
-  check_3003 = (value) =>
+  check_3008 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2025, unique_2026) => External[1019].test(unique_2025) || check_2(value[unique_2025]),
+      (unique_2029, unique_2030) => External[1021].test(unique_2029) || check_2(value[unique_2029]),
     ) &&
     (value.allowModelOverride === void 0 ||
       !("allowModelOverride" in value) ||
@@ -19950,17 +19992,17 @@ var External = [
     (value.allowedModels === void 0 ||
       !("allowedModels" in value) ||
       check_1184(value.allowedModels)),
-  check_3004 = (value) =>
+  check_3009 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.entries(value).every(
-      ([unique_2027, unique_2028], _) =>
-        !External[1020].test(unique_2027) || check_2999(unique_2028),
+      ([unique_2031, unique_2032], _) =>
+        !External[1022].test(unique_2031) || check_3004(unique_2032),
     ),
-  check_3005 = (value) =>
-    Array.isArray(value) && value.every((unique_2029, index) => check_3006(unique_2029)),
-  check_3006 = (value) =>
+  check_3010 = (value) =>
+    Array.isArray(value) && value.every((unique_2033, index) => check_3011(unique_2033)),
+  check_3011 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -19969,62 +20011,62 @@ var External = [
     "reviewToken" in value &&
     "acknowledgeRiskWarning" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2030, unique_2031) => External[1021].test(unique_2030) || check_2(value[unique_2030]),
+      (unique_2034, unique_2035) => External[1023].test(unique_2034) || check_2(value[unique_2034]),
     ) &&
     check_6(value.actionId) &&
     check_6(value.ref) &&
     check_6(value.reviewToken) &&
     check_391(value.acknowledgeRiskWarning),
-  check_3007 = (value) => check_3008(value),
-  check_3008 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "agentId" in value &&
-    "source" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2032, unique_2033) => External[1022].test(unique_2032) || check_2(value[unique_2032]),
-    ) &&
-    check_6(value.agentId) &&
-    check_2941(value.source),
-  check_3009 = (value) => check_3010(value),
-  check_3010 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "agentId" in value &&
-    "source" in value &&
-    "planIntegrity" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2034, unique_2035) => External[1023].test(unique_2034) || check_2(value[unique_2034]),
-    ) &&
-    check_6(value.agentId) &&
-    check_2941(value.source) &&
-    check_6(value.planIntegrity) &&
-    (value.acknowledgeClawHubRisk === void 0 ||
-      !("acknowledgeClawHubRisk" in value) ||
-      check_181(value.acknowledgeClawHubRisk)) &&
-    (value.acknowledgeCapabilities === void 0 ||
-      !("acknowledgeCapabilities" in value) ||
-      check_2997(value.acknowledgeCapabilities)) &&
-    (value.acknowledgeSkillWarnings === void 0 ||
-      !("acknowledgeSkillWarnings" in value) ||
-      check_3005(value.acknowledgeSkillWarnings)),
-  check_3011 = (value) => check_476(value),
   check_3012 = (value) => check_3013(value),
   check_3013 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "agentId" in value &&
-    "planIntegrity" in value &&
+    "source" in value &&
     Object.getOwnPropertyNames(value).every(
       (unique_2036, unique_2037) => External[1024].test(unique_2036) || check_2(value[unique_2036]),
     ) &&
     check_6(value.agentId) &&
-    check_6(value.planIntegrity),
+    check_2946(value.source),
   check_3014 = (value) => check_3015(value),
   check_3015 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "agentId" in value &&
+    "source" in value &&
+    "planIntegrity" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2038, unique_2039) => External[1025].test(unique_2038) || check_2(value[unique_2038]),
+    ) &&
+    check_6(value.agentId) &&
+    check_2946(value.source) &&
+    check_6(value.planIntegrity) &&
+    (value.acknowledgeClawHubRisk === void 0 ||
+      !("acknowledgeClawHubRisk" in value) ||
+      check_181(value.acknowledgeClawHubRisk)) &&
+    (value.acknowledgeCapabilities === void 0 ||
+      !("acknowledgeCapabilities" in value) ||
+      check_3002(value.acknowledgeCapabilities)) &&
+    (value.acknowledgeSkillWarnings === void 0 ||
+      !("acknowledgeSkillWarnings" in value) ||
+      check_3010(value.acknowledgeSkillWarnings)),
+  check_3016 = (value) => check_476(value),
+  check_3017 = (value) => check_3018(value),
+  check_3018 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "agentId" in value &&
+    "planIntegrity" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2040, unique_2041) => External[1026].test(unique_2040) || check_2(value[unique_2040]),
+    ) &&
+    check_6(value.agentId) &&
+    check_6(value.planIntegrity),
+  check_3019 = (value) => check_3020(value),
+  check_3020 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20039,37 +20081,37 @@ var External = [
     "blockers" in value &&
     "riskAcknowledgementRequired" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2038, unique_2039) => External[1025].test(unique_2038) || check_2(value[unique_2038]),
+      (unique_2042, unique_2043) => External[1027].test(unique_2042) || check_2(value[unique_2042]),
     ) &&
-    check_3016(value.schemaVersion) &&
-    check_3017(value.operation) &&
+    check_3021(value.schemaVersion) &&
+    check_3022(value.operation) &&
     check_6(value.planIntegrity) &&
-    check_3018(value.target) &&
-    check_3019(value.actions) &&
-    check_3044(value.capabilities) &&
-    check_3046(value.pluginReviews) &&
-    check_3051(value.skillReviews) &&
-    check_3053(value.blockers) &&
+    check_3023(value.target) &&
+    check_3024(value.actions) &&
+    check_3049(value.capabilities) &&
+    check_3051(value.pluginReviews) &&
+    check_3056(value.skillReviews) &&
+    check_3058(value.blockers) &&
     (value.trustWarning === void 0 || !("trustWarning" in value) || check_63(value.trustWarning)) &&
     (value.manifestDisclosure === void 0 ||
       !("manifestDisclosure" in value) ||
-      check_3055(value.manifestDisclosure)) &&
+      check_3060(value.manifestDisclosure)) &&
     check_97(value.riskAcknowledgementRequired) &&
     (value.configuredAccess === void 0 ||
       !("configuredAccess" in value) ||
-      check_3058(value.configuredAccess)) &&
+      check_3063(value.configuredAccess)) &&
     (value.scheduledJobs === void 0 ||
       !("scheduledJobs" in value) ||
-      check_3092(value.scheduledJobs)) &&
-    (value.readiness === void 0 || !("readiness" in value) || check_3104(value.readiness)),
-  check_3016 = (value) => typeof value == "string" && value === "openclaw.templatesGatewayPlan.v1",
-  check_3017 = (value) => check_16(value) || check_17(value) || check_245(value),
-  check_3018 = (value) =>
+      check_3097(value.scheduledJobs)) &&
+    (value.readiness === void 0 || !("readiness" in value) || check_3109(value.readiness)),
+  check_3021 = (value) => typeof value == "string" && value === "openclaw.templatesGatewayPlan.v1",
+  check_3022 = (value) => check_16(value) || check_17(value) || check_245(value),
+  check_3023 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2040, unique_2041) => External[1026].test(unique_2040) || check_2(value[unique_2040]),
+      (unique_2044, unique_2045) => External[1028].test(unique_2044) || check_2(value[unique_2044]),
     ) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
     (value.workspace === void 0 || !("workspace" in value) || check_63(value.workspace)) &&
@@ -20080,9 +20122,9 @@ var External = [
     (value.targetVersion === void 0 ||
       !("targetVersion" in value) ||
       check_63(value.targetVersion)),
-  check_3019 = (value) =>
-    Array.isArray(value) && value.every((unique_2042, index) => check_3020(unique_2042)),
-  check_3020 = (value) =>
+  check_3024 = (value) =>
+    Array.isArray(value) && value.every((unique_2046, index) => check_3025(unique_2046)),
+  check_3025 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20091,26 +20133,26 @@ var External = [
     "action" in value &&
     "blocked" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2043, unique_2044) => External[1027].test(unique_2043) || check_2(value[unique_2043]),
+      (unique_2047, unique_2048) => External[1029].test(unique_2047) || check_2(value[unique_2047]),
     ) &&
     check_6(value.kind) &&
     check_6(value.id) &&
     check_6(value.action) &&
     check_97(value.blocked) &&
     (value.reason === void 0 || !("reason" in value) || check_63(value.reason)) &&
-    (value.effect === void 0 || !("effect" in value) || check_3021(value.effect)),
-  check_3021 = (value) =>
-    check_3022(value) || check_3023(value) || check_3038(value) || check_3040(value),
-  check_3022 = (value) =>
+    (value.effect === void 0 || !("effect" in value) || check_3026(value.effect)),
+  check_3026 = (value) =>
+    check_3027(value) || check_3028(value) || check_3043(value) || check_3045(value),
+  check_3027 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "type" in value &&
     "destination" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2045, unique_2046) => External[1028].test(unique_2045) || check_2(value[unique_2045]),
+      (unique_2049, unique_2050) => External[1030].test(unique_2049) || check_2(value[unique_2049]),
     ) &&
-    check_2984(value.type) &&
+    check_2989(value.type) &&
     check_6(value.destination) &&
     (value.source === void 0 || !("source" in value) || check_63(value.source)) &&
     (value.currentDigest === void 0 ||
@@ -20122,33 +20164,33 @@ var External = [
     (value.currentPresent === void 0 ||
       !("currentPresent" in value) ||
       check_181(value.currentPresent)),
-  check_3023 = (value) =>
+  check_3028 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "type" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2047, unique_2048) => External[1029].test(unique_2047) || check_2(value[unique_2047]),
+      (unique_2051, unique_2052) => External[1031].test(unique_2051) || check_2(value[unique_2051]),
     ) &&
-    check_2985(value.type) &&
+    check_2990(value.type) &&
     (value.currentDigest === void 0 ||
       !("currentDigest" in value) ||
       check_63(value.currentDigest)) &&
     (value.desiredDigest === void 0 ||
       !("desiredDigest" in value) ||
       check_63(value.desiredDigest)) &&
-    (value.proposed === void 0 || !("proposed" in value) || check_3024(value.proposed)) &&
-    (value.ownership === void 0 || !("ownership" in value) || check_3035(value.ownership)),
-  check_3024 = (value) =>
+    (value.proposed === void 0 || !("proposed" in value) || check_3029(value.proposed)) &&
+    (value.ownership === void 0 || !("ownership" in value) || check_3040(value.ownership)),
+  check_3029 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "transport" in value &&
     "authentication" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2049, unique_2050) => External[1030].test(unique_2049) || check_2(value[unique_2049]),
+      (unique_2053, unique_2054) => External[1032].test(unique_2053) || check_2(value[unique_2053]),
     ) &&
-    check_3025(value.transport) &&
+    check_3030(value.transport) &&
     (value.command === void 0 || !("command" in value) || check_63(value.command)) &&
     (value.arguments === void 0 || !("arguments" in value) || check_1184(value.arguments)) &&
     (value.url === void 0 || !("url" in value) || check_63(value.url)) &&
@@ -20156,91 +20198,91 @@ var External = [
     (value.queryParameterNames === void 0 ||
       !("queryParameterNames" in value) ||
       check_1184(value.queryParameterNames)) &&
-    (value.environment === void 0 || !("environment" in value) || check_3029(value.environment)) &&
-    check_3031(value.authentication) &&
-    (value.toolFilter === void 0 || !("toolFilter" in value) || check_3033(value.toolFilter)) &&
-    (value.timeout === void 0 || !("timeout" in value) || check_3034(value.timeout)) &&
+    (value.environment === void 0 || !("environment" in value) || check_3034(value.environment)) &&
+    check_3036(value.authentication) &&
+    (value.toolFilter === void 0 || !("toolFilter" in value) || check_3038(value.toolFilter)) &&
+    (value.timeout === void 0 || !("timeout" in value) || check_3039(value.timeout)) &&
     (value.connectTimeout === void 0 ||
       !("connectTimeout" in value) ||
-      check_3034(value.connectTimeout)),
-  check_3025 = (value) => check_3026(value) || check_3027(value) || check_3028(value),
-  check_3026 = (value) => typeof value == "string" && value === "stdio",
-  check_3027 = (value) => typeof value == "string" && value === "sse",
-  check_3028 = (value) => typeof value == "string" && value === "streamable-http",
-  check_3029 = (value) =>
-    Array.isArray(value) && value.every((unique_2051, index) => check_3030(unique_2051)),
-  check_3030 = (value) =>
+      check_3039(value.connectTimeout)),
+  check_3030 = (value) => check_3031(value) || check_3032(value) || check_3033(value),
+  check_3031 = (value) => typeof value == "string" && value === "stdio",
+  check_3032 = (value) => typeof value == "string" && value === "sse",
+  check_3033 = (value) => typeof value == "string" && value === "streamable-http",
+  check_3034 = (value) =>
+    Array.isArray(value) && value.every((unique_2055, index) => check_3035(unique_2055)),
+  check_3035 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "name" in value &&
     "sourceName" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2052, unique_2053) => External[1031].test(unique_2052) || check_2(value[unique_2052]),
+      (unique_2056, unique_2057) => External[1033].test(unique_2056) || check_2(value[unique_2056]),
     ) &&
     check_6(value.name) &&
     check_6(value.sourceName),
-  check_3031 = (value) => check_430(value) || check_3032(value),
-  check_3032 = (value) => typeof value == "string" && value === "oauth",
-  check_3033 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2054, unique_2055) => External[1032].test(unique_2054) || check_2(value[unique_2054]),
-    ) &&
-    (value.include === void 0 || !("include" in value) || check_1184(value.include)) &&
-    (value.exclude === void 0 || !("exclude" in value) || check_1184(value.exclude)),
-  check_3034 = (value) => Number.isFinite(value) && value > 0,
-  check_3035 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "relationship" in value &&
-    "origin" in value &&
-    "independentOwner" in value &&
-    "affectedTemplateCount" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2056, unique_2057) => External[1033].test(unique_2056) || check_2(value[unique_2056]),
-    ) &&
-    check_3036(value.relationship) &&
-    check_3037(value.origin) &&
-    check_97(value.independentOwner) &&
-    check_7(value.affectedTemplateCount),
-  check_3036 = (value) => check_561(value) || check_2988(value),
-  check_3037 = (value) => check_2990(value) || check_2991(value),
+  check_3036 = (value) => check_430(value) || check_3037(value),
+  check_3037 = (value) => typeof value == "string" && value === "oauth",
   check_3038 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2058, unique_2059) => External[1034].test(unique_2058) || check_2(value[unique_2058]),
+    ) &&
+    (value.include === void 0 || !("include" in value) || check_1184(value.include)) &&
+    (value.exclude === void 0 || !("exclude" in value) || check_1184(value.exclude)),
+  check_3039 = (value) => Number.isFinite(value) && value > 0,
+  check_3040 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "relationship" in value &&
+    "origin" in value &&
+    "independentOwner" in value &&
+    "affectedTemplateCount" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2060, unique_2061) => External[1035].test(unique_2060) || check_2(value[unique_2060]),
+    ) &&
+    check_3041(value.relationship) &&
+    check_3042(value.origin) &&
+    check_97(value.independentOwner) &&
+    check_7(value.affectedTemplateCount),
+  check_3041 = (value) => check_561(value) || check_2993(value),
+  check_3042 = (value) => check_2995(value) || check_2996(value),
+  check_3043 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
     "type" in value &&
     "relationship" in value &&
     "origin" in value &&
     "independentOwner" in value &&
     "affectedTemplateCount" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2058, unique_2059) => External[1034].test(unique_2058) || check_2(value[unique_2058]),
+      (unique_2062, unique_2063) => External[1036].test(unique_2062) || check_2(value[unique_2062]),
     ) &&
-    check_3039(value.type) &&
-    check_3036(value.relationship) &&
-    check_3037(value.origin) &&
+    check_3044(value.type) &&
+    check_3041(value.relationship) &&
+    check_3042(value.origin) &&
     check_97(value.independentOwner) &&
     check_7(value.affectedTemplateCount),
-  check_3039 = (value) => typeof value == "string" && value === "ownership",
-  check_3040 = (value) =>
+  check_3044 = (value) => typeof value == "string" && value === "ownership",
+  check_3045 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "type" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2060, unique_2061) => External[1035].test(unique_2060) || check_2(value[unique_2060]),
+      (unique_2064, unique_2065) => External[1037].test(unique_2064) || check_2(value[unique_2064]),
     ) &&
-    check_3041(value.type) &&
-    (value.current === void 0 || !("current" in value) || check_3042(value.current)) &&
-    (value.desired === void 0 || !("desired" in value) || check_3042(value.desired)) &&
-    (value.ownership === void 0 || !("ownership" in value) || check_3035(value.ownership)),
-  check_3041 = (value) => typeof value == "string" && value === "skill-package",
-  check_3042 = (value) =>
+    check_3046(value.type) &&
+    (value.current === void 0 || !("current" in value) || check_3047(value.current)) &&
+    (value.desired === void 0 || !("desired" in value) || check_3047(value.desired)) &&
+    (value.ownership === void 0 || !("ownership" in value) || check_3040(value.ownership)),
+  check_3046 = (value) => typeof value == "string" && value === "skill-package",
+  check_3047 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20249,16 +20291,16 @@ var External = [
     "version" in value &&
     "integrity" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2062, unique_2063) => External[1036].test(unique_2062) || check_2(value[unique_2062]),
+      (unique_2066, unique_2067) => External[1038].test(unique_2066) || check_2(value[unique_2066]),
     ) &&
     check_258(value.source) &&
     check_6(value.ref) &&
     check_6(value.version) &&
-    check_3043(value.integrity),
-  check_3043 = (value) => typeof value == "string" && External[1037].test(value),
-  check_3044 = (value) =>
-    Array.isArray(value) && value.every((unique_2064, index) => check_3045(unique_2064)),
-  check_3045 = (value) =>
+    check_3048(value.integrity),
+  check_3048 = (value) => typeof value == "string" && External[1039].test(value),
+  check_3049 = (value) =>
+    Array.isArray(value) && value.every((unique_2068, index) => check_3050(unique_2068)),
+  check_3050 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20267,15 +20309,15 @@ var External = [
     "action" in value &&
     "reason" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2065, unique_2066) => External[1038].test(unique_2065) || check_2(value[unique_2065]),
+      (unique_2069, unique_2070) => External[1040].test(unique_2069) || check_2(value[unique_2069]),
     ) &&
     check_6(value.kind) &&
     check_6(value.id) &&
     check_6(value.action) &&
     check_6(value.reason),
-  check_3046 = (value) =>
-    Array.isArray(value) && value.every((unique_2067, index) => check_3047(unique_2067)),
-  check_3047 = (value) =>
+  check_3051 = (value) =>
+    Array.isArray(value) && value.every((unique_2071, index) => check_3052(unique_2071)),
+  check_3052 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20290,22 +20332,22 @@ var External = [
     "capabilityGrantsByPluginId" in value &&
     "reviewToken" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2068, unique_2069) => External[1039].test(unique_2068) || check_2(value[unique_2068]),
+      (unique_2072, unique_2073) => External[1041].test(unique_2072) || check_2(value[unique_2072]),
     ) &&
     check_6(value.actionId) &&
     check_6(value.pluginId) &&
     check_6(value.ref) &&
     check_6(value.version) &&
-    check_3048(value.ownerAction) &&
-    check_3043(value.integrity) &&
-    check_3050(value.declaredCapabilities) &&
-    check_2999(value.capabilityGrants) &&
-    check_3004(value.capabilityGrantsByPluginId) &&
+    check_3053(value.ownerAction) &&
+    check_3048(value.integrity) &&
+    check_3055(value.declaredCapabilities) &&
+    check_3004(value.capabilityGrants) &&
+    check_3009(value.capabilityGrantsByPluginId) &&
     check_6(value.reviewToken) &&
     (value.riskWarning === void 0 || !("riskWarning" in value) || check_63(value.riskWarning)),
-  check_3048 = (value) => check_1144(value) || check_3049(value),
-  check_3049 = (value) => typeof value == "string" && value === "reuse",
-  check_3050 = (value) =>
+  check_3053 = (value) => check_1144(value) || check_3054(value),
+  check_3054 = (value) => typeof value == "string" && value === "reuse",
+  check_3055 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20320,7 +20362,7 @@ var External = [
     "skills" in value &&
     "dangerousConfigFlags" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2070, unique_2071) => External[1040].test(unique_2070) || check_2(value[unique_2070]),
+      (unique_2074, unique_2075) => External[1042].test(unique_2074) || check_2(value[unique_2074]),
     ) &&
     check_747(value.channels) &&
     check_747(value.providers) &&
@@ -20332,9 +20374,9 @@ var External = [
     check_747(value.cliBackends) &&
     check_747(value.skills) &&
     check_747(value.dangerousConfigFlags),
-  check_3051 = (value) =>
-    Array.isArray(value) && value.every((unique_2072, index) => check_3052(unique_2072)),
-  check_3052 = (value) =>
+  check_3056 = (value) =>
+    Array.isArray(value) && value.every((unique_2076, index) => check_3057(unique_2076)),
+  check_3057 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20345,7 +20387,7 @@ var External = [
     "riskWarning" in value &&
     "reviewToken" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2073, unique_2074) => External[1041].test(unique_2073) || check_2(value[unique_2073]),
+      (unique_2077, unique_2078) => External[1043].test(unique_2077) || check_2(value[unique_2077]),
     ) &&
     check_6(value.actionId) &&
     check_6(value.ref) &&
@@ -20353,9 +20395,9 @@ var External = [
     check_6(value.integrity) &&
     check_6(value.riskWarning) &&
     check_6(value.reviewToken),
-  check_3053 = (value) =>
-    Array.isArray(value) && value.every((unique_2075, index) => check_3054(unique_2075)),
-  check_3054 = (value) =>
+  check_3058 = (value) =>
+    Array.isArray(value) && value.every((unique_2079, index) => check_3059(unique_2079)),
+  check_3059 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20363,26 +20405,26 @@ var External = [
     "path" in value &&
     "message" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2076, unique_2077) => External[1042].test(unique_2076) || check_2(value[unique_2076]),
+      (unique_2080, unique_2081) => External[1044].test(unique_2080) || check_2(value[unique_2080]),
     ) &&
     check_6(value.code) &&
     check_6(value.path) &&
     check_6(value.message),
-  check_3055 = (value) =>
+  check_3060 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "source" in value &&
     "manifestJson" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2078, unique_2079) => External[1043].test(unique_2078) || check_2(value[unique_2078]),
+      (unique_2082, unique_2083) => External[1045].test(unique_2082) || check_2(value[unique_2082]),
     ) &&
-    check_3056(value.source) &&
+    check_3061(value.source) &&
     check_6(value.manifestJson) &&
     (value.openClawProfileJson === void 0 ||
       !("openClawProfileJson" in value) ||
       check_63(value.openClawProfileJson)),
-  check_3056 = (value) =>
+  check_3061 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20391,28 +20433,28 @@ var External = [
     "integrity" in value &&
     "byteLength" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2080, unique_2081) => External[1044].test(unique_2080) || check_2(value[unique_2080]),
+      (unique_2084, unique_2085) => External[1046].test(unique_2084) || check_2(value[unique_2084]),
     ) &&
-    check_2937(value.packageName) &&
+    check_2942(value.packageName) &&
     check_6(value.version) &&
-    check_3057(value.integrity) &&
+    check_3062(value.integrity) &&
     check_618(value.byteLength),
-  check_3057 = (value) => typeof value == "string" && External[1045].test(value),
-  check_3058 = (value) =>
+  check_3062 = (value) => typeof value == "string" && External[1047].test(value),
+  check_3063 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "coverage" in value &&
     "unresolved" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2082, unique_2083) => External[1046].test(unique_2082) || check_2(value[unique_2082]),
+      (unique_2086, unique_2087) => External[1048].test(unique_2086) || check_2(value[unique_2086]),
     ) &&
-    check_3059(value.coverage) &&
-    (value.current === void 0 || !("current" in value) || check_3060(value.current)) &&
-    (value.desired === void 0 || !("desired" in value) || check_3060(value.desired)) &&
-    check_3085(value.unresolved),
-  check_3059 = (value) => typeof value == "string" && value === "configuration-only",
-  check_3060 = (value) =>
+    check_3064(value.coverage) &&
+    (value.current === void 0 || !("current" in value) || check_3065(value.current)) &&
+    (value.desired === void 0 || !("desired" in value) || check_3065(value.desired)) &&
+    check_3090(value.unresolved),
+  check_3064 = (value) => typeof value == "string" && value === "configuration-only",
+  check_3065 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20423,15 +20465,15 @@ var External = [
     "memorySearch" in value &&
     "subagentTargets" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2084, unique_2085) => External[1047].test(unique_2084) || check_2(value[unique_2084]),
+      (unique_2088, unique_2089) => External[1049].test(unique_2088) || check_2(value[unique_2088]),
     ) &&
-    check_3061(value.tools) &&
-    check_3062(value.sandbox) &&
-    check_3072(value.filesystem) &&
-    check_3073(value.heartbeat) &&
-    check_3075(value.memorySearch) &&
-    check_3084(value.subagentTargets),
-  check_3061 = (value) =>
+    check_3066(value.tools) &&
+    check_3067(value.sandbox) &&
+    check_3077(value.filesystem) &&
+    check_3078(value.heartbeat) &&
+    check_3080(value.memorySearch) &&
+    check_3089(value.subagentTargets),
+  check_3066 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20440,13 +20482,13 @@ var External = [
     "explicitAllow" in value &&
     "explicitDeny" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2086, unique_2087) => External[1048].test(unique_2086) || check_2(value[unique_2086]),
+      (unique_2090, unique_2091) => External[1050].test(unique_2090) || check_2(value[unique_2090]),
     ) &&
     check_747(value.allowed) &&
     check_747(value.excluded) &&
     check_747(value.explicitAllow) &&
     check_747(value.explicitDeny),
-  check_3062 = (value) =>
+  check_3067 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20455,76 +20497,76 @@ var External = [
     "workspaceAccess" in value &&
     "backend" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2088, unique_2089) => External[1049].test(unique_2088) || check_2(value[unique_2088]),
+      (unique_2092, unique_2093) => External[1051].test(unique_2092) || check_2(value[unique_2092]),
     ) &&
-    check_3063(value.mode) &&
-    check_3065(value.scope) &&
-    check_3066(value.workspaceAccess) &&
-    check_3069(value.backend),
-  check_3063 = (value) => check_903(value) || check_3064(value) || check_221(value),
-  check_3064 = (value) => typeof value == "string" && value === "non-main",
-  check_3065 = (value) => check_1169(value) || check_132(value) || check_675(value),
-  check_3066 = (value) => check_430(value) || check_3067(value) || check_3068(value),
-  check_3067 = (value) => typeof value == "string" && value === "ro",
-  check_3068 = (value) => typeof value == "string" && value === "rw",
-  check_3069 = (value) => check_3070(value) || check_3071(value) || check_171(value),
-  check_3070 = (value) => typeof value == "string" && value === "docker",
-  check_3071 = (value) => typeof value == "string" && value === "ssh",
-  check_3072 = (value) =>
+    check_3068(value.mode) &&
+    check_3070(value.scope) &&
+    check_3071(value.workspaceAccess) &&
+    check_3074(value.backend),
+  check_3068 = (value) => check_903(value) || check_3069(value) || check_221(value),
+  check_3069 = (value) => typeof value == "string" && value === "non-main",
+  check_3070 = (value) => check_1169(value) || check_132(value) || check_675(value),
+  check_3071 = (value) => check_430(value) || check_3072(value) || check_3073(value),
+  check_3072 = (value) => typeof value == "string" && value === "ro",
+  check_3073 = (value) => typeof value == "string" && value === "rw",
+  check_3074 = (value) => check_3075(value) || check_3076(value) || check_171(value),
+  check_3075 = (value) => typeof value == "string" && value === "docker",
+  check_3076 = (value) => typeof value == "string" && value === "ssh",
+  check_3077 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "workspaceOnly" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2090, unique_2091) => External[1050].test(unique_2090) || check_2(value[unique_2090]),
+      (unique_2094, unique_2095) => External[1052].test(unique_2094) || check_2(value[unique_2094]),
     ) &&
     check_97(value.workspaceOnly),
-  check_3073 = (value) =>
+  check_3078 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "enabled" in value &&
     "intervalMs" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2092, unique_2093) => External[1051].test(unique_2092) || check_2(value[unique_2092]),
+      (unique_2096, unique_2097) => External[1053].test(unique_2096) || check_2(value[unique_2096]),
     ) &&
     check_97(value.enabled) &&
     check_552(value.intervalMs) &&
-    (value.activeHours === void 0 || !("activeHours" in value) || check_3074(value.activeHours)) &&
+    (value.activeHours === void 0 || !("activeHours" in value) || check_3079(value.activeHours)) &&
     (value.isolatedSession === void 0 ||
       !("isolatedSession" in value) ||
       check_181(value.isolatedSession)),
-  check_3074 = (value) =>
+  check_3079 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2094, unique_2095) => External[1052].test(unique_2094) || check_2(value[unique_2094]),
+      (unique_2098, unique_2099) => External[1054].test(unique_2098) || check_2(value[unique_2098]),
     ) &&
     (value.start === void 0 || !("start" in value) || check_63(value.start)) &&
     (value.end === void 0 || !("end" in value) || check_63(value.end)) &&
     (value.timezone === void 0 || !("timezone" in value) || check_63(value.timezone)),
-  check_3075 = (value) => check_3076(value) || check_3077(value) || check_3079(value),
-  check_3076 = (value) =>
+  check_3080 = (value) => check_3081(value) || check_3082(value) || check_3084(value),
+  check_3081 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "state" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2096, unique_2097) => External[1053].test(unique_2096) || check_2(value[unique_2096]),
+      (unique_2100, unique_2101) => External[1055].test(unique_2100) || check_2(value[unique_2100]),
     ) &&
     check_1381(value.state),
-  check_3077 = (value) =>
+  check_3082 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "state" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2098, unique_2099) => External[1054].test(unique_2098) || check_2(value[unique_2098]),
+      (unique_2102, unique_2103) => External[1056].test(unique_2102) || check_2(value[unique_2102]),
     ) &&
-    check_3078(value.state),
-  check_3078 = (value) => typeof value == "string" && value === "unresolved",
-  check_3079 = (value) =>
+    check_3083(value.state),
+  check_3083 = (value) => typeof value == "string" && value === "unresolved",
+  check_3084 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20535,20 +20577,20 @@ var External = [
     "searchSources" in value &&
     "extraPathCount" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2100, unique_2101) => External[1055].test(unique_2100) || check_2(value[unique_2100]),
+      (unique_2104, unique_2105) => External[1057].test(unique_2104) || check_2(value[unique_2104]),
     ) &&
     check_511(value.state) &&
     check_97(value.rememberAcrossConversations) &&
     check_97(value.sessionMemory) &&
-    check_3080(value.indexedSources) &&
-    check_3080(value.searchSources) &&
+    check_3085(value.indexedSources) &&
+    check_3085(value.searchSources) &&
     check_7(value.extraPathCount),
-  check_3080 = (value) =>
-    Array.isArray(value) && value.every((unique_2102, index) => check_3081(unique_2102)),
-  check_3081 = (value) => check_3082(value) || check_3083(value),
-  check_3082 = (value) => typeof value == "string" && value === "memory",
-  check_3083 = (value) => typeof value == "string" && value === "sessions",
-  check_3084 = (value) =>
+  check_3085 = (value) =>
+    Array.isArray(value) && value.every((unique_2106, index) => check_3086(unique_2106)),
+  check_3086 = (value) => check_3087(value) || check_3088(value),
+  check_3087 = (value) => typeof value == "string" && value === "memory",
+  check_3088 = (value) => typeof value == "string" && value === "sessions",
+  check_3089 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20557,40 +20599,40 @@ var External = [
     "implicitSelfAllowed" in value &&
     "requireAgentId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2103, unique_2104) => External[1056].test(unique_2103) || check_2(value[unique_2103]),
+      (unique_2107, unique_2108) => External[1058].test(unique_2107) || check_2(value[unique_2107]),
     ) &&
     check_747(value.allowedAgentIds) &&
     check_97(value.allowAnyConfiguredAgent) &&
     check_97(value.implicitSelfAllowed) &&
     check_97(value.requireAgentId),
-  check_3085 = (value) =>
-    Array.isArray(value) && value.every((unique_2105, index) => check_3086(unique_2105)),
-  check_3086 = (value) =>
-    check_3087(value) ||
-    check_3088(value) ||
-    check_3089(value) ||
-    check_3090(value) ||
-    check_3091(value),
-  check_3087 = (value) => typeof value == "string" && value === "runtime-tools",
-  check_3088 = (value) => typeof value == "string" && value === "sandbox-runtime",
-  check_3089 = (value) => typeof value == "string" && value === "memory-runtime",
-  check_3090 = (value) => typeof value == "string" && value === "subagent-runtime",
-  check_3091 = (value) => typeof value == "string" && value === "scheduler-runtime",
-  check_3092 = (value) =>
+  check_3090 = (value) =>
+    Array.isArray(value) && value.every((unique_2109, index) => check_3091(unique_2109)),
+  check_3091 = (value) =>
+    check_3092(value) ||
+    check_3093(value) ||
+    check_3094(value) ||
+    check_3095(value) ||
+    check_3096(value),
+  check_3092 = (value) => typeof value == "string" && value === "runtime-tools",
+  check_3093 = (value) => typeof value == "string" && value === "sandbox-runtime",
+  check_3094 = (value) => typeof value == "string" && value === "memory-runtime",
+  check_3095 = (value) => typeof value == "string" && value === "subagent-runtime",
+  check_3096 = (value) => typeof value == "string" && value === "scheduler-runtime",
+  check_3097 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "coverage" in value &&
     "jobs" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2106, unique_2107) => External[1057].test(unique_2106) || check_2(value[unique_2106]),
+      (unique_2110, unique_2111) => External[1059].test(unique_2110) || check_2(value[unique_2110]),
     ) &&
-    check_3093(value.coverage) &&
-    check_3094(value.jobs),
-  check_3093 = (value) => typeof value == "string" && value === "package-declarations",
-  check_3094 = (value) =>
-    Array.isArray(value) && value.every((unique_2108, index) => check_3095(unique_2108)),
-  check_3095 = (value) =>
+    check_3098(value.coverage) &&
+    check_3099(value.jobs),
+  check_3098 = (value) => typeof value == "string" && value === "package-declarations",
+  check_3099 = (value) =>
+    Array.isArray(value) && value.every((unique_2112, index) => check_3100(unique_2112)),
+  check_3100 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20598,14 +20640,14 @@ var External = [
     "action" in value &&
     "blocked" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2109, unique_2110) => External[1058].test(unique_2109) || check_2(value[unique_2109]),
+      (unique_2113, unique_2114) => External[1060].test(unique_2113) || check_2(value[unique_2113]),
     ) &&
     check_6(value.id) &&
     check_6(value.action) &&
     check_97(value.blocked) &&
-    (value.current === void 0 || !("current" in value) || check_3096(value.current)) &&
-    (value.proposed === void 0 || !("proposed" in value) || check_3103(value.proposed)),
-  check_3096 = (value) =>
+    (value.current === void 0 || !("current" in value) || check_3101(value.current)) &&
+    (value.proposed === void 0 || !("proposed" in value) || check_3108(value.proposed)),
+  check_3101 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20614,37 +20656,37 @@ var External = [
     "delivery" in value &&
     "messageDigest" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2111, unique_2112) => External[1059].test(unique_2111) || check_2(value[unique_2111]),
+      (unique_2115, unique_2116) => External[1061].test(unique_2115) || check_2(value[unique_2115]),
     ) &&
-    check_3097(value.schedule) &&
-    check_3100(value.session) &&
-    check_3101(value.delivery) &&
+    check_3102(value.schedule) &&
+    check_3105(value.session) &&
+    check_3106(value.delivery) &&
     check_6(value.messageDigest),
-  check_3097 = (value) => check_3098(value) || check_3099(value),
-  check_3098 = (value) =>
+  check_3102 = (value) => check_3103(value) || check_3104(value),
+  check_3103 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "cron" in value &&
     "timezone" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2113, unique_2114) => External[1060].test(unique_2113) || check_2(value[unique_2113]),
+      (unique_2117, unique_2118) => External[1062].test(unique_2117) || check_2(value[unique_2117]),
     ) &&
     check_6(value.cron) &&
     check_6(value.timezone),
-  check_3099 = (value) =>
+  check_3104 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "everyMs" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2115, unique_2116) => External[1061].test(unique_2115) || check_2(value[unique_2115]),
+      (unique_2119, unique_2120) => External[1063].test(unique_2119) || check_2(value[unique_2119]),
     ) &&
     check_618(value.everyMs),
-  check_3100 = (value) => check_1611(value) || check_1612(value),
-  check_3101 = (value) => check_430(value) || check_3102(value) || check_1670(value),
-  check_3102 = (value) => typeof value == "string" && value === "last-channel",
-  check_3103 = (value) =>
+  check_3105 = (value) => check_1611(value) || check_1612(value),
+  check_3106 = (value) => check_430(value) || check_3107(value) || check_1670(value),
+  check_3107 = (value) => typeof value == "string" && value === "last-channel",
+  check_3108 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20654,164 +20696,164 @@ var External = [
     "messageDigest" in value &&
     "message" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2117, unique_2118) => External[1062].test(unique_2117) || check_2(value[unique_2117]),
+      (unique_2121, unique_2122) => External[1064].test(unique_2121) || check_2(value[unique_2121]),
     ) &&
-    check_3097(value.schedule) &&
-    check_3100(value.session) &&
-    check_3101(value.delivery) &&
+    check_3102(value.schedule) &&
+    check_3105(value.session) &&
+    check_3106(value.delivery) &&
     check_6(value.messageDigest) &&
     check_6(value.message),
-  check_3104 = (value) =>
+  check_3109 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "ready" in value &&
     "requirements" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2119, unique_2120) => External[1063].test(unique_2119) || check_2(value[unique_2119]),
+      (unique_2123, unique_2124) => External[1065].test(unique_2123) || check_2(value[unique_2123]),
     ) &&
     check_97(value.ready) &&
-    check_3105(value.requirements),
-  check_3105 = (value) =>
-    Array.isArray(value) && value.every((unique_2121, index) => check_3106(unique_2121)),
-  check_3106 = (value) =>
+    check_3110(value.requirements),
+  check_3110 = (value) =>
+    Array.isArray(value) && value.every((unique_2125, index) => check_3111(unique_2125)),
+  check_3111 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "kind" in value &&
     "owner" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2122, unique_2123) => External[1064].test(unique_2122) || check_2(value[unique_2122]),
+      (unique_2126, unique_2127) => External[1066].test(unique_2126) || check_2(value[unique_2126]),
     ) &&
-    check_3107(value.kind) &&
+    check_3112(value.kind) &&
     check_6(value.owner),
-  check_3107 = (value) => check_1334(value) || check_3032(value) || check_3108(value),
-  check_3108 = (value) => typeof value == "string" && value === "plugin-setup",
-  check_3109 = (value) => check_3110(value),
-  check_3110 = (value) =>
+  check_3112 = (value) => check_1334(value) || check_3037(value) || check_3113(value),
+  check_3113 = (value) => typeof value == "string" && value === "plugin-setup",
+  check_3114 = (value) => check_3115(value),
+  check_3115 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "html" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2124, unique_2125) => External[1065].test(unique_2124) || check_2(value[unique_2124]),
+      (unique_2128, unique_2129) => External[1067].test(unique_2128) || check_2(value[unique_2128]),
     ) &&
-    check_3111(value.html),
-  check_3111 = (value) =>
+    check_3116(value.html),
+  check_3116 = (value) =>
     typeof value == "string" &&
     (value.length <= 2097152 || (value.length <= 4194304 && CodePointCount(value) <= 2097152)),
-  check_3112 = (value) => check_3113(value),
-  check_3113 = (value) =>
+  check_3117 = (value) => check_3118(value),
+  check_3118 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "docId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2126, unique_2127) => External[1066].test(unique_2126) || check_2(value[unique_2126]),
+      (unique_2130, unique_2131) => External[1068].test(unique_2130) || check_2(value[unique_2130]),
     ) &&
-    check_3114(value.docId) &&
+    check_3119(value.docId) &&
     (value.sessionKey === void 0 || !("sessionKey" in value) || check_63(value.sessionKey)),
-  check_3114 = (value) =>
+  check_3119 = (value) =>
     typeof value == "string" &&
     (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
     (value.length <= 256 || (value.length <= 512 && CodePointCount(value) <= 256)) &&
-    External[1067].test(value),
-  check_3115 = (value) => check_3116(value),
-  check_3116 = (value) =>
+    External[1069].test(value),
+  check_3120 = (value) => check_3121(value),
+  check_3121 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "projectId" in value &&
     "agentId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2128, unique_2129) => External[1068].test(unique_2128) || check_2(value[unique_2128]),
+      (unique_2132, unique_2133) => External[1070].test(unique_2132) || check_2(value[unique_2132]),
     ) &&
     check_6(value.projectId) &&
     check_6(value.agentId),
-  check_3117 = (value) => check_3118(value),
-  check_3118 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2130, unique_2131) => External[1069].test(unique_2130) || check_2(value[unique_2130]),
-    ) &&
-    (value.includeObserved === void 0 ||
-      !("includeObserved" in value) ||
-      check_3119(value.includeObserved)),
-  check_3119 = (value) => typeof value == "boolean",
-  check_3120 = (value) => check_3121(value),
-  check_3121 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "path" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2132, unique_2133) => External[1070].test(unique_2132) || check_2(value[unique_2132]),
-    ) &&
-    check_6(value.path) &&
-    (value.name === void 0 || !("name" in value) || check_259(value.name)),
   check_3122 = (value) => check_3123(value),
   check_3123 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
-    "gitUrl" in value &&
     Object.getOwnPropertyNames(value).every(
       (unique_2134, unique_2135) => External[1071].test(unique_2134) || check_2(value[unique_2134]),
     ) &&
+    (value.includeObserved === void 0 ||
+      !("includeObserved" in value) ||
+      check_3124(value.includeObserved)),
+  check_3124 = (value) => typeof value == "boolean",
+  check_3125 = (value) => check_3126(value),
+  check_3126 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "path" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2136, unique_2137) => External[1072].test(unique_2136) || check_2(value[unique_2136]),
+    ) &&
+    check_6(value.path) &&
+    (value.name === void 0 || !("name" in value) || check_259(value.name)),
+  check_3127 = (value) => check_3128(value),
+  check_3128 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "gitUrl" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2138, unique_2139) => External[1073].test(unique_2138) || check_2(value[unique_2138]),
+    ) &&
     check_2310(value.gitUrl) &&
     (value.name === void 0 || !("name" in value) || check_259(value.name)),
-  check_3124 = (value) => check_3125(value),
-  check_3125 = (value) =>
+  check_3129 = (value) => check_3130(value),
+  check_3130 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "query" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2136, unique_2137) => External[1072].test(unique_2136) || check_2(value[unique_2136]),
+      (unique_2140, unique_2141) => External[1074].test(unique_2140) || check_2(value[unique_2140]),
     ) &&
     check_830(value.query),
-  check_3126 = (value) => check_3127(value),
-  check_3127 = (value) =>
+  check_3131 = (value) => check_3132(value),
+  check_3132 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "id" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2138, unique_2139) => External[1073].test(unique_2138) || check_2(value[unique_2138]),
+      (unique_2142, unique_2143) => External[1075].test(unique_2142) || check_2(value[unique_2142]),
     ) &&
-    check_3128(value.id) &&
+    check_3133(value.id) &&
     (value.deleteCheckout === void 0 ||
       !("deleteCheckout" in value) ||
       check_181(value.deleteCheckout)),
-  check_3128 = (value) => typeof value == "string" && External[1074].test(value),
-  check_3129 = (value) => check_203(value),
-  check_3130 = (value) => check_601(value),
-  check_3131 = (value) => check_3132(value),
-  check_3132 = (value) =>
+  check_3133 = (value) => typeof value == "string" && External[1076].test(value),
+  check_3134 = (value) => check_203(value),
+  check_3135 = (value) => check_601(value),
+  check_3136 = (value) => check_3137(value),
+  check_3137 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "sessionKey" in value &&
     "ops" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2140, unique_2141) => External[1075].test(unique_2140) || check_2(value[unique_2140]),
+      (unique_2144, unique_2145) => External[1077].test(unique_2144) || check_2(value[unique_2144]),
     ) &&
     check_6(value.sessionKey) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
-    check_3133(value.ops),
-  check_3133 = (value) =>
-    Array.isArray(value) && value.every((unique_2142, index) => check_3134(unique_2142)),
-  check_3134 = (value) =>
-    check_3135(value) ||
-    check_3141(value) ||
-    check_3143(value) ||
-    check_3145(value) ||
+    check_3138(value.ops),
+  check_3138 = (value) =>
+    Array.isArray(value) && value.every((unique_2146, index) => check_3139(unique_2146)),
+  check_3139 = (value) =>
+    check_3140(value) ||
+    check_3146(value) ||
     check_3148(value) ||
+    check_3150(value) ||
     check_3153(value) ||
-    check_3157(value),
-  check_3135 = (value) =>
+    check_3158(value) ||
+    check_3162(value),
+  check_3140 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20819,78 +20861,78 @@ var External = [
     "tabId" in value &&
     "title" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2143, unique_2144) => External[1076].test(unique_2143) || check_2(value[unique_2143]),
+      (unique_2147, unique_2148) => External[1078].test(unique_2147) || check_2(value[unique_2147]),
     ) &&
-    check_3136(value.kind) &&
-    check_3137(value.tabId) &&
+    check_3141(value.kind) &&
+    check_3142(value.tabId) &&
     check_48(value.title) &&
-    (value.chatDock === void 0 || !("chatDock" in value) || check_3138(value.chatDock)),
-  check_3136 = (value) => typeof value == "string" && value === "tab_create",
-  check_3137 = (value) => typeof value == "string" && External[1077].test(value),
-  check_3138 = (value) =>
-    check_3139(value) || check_2074(value) || check_2086(value) || check_3140(value),
-  check_3139 = (value) => typeof value == "string" && value === "left",
-  check_3140 = (value) => typeof value == "string" && value === "hidden",
-  check_3141 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "kind" in value &&
-    "tabId" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2145, unique_2146) => External[1078].test(unique_2145) || check_2(value[unique_2145]),
-    ) &&
-    check_3142(value.kind) &&
-    check_3137(value.tabId) &&
-    (value.title === void 0 || !("title" in value) || check_2126(value.title)) &&
-    (value.chatDock === void 0 || !("chatDock" in value) || check_3138(value.chatDock)) &&
-    (value.position === void 0 || !("position" in value) || check_426(value.position)),
-  check_3142 = (value) => typeof value == "string" && value === "tab_update",
+    (value.chatDock === void 0 || !("chatDock" in value) || check_3143(value.chatDock)),
+  check_3141 = (value) => typeof value == "string" && value === "tab_create",
+  check_3142 = (value) => typeof value == "string" && External[1079].test(value),
   check_3143 = (value) =>
+    check_3144(value) || check_2074(value) || check_2086(value) || check_3145(value),
+  check_3144 = (value) => typeof value == "string" && value === "left",
+  check_3145 = (value) => typeof value == "string" && value === "hidden",
+  check_3146 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "kind" in value &&
     "tabId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2147, unique_2148) => External[1079].test(unique_2147) || check_2(value[unique_2147]),
+      (unique_2149, unique_2150) => External[1080].test(unique_2149) || check_2(value[unique_2149]),
     ) &&
-    check_3144(value.kind) &&
-    check_3137(value.tabId),
-  check_3144 = (value) => typeof value == "string" && value === "tab_delete",
-  check_3145 = (value) =>
+    check_3147(value.kind) &&
+    check_3142(value.tabId) &&
+    (value.title === void 0 || !("title" in value) || check_2126(value.title)) &&
+    (value.chatDock === void 0 || !("chatDock" in value) || check_3143(value.chatDock)) &&
+    (value.position === void 0 || !("position" in value) || check_426(value.position)),
+  check_3147 = (value) => typeof value == "string" && value === "tab_update",
+  check_3148 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "kind" in value &&
+    "tabId" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2151, unique_2152) => External[1081].test(unique_2151) || check_2(value[unique_2151]),
+    ) &&
+    check_3149(value.kind) &&
+    check_3142(value.tabId),
+  check_3149 = (value) => typeof value == "string" && value === "tab_delete",
+  check_3150 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "kind" in value &&
     "tabIds" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2149, unique_2150) => External[1080].test(unique_2149) || check_2(value[unique_2149]),
+      (unique_2153, unique_2154) => External[1082].test(unique_2153) || check_2(value[unique_2153]),
     ) &&
-    check_3146(value.kind) &&
-    check_3147(value.tabIds),
-  check_3146 = (value) => typeof value == "string" && value === "tabs_reorder",
-  check_3147 = (value) =>
-    Array.isArray(value) && value.every((unique_2151, index) => check_3137(unique_2151)),
-  check_3148 = (value) =>
+    check_3151(value.kind) &&
+    check_3152(value.tabIds),
+  check_3151 = (value) => typeof value == "string" && value === "tabs_reorder",
+  check_3152 = (value) =>
+    Array.isArray(value) && value.every((unique_2155, index) => check_3142(unique_2155)),
+  check_3153 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "kind" in value &&
     "name" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2152, unique_2153) => External[1081].test(unique_2152) || check_2(value[unique_2152]),
+      (unique_2156, unique_2157) => External[1083].test(unique_2156) || check_2(value[unique_2156]),
     ) &&
-    check_3149(value.kind) &&
-    check_3150(value.name) &&
-    (value.tabId === void 0 || !("tabId" in value) || check_3151(value.tabId)) &&
+    check_3154(value.kind) &&
+    check_3155(value.name) &&
+    (value.tabId === void 0 || !("tabId" in value) || check_3156(value.tabId)) &&
     (value.position === void 0 || !("position" in value) || check_426(value.position)) &&
-    (value.after === void 0 || !("after" in value) || check_3152(value.after)),
-  check_3149 = (value) => typeof value == "string" && value === "widget_move",
-  check_3150 = (value) => typeof value == "string" && External[1082].test(value),
-  check_3151 = (value) => typeof value == "string" && External[1083].test(value),
-  check_3152 = (value) => typeof value == "string" && External[1084].test(value),
-  check_3153 = (value) =>
+    (value.after === void 0 || !("after" in value) || check_3157(value.after)),
+  check_3154 = (value) => typeof value == "string" && value === "widget_move",
+  check_3155 = (value) => typeof value == "string" && External[1084].test(value),
+  check_3156 = (value) => typeof value == "string" && External[1085].test(value),
+  check_3157 = (value) => typeof value == "string" && External[1086].test(value),
+  check_3158 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20899,59 +20941,59 @@ var External = [
     "sizeW" in value &&
     "sizeH" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2154, unique_2155) => External[1085].test(unique_2154) || check_2(value[unique_2154]),
+      (unique_2158, unique_2159) => External[1087].test(unique_2158) || check_2(value[unique_2158]),
     ) &&
-    check_3154(value.kind) &&
-    check_3150(value.name) &&
+    check_3159(value.kind) &&
+    check_3155(value.name) &&
     check_1360(value.sizeW) &&
     check_1360(value.sizeH) &&
-    (value.heightMode === void 0 || !("heightMode" in value) || check_3155(value.heightMode)),
-  check_3154 = (value) => typeof value == "string" && value === "widget_resize",
-  check_3155 = (value) => check_853(value) || check_3156(value),
-  check_3156 = (value) => typeof value == "string" && value === "fixed",
-  check_3157 = (value) =>
+    (value.heightMode === void 0 || !("heightMode" in value) || check_3160(value.heightMode)),
+  check_3159 = (value) => typeof value == "string" && value === "widget_resize",
+  check_3160 = (value) => check_853(value) || check_3161(value),
+  check_3161 = (value) => typeof value == "string" && value === "fixed",
+  check_3162 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "kind" in value &&
     "name" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2156, unique_2157) => External[1086].test(unique_2156) || check_2(value[unique_2156]),
+      (unique_2160, unique_2161) => External[1088].test(unique_2160) || check_2(value[unique_2160]),
     ) &&
-    check_3158(value.kind) &&
-    check_3150(value.name),
-  check_3158 = (value) => typeof value == "string" && value === "widget_remove",
-  check_3159 = (value) => check_3160(value),
-  check_3160 = (value) =>
-    check_3161(value) || check_3164(value) || check_3167(value) || check_3169(value),
-  check_3161 = (value) =>
+    check_3163(value.kind) &&
+    check_3155(value.name),
+  check_3163 = (value) => typeof value == "string" && value === "widget_remove",
+  check_3164 = (value) => check_3165(value),
+  check_3165 = (value) =>
+    check_3166(value) || check_3169(value) || check_3172(value) || check_3174(value),
+  check_3166 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "kind" in value &&
     "html" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2158, unique_2159) => External[1087].test(unique_2158) || check_2(value[unique_2158]),
+      (unique_2162, unique_2163) => External[1089].test(unique_2162) || check_2(value[unique_2162]),
     ) &&
-    check_3162(value.kind) &&
-    check_3163(value.html),
-  check_3162 = (value) => typeof value == "string" && value === "html",
-  check_3163 = (value) =>
+    check_3167(value.kind) &&
+    check_3168(value.html),
+  check_3167 = (value) => typeof value == "string" && value === "html",
+  check_3168 = (value) =>
     typeof value == "string" &&
     (value.length <= 10485760 || (value.length <= 20971520 && CodePointCount(value) <= 10485760)),
-  check_3164 = (value) =>
+  check_3169 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "kind" in value &&
     "descriptor" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2160, unique_2161) => External[1088].test(unique_2160) || check_2(value[unique_2160]),
+      (unique_2164, unique_2165) => External[1090].test(unique_2164) || check_2(value[unique_2164]),
     ) &&
-    check_3165(value.kind) &&
-    check_3166(value.descriptor),
-  check_3165 = (value) => typeof value == "string" && value === "mcp-app",
-  check_3166 = (value) =>
+    check_3170(value.kind) &&
+    check_3171(value.descriptor),
+  check_3170 = (value) => typeof value == "string" && value === "mcp-app",
+  check_3171 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20960,26 +21002,26 @@ var External = [
     "uiResourceUri" in value &&
     "toolCallId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2162, unique_2163) => External[1089].test(unique_2162) || check_2(value[unique_2162]),
+      (unique_2166, unique_2167) => External[1091].test(unique_2166) || check_2(value[unique_2166]),
     ) &&
     check_6(value.serverName) &&
     check_6(value.toolName) &&
     check_6(value.uiResourceUri) &&
     check_6(value.toolCallId),
-  check_3167 = (value) =>
+  check_3172 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "kind" in value &&
     "pluginKind" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2164, unique_2165) => External[1090].test(unique_2164) || check_2(value[unique_2164]),
+      (unique_2168, unique_2169) => External[1092].test(unique_2168) || check_2(value[unique_2168]),
     ) &&
     check_47(value.kind) &&
-    check_3168(value.pluginKind) &&
+    check_3173(value.pluginKind) &&
     (value.props === void 0 || !("props" in value) || check_454(value.props)),
-  check_3168 = (value) => typeof value == "string" && External[1091].test(value),
-  check_3169 = (value) =>
+  check_3173 = (value) => typeof value == "string" && External[1093].test(value),
+  check_3174 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -20987,15 +21029,15 @@ var External = [
     "contentKind" in value &&
     "source" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2166, unique_2167) => External[1092].test(unique_2166) || check_2(value[unique_2166]),
+      (unique_2170, unique_2171) => External[1094].test(unique_2170) || check_2(value[unique_2170]),
     ) &&
-    check_3170(value.kind) &&
-    check_3171(value.contentKind) &&
+    check_3175(value.kind) &&
+    check_3176(value.contentKind) &&
     check_1744(value.source),
-  check_3170 = (value) => typeof value == "string" && value === "registered",
-  check_3171 = (value) => typeof value == "string" && External[1093].test(value),
-  check_3172 = (value) => check_3173(value),
-  check_3173 = (value) =>
+  check_3175 = (value) => typeof value == "string" && value === "registered",
+  check_3176 = (value) => typeof value == "string" && External[1095].test(value),
+  check_3177 = (value) => check_3178(value),
+  check_3178 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21004,15 +21046,15 @@ var External = [
     "revision" in value &&
     "instanceId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2168, unique_2169) => External[1094].test(unique_2168) || check_2(value[unique_2168]),
+      (unique_2172, unique_2173) => External[1096].test(unique_2172) || check_2(value[unique_2172]),
     ) &&
     check_6(value.sessionKey) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
-    check_3150(value.name) &&
+    check_3155(value.name) &&
     check_618(value.revision) &&
     check_6(value.instanceId),
-  check_3174 = (value) => check_3175(value),
-  check_3175 = (value) =>
+  check_3179 = (value) => check_3180(value),
+  check_3180 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21020,96 +21062,96 @@ var External = [
     "name" in value &&
     "content" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2170, unique_2171) => External[1095].test(unique_2170) || check_2(value[unique_2170]),
+      (unique_2174, unique_2175) => External[1097].test(unique_2174) || check_2(value[unique_2174]),
     ) &&
     check_6(value.sessionKey) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
-    check_3150(value.name) &&
+    check_3155(value.name) &&
     (value.title === void 0 || !("title" in value) || check_2126(value.title)) &&
-    check_3176(value.content) &&
+    check_3181(value.content) &&
     (value.presentation === void 0 ||
       !("presentation" in value) ||
-      check_3180(value.presentation)) &&
-    (value.heightMode === void 0 || !("heightMode" in value) || check_3155(value.heightMode)) &&
-    (value.placement === void 0 || !("placement" in value) || check_3183(value.placement)) &&
-    (value.declared === void 0 || !("declared" in value) || check_3189(value.declared)) &&
+      check_3185(value.presentation)) &&
+    (value.heightMode === void 0 || !("heightMode" in value) || check_3160(value.heightMode)) &&
+    (value.placement === void 0 || !("placement" in value) || check_3188(value.placement)) &&
+    (value.declared === void 0 || !("declared" in value) || check_3194(value.declared)) &&
     (value.generatedIdentity === void 0 ||
       !("generatedIdentity" in value) ||
-      check_3193(value.generatedIdentity)),
-  check_3176 = (value) =>
-    check_3161(value) ||
-    check_3177(value) ||
-    check_3167(value) ||
-    check_3169(value) ||
-    check_3178(value),
-  check_3177 = (value) =>
+      check_3198(value.generatedIdentity)),
+  check_3181 = (value) =>
+    check_3166(value) ||
+    check_3182(value) ||
+    check_3172(value) ||
+    check_3174(value) ||
+    check_3183(value),
+  check_3182 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "kind" in value &&
     "viewId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2172, unique_2173) => External[1096].test(unique_2172) || check_2(value[unique_2172]),
+      (unique_2176, unique_2177) => External[1098].test(unique_2176) || check_2(value[unique_2176]),
     ) &&
-    check_3165(value.kind) &&
+    check_3170(value.kind) &&
     check_6(value.viewId),
-  check_3178 = (value) =>
+  check_3183 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "kind" in value &&
     "docId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2174, unique_2175) => External[1097].test(unique_2174) || check_2(value[unique_2174]),
-    ) &&
-    check_3179(value.kind) &&
-    check_6(value.docId),
-  check_3179 = (value) => typeof value == "string" && value === "canvas-doc",
-  check_3180 = (value) => check_3181(value) || check_712(value) || check_3182(value),
-  check_3181 = (value) => typeof value == "string" && value === "card",
-  check_3182 = (value) => typeof value == "string" && value === "frameless",
-  check_3183 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2176, unique_2177) => External[1098].test(unique_2176) || check_2(value[unique_2176]),
-    ) &&
-    (value.tabId === void 0 || !("tabId" in value) || check_3151(value.tabId)) &&
-    (value.size === void 0 || !("size" in value) || check_3184(value.size)) &&
-    (value.after === void 0 || !("after" in value) || check_3152(value.after)),
-  check_3184 = (value) =>
-    check_3185(value) ||
-    check_3186(value) ||
-    check_3187(value) ||
-    check_3188(value) ||
-    check_428(value),
-  check_3185 = (value) => typeof value == "string" && value === "sm",
-  check_3186 = (value) => typeof value == "string" && value === "md",
-  check_3187 = (value) => typeof value == "string" && value === "lg",
-  check_3188 = (value) => typeof value == "string" && value === "xl",
-  check_3189 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.getOwnPropertyNames(value).every(
       (unique_2178, unique_2179) => External[1099].test(unique_2178) || check_2(value[unique_2178]),
     ) &&
-    (value.netOrigins === void 0 || !("netOrigins" in value) || check_3190(value.netOrigins)) &&
-    (value.tools === void 0 || !("tools" in value) || check_3191(value.tools)),
-  check_3190 = (value) =>
+    check_3184(value.kind) &&
+    check_6(value.docId),
+  check_3184 = (value) => typeof value == "string" && value === "canvas-doc",
+  check_3185 = (value) => check_3186(value) || check_712(value) || check_3187(value),
+  check_3186 = (value) => typeof value == "string" && value === "card",
+  check_3187 = (value) => typeof value == "string" && value === "frameless",
+  check_3188 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2180, unique_2181) => External[1100].test(unique_2180) || check_2(value[unique_2180]),
+    ) &&
+    (value.tabId === void 0 || !("tabId" in value) || check_3156(value.tabId)) &&
+    (value.size === void 0 || !("size" in value) || check_3189(value.size)) &&
+    (value.after === void 0 || !("after" in value) || check_3157(value.after)),
+  check_3189 = (value) =>
+    check_3190(value) ||
+    check_3191(value) ||
+    check_3192(value) ||
+    check_3193(value) ||
+    check_428(value),
+  check_3190 = (value) => typeof value == "string" && value === "sm",
+  check_3191 = (value) => typeof value == "string" && value === "md",
+  check_3192 = (value) => typeof value == "string" && value === "lg",
+  check_3193 = (value) => typeof value == "string" && value === "xl",
+  check_3194 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2182, unique_2183) => External[1101].test(unique_2182) || check_2(value[unique_2182]),
+    ) &&
+    (value.netOrigins === void 0 || !("netOrigins" in value) || check_3195(value.netOrigins)) &&
+    (value.tools === void 0 || !("tools" in value) || check_3196(value.tools)),
+  check_3195 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_2180, index) => check_2310(unique_2180)) &&
+    value.every((unique_2184, index) => check_2310(unique_2184)) &&
     value.length <= 32,
-  check_3191 = (value) =>
+  check_3196 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_2181, index) => check_3192(unique_2181)) &&
+    value.every((unique_2185, index) => check_3197(unique_2185)) &&
     value.length <= 64,
-  check_3192 = (value) =>
+  check_3197 = (value) =>
     typeof value == "string" &&
     (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
     (value.length <= 269 || (value.length <= 538 && CodePointCount(value) <= 269)),
-  check_3193 = (value) =>
+  check_3198 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21117,14 +21159,14 @@ var External = [
     "key" in value &&
     "fallbackName" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2182, unique_2183) => External[1100].test(unique_2182) || check_2(value[unique_2182]),
+      (unique_2186, unique_2187) => External[1102].test(unique_2186) || check_2(value[unique_2186]),
     ) &&
-    check_3194(value.source) &&
+    check_3199(value.source) &&
     check_60(value.key) &&
-    check_3150(value.fallbackName),
-  check_3194 = (value) => typeof value == "string" && value === "show_widget",
-  check_3195 = (value) => check_3196(value),
-  check_3196 = (value) =>
+    check_3155(value.fallbackName),
+  check_3199 = (value) => typeof value == "string" && value === "show_widget",
+  check_3200 = (value) => check_3201(value),
+  check_3201 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21134,20 +21176,20 @@ var External = [
     "revision" in value &&
     "instanceId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2184, unique_2185) => External[1101].test(unique_2184) || check_2(value[unique_2184]),
+      (unique_2188, unique_2189) => External[1103].test(unique_2188) || check_2(value[unique_2188]),
     ) &&
     check_6(value.sessionKey) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
-    check_3150(value.name) &&
-    check_3197(value.decision) &&
+    check_3155(value.name) &&
+    check_3202(value.decision) &&
     check_618(value.revision) &&
     check_6(value.instanceId),
-  check_3197 = (value) => check_3198(value) || check_3199(value),
-  check_3198 = (value) => typeof value == "string" && value === "granted",
-  check_3199 = (value) => typeof value == "string" && value === "rejected",
-  check_3200 = (value) => check_3201(value),
-  check_3201 = (value) => check_3202(value) || check_3203(value),
-  check_3202 = (value) =>
+  check_3202 = (value) => check_3203(value) || check_3204(value),
+  check_3203 = (value) => typeof value == "string" && value === "granted",
+  check_3204 = (value) => typeof value == "string" && value === "rejected",
+  check_3205 = (value) => check_3206(value),
+  check_3206 = (value) => check_3207(value) || check_3208(value),
+  check_3207 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21155,58 +21197,58 @@ var External = [
     "widget" in value &&
     "payload" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2186, unique_2187) => External[1102].test(unique_2186) || check_2(value[unique_2186]),
+      (unique_2190, unique_2191) => External[1104].test(unique_2190) || check_2(value[unique_2190]),
     ) &&
     check_6(value.sessionKey) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
-    check_3150(value.widget) &&
+    check_3155(value.widget) &&
     check_302(value.payload),
-  check_3203 = (value) =>
+  check_3208 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "ticket" in value &&
     "payload" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2188, unique_2189) => External[1103].test(unique_2188) || check_2(value[unique_2188]),
+      (unique_2192, unique_2193) => External[1105].test(unique_2192) || check_2(value[unique_2192]),
     ) &&
     check_2310(value.ticket) &&
     check_302(value.payload),
-  check_3204 = (value) => check_3205(value),
-  check_3205 = (value) =>
+  check_3209 = (value) => check_3210(value),
+  check_3210 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "ticket" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2190, unique_2191) => External[1104].test(unique_2190) || check_2(value[unique_2190]),
+      (unique_2194, unique_2195) => External[1106].test(unique_2194) || check_2(value[unique_2194]),
     ) &&
     check_2310(value.ticket),
-  check_3206 = (value) => check_3207(value),
-  check_3207 = (value) =>
+  check_3211 = (value) => check_3212(value),
+  check_3212 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "ticket" in value &&
     "bindingId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2192, unique_2193) => External[1105].test(unique_2192) || check_2(value[unique_2192]),
+      (unique_2196, unique_2197) => External[1107].test(unique_2196) || check_2(value[unique_2196]),
     ) &&
     check_2310(value.ticket) &&
     check_829(value.bindingId) &&
-    (value.params === void 0 || !("params" in value) || check_3208(value.params)),
-  check_3208 = (value) =>
+    (value.params === void 0 || !("params" in value) || check_3213(value.params)),
+  check_3213 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.entries(value).every(
-      ([unique_2194, unique_2195], _) =>
-        !External[1106].test(unique_2194) || check_302(unique_2195),
+      ([unique_2198, unique_2199], _) =>
+        !External[1108].test(unique_2198) || check_302(unique_2199),
     ) &&
     Object.getOwnPropertyNames(value).length <= 64,
-  check_3209 = (value) => check_3210(value),
-  check_3210 = (value) => check_3211(value) || check_3213(value),
-  check_3211 = (value) =>
+  check_3214 = (value) => check_3215(value),
+  check_3215 = (value) => check_3216(value) || check_3218(value),
+  check_3216 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21214,35 +21256,35 @@ var External = [
     "action" in value &&
     "jobId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2196, unique_2197) => External[1107].test(unique_2196) || check_2(value[unique_2196]),
+      (unique_2200, unique_2201) => External[1109].test(unique_2200) || check_2(value[unique_2200]),
     ) &&
     check_2310(value.ticket) &&
-    check_3212(value.action) &&
+    check_3217(value.action) &&
     check_39(value.jobId),
-  check_3212 = (value) => typeof value == "string" && value === "cron.trigger",
-  check_3213 = (value) =>
+  check_3217 = (value) => typeof value == "string" && value === "cron.trigger",
+  check_3218 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "ticket" in value &&
     "action" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2198, unique_2199) => External[1108].test(unique_2198) || check_2(value[unique_2198]),
+      (unique_2202, unique_2203) => External[1110].test(unique_2202) || check_2(value[unique_2202]),
     ) &&
     check_2310(value.ticket) &&
-    check_3192(value.action) &&
-    (value.params === void 0 || !("params" in value) || check_3208(value.params)),
-  check_3214 = (value) => check_3215(value),
-  check_3215 = (value) =>
+    check_3197(value.action) &&
+    (value.params === void 0 || !("params" in value) || check_3213(value.params)),
+  check_3219 = (value) => check_3220(value),
+  check_3220 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "repoRoot" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2200, unique_2201) => External[1109].test(unique_2200) || check_2(value[unique_2200]),
+      (unique_2204, unique_2205) => External[1111].test(unique_2204) || check_2(value[unique_2204]),
     ) &&
     check_6(value.repoRoot) &&
-    (value.name === void 0 || !("name" in value) || check_3216(value.name)) &&
+    (value.name === void 0 || !("name" in value) || check_3221(value.name)) &&
     (value.baseRef === void 0 || !("baseRef" in value) || check_63(value.baseRef)) &&
     (value.profiles === void 0 || !("profiles" in value) || check_1184(value.profiles)) &&
     (value.expectedOwnerId === void 0 ||
@@ -21251,24 +21293,24 @@ var External = [
     (value.expectedRepoIdentity === void 0 ||
       !("expectedRepoIdentity" in value) ||
       check_63(value.expectedRepoIdentity)),
-  check_3216 = (value) => typeof value == "string" && External[1110].test(value),
-  check_3217 = (value) => check_3218(value),
-  check_3218 = (value) =>
+  check_3221 = (value) => typeof value == "string" && External[1112].test(value),
+  check_3222 = (value) => check_3223(value),
+  check_3223 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "id" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2202, unique_2203) => External[1111].test(unique_2202) || check_2(value[unique_2202]),
+      (unique_2206, unique_2207) => External[1113].test(unique_2206) || check_2(value[unique_2206]),
     ) &&
     check_6(value.id) &&
     (value.force === void 0 || !("force" in value) || check_181(value.force)) &&
     (value.ifLossless === void 0 || !("ifLossless" in value) || check_181(value.ifLossless)) &&
-    (value.exactState === void 0 || !("exactState" in value) || check_3219(value.exactState)) &&
+    (value.exactState === void 0 || !("exactState" in value) || check_3224(value.exactState)) &&
     (value.expectedOwnerId === void 0 ||
       !("expectedOwnerId" in value) ||
       check_63(value.expectedOwnerId)),
-  check_3219 = (value) =>
+  check_3224 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21279,42 +21321,42 @@ var External = [
     "branchHead" in value &&
     "indexSha256" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2204, unique_2205) => External[1112].test(unique_2204) || check_2(value[unique_2204]),
+      (unique_2208, unique_2209) => External[1114].test(unique_2208) || check_2(value[unique_2208]),
     ) &&
-    check_3220(value.ownerKind) &&
+    check_3225(value.ownerKind) &&
     (value.ownerId === void 0 || !("ownerId" in value) || check_272(value.ownerId)) &&
     check_383(value.createdAt) &&
     check_383(value.lastActiveAt) &&
-    check_3223(value.head) &&
-    check_3223(value.branchHead) &&
+    check_3228(value.head) &&
+    check_3228(value.branchHead) &&
     check_60(value.indexSha256),
-  check_3220 = (value) => check_3221(value) || check_1169(value) || check_3222(value),
-  check_3221 = (value) => typeof value == "string" && value === "manual",
-  check_3222 = (value) => typeof value == "string" && value === "workboard",
-  check_3223 = (value) => typeof value == "string" && External[1113].test(value),
-  check_3224 = (value) => check_3225(value),
-  check_3225 = (value) =>
+  check_3225 = (value) => check_3226(value) || check_1169(value) || check_3227(value),
+  check_3226 = (value) => typeof value == "string" && value === "manual",
+  check_3227 = (value) => typeof value == "string" && value === "workboard",
+  check_3228 = (value) => typeof value == "string" && External[1115].test(value),
+  check_3229 = (value) => check_3230(value),
+  check_3230 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "id" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2206, unique_2207) => External[1114].test(unique_2206) || check_2(value[unique_2206]),
+      (unique_2210, unique_2211) => External[1116].test(unique_2210) || check_2(value[unique_2210]),
     ) &&
     check_6(value.id) &&
     (value.recoverExactState === void 0 ||
       !("recoverExactState" in value) ||
-      check_3219(value.recoverExactState)) &&
+      check_3224(value.recoverExactState)) &&
     (value.expectedOwnerId === void 0 ||
       !("expectedOwnerId" in value) ||
       check_63(value.expectedOwnerId)),
-  check_3226 = (value) => check_3227(value),
-  check_3227 = (value) =>
+  check_3231 = (value) => check_3232(value),
+  check_3232 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2208, unique_2209) => External[1115].test(unique_2208) || check_2(value[unique_2208]),
+      (unique_2212, unique_2213) => External[1117].test(unique_2212) || check_2(value[unique_2212]),
     ) &&
     (value.expectedOwnerId === void 0 ||
       !("expectedOwnerId" in value) ||
@@ -21323,8 +21365,8 @@ var External = [
     (value.retryDeferred === void 0 ||
       !("retryDeferred" in value) ||
       check_181(value.retryDeferred)),
-  check_3228 = (value) => check_3229(value),
-  check_3229 = (value) =>
+  check_3233 = (value) => check_3234(value),
+  check_3234 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21333,14 +21375,14 @@ var External = [
     "recoveryId" in value &&
     "expectedOwnerId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2210, unique_2211) => External[1116].test(unique_2210) || check_2(value[unique_2210]),
+      (unique_2214, unique_2215) => External[1118].test(unique_2214) || check_2(value[unique_2214]),
     ) &&
     check_6(value.sessionKey) &&
     check_6(value.path) &&
     check_1996(value.recoveryId) &&
     check_6(value.expectedOwnerId),
-  check_3230 = (value) => check_3231(value),
-  check_3231 = (value) =>
+  check_3235 = (value) => check_3236(value),
+  check_3236 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21348,13 +21390,13 @@ var External = [
     "snapshot" in value &&
     "expectedOwnerId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2212, unique_2213) => External[1117].test(unique_2212) || check_2(value[unique_2212]),
+      (unique_2216, unique_2217) => External[1119].test(unique_2216) || check_2(value[unique_2216]),
     ) &&
     check_6(value.id) &&
-    check_3223(value.snapshot) &&
+    check_3228(value.snapshot) &&
     check_6(value.expectedOwnerId),
-  check_3232 = (value) => check_3233(value),
-  check_3233 = (value) =>
+  check_3237 = (value) => check_3238(value),
+  check_3238 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21366,41 +21408,41 @@ var External = [
     "expectedRetainedSourceOid" in value &&
     "expectedOwnerId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2214, unique_2215) => External[1118].test(unique_2214) || check_2(value[unique_2214]),
+      (unique_2218, unique_2219) => External[1120].test(unique_2218) || check_2(value[unique_2218]),
     ) &&
     check_6(value.id) &&
     check_6(value.expectedSnapshotRef) &&
-    check_3223(value.expectedSnapshotOid) &&
+    check_3228(value.expectedSnapshotOid) &&
     check_344(value.expectedRemovedAt) &&
-    check_3234(value.retainedSourceRef) &&
-    check_3223(value.expectedRetainedSourceOid) &&
+    check_3239(value.retainedSourceRef) &&
+    check_3228(value.expectedRetainedSourceOid) &&
     check_6(value.expectedOwnerId),
-  check_3234 = (value) => typeof value == "string" && External[1119].test(value),
-  check_3235 = (value) => check_3236(value),
-  check_3236 = (value) =>
+  check_3239 = (value) => typeof value == "string" && External[1121].test(value),
+  check_3240 = (value) => check_3241(value),
+  check_3241 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "repoRoot" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2216, unique_2217) => External[1120].test(unique_2216) || check_2(value[unique_2216]),
+      (unique_2220, unique_2221) => External[1122].test(unique_2220) || check_2(value[unique_2220]),
     ) &&
     check_6(value.repoRoot) &&
     (value.includeRepositoryStatus === void 0 ||
       !("includeRepositoryStatus" in value) ||
       check_181(value.includeRepositoryStatus)),
-  check_3237 = (value) => check_3238(value),
-  check_3238 = (value) =>
+  check_3242 = (value) => check_3243(value),
+  check_3243 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2218, unique_2219) => External[1121].test(unique_2218) || check_2(value[unique_2218]),
+      (unique_2222, unique_2223) => External[1123].test(unique_2222) || check_2(value[unique_2222]),
     ) &&
     (value.path === void 0 || !("path" in value) || check_63(value.path)) &&
     (value.nodeId === void 0 || !("nodeId" in value) || check_63(value.nodeId)),
-  check_3239 = (value) => check_3240(value),
-  check_3240 = (value) =>
+  check_3244 = (value) => check_3245(value),
+  check_3245 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21408,29 +21450,29 @@ var External = [
     "home" in value &&
     "entries" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2220, unique_2221) => External[1122].test(unique_2220) || check_2(value[unique_2220]),
+      (unique_2224, unique_2225) => External[1124].test(unique_2224) || check_2(value[unique_2224]),
     ) &&
     check_6(value.path) &&
     (value.parent === void 0 || !("parent" in value) || check_63(value.parent)) &&
     check_6(value.home) &&
-    check_3241(value.entries),
-  check_3241 = (value) =>
-    Array.isArray(value) && value.every((unique_2222, index) => check_3242(unique_2222)),
-  check_3242 = (value) =>
+    check_3246(value.entries),
+  check_3246 = (value) =>
+    Array.isArray(value) && value.every((unique_2226, index) => check_3247(unique_2226)),
+  check_3247 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "name" in value &&
     "path" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2223, unique_2224) => External[1123].test(unique_2223) || check_2(value[unique_2223]),
+      (unique_2227, unique_2228) => External[1125].test(unique_2227) || check_2(value[unique_2227]),
     ) &&
     check_6(value.name) &&
     check_6(value.path) &&
     (value.hidden === void 0 || !("hidden" in value) || check_181(value.hidden)),
-  check_3243 = (value) => check_3244(value),
-  check_3244 = (value) => check_3245(value) || check_3277(value),
-  check_3245 = (value) =>
+  check_3248 = (value) => check_3249(value),
+  check_3249 = (value) => check_3250(value) || check_3282(value),
+  check_3250 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21439,14 +21481,14 @@ var External = [
     "ok" in value &&
     "payload" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2225, unique_2226) => External[1124].test(unique_2225) || check_2(value[unique_2225]),
+      (unique_2229, unique_2230) => External[1126].test(unique_2229) || check_2(value[unique_2229]),
     ) &&
-    check_3246(value.type) &&
+    check_3251(value.type) &&
     check_22(value.id) &&
     check_391(value.ok) &&
-    check_3247(value.payload),
-  check_3246 = (value) => typeof value == "string" && value === "res",
-  check_3247 = (value) =>
+    check_3252(value.payload),
+  check_3251 = (value) => typeof value == "string" && value === "res",
+  check_3252 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21459,19 +21501,19 @@ var External = [
     "credentialExpiresAtMs" in value &&
     "policy" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2227, unique_2228) => External[1125].test(unique_2227) || check_2(value[unique_2227]),
+      (unique_2231, unique_2232) => External[1127].test(unique_2231) || check_2(value[unique_2231]),
     ) &&
-    check_3248(value.type) &&
+    check_3253(value.type) &&
     check_287(value.environmentId) &&
-    check_2642(value.sessionId) &&
+    check_2647(value.sessionId) &&
     check_344(value.ownerEpoch) &&
     check_310(value.rpcSetVersion) &&
-    check_2600(value.protocolFeatures) &&
+    check_2605(value.protocolFeatures) &&
     check_7(value.credentialExpiresAtMs) &&
-    (value.toolSurface === void 0 || !("toolSurface" in value) || check_3249(value.toolSurface)) &&
-    check_3276(value.policy),
-  check_3248 = (value) => typeof value == "string" && value === "worker-hello-ok",
-  check_3249 = (value) =>
+    (value.toolSurface === void 0 || !("toolSurface" in value) || check_3254(value.toolSurface)) &&
+    check_3281(value.policy),
+  check_3253 = (value) => typeof value == "string" && value === "worker-hello-ok",
+  check_3254 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21480,13 +21522,13 @@ var External = [
     "tools" in value &&
     "policy" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2229, unique_2230) => External[1126].test(unique_2229) || check_2(value[unique_2229]),
+      (unique_2233, unique_2234) => External[1128].test(unique_2233) || check_2(value[unique_2233]),
     ) &&
     check_287(value.generation) &&
-    check_3250(value.presentation) &&
-    check_3261(value.tools) &&
-    check_3273(value.policy),
-  check_3250 = (value) =>
+    check_3255(value.presentation) &&
+    check_3266(value.tools) &&
+    check_3278(value.policy),
+  check_3255 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21494,16 +21536,16 @@ var External = [
     "toolSearch" in value &&
     "forceDirectMessageTool" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2231, unique_2232) => External[1127].test(unique_2231) || check_2(value[unique_2231]),
+      (unique_2235, unique_2236) => External[1129].test(unique_2235) || check_2(value[unique_2235]),
     ) &&
-    check_3251(value.codeMode) &&
-    check_3254(value.toolSearch) &&
+    check_3256(value.codeMode) &&
+    check_3259(value.toolSearch) &&
     (value.toolSearchDirectoryLean === void 0 ||
       !("toolSearchDirectoryLean" in value) ||
       check_181(value.toolSearchDirectoryLean)) &&
     check_97(value.forceDirectMessageTool) &&
-    (value.skills === void 0 || !("skills" in value) || check_3259(value.skills)),
-  check_3251 = (value) =>
+    (value.skills === void 0 || !("skills" in value) || check_3264(value.skills)),
+  check_3256 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21519,11 +21561,11 @@ var External = [
     "searchDefaultLimit" in value &&
     "maxSearchLimit" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2233, unique_2234) => External[1128].test(unique_2233) || check_2(value[unique_2233]),
+      (unique_2237, unique_2238) => External[1130].test(unique_2237) || check_2(value[unique_2237]),
     ) &&
     check_97(value.enabled) &&
-    check_3252(value.executor) &&
-    check_3253(value.mode) &&
+    check_3257(value.executor) &&
+    check_3258(value.mode) &&
     check_618(value.timeoutMs) &&
     check_618(value.memoryLimitBytes) &&
     check_618(value.maxOutputBytes) &&
@@ -21532,9 +21574,9 @@ var External = [
     check_618(value.snapshotTtlSeconds) &&
     check_618(value.searchDefaultLimit) &&
     check_618(value.maxSearchLimit),
-  check_3252 = (value) => value === "node" || value === "quickjs",
-  check_3253 = (value) => typeof value == "string" && value === "only",
-  check_3254 = (value) =>
+  check_3257 = (value) => value === "node" || value === "quickjs",
+  check_3258 = (value) => typeof value == "string" && value === "only",
+  check_3259 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21543,31 +21585,31 @@ var External = [
     "searchDefaultLimit" in value &&
     "maxSearchLimit" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2235, unique_2236) => External[1129].test(unique_2235) || check_2(value[unique_2235]),
+      (unique_2239, unique_2240) => External[1131].test(unique_2239) || check_2(value[unique_2239]),
     ) &&
     check_97(value.enabled) &&
-    check_3255(value.mode) &&
-    (value.include === void 0 || !("include" in value) || check_3256(value.include)) &&
-    (value.exclude === void 0 || !("exclude" in value) || check_3256(value.exclude)) &&
+    check_3260(value.mode) &&
+    (value.include === void 0 || !("include" in value) || check_3261(value.include)) &&
+    (value.exclude === void 0 || !("exclude" in value) || check_3261(value.exclude)) &&
     check_618(value.searchDefaultLimit) &&
     check_618(value.maxSearchLimit),
-  check_3255 = (value) => value === "tools" || value === "directory",
-  check_3256 = (value) =>
-    Array.isArray(value) && value.every((unique_2237, index) => check_3257(unique_2237)),
-  check_3257 = (value) =>
+  check_3260 = (value) => value === "tools" || value === "directory",
+  check_3261 = (value) =>
+    Array.isArray(value) && value.every((unique_2241, index) => check_3262(unique_2241)),
+  check_3262 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2238, unique_2239) => External[1130].test(unique_2238) || check_2(value[unique_2238]),
+      (unique_2242, unique_2243) => External[1132].test(unique_2242) || check_2(value[unique_2242]),
     ) &&
-    (value.source === void 0 || !("source" in value) || check_3258(value.source)) &&
+    (value.source === void 0 || !("source" in value) || check_3263(value.source)) &&
     (value.name === void 0 || !("name" in value) || check_564(value.name)) &&
     Object.getOwnPropertyNames(value).length >= 1,
-  check_3258 = (value) => value === "openclaw" || value === "mcp" || value === "client",
-  check_3259 = (value) =>
-    Array.isArray(value) && value.every((unique_2240, index) => check_3260(unique_2240)),
-  check_3260 = (value) =>
+  check_3263 = (value) => value === "openclaw" || value === "mcp" || value === "client",
+  check_3264 = (value) =>
+    Array.isArray(value) && value.every((unique_2244, index) => check_3265(unique_2244)),
+  check_3265 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21575,16 +21617,16 @@ var External = [
     "description" in value &&
     "location" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2241, unique_2242) => External[1131].test(unique_2241) || check_2(value[unique_2241]),
+      (unique_2245, unique_2246) => External[1133].test(unique_2245) || check_2(value[unique_2245]),
     ) &&
     check_12(value.name) &&
     check_12(value.description) &&
     check_12(value.location),
-  check_3261 = (value) =>
+  check_3266 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_2243, index) => check_3262(unique_2243)) &&
+    value.every((unique_2247, index) => check_3267(unique_2247)) &&
     value.length <= 256,
-  check_3262 = (value) =>
+  check_3267 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21592,23 +21634,23 @@ var External = [
     "execution" in value &&
     "definition" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2244, unique_2245) => External[1132].test(unique_2244) || check_2(value[unique_2244]),
+      (unique_2248, unique_2249) => External[1134].test(unique_2248) || check_2(value[unique_2248]),
     ) &&
     check_287(value.id) &&
-    check_3263(value.execution) &&
+    check_3268(value.execution) &&
     (value.replay === void 0 || !("replay" in value) || check_326(value.replay)) &&
-    (value.plugin === void 0 || !("plugin" in value) || check_3264(value.plugin)) &&
-    (value.timeout === void 0 || !("timeout" in value) || check_3268(value.timeout)) &&
-    check_3269(value.definition),
-  check_3263 = (value) => value === "placement" || value === "gateway",
-  check_3264 = (value) =>
+    (value.plugin === void 0 || !("plugin" in value) || check_3269(value.plugin)) &&
+    (value.timeout === void 0 || !("timeout" in value) || check_3273(value.timeout)) &&
+    check_3274(value.definition),
+  check_3268 = (value) => value === "placement" || value === "gateway",
+  check_3269 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "pluginId" in value &&
     "optional" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2246, unique_2247) => External[1133].test(unique_2246) || check_2(value[unique_2246]),
+      (unique_2250, unique_2251) => External[1135].test(unique_2250) || check_2(value[unique_2250]),
     ) &&
     check_287(value.pluginId) &&
     check_97(value.optional) &&
@@ -21616,8 +21658,8 @@ var External = [
     (value.sideEffecting === void 0 ||
       !("sideEffecting" in value) ||
       check_181(value.sideEffecting)) &&
-    (value.mcp === void 0 || !("mcp" in value) || check_3265(value.mcp)),
-  check_3265 = (value) =>
+    (value.mcp === void 0 || !("mcp" in value) || check_3270(value.mcp)),
+  check_3270 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21626,35 +21668,35 @@ var External = [
     "toolName" in value &&
     "operation" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2248, unique_2249) => External[1134].test(unique_2248) || check_2(value[unique_2248]),
+      (unique_2252, unique_2253) => External[1136].test(unique_2252) || check_2(value[unique_2252]),
     ) &&
     check_12(value.serverName) &&
     check_12(value.safeServerName) &&
     check_12(value.toolName) &&
-    check_3266(value.operation) &&
-    (value.node === void 0 || !("node" in value) || check_3267(value.node)),
-  check_3266 = (value) =>
+    check_3271(value.operation) &&
+    (value.node === void 0 || !("node" in value) || check_3272(value.node)),
+  check_3271 = (value) =>
     value === "tool" ||
     value === "resources_list" ||
     value === "resources_read" ||
     value === "prompts_list" ||
     value === "prompts_get",
-  check_3267 = (value) =>
+  check_3272 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "id" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2250, unique_2251) => External[1135].test(unique_2250) || check_2(value[unique_2250]),
+      (unique_2254, unique_2255) => External[1137].test(unique_2254) || check_2(value[unique_2254]),
     ) &&
     check_287(value.id) &&
     (value.displayName === void 0 || !("displayName" in value) || check_272(value.displayName)),
-  check_3268 = (value) =>
+  check_3273 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2252, unique_2253) => External[1136].test(unique_2252) || check_2(value[unique_2252]),
+      (unique_2256, unique_2257) => External[1138].test(unique_2256) || check_2(value[unique_2256]),
     ) &&
     (value.minimumMs === void 0 || !("minimumMs" in value) || check_485(value.minimumMs)) &&
     (value.argument === void 0 || !("argument" in value) || check_323(value.argument)) &&
@@ -21662,7 +21704,7 @@ var External = [
       !("defaultSeconds" in value) ||
       check_640(value.defaultSeconds)) &&
     (value.paddingMs === void 0 || !("paddingMs" in value) || check_426(value.paddingMs)),
-  check_3269 = (value) =>
+  check_3274 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21671,7 +21713,7 @@ var External = [
     "description" in value &&
     "parameters" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2254, unique_2255) => External[1137].test(unique_2254) || check_2(value[unique_2254]),
+      (unique_2258, unique_2259) => External[1139].test(unique_2258) || check_2(value[unique_2258]),
     ) &&
     check_287(value.name) &&
     check_1881(value.label) &&
@@ -21685,16 +21727,16 @@ var External = [
       check_326(value.hideFromChannelProgress)) &&
     (value.resultContentSource === void 0 ||
       !("resultContentSource" in value) ||
-      check_3270(value.resultContentSource)) &&
+      check_3275(value.resultContentSource)) &&
     (value.executionMode === void 0 ||
       !("executionMode" in value) ||
-      check_2674(value.executionMode)) &&
-    (value.catalogMode === void 0 || !("catalogMode" in value) || check_3271(value.catalogMode)) &&
-    (value.async === void 0 || !("async" in value) || check_3272(value.async)),
-  check_3270 = (value) => typeof value == "string" && value === "network",
-  check_3271 = (value) => typeof value == "string" && value === "direct-only",
-  check_3272 = (value) => typeof value == "boolean" && value === !1,
-  check_3273 = (value) =>
+      check_2679(value.executionMode)) &&
+    (value.catalogMode === void 0 || !("catalogMode" in value) || check_3276(value.catalogMode)) &&
+    (value.async === void 0 || !("async" in value) || check_3277(value.async)),
+  check_3275 = (value) => typeof value == "string" && value === "network",
+  check_3276 = (value) => typeof value == "string" && value === "direct-only",
+  check_3277 = (value) => typeof value == "boolean" && value === !1,
+  check_3278 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21704,7 +21746,7 @@ var External = [
     "applyPatchWorkspaceOnly" in value &&
     "imageSanitization" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2256, unique_2257) => External[1138].test(unique_2256) || check_2(value[unique_2256]),
+      (unique_2260, unique_2261) => External[1140].test(unique_2260) || check_2(value[unique_2260]),
     ) &&
     check_97(value.workspaceOnly) &&
     check_97(value.readOnly) &&
@@ -21712,7 +21754,7 @@ var External = [
     check_97(value.applyPatchWorkspaceOnly) &&
     (value.applyPatchContainmentSource === void 0 ||
       !("applyPatchContainmentSource" in value) ||
-      check_3274(value.applyPatchContainmentSource)) &&
+      check_3279(value.applyPatchContainmentSource)) &&
     (value.modelContextWindowTokens === void 0 ||
       !("modelContextWindowTokens" in value) ||
       check_485(value.modelContextWindowTokens)) &&
@@ -21722,31 +21764,31 @@ var External = [
     (value.memoryFlushWritePath === void 0 ||
       !("memoryFlushWritePath" in value) ||
       check_1136(value.memoryFlushWritePath)) &&
-    check_3275(value.imageSanitization),
-  check_3274 = (value) => value === "config" || value === "session" || value === "required-root",
-  check_3275 = (value) =>
+    check_3280(value.imageSanitization),
+  check_3279 = (value) => value === "config" || value === "session" || value === "required-root",
+  check_3280 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2258, unique_2259) => External[1139].test(unique_2258) || check_2(value[unique_2258]),
+      (unique_2262, unique_2263) => External[1141].test(unique_2262) || check_2(value[unique_2262]),
     ) &&
     (value.maxBytes === void 0 || !("maxBytes" in value) || check_485(value.maxBytes)) &&
     (value.maxDimensionPx === void 0 ||
       !("maxDimensionPx" in value) ||
       check_485(value.maxDimensionPx)),
-  check_3276 = (value) =>
+  check_3281 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "heartbeatIntervalMs" in value &&
     "maxPayload" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2260, unique_2261) => External[1140].test(unique_2260) || check_2(value[unique_2260]),
+      (unique_2264, unique_2265) => External[1142].test(unique_2264) || check_2(value[unique_2264]),
     ) &&
     check_618(value.heartbeatIntervalMs) &&
     check_618(value.maxPayload),
-  check_3277 = (value) =>
+  check_3282 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21755,13 +21797,13 @@ var External = [
     "ok" in value &&
     "error" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2262, unique_2263) => External[1141].test(unique_2262) || check_2(value[unique_2262]),
+      (unique_2266, unique_2267) => External[1143].test(unique_2266) || check_2(value[unique_2266]),
     ) &&
-    check_3246(value.type) &&
+    check_3251(value.type) &&
     check_22(value.id) &&
     check_399(value.ok) &&
-    check_3278(value.error),
-  check_3278 = (value) =>
+    check_3283(value.error),
+  check_3283 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21769,74 +21811,74 @@ var External = [
     "message" in value &&
     "details" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2264, unique_2265) => External[1142].test(unique_2264) || check_2(value[unique_2264]),
+      (unique_2268, unique_2269) => External[1144].test(unique_2268) || check_2(value[unique_2268]),
     ) &&
-    check_3279(value.code) &&
+    check_3284(value.code) &&
     check_39(value.message) &&
-    check_3282(value.details) &&
+    check_3287(value.details) &&
     (value.retryable === void 0 || !("retryable" in value) || check_181(value.retryable)) &&
     (value.retryAfterMs === void 0 || !("retryAfterMs" in value) || check_426(value.retryAfterMs)),
-  check_3279 = (value) => check_3280(value) || check_3281(value),
-  check_3280 = (value) => typeof value == "string" && value === "INVALID_REQUEST",
-  check_3281 = (value) => typeof value == "string" && value === "UNAVAILABLE",
-  check_3282 = (value) =>
+  check_3284 = (value) => check_3285(value) || check_3286(value),
+  check_3285 = (value) => typeof value == "string" && value === "INVALID_REQUEST",
+  check_3286 = (value) => typeof value == "string" && value === "UNAVAILABLE",
+  check_3287 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "reason" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2266, unique_2267) => External[1143].test(unique_2266) || check_2(value[unique_2266]),
+      (unique_2270, unique_2271) => External[1145].test(unique_2270) || check_2(value[unique_2270]),
     ) &&
-    check_3283(value.reason),
-  check_3283 = (value) =>
-    check_3284(value) ||
-    check_3296(value) ||
-    check_3297(value) ||
-    check_3298(value) ||
-    check_3299(value) ||
-    check_3300(value) ||
+    check_3288(value.reason),
+  check_3288 = (value) =>
+    check_3289(value) ||
     check_3301(value) ||
     check_3302(value) ||
     check_3303(value) ||
     check_3304(value) ||
-    check_3305(value),
-  check_3284 = (value) =>
-    check_3285(value) ||
-    check_3286(value) ||
-    check_3287(value) ||
-    check_3288(value) ||
-    check_3289(value) ||
+    check_3305(value) ||
+    check_3306(value) ||
+    check_3307(value) ||
+    check_3308(value) ||
+    check_3309(value) ||
+    check_3310(value),
+  check_3289 = (value) =>
     check_3290(value) ||
     check_3291(value) ||
     check_3292(value) ||
     check_3293(value) ||
     check_3294(value) ||
-    check_3295(value),
-  check_3285 = (value) => typeof value == "string" && value === "invalid-credential",
-  check_3286 = (value) => typeof value == "string" && value === "credential-expired",
-  check_3287 = (value) => typeof value == "string" && value === "environment-mismatch",
-  check_3288 = (value) => typeof value == "string" && value === "environment-unavailable",
-  check_3289 = (value) => typeof value == "string" && value === "bundle-mismatch",
-  check_3290 = (value) => typeof value == "string" && value === "version-mismatch",
-  check_3291 = (value) => typeof value == "string" && value === "session-mismatch",
-  check_3292 = (value) => typeof value == "string" && value === "placement-mismatch",
-  check_3293 = (value) => typeof value == "string" && value === "owner-epoch-mismatch",
-  check_3294 = (value) => typeof value == "string" && value === "rpc-set-mismatch",
-  check_3295 = (value) => typeof value == "string" && value === "protocol-features-mismatch",
-  check_3296 = (value) => typeof value == "string" && value === "admission-rejected",
-  check_3297 = (value) => typeof value == "string" && value === "invalid-handshake",
-  check_3298 = (value) => typeof value == "string" && value === "protocol-mismatch",
-  check_3299 = (value) => typeof value == "string" && value === "gateway-unavailable",
-  check_3300 = (value) => typeof value == "string" && value === "invalid-frame",
-  check_3301 = (value) => typeof value == "string" && value === "slow-consumer",
-  check_3302 = (value) => typeof value == "string" && value === "method-not-allowed",
-  check_3303 = (value) => typeof value == "string" && value === "invalid-heartbeat",
-  check_3304 = (value) => typeof value == "string" && value === "credential-replaced",
-  check_3305 = (value) => typeof value == "string" && value === "gateway-shutdown",
-  check_3306 = (value) => check_3283(value),
-  check_3307 = (value) => check_3308(value),
-  check_3308 = (value) => check_3309(value) || check_3277(value),
-  check_3309 = (value) =>
+    check_3295(value) ||
+    check_3296(value) ||
+    check_3297(value) ||
+    check_3298(value) ||
+    check_3299(value) ||
+    check_3300(value),
+  check_3290 = (value) => typeof value == "string" && value === "invalid-credential",
+  check_3291 = (value) => typeof value == "string" && value === "credential-expired",
+  check_3292 = (value) => typeof value == "string" && value === "environment-mismatch",
+  check_3293 = (value) => typeof value == "string" && value === "environment-unavailable",
+  check_3294 = (value) => typeof value == "string" && value === "bundle-mismatch",
+  check_3295 = (value) => typeof value == "string" && value === "version-mismatch",
+  check_3296 = (value) => typeof value == "string" && value === "session-mismatch",
+  check_3297 = (value) => typeof value == "string" && value === "placement-mismatch",
+  check_3298 = (value) => typeof value == "string" && value === "owner-epoch-mismatch",
+  check_3299 = (value) => typeof value == "string" && value === "rpc-set-mismatch",
+  check_3300 = (value) => typeof value == "string" && value === "protocol-features-mismatch",
+  check_3301 = (value) => typeof value == "string" && value === "admission-rejected",
+  check_3302 = (value) => typeof value == "string" && value === "invalid-handshake",
+  check_3303 = (value) => typeof value == "string" && value === "protocol-mismatch",
+  check_3304 = (value) => typeof value == "string" && value === "gateway-unavailable",
+  check_3305 = (value) => typeof value == "string" && value === "invalid-frame",
+  check_3306 = (value) => typeof value == "string" && value === "slow-consumer",
+  check_3307 = (value) => typeof value == "string" && value === "method-not-allowed",
+  check_3308 = (value) => typeof value == "string" && value === "invalid-heartbeat",
+  check_3309 = (value) => typeof value == "string" && value === "credential-replaced",
+  check_3310 = (value) => typeof value == "string" && value === "gateway-shutdown",
+  check_3311 = (value) => check_3288(value),
+  check_3312 = (value) => check_3313(value),
+  check_3313 = (value) => check_3314(value) || check_3282(value),
+  check_3314 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21845,70 +21887,36 @@ var External = [
     "ok" in value &&
     "payload" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2268, unique_2269) => External[1144].test(unique_2268) || check_2(value[unique_2268]),
+      (unique_2272, unique_2273) => External[1146].test(unique_2272) || check_2(value[unique_2272]),
     ) &&
-    check_3246(value.type) &&
+    check_3251(value.type) &&
     check_22(value.id) &&
     check_391(value.ok) &&
-    check_3310(value.payload),
-  check_3310 = (value) => check_3311(value) || check_3312(value),
-  check_3311 = (value) =>
+    check_3315(value.payload),
+  check_3315 = (value) => check_3316(value) || check_3317(value),
+  check_3316 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "outcome" in value &&
     "baseLeafId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2270, unique_2271) => External[1145].test(unique_2270) || check_2(value[unique_2270]),
+      (unique_2274, unique_2275) => External[1147].test(unique_2274) || check_2(value[unique_2274]),
     ) &&
     check_1635(value.outcome) &&
-    check_2642(value.baseLeafId),
-  check_3312 = (value) =>
+    check_2647(value.baseLeafId),
+  check_3317 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "outcome" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2272, unique_2273) => External[1146].test(unique_2272) || check_2(value[unique_2272]),
-    ) &&
-    check_374(value.outcome),
-  check_3313 = (value) => check_3314(value),
-  check_3314 = (value) => check_3315(value) || check_3277(value),
-  check_3315 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "type" in value &&
-    "id" in value &&
-    "ok" in value &&
-    "payload" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2274, unique_2275) => External[1147].test(unique_2274) || check_2(value[unique_2274]),
-    ) &&
-    check_3246(value.type) &&
-    check_22(value.id) &&
-    check_391(value.ok) &&
-    check_311(value.payload),
-  check_3316 = (value) => check_3317(value),
-  check_3317 = (value) => check_3318(value) || check_3277(value),
-  check_3318 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "type" in value &&
-    "id" in value &&
-    "ok" in value &&
-    "payload" in value &&
-    Object.getOwnPropertyNames(value).every(
       (unique_2276, unique_2277) => External[1148].test(unique_2276) || check_2(value[unique_2276]),
     ) &&
-    check_3246(value.type) &&
-    check_22(value.id) &&
-    check_391(value.ok) &&
-    check_599(value.payload),
-  check_3319 = (value) => check_3320(value),
-  check_3320 = (value) => check_3321(value) || check_3277(value),
-  check_3321 = (value) =>
+    check_374(value.outcome),
+  check_3318 = (value) => check_3319(value),
+  check_3319 = (value) => check_3320(value) || check_3282(value),
+  check_3320 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -21919,38 +21927,29 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_2278, unique_2279) => External[1149].test(unique_2278) || check_2(value[unique_2278]),
     ) &&
-    check_3246(value.type) &&
+    check_3251(value.type) &&
     check_22(value.id) &&
     check_391(value.ok) &&
-    check_3322(value.payload),
-  check_3322 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "receivedAtMs" in value &&
-    "status" in value &&
-    "ownerEpoch" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2280, unique_2281) => External[1150].test(unique_2280) || check_2(value[unique_2280]),
-    ) &&
-    check_7(value.receivedAtMs) &&
-    check_1224(value.status) &&
-    check_344(value.ownerEpoch) &&
-    (value.github === void 0 || !("github" in value) || check_3323(value.github)),
+    check_311(value.payload),
+  check_3321 = (value) => check_3322(value),
+  check_3322 = (value) => check_3323(value) || check_3282(value),
   check_3323 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
-    "generation" in value &&
-    "token" in value &&
+    "type" in value &&
+    "id" in value &&
+    "ok" in value &&
+    "payload" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2282, unique_2283) => External[1151].test(unique_2282) || check_2(value[unique_2282]),
+      (unique_2280, unique_2281) => External[1150].test(unique_2280) || check_2(value[unique_2280]),
     ) &&
-    check_310(value.generation) &&
-    check_286(value.token) &&
-    (value.expiresAtMs === void 0 || !("expiresAtMs" in value) || check_188(value.expiresAtMs)),
+    check_3251(value.type) &&
+    check_22(value.id) &&
+    check_391(value.ok) &&
+    check_599(value.payload),
   check_3324 = (value) => check_3325(value),
-  check_3325 = (value) => check_3326(value) || check_3329(value) || check_3277(value),
+  check_3325 = (value) => check_3326(value) || check_3282(value),
   check_3326 = (value) =>
     typeof value == "object" &&
     value !== null &&
@@ -21960,9 +21959,9 @@ var External = [
     "ok" in value &&
     "payload" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2284, unique_2285) => External[1152].test(unique_2284) || check_2(value[unique_2284]),
+      (unique_2282, unique_2283) => External[1151].test(unique_2282) || check_2(value[unique_2282]),
     ) &&
-    check_3246(value.type) &&
+    check_3251(value.type) &&
     check_22(value.id) &&
     check_391(value.ok) &&
     check_3327(value.payload),
@@ -21970,63 +21969,31 @@ var External = [
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
-    "entryIds" in value &&
-    "newLeafId" in value &&
+    "receivedAtMs" in value &&
+    "status" in value &&
+    "ownerEpoch" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2284, unique_2285) => External[1152].test(unique_2284) || check_2(value[unique_2284]),
+    ) &&
+    check_7(value.receivedAtMs) &&
+    check_1224(value.status) &&
+    check_344(value.ownerEpoch) &&
+    (value.github === void 0 || !("github" in value) || check_3328(value.github)),
+  check_3328 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "generation" in value &&
+    "token" in value &&
     Object.getOwnPropertyNames(value).every(
       (unique_2286, unique_2287) => External[1153].test(unique_2286) || check_2(value[unique_2286]),
     ) &&
-    check_3328(value.entryIds) &&
-    check_287(value.newLeafId),
-  check_3328 = (value) =>
-    Array.isArray(value) &&
-    value.every((unique_2288, index) => check_287(unique_2288)) &&
-    value.length >= 1 &&
-    value.length <= 64,
-  check_3329 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "type" in value &&
-    "id" in value &&
-    "ok" in value &&
-    "error" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2289, unique_2290) => External[1154].test(unique_2289) || check_2(value[unique_2289]),
-    ) &&
-    check_3246(value.type) &&
-    check_22(value.id) &&
-    check_399(value.ok) &&
-    check_3330(value.error),
-  check_3330 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "code" in value &&
-    "message" in value &&
-    "details" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2291, unique_2292) => External[1155].test(unique_2291) || check_2(value[unique_2291]),
-    ) &&
-    check_3280(value.code) &&
-    check_39(value.message) &&
-    check_3331(value.details),
+    check_310(value.generation) &&
+    check_286(value.token) &&
+    (value.expiresAtMs === void 0 || !("expiresAtMs" in value) || check_188(value.expiresAtMs)),
+  check_3329 = (value) => check_3330(value),
+  check_3330 = (value) => check_3331(value) || check_3334(value) || check_3282(value),
   check_3331 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "reason" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2293, unique_2294) => External[1156].test(unique_2293) || check_2(value[unique_2293]),
-    ) &&
-    check_3332(value.reason),
-  check_3332 = (value) =>
-    value === "stale-base-leaf" ||
-    value === "epoch-mismatch" ||
-    value === "invalid-batch" ||
-    value === "session-not-attached",
-  check_3333 = (value) => check_3334(value),
-  check_3334 = (value) => check_3335(value) || check_3337(value) || check_3277(value),
-  check_3335 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -22035,22 +22002,29 @@ var External = [
     "ok" in value &&
     "payload" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2295, unique_2296) => External[1157].test(unique_2295) || check_2(value[unique_2295]),
+      (unique_2288, unique_2289) => External[1154].test(unique_2288) || check_2(value[unique_2288]),
     ) &&
-    check_3246(value.type) &&
+    check_3251(value.type) &&
     check_22(value.id) &&
     check_391(value.ok) &&
-    check_3336(value.payload),
-  check_3336 = (value) =>
+    check_3332(value.payload),
+  check_3332 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
-    "ackedSeq" in value &&
+    "entryIds" in value &&
+    "newLeafId" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2297, unique_2298) => External[1158].test(unique_2297) || check_2(value[unique_2297]),
+      (unique_2290, unique_2291) => External[1155].test(unique_2290) || check_2(value[unique_2290]),
     ) &&
-    check_344(value.ackedSeq),
-  check_3337 = (value) =>
+    check_3333(value.entryIds) &&
+    check_287(value.newLeafId),
+  check_3333 = (value) =>
+    Array.isArray(value) &&
+    value.every((unique_2292, index) => check_287(unique_2292)) &&
+    value.length >= 1 &&
+    value.length <= 64,
+  check_3334 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -22059,13 +22033,13 @@ var External = [
     "ok" in value &&
     "error" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2299, unique_2300) => External[1159].test(unique_2299) || check_2(value[unique_2299]),
+      (unique_2293, unique_2294) => External[1156].test(unique_2293) || check_2(value[unique_2293]),
     ) &&
-    check_3246(value.type) &&
+    check_3251(value.type) &&
     check_22(value.id) &&
     check_399(value.ok) &&
-    check_3338(value.error),
-  check_3338 = (value) =>
+    check_3335(value.error),
+  check_3335 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -22073,27 +22047,95 @@ var External = [
     "message" in value &&
     "details" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2301, unique_2302) => External[1160].test(unique_2301) || check_2(value[unique_2301]),
+      (unique_2295, unique_2296) => External[1157].test(unique_2295) || check_2(value[unique_2295]),
     ) &&
-    check_3280(value.code) &&
+    check_3285(value.code) &&
     check_39(value.message) &&
-    check_3339(value.details),
-  check_3339 = (value) => check_3340(value) || check_3342(value),
-  check_3340 = (value) =>
+    check_3336(value.details),
+  check_3336 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "reason" in value &&
     Object.getOwnPropertyNames(value).every(
+      (unique_2297, unique_2298) => External[1158].test(unique_2297) || check_2(value[unique_2297]),
+    ) &&
+    check_3337(value.reason),
+  check_3337 = (value) =>
+    value === "stale-base-leaf" ||
+    value === "epoch-mismatch" ||
+    value === "invalid-batch" ||
+    value === "session-not-attached",
+  check_3338 = (value) => check_3339(value),
+  check_3339 = (value) => check_3340(value) || check_3342(value) || check_3282(value),
+  check_3340 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "type" in value &&
+    "id" in value &&
+    "ok" in value &&
+    "payload" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2299, unique_2300) => External[1159].test(unique_2299) || check_2(value[unique_2299]),
+    ) &&
+    check_3251(value.type) &&
+    check_22(value.id) &&
+    check_391(value.ok) &&
+    check_3341(value.payload),
+  check_3341 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "ackedSeq" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2301, unique_2302) => External[1160].test(unique_2301) || check_2(value[unique_2301]),
+    ) &&
+    check_344(value.ackedSeq),
+  check_3342 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "type" in value &&
+    "id" in value &&
+    "ok" in value &&
+    "error" in value &&
+    Object.getOwnPropertyNames(value).every(
       (unique_2303, unique_2304) => External[1161].test(unique_2303) || check_2(value[unique_2303]),
     ) &&
-    check_3341(value.reason),
-  check_3341 = (value) =>
+    check_3251(value.type) &&
+    check_22(value.id) &&
+    check_399(value.ok) &&
+    check_3343(value.error),
+  check_3343 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "code" in value &&
+    "message" in value &&
+    "details" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2305, unique_2306) => External[1162].test(unique_2305) || check_2(value[unique_2305]),
+    ) &&
+    check_3285(value.code) &&
+    check_39(value.message) &&
+    check_3344(value.details),
+  check_3344 = (value) => check_3345(value) || check_3347(value),
+  check_3345 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "reason" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2307, unique_2308) => External[1163].test(unique_2307) || check_2(value[unique_2307]),
+    ) &&
+    check_3346(value.reason),
+  check_3346 = (value) =>
     value === "epoch-mismatch" ||
     value === "session-not-attached" ||
     value === "invalid-event" ||
     value === "capacity-exceeded",
-  check_3342 = (value) =>
+  check_3347 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -22101,44 +22143,14 @@ var External = [
     "ackedSeq" in value &&
     "expectedSeq" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2305, unique_2306) => External[1162].test(unique_2305) || check_2(value[unique_2305]),
-    ) &&
-    check_3343(value.reason) &&
-    check_344(value.ackedSeq) &&
-    check_310(value.expectedSeq),
-  check_3343 = (value) => typeof value == "string" && value === "resync-required",
-  check_3344 = (value) => check_3345(value),
-  check_3345 = (value) => check_3346(value) || check_3277(value),
-  check_3346 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "type" in value &&
-    "id" in value &&
-    "ok" in value &&
-    "payload" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2307, unique_2308) => External[1163].test(unique_2307) || check_2(value[unique_2307]),
-    ) &&
-    check_3246(value.type) &&
-    check_22(value.id) &&
-    check_391(value.ok) &&
-    check_3347(value.payload),
-  check_3347 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "resultJson" in value &&
-    Object.getOwnPropertyNames(value).every(
       (unique_2309, unique_2310) => External[1164].test(unique_2309) || check_2(value[unique_2309]),
     ) &&
-    check_3348(value.resultJson),
-  check_3348 = (value) =>
-    typeof value == "string" &&
-    (value.length >= 4 || (value.length >= 2 && CodePointCount(value) >= 2)) &&
-    (value.length <= 26214400 || (value.length <= 52428800 && CodePointCount(value) <= 26214400)),
+    check_3348(value.reason) &&
+    check_344(value.ackedSeq) &&
+    check_310(value.expectedSeq),
+  check_3348 = (value) => typeof value == "string" && value === "resync-required",
   check_3349 = (value) => check_3350(value),
-  check_3350 = (value) => check_3351(value) || check_3354(value) || check_3277(value),
+  check_3350 = (value) => check_3351(value) || check_3282(value),
   check_3351 = (value) =>
     typeof value == "object" &&
     value !== null &&
@@ -22150,7 +22162,7 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_2311, unique_2312) => External[1165].test(unique_2311) || check_2(value[unique_2311]),
     ) &&
-    check_3246(value.type) &&
+    check_3251(value.type) &&
     check_22(value.id) &&
     check_391(value.ok) &&
     check_3352(value.payload),
@@ -22158,60 +22170,18 @@ var External = [
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
-    "status" in value &&
+    "resultJson" in value &&
     Object.getOwnPropertyNames(value).every(
       (unique_2313, unique_2314) => External[1166].test(unique_2313) || check_2(value[unique_2313]),
     ) &&
-    check_3353(value.status),
-  check_3353 = (value) => value === "accepted" || value === "replayed",
-  check_3354 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "type" in value &&
-    "id" in value &&
-    "ok" in value &&
-    "error" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2315, unique_2316) => External[1167].test(unique_2315) || check_2(value[unique_2315]),
-    ) &&
-    check_3246(value.type) &&
-    check_22(value.id) &&
-    check_399(value.ok) &&
-    check_3355(value.error),
-  check_3355 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "code" in value &&
-    "message" in value &&
-    "details" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2317, unique_2318) => External[1168].test(unique_2317) || check_2(value[unique_2317]),
-    ) &&
-    check_3356(value.code) &&
-    check_39(value.message) &&
-    check_3357(value.details),
-  check_3356 = (value) => value === "INVALID_REQUEST" || value === "UNAVAILABLE",
-  check_3357 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "reason" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2319, unique_2320) => External[1169].test(unique_2319) || check_2(value[unique_2319]),
-    ) &&
-    check_3358(value.reason),
-  check_3358 = (value) =>
-    value === "model-not-approved" ||
-    value === "invalid-context" ||
-    value === "epoch-mismatch" ||
-    value === "session-not-attached" ||
-    value === "provider-error" ||
-    value === "cancelled",
-  check_3359 = (value) => check_3360(value),
-  check_3360 = (value) => check_3361(value) || check_3354(value) || check_3277(value),
-  check_3361 = (value) =>
+    check_3353(value.resultJson),
+  check_3353 = (value) =>
+    typeof value == "string" &&
+    (value.length >= 4 || (value.length >= 2 && CodePointCount(value) >= 2)) &&
+    (value.length <= 26214400 || (value.length <= 52428800 && CodePointCount(value) <= 26214400)),
+  check_3354 = (value) => check_3355(value),
+  check_3355 = (value) => check_3356(value) || check_3359(value) || check_3282(value),
+  check_3356 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -22220,24 +22190,70 @@ var External = [
     "ok" in value &&
     "payload" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2321, unique_2322) => External[1170].test(unique_2321) || check_2(value[unique_2321]),
+      (unique_2315, unique_2316) => External[1167].test(unique_2315) || check_2(value[unique_2315]),
     ) &&
-    check_3246(value.type) &&
+    check_3251(value.type) &&
     check_22(value.id) &&
     check_391(value.ok) &&
-    check_3362(value.payload),
-  check_3362 = (value) =>
+    check_3357(value.payload),
+  check_3357 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "status" in value &&
     Object.getOwnPropertyNames(value).every(
+      (unique_2317, unique_2318) => External[1168].test(unique_2317) || check_2(value[unique_2317]),
+    ) &&
+    check_3358(value.status),
+  check_3358 = (value) => value === "accepted" || value === "replayed",
+  check_3359 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "type" in value &&
+    "id" in value &&
+    "ok" in value &&
+    "error" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2319, unique_2320) => External[1169].test(unique_2319) || check_2(value[unique_2319]),
+    ) &&
+    check_3251(value.type) &&
+    check_22(value.id) &&
+    check_399(value.ok) &&
+    check_3360(value.error),
+  check_3360 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "code" in value &&
+    "message" in value &&
+    "details" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2321, unique_2322) => External[1170].test(unique_2321) || check_2(value[unique_2321]),
+    ) &&
+    check_3361(value.code) &&
+    check_39(value.message) &&
+    check_3362(value.details),
+  check_3361 = (value) => value === "INVALID_REQUEST" || value === "UNAVAILABLE",
+  check_3362 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "reason" in value &&
+    Object.getOwnPropertyNames(value).every(
       (unique_2323, unique_2324) => External[1171].test(unique_2323) || check_2(value[unique_2323]),
     ) &&
-    check_86(value.status),
-  check_3363 = (value) => check_3364(value),
-  check_3364 = (value) => check_3365(value) || check_3277(value),
-  check_3365 = (value) =>
+    check_3363(value.reason),
+  check_3363 = (value) =>
+    value === "model-not-approved" ||
+    value === "invalid-context" ||
+    value === "epoch-mismatch" ||
+    value === "session-not-attached" ||
+    value === "provider-error" ||
+    value === "cancelled",
+  check_3364 = (value) => check_3365(value),
+  check_3365 = (value) => check_3366(value) || check_3359(value) || check_3282(value),
+  check_3366 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -22248,12 +22264,38 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_2325, unique_2326) => External[1172].test(unique_2325) || check_2(value[unique_2325]),
     ) &&
-    check_3246(value.type) &&
+    check_3251(value.type) &&
     check_22(value.id) &&
     check_391(value.ok) &&
-    check_3366(value.payload),
-  check_3366 = (value) => check_3367(value) || check_3377(value) || check_3379(value),
+    check_3367(value.payload),
   check_3367 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "status" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2327, unique_2328) => External[1173].test(unique_2327) || check_2(value[unique_2327]),
+    ) &&
+    check_86(value.status),
+  check_3368 = (value) => check_3369(value),
+  check_3369 = (value) => check_3370(value) || check_3282(value),
+  check_3370 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "type" in value &&
+    "id" in value &&
+    "ok" in value &&
+    "payload" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2329, unique_2330) => External[1174].test(unique_2329) || check_2(value[unique_2329]),
+    ) &&
+    check_3251(value.type) &&
+    check_22(value.id) &&
+    check_391(value.ok) &&
+    check_3371(value.payload),
+  check_3371 = (value) => check_3372(value) || check_3382(value) || check_3384(value),
+  check_3372 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -22261,34 +22303,12 @@ var External = [
     "binding" in value &&
     "decision" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2327, unique_2328) => External[1173].test(unique_2327) || check_2(value[unique_2327]),
+      (unique_2331, unique_2332) => External[1175].test(unique_2331) || check_2(value[unique_2331]),
     ) &&
     check_288(value.operation) &&
     check_60(value.binding) &&
-    check_3368(value.decision),
-  check_3368 = (value) => check_3369(value) || check_3374(value),
-  check_3369 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "decision" in value &&
-    "risk" in value &&
-    "rationale" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_2329, unique_2330) => External[1174].test(unique_2329) || check_2(value[unique_2329]),
-    ) &&
-    check_44(value.decision) &&
-    check_3370(value.risk) &&
-    check_285(value.rationale) &&
-    (value.userAuthorization === void 0 ||
-      !("userAuthorization" in value) ||
-      check_3373(value.userAuthorization)),
-  check_3370 = (value) => check_3371(value) || check_3372(value),
-  check_3371 = (value) => typeof value == "string" && value === "low",
-  check_3372 = (value) => typeof value == "string" && value === "medium",
-  check_3373 = (value) =>
-    typeof value == "string" &&
-    (value === "low" || value === "medium" || value === "high" || value === "unknown"),
+    check_3373(value.decision),
+  check_3373 = (value) => check_3374(value) || check_3379(value),
   check_3374 = (value) =>
     typeof value == "object" &&
     value !== null &&
@@ -22297,19 +22317,41 @@ var External = [
     "risk" in value &&
     "rationale" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2331, unique_2332) => External[1175].test(unique_2331) || check_2(value[unique_2331]),
+      (unique_2333, unique_2334) => External[1176].test(unique_2333) || check_2(value[unique_2333]),
     ) &&
-    check_3375(value.decision) &&
-    check_3376(value.risk) &&
+    check_44(value.decision) &&
+    check_3375(value.risk) &&
     check_285(value.rationale) &&
     (value.userAuthorization === void 0 ||
       !("userAuthorization" in value) ||
-      check_3373(value.userAuthorization)),
-  check_3375 = (value) => check_42(value) || check_2300(value),
-  check_3376 = (value) =>
+      check_3378(value.userAuthorization)),
+  check_3375 = (value) => check_3376(value) || check_3377(value),
+  check_3376 = (value) => typeof value == "string" && value === "low",
+  check_3377 = (value) => typeof value == "string" && value === "medium",
+  check_3378 = (value) =>
     typeof value == "string" &&
     (value === "low" || value === "medium" || value === "high" || value === "unknown"),
-  check_3377 = (value) =>
+  check_3379 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "decision" in value &&
+    "risk" in value &&
+    "rationale" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_2335, unique_2336) => External[1177].test(unique_2335) || check_2(value[unique_2335]),
+    ) &&
+    check_3380(value.decision) &&
+    check_3381(value.risk) &&
+    check_285(value.rationale) &&
+    (value.userAuthorization === void 0 ||
+      !("userAuthorization" in value) ||
+      check_3378(value.userAuthorization)),
+  check_3380 = (value) => check_42(value) || check_2300(value),
+  check_3381 = (value) =>
+    typeof value == "string" &&
+    (value === "low" || value === "medium" || value === "high" || value === "unknown"),
+  check_3382 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -22318,15 +22360,15 @@ var External = [
     "id" in value &&
     "expiresAtMs" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2333, unique_2334) => External[1176].test(unique_2333) || check_2(value[unique_2333]),
+      (unique_2337, unique_2338) => External[1178].test(unique_2337) || check_2(value[unique_2337]),
     ) &&
     check_295(value.operation) &&
     check_60(value.binding) &&
     check_287(value.id) &&
     check_383(value.expiresAtMs) &&
-    (value.decision === void 0 || !("decision" in value) || check_3378(value.decision)),
-  check_3378 = (value) => check_44(value) || check_42(value) || check_13(value),
-  check_3379 = (value) =>
+    (value.decision === void 0 || !("decision" in value) || check_3383(value.decision)),
+  check_3383 = (value) => check_44(value) || check_42(value) || check_13(value),
+  check_3384 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -22334,15 +22376,15 @@ var External = [
     "binding" in value &&
     "decision" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_2335, unique_2336) => External[1177].test(unique_2335) || check_2(value[unique_2335]),
+      (unique_2339, unique_2340) => External[1179].test(unique_2339) || check_2(value[unique_2339]),
     ) &&
     check_298(value.operation) &&
     check_60(value.binding) &&
-    check_3380(value.decision) &&
+    check_3385(value.decision) &&
     (value.terminalReason === void 0 ||
       !("terminalReason" in value) ||
       check_272(value.terminalReason)),
-  check_3380 = (value) => check_44(value) || check_42(value) || check_13(value),
+  check_3385 = (value) => check_44(value) || check_42(value) || check_13(value),
   isApprovalGetResult = (value) => check_0(value),
   isApprovalHistoryResult = (value) => check_90(value),
   isApprovalResolveResult = (value) => check_95(value),
@@ -22790,120 +22832,122 @@ var External = [
   isSessionGitHubOptionsParams = (value) => check_2586(value),
   isSessionGitHubStatusParams = (value) => check_2588(value),
   isSessionGitHubConfirmParams = (value) => check_2590(value),
-  isConnectParams = (value) => check_2593(value),
-  isWorkerAdmissionHandshake = (value) => check_2606(value),
-  isWorkerConnectRequestFrame = (value) => check_2608(value),
-  isWorkerHeartbeatParams = (value) => check_2619(value),
-  isWorkerSessionsSpawnParams = (value) => check_2623(value),
-  isWorkerSessionsSendParams = (value) => check_2627(value),
-  isWorkerPortalParams = (value) => check_2629(value),
-  isWorkerPresenceParams = (value) => check_2633(value),
-  isWorkerComputerParams = (value) => check_2635(value),
-  isWorkerTranscriptCommitParams = (value) => check_2640(value),
-  isWorkerLiveEventParams = (value) => check_2695(value),
-  isGatewaySuspendPrepareParams = (value) => check_2742(value),
-  isGatewaySuspendPrepareResult = (value) => check_2747(value),
-  isGatewaySuspendStatusParams = (value) => check_2774(value),
-  isGatewaySuspendStatusResult = (value) => check_2776(value),
-  isGatewaySuspendResumeParams = (value) => check_2784(value),
-  isGatewaySuspendHandoffParams = (value) => check_2786(value),
-  isRequestFrame = (value) => check_2789(value),
-  isNodePairListParams = (value) => check_2791(value),
-  isNodePairApproveParams = (value) => check_2792(value),
-  isNodePairRejectParams = (value) => check_2793(value),
-  isNodePairRemoveParams = (value) => check_2794(value),
-  isNodeRenameParams = (value) => check_2796(value),
-  isNodeListParams = (value) => check_2798(value),
-  isNodePluginToolsUpdateParams = (value) => check_2799(value),
-  isNodeSkillsUpdateParams = (value) => check_2805(value),
-  isWorkerDesktopObserveParams = (value) => check_2810(value),
-  isWorkerDesktopObserveResult = (value) => check_2812(value),
-  isWorkerDesktopLaunchParams = (value) => check_2814(value),
-  isWorkerDesktopLaunchResult = (value) => check_2816(value),
-  isNodePendingAckParams = (value) => check_2818(value),
-  isNodeDescribeParams = (value) => check_2820(value),
-  isNodeInvokeParams = (value) => check_2821(value),
-  isNodeInvokeResultParams = (value) => check_2823(value),
-  isNodeInvokeProgressParams = (value) => check_2829(value),
-  isNodeEventParams = (value) => check_2832(value),
-  isNodePresenceActivityPayload = (value) => check_2834(value),
-  isNodeHostStatsPayload = (value) => check_2841(value),
-  isNodePendingDrainParams = (value) => check_2846(value),
-  isNodePendingEnqueueParams = (value) => check_2849(value),
-  isDevicePairListParams = (value) => check_2854(value),
-  isDevicePairApproveParams = (value) => check_2855(value),
-  isDevicePairRejectParams = (value) => check_2856(value),
-  isDevicePairRemoveParams = (value) => check_2857(value),
-  isDevicePairSetupCodeParams = (value) => check_2859(value),
-  isDevicePairSetupStatusParams = (value) => check_2862(value),
-  isDevicePairRenameParams = (value) => check_2864(value),
-  isDeviceTokenRotateParams = (value) => check_2866(value),
-  isDeviceTokenRevokeParams = (value) => check_2868(value),
-  isExecApprovalsNodeGetParams = (value) => check_2870(value),
-  isExecApprovalsNodeSetParams = (value) => check_2871(value),
-  isExecApprovalsNodeSnapshot = (value) => check_2884(value),
-  isTemplatesCatalogSearchParams = (value) => check_2907(value),
-  isTemplateDraftDocument = (value) => check_2910(value),
-  isTemplatesDraftsCreateParams = (value) => check_2918(value),
-  isTemplatesDraftsReadParams = (value) => check_2920(value),
-  isTemplatesDraftsSaveParams = (value) => check_2923(value),
-  isTemplatesDraftsReviewParams = (value) => check_2926(value),
-  isTemplatesDraftsPublishParams = (value) => check_2931(value),
-  isTemplatesCatalogSearchResult = (value) => check_2933(value),
-  isTemplatesCatalogDetailParams = (value) => check_2940(value),
-  isTemplatesCatalogDetailResult = (value) => check_2942(value),
-  isTemplatesCatalogPreviewParams = (value) => check_2956(value),
-  isTemplatesCatalogPreviewResult = (value) => check_2960(value),
-  isTemplatesStatusParams = (value) => check_2963(value),
-  isTemplatesStatusResult = (value) => check_2965(value),
-  isTemplatesAddPlanParams = (value) => check_2993(value),
-  isTemplatesAddApplyParams = (value) => check_2995(value),
-  isTemplatesUpdatePlanParams = (value) => check_3007(value),
-  isTemplatesUpdateApplyParams = (value) => check_3009(value),
-  isTemplatesRemovePlanParams = (value) => check_3011(value),
-  isTemplatesRemoveApplyParams = (value) => check_3012(value),
-  isTemplateLifecyclePlanResult = (value) => check_3014(value),
-  isCanvasDocumentPreviewParams = (value) => check_3109(value),
-  isCanvasDocumentViewParams = (value) => check_3112(value),
-  isProjectsCheckoutOptionsParams = (value) => check_3115(value),
-  isProjectsListParams = (value) => check_3117(value),
-  isProjectsRegisterParams = (value) => check_3120(value),
-  isProjectsAddParams = (value) => check_3122(value),
-  isProjectsSearchRemoteParams = (value) => check_3124(value),
-  isProjectsRemoveParams = (value) => check_3126(value),
-  isWorktreesListParams = (value) => check_3129(value),
-  isBoardGetParams = (value) => check_3130(value),
-  isBoardUpdateParams = (value) => check_3131(value),
-  isBoardWidgetContent = (value) => check_3159(value),
-  isBoardWidgetAppViewParams = (value) => check_3172(value),
-  isBoardWidgetPutParams = (value) => check_3174(value),
-  isBoardWidgetGrantParams = (value) => check_3195(value),
-  isBoardEventParams = (value) => check_3200(value),
-  isBoardPromptAuthorizeParams = (value) => check_3204(value),
-  isBoardDataReadParams = (value) => check_3206(value),
-  isBoardActionParams = (value) => check_3209(value),
-  isWorktreesCreateParams = (value) => check_3214(value),
-  isWorktreesRemoveParams = (value) => check_3217(value),
-  isWorktreesRestoreParams = (value) => check_3224(value),
-  isWorktreesGcParams = (value) => check_3226(value),
-  isWorktreesRecoverFileParams = (value) => check_3228(value),
-  isWorktreesRecoverRemovalParams = (value) => check_3230(value),
-  isWorktreesRetireSnapshotParams = (value) => check_3232(value),
-  isWorktreesBranchesParams = (value) => check_3235(value),
-  isFsListDirParams = (value) => check_3237(value),
-  isFsListDirResult = (value) => check_3239(value),
-  isWorkerAdmissionResponseFrame = (value) => check_3243(value),
-  isWorkerProtocolCloseReason = (value) => check_3306(value),
-  isWorkerTurnAdmissionResponseFrame = (value) => check_3307(value),
-  isWorkerGatewayToolResponseFrame = (value) => check_3313(value),
-  isWorkerGatewayToolCancelResponseFrame = (value) => check_3316(value),
-  isWorkerHeartbeatResponseFrame = (value) => check_3319(value),
-  isWorkerTranscriptCommitResponseFrame = (value) => check_3324(value),
-  isWorkerLiveEventResponseFrame = (value) => check_3333(value),
-  isWorkerComputerResponseFrame = (value) => check_3344(value),
-  isWorkerInferenceStartResponseFrame = (value) => check_3349(value),
-  isWorkerInferenceCancelResponseFrame = (value) => check_3359(value),
-  isWorkerExecApprovalResponseFrame = (value) => check_3363(value);
+  isSessionsFilesPreviewParams = (value) => check_2593(value),
+  isSessionsFilesPreviewReleaseParams = (value) => check_2596(value),
+  isConnectParams = (value) => check_2598(value),
+  isWorkerAdmissionHandshake = (value) => check_2611(value),
+  isWorkerConnectRequestFrame = (value) => check_2613(value),
+  isWorkerHeartbeatParams = (value) => check_2624(value),
+  isWorkerSessionsSpawnParams = (value) => check_2628(value),
+  isWorkerSessionsSendParams = (value) => check_2632(value),
+  isWorkerPortalParams = (value) => check_2634(value),
+  isWorkerPresenceParams = (value) => check_2638(value),
+  isWorkerComputerParams = (value) => check_2640(value),
+  isWorkerTranscriptCommitParams = (value) => check_2645(value),
+  isWorkerLiveEventParams = (value) => check_2700(value),
+  isGatewaySuspendPrepareParams = (value) => check_2747(value),
+  isGatewaySuspendPrepareResult = (value) => check_2752(value),
+  isGatewaySuspendStatusParams = (value) => check_2779(value),
+  isGatewaySuspendStatusResult = (value) => check_2781(value),
+  isGatewaySuspendResumeParams = (value) => check_2789(value),
+  isGatewaySuspendHandoffParams = (value) => check_2791(value),
+  isRequestFrame = (value) => check_2794(value),
+  isNodePairListParams = (value) => check_2796(value),
+  isNodePairApproveParams = (value) => check_2797(value),
+  isNodePairRejectParams = (value) => check_2798(value),
+  isNodePairRemoveParams = (value) => check_2799(value),
+  isNodeRenameParams = (value) => check_2801(value),
+  isNodeListParams = (value) => check_2803(value),
+  isNodePluginToolsUpdateParams = (value) => check_2804(value),
+  isNodeSkillsUpdateParams = (value) => check_2810(value),
+  isWorkerDesktopObserveParams = (value) => check_2815(value),
+  isWorkerDesktopObserveResult = (value) => check_2817(value),
+  isWorkerDesktopLaunchParams = (value) => check_2819(value),
+  isWorkerDesktopLaunchResult = (value) => check_2821(value),
+  isNodePendingAckParams = (value) => check_2823(value),
+  isNodeDescribeParams = (value) => check_2825(value),
+  isNodeInvokeParams = (value) => check_2826(value),
+  isNodeInvokeResultParams = (value) => check_2828(value),
+  isNodeInvokeProgressParams = (value) => check_2834(value),
+  isNodeEventParams = (value) => check_2837(value),
+  isNodePresenceActivityPayload = (value) => check_2839(value),
+  isNodeHostStatsPayload = (value) => check_2846(value),
+  isNodePendingDrainParams = (value) => check_2851(value),
+  isNodePendingEnqueueParams = (value) => check_2854(value),
+  isDevicePairListParams = (value) => check_2859(value),
+  isDevicePairApproveParams = (value) => check_2860(value),
+  isDevicePairRejectParams = (value) => check_2861(value),
+  isDevicePairRemoveParams = (value) => check_2862(value),
+  isDevicePairSetupCodeParams = (value) => check_2864(value),
+  isDevicePairSetupStatusParams = (value) => check_2867(value),
+  isDevicePairRenameParams = (value) => check_2869(value),
+  isDeviceTokenRotateParams = (value) => check_2871(value),
+  isDeviceTokenRevokeParams = (value) => check_2873(value),
+  isExecApprovalsNodeGetParams = (value) => check_2875(value),
+  isExecApprovalsNodeSetParams = (value) => check_2876(value),
+  isExecApprovalsNodeSnapshot = (value) => check_2889(value),
+  isTemplatesCatalogSearchParams = (value) => check_2912(value),
+  isTemplateDraftDocument = (value) => check_2915(value),
+  isTemplatesDraftsCreateParams = (value) => check_2923(value),
+  isTemplatesDraftsReadParams = (value) => check_2925(value),
+  isTemplatesDraftsSaveParams = (value) => check_2928(value),
+  isTemplatesDraftsReviewParams = (value) => check_2931(value),
+  isTemplatesDraftsPublishParams = (value) => check_2936(value),
+  isTemplatesCatalogSearchResult = (value) => check_2938(value),
+  isTemplatesCatalogDetailParams = (value) => check_2945(value),
+  isTemplatesCatalogDetailResult = (value) => check_2947(value),
+  isTemplatesCatalogPreviewParams = (value) => check_2961(value),
+  isTemplatesCatalogPreviewResult = (value) => check_2965(value),
+  isTemplatesStatusParams = (value) => check_2968(value),
+  isTemplatesStatusResult = (value) => check_2970(value),
+  isTemplatesAddPlanParams = (value) => check_2998(value),
+  isTemplatesAddApplyParams = (value) => check_3000(value),
+  isTemplatesUpdatePlanParams = (value) => check_3012(value),
+  isTemplatesUpdateApplyParams = (value) => check_3014(value),
+  isTemplatesRemovePlanParams = (value) => check_3016(value),
+  isTemplatesRemoveApplyParams = (value) => check_3017(value),
+  isTemplateLifecyclePlanResult = (value) => check_3019(value),
+  isCanvasDocumentPreviewParams = (value) => check_3114(value),
+  isCanvasDocumentViewParams = (value) => check_3117(value),
+  isProjectsCheckoutOptionsParams = (value) => check_3120(value),
+  isProjectsListParams = (value) => check_3122(value),
+  isProjectsRegisterParams = (value) => check_3125(value),
+  isProjectsAddParams = (value) => check_3127(value),
+  isProjectsSearchRemoteParams = (value) => check_3129(value),
+  isProjectsRemoveParams = (value) => check_3131(value),
+  isWorktreesListParams = (value) => check_3134(value),
+  isBoardGetParams = (value) => check_3135(value),
+  isBoardUpdateParams = (value) => check_3136(value),
+  isBoardWidgetContent = (value) => check_3164(value),
+  isBoardWidgetAppViewParams = (value) => check_3177(value),
+  isBoardWidgetPutParams = (value) => check_3179(value),
+  isBoardWidgetGrantParams = (value) => check_3200(value),
+  isBoardEventParams = (value) => check_3205(value),
+  isBoardPromptAuthorizeParams = (value) => check_3209(value),
+  isBoardDataReadParams = (value) => check_3211(value),
+  isBoardActionParams = (value) => check_3214(value),
+  isWorktreesCreateParams = (value) => check_3219(value),
+  isWorktreesRemoveParams = (value) => check_3222(value),
+  isWorktreesRestoreParams = (value) => check_3229(value),
+  isWorktreesGcParams = (value) => check_3231(value),
+  isWorktreesRecoverFileParams = (value) => check_3233(value),
+  isWorktreesRecoverRemovalParams = (value) => check_3235(value),
+  isWorktreesRetireSnapshotParams = (value) => check_3237(value),
+  isWorktreesBranchesParams = (value) => check_3240(value),
+  isFsListDirParams = (value) => check_3242(value),
+  isFsListDirResult = (value) => check_3244(value),
+  isWorkerAdmissionResponseFrame = (value) => check_3248(value),
+  isWorkerProtocolCloseReason = (value) => check_3311(value),
+  isWorkerTurnAdmissionResponseFrame = (value) => check_3312(value),
+  isWorkerGatewayToolResponseFrame = (value) => check_3318(value),
+  isWorkerGatewayToolCancelResponseFrame = (value) => check_3321(value),
+  isWorkerHeartbeatResponseFrame = (value) => check_3324(value),
+  isWorkerTranscriptCommitResponseFrame = (value) => check_3329(value),
+  isWorkerLiveEventResponseFrame = (value) => check_3338(value),
+  isWorkerComputerResponseFrame = (value) => check_3349(value),
+  isWorkerInferenceStartResponseFrame = (value) => check_3354(value),
+  isWorkerInferenceCancelResponseFrame = (value) => check_3364(value),
+  isWorkerExecApprovalResponseFrame = (value) => check_3368(value);
 export {
   isAgentIdentityParams,
   isAgentParams,
@@ -23190,6 +23234,8 @@ export {
   isSessionsFilesDownloadParams,
   isSessionsFilesGetParams,
   isSessionsFilesListParams,
+  isSessionsFilesPreviewParams,
+  isSessionsFilesPreviewReleaseParams,
   isSessionsFilesRevealParams,
   isSessionsFilesSetParams,
   isSessionsForkParams,

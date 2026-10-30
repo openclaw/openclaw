@@ -342,7 +342,6 @@ extensions/irc/src/send.ts	1
 extensions/irc/src/setup-core.ts	4
 extensions/irc/src/setup-surface.ts	24
 extensions/kilocode/provider-models.ts	3
-extensions/kimi-coding/provider-policy-api.ts	2
 extensions/line/src/accounts.ts	3
 extensions/line/src/actions.ts	3
 extensions/line/src/auto-reply-delivery.ts	1
@@ -2081,7 +2080,6 @@ src/plugins/command-registration.ts	3
 src/plugins/config-normalization-shared.ts	1
 src/plugins/config-schema.ts	5
 src/plugins/contracts/inventory/bundled-capability-metadata.ts	3
-src/plugins/contracts/registry.ts	1
 src/plugins/contracts/tts-contract-suites.ts	18
 src/plugins/dashboard-capabilities.ts	1
 src/plugins/dev-source-root.ts	1

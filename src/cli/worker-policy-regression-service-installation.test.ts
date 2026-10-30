@@ -53,10 +53,6 @@ vi.mock("../infra/npm-registry-spec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/npm-registry-spec.js")>()),
   compareOpenClawReleaseVersions: (a: string, b: string) => a.localeCompare(b),
 }));
-vi.mock("../state/openclaw-state-db.paths.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../state/openclaw-state-db.paths.js")>()),
-  resolveOpenClawStateSqlitePath: () => "/state.sqlite",
-}));
 vi.mock("../version.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../version.js")>()),
   VERSION: "2026.10.8",
@@ -145,9 +141,12 @@ describe.skipIf(process.platform !== "linux")("worker policy own-service selecti
   });
   it("preserves protection for a genuinely older own effective package", async () => {
     fixture.versions.system = "2026.10.6";
-    await expect(inspectCliGatewayServiceInstallation({})).resolves.toMatchObject({
+    await expect(
+      inspectCliGatewayServiceInstallation({ OPENCLAW_STATE_DIR: "/service-state" }),
+    ).resolves.toMatchObject({
       root: "/system",
       version: "2026.10.6",
+      databasePath: "/service-state/state/openclaw.sqlite",
     });
   });
   it("uses exact custom user unit from cgroup", async () => {

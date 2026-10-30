@@ -14,6 +14,7 @@ import {
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { activateGatewayAgentDatabaseStartup } from "./server-agent-database-startup.js";
+import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   migrate: vi.fn(),
@@ -55,6 +56,10 @@ vi.mock("./server-startup-session-migration.js", () => ({
     return [];
   },
   runGatewaySessionStartupMaintenance: mocks.maintain,
+}));
+// mock-isolation: Native restart discovery/admission is covered by the real integrity suite.
+vi.mock("./session-restart-resume.js", () => ({
+  prepareAgentRestartRecovery: async () => undefined,
 }));
 // mock-isolation: Model preparation stays observable without loading provider plugins.
 vi.mock("../agents/prepared-model-runtime.js", () => ({
@@ -201,8 +206,11 @@ function createFleet(
             },
           }),
         );
+        const context = createContext([], () => cfg);
+        context.agentDatabaseStartup = admission.observation;
         activateGatewayAgentDatabaseStartup({
           admission,
+          context,
           preparationReady,
           waitForPostReadyWork: () => postReadyWork,
           getConfig: () => cfg,

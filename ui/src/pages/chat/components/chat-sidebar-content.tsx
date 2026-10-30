@@ -285,8 +285,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                 when={
                   props.filePresentation === "desktop" &&
                   props.fileView?.imagePreview &&
-                  props.content?.kind === "file" &&
-                  props.content.mimeType === "image/svg+xml"
+                  props.content?.kind === "file"
                     ? props.content
                     : undefined
                 }
