@@ -306,7 +306,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     });
     if (result.code !== 0) {
       const stderr = result.stderr.toString("utf8");
-      if (stderr.includes("No such file or directory")) {
+      if (
+        stderr.includes("No such file or directory") ||
+        stderr.includes("can't cd to") ||
+        stderr.includes("cannot cd to")
+      ) {
         return null;
       }
       const message = stderr.trim() || `stat failed with code ${result.code}`;
