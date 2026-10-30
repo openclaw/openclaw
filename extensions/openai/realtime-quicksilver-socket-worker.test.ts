@@ -4,7 +4,11 @@ import { createRequire } from "node:module";
 import { connect, type AddressInfo, type Socket } from "node:net";
 import { pathToFileURL } from "node:url";
 import { MessageChannel, Worker } from "node:worker_threads";
-import { rawDataToString } from "openclaw/plugin-sdk/realtime-voice-provider";
+import {
+  rawDataToString,
+  REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { closeOpenAILiveSocket } from "./realtime-quicksilver-protocol.js";
@@ -83,6 +87,36 @@ describe("GPT-Live socket worker", () => {
       await receiver.terminate();
     }
   }, 30_000);
+
+  it.each([REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ, REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ])(
+    "opens the real media worker with a plugin-scoped $encoding format",
+    async (format) => {
+      const target = await startAudioEchoTarget();
+      let socket: OpenAIQuicksilverWorkerSocket | undefined;
+      const errors: Error[] = [];
+      try {
+        // Plugin invocation scopes wrap nested bridge inputs in proxies, unlike direct probes.
+        const audioFormat = new Proxy(format, {});
+        socket = OpenAIQuicksilverWorkerSocket.create(
+          `ws://127.0.0.1:${target.port}`,
+          { maxPayload: 1024 },
+          { model: "gpt-live-1", paced: true, audioFormat },
+          { onAudio() {} },
+        );
+        socket.on("error", (error) => errors.push(error));
+        await once(socket, "open");
+        expect(target.connections()).toBe(1);
+        const closed = once(socket, "close");
+        socket.close();
+        await closed;
+        expect(errors).toEqual([]);
+      } finally {
+        socket?.close();
+        await target.close();
+      }
+    },
+    10_000,
+  );
 
   it("retires a worker closed before WebSocket startup without late open or audio", async () => {
     const opened: string[] = [];
