@@ -2198,6 +2198,16 @@ export function isSessionGitHubConfirmParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionGitHubConfirmParamsSchema
 >;
+export function isSessionsFilesPreviewParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsFilesPreviewParamsSchema
+>;
+export function isSessionsFilesPreviewReleaseParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsFilesPreviewReleaseParamsSchema
+>;
 export function isConnectParams(
   value: unknown,
 ): value is import("typebox").Static<typeof import("../../schema-modules.js").ConnectParamsSchema>;

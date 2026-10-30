@@ -17,7 +17,6 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
@@ -31,6 +30,7 @@ import type { InternalSessionEntry } from "../../src/config/sessions/types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayRequestHandlerOptions } from "../../src/gateway/server-methods/types.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -192,9 +192,6 @@ async function run(count: number, first = 0) {
     );
   }
 }
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 try {
   await run(Math.min(iterations, 128), 9800);
   metadataReads = 0;
@@ -250,7 +247,7 @@ try {
         ? { pendingReplies, completedAtMs, latencyMs: latencyMs.toSorted((a, b) => a - b) }
         : {}),
       ...(allocation
-        ? { sampledBytesPerOperation: allocated(allocation.profile.head) / operations }
+        ? { sampledBytesPerOperation: sumSampledHeapBytes(allocation.profile.head) / operations }
         : {
             cpuUsPerOperation: (cpu.user + cpu.system) / operations,
             wallUsPerOperation: (elapsedMs * 1000) / operations,

@@ -36,7 +36,7 @@ function unreadableCapture(directory: string, error: string) {
 
 /** Backup-local pending markers cannot override the update's durable terminal result. */
 export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) {
-  const evidence = await readUpdateRecoveryBackups();
+  const evidence = await readUpdateRecoveryBackups(readRun);
   const classified = await Promise.all(
     evidence.map(async (entry) => {
       if (entry.kind === "unreadable") {
@@ -50,10 +50,10 @@ export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) 
           message: `Update capture at ${entry.directory} is incomplete: no sealed manifest is available. Retained files are unverified evidence for manual inspection.`,
         };
       }
-      const { ref, manifest, outcome } = entry;
+      const { ref, manifest, outcome, run } = entry;
       let forwardResolved: boolean;
       try {
-        forwardResolved = await hasUpdateRecoveryForwardResolution(ref);
+        forwardResolved = await hasUpdateRecoveryForwardResolution(ref, run);
       } catch (error) {
         return unreadableCapture(ref.directory, formatErrorMessage(error));
       }
@@ -68,50 +68,43 @@ export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) 
           message: `Update recovery set ${ref.manifestPath}: current state repaired forward; failed history and all generations retained.`,
         };
       }
-      let terminalOutcome: "committed" | "restored" | undefined;
-      let ambiguity: string | undefined;
-      // A failure that never activated left the captured state live; nothing needs recovery.
-      let unchanged = false;
-      try {
-        const run = await readRun(manifest.runId);
-        if (
-          !run &&
-          manifest.schemaVersion === 2 &&
-          manifest.generation?.kind === "baseline" &&
-          /^doctor-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
-            manifest.runId,
-          )
-        ) {
-          return {
-            ref,
-            runId: manifest.runId,
-            captureStatus: outcome.status,
-            status: "manual" as const,
-            terminalOutcome: undefined,
-            nextAction: "openclaw update status --json",
-            message: `Standalone Doctor capture ${ref.manifestPath}: pre-repair state retained for manual inspection. No repair outcome is recorded.`,
-          };
-        }
-        terminalOutcome = resolveUpdateRecoveryTerminalOutcome(run, ref.manifestSha256);
-        if (outcome.status === "committed" || outcome.status === "restored") {
-          if (terminalOutcome && terminalOutcome !== outcome.status) {
-            terminalOutcome = undefined;
-            ambiguity = "capture and update terminal outcomes disagree";
-          } else {
-            terminalOutcome = outcome.status;
-          }
-        }
-        if (run?.origin.updateRecoveryCapture?.doctorCompleted && !terminalOutcome) {
-          ambiguity = "Doctor succeeded but its older updater has no complete runtime validation";
-        }
-        if (!terminalOutcome && !ambiguity && run?.status !== "failed") {
-          ambiguity = run ? `update run is ${run.status}` : "no matching update run exists";
-        }
-        unchanged =
-          !terminalOutcome && !ambiguity && run !== undefined && isNeverActivatedFailedUpdate(run);
-      } catch (error) {
-        ambiguity = `update outcome is unreadable: ${formatErrorMessage(error)}`;
+      if (
+        !run &&
+        manifest.schemaVersion === 2 &&
+        manifest.generation?.kind === "baseline" &&
+        /^doctor-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+          manifest.runId,
+        )
+      ) {
+        return {
+          ref,
+          runId: manifest.runId,
+          captureStatus: outcome.status,
+          status: "manual" as const,
+          terminalOutcome: undefined,
+          nextAction: "openclaw update status --json",
+          message: `Standalone Doctor capture ${ref.manifestPath}: pre-repair state retained for manual inspection. No repair outcome is recorded.`,
+        };
       }
+      let terminalOutcome = resolveUpdateRecoveryTerminalOutcome(run, ref.manifestSha256);
+      let ambiguity: string | undefined;
+      if (outcome.status === "committed" || outcome.status === "restored") {
+        if (terminalOutcome && terminalOutcome !== outcome.status) {
+          terminalOutcome = undefined;
+          ambiguity = "capture and update terminal outcomes disagree";
+        } else {
+          terminalOutcome = outcome.status;
+        }
+      }
+      if (run?.origin.updateRecoveryCapture?.doctorCompleted && !terminalOutcome) {
+        ambiguity = "Doctor succeeded but its older updater has no complete runtime validation";
+      }
+      if (!terminalOutcome && !ambiguity && run?.status !== "failed") {
+        ambiguity = run ? `update run is ${run.status}` : "no matching update run exists";
+      }
+      // A failure that never activated left the captured state live; nothing needs recovery.
+      const unchanged =
+        !terminalOutcome && !ambiguity && run !== undefined && isNeverActivatedFailedUpdate(run);
       return { ref, manifest, outcome, terminalOutcome, unchanged, ambiguity };
     }),
   );

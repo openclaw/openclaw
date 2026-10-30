@@ -174,7 +174,7 @@ export function assertSessionStoreReadCandidate(
   pathname: string,
   candidates: readonly SessionStoreReadCandidate[],
 ): string {
-  if (isMainThread && isArtifactPreservingStateRead("agent")) {
+  if (isMainThread && isArtifactPreservingStateRead()) {
     const selected = candidates.find(
       (candidate) =>
         candidate.identity &&

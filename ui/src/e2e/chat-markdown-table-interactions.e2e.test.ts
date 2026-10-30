@@ -3,7 +3,12 @@ import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
+import { resolveRenderedColors } from "../test-helpers/rendered-colors.ts";
 import { chatMessage } from "./chat-flow.test-support.ts";
 import {
   auditMarkdownTable,
@@ -112,6 +117,119 @@ suite.define(() => {
       expect(overlaps).toBe(false);
       const textBounds = (await table.locator("..").boundingBox())!;
       expect(tableBounds.width).toBeGreaterThan(textBounds.width);
+    },
+  );
+
+  it.each([
+    { theme: "claw", accent: "#ffffff" },
+    { theme: "absolutely", accent: "#12395c" },
+  ])(
+    "keeps links readable without muting a legible accent in $theme chat bubbles",
+    async ({ theme, accent }) => {
+      const context = await suite.newBrowserContext({
+        colorScheme: "light",
+        viewport: { width: 1280, height: 900 },
+      });
+      const page = await context.newPage();
+      const prefs = { theme, themeMode: "light", accent };
+      const config = { ui: { prefs } };
+      const markdown =
+        "[`API guide`](https://example.com/inline) and `src/ready.ts:2`\n\n" +
+        "Sessions: agent:main:untitled and agent:main:link-target.\n\n" +
+        "| Documentation |\n| --- |\n| [Guide](https://example.com/table) |";
+      try {
+        await page.addInitScript(
+          ({ key, storedPrefs }) => localStorage.setItem(key, JSON.stringify(storedPrefs)),
+          { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), storedPrefs: prefs },
+        );
+        await installMockGateway(page, {
+          historyMessages: ["user", "assistant"].map((role) => chatMessage(role, markdown)),
+          sessions: [
+            { key: "agent:main:main", label: "Main" },
+            { key: "agent:main:link-target", label: "Linked task", displayName: "Linked task" },
+          ],
+          methodResponses: {
+            "config.get": { config, raw: JSON.stringify(config), valid: true, hash: "link-ink" },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        const links = page.locator(".chat-text a");
+        await expect.poll(() => links.count()).toBe(10);
+        await expect.poll(() => page.locator(".markdown-session-link--titled").count()).toBe(2);
+        for (const button of await page
+          .getByRole("button", { name: "Show more", exact: true })
+          .all()) {
+          await button.click();
+        }
+        const accents: { contrast: number; distance: number }[] = [];
+        for (const target of await links.all()) {
+          for (const hovered of [false, true]) {
+            if (hovered) {
+              await target.hover();
+            } else {
+              await page.mouse.move(1, 1);
+            }
+            const paint = await target.evaluate((link) => {
+              const element = link.querySelector("code") ?? link;
+              const probe = document.createElement("span");
+              probe.hidden = true;
+              element.append(probe);
+              probe.style.color = "var(--accent)";
+              const colors: Record<string, string> = {
+                ink: getComputedStyle(element).color,
+                accent: getComputedStyle(probe).color,
+              };
+              probe.style.color = "var(--bg-content, var(--bg))";
+              const bubble = getComputedStyle(element.closest(".chat-bubble")!);
+              colors.host =
+                bubble.getPropertyValue("--chat-bubble-background").trim() ||
+                getComputedStyle(probe).color;
+              colors.fill = getComputedStyle(element).backgroundColor;
+              probe.remove();
+              return colors;
+            });
+            const colors = await page.evaluate(resolveRenderedColors, paint);
+            const channels = ["red", "green", "blue"] as const;
+            const background = channels.map(
+              (channel) =>
+                colors.fill![channel] * colors.fill!.alpha +
+                colors.host![channel] * (1 - colors.fill!.alpha),
+            );
+            const luminance = (rgb: number[]) =>
+              rgb
+                .map((channel) => channel / 255)
+                .map((value) =>
+                  value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4,
+                )
+                .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index]!, 0);
+            const fill = luminance(background);
+            const contrast = (color: typeof colors.ink) => {
+              const ink = luminance(channels.map((channel) => color![channel]));
+              return (Math.max(ink, fill) + 0.05) / (Math.min(ink, fill) + 0.05);
+            };
+            expect(
+              contrast(colors.ink),
+              `hover=${hovered}, ink=${paint.ink}`,
+            ).toBeGreaterThanOrEqual(4.5);
+            if (!hovered) {
+              accents.push({
+                contrast: contrast(colors.accent),
+                distance: Math.max(
+                  ...channels.map((channel) =>
+                    Math.abs(colors.ink![channel] - colors.accent![channel]),
+                  ),
+                ),
+              });
+            }
+          }
+        }
+        if (accent !== "#ffffff") {
+          expect(Math.min(...accents.map((value) => value.contrast))).toBeGreaterThanOrEqual(4.5);
+          expect(Math.max(...accents.map((value) => value.distance))).toBeLessThanOrEqual(1);
+        }
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
     },
   );
 

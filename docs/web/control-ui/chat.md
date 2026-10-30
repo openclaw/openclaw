@@ -1083,6 +1083,39 @@ previews have no session folder and do not load relative assets.
 Loaded classic scripts with `defer` run after parsing, in document order with
 non-async module scripts, while retaining classic script globals.
 
+Documents with an authored Content Security Policy use a separate, conservative
+relative-resource preview path. Supported documents have one CSP meta element in
+an explicit HTML head, before scripts and resource references, with these declarations:
+
+```text
+default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'
+```
+
+`img-src` and `media-src` may additionally be `'none'`, `'self'`, or `'self' data:`.
+The authored policy is preserved, and **Source** and **Download** retain the
+original file bytes. The existing isolated sandbox loads permitted classic
+scripts and stylesheets as unchanged external resources, retaining native
+`defer` ordering. Its opaque origin still prevents
+access to Control UI data and browser storage such as `localStorage`; an app that
+requires that storage must use its original downloaded files.
+
+This path admits at most 64 distinct relative resources, including the single
+stylesheet resource round, under the same file-read and byte limits above.
+Resource URLs belong to the issuing connection and selected preview, expire,
+and stop serving bytes when the preview is closed or replaced, the source loses
+read authority, or the resource content changes. Reopen Preview if a later load
+needs a fresh URL. They provide no general filesystem or network access.
+
+Modules, `crossorigin` or integrity-bearing resources, CSS imports and fonts,
+authored base URLs, multiple or ambiguous policies, and other CSP directives or
+source expressions are outside this first supported subset. Such documents keep
+an explicit preview limitation and their original **Source** and **Download**
+recovery; their relative assets are not silently converted to inline content.
+The browser enforces CSP at the generated preview URLs. Apps whose behavior or
+later policies depend on their original URL or origin should use the downloaded
+files. Ordinary documents without an authored CSP retain their existing preview
+behavior.
+
 Authored in-page HTML links such as `href="#section"` scroll within the preview, including
 in `strict` mode. This leaves the original file and **Source** unchanged; authored
 base URLs, links targeting another window, and download links keep their behavior.
@@ -1390,15 +1423,13 @@ other runs are not included. Source cards require run identity in the transcript
 and follow tool-activity visibility. They are hidden while a run is active or
 transcript search is filtering messages.
 
-In completed dashboard turns, all assistant text and visual results stay visible
-in their original positions. Contiguous tool activity and reasoning-only parts
-fold into separate **Worked** disclosures between those visible parts in both
-flat and bubble mode. Expanding a disclosure shows that stretch of activity in its
-original order, and loading older history preserves which disclosures are open.
-Messages with saved attachments stay intact so each attachment appears once.
-Each disclosure is untimed; the final recap keeps the duration for the whole turn,
-including after reopening a completed chat when its saved timing matches the visible reply.
-Browser tab previews keep their execution order relative to visible results, so a page opened after an inline widget appears after that widget.
+In completed dashboard turns, commentary, reasoning-only messages, and tool activity
+share one **Worked for…** disclosure above the answers. Expanding it shows the
+activity in its original order; explicit answer segments and visual results stay
+visible below it. Browser tab previews keep their execution order relative to those
+visible results, so a page opened after an inline widget appears after that widget.
+Speech bubble view keeps commentary in place; contiguous tool activity uses its own
+activity disclosure instead of the **Worked for…** rollup.
 Failed tool results after the last answer stay visible outside
 the disclosure until a later answer follows them. This is display grouping, not a
 change to stored history. Live turns, search results, and turns without an answer
@@ -1408,7 +1439,7 @@ resumes the closing line reports the request. User messages,
 forwarded inputs, and structural markers remain boundaries for grouping.
 Selecting the author's name on a reply's **Replying to** line scrolls to the
 original message and briefly highlights it, first opening its containing
-**Worked** group when the original sits inside one.
+**Worked for…** group when the original sits inside one.
 
 On wide desktop panes, the conversation position rail provides keyboard shortcuts
 to messages. In right-to-left interface languages, the rail uses the right gutter

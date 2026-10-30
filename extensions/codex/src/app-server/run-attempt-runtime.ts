@@ -187,20 +187,24 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
           : {}),
         ...(startupAuthProfileId ? { authProfileId: startupAuthProfileId } : {}),
       };
-  const startupAuthAccountCacheKey = usesSupervisionConnection
-    ? undefined
-    : startupPreparedAuth?.kind === "api-key"
-      ? resolveCodexAppServerPreparedApiKeyCacheKey(startupPreparedAuth.apiKey)
-      : startupPreparedAuth?.kind === "profile"
-        ? startupPreparedAuth.snapshot?.secretFreeCacheKey
-        : await resolveCodexAppServerAuthAccountCacheKey({
-            authProfileId: startupAuthProfileId,
-            authProfileStore: attemptAuthProfileStore,
-            agentDir,
-            config: params.config,
-          });
+  const startupAuthAccountCacheKey =
+    usesSupervisionConnection || connection.nativeCommandAuth
+      ? undefined
+      : startupPreparedAuth?.kind === "api-key"
+        ? resolveCodexAppServerPreparedApiKeyCacheKey(startupPreparedAuth.apiKey)
+        : startupPreparedAuth?.kind === "profile"
+          ? startupPreparedAuth.snapshot?.secretFreeCacheKey
+          : await resolveCodexAppServerAuthAccountCacheKey({
+              authProfileId: startupAuthProfileId,
+              authProfileStore: attemptAuthProfileStore,
+              agentDir,
+              config: params.config,
+            });
   const startupEnvApiKeyCacheKey =
-    usesSupervisionConnection || startupPreparedAuth || startupAuthProfileId
+    usesSupervisionConnection ||
+    connection.nativeCommandAuth ||
+    startupPreparedAuth ||
+    startupAuthProfileId
       ? undefined
       : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start });
   preDynamicStartupStages.mark("auth-cache");
