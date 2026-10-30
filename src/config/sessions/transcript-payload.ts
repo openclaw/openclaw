@@ -54,12 +54,18 @@ const NAVIGATION_ENVELOPE = {
   modelWithoutCheckpointBytes: 0,
   withoutCustomDataBytes: 0,
 };
-const MIN_NAVIGATION_BYTES = [{}, { type: 0, id: 0 }, { type: 0, id: 0, parentId: 0 }].map(
-  (navigation) =>
+function minimumNavigationBytes(navigation: Record<string, number>): number {
+  return (
     Buffer.byteLength(
       JSON.stringify({ ...NAVIGATION_ENVELOPE, navigation, reset: navigation, model: navigation }),
-    ) - "null".length,
-);
+    ) - "null".length
+  );
+}
+const MIN_NAVIGATION_BYTES = [
+  minimumNavigationBytes({}),
+  minimumNavigationBytes({ type: 0, id: 0 }),
+  minimumNavigationBytes({ type: 0, id: 0, parentId: 0 }),
+] as const;
 
 export type TranscriptPayloadRecord = TranscriptPredicateFields & {
   event_json: string | null;
