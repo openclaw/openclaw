@@ -545,9 +545,14 @@ async function runCronIsolatedAgentTurnInTrace(
                 model: prepared.context.liveSelection.model,
                 diagnostics: mergeCronRunDiagnostics(
                   prepared.context.preflightDiagnostics,
+                  // A lane timeout carries why it gave up (cause, idle window, task budget) in
+                  // the original error's message. Diagnose `err`, not the generic operator text:
+                  // "job execution timed out" alone cannot tell a progress-idle kill from a
+                  // task-budget kill or an operator abort. `error` still owns the run row and
+                  // `lastError`, so user-facing text is unchanged.
                   createCronRunDiagnosticsFromError(
                     isCronLaneTimeout ? "cron-setup" : "agent-run",
-                    isCronLaneTimeout ? error : err,
+                    err,
                   ),
                 ),
               });

@@ -4,6 +4,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as diagnostics from "../../infra/diagnostic-events.js";
 import * as trace from "../../infra/diagnostic-trace-context.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
+import { CommandLaneTaskTimeoutError } from "../../process/command-queue.js";
+import { CommandLane } from "../../process/lanes.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 
 // mock-isolation: Cron diagnostics simulate missing auth sources without a credential-store owner.
@@ -147,5 +149,29 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
         usage: { input: 50, output: 10, total: 60 },
       },
     ]);
+  });
+
+  it("keeps the lane timeout detail in diagnostics instead of only the generic abort text", async () => {
+    harness.runWithModelFallbackMock.mockRejectedValueOnce(
+      new CommandLaneTaskTimeoutError(CommandLane.CronNested, {
+        cause: "progress-idle",
+        elapsedMs: 930_000,
+        idleMs: 900_000,
+        taskBudgetMs: 1_800_000,
+      }),
+    );
+
+    const result = await runWithEvents();
+
+    // The operator-facing summary stays stable so existing readers do not change.
+    expect(result).toMatchObject({ status: "error", error: "cron: job execution timed out" });
+    // The diagnostic keeps why the lane gave up: "job execution timed out" alone cannot
+    // distinguish a no-progress watchdog kill from a task-budget kill or an operator abort.
+    const entry = (result as { diagnostics?: { entries?: Array<Record<string, unknown>> } })
+      .diagnostics?.entries?.[0];
+    expect(entry).toMatchObject({ source: "cron-setup", severity: "error" });
+    expect(entry?.message).toContain('Command lane "cron-nested" task timed out');
+    expect(entry?.message).toContain("no progress for 900000ms");
+    expect(entry?.message).toContain("task budget 1800000ms");
   });
 });
