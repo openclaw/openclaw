@@ -201,6 +201,7 @@ describe("registered catalog list phase diagnostics", () => {
   });
 
   it("preserves a failed readiness result and omits unvisited stages", async () => {
+    install();
     observe();
     const failure = new Error(privateText);
     dirty = true;
@@ -216,6 +217,17 @@ describe("registered catalog list phase diagnostics", () => {
       expect.objectContaining({ name: "sessions.catalog.list.projection_initial", durationMs: 25 }),
     ]);
     expect(JSON.stringify(phases)).not.toContain(privateText);
+  });
+
+  it("returns an empty catalog while session readiness is unavailable", async () => {
+    observe();
+    dirty = true;
+    vi.spyOn(projection, "prepareSelection").mockRejectedValue(new Error("sessions not ready"));
+    const call = start();
+    await call.completion;
+    expect(call.respond).toHaveBeenCalledWith(true, { catalogs: [] });
+    await waitForDiagnosticEventsDrained();
+    expect(phases).toEqual([]);
   });
 
   it.each(["untrusted", "unavailable"] as const)(
