@@ -34,6 +34,13 @@ visibility, or remote session-link titles. Side Chat is hidden, and session link
 keep their locally available labels. MCP Apps discovery requires general write
 access. The Gateway continues to authorize every request.
 
+Connections without general read access also skip CLI session catalogs, plugin
+tool artwork, and detailed usage reads. Tool activities keep their standard
+symbols and context meters keep the session's total token count. The context
+breakdown and Usage page explain how to request access instead of offering a
+retry that cannot succeed. Session creation and effective tool access still
+follow their separate session scopes.
+
 When the Gateway starts with `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`,
 its Control UI shows **Gateway configuration is read-only.** You can inspect the
 configuration there. OpenClaw refuses changes to `openclaw.json` through the Gateway.

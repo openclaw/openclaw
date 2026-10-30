@@ -22,7 +22,7 @@ import {
   patchMcpServers,
 } from "../../lib/config/mcp-servers.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
-import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod, canPresentGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
@@ -132,6 +132,10 @@ export class ChatComposerCapabilityHost {
     agentId: string,
     refresh = false,
   ): void {
+    if (!canCallGatewayMethod(context.gateway.snapshot, "tools.effective", "operator.read")) {
+      this.retireEffectiveTools();
+      return;
+    }
     const client = state.client;
     const sessionKey = state.sessionKey;
     const cacheKey = this.effectiveToolsKeys(context, state, agentId);
@@ -156,6 +160,7 @@ export class ChatComposerCapabilityHost {
       this.client === client &&
       state.client === client &&
       state.connected &&
+      canCallGatewayMethod(context.gateway.snapshot, "tools.effective", "operator.read") &&
       this.connectionEpoch === connectionEpoch &&
       state.connectionEpoch === connectionEpoch &&
       state.sessionKey === sessionKey &&
@@ -185,6 +190,12 @@ export class ChatComposerCapabilityHost {
           }
         }
       });
+  }
+
+  private retireEffectiveTools() {
+    this.effectiveTools = null;
+    this.effectiveToolsErrorKey = null;
+    this.effectiveToolsRequest = null;
   }
 
   private trackRunSettlement(state: ComposerCapabilityState): void {
@@ -425,9 +436,7 @@ export class ChatComposerCapabilityHost {
       this.connectionEpoch = state.connectionEpoch;
       this.skillCatalog.synchronize(state.client, state.connectionEpoch);
       this.patchTokens.clear();
-      this.effectiveTools = null;
-      this.effectiveToolsErrorKey = null;
-      this.effectiveToolsRequest = null;
+      this.retireEffectiveTools();
     }
     this.trackRunSettlement(state);
     const client = state.client;
@@ -464,8 +473,14 @@ export class ChatComposerCapabilityHost {
     const runtimeConfig = currentDisplayRuntimeConfig(context.runtimeConfig.state);
     const access = readGatewayOperatorAccess(context.gateway.snapshot);
     const gatewayAvailable = state.connected && Boolean(state.client);
-    const effectiveToolsAvailable =
-      isGatewayMethodAdvertised(context.gateway.snapshot, "tools.effective") === true;
+    const effectiveToolsAvailable = canPresentGatewayMethod(
+      context.gateway.snapshot,
+      "tools.effective",
+      "operator.read",
+    );
+    if (!effectiveToolsAvailable) {
+      this.retireEffectiveTools();
+    }
     const effectiveToolsKey = effectiveToolsAvailable
       ? this.effectiveToolsKeys(context, state, agentId)
       : null;
