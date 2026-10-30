@@ -176,13 +176,13 @@ describe.skipIf(!hasBrowserLayout)("sidebar glyph geometry", () => {
           attribution: "owned",
         }).leadingIndicator,
     );
-    const ring = view.getByRole("img", { name: "Subagents working", exact: true });
+    const ring = view.getByRole("img", { name: /^Subagents working$/ });
     expect(ring.classList.contains("session-glyph__ring--background")).toBe(false);
     expect(getComputedStyle(ring).animationPlayState).toBe("running");
 
     setCurrent({ ...session, runningChildCount: 0 });
     flush();
-    const background = view.getByRole("img", { name: "Background work running", exact: true });
+    const background = view.getByRole("img", { name: /^Background work running$/ });
     expect(background.classList.contains("session-glyph__ring--background")).toBe(true);
   });
 
