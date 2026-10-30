@@ -37,6 +37,7 @@ import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { buildFeishuAgentBody } from "./bot-agent-body.js";
 import {
   buildBroadcastSessionKey,
+  claimFeishuBroadcastAgentMessage,
   createFeishuBroadcastIngressSettlement,
   resolveBroadcastAgents,
 } from "./bot-broadcast.js";
@@ -1395,34 +1396,29 @@ export async function handleFeishuMessage(params: {
           return;
         }
 
-        let agentClaim: Awaited<ReturnType<typeof claimUnprocessedFeishuMessage>> | undefined;
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          agentClaim = await claimUnprocessedFeishuMessage({
-            messageId: broadcastDedupeKey,
-            namespace: `broadcast:${agentId}`,
-            log,
-          });
-          if (agentClaim.kind === "duplicate") {
-            return;
-          }
-          if (agentClaim.kind !== "inflight") {
-            break;
-          }
-          broadcastSettlement.onLanePending();
-          try {
-            await agentClaim.pending;
-            return;
-          } catch (err) {
-            if (attempt === 1) {
-              throw err;
-            }
-          }
+        const agentClaim = await claimFeishuBroadcastAgentMessage({
+          messageId: broadcastDedupeKey,
+          agentId,
+          log,
+          onPending: broadcastSettlement.onLanePending,
+        });
+        if (!agentClaim) {
+          return;
         }
         const lane = broadcastSettlement.createLane(
-          agentClaim?.kind === "claimed" ? agentClaim.handle : undefined,
+          agentClaim.kind === "claimed" ? agentClaim.handle : undefined,
         );
 
         try {
+          if (
+            agentId !== activeAgentId &&
+            core.channel.commands.isControlCommandMessage(effectiveCommandProbeBody, effectiveCfg)
+          ) {
+            // Observer commands are consumed without dispatch; leaving them unadopted
+            // would retry the entire fan-out after the active agent already accepted it.
+            await lane.lifecycle.onAdopted();
+            return;
+          }
           const agentSessionKey = buildBroadcastSessionKey(
             route.sessionKey,
             route.agentId,

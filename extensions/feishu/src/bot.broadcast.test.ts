@@ -97,7 +97,9 @@ describe("broadcast dispatch", () => {
     });
   }
 
-  it("keeps broadcast commands authorized only for the active agent", async () => {
+  it("settles observer commands without dispatching or replaying them", async () => {
+    const { broadcastClaim, susanClaim, mainClaim } = mockBroadcastClaims("broadcast-command");
+    const turnAdoptionLifecycle = createIngressLifecycle();
     vi.spyOn(runtimeStub.channel.commands, "shouldComputeCommandAuthorized").mockReturnValue(true);
     const cfg = createBroadcastConfig();
     cfg.channels = {
@@ -110,17 +112,15 @@ describe("broadcast dispatch", () => {
       botMentioned: true,
     });
     event.sender.sender_id.open_id = "ou_sender";
-    await dispatchBroadcast("broadcast-command", { cfg, event });
-    const active = resolvedTurnCalls.find((turn) => turn.admission?.kind !== "observeOnly");
-    const observer = resolvedTurnCalls.find((turn) => turn.admission?.kind === "observeOnly");
-    expect(active?.ctxPayload?.CommandTurn).toMatchObject({
-      kind: "text-slash",
-      authorized: true,
-    });
-    expect(observer).toBeDefined();
-    expect(observer?.ctxPayload?.CommandAuthorized).toBe(false);
-    expect(observer?.ctxPayload?.CommandTurn).toBeUndefined();
-    expect(observer?.ctxPayload?.CommandSource).toBeUndefined();
+    await dispatchBroadcast("broadcast-command", { cfg, event, turnAdoptionLifecycle });
+    expect(mockDispatchReply).toHaveBeenCalledTimes(1);
+    expectClaim(susanClaim, true);
+    expectClaim(mainClaim, true);
+    expectClaim(broadcastClaim, true);
+    await dispatchBroadcast("broadcast-command", { cfg, event, turnAdoptionLifecycle });
+    expect(mockDispatchReply).toHaveBeenCalledTimes(1);
+    expect(turnAdoptionLifecycle.onAdopted).toHaveBeenCalledTimes(1);
+    expect(turnAdoptionLifecycle.onAbandoned).not.toHaveBeenCalled();
   });
 
   it("sends no-visible-reply fallback for active broadcast failed final delivery", async () => {
