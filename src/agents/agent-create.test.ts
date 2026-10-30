@@ -124,6 +124,7 @@ vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
   root: vi.fn(async () => ({ read: mocks.rootRead, write: mocks.rootWrite })),
 }));
 
+import { assertRetainedPostgresAgentStores } from "./agent-create-retained-postgres.js";
 import { checkAgentCreationGate, createAgent } from "./agent-create.js";
 
 function migration(overrides: Partial<LegacyMainSessionMigrationResult> = {}) {
@@ -219,7 +220,7 @@ describe("createAgent", () => {
       const anchor = fileURLToPath(import.meta.url);
       mocks.configuredTargets.mockReturnValue([{ agentId: "researcher", path: anchor }]);
       if (kind === "missing") {
-        mocks.inspectRetainedStore.mockRejectedValue(new Error("namespace missing"));
+        mocks.inspectRetainedStore.mockResolvedValue({ version: 0 });
       } else {
         mocks.inspectRetainedStore.mockResolvedValue({
           version: OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -243,6 +244,39 @@ describe("createAgent", () => {
       expect(mocks.mkdir).not.toHaveBeenCalled();
       expect(mocks.persisted).toEqual({});
       expect(await checkAgentCreationGate("researcher")).toMatchObject({ status: "error" });
+    },
+  );
+
+  it.each(["throw", "reason", "failure"] as const)(
+    "reports an unverifiable PostgreSQL store (%s) without discard advice",
+    async (kind) => {
+      mocks.postgresAgent = true;
+      const anchor = fileURLToPath(import.meta.url);
+      const cause = new Error("connect ECONNREFUSED 127.0.0.1:5432");
+      mocks.configuredTargets.mockReturnValue([{ agentId: "researcher", path: anchor }]);
+      if (kind === "throw") {
+        mocks.inspectRetainedStore.mockRejectedValue(cause);
+      } else {
+        mocks.inspectRetainedStore.mockResolvedValue({
+          version: OPENCLAW_AGENT_SCHEMA_VERSION,
+          ...(kind === "reason" ? { reason: cause.message } : { failure: cause }),
+        });
+      }
+      const result = await createAgent({ name: "researcher" });
+      expect(result).toMatchObject({ status: "error", reason: "already-exists" });
+      const message = "message" in result ? result.message : "";
+      expect(message).toContain(`could not verify retained PostgreSQL store "${anchor}"`);
+      expect(message).toContain(cause.message);
+      expect(message).toContain("database.postgres.connection");
+      expect(message).not.toMatch(/backup restore|move this anchor|sidecars/);
+      expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+      expect(mocks.mkdir).not.toHaveBeenCalled();
+      expect(mocks.persisted).toEqual({});
+      if (kind !== "reason") {
+        await expect(
+          assertRetainedPostgresAgentStores({ config: roster(), agentId: "researcher" }),
+        ).rejects.toHaveProperty("cause", cause);
+      }
     },
   );
 
