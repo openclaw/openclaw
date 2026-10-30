@@ -291,11 +291,13 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     return loadedSkillCommands;
   };
 
-  // These commands need the selected model's transcript or context budget.
+  // These commands need the selected model's transcript, context budget, or tool inventory.
   const needsModelSelection =
     command.isAuthorizedSender &&
     (command.commandBodyNormalized === "/compact" ||
       command.commandBodyNormalized.startsWith("/compact ") ||
+      command.commandBodyNormalized === "/tools" ||
+      command.commandBodyNormalized.startsWith("/tools ") ||
       command.commandBodyNormalized.startsWith("/context "));
   const commandResult = needsModelSelection
     ? { shouldContinue: true, reply: undefined }

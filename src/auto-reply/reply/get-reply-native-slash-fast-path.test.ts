@@ -423,6 +423,53 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["/tools", "/tools verbose"])(
+    "resolves the selected session model inventory for native %s (#188285)",
+    async (body) => {
+      handleCommandsMock.mockResolvedValueOnce({
+        shouldContinue: false,
+        reply: { text: "⚙️ Tools" },
+      });
+
+      const storePath = path.join(tempDirs.make("openclaw-native-tools-"), "sessions.json");
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:main", storePath },
+        {
+          sessionId: "fable-session",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "fable-5",
+          modelOverrideSource: "user",
+          contextTokens: 1_000_000,
+          thinkingLevel: "off",
+        },
+      );
+
+      const typing = createTypingController();
+      const result = await runTestNativeSlashFastReply({
+        ctx: buildNativeCommandCtx(body, {
+          SessionKey: "telegram:slash:123",
+          CommandTargetSessionKey: "agent:main:main",
+        }),
+        cfg: markCompleteReplyConfig(
+          {
+            session: { store: storePath },
+          } as OpenClawConfig,
+          { runtimeMode: "full" },
+        ),
+        typing,
+      });
+
+      expect(result.handled).toBe(true);
+      expect(handleCommandsMock).toHaveBeenCalledOnce();
+      const call: { provider?: string; model?: string } | undefined =
+        handleCommandsMock.mock.calls[0]?.[0];
+      // The session's saved model owns the tool inventory forwarded into command handling.
+      expect(call?.provider).toBe("anthropic");
+      expect(call?.model).toMatch(/fable-5/);
+    },
+  );
+
   it.each<{
     source: "auto" | "user";
     locked: boolean;
