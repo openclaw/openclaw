@@ -9,6 +9,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as harness from "../src/agents/decision-inference.test-support.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { withEnvAsync } from "../src/test-utils/env.js";
+import { VERSION } from "../src/version.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const traceKey = Symbol.for("openclaw.test.onnx-prepared-decisions");
@@ -98,13 +99,14 @@ it("runs the registered native ONNX worker and joins cancellation before replace
   // Observe native processes without supplying a worker or replacing its IPC results.
   const spawned = vi.spyOn(childProcess, "spawn");
   syncBuiltinESMExports();
-  const env = harness.decisionEnv(root);
+  const env = harness.decisionEnv(root, { OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION });
   await withEnvAsync(env, async () => {
     const registry = await harness.activateDecisionRegistry(cfg, {
       env,
       preferBuiltPluginArtifacts: false,
       pluginSdkResolution: "src",
     });
+    expect(registry.decisionProviders.map(({ host }) => host.provider.id)).toContain("onnx");
     const runtime = trace.runtime;
     assert(runtime);
     await using prepared = await harness.prepareDecisionRuntime(cfg, "onnx", modelId);
