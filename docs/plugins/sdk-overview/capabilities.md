@@ -17,6 +17,7 @@ worker, storage, or embedding provider must satisfy. Part of the
 
 | Method                                           | What it registers                                                                 |
 | ------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `api.registerDecisionProvider(...)`              | Typed decision inference with V1 or prepared V2 execution                         |
 | `api.registerProvider(...)`                      | Text inference (LLM)                                                              |
 | `api.registerWorkerProvider(...)`                | Cloud-worker lifecycle leases                                                     |
 | `api.registerStorageProvider(...)`               | Opaque object storage for named locations                                         |
@@ -285,6 +286,37 @@ sort/tag/box questions or other unrepresentable data return `unsupported-input`
 across the V1 boundary. They never become fabricated probabilities or labels.
 Existing V1 providers retain their documented execution contract. External
 plugins adopt V2 only after a host release exports the required V2 SDK surface.
+
+### Provider implementation boundaries
+
+Provider plugins own model eligibility, native input limits, answer semantics,
+and HTTP or worker execution. Keep these decisions in the plugin when separating
+its adapter, codec, and executor:
+
+| Responsibility                                                                       | Owner                   |
+| ------------------------------------------------------------------------------------ | ----------------------- |
+| Versioned evidence, questions, answers, validation, and lossless conversion          | Decision data contracts |
+| Consumer identity, model policy, selection, and accepted usage                       | Runtime coordination    |
+| Capacity, deadlines, circuit state, version bridging, and physical settlement        | Provider host           |
+| Selected route, capabilities, agent/profile credentials, and private transport facts | Prepared inference      |
+| Native protocol mappings, provider eligibility, and transport or worker execution    | Provider plugin         |
+
+Register through `api.registerDecisionProvider` and import contracts from
+`openclaw/plugin-sdk/decisions`. The prepared adapter projects the selected
+model, auth, request, and lifetime facts into plugin-local execution. Pure codecs
+encode requests and decode native responses without resolving credentials,
+selecting routes, performing I/O, or recording usage. Consumers continue to use
+`api.runtime.decisions.evaluateV2`; they do not construct provider contexts.
+Preserving V1 admission with `isDecisionBatchV1Representable` does not require
+converting native execution or results through V1.
+
+For HTTP adapters, retain complete prepared request metadata when checking
+responses for reflected credentials. The existing
+`createProviderCredentialMatcher` helper from `openclaw/plugin-sdk/provider-http`
+can account for replacement-auth headers and prefixes, plus configured header
+names. Structural result validation cannot detect leaked credentials. Preserve
+live admission checks after DNS or queue waits, and await response/transport
+release before settling the operation.
 
 ## Decision models (contract version 1)
 
