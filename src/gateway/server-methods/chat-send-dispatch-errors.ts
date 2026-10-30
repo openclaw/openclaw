@@ -126,6 +126,7 @@ type PendingDispatchLifecycleError = {
   endedAt: number;
   error: string;
   errorKind?: "state_contention";
+  notice?: string;
   sessionId: string;
   lifecycleRevision?: string;
   startedAt: number;
@@ -485,6 +486,29 @@ export function createChatSendDispatchErrorLifecycle(params: {
     }
   };
 
+  /**
+   * Preparation (memory flush, preflight compaction, sandbox setup) can return a
+   * failure before any runtime lifecycle exists. Keep it as this run's durable
+   * terminal so history and other clients show the outcome, not only the live broadcast.
+   */
+  const retainUnstartedFailure = (notice: string | undefined) => {
+    if (suppressLifecycle || params.isAgentRunStarted()) {
+      return;
+    }
+    pendingDispatchLifecycleError = {
+      allowUnstartedFailure: true,
+      terminationFields: {},
+      endedAt: Date.now(),
+      error: notice ?? "agent returned an error payload",
+      // The returned payload is already user-facing copy with its next step.
+      notice,
+      sessionId: getRpcSourceIdentity(activeRunAbort.entry).sessionId,
+      lifecycleRevision:
+        session.entry?.lifecycleRevision ?? admission.initialSessionEntry?.lifecycleRevision,
+      startedAt: getRpcSourceStartedAt(activeRunAbort.entry) ?? now,
+    };
+  };
+
   const finalize = async () => {
     if (params.isReplyDispatchRun?.() && activeRunAbort.entry) {
       // Accepted lifecycle delivery still needs this exact registration and run context.
@@ -571,6 +595,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
               endedAt: dispatchError.endedAt,
               error: dispatchError.error,
               errorKind: dispatchError.errorKind,
+              ...(dispatchError.notice ? { errorNotice: dispatchError.notice } : {}),
               ...dispatchError.terminationFields,
             },
           },
@@ -580,6 +605,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
             runId: clientRunId,
             error: dispatchError.error,
             errorKind: dispatchError.errorKind,
+            notice: dispatchError.notice,
           });
         }
         emitSessionsChanged(context, {
@@ -602,5 +628,5 @@ export function createChatSendDispatchErrorLifecycle(params: {
     }
   };
 
-  return { broadcastError, classifyFailure, finalize, handleError };
+  return { broadcastError, classifyFailure, finalize, handleError, retainUnstartedFailure };
 }

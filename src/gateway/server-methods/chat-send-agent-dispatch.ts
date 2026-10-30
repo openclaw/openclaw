@@ -586,6 +586,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
             (hasReturnedAgentError && (runtimeFailed || !finalizedSourceReply));
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
             if (hasTerminalAgentError && !dispatchResult.collaborativeSteeringRefused) {
+              dispatchErrorLifecycle.retainUnstartedFailure(returnedAgentErrorMessage);
               dispatchErrorLifecycle.broadcastError({
                 errorMessage: returnedAgentErrorMessage,
                 errorKind: runtimeClassification === "timeout" ? "timeout" : undefined,
