@@ -45,10 +45,6 @@ it("loads inspector-only context copy with the panel while keeping the breakdown
     contextFree: "Free space",
     contextUnavailable: "No matching context report. Send a message to capture one.",
     contextReserve: "{tokens} tokens reserved outside this budget",
-    contextCompactDescription: "Replaces older context with a summary.",
-    contextCompact: "Compact session",
-    contextCompacting: "Compacting",
-    contextCompactShort: "Compact",
     contextFreeShort: "{tokens} free",
     contextReserveShort: "+{tokens} reserved",
     contextInputShort: "in",
@@ -111,7 +107,7 @@ it.each([false, true])(
     registerChatSessionEnglish();
 
     expect(manager.t("chat.sessionDetails.contextProject")).toBe("Project");
-    expect(manager.t("chat.sessionDetails.contextCompactShort")).toBe("Compact");
+    expect(manager.t("chat.sessionDetails.contextFreeShort", { tokens: "1k" })).toBe("1k free");
     expect(manager.t("chat.sessionDetails.contextSearch", { category: "Skills" })).toBe(
       "Suchen Skills",
     );

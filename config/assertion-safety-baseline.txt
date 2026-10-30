@@ -153,7 +153,6 @@ extensions/copilot/src/tool-bridge.ts	2
 extensions/copilot/src/workspace-bootstrap.ts	1
 extensions/cua-computer/src/commands.ts	2
 extensions/cua-computer/src/driver-artifact-verification.ts	1
-extensions/cua-computer/src/driver-artifacts.ts	1
 extensions/cua-computer/src/driver-client.ts	9
 extensions/cua-computer/src/driver-result.ts	3
 extensions/cua-computer/src/mcp-driver-client.ts	2
@@ -249,7 +248,7 @@ extensions/fal/video-generation-provider.ts	3
 extensions/feishu/src/accounts.ts	2
 extensions/feishu/src/bitable.ts	1
 extensions/feishu/src/bot-content.ts	1
-extensions/feishu/src/bot.ts	7
+extensions/feishu/src/bot.ts	6
 extensions/feishu/src/card-action.ts	1
 extensions/feishu/src/card-interaction.ts	1
 extensions/feishu/src/channel.ts	4

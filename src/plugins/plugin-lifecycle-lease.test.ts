@@ -10,7 +10,6 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import { createPluginLifecycleLeaseTestClock } from "../gateway/config-reload.test-support.js";
-import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { OpenClawStateLeaseError } from "../state/openclaw-state-lease.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -155,6 +154,20 @@ async function runLeaseChild(
 }
 
 describe("plugin lifecycle lease", () => {
+  it("keeps ownership when synchronous plugin work blocks past the lease duration", async () => {
+    await withOpenClawTestState({ label: "plugin-lifecycle-blocked-parent" }, async (state) => {
+      await withPluginLifecycleLease({ env: state.env, leaseMs: 1_000 }, async (lease) => {
+        // Finalize/repair can synchronously admit a large database while holding this lease.
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_500);
+        lease.assertOwned();
+        expect(lease.signal.aborted).toBe(false);
+      });
+      await expect(
+        withPluginLifecycleLease({ env: state.env, waitMs: 0 }, async () => "released"),
+      ).resolves.toBe("released");
+    });
+  });
+
   it.each(["native", "worker"] as const)(
     "releases retired cache facts while %s resources retain the expired lease",
     async (kind) => {
@@ -448,29 +461,6 @@ describe("plugin lifecycle lease", () => {
         const alphaGoMarker = state.path("alpha-go");
         const betaGoMarker = state.path("beta-go");
         const releaseAlphaMarker = state.path("release-alpha");
-        // Both processes and their SQLite workers share the lease clock for this cache handoff.
-        // Bun's explicit worker env skips inherited preloads in these non-Vitest children.
-        const clockPreload = await state.writeText(
-          "lease-clock.cjs",
-          `Date.now = () => ${Date.now()};
-if (process.versions.bun) {
-  const threads = require("node:worker_threads");
-  const Worker = threads.Worker;
-  threads.Worker = class extends Worker {
-    constructor(url, options) {
-      super(url, { ...options, execArgv: [...(options?.execArgv ?? process.execArgv), "--preload", __filename] });
-    }
-  };
-  require("node:module").syncBuiltinESMExports();
-}
-`,
-        );
-        const childEnv = { ...process.env };
-        for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(clockPreload))) {
-          childEnv[key] = key.endsWith("_OPTIONS")
-            ? [childEnv[key], value].filter(Boolean).join(" ")
-            : value;
-        }
         // A missing database skips worker startup, so prime an existing empty index.
         await seedInstalledPluginIndex({}, { env: state.env, candidates: [] });
         const childScript = await state.writeText(
@@ -478,7 +468,6 @@ if (process.versions.bun) {
           `
           import assert from "node:assert/strict";
           import fs from "node:fs/promises";
-          import { mock } from "node:test";
           import { withPluginLifecycleLease } from ${JSON.stringify(leaseModuleUrl)};
           import {
             loadInstalledPluginIndexInstallRecords,
@@ -488,8 +477,6 @@ if (process.versions.bun) {
           const [pluginId, stateDir, goMarker, releaseAlphaMarker] = process.argv.slice(2);
           process.env.OPENCLAW_STATE_DIR = stateDir;
           const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-          // Exercise cache coherence with real contention, independent of host scheduling delays.
-          mock.method(performance, "now", () => 0);
           async function waitForMarker(marker) {
             while (true) {
               try {
@@ -521,7 +508,7 @@ if (process.versions.bun) {
             }
             const records = await loadInstalledPluginIndexInstallRecords();
             process.stdout.write("records:" + Object.keys(records).sort().join(",") + "\\n");
-            // Reuse prepared fixture metadata; discovery can block the heartbeat during this race.
+            // Reuse prepared fixture metadata so this test exercises only the cache handoff.
             await writePersistedInstalledPluginIndex({
               ...index,
               installRecords: {
@@ -542,18 +529,18 @@ if (process.versions.bun) {
         `,
         );
 
-        const alpha = await runLeaseChild(
-          children,
-          childScript,
-          ["alpha", state.stateDir, alphaGoMarker, releaseAlphaMarker],
-          childEnv,
-        );
-        const beta = await runLeaseChild(
-          children,
-          childScript,
-          ["beta", state.stateDir, betaGoMarker, releaseAlphaMarker],
-          childEnv,
-        );
+        const alpha = await runLeaseChild(children, childScript, [
+          "alpha",
+          state.stateDir,
+          alphaGoMarker,
+          releaseAlphaMarker,
+        ]);
+        const beta = await runLeaseChild(children, childScript, [
+          "beta",
+          state.stateDir,
+          betaGoMarker,
+          releaseAlphaMarker,
+        ]);
         await Promise.all([alpha.ready, beta.ready]);
         await fs.writeFile(alphaGoMarker, "go");
         await alpha.waitForPhase("acquired");
@@ -724,6 +711,7 @@ if (process.versions.bun) {
               }
               try {
                 lease.assertCurrent();
+                lease.assertOwned();
                 publish();
               } finally {
                 clock?.mockRestore();

@@ -1,5 +1,6 @@
-import type { Dialog, Frame, Page } from "playwright";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { reloadDismissingUnloadPrompt } from "../test-helpers/browser-page.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -95,29 +96,7 @@ suite.define(() => {
         const draft = "Synthetic notes.txt content\nKeep this unsaved paragraph.";
         expect(await exactButton(panel, "Save").isEnabled()).toBe(true);
 
-        const reload = async () => {
-          const session = await page.context().newCDPSession(page);
-          const outcome = Promise.withResolvers<string | undefined>();
-          const onDialog = (dialog: Dialog) => {
-            void dialog.dismiss().then(() => outcome.resolve(dialog.type()), outcome.reject);
-          };
-          const onNavigation = (frame: Frame) => {
-            if (frame === page.mainFrame()) {
-              outcome.resolve(undefined);
-            }
-          };
-          page.on("dialog", onDialog);
-          page.on("framenavigated", onNavigation);
-          try {
-            // Cancellation has no navigation to await; observe the native outcome instead.
-            await session.send("Page.reload");
-            return await outcome.promise;
-          } finally {
-            page.off("dialog", onDialog);
-            page.off("framenavigated", onNavigation);
-            await session.detach();
-          }
-        };
+        const reload = () => reloadDismissingUnloadPrompt(page);
         expect(await reload()).toBe("beforeunload");
         expect(await editor.locator(".cm-line").allTextContents()).toEqual(draft.split("\n"));
         await editor.press("End");

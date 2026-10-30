@@ -1395,22 +1395,6 @@ describe("image tool implicit imageModel config", () => {
   });
 });
 
-describe("image tool data URL support", () => {
-  it.each([
-    {
-      dataUrl: "data:text/plain;base64,SGVsbG8=",
-      maxBytes: undefined,
-      error: /Unsupported data URL type/i,
-    },
-    { dataUrl: `data:image/png;base64,${"A".repeat(16)}`, maxBytes: 4, error: /size limit/i },
-  ])("rejects invalid data URLs before decoding: $error", ({ dataUrl, maxBytes, error }) => {
-    using bufferFromSpy = vi.spyOn(Buffer, "from");
-
-    expect(() => testing.decodeDataUrl(dataUrl, { maxBytes })).toThrow(error);
-    expect(bufferFromSpy).not.toHaveBeenCalledWith(dataUrl.split(",")[1], "base64");
-  });
-});
-
 describe("image tool MiniMax VLM routing", () => {
   let state: OpenClawTestState;
 

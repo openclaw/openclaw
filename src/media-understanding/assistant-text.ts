@@ -1,5 +1,7 @@
-import type { AssistantMessage } from "../../llm/types.js";
-import { extractEmbeddedAssistantText } from "../embedded-agent-utils.js";
+import { extractEmbeddedAssistantText } from "../agents/embedded-agent-utils.js";
+import type { AssistantMessage } from "../llm/types.js";
+
+export class MediaAssistantNoTextError extends Error {}
 
 export function createMediaAssistantTextCoercer(kind: "Image" | "PDF") {
   return (params: { message: AssistantMessage; provider: string; model: string }): string => {
@@ -20,6 +22,6 @@ export function createMediaAssistantTextCoercer(kind: "Image" | "PDF") {
     if (text) {
       return text;
     }
-    throw new Error(`${kind} model returned no text (${label}).`);
+    throw new MediaAssistantNoTextError(`${kind} model returned no text (${label}).`);
   };
 }

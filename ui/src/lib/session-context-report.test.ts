@@ -47,7 +47,7 @@ function setup(...reads: Promise<ReturnType<typeof response>>[]) {
     ...gateway.snapshot,
     phase: "connected",
     client,
-    hello: gatewayHelloForMethods(["sessions.usage"]),
+    hello: gatewayHelloForMethods([]),
   });
   return { gateway, publish, request, store: sessionContextReportsForGateway(gateway) };
 }
@@ -59,7 +59,7 @@ it("does not read restricted context breakdowns and retires results across scope
   const setScopes = (scopes: string[]) =>
     publish({
       ...gateway.snapshot,
-      hello: gatewayHelloForMethods(["sessions.usage"], scopes),
+      hello: gatewayHelloForMethods([], scopes),
     });
   request.mockResolvedValue(response());
   setScopes(["operator.sessions.read"]);
