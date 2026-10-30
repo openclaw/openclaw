@@ -16,7 +16,8 @@ vi.mock("@openclaw/fs-safe/watch", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/fs-safe/watch")>()),
 }));
 
-vi.mock("../infra/owned-directory-observation.js", () => ({
+vi.mock("../infra/owned-directory-observation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/owned-directory-observation.js")>()),
   observeOwnedDirectory: vi.fn(() => ({ close: vi.fn(), isWatching: vi.fn(() => true) })),
 }));
 
