@@ -28,6 +28,9 @@ describe("active-memory escalation", () => {
     "지난 번에 우리가 이야기했던 설정은 뭐였어?",
     "그 설정 기억나ㅋㅋ",
     "지난 주에 논의했던 다음 배포 일정 기억나죠?",
+    "Ti ricordi cosa abbiamo deciso per il volo?",
+    "Ne abbiamo parlato ieri e abbiamo scelto l'hotel in centro.",
+    "Come avevamo deciso di configurare il database?",
     "Что мы обсуждали на прошлой неделе?",
     "Напомни, о чём мы договорились в прошлый раз",
     "Помнишь, что мы решили развернуть завтра?",
@@ -108,6 +111,10 @@ describe("active-memory escalation", () => {
     "Rappelle-moi dans une heure de rappeler Ting",
     "Hier on a fait un audit.",
     "J'ai dit que mon cahier était plein.",
+    "Ricordati di comprare il pane domani.",
+    "Domani prenotiamo il volo per Roma.",
+    "La prossima settimana andiamo al mare.",
+    "Parlavo italiano con mia madre.",
   ])("does not mistake ordinary or future-facing %j for recall intent", (message) => {
     expect(hasRecallIntent(message)).toBe(false);
   });
