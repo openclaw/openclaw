@@ -1,4 +1,5 @@
 import type { StopReason } from "../../../packages/llm-core/src/types.js";
+import type { AcquireConfiguredProviderLocalService } from "../../agents/provider-local-service-target.js";
 import type { CreateChannelIngressDrainOptions } from "../../channels/message/ingress-drain.js";
 import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.types.js";
 import type { ConfigMutationBase } from "../../config/mutation-types.js";
@@ -557,15 +558,7 @@ export type PluginRuntimeCore = {
   };
   llm: {
     complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
-    acquireLocalService: (
-      target: {
-        providerId: string;
-        baseUrl: string;
-        headers?: HeadersInit;
-        reconcile?: import("../provider-plugin.types.js").ProviderPlugin["reconcileLocalService"];
-      },
-      signal?: AbortSignal | null,
-    ) => Promise<{ release: () => void } | undefined>;
+    acquireLocalService: AcquireConfiguredProviderLocalService;
   };
   modelConfig: {
     /** Read-only model selection; no session mutation or harness execution authority. */

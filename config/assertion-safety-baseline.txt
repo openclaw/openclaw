@@ -2125,7 +2125,6 @@ src/plugins/manifest.ts	2
 src/plugins/marketplace.ts	5
 src/plugins/memory-runtime.ts	1
 src/plugins/native-module-require.ts	2
-src/plugins/openai-compatible-embedding-provider.ts	1
 src/plugins/plugin-command-dispatch-contract.ts	1
 src/plugins/plugin-command-runtime.ts	1
 src/plugins/plugin-metadata-snapshot.runtime.ts	1

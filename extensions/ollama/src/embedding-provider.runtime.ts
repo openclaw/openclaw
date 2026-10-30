@@ -1,4 +1,5 @@
 import type {
+  AcquireConfiguredProviderLocalService,
   EmbeddingProvider,
   EmbeddingProviderCallOptions,
 } from "openclaw/plugin-sdk/embedding-providers";
@@ -34,17 +35,6 @@ import { resolveOllamaApiBase } from "./provider-models.js";
 
 export type OllamaEmbeddingProvider = EmbeddingProvider;
 
-type MemoryCoreAcquireLocalService = (
-  target: {
-    providerId: string;
-    baseUrl: string;
-    headers?: HeadersInit;
-    /** Reports managed-companion readiness waits; request work stays outside. */
-    onReadinessWait?: (waiting: boolean) => void;
-  },
-  signal?: AbortSignal | null,
-) => Promise<{ release: () => void } | undefined>;
-
 type OllamaEmbeddingOptions = {
   config: OpenClawConfig;
   agentDir?: string;
@@ -59,13 +49,13 @@ type OllamaEmbeddingOptions = {
   local?: unknown;
   dimensions?: number;
   taskType?: unknown;
-  acquireLocalService?: MemoryCoreAcquireLocalService;
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
 };
 
 export type OllamaEmbeddingClient = Omit<RemoteEmbeddingClient, "fetchImpl"> & {
   outputDimensionality?: number;
-  localServiceTarget?: Parameters<MemoryCoreAcquireLocalService>[0];
-  acquireLocalService?: MemoryCoreAcquireLocalService;
+  localServiceTarget?: Parameters<AcquireConfiguredProviderLocalService>[0];
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
   /** Provider ownership permits the guard to check its narrow Podman origin exception. */
   allowPodmanHostGatewayLinkLocal?: boolean;
   embedBatch: (texts: string[]) => Promise<number[][]>;
