@@ -203,6 +203,7 @@ describe("createSlackBoltApp", () => {
         throw new Error("transient");
       }),
     ).rejects.toThrow("transient");
+    expect(client.listenerCount("disconnecting")).toBe(0);
     expect(emit.mock.calls).toEqual([
       ["reconnecting"],
       ["unable_to_socket_mode_start", startError],
@@ -229,8 +230,11 @@ describe("createSlackBoltApp", () => {
         throw new Error("expected a native reconnect scheduler");
       }
 
-      void delayReconnectAttempt.call(client, start);
+      const reconnect = delayReconnectAttempt.call(client, start);
+      expect(client.listenerCount("disconnecting")).toBe(1);
       await gracefulStopSlackApp(app, client);
+      await expect(reconnect).resolves.toBeUndefined();
+      expect(client.listenerCount("disconnecting")).toBe(0);
       await app.start();
       await vi.advanceTimersByTimeAsync(15_000);
 
@@ -240,6 +244,43 @@ describe("createSlackBoltApp", () => {
       vi.useRealTimers();
     }
   });
+
+  it.each([false, true])(
+    "settles Socket Mode startup stopped during a URL retry (late=%s)",
+    async (late) => {
+      vi.useFakeTimers();
+      const response = Promise.withResolvers<Response>();
+      const fetch = vi.fn(() => response.promise);
+      const { app, receiver } = await createSocketApp({ fetch, retryConfig: { retries: 0 } });
+      const controller = new AbortController();
+      const startup = startSlackSocketAndWaitForDisconnect({
+        app,
+        socketClient: receiver.client,
+        abortSignal: controller.signal,
+      });
+      const settled = vi.fn();
+      void startup.then(settled, settled);
+      try {
+        await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+        if (!late) {
+          response.resolve(Response.json({ ok: false, error: "internal_error" }));
+          await vi.waitFor(() =>
+            expect(Reflect.get(receiver.client, "reconnectionTimer")).toBeDefined(),
+          );
+        }
+        controller.abort();
+        await gracefulStopSlackApp(app, receiver.client);
+        response.resolve(Response.json({ ok: false, error: "internal_error" }));
+        await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce());
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(fetch).toHaveBeenCalledOnce();
+      } finally {
+        response.resolve(Response.json({ ok: false, error: "internal_error" }));
+        await gracefulStopSlackApp(app, receiver.client);
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("recovers a transient error and close through one real SDK socket lifecycle", async () => {
     const fixture = await createSocketServer();
