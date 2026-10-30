@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { DecisionProviderHost } from "../decisions/provider-host.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import { runGatewayCloseSteps } from "../gateway/server-shutdown.js";
@@ -226,7 +227,7 @@ describe("setActivePluginRegistry", () => {
     }
   });
 
-  it("does not cancel successor decisions when its predecessor finally retires", async () => {
+  it("does not cancel successor decisions when its predecessor finally retires", async (ctx) => {
     const previous = createEmptyPluginRegistry();
     const consumer = createPluginRecord({ id: "decision-consumer" });
     const provider = createPluginRecord({ id: "decision-provider" });
@@ -276,10 +277,18 @@ describe("setActivePluginRegistry", () => {
       "fixture-v1",
       { agents: { defaults: { decisionModel: "fixture/fixture-v1" } } },
       next,
+      1,
       consumer.id,
     );
     try {
-      const signal = await entered.promise;
+      const signal = await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Decision provider settled before entering evaluation",
+        ),
+        ctx.signal,
+      );
       expect(providerInstance.owner?.registry).toBe(next);
       hold.release();
       await waitForPluginRegistryRetirement(previous);
