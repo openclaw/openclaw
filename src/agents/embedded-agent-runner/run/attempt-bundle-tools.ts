@@ -6,6 +6,7 @@ import {
   acquireSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
+import { readWebchatMcpRequester } from "../../agent-bundle-mcp-webchat-requester.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
@@ -125,6 +126,10 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       });
     },
   });
+  const webchatRequester =
+    bundleMcpEnabled && !params.attempt.senderId?.trim()
+      ? readWebchatMcpRequester(params.attempt)
+      : undefined;
   const bundleMcpAcquisition = bundleMcpEnabled
     ? await acquireSessionMcpRuntime({
         ...mcpConfig,
@@ -132,10 +137,10 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         sessionKey: params.attempt.sessionKey,
         agentId: params.setup.sessionAgentId,
         agentDir: params.agentDir,
-        // senderId is only set from the verified inbound sender (sessionCtx.SenderId
-        // or the triggering run's sender on follow-ups). Cron/subagent runs
-        // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
-        requesterSenderId: params.attempt.senderId,
+        // Webchat has no transport SenderId. Its exact live direct-turn owner
+        // supplies the authenticated profile without rewriting channel attribution.
+        requesterSenderId: params.attempt.senderId?.trim() || webchatRequester?.requesterSenderId,
+        assertRequesterCurrent: webchatRequester?.assertCurrent,
         agentAccountId: params.attempt.agentAccountId,
         messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
       })
@@ -143,6 +148,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   const bundleMcpRuntime = bundleMcpAcquisition
     ? await materializeBundleMcpToolsForRun({
         ...bundleMcpAcquisition,
+        assertRequesterCurrent: webchatRequester?.assertCurrent,
         agentId: params.setup.sessionAgentId,
         reservedToolNames: [
           ...tools.map((tool) => tool.name),

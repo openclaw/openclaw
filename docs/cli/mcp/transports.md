@@ -154,6 +154,13 @@ The per-requester flow is sender-driven:
 2. OpenClaw returns a sign-in link for that sender instead of exposing another sender's credentials.
 3. The provider redirects through the Gateway callback. After the callback succeeds, the sender retries the tool call with their connected account.
 
+In authenticated Control UI Webchat, the sender is the signed-in user profile for the
+current direct turn. Ask the agent to connect the server to get your personal
+sign-in link. Settings → MCP and the CLI manage operator credentials, not this
+personal connection. Background jobs and subagents do not borrow a Webchat
+participant's account. If several people steer the same ongoing turn, start a new
+turn before requesting a personal sign-in link.
+
 If `gateway.publicOrigin` is missing, the sign-in result names that setting and `openclaw doctor` reports the same operator fix. `openclaw mcp login` and `openclaw mcp logout` remain operator-only commands for shared credentials; they do not manage per-requester accounts.
 
 Sign-in links are single-use bearer links: any chat participant who opens one connects their own account to the sender the link was issued for. Use per-requester OAuth in channels where every trusted sender is mutually trusted; a requester-private sign-in handoff is tracked as follow-up work.

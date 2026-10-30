@@ -1,6 +1,7 @@
 /** Module-level session MCP runtime manager entry APIs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { getBoundLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -8,6 +9,7 @@ import {
   releaseSessionMcpRuntime,
 } from "./agent-bundle-mcp-manager-cleanup.js";
 import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
+import { runWithSessionMcpToolCallAuthority } from "./agent-bundle-mcp-request-context.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   McpToolCatalog,
@@ -35,6 +37,7 @@ export function setSessionMcpRuntimeScheduler(scheduler: GatewayScheduler): Prom
 
 async function acquireManagedRuntime<T extends SessionMcpRuntimeLease | undefined>(
   acquire: (manager: SessionMcpRuntimeManager) => Promise<T>,
+  assertRequesterCurrent?: () => void,
 ): Promise<T> {
   const host = getBoundLegacyPluginSdkResourceHost();
   const scheduler = host?.scheduler;
@@ -43,10 +46,19 @@ async function acquireManagedRuntime<T extends SessionMcpRuntimeLease | undefine
     host?.assertOpen();
     scheduler.signal.throwIfAborted();
   }
-  const lease = await acquire(getSessionMcpRuntimeManager());
+  let lease: T | undefined;
   try {
+    lease = await withGuardedFetchRequestAuthority(assertRequesterCurrent, () =>
+      runWithSessionMcpToolCallAuthority(assertRequesterCurrent, () =>
+        acquire(getSessionMcpRuntimeManager()),
+      ),
+    );
     host?.assertOpen();
     scheduler?.signal.throwIfAborted();
+    assertRequesterCurrent?.();
+    if (lease && assertRequesterCurrent) {
+      return { ...lease, assertRequesterCurrent };
+    }
     return lease;
   } catch (error) {
     if (lease) {
@@ -57,9 +69,12 @@ async function acquireManagedRuntime<T extends SessionMcpRuntimeLease | undefine
 }
 
 export function acquireSessionMcpRuntime(
-  params: Parameters<SessionMcpRuntimeManager["acquire"]>[0],
+  params: Parameters<SessionMcpRuntimeManager["acquire"]>[0] & {
+    assertRequesterCurrent?: () => void;
+  },
 ): Promise<SessionMcpRuntimeLease> {
-  return acquireManagedRuntime((manager) => manager.acquire(params));
+  const { assertRequesterCurrent, ...runtimeParams } = params;
+  return acquireManagedRuntime((manager) => manager.acquire(runtimeParams), assertRequesterCurrent);
 }
 
 /**
@@ -67,9 +82,15 @@ export function acquireSessionMcpRuntime(
  * Shared-thread harnesses use this so static MCP stays harness-native.
  */
 export function acquireRequesterScopedMcpRuntime(
-  params: Parameters<SessionMcpRuntimeManager["acquireRequesterScoped"]>[0],
+  params: Parameters<SessionMcpRuntimeManager["acquireRequesterScoped"]>[0] & {
+    assertRequesterCurrent?: () => void;
+  },
 ): Promise<RequesterScopedMcpRuntimeHandle | undefined> {
-  return acquireManagedRuntime((manager) => manager.acquireRequesterScoped(params));
+  const { assertRequesterCurrent, ...runtimeParams } = params;
+  return acquireManagedRuntime(
+    (manager) => manager.acquireRequesterScoped(runtimeParams),
+    assertRequesterCurrent,
+  );
 }
 
 export function rememberAdvertisedScopedMcpCatalog(

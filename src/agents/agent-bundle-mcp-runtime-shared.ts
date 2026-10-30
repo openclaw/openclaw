@@ -37,10 +37,21 @@ export function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number 
 export function shouldLoadRequesterScopedMcpHarnessRuntime(params: {
   sessionId: string;
   requesterSenderId?: string | null;
+  policyContext?: {
+    operatorProfileId?: string;
+    messageChannel?: string | null;
+    messageProvider?: string | null;
+  };
 }): boolean {
-  if (params.requesterSenderId?.trim()) {
+  // This is a load hint only. The runtime requires the host's live turn capture.
+  if (
+    params.requesterSenderId?.trim() ||
+    (params.policyContext?.operatorProfileId &&
+      (params.policyContext.messageChannel ?? params.policyContext.messageProvider) === "webchat")
+  ) {
     return true;
   }
+
   const manager = (globalThis as Record<PropertyKey, unknown>)[SESSION_MCP_RUNTIME_MANAGER_KEY] as
     | SessionMcpRuntimeManager
     | undefined;

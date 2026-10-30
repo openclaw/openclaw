@@ -99,7 +99,10 @@ export type RequesterMcpConnect = {
   catalog: McpToolCatalog;
   authorizedServerNames: readonly string[];
   configFingerprint: string;
-  createExecute: (serverName: string) => AnyAgentTool["execute"] | undefined;
+  createExecute: (
+    serverName: string,
+    options?: { assertCurrent: () => void },
+  ) => AnyAgentTool["execute"] | undefined;
 };
 
 type PreparedNativeMcpServerPolicy = {
@@ -202,6 +205,8 @@ export type SessionMcpRuntime = {
 export type SessionMcpRuntimeLease = {
   runtime: SessionMcpRuntime;
   releaseLease: () => void;
+  /** Per-run requester fence; never retained on the shared session runtime. */
+  assertRequesterCurrent?: () => void;
   /** Retires unleased discovery servers outside the final prepared bundle. */
   retireUnusedServers?: (retainedServerNames: ReadonlySet<string>) => Promise<void>;
 };

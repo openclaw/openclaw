@@ -26,6 +26,7 @@ import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../admitted-run-context.js";
+import { captureWebchatMcpRequester } from "../agent-bundle-mcp-webchat-requester.js";
 import { getControllerEmbeddedAttachment } from "../embedded-agent-runner/run-state.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { captureRequesterOrigin, hasSameRequesterOrigin } from "../requester-origin.js";
@@ -311,6 +312,13 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
         sessionKey,
         operationalRunInstance: instance,
         personalToolParticipants,
+        webchatMcpRequester: captureWebchatMcpRequester({
+          ...attempt,
+          admittedRunContext: admitted,
+          replyOperation: operation,
+          toolAuthorityFingerprint: fingerprint,
+          trigger: internal.trigger,
+        }),
         watchdogAttempt,
         requesterOrigin,
         receiptAuthority: assertReplyActive,

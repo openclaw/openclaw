@@ -51,6 +51,37 @@ export function consumeMcpCodeModeGuestResult(result: AgentToolResult<unknown>):
   return safe;
 }
 
+export function projectMcpJsonAgentToolResult(params: {
+  serverName: string;
+  operation: string;
+  value: unknown;
+}): AgentToolResult<unknown> {
+  const publicValue = toToolSearchJsonSafe(
+    params.operation === "resources_list" && Array.isArray(params.value)
+      ? { resources: params.value }
+      : params.operation === "prompts_list" && Array.isArray(params.value)
+        ? { prompts: params.value }
+        : params.value,
+  );
+  if (isRecord(publicValue)) {
+    delete publicValue._meta;
+  }
+  const result: AgentToolResult<unknown> = {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(publicValue, null, 2),
+      },
+    ],
+    details: {
+      mcpServer: params.serverName,
+      mcpOperation: params.operation,
+      untrustedMcpOutput: true,
+    },
+  };
+  return setMcpCodeModeGuestResult(result, publicValue);
+}
+
 function stringifyMcpContent(value: unknown): string {
   try {
     return JSON.stringify(value) ?? String(value);

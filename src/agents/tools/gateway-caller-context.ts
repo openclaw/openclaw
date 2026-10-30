@@ -34,6 +34,7 @@ import {
   type AdmittedRunContext,
   type OperationalRunInstanceRef,
 } from "../admitted-run-context.js";
+import type { WebchatMcpRequester } from "../agent-bundle-mcp-webchat-requester.types.js";
 import { wrapAgentToolExecutionContext } from "../agent-tool-metadata.js";
 import {
   captureActiveEmbeddedRunPersonalToolParticipants,
@@ -51,6 +52,8 @@ type ReceiptAuthority = (() => boolean | void) &
   Pick<SessionSourceAssertion, keyof SessionSourceAssertion>;
 
 type GatewayToolCallerIdentity = {
+  /** Exact direct-turn owner captured before private harness state is projected away. */
+  webchatMcpRequester?: WebchatMcpRequester;
   watchdogAttempt?: SessionControllerWatchdogAttempt;
   personalToolParticipants?: ReplyTurnParticipants;
   personalToolUser?: string;
@@ -373,6 +376,7 @@ export function withGatewayToolOperatorContinuation<T>(
     {
       ...caller,
       personalToolParticipants: undefined,
+      webchatMcpRequester: undefined,
       personalToolUser: undefined,
       personalToolIdentityScoped: true,
       personalToolSelection: Object.freeze({
@@ -609,6 +613,7 @@ export async function withGatewayToolCallerIdentity<T>(
       workspacePrAdoptionSessionId: inheritedValue("workspacePrAdoptionSessionId"),
       workspaceEvidenceSandbox: inheritedValue("workspaceEvidenceSandbox"),
       personalToolParticipants: inheritedValue("personalToolParticipants"),
+      webchatMcpRequester: inheritedValue("webchatMcpRequester"),
       personalToolUser: inheritedValue("personalToolUser"),
       personalToolIdentityScoped: inheritedValue("personalToolIdentityScoped"),
       personalToolSelection: inheritedValue("personalToolSelection"),
