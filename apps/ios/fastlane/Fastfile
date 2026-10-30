@@ -2466,6 +2466,7 @@ platform :ios do
           "-derivedDataPath", derived_data_path,
           "-destination", "generic/platform=iOS Simulator",
           "ARCHS=#{RbConfig::CONFIG.fetch("host_cpu")}", "ONLY_ACTIVE_ARCH=YES",
+          "COMPILER_INDEX_STORE_ENABLE=NO",
           "-allowProvisioningUpdates", "build-for-testing"
         ],
         log_path: File.join(log_directory, "build.log")
