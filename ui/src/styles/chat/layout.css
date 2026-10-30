@@ -1367,6 +1367,14 @@ openclaw-chat-video-player {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
+.chat-bubble .chat-audio-player__seek::-webkit-slider-thumb {
+  border-color: var(--chat-attachment-surface, var(--card));
+}
+
+.chat-bubble .chat-audio-player__seek::-moz-range-thumb {
+  border-color: var(--chat-attachment-surface, var(--card));
+}
+
 .chat-audio-player__seek:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 4px;

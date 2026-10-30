@@ -34,7 +34,6 @@ export function renderSessionSection(params: {
     host,
     () => !(section().renderHeader && host().collapsedSessionSections.has(section().id)),
   );
-  const totalRowCount = createMemo(() => section().totalRowCount);
   const group = createMemo(() => section().category);
   // Created rows lead their section, so a create for this group takes that slot now.
   const pendingCreate = createMemo(() => {
@@ -191,13 +190,9 @@ export function renderSessionSection(params: {
   const labelText = createMemo(() =>
     renderHoverMarquee(label(), "sidebar-recent-sessions__label-text"),
   );
-  const showCount = createMemo(() => collapsed() && totalRowCount() > 0);
   const headerStatus = createMemo(() =>
-    showCount() || collapsedRunningDot() || collapsedAttentionDot() ? (
+    collapsedRunningDot() || collapsedAttentionDot() ? (
       <>
-        {showCount() ? (
-          <span class="sidebar-session-group-count">{totalRowCount()}</span>
-        ) : undefined}
         {collapsedRunningDot() ? (
           <span
             class="session-run-spinner sidebar-session-group-running"

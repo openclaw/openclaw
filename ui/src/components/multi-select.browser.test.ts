@@ -236,14 +236,14 @@ it("selects the visible highlight when a catalog refresh shortens the open list"
 });
 it("finds and selects a model by its displayed description", async () => {
   const { element, props } = await createMultiSelect({
-    options: [{ value: "fixture/backup", label: "Backup", description: "Regional endpoint" }],
+    options: [{ value: "fixture/backup", label: "Backup", description: "Cafe\u0301 endpoint" }],
     value: [],
     allowCustom: false,
   });
-  await typeText(element, "endpoint");
+  await typeText(element, "Café");
   expect(values(element, "option")).toEqual(["fixture/backup"]);
   expect(element.querySelector(".picker-select__description")?.textContent).toBe(
-    "Regional endpoint",
+    "Cafe\u0301 endpoint",
   );
   await pressKey(element, "Enter");
   expect(props.onChange).toHaveBeenCalledExactlyOnceWith(["fixture/backup"]);

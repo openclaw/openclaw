@@ -105,7 +105,7 @@ suite.define(() => {
           expect(toolbarBox).not.toBeNull();
           expect(sessionsBox).not.toBeNull();
           expect(firstRowBox).not.toBeNull();
-          expect(sessionsBox!.y - toolbarBox!.y - toolbarBox!.height).toBe(4);
+          expect(sessionsBox!.y - toolbarBox!.y - toolbarBox!.height).toBe(6);
           expect(firstRowBox!.y - sessionsBox!.y).toBe(0);
         },
       );

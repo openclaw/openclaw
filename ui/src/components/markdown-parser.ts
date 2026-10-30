@@ -343,7 +343,7 @@ export function createMarkdownParser(): MarkdownItParser {
 
   markdownParser.core.ruler.after("linkify-cjk-trim", "file-links", (state) => {
     const env = state.env as Partial<MarkdownRenderEnv> | undefined;
-    if (env?.fileLinks !== true) {
+    if (env?.fileLinks !== true && !env?.documentFileLinks) {
       return;
     }
     const decorations: MarkdownFileLinkDecoration[] = [];
@@ -385,15 +385,21 @@ export function createMarkdownParser(): MarkdownItParser {
             } catch {
               // Keep the raw href when malformed percent escapes cannot be decoded.
             }
-            if (!decodedHref.includes("://")) {
+            // Query values may contain URLs; selection parsing owns the destination's scheme check.
+            if (env.documentFileLinks === "select" || !decodedHref.includes("://")) {
               const documentTarget = env.documentFileLinks
-                ? parseMarkdownDocumentFileLinkTarget(href)
+                ? parseMarkdownDocumentFileLinkTarget(
+                    href,
+                    env.documentFileLinks === "select" ? "select" : "read",
+                  )
                 : null;
               const target =
                 documentTarget ??
-                parseMarkdownFileLinkTarget(decodedHref, { authored: true }) ??
-                (isHostLocalMarkdownFileHref(decodedHref)
-                  ? splitMarkdownFileLineSuffix(decodedHref.trim())
+                (env.fileLinks
+                  ? (parseMarkdownFileLinkTarget(decodedHref, { authored: true }) ??
+                    (isHostLocalMarkdownFileHref(decodedHref)
+                      ? splitMarkdownFileLineSuffix(decodedHref.trim())
+                      : null))
                   : null);
               if (target) {
                 token.attrs = token.attrs?.filter(([name]) => name !== "href") ?? null;
@@ -416,7 +422,7 @@ export function createMarkdownParser(): MarkdownItParser {
           linkDepth = Math.max(0, linkDepth - 1);
           continue;
         }
-        if (linkDepth > 0) {
+        if (linkDepth > 0 || !env.fileLinks) {
           continue;
         }
         if (token.type === "code_inline") {

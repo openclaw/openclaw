@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { lookup } from "node:dns/promises";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
+import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { evaluate } from "./client.js";
@@ -128,7 +129,14 @@ it.each(["127.0.0.1", "localhost", "[::1]"])("reuses local %s sockets", async (h
     if (hostname === "localhost") {
       vi.mocked(lookup).mockRejectedValue(new Error("Synthetic untrusted localhost resolver"));
     }
-    const provider = registeredProvider(`http://${hostname}:${address.port}`);
+    const endpoint = `http://${hostname}:${address.port}`;
+    // Prepare Gateway policy before the per-request deadlines; cold admission has separate tests.
+    resolveProviderHttpRequestConfigWithOriginTrust({
+      provider: "typesafe",
+      baseUrl: `${endpoint}/v1`,
+      defaultBaseUrl: `${endpoint}/v1`,
+    });
+    const provider = registeredProvider(endpoint);
     expect(provider.isReady?.()).toBe(true);
     for (let attempt = 0; attempt < 5; attempt += 1) {
       await expect(provider.evaluate(decisionBatch, decisionContext(input.model))).resolves.toEqual(

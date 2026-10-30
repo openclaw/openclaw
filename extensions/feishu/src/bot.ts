@@ -1158,7 +1158,7 @@ export async function handleFeishuMessage(params: {
             readAllowFromStore: pairing.readAllowFromStore,
             senderOpenId: ctx.senderOpenId,
             senderUserId,
-            conversationId: ctx.senderOpenId,
+            conversationId: ctx.chatId,
             mayPair: false,
             contextBinding,
           });

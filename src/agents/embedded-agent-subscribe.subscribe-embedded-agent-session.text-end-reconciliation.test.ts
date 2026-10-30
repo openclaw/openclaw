@@ -286,9 +286,9 @@ it("preserves split reply directives after a delivered chunk through text_end", 
   const text = "Visible text.\n[[reply_to:target]]Bye";
   const message = assistant([text]);
   h.update(message, { type: "text_end", content: text, partial: message });
-  await h.flush(["Visible text.", "Bye"]);
+  await h.flush(["Visible text.", "\nBye"]);
   expect(h.onBlockReply.mock.calls.at(-1)?.[0]).toMatchObject({
-    text: "Bye",
+    text: "\nBye",
     replyToId: "target",
     replyToTag: true,
   });

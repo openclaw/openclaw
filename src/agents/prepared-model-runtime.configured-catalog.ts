@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
-import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import { assignProviderModelOrder } from "./model-catalog-order.js";
@@ -23,7 +22,6 @@ export function prepareConfiguredRuntimeFacts(params: {
   };
   workspaceFacts: {
     pluginMetadataSnapshot: PluginMetadataSnapshot;
-    inlineProviderModels: readonly InlineModelEntry[];
   };
   templateModelRegistry: ModelRegistry;
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
@@ -84,7 +82,6 @@ export function prepareConfiguredRuntimeFacts(params: {
     templateModelRegistry,
     modelCatalog,
     configuredRuntimeModels: params.configuredRuntimeModels,
-    inlineProviderModels: params.workspaceFacts.inlineProviderModels,
   };
 }
 

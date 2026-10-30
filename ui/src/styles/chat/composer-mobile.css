@@ -136,6 +136,16 @@
   margin-block-start: -7px;
 }
 
+/* The rail already carries the editor inset and remove-target slop; cancel
+   the one-line row padding so the chips sit where editing places them. */
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__composer-lede
+  > .chat-attachments-preview {
+  width: calc(100% + 16px);
+  max-width: none;
+  margin: calc(-7px - var(--chat-attachment-hit-slop)) -8px 0;
+}
+
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
   .agent-chat__composer-input-row {
   grid-column: 2;

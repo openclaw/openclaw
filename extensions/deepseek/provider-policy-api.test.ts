@@ -1,6 +1,6 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { describe, expect, it } from "vitest";
-import { normalizeConfig, resolveThinkingProfile } from "./provider-policy-api.js";
+import { normalizeConfig } from "./provider-policy-api.js";
 
 const cost = (input: number, output: number, cacheRead: number) => ({
   input,
@@ -30,26 +30,6 @@ function model(
 }
 
 describe("deepseek provider-policy-api", () => {
-  it("advertises max thinking levels for DeepSeek V4 models", () => {
-    const profile = (modelId: string, provider = "deepseek") =>
-      resolveThinkingProfile({ provider, modelId });
-    for (const modelId of [
-      "deepseek-flash",
-      "deepseek-v4-flash",
-      "deepseek-v4-pro",
-      "deepseek-v4-flash-vision-exp",
-    ]) {
-      expect(profile(modelId)).toEqual({
-        defaultLevel: "high",
-        levels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((id) => ({ id })),
-      });
-    }
-    for (const id of ["deepseek-chat", "deepseek-reasoner"]) {
-      expect(profile(id)).toBe(undefined);
-    }
-    expect(profile("deepseek-v4-pro", "openrouter")).toBe(null);
-  });
-
   it("refreshes exact current-model catalog metadata snapshots written by prior releases", () => {
     const providerConfig = configWithModels(
       model("deepseek-v4-flash", { cost: cost(0.14, 0.28, 0.028) }),

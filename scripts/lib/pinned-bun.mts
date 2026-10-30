@@ -18,6 +18,8 @@ type PinnedBunDeps = {
   arch: string;
   homedir: () => string;
   stage: (destination: string, platform: string, arch: string) => void;
+  /** Offline isolation rehashes admitted bytes without staging or cache writes. */
+  preparedOnly?: boolean;
 };
 
 // Prepared worker copies still consume the checkout's pin and stager.
@@ -36,6 +38,16 @@ const defaults: PinnedBunDeps = {
     );
   },
 };
+
+function readPin(deps: PinnedBunDeps): BunPin {
+  return JSON.parse(
+    deps.fs.readFileSync(path.join(deps.repoRoot, "scripts/lib/openclaw-bun.json"), "utf8"),
+  );
+}
+
+function matchesPinnedBytes(file: string, expected: string, deps: PinnedBunDeps): boolean {
+  return createHash("sha256").update(deps.fs.readFileSync(file)).digest("hex") === expected;
+}
 
 export function isCiEnvironment(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.CI && env.CI !== "false");
@@ -67,9 +79,7 @@ export function resolvePinnedBun(
     return { reason: `unsupported platform ${target}` };
   }
   try {
-    const pin: BunPin = JSON.parse(
-      deps.fs.readFileSync(path.join(deps.repoRoot, "scripts/lib/openclaw-bun.json"), "utf8"),
-    );
+    const pin = readPin(deps);
     const artifact = pin.artifacts[target];
     if (!artifact) {
       return { reason: `no pinned artifact for ${target}` };
@@ -98,19 +108,26 @@ export function resolvePinnedBun(
         // Old or interrupted caches are verified once before reuse.
       }
       if (
+        !deps.preparedOnly &&
         stamp?.executableSha256 === expected.executableSha256 &&
         stamp?.size === expected.size &&
         stamp?.mtimeMs === expected.mtimeMs
       ) {
         return { command };
       }
-      const digest = createHash("sha256").update(deps.fs.readFileSync(command)).digest("hex");
-      if (digest === artifact.executableSha256) {
-        deps.fs.writeFileSync(stampPath, JSON.stringify(expected));
+      if (matchesPinnedBytes(command, artifact.executableSha256, deps)) {
+        if (!deps.preparedOnly) {
+          deps.fs.writeFileSync(stampPath, JSON.stringify(expected));
+        }
         return { command };
       }
     } catch {
       // A missing or damaged cache is repaired by the checksum-verifying stager.
+    }
+    if (deps.preparedOnly) {
+      return {
+        reason: "prepared pinned Bun is missing or corrupt; offline invocation will not stage it",
+      };
     }
     deps.fs.mkdirSync(path.join(directory, "bin"), { recursive: true });
     const staging = deps.fs.mkdtempSync(path.join(directory, ".stage-"));
@@ -130,8 +147,12 @@ export function resolvePinnedBun(
   }
 }
 
-export function requirePinnedBun(env: NodeJS.ProcessEnv = process.env): string {
-  const result = resolvePinnedBun(env);
+export function requirePinnedBun(
+  env: NodeJS.ProcessEnv = process.env,
+  overrides: Partial<PinnedBunDeps> = {},
+): string {
+  const deps = { ...defaults, ...overrides };
+  const result = resolvePinnedBun(env, overrides);
   const ciJob = isCiEnvironment(env)
     ? `CI job ${env.GITHUB_JOB || env.OPENCLAW_VITEST_SHARD_NAME || "unknown"}: `
     : "";
@@ -141,11 +162,21 @@ export function requirePinnedBun(env: NodeJS.ProcessEnv = process.env): string {
   if (!result.command) {
     throw new Error(`[openclaw] ${ciJob}Bun fork unavailable (${result.reason}). ${recovery}`);
   }
-  if (ciJob) {
+  if (ciJob || deps.preparedOnly) {
     try {
-      const pin: BunPin = JSON.parse(
-        fs.readFileSync(path.join(repoRoot, "scripts/lib/openclaw-bun.json"), "utf8"),
-      );
+      const pin = readPin(deps);
+      if (deps.preparedOnly) {
+        const expected = pin.artifacts[`${deps.platform}-${deps.arch}`]?.executableSha256;
+        if (
+          !path.isAbsolute(result.command) ||
+          deps.fs.realpathSync(result.command) !== result.command ||
+          !deps.fs.lstatSync(result.command).isFile() ||
+          !expected ||
+          !matchesPinnedBytes(result.command, expected, deps)
+        ) {
+          throw new Error("prepared Bun must be a physical executable matching the pinned SHA-256");
+        }
+      }
       const revision = execFileSync(result.command, ["--revision"], {
         env,
         encoding: "utf8",

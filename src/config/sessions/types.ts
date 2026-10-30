@@ -674,6 +674,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Written only by committed graceful shutdown, consumed by the next startup. */
   resumeAfterRestart?: { queuedInputIds: string[]; hadBackgroundExec?: true };
+  /** Upgrade-only cycle; remove once stable includes the restart redesign (#185730). */
+  mainRestartRecovery?: { cycleId: string };
 };
 
 export interface InternalSessionEntry extends InternalSessionEntryCore {}

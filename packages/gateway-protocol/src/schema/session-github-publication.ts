@@ -312,6 +312,75 @@ export const SessionGitHubStatusParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   requestId: PersonalGitHubGenerationSchema,
 });
+export const SessionGitHubReadinessParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  requestId: Type.Optional(PersonalGitHubGenerationSchema),
+});
+const SharedPublicationObservationSchema = Type.Union([
+  closedObject(
+    Type.Omit(SessionGitHubPublicationRequestedSchema, ["publisher", "message"]).properties,
+  ),
+  closedObject(
+    Type.Omit(SessionGitHubPublicationPublishingSchema, ["publisher", "message"]).properties,
+  ),
+  closedObject(Type.Omit(SessionGitHubPublicationPublishedSchema, ["publisher"]).properties),
+  closedObject(
+    Type.Omit(SessionGitHubPublicationFailedSchema, ["publisher", "message", "nextAction"])
+      .properties,
+  ),
+]);
+export const SessionGitHubReadinessResultSchema = closedObject({
+  policy: closedObject({ read: Type.Literal("admitted"), write: Type.Literal("unknown") }),
+  custody: Type.Union([
+    closedObject({
+      kind: Type.Literal("qualified"),
+      source: stringLiteralUnion(["worktree", "repository", "imported-pr"]),
+    }),
+    closedObject({ kind: stringLiteralUnion(["unbound_workspace", "archived", "changed"]) }),
+    closedObject({ kind: Type.Literal("unknown"), reason: Type.Literal("unavailable") }),
+  ]),
+  target: Type.Union([
+    closedObject({
+      kind: Type.Literal("supported"),
+      basis: stringLiteralUnion([
+        "registered-repository",
+        "repository-url",
+        "prepared-imported-pr",
+      ]),
+      freshness: stringLiteralUnion(["observed", "cached"]),
+    }),
+    closedObject({ kind: Type.Literal("unsupported") }),
+    closedObject({
+      kind: Type.Literal("unknown"),
+      reason: stringLiteralUnion(["not-qualified", "unavailable"]),
+    }),
+  ]),
+  request: Type.Union([
+    closedObject({
+      kind: Type.Literal("observed"),
+      selection: stringLiteralUnion(["exact", "current"]),
+      receipt: SharedPublicationObservationSchema,
+    }),
+    closedObject({ kind: Type.Literal("none"), selection: Type.Literal("current") }),
+    closedObject({
+      kind: Type.Literal("unknown"),
+      reason: stringLiteralUnion(["unavailable", "not-observable"]),
+      selectedRequestId: Type.Optional(PersonalGitHubGenerationSchema),
+    }),
+  ]),
+  remedies: Type.Array(
+    Type.Union([
+      closedObject({ kind: Type.Literal("select_bound_session") }),
+      closedObject({ kind: Type.Literal("inspect_source") }),
+      closedObject({ kind: Type.Literal("retry_read") }),
+      closedObject({ kind: Type.Literal("observe_request"), requestId: NonEmptyString }),
+    ]),
+    { maxItems: 3 },
+  ),
+});
+export type SessionGitHubReadinessResult = Static<typeof SessionGitHubReadinessResultSchema>;
+
 export const SessionGitHubConfirmParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),

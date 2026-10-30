@@ -3,6 +3,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import {
   addDiffReadDurations,
@@ -146,7 +147,7 @@ function createReadCache<Input, Output>(
     const environment = preparedEnvironment ?? gitEnvironment();
     const key = preparedKey ?? JSON.stringify([input, environment]);
     let entry = entries.get(key)?.entry;
-    const waitingToRetry = !options.refresh && (entry?.retryAt ?? 0) > Date.now();
+    const waitingToRetry = !options.refresh && (entry?.retryAt ?? 0) > monotonicNow();
     let currentRevision = waitingToRetry ? entry!.revision : undefined;
     let preparedRevision: GitReadOperations["checkout.revision"]["output"] | undefined;
     if (revision && !waitingToRetry) {
@@ -194,7 +195,7 @@ function createReadCache<Input, Output>(
       (options.refresh && (currentRevision === null || entry?.retryAt !== undefined)) ||
       !entry ||
       entry.revision !== currentRevision ||
-      (entry.expiresAt <= Date.now() && (!(snapshot || joinPending) || !entry.pending))
+      (entry.expiresAt <= monotonicNow() && (!(snapshot || joinPending) || !entry.pending))
     ) {
       if (snapshot && pending.size >= MAX_CACHED_CHECKOUTS) {
         return entry?.value ?? snapshot.empty();
@@ -208,7 +209,7 @@ function createReadCache<Input, Output>(
         expiresAt:
           retainedFreshnessMs === 0
             ? Number.POSITIVE_INFINITY
-            : Date.now() +
+            : monotonicNow() +
               (currentRevision === null
                 ? Math.min(retainedFreshnessMs, 75_000)
                 : retainedFreshnessMs),
@@ -235,11 +236,11 @@ function createReadCache<Input, Output>(
           controller.signal.throwIfAborted();
           next.value = value;
           if (snapshot) {
-            next.expiresAt = Date.now() + freshnessMs;
+            next.expiresAt = monotonicNow() + freshnessMs;
           }
           const retention = retain(value);
           if (typeof retention === "number") {
-            next.retryAt = next.expiresAt = Date.now() + retention;
+            next.retryAt = next.expiresAt = monotonicNow() + retention;
           } else if (retainedFreshnessMs === 0 || !retention) {
             remove(key, next);
           } else if (joinPending && currentRevision === null) {
@@ -252,7 +253,7 @@ function createReadCache<Input, Output>(
           next.pending = false;
           pending.delete(next);
           if (snapshot) {
-            next.expiresAt = Date.now() + freshnessMs;
+            next.expiresAt = monotonicNow() + freshnessMs;
           } else {
             next.expiresAt = 0;
             remove(key, next);
@@ -281,7 +282,7 @@ function createReadCache<Input, Output>(
         break;
       }
       if (candidate.poll) {
-        if (candidate.poll.pending || candidate.poll.expiresAt > Date.now()) {
+        if (candidate.poll.pending || candidate.poll.expiresAt > monotonicNow()) {
           continue;
         }
         releasePoll(oldest, candidate);
@@ -339,7 +340,7 @@ function createReadCache<Input, Output>(
       const environment = gitEnvironment();
       const key = JSON.stringify([input, environment]);
       const slot = entries.get(key) ?? {};
-      if (slot.poll && !slot.poll.pending && slot.poll.expiresAt <= Date.now()) {
+      if (slot.poll && !slot.poll.pending && slot.poll.expiresAt <= monotonicNow()) {
         releasePoll(key, slot);
       }
       let poll = slot.poll;
@@ -352,7 +353,7 @@ function createReadCache<Input, Output>(
             if (
               candidate.poll &&
               !candidate.poll.pending &&
-              candidate.poll.expiresAt <= Date.now()
+              candidate.poll.expiresAt <= monotonicNow()
             ) {
               releasePoll(otherKey, candidate);
             }
@@ -371,7 +372,7 @@ function createReadCache<Input, Output>(
         // Fan out both outcomes to reconnecting tabs before the next fresh read.
         const settled = () => {
           admitted.pending = false;
-          admitted.expiresAt = Date.now() + 1_000;
+          admitted.expiresAt = monotonicNow() + 1_000;
         };
         void promise.then(settled, settled);
         slot.poll = poll;

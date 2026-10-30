@@ -22,6 +22,7 @@ import {
 } from "./openclaw-state-db-admission.js";
 import type { OpenClawStateIntegrityAdmission } from "./openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { hasHistoricalImageReserveSnapshots } from "./openclaw-state-db-image-snapshot-migration.js";
 import { assertOpenClawStateRuntimeIntegrity } from "./openclaw-state-db-integrity-admission.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db-maintenance.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
@@ -57,7 +58,8 @@ export function needsOpenClawStateDatabaseSchemaRepair(
     assertSupportedStateSchemaVersion(database, pathname);
     const needsRepair =
       readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
-      hasLegacyCronRunLogs(database);
+      hasLegacyCronRunLogs(database) ||
+      (scope === "doctor" && hasHistoricalImageReserveSnapshots(database));
     if (!needsRepair) {
       assertCurrentStateRuntimeSchema(database, pathname);
       if (scope === "doctor") {

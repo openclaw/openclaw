@@ -24,7 +24,7 @@ import {
   type UpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
 import { formatUpdateFailureFact } from "../infra/update-failure-facts-format.js";
-import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
+import { createUpdateErrorFact, createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { withPluginLoadDiagnostics } from "../plugins/load-diagnostics.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
@@ -671,6 +671,7 @@ async function runDoctorHealthFlowWithResult(
           ? refusalFacts
           : [
               createUpdateFailureFact({
+                leaseLoss: createUpdateErrorFact("doctor", error).leaseLoss,
                 check: unsafeConfigWrite
                   ? "config-write"
                   : schemaRefusal
@@ -693,7 +694,6 @@ async function runDoctorHealthFlowWithResult(
     }
     throw error;
   } finally {
-    const startupWarnings = startupFindings.updateWarnings;
     await measure("doctor.maintenance.release", () => resources.disposeAsync());
     if (updateResult) {
       await publishDoctorUpdateResult({
@@ -701,7 +701,7 @@ async function runDoctorHealthFlowWithResult(
         doctorResult,
         healthContext,
         maintenance,
-        startupWarnings,
+        startupWarnings: startupFindings.updateWarnings,
       });
     }
     // The default runtime exits synchronously; finish native recovery and release

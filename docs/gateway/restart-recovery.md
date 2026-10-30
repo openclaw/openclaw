@@ -19,6 +19,22 @@ from that process. Open the conversation and send a message to continue. This is
 an accepted loss window: files, external actions, and tool effects may already
 have changed, so check them before repeating work.
 
+On upgrade from the retired restart-recovery subsystem (through 2026.10.9),
+startup and `openclaw doctor --fix` also repair tombstoned root sessions, with or
+without a recorded continuation. The repair backs up the original database,
+clears obsolete execution claims, and warns with the session key. Pending final
+delivery is retired with an unknown outcome rather than replayed under obsolete
+sender authority; its original content remains in the backup. Existing transcript
+content is unchanged. Eligible roots receive one ordinary resume input; manual
+archives, provider review, and external harness ownership retain their normal gates.
+Every retained fence and pending final must match the tombstone's recorded run or
+generation before retirement. A different generation, missing ownership link, or
+live execution leaves custody intact and prevents automatic resume of that row.
+Doctor names the session and asks the operator to inspect its retained identities
+and delivery outcome against the transcript before repairing custody. Legacy scalar
+delivery fields can still be normalized without discarding the pending final, so
+ordinary admission no longer depends on the retired tombstone gate.
+
 ## What survives a restart
 
 | State                                                | Behavior                                                                        |
@@ -49,6 +65,20 @@ no schema migration.
 There are no restart checkpoints written per turn or tool call, startup orphan
 scans, or crash-time execution reconstruction.
 
+Startup recovers ready session stores immediately. If a store is still undergoing
+inspection and preparation, its existing startup owner discovers retained work
+before admitting fresh inputs. Recovery runs after database preparation ends,
+under the session's current authority. An unrelated store's inspection does not
+hold up ready agents. Refused databases keep their normal admission safeguards,
+and shutdown cancels pending recovery without consuming its markers.
+
+The initial recovery pass keeps the existing external-input fence until its
+retained inputs own their ordinary queue slots. A store prepared later keeps its
+own input readiness pending until its retained inputs are admitted. This also
+applies when several logical agents share the same physical store. Database
+reads and writes retain their normal admission rules; recovery does not borrow
+startup's temporary database access or wait for model executions to finish.
+
 <a id="graceful-restarts-drain-first" />
 
 ## Graceful shutdown
@@ -59,17 +89,28 @@ short bounded time for in-flight persistence and gives other resource cleanup a
 bounded grace. A long model stream, tool call, or background process does not get
 a full run-completion drain before shutdown.
 
+After marker persistence and cancellation, process-owned shutdown gives session
+resources five seconds to settle. Leftovers retain their shared databases until
+process exit instead of extending the session-admission wait. Embedded hosts
+still join those resources before reusing the runtime.
+
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.
 Managed update handoffs keep their own stop handling.
+
+Failed startup uses the same cleanup grace when the CLI will exit. Usage backfill
+cancels pending discovery reads and scans when its sidecar stops; a later startup
+rebuilds any unfinished cache work. Embedded hosts and in-process startup recovery
+still join cleanup before reusing the runtime.
 
 An external stop or restart logs bounded-grace leftovers, such as a service-child
 cleanup deadline, lifetime sidecar, or retained plugin runtime, and returns with
 status `0` unless required persistence failed. A runtime that still owns resources
 is never reused for an in-process restart. Node exits naturally after owned handles
 close; the native shutdown watchdog kills the process if leaked handles keep it
-alive past the deadline. That signal exit is accepted, and the supervisor starts
-a fresh Gateway.
+alive past the deadline. Worker startup consumes that same monotonic deadline
+instead of starting a new delay. That signal exit is accepted, and the supervisor
+starts a fresh Gateway.
 
 Reversible suspension and host freeze preparation keep their own semantics. A
 suspension does not mark sessions or abort them. Preparation with `drain: true`
@@ -306,6 +347,18 @@ Copying one does not grant permission to restart a service.
 
 ## Automatic resume
 
+On the first upgrade from a version with legacy main-session recovery, startup
+adopts an unsettled cycle only when the entry has `abortedLastRun: true`, status
+`interrupted`, and an `updatedAt` within the six hours before this process started.
+Old shutdown marking updated that timestamp. Startup clears the cycle and sends
+the same single resume input under the current-authority rules below. Stale,
+future-dated, settled, `done`, and `killed` entries do not resume through that bridge.
+Legacy tombstones use the backed-up repair described above and do not require
+a recent timestamp or a continuation session.
+An installation stopped for longer than six hours before upgrading loses this
+one-time resume; send a new message to continue. Old execution and authority
+snapshots are not restored.
+
 Startup clears each marker and admits exactly one new input through the normal
 session-event path:
 
@@ -405,7 +458,7 @@ Marker persistence, skipped authority, and bounded shutdown leftovers are report
 in logs. A resume admission proves only that the new input was accepted; use the
 session transcript and actual delivery outcome to check whether work finished.
 
-Old restart claims, authority snapshots, interrupted pending-input rows, and queued
+Apart from that upgrade bridge, old restart claims, authority snapshots, interrupted pending-input rows, and queued
 inference records may remain in existing databases. They are ignored rather than
 reconstructed or deleted. Their text stays preserved. Legacy interrupted and
 ownerless queued inputs left by a crash do not add pending counts, notices, or
@@ -429,7 +482,7 @@ does not prove that a reply reached its channel.
 - Deleted or archived sessions, and human-owned sessions whose current principal
   cannot be admitted.
 - Gateway terminal PTYs and background OS processes.
-- Legacy inference queue entries or old execution-recovery records.
+- Legacy inference queue entries or settled old execution-recovery records.
 
 After a lossy stop, the stored conversation remains available. Send a new message
 to continue and inspect uncertain effects before repeating them.

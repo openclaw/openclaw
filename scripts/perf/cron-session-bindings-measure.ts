@@ -12,7 +12,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { PerformanceObserver } from "node:perf_hooks";
@@ -21,6 +20,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -118,13 +118,10 @@ const memory = process.memoryUsage();
 await nextTurn();
 await nextTurn();
 observer.disconnect();
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 let sampledBytes: number | undefined;
 if (values.mode === "allocation") {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
-  sampledBytes = allocated(profile.head);
+  sampledBytes = sumSampledHeapBytes(profile.head);
   inspector.disconnect();
 }
 await writeFile(

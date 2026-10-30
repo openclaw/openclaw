@@ -24,6 +24,7 @@ import { parseArgs } from "node:util";
 import { GCProfiler } from "node:v8";
 import type { AnthropicOptions } from "../../packages/ai/src/provider-options.js";
 import type { Context, Model } from "../../packages/llm-core/src/types.js";
+import { summarizeGcByKind } from "../lib/gc-profile-summary.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
@@ -398,17 +399,7 @@ console.log(
     gcMs: collections.reduce((sum, entry) => sum + entry.cost / 1000, 0),
     gcMaxMs: Math.max(0, ...collections.map((entry) => entry.cost / 1000)),
     gcCount: collections.length,
-    gcByKind: [...new Set(collections.map((entry) => entry.gcType))].map((kind) => {
-      const pauses = collections
-        .filter((entry) => entry.gcType === kind)
-        .map((entry) => entry.cost / 1000);
-      return {
-        kind,
-        count: pauses.length,
-        totalMs: pauses.reduce((sum, ms) => sum + ms, 0),
-        maxMs: Math.max(0, ...pauses),
-      };
-    }),
+    gcByKind: summarizeGcByKind(collections),
     memoryBeforeFinalGc,
     memory: process.memoryUsage(),
     hostLoadBefore,
