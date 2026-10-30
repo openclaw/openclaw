@@ -74,12 +74,21 @@ describe("memory session actor", () => {
   it("detaches committed receipts and rejects a stale command version", async () => {
     const { actor } = await fixture();
     const old = actor.snapshot(authority)!;
-    const result = await actor.patch(activityCommand(10), authority);
+    const result = await actor.patch(activityCommand(10), authority, {
+      committed(value) {
+        value.receipt.afterVersion.sequence = 100;
+        value.receipt.postimage.entry!.updatedAt = 100;
+        value.receipt.transcript.after.rawSeq = 100;
+      },
+    });
     if (result.kind !== "committed") {
       throw new Error("Expected a committed receipt");
     }
     const retained = actor.snapshot(authority);
+    expect(result.receipt.postimage).toEqual(retained);
+    expect(retained?.entry?.updatedAt).toBe(10);
     Object.assign(result.receipt.afterVersion, { sequence: 100 });
+    result.receipt.postimage.entry!.updatedAt = 100;
     result.receipt.transcript.after.rawSeq = 100;
     expect(actor.snapshot(authority)).toEqual(retained);
     expect(

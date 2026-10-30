@@ -1,0 +1,2 @@
+# Preserve observer and returned-receipt mutation isolation after removing the intermediate copy.
+9
