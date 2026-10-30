@@ -322,10 +322,10 @@ describe("headless Code Mode", () => {
         "": 7,
         count: 4,
         nested: { stable: true, list: [null, { keep: 3 }] },
-        nonfinite: NaN,
+        nonfinite: Number.NaN,
       };
       const ctx = createHeadlessCodeModeHarness([], { codeMode: { executor } });
-      for (let run = 0; run < 2; run++) {
+      for (let iteration = 0; iteration < 2; iteration++) {
         const result = expectCompleted(
           await runCodeModeScriptHeadless({
             ctx,
@@ -364,7 +364,7 @@ describe("headless Code Mode", () => {
           "": 7,
           count: 4,
           nested: { stable: true, list: [null, { keep: 3 }] },
-          nonfinite: NaN,
+          nonfinite: Number.NaN,
         });
         expect(Object.isFrozen(state.nested.list[1])).toBe(false);
       }
