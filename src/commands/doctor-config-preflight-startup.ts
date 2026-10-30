@@ -236,6 +236,7 @@ function assertStartupConfigUnchanged(before: ConfigFileSnapshot, after: ConfigF
 async function assertStartupStateMigrationReady(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  lease?: StartupMigrationLease;
 }): Promise<void> {
   const { assertOpenClawDatabasesReady } = await measureDoctorConfigPreflightStep(
     "admission.database-runtime-import",
@@ -250,6 +251,7 @@ async function assertStartupStateMigrationReady(params: {
         env: params.env,
         config: params.cfg,
         operation: "gateway-startup",
+        heartbeat: () => params.lease?.heartbeat(),
         onAgentInspection: (stats) => {
           Object.assign(admissionMetrics, stats);
         },
@@ -393,6 +395,7 @@ export async function completeStartupMigrationPreflight(params: {
     await assertStartupStateMigrationReady({
       cfg: snapshot.runtimeConfig ?? snapshot.config,
       env: params.startupMigrationEnv,
+      lease: params.startupMigrationLease,
     });
   }
   if (
