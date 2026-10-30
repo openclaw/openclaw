@@ -169,14 +169,14 @@ describe("audit writer shared worker", () => {
           sourceSequence: message && index === 1 ? 0 : index + 1,
         },
       }));
-      const context = { open: () => opened, stateOptions: () => ({ path: opened.path }) };
+      const ctx = { open: () => opened, stateOptions: () => ({ ...database, path: opened.path }) };
       const execute = () =>
         message
           ? executeOpenClawStateWorker(captureOpenClawStateWorkerContext(database), {
               type: "audit.writer.process",
               input: requests,
             })
-          : auditOperations["audit.writer.process"](requests, context);
+          : auditOperations["audit.writer.process"](requests, ctx);
       const sql = observeMainThreadSql({
         onStatement: () => expect(opened.db.isTransaction).toBe(true),
       });
