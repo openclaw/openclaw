@@ -261,10 +261,20 @@ final class VoiceNoteRecorderTests: XCTestCase {
         recorder.cancel()
     }
 
+    func testDurationLabelPreservesLongAttachmentTimes() {
+        XCTAssertEqual(openClawVoiceNoteDurationLabel(180), "3:00")
+        XCTAssertEqual(openClawVoiceNoteDurationLabel(181), "3:01")
+        XCTAssertEqual(openClawVoiceNoteDurationLabel(299.9), "4:59")
+        XCTAssertEqual(openClawVoiceNoteDurationLabel(446), "7:26")
+        XCTAssertEqual(openClawVoiceNoteDurationLabel(3600), "60:00")
+        XCTAssertEqual(openClawVoiceNoteDurationLabel(2147483648 * 60), "2147483648:00")
+    }
+
     func testDurationLabelBoundsMalformedHistoryValues() {
         XCTAssertEqual(openClawVoiceNoteDurationLabel(.infinity), "0:00")
         XCTAssertEqual(openClawVoiceNoteDurationLabel(.nan), "0:00")
-        XCTAssertEqual(openClawVoiceNoteDurationLabel(1e100), "3:00")
+        XCTAssertEqual(openClawVoiceNoteDurationLabel(1e100), "0:00")
+        XCTAssertEqual(openClawVoiceNoteDurationLabel(Double(Int.max)), "0:00")
         XCTAssertEqual(openClawVoiceNoteDurationLabel(-1), "0:00")
     }
 
