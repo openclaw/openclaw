@@ -177,6 +177,8 @@ const repositoryScriptEntries = [
   "scripts/control-ui-retention/retention-suite.ts!",
   // #179175 invokes this development-loop benchmark CLI by path.
   "scripts/bench-control-ui-dev-loop.mts!",
+  // The Control UI development guide invokes this watcher/dispatch diagnostic.
+  "scripts/bench-control-ui-hmr.mts!",
   // #179449 documents this document-handler benchmark CLI by path.
   "scripts/bench-control-ui-document.ts!",
   // The channel-turn benchmark guide invokes this opt-in CLI by path.
