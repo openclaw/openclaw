@@ -2,7 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createNativeTypeScriptProject } from "../../scripts/lib/native-typescript.mts";
 
-it("accepts an explicitly undefined reconciler without allowing plugin-owned process configuration", () => {
+it("preserves strict reconciler typing and host-owned process configuration", () => {
   const cwd = path.resolve(import.meta.dirname, "../..");
   const configFileName = "tsconfig.plugin-runtime-types.json";
   const sourceFileName = path.join(cwd, "src/plugin-sdk/plugin-runtime.consumer.ts");
@@ -26,6 +26,11 @@ runtime.llm.acquireLocalService({
 runtime.llm.acquireLocalService({
   providerId: "fixture",
   baseUrl: "http://localhost",
+  reconcile: "invalid",
+}, null);
+runtime.llm.acquireLocalService({
+  providerId: "fixture",
+  baseUrl: "http://localhost",
   service: { command: "fixture" },
 }, null);
 `,
@@ -33,6 +38,10 @@ runtime.llm.acquireLocalService({
   });
   try {
     expect(session.project.program.getSemanticDiagnostics(sourceFileName)).toEqual([
+      expect.objectContaining({
+        code: 2322,
+        text: expect.stringContaining("is not assignable to type"),
+      }),
       expect.objectContaining({ code: 2353, text: expect.stringContaining("'service'") }),
     ]);
   } finally {
