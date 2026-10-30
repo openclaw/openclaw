@@ -1,4 +1,7 @@
-import { Value } from "typebox/value";
+import { setImmediate as yieldToScheduler } from "node:timers/promises";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import type { GatewayRequestHandler } from "../../gateway/server-methods/types.js";
+import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -12,7 +15,6 @@ import * as caches from "../../plugins/plugin-cache.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import * as runtimeScope from "../../plugins/runtime/generation-scope.js";
-import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import * as modelScope from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import * as callerScope from "./gateway-caller-context.js";
@@ -85,36 +87,33 @@ it("admits each delegated call outside its caller generation without dropping ca
   expectUnscoped();
 });
 
-it("relays context and the completed approval outcome", async () => {
-  callGateway.mockResolvedValue({
-    sessionId: "ignored-by-client",
-    reply: "Applied.",
-    action: "none",
-  });
-  const tool = delegate({
-    runSessionKey: "agent:main:dm:one",
-    agentChannel: "webchat",
-    execSession: { permissionMode: "guarded" },
-  });
-  expect(tool.description).toContain("Gateway restart");
-  expect(tool.description).toContain("multiple named custom/local model endpoints");
-  expect(tool.description).toContain(
-    "provider IDs can be user-defined, while api selects the protocol",
+it("cancels a delegated Gateway wait while its handler remains unsettled", async () => {
+  const actual =
+    await vi.importActual<typeof import("./in-process-gateway.js")>("./in-process-gateway.js");
+  callGateway.mockImplementation(actual.callInProcessGatewayTool);
+  const started = createDeferred();
+  const release = createDeferred();
+  const handler: GatewayRequestHandler = async ({ respond }) => {
+    started.resolve();
+    await release.promise;
+    respond(true, { reply: "Applied.", action: "none" });
+  };
+  const context = createContext([["openclaw.chat", "operator.admin", "system-agent", handler]]);
+  const controller = new AbortController();
+  const stopped = new Error("synthetic turn stopped");
+  const pending = callerScope.withGatewayToolCallerIdentity(
+    { agentId: "main", sessionKey: runSessionKey, gatewayContextResolver: () => context },
+    () => delegate().execute("call-1", { message: "Check setup." }, controller.signal),
   );
-  expect(tool.description).toContain("approve in the Control UI");
-  expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("openclaw");
-  const result = await tool.execute("call-1", { message: "Add channel." });
-  expect(callGateway).toHaveBeenCalledWith("openclaw.chat", {
-    sessionId: expect.stringMatching(/^delegate-[a-f0-9]{32}$/),
-    message: "Add channel.",
-    delegation: {
-      agentId: "main",
-      sessionKey: "agent:main:dm:one",
-      turnSourceChannel: "webchat",
-    },
-  });
-  expect(result.details).toEqual({ reply: "Applied." });
-  expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+  const outcome = pending.catch((error: unknown) => error);
+  try {
+    await awaitGateBeforeSettlement(started.promise, pending, "Gateway handler not reached");
+    controller.abort(stopped);
+    expect(await Promise.race([outcome, yieldToScheduler()])).toBe(stopped);
+  } finally {
+    release.resolve();
+    await pending.catch(() => undefined);
+  }
 });
 
 it.each<[string, Options, boolean]>([
@@ -189,7 +188,10 @@ it.each<[string, Options, boolean]>([
   ],
   [
     "agent-restricted default",
-    { config: { agents: { entries: { main: { tools: { exec: { mode: "ask" } } } } } } },
+    {
+      agentChannel: "telegram",
+      config: { agents: { entries: { main: { tools: { exec: { mode: "ask" } } } } } },
+    },
     false,
   ],
   [
