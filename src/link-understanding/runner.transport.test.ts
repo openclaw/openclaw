@@ -145,6 +145,19 @@ it("dedupes and limits bare URLs while ignoring Markdown citations", async () =>
   expect(ctx.LinkUnderstanding).toEqual(["/bare-one", "/escaped", "/bare-two"]);
 });
 
+it.each([
+  ["text/html; charset=Shift_JIS", [0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea], "日本語"],
+  ["text/plain; charset=x-unknown", [0x6f, 0x6b], "ok"],
+] as const)("decodes a %s response for the processor", async (contentType, bytes, text) => {
+  const base = await serve((_req, res) => {
+    res.writeHead(200, { "content-type": contentType });
+    res.end(Buffer.from(bytes));
+  });
+  const { ctx, result } = startLink(`${base}/page`);
+  await result;
+  expect(ctx.LinkUnderstanding).toEqual([text]);
+});
+
 it("stops processor descendants after caller cancellation", async (t) => {
   const receipts = await openFixtureReceiptChannel();
   onTestFinished(() => receipts.close());
