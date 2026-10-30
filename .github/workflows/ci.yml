@@ -6282,12 +6282,9 @@ jobs:
       - *linux_node_checkout_step
 
       - name: Setup screenshot evidence Node
-        uses: ./.ci-harness/.github/actions/setup-node-env
-        with:
-          cache-mode: *cache_mode
-          install-bun: "false"
-          install-deps: "false"
-          node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}
+        env:
+          REQUESTED_NODE_VERSION: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}
+        run: *ensure_node_run
 
       - name: Download iOS screenshot capture evidence
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
