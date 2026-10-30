@@ -1,3 +1,4 @@
+import { ownsThinkingProfile } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeLowercaseStringOrEmpty as normalizeApi } from "@openclaw/normalization-core/string-coerce";
 import type { ModelCompatConfig } from "../config/types.models.js";
 
@@ -69,6 +70,25 @@ export function resolveUniqueCatalogModelRoute<T extends ModelTransportRoute>(
   return match;
 }
 
+/**
+ * Configured effort facts (list, map or support flag) replace a profile the catalog row owns,
+ * unless config states its own ladder or default, so the provider derives the ladder from them.
+ */
+export function withoutOverriddenThinkingProfile(
+  catalogCompat: ModelCompatConfig | undefined,
+  configuredCompat: ModelCompatConfig | undefined,
+): ModelCompatConfig | undefined {
+  const declaresEfforts =
+    configuredCompat?.supportedReasoningEfforts !== undefined ||
+    configuredCompat?.supportsReasoningEffort !== undefined ||
+    configuredCompat?.reasoningEffortMap !== undefined;
+  if (!catalogCompat || !declaresEfforts || ownsThinkingProfile(configuredCompat)) {
+    return catalogCompat;
+  }
+  const { defaultThinkingLevel: _default, thinkingLevels: _levels, ...rest } = catalogCompat;
+  return rest;
+}
+
 /** Catalogs own route defaults; operator reasoning declarations take precedence. */
 export function resolveCatalogOwnedModelCompat(params: {
   catalogRoute?: ModelTransportRoute;
@@ -88,6 +108,7 @@ export function resolveCatalogOwnedModelCompat(params: {
     (
       [
         "defaultThinkingLevel",
+        "thinkingLevels",
         "adaptiveThinking",
         "thinkingRequired",
         "thinkingLevelLabels",
@@ -105,7 +126,7 @@ export function resolveCatalogOwnedModelCompat(params: {
       : params.catalogCompat;
   }
   return {
-    ...params.catalogCompat,
+    ...withoutOverriddenThinkingProfile(params.catalogCompat, configured),
     ...(efforts !== undefined
       ? { supportedReasoningEfforts: efforts, supportsReasoningEffort: efforts.length > 0 }
       : configured?.supportsReasoningEffort !== false &&

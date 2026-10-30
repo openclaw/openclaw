@@ -230,17 +230,19 @@ function resolveModelThinkingProfile(params: ThinkingProfileParams): ResolvedThi
     compat: candidate?.compat,
   };
   const compat = context.compat;
-  // A row that sets `compat.defaultThinkingLevel` owns its profile; provider hooks only cover
-  // rows without it.
+  // A row that sets `compat.defaultThinkingLevel` or `compat.thinkingLevels` owns its profile;
+  // provider hooks only cover rows without them.
   const rowDefaultLevel = compat?.defaultThinkingLevel
     ? normalizeThinkLevel(compat.defaultThinkingLevel)
     : undefined;
+  const rowLevels = compat?.thinkingLevels?.flatMap((level) => normalizeThinkLevel(level) ?? []);
+  const rowOwned = rowDefaultLevel !== undefined || (rowLevels?.length ?? 0) > 0;
   const providerProfileParams = {
     provider,
     context,
     ...(candidate ? { catalogEntry: candidate } : {}),
   };
-  const providerProfile = rowDefaultLevel
+  const providerProfile = rowOwned
     ? undefined
     : typeof params.providerPolicySource === "object"
       ? resolveEffectiveThinkingProfile(providerProfileParams, {
@@ -257,7 +259,7 @@ function resolveModelThinkingProfile(params: ThinkingProfileParams): ResolvedThi
   // base set, deliberately bypassing the later compat-driven xhigh upgrade —
   // anthropic-messages does not carry a generic xhigh contract.
   const anthropicMessagesProfile =
-    !rowDefaultLevel && context.api === "anthropic-messages"
+    !rowOwned && context.api === "anthropic-messages"
       ? resolveClaudeThinkingProfile(context.modelId, context.params, {
           includeNativeMax: true,
         })
@@ -283,8 +285,16 @@ function resolveModelThinkingProfile(params: ThinkingProfileParams): ResolvedThi
     };
   }
 
-  const profile = buildBaseThinkingProfile();
-  appendCatalogAdvancedThinkingLevels(profile, compat, context.thinkingLevelMap);
+  // An explicit row ladder replaces the one derived from the map and efforts.
+  const profile = rowLevels?.length
+    ? {
+        levels: rowLevels.map((id) => ({ id, label: id, rank: THINKING_LEVEL_RANKS[id] })),
+        defaultLevel: undefined,
+      }
+    : buildBaseThinkingProfile();
+  if (!rowLevels?.length) {
+    appendCatalogAdvancedThinkingLevels(profile, compat, context.thinkingLevelMap);
+  }
   if (compat?.adaptiveThinking) {
     appendProfileLevel(profile, "adaptive");
   }
@@ -292,7 +302,12 @@ function resolveModelThinkingProfile(params: ThinkingProfileParams): ResolvedThi
     level.label = compat?.thinkingLevelLabels?.[level.id] ?? level.id;
   }
   profile.defaultLevel = rowDefaultLevel;
-  return normalizeThinkingProfile(profile, context.thinkingLevelMap, mappedLevels);
+  // A stated ladder is the whole offer: mapped wire aliases stay usable but hidden.
+  return normalizeThinkingProfile(
+    profile,
+    context.thinkingLevelMap,
+    rowLevels?.length ? [] : mappedLevels,
+  );
 }
 
 /** Ultra is a harness mode, independent of a model's native reasoning controls. */
@@ -328,7 +343,9 @@ export function resolveProviderThinkingLevel(
       ("thinkingFormat" in compat ||
         "supportsReasoningEffort" in compat ||
         "supportedReasoningEfforts" in compat ||
-        "reasoningEffortMap" in compat)
+        "reasoningEffortMap" in compat ||
+        "thinkingLevels" in compat ||
+        "defaultThinkingLevel" in compat)
         ? compat
         : undefined,
   }));

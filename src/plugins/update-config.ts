@@ -14,8 +14,6 @@ import { resolvePluginInstallDir } from "./install.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import { reconcileRegisteredOpenClawHostLinks } from "./plugin-peer-link.js";
-import { resetPluginSlotsToDefaults, resolveRetainedContextEngineIds } from "./slots.js";
-import { setPluginEnabledInConfig } from "./toggle-config.js";
 import type { PluginUpdateLogger } from "./update-source.js";
 
 export async function hasRunnableInstalledNpmPayload(params: {
@@ -326,28 +324,6 @@ export function migratePluginConfigId(
   }
 
   return nextPlugins === plugins ? cfg : { ...cfg, plugins: nextPlugins };
-}
-
-export function disablePluginAfterUpdateFailure(
-  config: OpenClawConfig,
-  pluginId: string,
-): OpenClawConfig {
-  const disabled = setPluginEnabledInConfig(config, pluginId, false, {
-    updateChannelConfig: false,
-  });
-  const pluginsConfig = disabled.plugins ?? {};
-  return {
-    ...disabled,
-    plugins: {
-      ...pluginsConfig,
-      // Failed updates are reversible activation changes; only explicit uninstall removes trust policy.
-      slots: resetPluginSlotsToDefaults(
-        pluginsConfig.slots,
-        pluginId,
-        resolveRetainedContextEngineIds(config, pluginId),
-      ),
-    },
-  };
 }
 
 /** Repairs a legacy npm-owned extensions-root host without reinstalling its package. */
