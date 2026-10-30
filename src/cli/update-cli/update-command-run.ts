@@ -183,10 +183,9 @@ export async function resolveUpdateCommandAdmissionEnv(params: {
 export async function admitUpdateCommandRun(params: {
   opts: UpdateCommandOptions;
   root: string;
+  env: NodeJS.ProcessEnv;
   installKind?: "git" | "package" | "unknown";
   serviceRoot?: string;
-  invocationCwd?: string;
-  pkgOwnership?: SystemPackageOwnershipInspection;
   expectedForeground?: true;
   initialization?: UpdateInitializationAdmission;
   assertCurrent?: () => void;
@@ -195,7 +194,8 @@ export async function admitUpdateCommandRun(params: {
     serviceRoot: params.serviceRoot,
     dryRun: params.opts.dryRun,
   });
-  const env = await resolveUpdateCommandAdmissionEnv(params);
+  // Engine selection and original-state capture already use this selected service profile.
+  const { env } = params;
   // A previous invocation may have died with a sealed restoration plan. Detect
   // it before any writable owner open or history row creation changes that state.
   // An inherited diagnostic run ID is not a durable continuation claim.

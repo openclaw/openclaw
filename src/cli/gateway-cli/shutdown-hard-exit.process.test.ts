@@ -11,6 +11,14 @@ const watchdogModuleUrl = pathToFileURL(
 ).href;
 
 function runWatchdogChild() {
+  const delayedBootstrap = (delayMs: number) => `
+    import { isMainThread } from "node:worker_threads";
+    import { writeSync } from "node:fs";
+    if (!isMainThread) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${delayMs});
+      writeSync(1, "worker-bootstrap-finished:${delayMs}:" + Date.now() + "\\n");
+    }
+  `;
   const script = `
     import { writeSync } from "node:fs";
     import { armShutdownHardExitWatchdog } from ${JSON.stringify(watchdogModuleUrl)};
@@ -19,32 +27,29 @@ function runWatchdogChild() {
       writeSync(2, \`error:\${message}\\n\`);
       process.exit(2);
     };
+    process.env.NODE_OPTIONS = ${JSON.stringify(`--import=data:text/javascript,${encodeURIComponent(delayedBootstrap(500))}`)};
+    const hold = setInterval(() => {}, 1_000);
     const firstWatchdog = armShutdownHardExitWatchdog({
       delayMs: ${WATCHDOG_DELAY_MS},
       onError: (error) => fail(String(error)),
     });
-    if (firstWatchdog === null) {
-      fail("first-watchdog-not-armed");
-    }
-    firstWatchdog.cancel();
+    await firstWatchdog.cancel();
+    clearInterval(hold);
     await new Promise((resolve) => setTimeout(resolve, ${WATCHDOG_DELAY_MS * 2}));
     writeSync(1, "cancelled-watchdog-deadline-survived\\n");
 
     process.once("beforeExit", () => {
       // Reaching beforeExit proves the cancelled worker no longer retains process liveness.
       writeSync(1, "cancelled-watchdog-released-liveness\\n");
-      const secondWatchdog = armShutdownHardExitWatchdog({
-        delayMs: ${WATCHDOG_DELAY_MS},
+      process.env.NODE_OPTIONS = ${JSON.stringify(`--import=data:text/javascript,${encodeURIComponent(delayedBootstrap(1_000))}`)};
+      armShutdownHardExitWatchdog({
+        delayMs: 1_000,
         onError: (error) => fail(String(error)),
       });
-      if (secondWatchdog === null) {
-        fail("second-watchdog-not-armed");
-      }
       writeSync(1, "second-watchdog-armed\\n");
       while (true) {}
     });
   `;
-  const startedAt = Date.now();
   const result = spawnSync(
     process.execPath,
     ["--import", "tsx", "--input-type=module", "--eval", script],
@@ -56,37 +61,21 @@ function runWatchdogChild() {
       timeout: CHILD_TIMEOUT_MS,
     },
   );
-  return { elapsedMs: Date.now() - startedAt, result };
+  return { finishedAt: Date.now(), result };
 }
 
-it("cancels one watchdog before another kills a blocked main thread", () => {
-  const { elapsedMs, result } = runWatchdogChild();
-  const diagnostics = JSON.stringify(
-    {
-      elapsedMs,
-      status: result.status,
-      signal: result.signal,
-      error: result.error ? String(result.error) : undefined,
-      stdout: result.stdout,
-      stderr: result.stderr,
-    },
-    null,
-    2,
+it("cancels one watchdog and counts worker bootstrap toward the blocked-main deadline", () => {
+  const { finishedAt, result } = runWatchdogChild();
+  const diagnostics = JSON.stringify(result);
+  expect(result.stdout, diagnostics).toMatch(
+    /cancelled-watchdog-deadline-survived\ncancelled-watchdog-released-liveness\nsecond-watchdog-armed\nworker-bootstrap-finished:1000:/,
   );
-  const markers = [
-    "cancelled-watchdog-deadline-survived",
-    "cancelled-watchdog-released-liveness",
-    "second-watchdog-armed",
-  ];
-  let previousMarkerIndex = -1;
-  for (const marker of markers) {
-    const markerIndex = result.stdout.indexOf(marker);
-    expect(markerIndex, diagnostics).toBeGreaterThan(previousMarkerIndex);
-    previousMarkerIndex = markerIndex;
-  }
 
   expect(result.error, diagnostics).toBeUndefined();
   expect(result.status, diagnostics).toBeNull();
   expect(result.signal, diagnostics).toBe("SIGKILL");
-  expect(elapsedMs, diagnostics).toBeLessThan(CHILD_TIMEOUT_MS);
+  const bootstrapFinished = Number(
+    result.stdout.match(/worker-bootstrap-finished:1000:(\d+)/)?.[1],
+  );
+  expect(finishedAt - bootstrapFinished, diagnostics).toBeLessThan(500);
 });

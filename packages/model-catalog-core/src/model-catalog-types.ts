@@ -87,6 +87,8 @@ export type ModelCatalogCompatConfig = {
   visibleReasoningDetailTypes?: string[];
   /** Thinking level a new session starts at. Its presence makes the row own the thinking profile. */
   defaultThinkingLevel?: string;
+  /** Offered thinking levels, in order. Replaces the ladder derived from the map and efforts. */
+  thinkingLevels?: string[];
   /** Offers the `adaptive` level, which lets the model choose its own effort. */
   adaptiveThinking?: boolean;
   /** Thinking stays on even when the row says `reasoning: false` (the route cannot turn it off). */
@@ -162,6 +164,13 @@ export function resolveOpenAIThinkingApi(api: unknown): string | undefined {
 }
 
 /** Map keys describe logical choices; provider-native values retain their spelling. */
+/** A row owns its thinking profile when it states a default level or an offered ladder. */
+export function ownsThinkingProfile(
+  compat: { defaultThinkingLevel?: string; thinkingLevels?: readonly string[] } | null | undefined,
+): boolean {
+  return compat?.defaultThinkingLevel !== undefined || (compat?.thinkingLevels?.length ?? 0) > 0;
+}
+
 export function listMappedModelThinkingLevels(model: {
   api?: string | null;
   compat?: unknown;
