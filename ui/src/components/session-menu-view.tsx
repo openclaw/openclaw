@@ -100,6 +100,8 @@ export function useSessionMenuEntries(
   });
   const separator = (id: string) =>
     content(id, <div class="session-menu__separator" role="separator" />);
+  const communicationDivider = separator("communication-divider");
+  const involvementDivider = separator("involvement-divider");
   const deleteDivider = separator("delete-divider");
   const item = (entry: ItemOptions): MenuItem => ({
     id: entry.kind,
@@ -256,7 +258,8 @@ export function useSessionMenuEntries(
     );
   function body(view: CompactSessionMenuView): MenuEntry[] {
     switch (view) {
-      case "advanced":
+      case "advanced": {
+        const involvementEntries = state.involvingMeContext ? [] : involvement();
         return [
           submenu({
             view: "icon",
@@ -285,12 +288,14 @@ export function useSessionMenuEntries(
                 }),
               ]
             : []),
+          communicationDivider,
           ...details.communication(),
           details.readStatus,
-          ...(!state.involvingMeContext ? involvement() : []),
+          ...(involvementEntries.length ? [involvementDivider, ...involvementEntries] : []),
           deleteDivider,
           deleteAction(),
         ];
+      }
       case "snooze":
         return snoozeEntries()();
       case "copy":

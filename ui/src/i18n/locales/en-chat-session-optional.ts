@@ -6,6 +6,34 @@ import { en } from "./en.ts";
 // Shared labels stay synchronous; these labels follow optional session surfaces.
 const catalog = {
   chat: {
+    sessionDetails: {
+      contextAgentWorkspace: "Agent workspace",
+      contextProject: "Project",
+      contextPersonal: "Personal instructions",
+      contextOtherFiles: "Other files",
+      contextSystemTools: "System tools",
+      contextMcpTools: "MCP tools",
+      contextClientTools: "Client tools",
+      contextAvailableOnDemand: "Tools loaded on use",
+      contextDeferredEstimate: "Schema sizes, not current usage.",
+      contextFree: "Free space",
+      contextUnavailable: "No matching context report. Send a message to capture one.",
+      contextReserve: "{tokens} tokens reserved outside this budget",
+      contextCompactDescription: "Replaces older context with a summary.",
+      contextCompact: "Compact session",
+      contextCompacting: "Compacting",
+      contextCompactShort: "Compact",
+      contextFreeShort: "{tokens} free",
+      contextReserveShort: "+{tokens} reserved",
+      contextInputShort: "in",
+      contextOutputShort: "out",
+      contextSearch: "Search {category}",
+      contextSearchCount: "Search {count} · {category}",
+      contextSearchSkills: "Search {count} skills",
+      contextSearchFiles: "Search {count} files",
+      contextSearchTools: "Search {count} tools",
+      contextShowAll: "Show all {count}",
+    },
     sessionAutomation: {
       emptyHint: "Automations attached to this session will appear here.",
       scheduleUnavailable: "Schedule unavailable",
@@ -448,6 +476,7 @@ const catalog = {
 export const registerChatSessionOptionalEnglish = Object.assign(
   () => {
     registerChatSessionEnglish();
+    mergeCatalog(en.chat.sessionDetails, catalog.chat.sessionDetails);
     Object.assign(en.chat.sessionAutomation, catalog.chat.sessionAutomation);
     Object.assign(en.chat.activityPills, catalog.chat.activityPills);
     Object.assign(en.chat.usageLimit, catalog.chat.usageLimit);

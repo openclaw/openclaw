@@ -181,7 +181,8 @@ export async function parseSnapshotRecord(
   return { ...parsed, snapshot: { ...parsed.snapshot, historyState } };
 }
 
-export const CHAT_SNAPSHOT_PROJECTION_VERSION = 11;
+// Refill history whose old display projection omitted reasoning-only messages.
+export const CHAT_SNAPSHOT_PROJECTION_VERSION = 12;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 
 export async function createSnapshotRecord(

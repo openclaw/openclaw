@@ -286,6 +286,82 @@ it("never saves Apple inputs from PRs, dispatches, non-main refs, or frozen targ
   }
 });
 
+it("reuses trusted simulator libraries and caches only screenshot package downloads", () => {
+  const jobs = readCiWorkflow().jobs;
+  const capture = jobs["ios-screenshot-capture"];
+  expect(capture.env.HISTORICAL_TARGET).toBe(jobs["ios-build"].env.HISTORICAL_TARGET);
+  const restore = capture.steps.find((step: WorkflowStep) => step.id === "watch-rtc-cache");
+  const producer = jobs["ios-build"].steps.find(
+    (step: WorkflowStep) => step.id === "watch-rtc-cache",
+  );
+  expect(restore?.with).toEqual(producer.with);
+  const packages = capture.steps.find((step: WorkflowStep) => step.id === "ios-packages-cache");
+  const saves = capture.steps.filter((step: WorkflowStep) =>
+    step.uses?.startsWith("actions/cache/save@"),
+  );
+  expect(saves).toHaveLength(1);
+  expect(packages.with.path).toBe("apps/ios/build/SnapshotDerivedData/SourcePackages");
+  expect(packages.with.key).toMatch(/^ios-screenshot-packages-v1-/);
+  expect(packages.with["restore-keys"]).toBeUndefined();
+  expect(saves[0].with.path).toBe(packages.with.path);
+  expect(saves[0].with.key).toBe("${{ steps.ios-packages-cache.outputs.cache-primary-key }}");
+  for (const owner of [restore, packages, saves[0]]) {
+    expect(owner["continue-on-error"]).toBe(true);
+    expect(owner["timeout-minutes"]).toBe(3);
+  }
+  for (const eventName of ["push", "schedule", "pull_request", "workflow_dispatch"] as const) {
+    for (const ref of ["refs/heads/main", "refs/heads/topic"]) {
+      for (const trust of ["main", "pull-request", "release", "workflow"]) {
+        for (const hit of ["false", "true"]) {
+          const context = {
+            eventName,
+            ref,
+            preflightOutputs: { candidate_trust: trust, cache_write_allowed: "true" },
+            steps: {
+              "ios-cache-inputs": { outputs: { xcode: "xcode" } },
+              "ios-packages-cache": { outputs: { "cache-hit": hit } },
+            },
+          };
+          expect(evaluateWorkflow(`\${{ ${saves[0].if} }}`, context)).toBe(
+            eventName !== "pull_request" &&
+              ref === "refs/heads/main" &&
+              trust === "main" &&
+              hit !== "true",
+          );
+          expect(
+            evaluateWorkflow(`\${{ ${saves[0].if} }}`, {
+              ...context,
+              preflightOutputs: { ...context.preflightOutputs, cache_write_allowed: "false" },
+            }),
+          ).toBe(false);
+        }
+      }
+    }
+  }
+  const identify = capture.steps.find((step: WorkflowStep) => step.id === "ios-cache-inputs");
+  for (const historical of ["true", "false"]) {
+    for (const frozen of ["true", "false"]) {
+      expect(
+        evaluateWorkflow(`\${{ ${identify.if} }}`, {
+          env: { HISTORICAL_TARGET: historical },
+          preflightOutputs: { frozen_target: frozen },
+          fileHashes: { "apps/shared/OpenClawWatchRTC/build.sh": "present" },
+        }),
+      ).toBe(historical !== "true" && frozen !== "true");
+    }
+  }
+  for (const owner of [restore, packages]) {
+    for (const cache_mode of ["off", "restore"]) {
+      expect(
+        evaluateWorkflow(`\${{ ${owner.if} }}`, {
+          preflightOutputs: { cache_mode },
+          steps: { "ios-cache-inputs": { outputs: { xcode: "xcode" } } },
+        }),
+      ).toBe(cache_mode !== "off");
+    }
+  }
+});
+
 it("shares release device libraries only between trusted main release destinations", () => {
   const job = readWorkflow(".github/workflows/ios-store-release.yml").jobs.release;
   const restore = job.steps.find((step: WorkflowStep) => step.id === "watch-rtc-cache");

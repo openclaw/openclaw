@@ -983,6 +983,9 @@
       ],
       "openclaw/plugin-sdk/terminal-safe-text": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/terminal-safe-text.d.ts"
+      ],
+      "openclaw/plugin-sdk/memory-core-host-transcript-stats": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-transcript-stats.d.ts"
       ]
     }
   }

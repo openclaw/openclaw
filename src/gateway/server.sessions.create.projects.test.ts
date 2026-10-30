@@ -412,11 +412,22 @@ test.each([
                 role: "custom",
                 customType: "run-failed-before-reply",
                 display: true,
-                content: expect.stringContaining(failureMessage),
+                content: "Your request couldn't be completed.",
               }),
             ],
           });
         }
+
+        // Concise display copy must not discard the recovery cause retained by the writer.
+        expect(
+          loadTranscriptEventsSync({ agentId: "main", sessionKey: key, sessionId, storePath }),
+        ).toContainEqual(
+          expect.objectContaining({
+            type: "custom_message",
+            customType: "run-failed-before-reply",
+            details: { runId, error: expect.stringContaining(failureMessage) },
+          }),
+        );
 
         const retriedMaterialization = createDeferredCore<typeof project>();
         projectCloneMocks.materialize.mockReturnValueOnce(retriedMaterialization.promise);

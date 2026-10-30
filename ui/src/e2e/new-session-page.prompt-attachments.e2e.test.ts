@@ -145,7 +145,7 @@ suite.define(() => {
     }
   });
 
-  it("grows the first prompt downward without moving the identity, then caps at ten lines", async () => {
+  it("grows the first prompt downward to twelve lines, then scrolls internally", async () => {
     await withNewSessionPage(async (page) => {
       const gateway = await installMockGateway(page);
       await page.emulateMedia({ reducedMotion: "reduce" });
@@ -174,6 +174,8 @@ suite.define(() => {
         const style = getComputedStyle(element);
         return {
           height: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+          viewportHeight: element.ownerDocument.defaultView!.innerHeight,
           lineHeight: Number.parseFloat(style.lineHeight),
           overflowY: style.overflowY,
           padding: Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom),
@@ -184,9 +186,15 @@ suite.define(() => {
       expect(tenLines.height).toBeGreaterThanOrEqual(
         Math.floor(tenLines.lineHeight * 10 + tenLines.padding) - 1,
       );
+      expect(tenLines.scrollHeight).toBe(tenLines.height);
       expect(tenLines.overflowY).toBe("hidden");
 
-      const longPrompt = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n");
+      // More text than even the whole viewport can hold must exceed the pane budget.
+      const overflowLines = Math.ceil(tenLines.viewportHeight / tenLines.lineHeight) + 1;
+      const longPrompt = Array.from(
+        { length: overflowLines },
+        (_, index) => `line ${index + 1}`,
+      ).join("\n");
       await message.fill(longPrompt);
       // Classic scrollbars retain their gutter at the cap to prevent draft-height oscillation.
       await expect
@@ -201,6 +209,8 @@ suite.define(() => {
         triggers.boundingBox(),
         composer.boundingBox(),
       ]);
+      expect(capped.clientHeight).toBeCloseTo(tenLines.lineHeight * 12 + tenLines.padding, 0);
+      expect(capped.clientHeight).toBeLessThan(tenLines.viewportHeight);
       expect(capped.clientHeight).toBeLessThan(capped.scrollHeight);
       // Browser subpixel rounding may shift stable blocks by a pixel; larger movement is visible.
       for (const [before, after] of [

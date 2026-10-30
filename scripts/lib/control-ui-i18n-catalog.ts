@@ -239,7 +239,54 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   )) {
     sessionDetails[key] = value;
     if (key === "close") {
-      Object.assign(sessionDetails, registerChatDetailsEnglish.catalog.chat.sessionDetails);
+      // Rejoin cold inspector copy at its original positions to preserve translation-memory order.
+      const inspectorCopy = registerChatSessionOptionalEnglish.catalog.chat.sessionDetails;
+      for (const [name, copy] of Object.entries(
+        registerChatDetailsEnglish.catalog.chat.sessionDetails,
+      )) {
+        sessionDetails[name] = copy;
+        const inspectorKeys: Array<keyof typeof inspectorCopy> =
+          name === "contextTools"
+            ? [
+                "contextAgentWorkspace",
+                "contextProject",
+                "contextPersonal",
+                "contextOtherFiles",
+                "contextSystemTools",
+                "contextMcpTools",
+                "contextClientTools",
+                "contextAvailableOnDemand",
+                "contextDeferredEstimate",
+              ]
+            : name === "contextSystem"
+              ? ["contextFree"]
+              : name === "contextOffline"
+                ? [
+                    "contextUnavailable",
+                    "contextReserve",
+                    "contextCompactDescription",
+                    "contextCompact",
+                    "contextCompacting",
+                    "contextCompactShort",
+                  ]
+                : name === "contextExactCount"
+                  ? [
+                      "contextFreeShort",
+                      "contextReserveShort",
+                      "contextInputShort",
+                      "contextOutputShort",
+                      "contextSearch",
+                      "contextSearchCount",
+                      "contextSearchSkills",
+                      "contextSearchFiles",
+                      "contextSearchTools",
+                      "contextShowAll",
+                    ]
+                  : [];
+        for (const inspectorKey of inspectorKeys) {
+          sessionDetails[inspectorKey] = inspectorCopy[inspectorKey];
+        }
+      }
     }
   }
   // Keep source translation order while the composer notice copy follows its lazy view.
