@@ -304,6 +304,39 @@ retention, and input-recovery hints. Invalid actions and unknown session IDs inc
 an `error` message alongside `status: "failed"`. Terminal process failures retain
 their exit facts, including `finalizationFailed: true` when cleanup failed.
 
+## Preserving diagnostic output
+
+For a build or service startup that you may need to investigate later, redirect
+stdout and stderr to a file before starting it. `process log` can only read the
+retained in-memory output; increasing the TTL does not preserve it across a
+Gateway restart.
+
+Use the project's directory as `exec.workdir`. For a POSIX shell:
+
+```bash
+mkdir -p .dev-runtime && npm run build > .dev-runtime/build.log 2>&1
+```
+
+For PowerShell on Windows:
+
+```powershell
+New-Item -ItemType Directory -Force .dev-runtime -ErrorAction Stop | Out-Null
+npm.cmd run build > .dev-runtime/build.log 2>&1
+exit $LASTEXITCODE
+```
+
+The Windows example uses `npm.cmd` and preserves its exit code so a failed build
+still reports failure. These examples overwrite `build.log`; choose a distinct
+filename for each run you want to keep. Redirection follows the existing
+[exec approval policy](/tools/exec-approvals) and may require approval.
+
+Use `yieldMs` for ordinary long-running work, then collect the returned process
+handle when needed. Redirected commands can be quiet while running. Read the log
+file to investigate a failure and include its path with the result. On a persistent
+Gateway workspace, the file remains after process-result expiry or a Gateway
+restart; sandbox or worker workspace cleanup can still remove it. Log files are
+user-managed and can contain sensitive output: remove them when no longer needed.
+
 ## Examples
 
 Run a task longer than the default 10000 ms yield window and poll later:
