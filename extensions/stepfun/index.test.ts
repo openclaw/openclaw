@@ -28,7 +28,7 @@ async function applyConfig(providerId: string, methodId: string, config: OpenCla
   return result;
 }
 
-const catalogModels = ["step-3.7-flash", "step-3.5-flash"];
+const catalogModels = ["step-5-preview", "step-3.7-flash", "step-3.5-flash"];
 describe.each([
   ["stepfun", "standard-api-key-intl", undefined, catalogModels],
   ["stepfun-plan", "plan-api-key-cn", "merge", [...catalogModels, "step-3.5-flash-2603"]],
@@ -40,7 +40,7 @@ describe.each([
 
     expect(config.models?.providers?.[providerId]?.models).toEqual([]);
     expect(config.agents?.defaults?.models?.[`${providerId}/step-3.7-flash`]).toEqual({});
-    const alias = config.agents?.defaults?.models?.[`${providerId}/step-3.5-flash`]?.alias;
+    const alias = config.agents?.defaults?.models?.[`${providerId}/step-5-preview`]?.alias;
     expect(alias).toEqual(expect.any(String));
     expect(await apply(config)).toEqual(config);
   });
@@ -51,7 +51,7 @@ describe.each([
   });
 });
 
-it("adds Step 3.7 Flash without changing existing defaults", async () => {
+it("ships Step 5 Preview as the default and keeps Step 3.7 Flash facts", async () => {
   const { providers } = await registerStepFun();
   async function catalog(providerId: string) {
     const registration = plugins.requireRegisteredProvider(providers, providerId);
@@ -62,7 +62,7 @@ it("adds Step 3.7 Flash without changing existing defaults", async () => {
       resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
     });
     assert(result && "provider" in result, `Missing ${providerId} catalog`);
-    expect(registration.auth[0]?.starterModel).toBe(`${providerId}/step-3.5-flash`);
+    expect(registration.auth[0]?.starterModel).toBe(`${providerId}/step-5-preview`);
     return result.provider;
   }
   const standard = await catalog("stepfun");
@@ -70,6 +70,26 @@ it("adds Step 3.7 Flash without changing existing defaults", async () => {
   const standard35 = standard.models?.find((model) => model.id === "step-3.5-flash");
   expect(standard35?.compat?.supportsReasoningEffort).not.toBe(true);
   expect(standard35?.cost).toEqual({ input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0 });
+  for (const [provider, cost] of [
+    [standard, { input: 1, output: 2.7, cacheRead: 0.1, cacheWrite: 0 }],
+    [plan, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+  ] as const) {
+    const model = provider.models?.find((entry) => entry.id === "step-5-preview");
+    assert(model, "Missing Step 5 Preview");
+    expect(model).toMatchObject({
+      cost,
+      reasoning: true,
+      input: ["text", "image"],
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "high", max: "high" },
+      contextWindow: 1048576,
+      maxTokens: 65536,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high"],
+        maxTokensField: "max_tokens",
+      },
+    });
+  }
   for (const [provider, cost] of [
     [standard, { input: 0.2, output: 1.15, cacheRead: 0.04, cacheWrite: 0 }],
     [plan, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
@@ -138,8 +158,31 @@ it.each([
   const defaults = result.agents?.defaults;
   expect(defaults?.model).toEqual(model);
   expect(defaults?.models?.[primary]).toEqual(models[primary]);
-  expect(defaults?.models?.[`${providerId}/step-3.5-flash`]).toMatchObject({
+  expect(defaults?.models?.[`${providerId}/step-5-preview`]).toMatchObject({
     alias: expect.any(String),
   });
   expect(result.models?.providers?.[providerId]).toBeDefined();
 });
+
+it.each([
+  ["stepfun", "standard-api-key-intl", "StepFun"],
+  ["stepfun", "standard-api-key-cn", "StepFun"],
+  ["stepfun-plan", "plan-api-key-intl", "StepFun Plan"],
+  ["stepfun-plan", "plan-api-key-cn", "StepFun Plan"],
+])(
+  "keeps an existing %s/%s alias on the model that already owned it",
+  async (providerId, methodId, alias) => {
+    const priorRef = `${providerId}/step-3.5-flash`;
+    // Runtime alias keys are trimmed + lowercased, so the guard must normalize the
+    // same way or a padded legacy alias looks unowned and the new default steals it.
+    for (const priorAlias of [alias, ` ${alias} `]) {
+      const result = await applyConfig(providerId, methodId, {
+        agents: { defaults: { model: priorRef, models: { [priorRef]: { alias: priorAlias } } } },
+      });
+      const models = result.agents?.defaults?.models ?? {};
+      expect(models[priorRef]?.alias).toBe(priorAlias);
+      expect(models[`${providerId}/step-5-preview`]?.alias).toBeUndefined();
+      expect(result.agents?.defaults?.model).toBe(priorRef);
+    }
+  },
+);
