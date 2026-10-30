@@ -3,8 +3,6 @@ import dns from "node:dns/promises";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import levanto from "../extensions/levanto/index.js";
-import { removeAuthProfilesAcrossOwnerStores } from "../src/agents/auth-profiles/profiles.js";
-import { upsertAuthProfileWithLockOrThrow } from "../src/agents/auth-profiles/upsert-with-lock.js";
 import * as modelAuthProvider from "../src/agents/model-auth-provider.js";
 import { acquireAgentRunPreparedModelRuntime } from "../src/agents/prepared-model-runtime.js";
 import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
@@ -149,25 +147,24 @@ async function runScenario(
       await barrier.wait(settled);
       expect(auth).toHaveBeenCalledOnce();
       expect(received).toHaveLength(0);
-      if (change === "revoked") {
-        expect(
-          await removeAuthProfilesAcrossOwnerStores({
-            cfg,
-            agentDir,
-            provider: "levanto",
-            profileIds: [profileId],
-          }),
-        ).toBe(true);
-      } else if (change === "replaced") {
-        await upsertAuthProfileWithLockOrThrow({
-          profileId,
-          agentDir,
-          credential: {
-            type: "api_key",
-            provider: "levanto",
-            key: "synthetic-replacement",
+      if (change === "revoked" || change === "replaced") {
+        // Test workers persist through the fixture owner, not host-only agent admission.
+        await state.writeAuthProfiles(
+          {
+            version: 1,
+            profiles:
+              change === "revoked"
+                ? {}
+                : {
+                    [profileId]: {
+                      type: "api_key",
+                      provider: "levanto",
+                      key: "synthetic-replacement",
+                    },
+                  },
           },
-        });
+          agentId,
+        );
       }
       release.resolve();
       const outcome = await settled;

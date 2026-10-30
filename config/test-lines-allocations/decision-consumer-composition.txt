@@ -1,2 +1,2 @@
-# Real native HTTP and consumer retirement: 188 new lines, offset by six lines removed in earlier stack slices.
-182
+# Native consumer completion and fixture persistence: 185 net lines, offset by six earlier stack deletions.
+185
