@@ -185,6 +185,8 @@ export type DoctorConfigCapture = {
   configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
   deferredInspectionCheckIds?: string[];
 };
+/** Runs a policy check under Doctor's held maintenance owner and its open scope. */
+export type DoctorPolicyCustodyOwner = { assertCurrent(policy: () => void): void };
 export type UpdateDoctorWriteAuthority = {
   /** An optional work profile; config preparation still proves eligibility. */
   retirementOnly?: true;
@@ -192,6 +194,8 @@ export type UpdateDoctorWriteAuthority = {
   serviceInspectionDeadlineAtMs?: number;
   inputHash: string;
   assertCurrent: () => void;
+  /** Doctor lends its held maintenance owner to `assertCurrent`; see doctor-policy-custody. */
+  lendPolicyCustody?: (owner: DoctorPolicyCustodyOwner | undefined) => void;
   commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
   databaseGenerations?: UpdateDatabaseGenerations;
