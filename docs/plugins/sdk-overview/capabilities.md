@@ -105,8 +105,12 @@ A deployment can select an optional repository policy with
 Registration alone does not select it. A selected owner that is missing,
 disabled, unloaded, or disposed blocks admission rather than falling back.
 
-The integration interprets authenticated connection metadata and admits GitHub
-App source access for worker repository preparation. Its `withIdentity` callback
+The integration interprets authenticated connection metadata and admits source
+access for worker repository preparation with native, GitHub App, and managed
+OAuth or PAT credentials. Selecting a managed profile does not bypass policy:
+admission runs before refresh or profile lookup, while the native managed-profile
+owner retains credential reading and rotation. Policy admission does not request
+a native bearer for a managed profile. Its `withIdentity` callback
 receives the original caller, exact session and request binding, current profile
 reader, and a live `assertCurrent` guard. Check that guard after awaited policy
 work and immediately before effects. The native issuer retains signing keys;

@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { GitHubCredentialReader } from "../agents/github-credential-reader.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getRepositoryIntegration } from "../plugins/repository-integration-runtime.js";
 import type {
   RepositoryActor,
@@ -144,6 +145,17 @@ export function repositoryChatDispatchCredentialReader(
   });
 }
 
+/** Worker source access cannot replace required caller admission with stored credentials. */
+export function assertRepositoryDispatchAdmission(
+  reader: GitHubCredentialReader | undefined,
+  config?: OpenClawConfig,
+): void {
+  if (getRepositoryIntegration(config) && !reader?.admit) {
+    throw new Error("Repository worker startup requires current GitHub dispatch admission");
+  }
+  reader?.assertCurrent?.();
+}
+
 /** A dispatch reader retains its original actor and exact request identity. */
 export function repositoryDispatchCredentialReader(params: {
   client: GatewayClient | null | undefined;
@@ -184,7 +196,7 @@ function repositoryCredentialReader(params: {
     actor.assertCurrent();
     assertPolicyCurrent?.();
   };
-  const reader: GitHubCredentialReader = async (env, admission) => {
+  const admit = async (read?: (reader: GitHubCredentialReader) => Promise<unknown>) => {
     assertReaderCurrent();
     await withRepositoryIdentity(
       actor,
@@ -192,13 +204,16 @@ function repositoryCredentialReader(params: {
       async (_env, readCredential, assertCurrent) => {
         assertPolicyCurrent = assertCurrent;
         assertCurrent();
-        await readCredential(env, admission);
+        await read?.(readCredential);
         assertCurrent();
-        return {};
+        return undefined;
       },
     );
     return undefined;
   };
+  const reader: GitHubCredentialReader = (env, admission) =>
+    admit((readCredential) => readCredential(env, admission));
+  reader.admit = admit;
   reader.assertCurrent = assertReaderCurrent;
   return reader;
 }
