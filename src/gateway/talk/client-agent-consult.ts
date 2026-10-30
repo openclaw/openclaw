@@ -238,6 +238,7 @@ export function createTalkClientAgentConsultRunner(params: {
               operatorAuthority: _operatorAuthority,
               traceAuthorized: _traceAuthorized,
               originatingChannel: _originatingChannel,
+              sessionKey: _sessionKey,
               ...executionContext
             } = toolContext.toolAuthorityOverlay;
             return {
