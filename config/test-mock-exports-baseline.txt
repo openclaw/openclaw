@@ -1645,7 +1645,6 @@
 ["src/agents/github-exec-credential.test.ts","../infra/fs-safe.js","bcfb51e37441acf62947896190d4909a3f21241677a7889a5e3f74cc3e9d91d3",1]
 ["src/agents/github-managed-credential.test.ts","../process/exec.js","e424257697d39948773efe0a3942dc6e89d6295a5c6386c873c5f976eb58cf1d",1]
 ["src/agents/github-managed-credential.test.ts","./github-oauth-records.js","2060d6185d957d63eb53c07be98310814907d2878b0f5a5d219422ce5c8b11ed",1]
-["src/agents/github-tool-identity.test.ts","./github-oauth-records.js","1c9bc36bb2ae3c818b6c0af21f8cbc0e7b1cea68f0b09dc2bcfd3cf455ea9f04",1]
 ["src/agents/github-tool-profile-cleanup.test.ts","./github-oauth-records.js","61b7b9db319a03c318828440061d8282c2a3d72248e62ff9878ffec5aa83ae94",1]
 ["src/agents/harness/agent-end-side-effects.test.ts","./lifecycle-hook-helpers.js","16d16cff63f168b08ce43eb08057d49bc03e018713f7bc98a73f3c61ef60f4ab",1]
 ["src/agents/harness/builtin-openclaw.test.ts","../embedded-agent-runner/run/attempt.js","e8a12ed96055114b67422388214eebe76347abb574dbc9c8e63f8631554eb6f2",1]
