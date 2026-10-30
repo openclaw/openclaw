@@ -105,13 +105,9 @@ function readBody(database: DatabaseSync, seq: number, mode: "sql" | "row" = "sq
 }
 
 function compressedRecord(bytes: Uint8Array, rawBytes = bytes.byteLength): PayloadFixture {
-  const codec = resolveZstdCodec();
-  if (!codec) {
-    throw new Error("Transcript compression boundary tests require native zstd support");
-  }
   return {
     event_json: null,
-    event_zstd: codec.compress(bytes, 1, true),
+    event_zstd: resolveZstdCodec().compress(bytes, 1, true),
     event_utf8_bytes: rawBytes,
     navigation_json: '{"type":"custom"}',
   };
@@ -135,6 +131,19 @@ describe("transcript payload storage boundary", () => {
     }
     expect(prepared.event_zstd).not.toBeNull();
     expect(readTranscriptPayload(prepared)).toBe(original);
+    for (const role of ["user", "assistant"]) {
+      const event = { type: "message", id: "x".repeat(1100), message: { role, content: "" } };
+      const json = JSON.stringify(event);
+      const observation = observeSqliteReadSql(
+        nodeSqlite.requireNodeSqlite().StatementSync.prototype,
+      );
+      try {
+        expect(prepareTranscriptPayload(database, json, event).event_json).toBe(json);
+        expect(observation.queries).toEqual([]);
+      } finally {
+        observation.restore();
+      }
+    }
     for (const surrogate of ["\ud800", "\udfff"]) {
       const malformed = `{"type":"custom","data":"${"x".repeat(2048)}${surrogate}"}`;
       const identity = prepareTranscriptPayload(database, malformed);
@@ -190,58 +199,49 @@ describe("transcript payload storage boundary", () => {
   });
 
   it("publishes predicate columns with inserts and rewrites and rolls both back together", () => {
-    const database = openNodeSqliteDatabase(":memory:");
-    try {
-      createTable(database);
-      database.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT;
-        ALTER TABLE transcript_events ADD COLUMN created_at INTEGER`);
-      const write = createTranscriptEventInserter(database, "session");
-      write({
-        seq: 1,
-        createdAt: 1,
-        eventJson: '{"type":"message","message":{"role":"user","role":"assistant"}}',
-      });
-      const read = () =>
-        database
-          .prepare(`SELECT navigation_type, navigation_last_type,
-        navigation_display, message_role, navigation_valid FROM transcript_events WHERE seq = 1`)
-          .get();
-      expect(read()).toEqual({
-        navigation_type: "message",
-        navigation_last_type: "message",
-        navigation_display: 0,
-        message_role: "user",
-        navigation_valid: 1,
-      });
-      database.exec("BEGIN");
-      createTranscriptPayloadUpdater(
+    using database = openNodeSqliteDatabase(":memory:");
+    createTable(database);
+    database.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT;
+      ALTER TABLE transcript_events ADD COLUMN created_at INTEGER`);
+    const write = createTranscriptEventInserter(database, "session");
+    write({
+      seq: 1,
+      createdAt: 1,
+      eventJson: '{"type":"message","message":{"role":"user","role":"assistant"}}',
+    });
+    const read = () =>
+      database
+        .prepare(`SELECT navigation_type, navigation_last_type,
+      navigation_display, message_role, navigation_valid FROM transcript_events WHERE seq = 1`)
+        .get();
+    const original = {
+      navigation_type: "message",
+      navigation_last_type: "message",
+      navigation_display: 0,
+      message_role: "user",
+      navigation_valid: 1,
+    };
+    expect(read()).toEqual(original);
+    database.exec("BEGIN");
+    createTranscriptPayloadUpdater(
+      database,
+      "session",
+    )({
+      seq: 1,
+      ...prepareTranscriptPayload(
         database,
-        "session",
-      )({
-        seq: 1,
-        ...prepareTranscriptPayload(
-          database,
-          '{"type":"custom_message","type":"reset","display":true}',
-        ),
-      });
-      expect(read()).toEqual({
-        navigation_type: "custom_message",
-        navigation_last_type: "reset",
-        navigation_display: 1,
-        message_role: null,
-        navigation_valid: 1,
-      });
-      database.exec("ROLLBACK");
-      expect(read()).toEqual({
-        navigation_type: "message",
-        navigation_last_type: "message",
-        navigation_display: 0,
-        message_role: "user",
-        navigation_valid: 1,
-      });
-    } finally {
-      database.close();
-    }
+        '{"type":"custom_message","type":"reset","display":true}',
+      ),
+    });
+    expect(read()).toEqual({
+      navigation_type: "custom_message",
+      navigation_last_type: "reset",
+      navigation_display: 1,
+      message_role: null,
+      navigation_valid: 1,
+    });
+    database.exec("ROLLBACK");
+    expect(read()).toEqual(original);
   });
 
   it.each([

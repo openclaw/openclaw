@@ -48,6 +48,15 @@ decoded rows even when a caller retains the inactive handle. Predicate compariso
 baselines last only until release; a late acknowledgement cannot restore them.
 Active authorities retain their existing publication and final-effect checks.
 
+Host file writes prepare retained session-generation authority at their final
+effect boundary, after overwrite rollback capture. The existing session worker
+validates physical sources and refreshes facts after committed native mutations;
+the final host assertion checks the retained generation, native handle and revision,
+and live owner. Lifecycle adapters preserve that preparation through indirect
+settings reads. Ordinary synchronous assertions, opaque callback sources, and
+uncommitted native transactions retain their existing checks; an async wrapper
+alone does not move those callbacks off the main thread.
+
 Finished worker admissions release publication observers and request callbacks.
 Committed facts remain available for lost-reply recovery, which runs
 after transport cleanup. Workspace mutations release their payload and previous
@@ -914,9 +923,13 @@ or cold projections remain incomplete and are not marked as successfully backfil
 Usage-cost refresh holds the exclusive refresh lease while reading a stale rollup
 body and its monthly partitions by key, without revalidating their metadata.
 Discovery still reads only metadata, and body reads retain their payload bounds.
-Full refresh transfers stale row snapshots in batches of up to 64 rows or 1 MiB
-of JSON and key data, with oversized rows sent alone. A final prune request uses
-the existing worker transaction and checkpoint and timestamp comparisons.
+Full refresh prunes stale row snapshots in batches of up to 1,024 rows or 1 MiB
+of JSON and key data, with oversized rows sent alone. Each batch waits outside
+the existing writer FIFO until it drains, then commits through its ordinary
+transaction and checkpoint and timestamp comparisons. A row and its partitions
+remain atomic; a later failed batch leaves earlier batches committed. Restart
+or the next refresh rediscovers remaining obsolete rows, making partial cleanup
+safe to retry without retaining the whole inventory on the host.
 Targeted refreshes do not prune other keys. Selected month deletion uses bounded
 key batches within the rollup write transaction. Transcript statistics use
 the existing batched read directly, without registering per-session write scopes

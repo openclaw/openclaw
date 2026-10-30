@@ -1617,6 +1617,42 @@ function normalizeNpmVersionDrift<T>(lockfile: T): T {
   return lockfile;
 }
 
+function normalizeNpmRegistryIntegrities(lockfile: unknown) {
+  const pnpmIntegrities = readPnpmLockPackageIntegrities();
+  for (const [lockPath, metadata] of Object.entries(recordAt(lockfile, "packages") ?? {})) {
+    if (
+      !isRecord(metadata) ||
+      metadata.link === true ||
+      metadata.inBundle === true ||
+      typeof metadata.resolved !== "string" ||
+      !/^https?:\/\//u.test(metadata.resolved) ||
+      typeof metadata.integrity !== "string" ||
+      !/^sha1-[A-Za-z0-9+/]{27}=$/u.test(metadata.integrity)
+    ) {
+      continue;
+    }
+    const name =
+      typeof metadata.name === "string"
+        ? metadata.name
+        : parseLockPackagePath(lockPath).at(-1)?.name;
+    const packageKey = `${name}@${String(metadata.version)}`;
+    const pins = pnpmIntegrities.get(packageKey);
+    if (pins?.has(metadata.integrity)) {
+      continue;
+    }
+    const [pin] = pins ?? [];
+    if (pins?.size !== 1 || !pin || !/^sha512-[A-Za-z0-9+/]{86}==$/u.test(pin)) {
+      throw new Error(
+        `cannot normalize registry integrity for ${packageKey}: expected one pnpm SHA512 pin`,
+      );
+    }
+    // Some mirrors expose only dist.shasum. Carry the reviewed archive constraint,
+    // not an assertion that SHA1 metadata authenticated those bytes. Consumers
+    // still verify downloaded archives against this SHA512; strong mismatches stay errors.
+    metadata.integrity = pin;
+  }
+}
+
 export function createNpmPackageLockInstallStrategyArgs(
   options: Pick<NpmLockOptions, "installStrategy"> = {},
 ) {
@@ -1670,6 +1706,7 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
         parseJsonObject(readFileSync(path.join(tempDir, "package-lock.json"), "utf8")),
       ),
     );
+    normalizeNpmRegistryIntegrities(generated);
     let npmBundleTarball: Buffer | undefined;
     const npmVersion = recordAt(recordAt(generated, "packages"), "node_modules/npm")?.version;
     if (typeof npmVersion === "string" && NPM_BUNDLED_DEPENDENCY_POLICIES.has(npmVersion)) {

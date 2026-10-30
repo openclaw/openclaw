@@ -77,7 +77,6 @@ export function assertDurableExecAvailable(
   args: ExecToolArgs,
   host: ExecHost,
   allowBackground: boolean,
-  secretGrantCount = 0,
 ): void {
   if (!args.durable) {
     return;
@@ -85,11 +84,6 @@ export function assertDurableExecAvailable(
   if (host !== "gateway" || !allowBackground) {
     throw new Error(
       "Durable exec requires Gateway-host background execution on Linux with systemd 250 or newer, a reachable user manager, and the process tool enabled. Sandbox, node, and worker execution are unsupported.",
-    );
-  }
-  if (secretGrantCount) {
-    throw new Error(
-      "Durable exec cannot use secret-egress proxy grants because they expire when the Gateway restarts. Use non-durable background execution or a directly provided credential instead.",
     );
   }
 }
