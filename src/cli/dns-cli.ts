@@ -110,16 +110,25 @@ function publishConfigFile(filePath: string, content: string): void {
     // The atomic writer applies dirMode to the parent directory, so pass the
     // operator's own mode instead of tightening the CoreDNS directory.
     dirMode: fs.statSync(path.dirname(target)).mode & 0o7777,
-    // A fresh file keeps the umask-sensitive creation contract of the plain
-    // write it replaced (0666 filtered by the operator's umask).
-    ...(existing ? { preserveExistingMode: true } : { mode: 0o666 & ~process.umask() }),
-    // A rename publishes a new inode: hand the staged file the operator's
-    // ownership before it replaces theirs. Setting a group outside the
-    // invoking account's memberships fails EPERM and routes the publication
-    // through the privileged path below.
-    beforeRename: existing
-      ? ({ tempPath }) => fs.chownSync(tempPath, existing.uid, existing.gid)
-      : undefined,
+    // Stage privately: the staged file is created 0600 and only becomes the
+    // operator's mode after the ownership hand-off, so no account that cannot
+    // read the operator's file can read the staged configuration - not even
+    // during the window between writing it and publishing it.
+    mode: 0o600,
+    beforeRename: ({ tempPath }) => {
+      if (existing) {
+        // A rename publishes a new inode: hand the staged file the operator's
+        // ownership and mode before it replaces theirs. Setting a group outside
+        // the invoking account's memberships fails EPERM and routes the
+        // publication through the privileged path below.
+        fs.chownSync(tempPath, existing.uid, existing.gid);
+        fs.chmodSync(tempPath, existing.mode & 0o7777);
+        return;
+      }
+      // A fresh file keeps the umask-sensitive creation contract of the plain
+      // write it replaced (0666 filtered by the operator's umask).
+      fs.chmodSync(tempPath, 0o666 & ~process.umask());
+    },
     syncTempFile: true,
     syncParentDir: true,
     tempPrefix: ".openclaw-dns-config",
@@ -154,11 +163,17 @@ function publishConfigFileWithSudo(filePath: string, content: string): void {
     } else {
       run("sudo", ["chmod", (0o666 & ~process.umask()).toString(8), tempPath]);
     }
+    // Flush the staged bytes before the rename, matching the ordinary
+    // publisher's durability: a crash after the rename must not leave the
+    // published name pointing at missing or incomplete content.
+    run("sudo", ["sync", tempPath]);
     const published = spawnSync("sudo", ["mv", "-f", tempPath, target], {
       encoding: "utf-8",
       stdio: "inherit",
     });
     assertSpawnSucceeded(`sudo mv ${tempPath} ${target}`, published);
+    // Flush the directory entry so the rename itself survives a crash.
+    run("sudo", ["sync", path.dirname(target)]);
   } catch (error) {
     // The staged file is inert and the operator's file was never touched.
     spawnSync("sudo", ["rm", "-f", tempPath], {

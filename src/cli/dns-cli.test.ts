@@ -211,6 +211,41 @@ describe("dns-cli probe bounds", () => {
     );
   });
 
+  unix("keeps the staged configuration private until the operator's mode is restored", async () => {
+    const etcDir = path.join(brewPrefix, "etc", "coredns");
+    const corefilePath = path.join(etcDir, "Corefile");
+    fs.mkdirSync(etcDir, { recursive: true });
+    fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
+    fs.chmodSync(corefilePath, 0o640);
+    // The staged sibling is created by the invoking account, whose group
+    // differs from the operator's file group. Observe the staged file at the
+    // ownership hand-off: it holds the configuration bytes there, and no
+    // account outside the operator's readership may be able to read it.
+    const stagedModes: number[] = [];
+    const originalChownSync = fs.chownSync;
+    const chownSpy = vi.spyOn(fs, "chownSync").mockImplementation((...args) => {
+      const stagedPath = args[0];
+      if (typeof stagedPath === "string") {
+        stagedModes.push(fs.statSync(stagedPath).mode & 0o777);
+      }
+      return originalChownSync(...args);
+    });
+
+    try {
+      await runDnsSetupApply();
+    } finally {
+      chownSpy.mockRestore();
+    }
+
+    // The staged file was still private while it held the configuration.
+    expect(stagedModes.length).toBeGreaterThan(0);
+    for (const mode of stagedModes) {
+      expect(mode).toBe(0o600);
+    }
+    // The published file carries the operator's mode.
+    expect(fs.statSync(corefilePath).mode & 0o777).toBe(0o640);
+  });
+
   unix("keeps the operator's Corefile mode across a successful publication", async () => {
     const etcDir = path.join(brewPrefix, "etc", "coredns");
     const corefilePath = path.join(etcDir, "Corefile");
@@ -294,15 +329,16 @@ describe("dns-cli probe bounds", () => {
       expect(fs.statSync(corefilePath).mode & 0o777).toBe(0o640);
       // Staging stayed private: the 0600 sibling was created before any
       // configuration byte was written into it.
-      const commands = spawnSyncMock.mock.calls.map((call) =>
-        [call[0], ...(call[1] as string[])].join(" "),
-      );
-      const installIndex = commands.findIndex((command) =>
-        command.includes("install -m 600 /dev/null"),
-      );
-      const teeIndex = commands.findIndex((command) => command.includes(" sudo tee "));
+      const sudoCalls = spawnSyncMock.mock.calls.filter((call) => call[0] === "sudo");
+      const installIndex = sudoCalls.findIndex((call) => (call[1] as string[])[0] === "install");
+      const teeIndex = sudoCalls.findIndex((call) => (call[1] as string[])[0] === "tee");
       expect(installIndex).toBeGreaterThanOrEqual(0);
       expect(teeIndex).toBeGreaterThan(installIndex);
+      // The privileged publisher flushed the staged bytes before publishing.
+      const syncIndex = sudoCalls.findIndex((call) => (call[1] as string[])[0] === "sync");
+      const moveIndex = sudoCalls.findIndex((call) => (call[1] as string[])[0] === "mv");
+      expect(syncIndex).toBeGreaterThanOrEqual(0);
+      expect(syncIndex).toBeLessThan(moveIndex);
       // No staging sibling survived publication.
       expect(fs.readdirSync(etcDir).filter((entry) => entry.startsWith(".Corefile"))).toEqual([]);
     },
