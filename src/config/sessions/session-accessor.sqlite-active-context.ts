@@ -473,6 +473,28 @@ export function readSessionTranscriptBoundedActiveContextCore(
             sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
           ])
           .where("active.session_id", "=", projection.resolved.sessionId)
+          // Classify from small owner facts before touching payloads. Missing identities
+          // remain candidates for exact imports and id-less control events.
+          .where(
+            "event.seq",
+            "in",
+            db
+              .selectFrom("session_transcript_active_events as active")
+              .leftJoin("transcript_event_identities as identity", (join) =>
+                join
+                  .onRef("identity.session_id", "=", "active.session_id")
+                  .onRef("identity.seq", "=", "active.event_seq"),
+              )
+              .select("active.event_seq")
+              .where("active.session_id", "=", projection.resolved.sessionId)
+              .where((eb) =>
+                eb.or([
+                  eb("identity.seq", "is", null),
+                  eb("identity.event_type", "in", ["custom", "reset", "branch_summary"]),
+                  eb("active.context_eligible", "=", 0),
+                ]),
+              ),
+          )
           .$if(fence !== undefined, (query) =>
             query.where("active.event_seq", "<", fence!.beforeRawSeq),
           )

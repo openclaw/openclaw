@@ -4,7 +4,13 @@ import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { upsertSessionEntryCore } from "./session-accessor.js";
+import {
+  appendTranscriptEvent,
+  appendTranscriptMessage,
+  upsertSessionEntryCore,
+  waitForSessionTranscriptProjection,
+} from "./session-accessor.js";
+import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 
@@ -105,6 +111,45 @@ it("retains accepted background artifacts across bounded placement and compactio
     expect(
       JSON.stringify(loadTranscriptEventsSync(scope).slice(0, JSON.parse(before).length)),
     ).toBe(before);
+  }));
+
+it("honors id-less resets beside indexed history when bounding background results", () =>
+  withOpenClawTestState({ label: "id-less-background-reset" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "placement",
+      sessionKey: "agent:main:placement",
+      storePath: state.statePath("transcript.sqlite"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await SessionManager.openAsync(scope);
+    await appendTranscriptMessage(scope, {
+      eventId: "pending",
+      message: {
+        ...makeAgentAssistantMessage({
+          provider: "openclaw",
+          model: "automation-result",
+          content: [{ type: "text", text: "Result before reset" }],
+        }),
+        excludeFromContext: true,
+        openclawModelPlacement: "pending",
+      },
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      reason: "new",
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "tail",
+      message: { role: "user", content: "Later request", timestamp: 1 },
+    });
+    await waitForSessionTranscriptProjection(scope);
+    const context = readSessionTranscriptBoundedActiveContextCore(scope, {
+      maxBytes: 16_384,
+      maxEvents: 1,
+    });
+    expect(context.events).toMatchObject([{ type: "session" }, { id: "tail" }]);
+    expect(context.totalEvents).toBe(3);
   }));
 
 it("reuses freshly decoded model payloads while keeping stored and subsequent contexts detached", () =>

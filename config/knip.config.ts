@@ -74,6 +74,8 @@ const repositoryScriptEntries = [
   "scripts/perf/session-membership-retention-measure.ts!",
   "scripts/perf/session-message-custody-payload-measure.mjs!",
   "scripts/perf/session-patch-response-measure.ts!",
+  "scripts/perf/session-resource-loader-fixture.mjs!",
+  "scripts/perf/session-resource-loader-measure.mjs!",
   "scripts/perf/sessions-files-title-measure.ts!",
   "scripts/perf/sessions-usage-measure.ts!",
   "scripts/perf/tool-loop-outcome-measure.ts!",
