@@ -131,8 +131,16 @@ function parseUnit(content) {
     "SuccessExitStatus",
     "OOMPolicy",
     "KillMode",
+    "Delegate",
+    "DelegateSubgroup",
   ]);
   if ([...directives.keys()].some((key) => !supported.has(key))) {
+    fail();
+  }
+  if (
+    !["", "yes"].includes(single("Delegate")) ||
+    !["", "gateway"].includes(single("DelegateSubgroup"))
+  ) {
     fail();
   }
   // Generated units use whole seconds. Missing policy follows systemd's 90s

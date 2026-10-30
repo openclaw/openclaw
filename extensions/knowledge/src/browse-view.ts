@@ -145,7 +145,7 @@ export function renderBrowse(
   );
   if (s.kind === "page" && s.vocabulary) {
     let group = "";
-    for (const def of [...s.vocabulary.definitions]
+    for (const def of s.vocabulary.definitions
       .filter((d) => d.recordCount > 0)
       .toSorted(
         (a, b) =>

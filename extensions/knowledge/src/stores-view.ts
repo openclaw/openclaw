@@ -201,7 +201,7 @@ export function storesSection(
   const inventory = el("section", undefined, "knowledge-store-inventory");
   inventory.append(el("h3", "Stores", "knowledge-eyebrow"));
   const list = el("div", undefined, "knowledge-surface");
-  for (const entry of [...snapshot.stores].toSorted(
+  for (const entry of snapshot.stores.toSorted(
     (a, b) => Number(b.kind === "named") - Number(a.kind === "named"),
   )) {
     const row = el("div", undefined, "knowledge-store-row"),
