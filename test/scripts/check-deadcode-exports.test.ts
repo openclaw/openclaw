@@ -595,7 +595,7 @@ const unrelatedArgs = [
     for (const [relative, name] of [
       ["scripts/perf/transcript-broadcast-measure.ts", "installTeamStressTelemetryIpc"],
       ["test/scripts/team-shape-stress.test.ts", "startTeamStressTelemetry"],
-    ]) {
+    ] as const) {
       const file = path.resolve(relative);
       const source = fs.readFileSync(file, "utf8");
       expect(compile()).toContain(`${name} as __dynamic`);
