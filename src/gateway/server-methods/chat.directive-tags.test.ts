@@ -1413,6 +1413,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-matching-empty-leaf-",
     );
+    mockState.finalText = "accepted";
 
     const payload = await send({
       idempotencyKey: "idem-matching-empty-leaf",
@@ -1427,9 +1428,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(context.addChatRun).toHaveBeenCalledTimes(1);
     expect(mockState.lastDispatchOriginatingLeafEntryId).toBeNull();
-    expect(payload?.runId).toBe("idem-matching-empty-leaf");
-    expect(payload?.state).toBe("final");
-    expect(extractFirstTextBlock(getMessage(payload))).toBe("");
+    expect(payload).toMatchObject({ runId: "idem-matching-empty-leaf", state: "final" });
+    expect(extractFirstTextBlock(getMessage(payload))).toBe("accepted");
   });
 
   it.each(["active descendant", "non-injectable CLI owner"] as const)(
