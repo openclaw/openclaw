@@ -55,6 +55,8 @@ Keep a background command running across Gateway restarts. Requires explicit `ba
 
 Durable commands have no interactive input: `pty: true`, `awaitResults: true`, and process input actions are refused. Exec policy, approvals, cwd restrictions, and environment preparation still apply. Proxy-backed secret grants are refused because the Gateway owns their lifetime; use non-durable background execution or a directly provided credential. A managed GitHub identity is allowed, but its launch token is not refreshed for the running command and can expire during long work.
 
+Durable units receive their launch environment as user-manager unit properties held in memory/tmpfs and readable by the same Unix user via `systemctl --user show`; use durable mode only where the Gateway user's other processes may see that environment. Durable process bookkeeping does not copy launch environment values into its OpenClaw state-database records or logs.
+
 The process uses a transient systemd user service with `ExitType=cgroup`, so descendants keep the process running after its initial shell exits. `timeoutSeconds` applies as `RuntimeMaxSec`, and output appends under `$OPENCLAW_STATE_DIR/processes/`. After restart, the same registry adopts the process under its existing session scope; `process list`, `poll`, `log`, and `kill` continue to work. See [durable processes](/gateway/background-process#durable-processes) for completion authority, retention, and host lifetime limits.
 </ParamField>
 
