@@ -46,6 +46,10 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - A saved `toolOverrides.webSearch=false` excludes core `web_search`. Changing
     this override selects the matching preview instead of reusing the other
     state's cached inventory.
+  - Saved sandbox policy filters both core tools and warm MCP catalogs. A session
+    that requires a sandbox keeps that policy even when local sandbox mode is
+    off. A matching active remote-exec placement also applies sandbox policy.
+    Previewing tools does not provision a sandbox or grant execution authority.
   - `tools.effective` is read-only for MCP: it may project a warm session MCP
     catalog through the final tool policy, but does not create MCP runtimes,
     connect transports, or issue `tools/list`. If no matching warm catalog

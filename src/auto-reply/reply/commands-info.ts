@@ -2,7 +2,10 @@ import {
   resolveEffectiveToolInventory,
   acquireEffectiveToolInventoryRuntimeModelContext,
 } from "../../agents/tools-effective-inventory.js";
+import { resolveSessionToolPreviewSandboxPolicy } from "../../agents/tools-effective-sandbox-policy.js";
+import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { getInProcessGatewayRequestContext } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   prepareSkillCommandsForAgents,
   resolveSkillCommandInvocation,
@@ -151,9 +154,19 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
     await using acquired =
       await acquireEffectiveToolInventoryRuntimeModelContext(inventoryModelContext());
     return await acquired.run(async (runtimeModelContext) => {
+      const gateway = getInProcessGatewayRequestContext(
+        readChannelContextGatewayContextResolver(params.rootCtx ?? params.ctx),
+      );
       const result = await resolveEffectiveToolInventory({
         ...inventoryModelContext(),
         sessionKey: params.sessionKey,
+        sandboxToolPolicy: await resolveSessionToolPreviewSandboxPolicy({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          sessionEntry: targetSessionEntry,
+          context: gateway,
+        }),
         modelApi: runtimeModelContext.modelApi,
         runtimeModel: runtimeModelContext.runtimeModel,
         messageProvider: params.command.channel,

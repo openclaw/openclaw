@@ -24,6 +24,7 @@ import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-message-fixtures.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
 import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
@@ -301,6 +302,7 @@ describe("control-ui-i18n generated ownership", () => {
     const catalog: unknown = JSON.parse(result.stdout);
     const source = flattenCatalog(catalog, "en");
     for (const fragment of [
+      registerChatDetailsEnglish.catalog,
       registerChatSessionEnglish.catalog,
       registerChatSessionOptionalEnglish.catalog,
       registerCodeBlocksEnglish.catalog,
@@ -338,6 +340,165 @@ describe("control-ui-i18n generated ownership", () => {
       "eventTitleOne",
       "eventTitleMany",
       "eventDescription",
+    ]);
+    expect(
+      [...source.keys()]
+        .filter((key) => key.startsWith("chat.sessionSharing."))
+        .map((key) => key.slice(20)),
+    ).toEqual([
+      "sessionAccess",
+      "sharedDescription",
+      "readOnlyDescription",
+      "suggestDescription",
+      "draftDescription",
+      "linkSharing",
+      "anyoneWithLink",
+      "publicLinkDescription",
+      "publicDraftDescription",
+      "linkUnavailable",
+      "permissions",
+      "creator",
+      "canRead",
+      "canSuggest",
+      "canSend",
+      "searchPeople",
+      "closeSearch",
+      "noPeopleFound",
+      "tryAnotherName",
+      "sharingOptions",
+      "menu",
+      "share",
+      "current",
+      "visibility",
+      "shared",
+      "readOnly",
+      "suggest",
+      "draft",
+      "publishDraft",
+      "owner",
+      "noPeople",
+      "readOnlyNotice",
+      "scopeReadOnlyNotice",
+      "guestWelcomePending",
+      "guestWelcomeFailed",
+      "guestWelcomeRetry",
+      "publicAccess",
+      "publicIndicator",
+      "worldReadable",
+      "notPublic",
+      "enablePublicAccess",
+      "disablePublicAccess",
+      "copyPublicLink",
+      "publicConfirmTitle",
+      "publicConfirmMessage",
+      "publicConfirmEnable",
+      "publicEnabled",
+      "publicDisabled",
+      "publicUnavailable",
+    ]);
+    expect(
+      [...source.keys()]
+        .filter((key) => key.startsWith("chat.subagentsPanel."))
+        .map((key) => key.slice(20)),
+    ).toEqual([
+      "nativeTitle",
+      "nativeCoverage",
+      "nativeEmpty",
+      "nativeTruncated",
+      "nativeRetry",
+      "nativeStatus.running",
+      "nativeStatus.completed",
+      "nativeStatus.failed",
+      "nativeStatus.interrupted",
+      "title",
+      "desktopFilter.all",
+      "desktopFilter.active",
+      "desktopFilter.waiting",
+      "desktopFilter.done",
+      "desktopFilterLabel",
+      "desktopSearch",
+      "desktopCloseSearch",
+      "desktopWorking",
+      "workingFor",
+      "desktopWaiting",
+      "desktopFor",
+      "desktopShowMore",
+      "desktopNoResults",
+      "desktopNoResultsDescription",
+      "mobileFinished",
+      "stopConfirmTitle",
+      "stopConfirmMessage",
+      "stopConfirmAction",
+      "back",
+      "running",
+      "finished",
+      "callsOne",
+      "callsMany",
+      "callsAtLeast",
+      "empty",
+      "noRunning",
+      "refresh",
+      "stop",
+      "stopping",
+      "elapsed",
+      "duration",
+    ]);
+    expect(
+      [...source.keys()]
+        .filter((key) => key.startsWith("chat.sessionHeader.continueInTerminal."))
+        .map((key) => key.slice(38)),
+    ).toEqual([
+      "action",
+      "title",
+      "description",
+      "authNote",
+      "disconnected",
+      "queryRouted",
+      "unavailable",
+    ]);
+    expect(
+      [...source.keys()]
+        .filter((key) => key.startsWith("chat.sessionDetails.context"))
+        .map((key) => key.slice("chat.sessionDetails.".length)),
+    ).toEqual([
+      "context",
+      "contextMessages",
+      "contextFiles",
+      "contextTools",
+      "contextAgentWorkspace",
+      "contextProject",
+      "contextPersonal",
+      "contextOtherFiles",
+      "contextSystemTools",
+      "contextMcpTools",
+      "contextClientTools",
+      "contextAvailableOnDemand",
+      "contextDeferredEstimate",
+      "contextSkills",
+      "contextSystem",
+      "contextFree",
+      "contextUnverified",
+      "contextOpen",
+      "contextLoading",
+      "contextError",
+      "contextOffline",
+      "contextUnavailable",
+      "contextReserve",
+      "contextCompactDescription",
+      "contextCompact",
+      "contextCompacting",
+      "contextCompactShort",
+      "contextExactCount",
+      "contextFreeShort",
+      "contextReserveShort",
+      "contextInputShort",
+      "contextOutputShort",
+      "contextSearch",
+      "contextSearchCount",
+      "contextSearchSkills",
+      "contextSearchFiles",
+      "contextSearchTools",
+      "contextShowAll",
     ]);
     expect(source.get("meetingCapture.title")).toBe("Meeting capture");
     expect(source.get("meetingCapture.sources")).toBe("Auto-start sources");

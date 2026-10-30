@@ -1043,7 +1043,6 @@ export async function runGatewayLoop(params: {
     getTerminalHostedStop: () =>
       terminalHostedStop === hostLifecycle ? terminalHostedStop : undefined,
     updateSuccessor,
-    forceExit: (reason) => cleanup.retain(forceExitAfterStabilityBundle(reason)),
     request,
   });
   const releaseRuntimeRecovery = eagerLifecycleRuntime.registerGatewayRuntimeRecovery({

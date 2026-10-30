@@ -13,6 +13,7 @@ import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
@@ -69,12 +70,7 @@ globalThis.gc?.();
 const inspector = new Session();
 try {
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 1024,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 1024);
   }
   const hostLoadBefore = loadavg();
   const memoryBefore = process.memoryUsage();

@@ -222,7 +222,9 @@ Current iOS Debug builds log CPU count, memory, machine model, booted simulators
 
 Shared OpenClawKit Periphery scans restore the same verified Watch RTC libraries published by trusted main CI, without saving caches. Both Apple consumers build their complete index in a separate timed step with streamed output retained as `build.log` in the consumer artifact. iOS uses a fresh run-owned index; Periphery analyzes that exact index without rebuilding. Scan scope and the shared dead-code intersection stay unchanged. Cache misses retain the locked Cargo build.
 
-iOS screenshot capture, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
+iOS screenshot capture, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time. Before creating each device, it requires ten continuous seconds with at least 30% idle host CPU, using qualification's existing five-minute headroom deadline. A host that stays busy fails before the next simulator starts; boots and captures are not retried. The screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
+
+Main CI screenshot capture restores the same verified Watch RTC simulator libraries published by trusted main CI, without saving that cache. Its Swift package sources and binary downloads use a separate cache for `SnapshotDerivedData/SourcePackages`, keyed by runner platform, architecture, Xcode, package manifests, and available lockfiles. Screenshot preparation preserves only that directory and deletes all other DerivedData contents; automatic package resolution and fresh compilation remain enabled. Only successful trusted current-main runs save screenshot downloads, including manual CI runs because hourly main CI omits screenshots. PRs restore only, historical and frozen targets skip both caches, and cache transfer failures retain the cold build path. Store Release and its screenshot-only operation retain their existing workflow cache settings.
 
 iOS and Android releases check out the exact selected commit at depth one and gather their release plans there. The release entry point creates a detached worktree and fetches complete ancestry only when preparing notes, without unrelated branches, tags, or historical file contents. TestFlight attempts that are unchanged or deferred for review or processing skip that extra checkout and history transfer. Release-note reads fetch their recorded baseline refs and hydrate historical contents as needed. Source identity and main-ancestry checks remain unchanged.
 
@@ -608,6 +610,10 @@ controls, reject a wrong pin and wrong hostname before an origin request, and
 reject the verified incident OV G3C intermediate in both trust modes. The report
 reducer requires all twelve TLS class/method identities exactly once, separately
 from the existing Access case and packaged-library checks.
+
+Platform-root incident cases require either exact Conscrypt key rejection or
+OkHttp's specific blocklist rejection after verifying the raw peer chain and
+hostname. They do not depend on Android downloading a platform blocklist update.
 
 These secretless, disposable emulators temporarily import a synthetic localhost
 root and the verified incident root into copied APEX CA stores in the zygote

@@ -126,6 +126,7 @@ const DIRECT_SESSION_READ_METHODS = new Set([
   "sessions.messages.unsubscribe",
   "sessions.setInvolvement",
   "talk.voice.get",
+  "tools.effective",
 ]);
 
 const INDIRECT_SESSION_READ_METHODS = new Set([

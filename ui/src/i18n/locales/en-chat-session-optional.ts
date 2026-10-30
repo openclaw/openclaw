@@ -1,3 +1,4 @@
+import { mergeCatalog } from "../lib/merge-catalog.ts";
 import type { TranslationMap } from "../lib/types.ts";
 import { registerChatSessionEnglish } from "./en-chat-session.ts";
 import { en } from "./en.ts";
@@ -5,6 +6,34 @@ import { en } from "./en.ts";
 // Shared labels stay synchronous; these labels follow optional session surfaces.
 const catalog = {
   chat: {
+    sessionDetails: {
+      contextAgentWorkspace: "Agent workspace",
+      contextProject: "Project",
+      contextPersonal: "Personal instructions",
+      contextOtherFiles: "Other files",
+      contextSystemTools: "System tools",
+      contextMcpTools: "MCP tools",
+      contextClientTools: "Client tools",
+      contextAvailableOnDemand: "Tools loaded on use",
+      contextDeferredEstimate: "Schema sizes, not current usage.",
+      contextFree: "Free space",
+      contextUnavailable: "No matching context report. Send a message to capture one.",
+      contextReserve: "{tokens} tokens reserved outside this budget",
+      contextCompactDescription: "Replaces older context with a summary.",
+      contextCompact: "Compact session",
+      contextCompacting: "Compacting",
+      contextCompactShort: "Compact",
+      contextFreeShort: "{tokens} free",
+      contextReserveShort: "+{tokens} reserved",
+      contextInputShort: "in",
+      contextOutputShort: "out",
+      contextSearch: "Search {category}",
+      contextSearchCount: "Search {count} · {category}",
+      contextSearchSkills: "Search {count} skills",
+      contextSearchFiles: "Search {count} files",
+      contextSearchTools: "Search {count} tools",
+      contextShowAll: "Show all {count}",
+    },
     sessionAutomation: {
       emptyHint: "Automations attached to this session will appear here.",
       scheduleUnavailable: "Schedule unavailable",
@@ -309,6 +338,67 @@ const catalog = {
       statusRenamed: "Renamed",
       statusModified: "Modified",
     },
+    subagentsPanel: {
+      nativeTitle: "Live native agents",
+      nativeCoverage: "Current native agent activity. Saved agent history is not included.",
+      nativeEmpty: "No native agents are currently observed.",
+      nativeTruncated: "Only part of the live native roster is shown.",
+      nativeRetry: "Updates retry automatically while this panel is visible.",
+      nativeStatus: {
+        running: "Running",
+        completed: "Completed",
+        failed: "Failed",
+        interrupted: "Interrupted",
+      },
+      desktopFilter: { all: "All", active: "Active", waiting: "Waiting", done: "Done" },
+      desktopFilterLabel: "Filter subagents",
+      desktopSearch: "Search subagents",
+      desktopCloseSearch: "Close search",
+      workingFor: "Working for",
+      desktopWaiting: "Waiting for subagents",
+      desktopFor: "for",
+      desktopShowMore: "Show more",
+      desktopNoResults: "No subagents found",
+      desktopNoResultsDescription: "Try a different name or filter.",
+      mobileFinished: "Finished",
+      running: "Running ({count})",
+      finished: "Finished ({count})",
+      callsOne: "{count} call",
+      callsMany: "{count} calls",
+      callsAtLeast: "{count}+ calls",
+      empty: "No subagents in this conversation.",
+      noRunning: "No running subagents",
+      refresh: "Refresh subagents",
+      elapsed: "Elapsed time",
+      duration: "Run duration",
+    },
+    sessionSharing: {
+      noPeopleFound: "No people found",
+      tryAnotherName: "Try another name",
+      visibility: "Visibility",
+      publishDraft: "Publish draft",
+      noPeople: "No paired people found.",
+      publicAccess: "Public access",
+      notPublic: "Only signed-in people with access can view this session.",
+      enablePublicAccess: "Enable public access…",
+      disablePublicAccess: "Disable public access",
+      copyPublicLink: "Copy public link",
+      publicConfirmTitle: "Make this session world-readable?",
+      publicConfirmMessage:
+        "Anyone with the public link can read existing and future conversation text, including all user and assistant messages and progress, plus tool names, short argument summaries, and images without signing in.\n\nReasoning, tool-result text, and private dashboards stay hidden. Image contents are not redacted. Review for private information before sharing; disabling access cannot recall downloaded copies.",
+      publicConfirmEnable: "Make public",
+      publicEnabled: "Public access enabled. Copy the public link from Session sharing.",
+      publicDisabled: "Public access disabled.",
+    },
+    sessionHeader: {
+      continueInTerminal: {
+        title: "Continue in terminal",
+        description:
+          "Copy this command to continue the current session. It is safe to paste in common terminals and shells.",
+        authNote:
+          "The command contains no credentials. The terminal authenticates independently, and the session's access controls still apply.",
+      },
+    },
     workspaceConflict: {
       titleOne: "1 cloud workspace conflict",
       titleMany: "{count} cloud workspace conflicts",
@@ -386,6 +476,7 @@ const catalog = {
 export const registerChatSessionOptionalEnglish = Object.assign(
   () => {
     registerChatSessionEnglish();
+    mergeCatalog(en.chat.sessionDetails, catalog.chat.sessionDetails);
     Object.assign(en.chat.sessionAutomation, catalog.chat.sessionAutomation);
     Object.assign(en.chat.activityPills, catalog.chat.activityPills);
     Object.assign(en.chat.usageLimit, catalog.chat.usageLimit);
@@ -397,6 +488,9 @@ export const registerChatSessionOptionalEnglish = Object.assign(
     Object.assign(en.chat.youtube, catalog.chat.youtube);
     Object.assign(en.chat.rail, catalog.chat.rail);
     Object.assign(en.chat.sessionDiff, catalog.chat.sessionDiff);
+    mergeCatalog(en.chat.subagentsPanel, catalog.chat.subagentsPanel);
+    Object.assign(en.chat.sessionSharing, catalog.chat.sessionSharing);
+    mergeCatalog(en.chat.sessionHeader, catalog.chat.sessionHeader);
     Object.assign(en.chat.workspaceConflict, catalog.chat.workspaceConflict);
     Object.assign(en.chat.workspaceFiles, catalog.chat.workspaceFiles);
   },

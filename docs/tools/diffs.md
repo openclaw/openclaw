@@ -62,7 +62,7 @@ The [Control UI](/web/control-ui) already highlights inline tool diffs and sessi
 
 ## Disable built-in system guidance
 
-To keep the tool but drop the prepended system-prompt guidance, set `plugins.entries.diffs.hooks.allowPromptInjection` to `false`:
+To keep the tool but drop its system-prompt guidance, set `plugins.entries.diffs.hooks.allowPromptInjection` to `false`:
 
 ```json5
 {
