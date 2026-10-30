@@ -38,6 +38,12 @@ const repositoryScriptEntries = [
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-android-release-history.mts!",
   "scripts/bench-duplicate-paragraphs.mts!",
+  "scripts/perf/agent-exec-cgroup-proof.ts!",
+  "scripts/perf/anthropic-request-construction.ts!",
+  "scripts/perf/auth-file-watch-events-measure.ts!",
+  "scripts/perf/backup-verify-fixture.mjs!",
+  "scripts/perf/backup-verify-measure.mjs!",
+  "scripts/perf/board-read-admission-measure.ts!",
   // catalog-compare-released.mts copies and spawns this sandboxed reader by path.
   "scripts/lib/catalog-compare-released-worker.mts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
@@ -71,6 +77,10 @@ const repositoryScriptEntries = [
   "scripts/ci-shard-timings-refresh.mts!",
   // The scheduled-run execution context design invokes this development replay by path.
   "scripts/dev/cron-context-replay.mts!",
+  // #183131 invokes this fresh-process cron flake workload by path.
+  "scripts/perf/repeat-cron-test.mjs!",
+  // Its header documents the paired operator-role currency-check benchmark.
+  "scripts/perf/operator-role-source-policy-measure.mjs!",
   // db:postgres:gen/check invoke this generator through the source loader.
   "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.
@@ -120,6 +130,9 @@ const repositoryScriptEntries = [
   "scripts/bench-control-ui-document.ts!",
   // The channel-turn benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-channel-turn.mts!",
+  "scripts/perf/session-actor-retention-seed.ts!",
+  "scripts/perf/session-cold-selection.ts!",
+  "scripts/perf/session-entry-projection-measure.ts!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.
   "scripts/bench-decision-transport.mts!",
   // docs/reference/test/performance.md invokes the frozen-revision benchmark builder.
@@ -152,6 +165,10 @@ const repositoryScriptEntries = [
   // Maintained source headers, guides, and recorded proof commands invoke these exact roots.
   "scripts/bench-control-ui-route-leaks.ts!",
   "scripts/bench-plugin-views.ts!",
+  "scripts/perf/long-lived-error-stacks-measure.ts!",
+  "scripts/perf/mcp-http-dispatcher-measure.ts!",
+  "scripts/perf/prepared-gateway-startup-measure.mjs!",
+  "scripts/perf/sandbox-paths-measure.ts!",
   // Maintained source headers invoke these standalone commands and external preload by exact path.
   "scripts/bench-control-ui-talk.ts!",
   // Maintained source headers invoke these standalone analysis commands by exact path.
