@@ -8,11 +8,13 @@ import {
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { ProviderUsagePanel } from "../../components/solid/provider-usage.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
+import type { ProviderUsageSummary } from "./data-types.ts";
 import { formatIsoDate } from "./helpers.ts";
 import {
   buildUsageCostWindows,
@@ -602,3 +604,80 @@ export function UsageInsights(props: {
 }
 
 export { renderCostWindowComparison, renderFilterChips, renderInsightList };
+
+export function renderProviderUsage(
+  providers: ProviderUsageSummary["providers"][number][],
+  unavailable: boolean,
+  stalled: boolean,
+) {
+  const notice =
+    stalled || unavailable ? (
+      <div class="callout warning usage-callout">
+        {t(stalled ? "usage.providerUsage.stalled" : "usage.providerUsage.unavailable")}
+      </div>
+    ) : undefined;
+  if (providers.length === 0) {
+    return notice;
+  }
+  return (
+    <SettingsSection
+      title={t("usage.providerUsage.title")}
+      count={providers.length}
+      description={t("usage.providerUsage.subtitle")}
+    >
+      {notice}
+      <div class="usage-panel provider-usage-section">
+        <div class="provider-usage-grid">
+          <For each={providers}>
+            {(provider) => (
+              <article class="provider-usage-card">
+                <div class="provider-usage-card__header">
+                  <div>
+                    <div class="provider-usage-card__name">{provider.displayName}</div>
+                    <div class="provider-usage-card__id">{provider.provider}</div>
+                  </div>
+                  {provider.plan ? (
+                    <>
+                      {" "}
+                      <span class="provider-usage-plan">{provider.plan}</span>{" "}
+                    </>
+                  ) : undefined}
+                </div>
+                <ProviderUsagePanel usage={provider} />
+              </article>
+            )}
+          </For>
+        </div>
+      </div>
+    </SettingsSection>
+  );
+}
+
+type UsageOverviewData = Pick<UsageProps["data"], "totals" | "sessions" | "costDaily" | "overview">;
+
+export function usageOverview(data: UsageOverviewData, complete: boolean) {
+  // Cold caches can list sessions before usage arrives. Zero-filled aggregates
+  // are not evidence of zero usage while that read is pending.
+  const awaitingUsage =
+    !complete &&
+    !data.totals?.totalTokens &&
+    !data.totals?.totalCost &&
+    !data.sessions.some(
+      (session) =>
+        session.usage?.computedAt !== undefined ||
+        session.usage?.totalTokens ||
+        session.usage?.totalCost,
+    ) &&
+    !data.costDaily.some((day) => day.totalTokens || day.totalCost);
+  return {
+    awaitingUsage,
+    hasOverviewData:
+      !awaitingUsage && Boolean(data.totals || data.sessions.length || data.costDaily.length),
+    isEmpty:
+      complete &&
+      data.totals !== null &&
+      data.sessions.length === 0 &&
+      (data.overview?.unfilteredSessionCount ?? 0) === 0 &&
+      (data.totals?.totalTokens ?? 0) === 0,
+  };
+}

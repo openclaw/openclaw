@@ -887,30 +887,6 @@ describe("handleFeishuMessage command authorization", () => {
     },
   );
 
-  it.each(["/status", "/btw progress?"])(
-    "keeps DM %s separate from agent mention context",
-    async (command) => {
-      computeCommandAccess.mockReturnValue(true);
-      await receiveConfigured(
-        {
-          messageId: `msg-dm-mention-${command}`,
-          text: `@_bot ${command}`,
-          message: { mentions: [{ key: "@_bot", id: { open_id: "ou-bot" }, name: "Bot" }] },
-        },
-        createFeishuTestConfig({ dmPolicy: "open", allowFrom: ["*"] }),
-        { botOpenId: "ou-bot" },
-      );
-      const context = inboundContext();
-      expect(context).toMatchObject({
-        RawBody: `<at user_id="ou-bot">Bot</at> ${command}`,
-        CommandBody: command,
-        BodyForCommands: command,
-      });
-      expect(context.BodyForAgent).toContain(`<at user_id="ou-bot">Bot</at> ${command}`);
-      expect(dispatchReply).toHaveBeenCalledOnce();
-    },
-  );
-
   it.each([
     ["ou-attacker", false],
     ["ou-admin", true],

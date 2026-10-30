@@ -1,16 +1,18 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import { registerChatDetailsEnglish } from "../../i18n/locales/en-chat-details.ts";
+import "../../styles.css";
+import "../../styles/chat.ts";
+import "../../styles/chat/composer.css";
+import "../../styles/chat/composer-progress.css";
+
+import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import {
   createComposerContainer,
   createComposerProps,
   disposeComposer,
   renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import "../../styles.css";
-import "../../styles/chat.ts";
-import "../../styles/chat/composer.css";
-import "../../styles/chat/composer-progress.css";
-
 import { resetChatComposerState } from "./components/chat-composer.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
@@ -70,6 +72,16 @@ function isPainted(element: HTMLElement) {
     )
   );
 }
+
+function labelBox(element: HTMLElement) {
+  const range = document.createRange();
+  range.selectNodeContents(
+    [...element.childNodes].find((node) => node.nodeType === Node.TEXT_NODE && node.textContent)!,
+  );
+  return range.getBoundingClientRect();
+}
+
+const center = (box: DOMRect) => box.top + box.height / 2;
 
 async function expectBounds(element: HTMLElement, matches: (box: DOMRect) => boolean) {
   await expect.poll(() => matches(element.getBoundingClientRect())).toBe(true);
@@ -146,5 +158,59 @@ it.each([
     if (!panned) {
       expect(trigger.getBoundingClientRect().bottom).toBeLessThanOrEqual(height + 1);
     }
+  },
+);
+
+it.each([1280, 320] as const)(
+  "centers a secondary Compact on the View context row at %spx and stays open while it runs",
+  async (width) => {
+    // The breakdown module registers the View context label; measure the real copy, not its key.
+    registerEnglishCatalog(registerChatDetailsEnglish);
+    await page.viewport(width, 720);
+    container.style.cssText = "position:fixed;bottom:16px;left:16px;right:16px";
+    const pending = Promise.withResolvers<void>();
+    const onCompact = vi.fn(() => pending.promise);
+    renderComposerInto(
+      container,
+      createComposerProps({
+        onCompact,
+        selectedSession: {
+          key: "main",
+          kind: "direct",
+          updatedAt: 1,
+          totalTokens: 190_000,
+          contextTokens: 200_000,
+        },
+      }),
+    );
+    const trigger = container.querySelector<HTMLElement>(".context-ring")!;
+    const popover = container.querySelector<HTMLElement>(".context-usage [data-anchored-overlay]")!;
+    await page.elementLocator(trigger).click();
+    const open = popover.querySelector<HTMLElement>(".context-usage__open")!;
+    const compact = popover.querySelector<HTMLButtonElement>(".chat-context__compact")!;
+    await expect.poll(() => isPainted(open) && isPainted(compact)).toBe(true);
+    const link = open.getBoundingClientRect();
+    const action = compact.getBoundingClientRect();
+    const linkText = labelBox(open);
+    const actionText = labelBox(compact);
+    expect(open.textContent).toBe("View context");
+    // One baseline for both labels, and the outline centered on that shared line
+    // (WebKit rounds text boxes to whole pixels).
+    expect(Math.abs(linkText.bottom - actionText.bottom)).toBeLessThan(0.5);
+    expect(Math.abs(center(action) - center(actionText))).toBeLessThanOrEqual(1);
+    expect(open.parentElement!.getBoundingClientRect().height).toBe(26);
+    expect(link.right).toBeLessThan(action.left);
+    expect(action.right).toBeLessThanOrEqual(popover.getBoundingClientRect().right);
+    // 95% fresh usage still renders the outlined secondary treatment.
+    expect(getComputedStyle(compact).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+
+    await page.elementLocator(compact).click();
+    await expect.poll(() => compact.textContent).toBe("Compacting");
+    expect(compact.disabled).toBe(true);
+    expect(popover.checkVisibility()).toBe(true);
+    pending.resolve();
+    await expect.poll(() => compact.textContent).toBe("Compact");
+    expect(popover.checkVisibility()).toBe(true);
+    expect(onCompact).toHaveBeenCalledOnce();
   },
 );

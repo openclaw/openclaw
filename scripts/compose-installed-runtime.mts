@@ -298,10 +298,8 @@ async function materializeClosure(
       preserveTimestamps: true,
       verbatimSymlinks: true,
       filter: (source) => {
-        if (
-          source !== entry.root &&
-          path.relative(entry.root, source).split(path.sep).includes("node_modules")
-        ) {
+        // The planner owns installed dependencies, not nested package implementation trees.
+        if (path.relative(entry.root, source) === "node_modules") {
           return false;
         }
         const relative = path.relative(dependencyRoot, source).split(path.sep).join("/");

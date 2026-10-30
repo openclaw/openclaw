@@ -54,7 +54,11 @@ function createSessionContextReports(gateway: ApplicationGateway) {
   const watchers = new Map<object, { key: string; presented: boolean }>();
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
   let scope = gatewayPresentationScope(gateway).key;
-  const canRead = () => canCallGatewayMethod(gateway.snapshot, "sessions.usage", "operator.read");
+  // Usage reads are registered but intentionally omitted from the advertised method catalog.
+  const canRead = () =>
+    canCallGatewayMethod(gateway.snapshot, "sessions.usage", "operator.read", {
+      requireAdvertisement: false,
+    });
   let readable = canRead();
   let unsubscribe: (() => void) | undefined;
   let stopVisibility: (() => void) | undefined;

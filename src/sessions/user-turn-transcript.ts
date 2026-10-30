@@ -126,13 +126,14 @@ export function createUserTurnTranscriptRecorder(
   // pending custody can supply identity to a fresh write.
   const projectRequesterOrigin = <T extends PersistedUserTurnMessage | undefined>(
     candidate: T,
+    origin: typeof requesterOrigin,
   ): T => {
     if (!candidate) {
       return candidate;
     }
     const { requesterOrigin: _previousOrigin, ...metadata } = candidate["__openclaw"] ?? {};
-    if (requesterOrigin) {
-      metadata.requesterOrigin = requesterOrigin;
+    if (origin) {
+      metadata.requesterOrigin = origin;
     }
     const next = { ...candidate };
     delete next["__openclaw"];
@@ -145,7 +146,7 @@ export function createUserTurnTranscriptRecorder(
   const adoptPendingInput = (receipt: NonNullable<typeof pendingInput>) => {
     pendingInput = receipt;
     requesterOrigin = readSessionPendingInputRequesterOrigin(receipt);
-    message = projectRequesterOrigin(receipt.message);
+    message = projectRequesterOrigin(receipt.message, requesterOrigin);
     resolvedMessagePromise = Promise.resolve(message);
   };
 
@@ -165,7 +166,7 @@ export function createUserTurnTranscriptRecorder(
 
   const applyMessageOverrides = (candidate: PersistedUserTurnMessage | undefined) => {
     const next = rewritePersistedSteerTargetRunId(
-      projectRequesterOrigin(applyReplacementText(candidate)),
+      projectRequesterOrigin(applyReplacementText(candidate), requesterOrigin),
       confirmedSteerTargetRunId,
     );
     // Native mirrors must reuse this admission even when no transport supplied a key.
@@ -440,7 +441,7 @@ export function createUserTurnTranscriptRecorder(
           persistUserTurnInput(recorder, {
             ...resolvedTarget,
             logicalTurnId,
-            message: projectRequesterOrigin(candidate),
+            message: projectRequesterOrigin(candidate, requesterOrigin),
             sessionTurnMutation: params.sessionTurnMutation,
             expectedSessionId: options.expectedSessionId || resolvedTarget.expectedSessionId,
             sessionLifecyclePatch: options.sessionLifecyclePatch ?? params.sessionLifecyclePatch,
@@ -578,19 +579,23 @@ export function createUserTurnTranscriptRecorder(
           if (!candidate || !target || persistedResult || runtimePersisted) {
             return false;
           }
+          const stagedOrigin = requesterOrigin;
           pendingInput = await stageUserTurnPendingInput(recorder, target, {
             ...options,
             requestFingerprint: params.pendingInputRequestFingerprint,
             trackCompletion: params.trackInputCompletion,
             retryCancelled: options.retryCancelled || params.sessionTurnMutation?.kind === "goal",
             replaySourceSessionKeys: params.pendingInputReplaySourceSessionKeys,
-            message: projectRequesterOrigin(candidate),
+            message: projectRequesterOrigin(candidate, requesterOrigin),
             onCommitted: adoptPendingInput,
             prepareMessageAfterIdempotencyCheck: (next) =>
-              preparePersistedUserTurnMessageForTranscriptWrite(projectRequesterOrigin(next), {
-                ...target,
-                beforeMessageWrite: params.beforeMessageWrite ?? target.beforeMessageWrite,
-              }),
+              preparePersistedUserTurnMessageForTranscriptWrite(
+                projectRequesterOrigin(next, stagedOrigin),
+                {
+                  ...target,
+                  beforeMessageWrite: params.beforeMessageWrite ?? target.beforeMessageWrite,
+                },
+              ),
           });
           if (!pendingInput) {
             return false;
@@ -603,15 +608,8 @@ export function createUserTurnTranscriptRecorder(
     getPendingInputMessage: () => pendingInput?.message,
     ...processing,
     isPendingInputConsumed: () => pendingInput?.state === "consumed",
-    withPendingInput: (run) => (pendingInput ? pendingInput.run(run) : run()),
-    finishPendingInput: (disposition) => {
-      if (pendingInput) {
-        pendingInput.finish(disposition);
-      } else {
-        for (const source of params.pendingInputSources ?? []) {
-          source.finishPendingInput?.(disposition);
-        }
-      }
+    get validateCommittedReplay() {
+      return pendingInput?.validateCommittedReplay;
     },
     replaceTextBeforePersistence: (text) => {
       if (pendingInput || persistedResult || runtimePersisted || sentToProvider) {

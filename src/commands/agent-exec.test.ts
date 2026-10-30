@@ -72,7 +72,7 @@ async function runSuccessfulExec(
     await observe(invocation);
     return successResult();
   });
-  expect(result.exitCode).toBe(0);
+  expect(result.exitCode, JSON.stringify(result.envelope.error)).toBe(0);
   return result;
 }
 
@@ -154,7 +154,10 @@ describe("agent exec command composition", () => {
       setRuntimeConfigSnapshot(base);
       const retained = mode === "ambient" || mode === "pinned";
       await withEnvAsync(
-        { EXEC_TEST_DSN: retained ? "postgresql://localhost/exec_test" : undefined },
+        {
+          OPENCLAW_STATE_DIR: root,
+          EXEC_TEST_DSN: retained ? "postgresql://localhost/exec_test" : undefined,
+        },
         async () => {
           await runSuccessfulExec(
             {

@@ -20,7 +20,6 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import * as stateDatabase from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { getGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import {
@@ -259,41 +258,40 @@ test.runIf(process.platform !== "win32")(
 
 test("configured-only parent-owned stores keep lineage children without directory discovery", async () => {
   const { dir: stateDir } = await createSessionStoreDir();
-  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-    const storeTemplate = configureStores(stateDir, {
-      ownership: "explicit",
-      entries: { ops: {} },
-    });
-    const storePath = storeTemplate.replace("{agentId}", "ops");
-    const mainKey = "agent:ops:main";
-    const childKey = "agent:codex:subagent:fixed-child";
-    testState.agentConfig = { sessionStore: { agentId: "ops" } };
-    await writeSessionStore({
-      agentId: "ops",
-      storePath,
-      entries: {
-        [childKey]: { sessionId: "session-child", updatedAt: 30, parentSessionKey: mainKey },
-        [mainKey]: { sessionId: "session-main", updatedAt: 20 },
-        "agent:local:main": { sessionId: "session-local", updatedAt: 10 },
-      },
-    });
-
-    expect((await directSessionReq("sessions.list", { configuredAgentsOnly: true })).ok).toBe(true);
-    const enumerateAgentDirs = vi.spyOn(sessionDirs, "resolveAgentSessionDirsFromAgentsDirSync");
-    try {
-      const listed = await directSessionReq<{ sessions: Array<{ key: string }> }>("sessions.list", {
-        includeGlobal: false,
-        includeUnknown: false,
-        configuredAgentsOnly: true,
-      });
-
-      expect(listed.ok).toBe(true);
-      expect(listed.payload?.sessions.map((session) => session.key)).toEqual([childKey, mainKey]);
-      expect(enumerateAgentDirs).not.toHaveBeenCalled();
-    } finally {
-      enumerateAgentDirs.mockRestore();
-    }
+  // Keep the suite Gateway's registry; the absolute template isolates this case's stores.
+  const storeTemplate = configureStores(stateDir, {
+    ownership: "explicit",
+    entries: { ops: {} },
   });
+  const storePath = storeTemplate.replace("{agentId}", "ops");
+  const mainKey = "agent:ops:main";
+  const childKey = "agent:codex:subagent:fixed-child";
+  testState.agentConfig = { sessionStore: { agentId: "ops" } };
+  await writeSessionStore({
+    agentId: "ops",
+    storePath,
+    entries: {
+      [childKey]: { sessionId: "session-child", updatedAt: 30, parentSessionKey: mainKey },
+      [mainKey]: { sessionId: "session-main", updatedAt: 20 },
+      "agent:local:main": { sessionId: "session-local", updatedAt: 10 },
+    },
+  });
+
+  expect((await directSessionReq("sessions.list", { configuredAgentsOnly: true })).ok).toBe(true);
+  const enumerateAgentDirs = vi.spyOn(sessionDirs, "resolveAgentSessionDirsFromAgentsDirSync");
+  try {
+    const listed = await directSessionReq<{ sessions: Array<{ key: string }> }>("sessions.list", {
+      includeGlobal: false,
+      includeUnknown: false,
+      configuredAgentsOnly: true,
+    });
+
+    expect(listed.ok).toBe(true);
+    expect(listed.payload?.sessions.map((session) => session.key)).toEqual([childKey, mainKey]);
+    expect(enumerateAgentDirs).not.toHaveBeenCalled();
+  } finally {
+    enumerateAgentDirs.mockRestore();
+  }
 });
 
 test("resolves and patches main alias to default agent main key", async () => {

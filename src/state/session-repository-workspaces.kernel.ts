@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Selectable, Updateable } from "kysely";
+import { REPOSITORY_BRANCH_PREFIX_PATTERN } from "../config/repository-branch-prefix.js";
 import {
   createSqliteQueryCache,
   executeSqliteQueryTakeFirstSync,
@@ -137,6 +138,10 @@ export function createSessionRepositoryWorkspaceInDatabase(
     }
     return { ...changed(db, existing), changed: false };
   }
+  const branchPrefix = input.branchPrefix ?? "openclaw";
+  if (branch === undefined && !REPOSITORY_BRANCH_PREFIX_PATTERN.test(branchPrefix)) {
+    throw new Error("Repository branch prefix is invalid");
+  }
   const workspaceId = randomUUID();
   const inserted = executeSqliteQueryTakeFirstSync(
     db,
@@ -151,7 +156,7 @@ export function createSessionRepositoryWorkspaceInDatabase(
         run_setup_script: input.runSetupScript ? 1 : 0,
         base_commit: null,
         base_manifest_hash: null,
-        branch: branch ?? `openclaw/${workspaceId}`,
+        branch: branch ?? `${branchPrefix}/${workspaceId}`,
         checkpoint_ref: null,
         manifest_hash: null,
         revision: 0,

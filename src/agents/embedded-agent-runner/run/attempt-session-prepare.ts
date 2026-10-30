@@ -82,8 +82,6 @@ import {
 } from "./tool-loop-recovery.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
-
 export async function prepareEmbeddedAttemptAgentSession(input: {
   attempt: EmbeddedRunAttemptParams;
   activeContextEngineInfo?: ContextEngine["info"];
@@ -100,7 +98,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   runAbortSignal: AbortSignal;
   sessionAgentId: string;
   transcriptLifecycle: EmbeddedAttemptTranscriptLifecycle;
-  sessionManager: AttemptSessionManager;
+  sessionManager: ReturnType<typeof guardSessionManager>;
   prepareInitialUserTurnReplay?: InitialUserTurnReplayPreparation;
   prepareSystemPromptUpdate?: SystemPromptUpdatePreparation;
 }) {
@@ -612,16 +610,19 @@ export async function prepareEmbeddedAttemptSessionManager(
       message: preparedUserTurnMessage,
       recorder: attempt.userTurnTranscriptRecorder,
       runId: attempt.runId,
+      fallbackReason: attempt.fallbackReason,
       signal: attempt.abortSignal,
       initial: initialReplay,
     }),
   );
   const prepareInitialUserTurnReplay: InitialUserTurnReplayPreparation | undefined =
-    preparedReplay &&
-    (async (signal) => {
-      const consume = await input.withOwnedTranscriptWrite(() => preparedReplay(signal));
-      return consume && ((onAdmitted) => input.withOwnedTranscriptWrite(() => consume(onAdmitted)));
-    });
+    typeof preparedReplay === "function"
+      ? async (signal) => {
+          const apply = await input.withOwnedTranscriptWrite(() => preparedReplay(signal));
+          return apply && ((admitted) => input.withOwnedTranscriptWrite(() => apply(admitted)));
+        }
+      : undefined;
+  attempt.inputAlreadyDelivered = preparedReplay === "already-delivered" ? true : undefined;
   const sessionManager = guardSessionManager(unguardedSessionManager, {
     agentId: input.sessionAgentId,
     runId: attempt.runId,
