@@ -32,6 +32,7 @@ import type {
   ReadRecentSessionMessagesOptions,
   ReadSessionMessageByIdResult,
   ReadSessionMessagesResult,
+  SessionTranscriptMessageByIdOptions,
   SessionTranscriptSourcePageOptions,
   SessionTranscriptSourceSnapshot,
 } from "./session-transcript-read.types.js";
@@ -260,8 +261,9 @@ export class ArchivedTranscriptReader {
 
   async readById(
     messageId: string,
-    historyVisibility?: { sessionStartedAt?: number },
+    options?: SessionTranscriptMessageByIdOptions,
   ): Promise<ReadSessionMessageByIdResult> {
+    const historyVisibility = options?.historyVisibility;
     const filePath = await this.resolvePath();
     if (!filePath) {
       return { oversized: false, found: false };
@@ -288,7 +290,12 @@ export class ArchivedTranscriptReader {
     if (oversized && !historyVisibility) {
       return { oversized: true, found: true, seq: entry.seq };
     }
-    const message = indexedTranscriptEntryToMessage(entry);
+    const message = projectTranscriptEntryMessage(
+      entry.record,
+      entry.seq,
+      entry.transcriptPosition,
+      options,
+    );
     const preceding =
       historyVisibility &&
       isPreSessionStartAssistantMessage(message, historyVisibility.sessionStartedAt)
