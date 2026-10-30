@@ -108,7 +108,8 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   runId?: string;
   opts?: UpdateCommandOptions;
   /** Only local candidate code may supply its known native Doctor contract. */
-  doctorConfigWrites?: true;
+  doctorCapabilities?: { doctorConfigWrites: true; doctorRetirementOnly: true };
+  retirementOnly?: true;
   databaseBackup?: UpdateDatabaseBackup;
   onDoctorStep?: (step: UpdateStepResult) => void;
   yes: boolean;
@@ -207,9 +208,8 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       root: params.root,
     });
     const workerCommand = [workerRuntime, ...resolveRuntimeWorkerArgv(workerUrl, workerRuntime)];
-    const doctorConfigWrites =
-      run &&
-      (params.doctorConfigWrites ??
+    const doctorCapabilities = run
+      ? (params.doctorCapabilities ??
         (await inspectUpdateDoctorChildSupport(
           { workerUrl, argv: workerCommand },
           {
@@ -219,7 +219,9 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
             env: commandOptions.env,
           },
           assertCurrent,
-        )));
+        )))
+      : undefined;
+    const doctorConfigWrites = doctorCapabilities?.doctorConfigWrites;
     // The capability check above stays untraced; only the Doctor reports its sections.
     const doctorOptions: CommandOptions = {
       ...commandOptions,
@@ -288,6 +290,9 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
             configInputHash: snapshot.hash,
             originalRecoveryCapture: run?.originalRecoveryCapture,
             repair: true,
+            ...(params.retirementOnly && doctorCapabilities?.doctorRetirementOnly
+              ? { retirementOnly: true as const }
+              : {}),
             fullIntegrityCheck: params.opts?.fullIntegrityCheck,
             databaseGenerations:
               params.databaseBackup?.migration?.to ?? params.databaseBackup?.sourceGenerations,
@@ -535,7 +540,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
 export async function completePostCorePluginUpdate(
   params: Omit<
     Parameters<typeof runUpdateFinalizationDoctorInFreshProcess>[0],
-    "phase" | "workspaceSuggestions" | "entryPath" | "onAuthorityRefused"
+    "phase" | "workspaceSuggestions" | "entryPath" | "onAuthorityRefused" | "retirementOnly"
   > & {
     pluginUpdate: PostCorePluginUpdateResult;
     beforeDoctor?: () => Promise<void>;
@@ -579,6 +584,7 @@ export async function completePostCorePluginUpdate(
         let inspectionCheckIds: string[] | null | undefined;
         const warning = await runUpdateFinalizationDoctorInFreshProcess({
           ...params,
+          ...(!pluginUpdate.changed ? { retirementOnly: true as const } : {}),
           onDoctorStep: (step) => {
             if (step.deferredInspectionCheckIds !== undefined) {
               inspectionCheckIds = step.deferredInspectionCheckIds;

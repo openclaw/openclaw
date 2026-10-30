@@ -24,16 +24,12 @@ import {
   logDecisionEvaluation,
   type DecisionEvaluationFacts,
 } from "./diagnostics.js";
-import type {
-  DecisionBatchV2,
-  DecisionEvaluateOptionsV2,
-  DecisionOutcomeV2,
-  DecisionProviderV2,
-} from "./types-v2.js";
+import type { DecisionEvaluateOptionsV2 } from "./execution-types.js";
+import type { DecisionProviderV2, DecisionProviderV1 } from "./provider-types.js";
+import type { DecisionBatchV2, DecisionOutcomeV2 } from "./types-v2.js";
 import type {
   DecisionBatch,
   DecisionOutcome,
-  DecisionProviderV1,
   ProviderFailureReason,
   UnavailableReason,
 } from "./types.js";
@@ -238,53 +234,7 @@ export class DecisionProviderHost {
     };
   }
 
-  evaluate(
-    submitted: DecisionBatch,
-    options: Options,
-    model: string,
-    config: OpenClawConfig,
-    registry: PluginRegistry,
-    consumerId?: string,
-    isAdmissible?: () => boolean,
-    onPreparedBilling?: (facts: PreparedDecisionBilling) => void,
-  ): Promise<DecisionOutcome> {
-    return this.evaluateVersion(
-      submitted,
-      options,
-      model,
-      config,
-      registry,
-      1,
-      consumerId,
-      isAdmissible,
-      onPreparedBilling,
-    ) as Promise<DecisionOutcome>; // SAFETY: Version 1 dispatch pairs this V1 batch with a V1 outcome.
-  }
-
-  evaluateV2(
-    submitted: DecisionBatchV2,
-    options: Options,
-    model: string,
-    config: OpenClawConfig,
-    registry: PluginRegistry,
-    consumerId?: string,
-    isAdmissible?: () => boolean,
-    onPreparedBilling?: (facts: PreparedDecisionBilling) => void,
-  ): Promise<DecisionOutcomeV2> {
-    return this.evaluateVersion(
-      submitted,
-      options,
-      model,
-      config,
-      registry,
-      2,
-      consumerId,
-      isAdmissible,
-      onPreparedBilling,
-    ) as Promise<DecisionOutcomeV2>; // SAFETY: Version 2 dispatch pairs this V2 batch with a V2 outcome.
-  }
-
-  private async evaluateVersion(
+  async evaluate(
     submitted: Batch,
     options: Options,
     model: string,

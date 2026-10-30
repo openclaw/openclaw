@@ -34,6 +34,7 @@ import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 const pngAttachment = { fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 };
+type QuotaProof = { rejectedWrites: number };
 
 function initialPromptResponses(sessionKey: string, runId: string, sessionId: string) {
   return {
@@ -690,10 +691,16 @@ suite.define(() => {
         const quota = recovery === "quota";
         if (quota) {
           await page.addInitScript(() => {
+            const proof: QuotaProof = { rejectedWrites: 0 };
+            (globalThis as unknown as { quotaProof: QuotaProof }).quotaProof = proof;
             const setItem = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem")
               ?.value as Storage["setItem"];
             Storage.prototype.setItem = function (key: string, value: string) {
-              if (key.startsWith("openclaw.control.chatComposer.v2:")) {
+              if (
+                this === window.sessionStorage &&
+                key.startsWith("openclaw.control.chatComposer.v4:")
+              ) {
+                proof.rejectedWrites += 1;
                 throw new DOMException("Quota exceeded", "QuotaExceededError");
               }
               return setItem.call(this, key, value);
@@ -740,6 +747,13 @@ suite.define(() => {
           timeout: 30_000,
         });
         await expectRejectedTurn(page, message, runError);
+        if (quota) {
+          expect(
+            await page.evaluate(
+              () => (globalThis as unknown as { quotaProof: QuotaProof }).quotaProof.rejectedWrites,
+            ),
+          ).toBeGreaterThan(0);
+        }
         if (!quota) {
           await page.reload();
           await expectRejectedTurn(page, message, runError);

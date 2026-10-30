@@ -50,7 +50,7 @@ function resolvePluginProviderEnvVars(plugin: {
   return normalizeProviderEnvVars(envVars);
 }
 
-function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
+export function getPluginRegistrationContracts(): PluginRegistrationContractEntry[] {
   if (process.env.VITEST) {
     return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => structuredClone(entry));
   }
@@ -247,37 +247,6 @@ export function resolveWebSearchProviderContractEntriesForPluginId(
   });
 }
 
-function createLazyArrayView<T>(load: () => T[]): T[] {
-  return new Proxy([] as T[], {
-    get(_target, prop) {
-      const actual = load();
-      const value = Reflect.get(actual, prop, actual);
-      return typeof value === "function" ? value.bind(actual) : value;
-    },
-    has(_target, prop) {
-      return Reflect.has(load(), prop);
-    },
-    ownKeys() {
-      return Reflect.ownKeys(load());
-    },
-    getOwnPropertyDescriptor(_target, prop) {
-      const actual = load();
-      const descriptor = Reflect.getOwnPropertyDescriptor(actual, prop);
-      if (descriptor) {
-        return descriptor;
-      }
-      if (Reflect.has(actual, prop)) {
-        return {
-          configurable: true,
-          enumerable: true,
-          writable: false,
-          value: Reflect.get(actual, prop, actual),
-        };
-      }
-      return undefined;
-    },
-  });
-}
 export function resolveProviderContractProvidersForPluginIds(
   pluginIds: readonly string[],
 ): ProviderPlugin[] {
@@ -291,5 +260,3 @@ export function resolveProviderContractProvidersForPluginIds(
     ).values(),
   ];
 }
-export const pluginRegistrationContractRegistry: PluginRegistrationContractEntry[] =
-  createLazyArrayView(resolveBundledManifestContracts);

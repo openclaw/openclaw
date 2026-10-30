@@ -141,6 +141,12 @@ writer broker for mutations. Keep multi-statement snapshot reads together; use
 the writer's ordered operation when a read must follow its accepted writes.
 Do not open a second main-thread connection or add a synchronous fallback.
 
+Existing shared-state reads await source existence and dispatch-time file identity
+checks. A missing source still avoids allocating a reader, and a replaced source
+still refuses dispatch. The task retains its admission turn through the identity
+check and rechecks live authority after that wait; no successful check is cached
+across requests.
+
 Local workspace reconciliation releases the shared state reader after capturing
 its database snapshot. The existing workspace computation pool scans files and
 prepares manifest results from that compressed snapshot; the Gateway forwards it
@@ -808,7 +814,10 @@ settlement queue for read-your-writes. Synchronous authority acceptance, mutatio
 preparation, cold initialization, retirement comparisons, and accepted-write
 barriers retain their ordered reservations.
 
-Board reads share the agent's existing admission queue with prepared transcript-only
+Board metadata snapshots use the existing read worker without reserving the writer
+queue. Target, database, and read-admission checks still guard publication; document
+delivery and capability use retain their ordered current-revision and grant checks.
+Board authority reads share the agent's existing admission queue with prepared transcript-only
 appends using disjoint conflict keys. SQLite WAL snapshots let the read finish
 while the append holds the native writer. Board mutations, session lifecycle
 changes, unknown write commands, and cold preparation still reserve the whole

@@ -2406,7 +2406,7 @@
     "@modelcontextprotocol/server": "2.3.1",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.26.13",
+    "@openclaw/fs-safe": "0.26.14",
     "@openclaw/proc-safe": "0.4.2",
     "@openclaw/proxyline": "0.4.0",
     "@opentelemetry/semantic-conventions": "1.43.0",

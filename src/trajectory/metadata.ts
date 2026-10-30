@@ -1,3 +1,4 @@
+import { omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
@@ -88,9 +89,7 @@ function toSortedUniqueStrings(values: readonly string[] | undefined): string[] 
   if (!values || values.length === 0) {
     return undefined;
   }
-  return [...new Set(values)]
-    .filter((value) => typeof value === "string")
-    .map((value) => value.trim())
+  return Array.from(new Set(values), (value) => (typeof value === "string" ? value.trim() : ""))
     .filter(Boolean)
     .toSorted((left, right) => left.localeCompare(right));
 }
@@ -143,6 +142,7 @@ function buildPluginsFromActiveRegistry() {
         webSearchProviderIds: toSortedUniqueStrings(plugin.webSearchProviderIds),
         agentHarnessIds: toSortedUniqueStrings(plugin.agentHarnessIds),
       }))
+      .map(omitUndefinedFields)
       .toSorted((left, right) => left.id.localeCompare(right.id)),
   };
 }
@@ -321,7 +321,7 @@ export function buildTrajectoryRunMetadata(
       runtime: {
         node: process.version,
       },
-      invocation: sanitizeSupportSnapshotValue([...process.argv], redaction, "programArguments"),
+      invocation: sanitizeSupportSnapshotValue(process.argv, redaction, "programArguments"),
       entrypoint: process.argv[1] ? redactPathForSupport(process.argv[1], redaction) : undefined,
       workspaceDir: redactPathForSupport(params.workspaceDir, redaction),
       sessionFile: params.sessionFile

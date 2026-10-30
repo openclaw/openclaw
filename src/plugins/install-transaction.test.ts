@@ -16,7 +16,10 @@ import {
 } from "./update-summary.js";
 
 const repairPeerLinks = vi.hoisted(() => vi.fn());
-vi.mock("./update-config.js", () => ({ repairOpenClawPeerLinksForNpmInstalls: repairPeerLinks }));
+vi.mock("./plugin-peer-link.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-peer-link.js")>()),
+  repairInstalledOpenClawHostLinks: repairPeerLinks,
+}));
 
 function retainTransaction(owner: object, transaction: PluginInstallTransaction) {
   retainPluginInstallTransaction(owner, attachPluginInstallTransaction({}, transaction));
