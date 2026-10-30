@@ -135,10 +135,15 @@ test("delivers equivalent presence through deltas, resets after backpressure, an
       try {
         const legacy = await openObserver(false);
         const capable = await openObserver(true);
-        const assertEquivalent = () => {
+        const assertEquivalent = async (peer = capable) => {
+          // This same-socket reply drains publications already observed by the legacy peer.
+          expect((await rpcReq(peer.ws, "system-presence")).ok).toBe(true);
           const latestLegacy = legacy.frames.at(-1)!;
+          expect(peer.frames.at(-1)?.stateVersion.presence).toBe(
+            latestLegacy.stateVersion.presence,
+          );
           expect(Object.keys(latestLegacy.payload)).toEqual(["presence"]);
-          expect(reconstruct(capable.hello, capable.frames)).toEqual(
+          expect(reconstruct(peer.hello, peer.frames)).toEqual(
             (latestLegacy.payload as LegacyPresence).presence,
           );
         };
@@ -162,7 +167,7 @@ test("delivers equivalent presence through deltas, resets after backpressure, an
             }
           })(),
         ]);
-        assertEquivalent();
+        await assertEquivalent();
         expect(capable.frames[0]?.payload).toHaveProperty("reset", true);
         expect(Array.isArray((await rpcReq(capable.ws, "system-presence")).payload)).toBe(true);
 
@@ -186,7 +191,7 @@ test("delivers equivalent presence through deltas, resets after backpressure, an
           nextPresence(capable.ws, connectedRow),
         ]);
         expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
-        assertEquivalent();
+        await assertEquivalent();
         expect(capable.frames.at(-1)?.payload).toHaveProperty("base");
 
         const watchedRow = (row: PresenceEntry) =>
@@ -199,7 +204,7 @@ test("delivers equivalent presence through deltas, resets after backpressure, an
             expect(result.ok).toBe(true),
           ),
         ]);
-        assertEquivalent();
+        await assertEquivalent();
         expect(capable.frames.at(-1)?.payload).toHaveProperty("base");
 
         const disconnectedRow = (row: PresenceEntry) =>
@@ -211,7 +216,7 @@ test("delivers equivalent presence through deltas, resets after backpressure, an
         ]);
         actor.close();
         await disconnected;
-        assertEquivalent();
+        await assertEquivalent();
         expect(capable.frames.at(-1)?.payload).toHaveProperty("base");
 
         const serverSocket = serverSockets.get(capable.hello.server.connId)!;
@@ -237,7 +242,7 @@ test("delivers equivalent presence through deltas, resets after backpressure, an
           publishNode(1, "recovered-update"),
         ]);
         expect(recovered.payload).toHaveProperty("reset", true);
-        assertEquivalent();
+        await assertEquivalent();
 
         // Each snapshot read refreshes the gateway self row's timestamp.
         const recoveryClock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
@@ -256,7 +261,7 @@ test("delivers equivalent presence through deltas, resets after backpressure, an
           publishNode(2, "after-rpc-reset"),
         ]);
         expect(afterRecovery.payload).toHaveProperty("reset", true);
-        assertEquivalent();
+        await assertEquivalent();
 
         const oldConnectionId = capable.hello.server.connId;
         const closed = once(capable.ws, "close");
@@ -275,9 +280,7 @@ test("delivers equivalent presence through deltas, resets after backpressure, an
           publishNode(3, "after-reconnect"),
         ]);
         expect(reconnected.frames[0]?.payload).toHaveProperty("reset", true);
-        expect(reconstruct(reconnected.hello, reconnected.frames)).toEqual(
-          (legacy.frames.at(-1)!.payload as LegacyPresence).presence,
-        );
+        await assertEquivalent(reconnected);
         expect(firstAfterReconnect.stateVersion.presence).toBeGreaterThan(
           reconnected.hello.snapshot.stateVersion?.presence ?? 0,
         );
