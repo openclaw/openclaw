@@ -182,6 +182,11 @@ export async function runEmbeddedAttemptPromptPhase(
 
   let transcriptLeafId: string | null = null;
   try {
+    if (attempt.inputAlreadyDelivered) {
+      runAbortController.signal.throwIfAborted();
+      input.sessionLock.ownedTranscriptWriteContext.assertCommitAllowed?.();
+      return { promptStartedAt, transcriptLeafId };
+    }
     const promptAssembly = await prepareEmbeddedAttemptPromptAssembly({
       attempt,
       activeSession,

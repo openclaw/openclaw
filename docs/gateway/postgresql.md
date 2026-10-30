@@ -281,6 +281,15 @@ the required extension functions and types. Do not grant the runtime role
 permission to install extensions or access other installations' schemas merely
 to make admission pass.
 
+### Connection poolers
+
+Connect directly to PostgreSQL or use a pooler in **session mode**. Transaction-mode
+poolers, including PgBouncer with `pool_mode=transaction`, Supavisor transaction
+mode, and similar services, are **not supported**. The bridge relies on
+per-connection session state: `lock_timeout`, `statement_timeout`, `search_path`,
+and named prepared statements. A pooler must preserve that session for the life
+of the connection.
+
 ### Supply the connection securely
 
 Store the DSN in your secret manager and make it available to both the Gateway

@@ -24,6 +24,7 @@ import type { EmbeddedRunAttemptResult } from "./types.js";
 export type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
+  | "inputAlreadyDelivered"
   | "preparedTerminalReply"
   | "textToolCallAttempt"
   | "clientToolCalls"

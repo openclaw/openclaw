@@ -53,7 +53,7 @@ When your tool policy enables `browser`, local browser control works without a G
 
 Use `--state-dir <dir>` to retain sessions and other run state. The directory must already exist and is never created or deleted by the command. A retained state directory requires exclusive ownership: exec refuses to start while a Gateway or another embedded writer owns it, then holds the state lock for the complete run. Omit `--state-dir` for isolated temporary state, or stop the Gateway first with `openclaw gateway stop`.
 
-Temporary and `--isolated` runs always use SQLite, even when a config or override selects PostgreSQL; retained runs otherwise use the effective database configuration.
+Temporary and `--isolated` runs always use SQLite, even when a config or override selects PostgreSQL; retained runs otherwise use the effective [database engine configuration](/reference/database-engines).
 
 When exec uses the ambient or a pinned config, installed plugins continue to resolve from the operator's ordinary plugin roots while sessions and other run state use the ephemeral directory. Plugins that adopt the managed-resource root, including llama.cpp, also keep shared model caches and managed binaries on the operator root. In those modes, `--state-dir` controls run state only; it is not required for configured providers, channels, or harnesses supplied by installed plugins.
 

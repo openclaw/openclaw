@@ -24,6 +24,11 @@ coding harness, see [Session synchronization and attachment](/concepts/session-a
 For turn ownership, queueing, stopping, and lifecycle mutation rules, see
 [Session controller](/concepts/session-controller).
 
+Retries with the same input key acknowledge an already committed input even after
+another turn has started. They do not append another user message or generate a
+second reply. Interrupted current turns can still resume; reusing a key for
+conflicting content or sender identity is refused.
+
 For the personal-agent default — one rolling conversation shared by all your
 DM channels, with group activity and background work flowing into it — see
 [The main session](/concepts/main-session).
@@ -293,6 +298,9 @@ session, then aborts work promptly. A root is running when its agent loop, one o
 its descendant sub-agents, or one of its background processes is active. At startup,
 the Gateway clears the marker and sends one ordinary system input asking the agent
 to check current files, processes, sub-agents, and external actions before continuing.
+This includes channel threads and non-default agents; replies retain the session's
+recorded channel and thread. Marker persistence uses the process shutdown deadline.
+Shutdown and startup log per-agent marked/resumed counts and skip reasons.
 
 Running children stop quietly and do not resume independently. Their root requester
 receives the single resume input and can inspect results, send new instructions,

@@ -65,7 +65,7 @@ import {
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
 import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { DurableExecOptions, ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import type { ExecApprovalTransport } from "./exec-approval-transport.js";
@@ -206,6 +206,8 @@ export async function runExecProcess({
   ...opts
 }: {
   command: string;
+  durable?: DurableExecOptions;
+  sessionId?: string;
   // Execute this instead of `command` (which is kept for display/session/logging).
   // Used to sanitize safeBins execution while preserving the original user input.
   execCommand?: string;
@@ -558,11 +560,31 @@ export async function runExecProcess({
       // Source authority covers construction; approval policy ends at native launch.
       assertCurrent();
       assertHostPolicyCurrent?.();
+      if (opts.durable && (opts.sandbox || opts.usePty || opts.secretEgressBindings?.length)) {
+        throw new Error(
+          "Durable exec requires noninteractive Gateway-host execution without secret-egress proxy grants. Use non-durable background exec or a directly provided credential.",
+        );
+      }
       const grant = opts.secretEgressBindings
         ? await registerSecretEgressProxyProcess(opts.secretEgressBindings)
         : undefined;
       secretEgressGrant = grant;
       try {
+        if (opts.durable) {
+          const { startDurableExecProcess } = await import("./bash-process-durable.js");
+          return await startDurableExecProcess(
+            session,
+            opts.sessionId,
+            {
+              ...input,
+              env: resolveExecLaunchEnv(input.env, false),
+              assertCurrent,
+              beforeSpawn: assertHostPolicyCurrent,
+              initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
+            },
+            opts.durable,
+          );
+        }
         return await withChildProcessOperation("agent.exec", () =>
           withoutGatewayToolCallerIdentity(() =>
             supervisor.spawn({
@@ -633,6 +655,9 @@ export async function runExecProcess({
         argv: spawnSpec.argv,
         stdinMode: spawnSpec.stdinMode,
       });
+    }
+    if (opts.durable && requestSignal?.aborted) {
+      managedRun.cancel("manual-cancel");
     }
     // Background execution outlives the turn, but never its original access grant.
     operatorSignal?.addEventListener("abort", onOperatorRevoked, { once: true });

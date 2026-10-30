@@ -2998,7 +2998,7 @@ describe("gateway server chat", () => {
       expect(history.payload?.messages?.map(readOpenClawSeq)).toEqual([2, 3, 4]);
       expect(history.payload?.offset).toBeUndefined();
       expect(history.payload?.nextOffset).toBeUndefined();
-      expect(history.payload?.hasMore).toBeUndefined();
+      expect(history.payload?.hasMore).toBe(true);
       expect(history.payload?.totalMessages).toBeUndefined();
     });
   });

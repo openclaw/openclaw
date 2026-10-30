@@ -363,6 +363,31 @@ it("ignores protected store entries without replacing inherited network settings
   });
 });
 
+it("refuses durable exec before granting proxy-backed secrets or launching a process", async () => {
+  mocks.egressActive = true;
+  const tool = createExecTool({
+    host: "gateway",
+    mode: "full",
+    preparedStoreEnvironment: {
+      env: {},
+      secretSentinels: { SERVICE_API_KEY: "synthetic-sentinel" },
+      secretEgressBindings: [
+        {
+          name: "SERVICE_API_KEY",
+          sentinel: "synthetic-sentinel",
+          allowedHosts: ["api.example.com"],
+        },
+      ],
+    },
+    preparedSubagentExecution: false,
+  });
+  await expect(
+    tool.execute("durable-proxy", { command: ":", background: true, durable: true }),
+  ).rejects.toThrow("Use non-durable background execution or a directly provided credential");
+  expect(mocks.proxyBindings).toEqual([]);
+  expect(mocks.spawnInputs).toEqual([]);
+});
+
 it.each(["gateway", "sandbox"] as const)(
   "applies enabled secret egress only to gateway exec (%s)",
   async (host) => {

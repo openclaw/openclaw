@@ -277,6 +277,7 @@ export async function createChildAdapter(
       },
       initiateSpawn: params.initiateSpawn,
       argv: [preparedSpawn.command, ...preparedSpawn.args],
+      gatewayWorker: params.ownedWorker,
       options,
     });
 
@@ -551,6 +552,14 @@ export async function createChildAdapter(
     }
     // A delayed private-input failure must not signal a PID whose child has closed.
     if (processClosed) {
+      return;
+    }
+    if (
+      process.platform === "win32" &&
+      (childExitState !== null || child.exitCode !== null || child.signalCode !== null)
+    ) {
+      // A descendant can retain output after root exit, but taskkill must not target its reusable PID.
+      scheduleForceKillWaitFallback(signal ?? "SIGKILL");
       return;
     }
     const pid = child.pid ?? undefined;

@@ -13,7 +13,6 @@ import type {
 } from "../../plugin-sdk/media-understanding.js";
 import * as capabilities from "../../plugins/capability-provider-runtime.js";
 import * as models from "../embedded-agent-runner/model.js";
-import { decodeDataUrl } from "./image-tool.helpers.js";
 import { createImageTool } from "./image-tool.js";
 import * as execution from "./image-tool.model-execution.js";
 
@@ -167,7 +166,6 @@ function setProviderDepsForTest(overrides?: Partial<ImageToolProviderDeps>): voi
 }
 
 export const testing = {
-  decodeDataUrl,
   resolveImageCompressionPolicy: (
     params: Parameters<typeof execution.prepareImageCompressionPolicy>[0],
   ) => execution.prepareImageCompressionPolicy(params),

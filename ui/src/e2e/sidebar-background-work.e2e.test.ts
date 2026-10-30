@@ -1,8 +1,4 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import * as ui from "./session-management.compact.test-support.ts";
@@ -46,22 +42,16 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
         await ui.visible(row);
-        const capture = process.env.OPENCLAW_SIDEBAR_BACKGROUND_CAPTURE;
-        if (capture) {
-          const directory = createControlUiE2eArtifactDir(`sidebar-background-${capture}`);
-          const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [row], {
-            viewport: { width: 1440, height: 900 },
-            animations: "disabled",
-            elements: [row],
-          });
-          await writeFile(path.join(directory, `${capture}.png`), frame.png);
-        }
         const ring = row.getByRole("img", { name: "Background work running", exact: true });
         await ui.visible(ring);
         expect(await ring.getAttribute("class")).toContain("session-glyph__ring--background");
         expect(await row.locator(".sidebar-session-indicator .session-glyph__ring").count()).toBe(
           1,
         );
+        // The chat pane admits its initial child roster after the sidebar is ready.
+        await gateway.waitForRequest("sessions.list", {
+          match: { source: "chat-pane", spawnedBy: "agent:main:main" },
+        });
         const listReads = (await gateway.getRequests("sessions.list")).length;
         await gateway.emitGatewayEvent("sessions.changed", {
           reason: "background-processes",
