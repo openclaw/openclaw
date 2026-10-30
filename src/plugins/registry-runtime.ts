@@ -4,9 +4,6 @@ import { createChannelIngressQueue } from "../channels/message/ingress-queue.js"
 import { readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DecisionEvaluateOptions } from "../decisions/execution-types.js";
-import type { DecisionEvaluation } from "../decisions/runtime.js";
-import type { DecisionOutcomeV2 } from "../decisions/types-v2.js";
-import type { DecisionOutcome } from "../decisions/types.js";
 import {
   createPluginBlobStore,
   type OpenBlobStoreOptions,
@@ -131,15 +128,16 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         throw new Error(`Plugin "${pluginId}" runtime is no longer active.`);
       }
     };
-    const evaluateDecision = async <T extends DecisionOutcome | DecisionOutcomeV2>(
+    const evaluateDecision = async <Evaluation, Outcome>(
       options: DecisionEvaluateOptions,
       run: (
         runtime: typeof import("../decisions/runtime.js"),
         registry: PluginRegistry,
         config: OpenClawConfig,
         isAdmissible: () => boolean,
-      ) => Promise<DecisionEvaluation<T>>,
-    ): Promise<T> => {
+      ) => Promise<Evaluation>,
+      complete: (runtime: typeof import("../decisions/runtime.js"), result: Evaluation) => Outcome,
+    ): Promise<Outcome> => {
       assertRuntimeCurrent();
       const capturedRegistry = currentDecisionRegistry();
       const decisions = await import("../decisions/runtime.js");
@@ -154,7 +152,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       );
       assertRuntimeCurrent();
       options.signal.throwIfAborted();
-      return decisions.completeDecisionEvaluation(result);
+      return complete(decisions, result);
     };
     const assertNativeRuntimeCurrent = () => {
       assertRuntimeCurrent();
@@ -338,26 +336,32 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         if (prop === "decisions") {
           return {
             evaluate: (batch, options) =>
-              evaluateDecision(options, (runtime, registry, config, isAdmissible) =>
-                runtime.evaluateDecisionOperation(
-                  batch,
-                  options,
-                  registry,
-                  config,
-                  record.id,
-                  isAdmissible,
-                ),
+              evaluateDecision(
+                options,
+                (runtime, registry, config, isAdmissible) =>
+                  runtime.evaluateDecisionOperation(
+                    batch,
+                    options,
+                    registry,
+                    config,
+                    record.id,
+                    isAdmissible,
+                  ),
+                (runtime, result) => runtime.completeDecisionEvaluation(result),
               ),
             evaluateV2: (batch, options) =>
-              evaluateDecision(options, (runtime, registry, config, isAdmissible) =>
-                runtime.evaluateDecisionV2Operation(
-                  batch,
-                  options,
-                  registry,
-                  config,
-                  record.id,
-                  isAdmissible,
-                ),
+              evaluateDecision(
+                options,
+                (runtime, registry, config, isAdmissible) =>
+                  runtime.evaluateDecisionV2Operation(
+                    batch,
+                    options,
+                    registry,
+                    config,
+                    record.id,
+                    isAdmissible,
+                  ),
+                (runtime, result) => runtime.completeDecisionEvaluation(result),
               ),
           } satisfies PluginRuntime["decisions"];
         }
