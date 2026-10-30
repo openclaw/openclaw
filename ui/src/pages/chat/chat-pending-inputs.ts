@@ -17,7 +17,11 @@ import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
-import type { ChatPendingInputView, PendingInputRequest } from "./chat-pending-inputs.types.ts";
+import type {
+  ChatPendingInputView,
+  PendingInputRequest,
+  PendingInputReceiptState,
+} from "./chat-pending-inputs.types.ts";
 import {
   readDeliveredQueuedChatSendForRun,
   removeDeliveredQueuedChatSendForRun,
@@ -62,6 +66,58 @@ function reconcileQueuedInputs(
       ? receipt.state === "pending" && receipt.queued
       : !input.runId || !queried.has(input.runId);
   });
+}
+
+/** Approved payloads do not change custody; deserialization and display enrichment are neutral. */
+function pendingInputCustodyKey(
+  page: ChatPendingInputsPage,
+  queued: ChatPendingInputsPage["items"],
+): string {
+  const entries = (inputs: ChatPendingInputsPage["items"]) =>
+    inputs.map((input) => [input.id, input.runId, input.state, input.queued === true]);
+  return JSON.stringify([
+    page.total,
+    page.nextBefore,
+    page.queuedCount,
+    entries(page.items),
+    entries(queued),
+  ]);
+}
+
+function pendingInputReceiptState(
+  receipt: ChatInputReceipts[number] | undefined,
+): PendingInputReceiptState {
+  return !receipt
+    ? "absent"
+    : receipt.state === "consumed"
+      ? "consumed"
+      : receipt.cancelled
+        ? "cancelled"
+        : receipt.queued
+          ? "queued"
+          : "pending";
+}
+
+/** Exact newer receipts can retire an input outside both display windows. */
+function observePendingInputReceipts(
+  request: PendingInputRequest,
+  receipts: ChatInputReceipts | undefined,
+  queriedRunIds: readonly string[] = [],
+): void {
+  if (receipts === undefined) {
+    return;
+  }
+  const observed = new Map(receipts.map((receipt) => [receipt.runId, receipt]));
+  for (const runId of request.receiptStates.keys()) {
+    const receipt = observed.get(runId);
+    if (receipt || queriedRunIds.includes(runId)) {
+      const next = pendingInputReceiptState(receipt);
+      if (request.receiptStates.get(runId) !== next) {
+        request.receiptStates.set(runId, next);
+        request.receiptRevision += 1;
+      }
+    }
+  }
 }
 
 function describePendingInputMessage(message: unknown): string {
@@ -275,12 +331,15 @@ export function applyChatPendingInputs(
     options.receipts,
     options.queriedRunIds,
   );
+  const custodyKey = pendingInputCustodyKey(displayPage, queuedInputs);
   if (!view) {
     view = {
       sessionKey: state.sessionKey,
       sessionId: state.currentSessionId ?? null,
       agentId: resolveUiSelectedSessionAgentId(state),
       page: displayPage,
+      custodyKey,
+      custodyRevision: 0,
       queuedInputs,
       receiptRunIds: [],
       queuedCount: displayPage.queuedCount ?? 0,
@@ -291,6 +350,10 @@ export function applyChatPendingInputs(
     };
     state.chatPendingInputs = view;
   } else {
+    if (view.custodyKey !== custodyKey) {
+      view.custodyKey = custodyKey;
+      view.custodyRevision += 1;
+    }
     view.queuedInputs = queuedInputs;
     view.queuedCount = displayPage.queuedCount ?? 0;
     view.queueBefore = displayPage.nextBefore;
@@ -305,6 +368,9 @@ export function applyChatPendingInputs(
     if (view.before !== undefined && !view.request) {
       void requestPendingInputPage(state, view.before, "refresh");
     }
+  }
+  if (view.request && ownsPendingInputRequest(state, view, view.request)) {
+    observePendingInputReceipts(view.request, options.receipts, options.queriedRunIds);
   }
   rotateInputReceipts(state, view, options.queriedRunIds);
   if (
@@ -334,7 +400,14 @@ async function requestPendingInputPage(
   ) {
     return;
   }
-  const request = { before, kind, client, connectionEpoch: state.connectionEpoch };
+  const request: PendingInputRequest = {
+    before,
+    kind,
+    client,
+    connectionEpoch: state.connectionEpoch,
+    receiptStates: new Map(),
+    receiptRevision: 0,
+  };
   view.request = request;
   view.error = undefined;
   if (kind === "navigation") {
@@ -344,6 +417,32 @@ async function requestPendingInputPage(
   try {
     while (current()) {
       const inputRunIds = readChatInputRunIds(state);
+      // Retain observations only for this RPC's receipt window, never a session history.
+      for (const runId of request.receiptStates.keys()) {
+        if (!inputRunIds.includes(runId)) {
+          request.receiptStates.delete(runId);
+        }
+      }
+      for (const runId of inputRunIds) {
+        if (request.receiptStates.has(runId)) {
+          continue;
+        }
+        const input =
+          view.queuedInputs.find((item) => item.runId === runId) ??
+          view.page.items.find((item) => item.runId === runId);
+        request.receiptStates.set(
+          runId,
+          !input
+            ? "unknown"
+            : input.state === "cancelled"
+              ? "cancelled"
+              : input.queued
+                ? "queued"
+                : "pending",
+        );
+      }
+      const observedCustody = view.custodyRevision;
+      const observedReceipts = request.receiptRevision;
       const result = await client.request<{
         sessionId?: string;
         pendingInputs?: ChatPendingInputsPage;
@@ -359,8 +458,15 @@ async function requestPendingInputPage(
       if (!current() || result.sessionId !== view.sessionId) {
         return;
       }
-      // An overlapping live update may leave this page briefly behind; the next
-      // ordinary refresh catches it up without restarting navigation reads.
+      // A newer custody publication can consume or cancel rows while navigation
+      // is pending. Reissue the same navigation instead of restoring its old queue.
+      if (
+        view.custodyRevision !== observedCustody ||
+        request.receiptRevision !== observedReceipts
+      ) {
+        continue;
+      }
+      observePendingInputReceipts(request, result.inputReceipts, inputRunIds);
       const page = reconcilePendingInputPage(state, result.pendingInputs, result.inputReceipts);
       view.queuedInputs = reconcileQueuedInputs(
         view.queuedInputs,

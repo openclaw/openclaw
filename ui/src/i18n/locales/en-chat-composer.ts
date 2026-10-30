@@ -204,6 +204,7 @@ const catalog = {
       moreActions: "More queued message actions",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
+        queuedOnServer: "Queued for a new turn",
         applyingSettings: "Applying chat settings",
         blockedByReview:
           "Queue paused. Review or discard the earlier held message in the conversation.",

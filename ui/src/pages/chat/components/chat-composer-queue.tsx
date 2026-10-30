@@ -272,6 +272,9 @@ function ChatQueueItem(rowProps: {
     const queueItem: ChatQueueItem = item();
     const offline: boolean = !item().serverQueued && rowProps.controls.offline === true;
     const connected: boolean | undefined = rowProps.controls.connected;
+    if (item().serverQueued) {
+      return t("chat.queue.states.queuedOnServer");
+    }
     if (offline && queueItem.sendState !== "failed" && queueItem.sendState !== "held") {
       return t("chat.queue.states.waitingForReconnect");
     }

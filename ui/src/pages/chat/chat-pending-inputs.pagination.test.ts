@@ -104,6 +104,181 @@ function expectPage(
 }
 
 describe("server-owned pending input pagination", () => {
+  it("does not restore a newly consumed input after custody returns to its starting state", async () => {
+    const stale = createDeferred<unknown>();
+    const runId = "arrived-during-navigation";
+    const empty: ChatPendingInputsPage = { items: [], total: 21, nextBefore: 2, queuedCount: 0 };
+    const accepted: ChatPendingInputsPage = {
+      items: [queuedInput("Consumed during navigation", 1, undefined, runId)],
+      total: 22,
+      queuedCount: 1,
+    };
+    let reads = 0;
+    const host = makeHost(() =>
+      ++reads === 1 ? stale.promise : { sessionId, pendingInputs: empty },
+    );
+    applyChatPendingInputs(host, empty);
+    expect(readChatInputRunIds(host)).toEqual([]);
+    const navigation = loadChatPendingInputs(host, 2);
+    expect(host.request.mock.calls.at(-1)?.[1]).not.toHaveProperty("inputRunIds");
+    applyChatPendingInputs(host, accepted);
+    applyChatPendingInputs(host, structuredClone(empty), {
+      receipts: [{ runId, state: "consumed", consumedByEventId: "committed-during-navigation" }],
+    });
+    stale.resolve({ sessionId, pendingInputs: accepted });
+    await navigation;
+    expect.soft(reads).toBe(2);
+    expect(getChatPendingInputs(host)?.queuedInputs).toEqual([]);
+    expect(await queueText(host)).not.toContain("Consumed during navigation");
+    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+  });
+
+  it.each(["consumed", "cancelled", "absent"] as const)(
+    "does not revive an off-page local source after a receipt-only %s publication",
+    async (disposition) => {
+      const runId = "receipt-only-run";
+      const stale = createDeferred<unknown>();
+      const latestPage: ChatPendingInputsPage = {
+        items: [],
+        total: 21,
+        nextBefore: 2,
+        queuedCount: 0,
+      };
+      const receipts: ChatInputReceipts =
+        disposition === "consumed"
+          ? [{ runId, state: "consumed", consumedByEventId: "already-committed" }]
+          : disposition === "cancelled"
+            ? [{ runId, state: "pending", cancelled: true }]
+            : [];
+      const publication = { receipts, queriedRunIds: [runId] };
+      let reads = 0;
+      const host = makeHost(() => {
+        if (++reads > 4) {
+          throw new Error("Receipt-only probe exceeded its read bound");
+        }
+        if (reads === 1) {
+          return stale.promise;
+        }
+        // The same receipt publication remains enabled on every fresh response.
+        applyChatPendingInputs(host, structuredClone(latestPage), structuredClone(publication));
+        return { sessionId, pendingInputs: latestPage, inputReceipts: receipts };
+      });
+      applyChatPendingInputs(host, latestPage);
+      const local = retainedSource("attempted-local", runId);
+      expect(
+        admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, sessionKey), local),
+      ).toBe(true);
+      expect(readChatInputRunIds(host)).toEqual([runId]);
+      const navigation = loadChatPendingInputs(host, 2);
+      expect(host.request.mock.calls.at(-1)?.[1]).toMatchObject({ inputRunIds: [runId] });
+      applyChatPendingInputs(host, structuredClone(latestPage), publication);
+      expect(host.chatQueue.map((item) => item.id)).toEqual(
+        disposition === "absent" ? [local.id] : [],
+      );
+      stale.resolve({
+        sessionId,
+        pendingInputs: {
+          items: [queuedInput("Stale server copy", 1, undefined, runId)],
+          total: 21,
+          queuedCount: 1,
+        },
+      });
+      await navigation;
+      expect.soft(reads).toBe(2);
+      expect(getChatPendingInputs(host)?.queuedInputs).toEqual([]);
+      expect(await queueText(host)).not.toContain("Stale server copy");
+      expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    },
+  );
+
+  it.each([
+    { queuedCount: 0, deserialize: false },
+    { queuedCount: 1, deserialize: false },
+    { queuedCount: 0, deserialize: true },
+    { queuedCount: 1, deserialize: true },
+  ])(
+    "finishes navigation despite equivalent custody (queuedCount=$queuedCount, deserialized=$deserialize)",
+    async ({ queuedCount, deserialize }) => {
+      const latestPage: ChatPendingInputsPage = {
+        items: queuedCount ? [queuedInput("Still queued", 1)] : [],
+        total: 21,
+        nextBefore: 2,
+        queuedCount,
+      };
+      const olderPage: ChatPendingInputsPage = { items: [input], total: 21, queuedCount };
+      let reads = 0;
+      const host = makeHost(() => {
+        reads += 1;
+        // Bound a failing probe instead of letting an endless microtask loop hang the runner.
+        if (reads > 4) {
+          throw new Error("Probe stopped after four unchanged-custody retries");
+        }
+        const queriedRunIds = readChatInputRunIds(host);
+        const receipts: ChatInputReceipts = [
+          ...queriedRunIds.map((runId) => ({
+            runId,
+            state: "pending" as const,
+            queued: true as const,
+          })),
+          { runId: `unqueried-${reads}`, state: "consumed", consumedByEventId: "unrelated" },
+        ];
+        applyChatPendingInputs(host, deserialize ? structuredClone(latestPage) : latestPage, {
+          receipts: deserialize ? structuredClone(receipts) : receipts,
+          queriedRunIds,
+        });
+        return { sessionId, pendingInputs: deserialize ? structuredClone(olderPage) : olderPage };
+      });
+      applyChatPendingInputs(host, latestPage);
+      await loadChatPendingInputs(host, 2);
+      const view = getChatPendingInputs(host);
+      expect.soft(reads).toBe(1);
+      expectPage(host, olderPage, 2);
+      expect(view?.error).toBeUndefined();
+    },
+  );
+
+  it.each(["consumed", "cancelled"] as const)(
+    "does not restore %s queue rows from an overlapping older-page response",
+    async (disposition) => {
+      const stale = createDeferred<unknown>();
+      const queued = queuedInput("Already consumed", 1);
+      const currentPage: ChatPendingInputsPage = {
+        items:
+          disposition === "cancelled" ? [{ ...queued, state: "cancelled", queued: undefined }] : [],
+        total: disposition === "cancelled" ? 1 : 0,
+        queuedCount: 0,
+      };
+      let reads = 0;
+      const host = makeHost(() =>
+        ++reads === 1 ? stale.promise : { sessionId, pendingInputs: currentPage },
+      );
+      applyChatPendingInputs(host, {
+        items: [queued],
+        total: 21,
+        nextBefore: 2,
+        queuedCount: 1,
+      });
+      const navigation = loadChatPendingInputs(host, 2);
+      applyChatPendingInputs(host, currentPage, {
+        receipts: [
+          disposition === "consumed"
+            ? { runId: queued.runId, state: "consumed", consumedByEventId: "committed" }
+            : { runId: queued.runId, state: "pending", cancelled: true },
+        ],
+        queriedRunIds: [queued.runId],
+      });
+      stale.resolve({
+        sessionId,
+        pendingInputs: { items: [queued], total: 1, queuedCount: 1 },
+      });
+      await navigation;
+      expect(reads).toBe(2);
+      expect(await queueText(host)).toEqual([]);
+      expect(getChatPendingInputs(host)?.page).toEqual(currentPage);
+      expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    },
+  );
+
   it.each(["empty-queue", "complete-page", "partial-page-receipts"] as const)(
     "retires consumed server queue chips outside the transcript window using %s",
     async (source) => {
@@ -335,9 +510,7 @@ describe("server-owned pending input pagination", () => {
 
       await vi.waitFor(() => {
         expect(getChatPendingInputs(host)?.before).toBe(21);
-        expect(getChatPendingInputs(host)?.page).toEqual(
-          order === "refresh-first" ? olderPage : refreshedOlderPage,
-        );
+        expect(getChatPendingInputs(host)?.page).toEqual(refreshedOlderPage);
       });
       expect(host.chatMessages).toEqual([canonical]);
       expect(host.chatQueue).toEqual([]);
