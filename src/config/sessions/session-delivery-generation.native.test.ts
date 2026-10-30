@@ -93,7 +93,9 @@ it("writes under prepared generation and command-owner authority without synchro
   const nativeReads = vi
     .spyOn(nativeEntries, "readSessionEntryGenerationInDatabase")
     .mockImplementation(delay(readGeneration));
-  onTestFinished(() => vi.restoreAllMocks());
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
   await withGatewayToolCallerIdentity(
     { agentId: scope.agentId, sessionKey: scope.sessionKey, receiptAuthority },
     () => writeHostFile(file, "replacement"),
@@ -154,7 +156,9 @@ it.each(["revision", "release"] as const)(
         return result;
       },
     );
-    onTestFinished(() => vi.restoreAllMocks());
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
     await expect(prepareSessionSourceEffect(generation.assertCurrent)).rejects.toThrow(
       generationError(),
     );
