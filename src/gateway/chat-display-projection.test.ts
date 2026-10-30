@@ -593,6 +593,42 @@ it.each(["length", "stop"])("retains keyed commentary from a %s attempt", (stopR
   ).toEqual([]);
 });
 
+it.each([
+  ["length", undefined],
+  ["length", false],
+  ["length", true],
+  ["stop", undefined],
+  ["stop", false],
+  ["stop", true],
+] as const)("honors source silence before %s commentary (display=%s)", (stopReason, display) => {
+  const progress = "Running it now.";
+  const final = phasedText("NO_REPLY", "final_answer");
+  const source = assistant([phasedText(progress, "commentary"), final], {
+    stopReason,
+    ...(display === undefined ? {} : { display }),
+  });
+  const expected =
+    display === true
+      ? [
+          {
+            role: "assistant",
+            content: [text(progress)],
+            openclawStreamFallback: {
+              source: "segment",
+              itemId: "commentary",
+              replacementText: progress,
+            },
+          },
+          { ...source, content: [final] },
+        ]
+      : [];
+  for (const assistantErrorPending of [false, true]) {
+    expect(
+      projectStable([source], { includeCommentaryFallbacks: true, assistantErrorPending }),
+    ).toEqual(expected);
+  }
+});
+
 const legacyGuidance = "The provider stopped this request as a safety precaution (misalignment).";
 it.each([
   [{ errorCode: "misalignment_policy_violation" }, legacyGuidance],
