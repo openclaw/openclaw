@@ -1,2 +1,0 @@
-# Real lifecycle lease survives a parent-thread stall beyond expiry and releases afterward.
-15
