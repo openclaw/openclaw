@@ -17,7 +17,10 @@ import {
 } from "../../../lib/sessions/tool-overrides.ts";
 import { uploadsEnabled } from "../../../lib/uploads.ts";
 import { resolveComposerSkills } from "../composer-capability-catalog.ts";
-import type { ChatComposerPlusMenuView } from "../composer-capability-types.ts";
+import type {
+  ChatComposerMenuSkill,
+  ChatComposerPlusMenuView,
+} from "../composer-capability-types.ts";
 import "./chat-camera-capture.tsx";
 import { useNativeAttachmentSourceMenu } from "./chat-attachment-picker-policy.ts";
 import {
@@ -25,7 +28,6 @@ import {
   composerLibraryMenuItems,
   composerLibraryAddItems,
 } from "./chat-composer-library-menu.tsx";
-import { libraryRows, matchMenuText, skillRows } from "./chat-composer-menu-filter.tsx";
 import { toolsForServer, isToolDenied, menuRenderInputs } from "./chat-composer-menu-inputs.ts";
 import {
   menuChevron,
@@ -42,6 +44,76 @@ import type {
 registerEnglishCatalog(registerChatComposerMenuEnglish);
 
 registerEnglishCatalog(registerMcpEnglish);
+
+function libraryRows(menu: ChatComposerPlusMenuContentProps, query: string): MenuEntry[] {
+  const items = composerLibraryMenuItems(menu.library).filter(
+    (item) => item.kind === "content" || item.label.toLowerCase().normalize("NFC").includes(query),
+  );
+  return items.length
+    ? [
+        {
+          kind: "group",
+          id: "library-skills",
+          items: [menuSection("library-heading", t("chat.composer.menu.fromLibraries")), ...items],
+        },
+      ]
+    : [];
+}
+
+function skillRows(
+  rows: readonly ChatComposerMenuSkill[] | null,
+  menu: ChatComposerPlusMenuContentProps,
+  query: string,
+  hasLibrary: boolean,
+): MenuEntry[] {
+  const matches = (text: string) => text.toLowerCase().normalize("NFC").includes(query);
+  const entries: MenuEntry[] = [];
+  const filtered = rows?.filter((skill) => matches(skill.name)) ?? [];
+  for (const unavailable of [false, true]) {
+    const group = filtered.filter(
+      (skill) => Boolean(skill.missingDeps || skill.blocked) === unavailable,
+    );
+    if (!group.length) {
+      continue;
+    }
+    const id = unavailable ? "unavailable" : "agent";
+    const groupRows: MenuEntry[] = [
+      ...(entries.length || hasLibrary ? [menuDivider(`${id}-divider`)] : []),
+      menuSection(
+        `${id}-heading`,
+        t(unavailable ? "chat.composer.menu.unavailable" : "chat.composer.menu.agentWorkspace"),
+      ),
+    ];
+    for (const skill of group) {
+      groupRows.push({
+        ...renderCapabilityToggleRow({
+          value: `skill:${skill.key}`,
+          label: skill.name,
+          emoji: skill.emoji,
+          skill: true,
+          checked: skill.enabled,
+          disabled: unavailable || menu.mutationBlockedReason !== null,
+          title: skill.missingDeps
+            ? t("chat.composer.menu.depsMissing")
+            : skill.blocked
+              ? t("chat.composer.menu.skillBlocked")
+              : menu.mutationBlockedReason,
+        }),
+        ...(unavailable ? { type: undefined, checked: undefined, details: undefined } : {}),
+      });
+    }
+    entries.push({ kind: "group", id: `${id}-skills`, items: groupRows });
+  }
+
+  return entries.length || hasLibrary
+    ? entries
+    : [
+        renderCapabilityMenuState(
+          "skills-empty",
+          t(query ? "chat.composer.menu.noMatches" : "chat.composer.menu.noSkills"),
+        ),
+      ];
+}
 
 function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
   const entries: MenuEntry[] = [];
@@ -344,7 +416,7 @@ export function ChatComposerPlusMenuBody(props: ChatComposerPlusMenuResolvedProp
         previous.values.every((value, index) => Object.is(value, next.values[index])),
     },
   );
-  const skillsQuery = () => matchMenuText(query().trim());
+  const skillsQuery = () => query().trim().toLowerCase().normalize("NFC");
   const libraryItems = createMemo(() => libraryRows(inputs().menu, skillsQuery()));
   const skillsOwner = createMemo(() => ({ read: inputs().menu.skillsRead }), {
     equals: (a, b) => a.read === b.read,

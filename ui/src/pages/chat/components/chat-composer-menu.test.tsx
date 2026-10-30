@@ -578,7 +578,7 @@ it("filters skills across groups and restores the catalog when header search clo
     capabilityMenu: makeCapabilities({
       skills: [
         { key: "notes", name: "Notes", enabled: true, baseEnabled: true },
-        { key: "weather", name: "Weather", enabled: false, baseEnabled: false, missingDeps: true },
+        { key: "nfd", name: "e\u0301", enabled: false, baseEnabled: false, missingDeps: true },
       ],
     }),
   });
@@ -595,12 +595,12 @@ it("filters skills across groups and restores the catalog when header search clo
     name: "Search skills",
     hidden: true,
   }) as HTMLInputElement;
-  input.value = "weather";
+  input.value = "É";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   await waitForSolid(() => {
     expect(view.queryByRole("menuitemcheckbox", { name: "Notes", hidden: true })).toBeNull();
     expect(
-      view.getByRole("menuitem", { name: "Weather", hidden: true }).getAttribute("aria-disabled"),
+      view.getByRole("menuitem", { name: "e\u0301", hidden: true }).getAttribute("aria-disabled"),
     ).toBe("true");
   });
   input.value = "missing";
@@ -612,7 +612,7 @@ it("filters skills across groups and restores the catalog when header search clo
   await waitForSolid(() => {
     expect(view.queryByRole("textbox", { name: "Search skills", hidden: true })).toBeNull();
     expect(view.getByRole("menuitemcheckbox", { name: "Notes", hidden: true })).not.toBeNull();
-    expect(view.getByRole("menuitem", { name: "Weather", hidden: true })).not.toBeNull();
+    expect(view.getByRole("menuitem", { name: "e\u0301", hidden: true })).not.toBeNull();
   });
   setMenu((previous) => ({ ...previous, view: "libraries" }));
   await waitForSolid(() => {
@@ -664,35 +664,6 @@ it("filters skills across groups and restores the catalog when header search clo
   setMenu((previous) => ({ ...previous, view: "connectors" }));
   await waitForSolid(() =>
     expect(view.getByRole("menuitem", { name: "Plugins", hidden: true })).not.toBeNull(),
-  );
-});
-
-// NFC "ü" is U+00FC; NFD is "u" + combining diaeresis U+0308.
-it("matches an NFC skill search against an NFD skill name", async () => {
-  const nfdName = "Mu\u0308ller skill";
-  const base = makeMenu({
-    open: true,
-    view: "skills",
-    capabilityMenu: makeCapabilities({
-      skills: [{ key: "muller", name: nfdName, enabled: true, baseEnabled: true }],
-    }),
-  });
-  const view = mountSolid(() => <ChatComposerPlusMenu menu={base} />);
-  await waitForSolid(() =>
-    expect(view.queryByRole("button", { name: "Search skills", hidden: true })).not.toBeNull(),
-  );
-  view.getByRole("button", { name: "Search skills", hidden: true }).click();
-  await waitForSolid(() =>
-    expect(view.queryByRole("textbox", { name: "Search skills", hidden: true })).not.toBeNull(),
-  );
-  const input = view.getByRole("textbox", {
-    name: "Search skills",
-    hidden: true,
-  }) as HTMLInputElement;
-  input.value = "M\u00fcller";
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  await waitForSolid(() =>
-    expect(view.getByRole("menuitemcheckbox", { name: nfdName, hidden: true })).not.toBeNull(),
   );
 });
 
