@@ -521,7 +521,8 @@ if (noOp && !legacySameVersionApply) {
   }
   const allowedNoOpSteps = new Set(["package-install", "global update", "recovery-artifact-cleanup"]);
   const cleanupSteps = steps.filter((step) => step?.name === "recovery-artifact-cleanup");
-  if (cleanupSteps.length > 1 || steps.some((step) => !allowedNoOpSteps.has(step?.name))) {
+  if (cleanupSteps.length > 1 || cleanupSteps.some((step) => Number(step.exitCode ?? 1) !== 0) ||
+      steps.some((step) => !allowedNoOpSteps.has(step?.name))) {
     throw new Error("already-current update performed unexpected activation or maintenance steps");
   }
   console.log("Verified already-current no-op: package staged, installed build unchanged, no activation");
