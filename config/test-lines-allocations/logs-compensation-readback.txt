@@ -1,2 +1,2 @@
 # Regression exercises real LogsView and virtual-core with native resize/scroll ordering.
-127
+138

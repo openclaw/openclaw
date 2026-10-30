@@ -208,13 +208,13 @@ export function LogsView(props: LogsProps) {
   createLayoutMeasurement(
     windowHeight,
     () => {
-      // Retry compensation only after Solid commits the measured spacer height.
+      // Retry when Solid commits the spacer, before another queued row measurement.
       const { _willUpdate: updateVirtualizer } = virtualizer;
       updateVirtualizer();
       // A retried compensation must be read back before another row measures from the old offset.
       synchronizeScrollOffset?.(virtualizer.isScrolling);
     },
-    { targets: () => [stream] },
+    { targets: () => [stream], changeTiming: "sync" },
   );
   const rendered = createMemo(() =>
     window().items.flatMap((item) => {
