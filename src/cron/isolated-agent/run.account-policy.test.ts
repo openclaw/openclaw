@@ -7,7 +7,9 @@ import {
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import "../../agents/test-helpers/fast-coding-tools.js";
+import { resolveMessageToolScheduledAccountScope } from "../../agents/tools/message-tool-discovery.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
@@ -58,7 +60,7 @@ type AccountCase = [
   accountId: string | undefined,
   toolsAllow: string[] | undefined,
   fails: boolean,
-  options?: { manual?: boolean; channel?: string },
+  options?: { manual?: boolean; channel?: string; requesterAccountId?: string },
 ];
 it.each<AccountCase>([
   ["removed named account", "removed", ["read"], true],
@@ -73,6 +75,27 @@ it.each<AccountCase>([
   ["legacy capless job", undefined, undefined, false],
   ["intentional no-tool job", "work", [], false],
   ["configured DM account without delivery", "work", ["read"], false, { channel: "whatsapp" }],
+  [
+    "authenticated requester without duplicate origin",
+    "work",
+    ["read"],
+    false,
+    { channel: "whatsapp", requesterAccountId: "work" },
+  ],
+  [
+    "requester for another account",
+    "work",
+    ["read"],
+    true,
+    { channel: "whatsapp", requesterAccountId: "other" },
+  ],
+  [
+    "authenticated requester with removed account",
+    "removed",
+    ["read"],
+    true,
+    { channel: "whatsapp", requesterAccountId: "removed" },
+  ],
   ["DM account with malformed creator origin", "work", ["read"], true, { channel: "" }],
 ])(
   "records %s through scheduler and history",
@@ -106,8 +129,18 @@ it.each<AccountCase>([
         ownerSessionKey,
         ownerAccountId: accountId ?? "removed",
       },
-      toolsAllowProvenance:
-        options.channel === undefined
+      toolsAllowProvenance: options.requesterAccountId
+        ? {
+            version: 1,
+            source: "authenticated-requester",
+            channelRequester: {
+              version: 1,
+              channel: options.channel ?? "whatsapp",
+              accountId: options.requesterAccountId,
+              senderId: "sender",
+            },
+          }
+        : options.channel === undefined
           ? undefined
           : {
               version: 1,
@@ -174,6 +207,21 @@ it.each<AccountCase>([
       } else {
         expect(persisted?.state.lastError).toBeUndefined();
         expect(runEmbeddedAgentMock.mock.calls[0]?.[0].toolsAllow).toEqual(toolsAllow);
+        if (options.requesterAccountId) {
+          const continuation = await readSessionEntryReadOnlyInWorker({
+            storePath: sessionStorePath,
+            sessionKey: runEmbeddedAgentMock.mock.calls[0]?.[0].sessionKey,
+          });
+          expect(continuation?.cronRunContinuation?.scheduledToolCallerOrigin).toEqual({
+            kind: "external",
+            channel: "whatsapp",
+          });
+          expect(resolveMessageToolScheduledAccountScope(undefined, continuation)).toEqual({
+            accountId: "work",
+            channels: ["whatsapp"],
+          });
+          expect(persisted?.toolsAllowProvenance?.callerOrigin).toBeUndefined();
+        }
         if (!accountId) {
           expect(runEmbeddedAgentMock.mock.calls[0]?.[0].scheduledToolPolicy).toBeUndefined();
         }

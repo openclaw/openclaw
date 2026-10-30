@@ -40,7 +40,7 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { resolveCronJobToolPolicyContext } from "../execution-context-admission.js";
+import { resolveCronJobToolPolicyContext } from "../job-tool-policy-context.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
 import { prepareCronRunInference } from "../run-inference.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
