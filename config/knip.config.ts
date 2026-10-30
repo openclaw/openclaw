@@ -143,6 +143,7 @@ const repositoryScriptEntries = [
   "scripts/lib/gateway-bench-transport-preload.ts!",
   // The performance guide and retained package-integrity rerun invoke these benchmarks by path.
   "scripts/bench-package-integrity.ts!",
+  "scripts/perf/cron-delivery-gateway-entry.ts!",
   // Maintained guides and source headers invoke these proof commands by exact path.
   "scripts/bench-control-ui-media.ts!",
   "scripts/bench-control-ui-css.ts!",
@@ -152,6 +153,8 @@ const repositoryScriptEntries = [
   "scripts/bench-dynamic-validators.mts!",
   "scripts/bench-standalone-wasm.mjs!",
   "scripts/generate-social-preview.mts!",
+  "scripts/perf/plugin-invocation-scope-measure.ts!",
+  "scripts/perf/plugin-state-polling.mts!",
   "scripts/bench-codex-validators.mts!",
   "scripts/bench-control-ui-navigation.ts!",
   "scripts/bench-gateway-validators.mts!",

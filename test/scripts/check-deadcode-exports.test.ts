@@ -86,8 +86,9 @@ describe("check-deadcode-exports", () => {
       "config/knip.scripts-exports.config.ts!",
       "scripts/generate-runtime-script-assets.mjs!",
       "scripts/generate-static-validators.mts!",
-      "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
+      "scripts/perf/cron-delivery-gateway-entry.ts!",
       "tsdown.config.ts!",
+      "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
     ]);
     expect(knipConfig.workspaces["."].project).toContain("config/**/*.{ts,mts,cts}!");
     expectEntries(fullRootWorkspace.entry, [
@@ -415,9 +416,6 @@ const unrelatedArgs = [
       /import \{ recordTrajectoryFlush as __dynamic\d+_0 \} from "\.\.\/scripts\/perf\/trajectory-flush-preload\.mts";/u,
     );
 
-    expect(compiled).toMatch(
-      /import \{ installTeamStressTelemetryIpc as __dynamic\d+_0 \} from "\.\.\/scripts\/perf\/team-shape-stress-telemetry\.ts";/u,
-    );
     const readFileSync = fs.readFileSync.bind(fs);
     const doctorConsumerPath = path.resolve("src/commands/config-preflight-snapshot.ts");
     const directDoctorConsumer = `const addIssues = (
@@ -433,14 +431,6 @@ const unrelatedArgs = [
 
     readFile.mockImplementation((file, options) => {
       const source = readFileSync(file, options);
-      if (
-        path.resolve(String(file)) === path.resolve("scripts/perf/transcript-broadcast-measure.ts")
-      ) {
-        return String(source).replace(
-          "import { installTeamStressTelemetryIpc } from",
-          "import {} from",
-        );
-      }
       if (path.resolve(String(file)) === path.resolve("tsdown.config.ts")) {
         return String(source).replace(
           `import {
@@ -481,18 +471,13 @@ const unrelatedArgs = [
       return source;
     });
     const withoutConsumers = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
-    for (const name of [
-      "runtimeProcessDeployManifest",
-      "runtimeProcessHelperManifest",
-      "runtimeProcessWorkerDependencies",
-      "gatewayBenchTaskOperation",
-      "fetchWithSsrFGuard",
-      "addDoctorLegacyIssues",
-      "recordTrajectoryFlush",
-      "installTeamStressTelemetryIpc",
-    ]) {
-      expect(withoutConsumers).not.toContain(name);
-    }
+    expect(withoutConsumers).not.toContain("runtimeProcessDeployManifest");
+    expect(withoutConsumers).not.toContain("runtimeProcessHelperManifest");
+    expect(withoutConsumers).not.toContain("runtimeProcessWorkerDependencies");
+    expect(withoutConsumers).not.toContain("gatewayBenchTaskOperation");
+    expect(withoutConsumers).not.toContain("fetchWithSsrFGuard");
+    expect(withoutConsumers).not.toContain("addDoctorLegacyIssues");
+    expect(withoutConsumers).not.toContain("recordTrajectoryFlush");
   });
 
   it("models Codex lazy runtime members only from their live loaders and consumers", () => {
@@ -603,6 +588,20 @@ const unrelatedArgs = [
       expect(project(replaceFixture(source, from, to))).toBe("");
     }
     expect(compiled).not.toContain("prepareTtsRequest as");
+  });
+
+  it("models telemetry only through live source imports", () => {
+    const compile = createDynamicConsumerCompiler();
+    for (const [relative, name] of [
+      ["scripts/perf/transcript-broadcast-measure.ts", "installTeamStressTelemetryIpc"],
+      ["test/scripts/team-shape-stress.test.ts", "startTeamStressTelemetry"],
+    ]) {
+      const file = path.resolve(relative);
+      const source = fs.readFileSync(file, "utf8");
+      expect(compile()).toContain(`${name} as __dynamic`);
+      const removed = replaceFixture(source, name, "");
+      expect(compile(new Map([[file, removed]]))).not.toContain(`${name} as __dynamic`);
+    }
   });
 
   it("models optional anchor imports only through their bound runtime calls", () => {
