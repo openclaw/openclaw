@@ -14,7 +14,6 @@ import {
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { joinProcessCompletionAndOutput, onDecodedOutput } from "../../decoded-output.js";
 import { signalProcessTree } from "../../kill-tree.js";
-import { AGENT_EXEC_CGROUP_ENV, getAgentExecCgroup } from "../../linux-exec-cgroup.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { pipeProcessOutput } from "../../pipe-output.js";
 import { scheduleAdoptedChildZombieReapAfterExit } from "../../scoped-child-reaper.js";
@@ -150,11 +149,7 @@ export async function createChildAdapter(
     });
   }
 
-  const baseEnv = params.ownedWorker
-    ? toStringEnv({ ...(params.env ?? process.env), [AGENT_EXEC_CGROUP_ENV]: getAgentExecCgroup() })
-    : params.env
-      ? toStringEnv(params.env)
-      : undefined;
+  const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const windowsShell = process.platform === "win32" && params.windowsShell === true;
   const invocation = windowsShell
     ? {

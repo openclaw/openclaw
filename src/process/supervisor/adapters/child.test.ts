@@ -2,7 +2,6 @@ import { Writable, type WritableOptions } from "node:stream";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import * as execCgroup from "../../linux-exec-cgroup.js";
 import { closeOwnedStdioProcess } from "../../owned-stdio.js";
 import type { ProcessExtinctionResult } from "../types.js";
 import { createChildAdapter } from "./child.js";
@@ -291,11 +290,9 @@ describe("createChildAdapter", () => {
   });
 
   it.each([undefined, true] as const)(
-    "preserves exact application env and passes owner activation only to owned workers (%s)",
+    "preserves the exact environment for application and owned workers (%s)",
     async (ownedWorker) => {
       setPlatform("linux");
-      const activation = "/sys/fs/cgroup/owned.service/agent-exec";
-      vi.spyOn(execCgroup, "getAgentExecCgroup").mockReturnValue(activation);
       const argv = ["/usr/bin/node", "worker"];
       const env = { HOME: "/worker-home", PATH: "/usr/bin", DROP_ME: undefined };
       await setup({ argv, exactEnv: true, env, ownedWorker });
@@ -303,7 +300,6 @@ describe("createChildAdapter", () => {
       expect(spawnArgs().options?.env).toEqual({
         HOME: "/worker-home",
         PATH: "/usr/bin",
-        ...(ownedWorker ? { [execCgroup.AGENT_EXEC_CGROUP_ENV]: activation } : {}),
       });
     },
   );

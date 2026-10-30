@@ -8,7 +8,6 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { resolveLaunchableNodePath } from "../../infra/stable-node-path.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { AGENT_EXEC_CGROUP_ENV, getAgentExecCgroup } from "../linux-exec-cgroup.js";
 import { withChildProcessOperation } from "../spawn-diagnostics.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 import { spawnProcess } from "../spawn-utils.js";
@@ -158,12 +157,6 @@ export function spawnServiceChildRelay(params: {
     "service.relay",
     () => {
       const env = resolveRuntimeWorkerEnv(params.workerUrl, params.env);
-      const execCgroup = getAgentExecCgroup();
-      if (execCgroup) {
-        env[AGENT_EXEC_CGROUP_ENV] = execCgroup;
-      } else {
-        delete env[AGENT_EXEC_CGROUP_ENV];
-      }
       if (env.NODE_OPTIONS !== undefined) {
         env.NODE_OPTIONS = stripNodeStartupHooks(env.NODE_OPTIONS);
       }

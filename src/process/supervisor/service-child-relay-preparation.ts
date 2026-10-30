@@ -1,7 +1,6 @@
 import type { Writable } from "node:stream";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import type { NodeWorkerCleanupBinding } from "../../node-host/node-worker-launch-receipt.js";
-import { AGENT_EXEC_CGROUP_ENV, getAgentExecCgroup } from "../linux-exec-cgroup.js";
 import { prepareSecretInputStdio, type SpawnStdioEntry } from "../spawn-secret-input.js";
 import { toStringEnv } from "./adapters/env.js";
 import {
@@ -156,11 +155,7 @@ export function createServiceChildStart(
     args: params.args,
     argv0: params.argv0,
     cwd: params.cwd,
-    env: toStringEnv(
-      params.ownedWorker
-        ? { ...params.env, [AGENT_EXEC_CGROUP_ENV]: getAgentExecCgroup() }
-        : (params.env ?? process.env),
-    ),
+    env: toStringEnv(params.env ?? process.env),
     stdinMode: params.stdinMode,
     secretFd: params.secretInput?.fd,
     terminateOnHostLoss: params.terminateOnHostLoss,

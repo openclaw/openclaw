@@ -1,45 +1,62 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const cgroupMount = "/sys/fs/cgroup";
-// A startup-owned inherited fact, never an operator configuration override.
-export const AGENT_EXEC_CGROUP_ENV = "OPENCLAW_INTERNAL_AGENT_EXEC_CGROUP";
-const state = resolveGlobalSingleton<{
-  activation: string | undefined;
-  directory: string | undefined;
-}>(Symbol.for("openclaw.agentExecCgroup"), () => ({
-  activation: undefined,
-  directory: undefined,
-}));
+const controllers = ["cpu", "io", "memory"];
 
+/** Delegation is a kernel capability, resolved from this process's own service leaf. */
 export function resolveGatewayServiceCgroupDirectory(): string | undefined {
   const relative = /^0::(.+)$/mu.exec(fs.readFileSync("/proc/self/cgroup", "utf8"))?.[1];
   if (!relative || !/^\/(?:[^/]+\/)*[^/]+\.service\/(?:gateway|agent-exec)$/u.test(relative)) {
     return undefined;
   }
-  return path.dirname(path.join(cgroupMount, relative));
+  const root = path.dirname(path.join(cgroupMount, relative));
+  fs.accessSync(root, fs.constants.W_OK | fs.constants.X_OK);
+  fs.accessSync(path.join(root, "cgroup.subtree_control"), fs.constants.W_OK);
+  fs.accessSync(path.join(root, "gateway", "cgroup.procs"), fs.constants.W_OK);
+  const available = new Set(
+    fs.readFileSync(path.join(root, "cgroup.controllers"), "utf8").trim().split(/\s+/u),
+  );
+  if (!controllers.every((controller) => available.has(controller))) {
+    throw new Error("the service has not delegated cpu, io, and memory controllers");
+  }
+  if (fs.readFileSync(path.join(root, "cgroup.procs"), "utf8").trim()) {
+    throw new Error(
+      "the service root still contains processes; move its launcher into the gateway leaf",
+    );
+  }
+  return root;
 }
 
-/** Helpers inherit only a successfully published startup fact, never stale kernel limits. */
+/** Helpers discover the same delegated subtree even with an exact application environment. */
 export function getAgentExecCgroup(): string | undefined {
   if (process.platform !== "linux") {
     return undefined;
   }
-  const activation = process.env[AGENT_EXEC_CGROUP_ENV];
-  if (state.activation !== activation) {
-    state.activation = activation;
-    state.directory = undefined;
-    try {
-      const root = activation && resolveGatewayServiceCgroupDirectory();
-      if (root && activation === path.join(root, "agent-exec")) {
-        state.directory = activation;
-      }
-    } catch {
-      // Startup diagnostics own unavailable delegation; optional isolation never blocks exec.
+  try {
+    const root = resolveGatewayServiceCgroupDirectory();
+    if (!root) {
+      return undefined;
     }
+    const enabled = new Set(
+      fs.readFileSync(path.join(root, "cgroup.subtree_control"), "utf8").trim().split(/\s+/u),
+    );
+    const directory = path.join(root, "agent-exec");
+    fs.accessSync(directory, fs.constants.W_OK | fs.constants.X_OK);
+    fs.accessSync(path.join(directory, "cgroup.procs"), fs.constants.W_OK);
+    // Startup writes a finite memory.high last, after every controller policy succeeds.
+    const memoryHigh = Number(fs.readFileSync(path.join(directory, "memory.high"), "utf8"));
+    if (
+      controllers.every((controller) => enabled.has(controller)) &&
+      memoryHigh > 0 &&
+      Number.isFinite(memoryHigh)
+    ) {
+      return directory;
+    }
+  } catch {
+    // Startup diagnostics own unavailable delegation; optional isolation never blocks exec.
   }
-  return state.directory;
+  return undefined;
 }
 
 /** Dedicated anchors/PTY helpers enter before launching their first application child. */

@@ -642,6 +642,12 @@ On systemd 254+ with cgroup v2, managed Gateway units use `Delegate=yes` and
 `gateway` leaf before they spawn children. This leaves the service cgroup empty,
 as required before enabling controllers for sibling cgroups.
 
+Runtime detection reads the process's own `/proc/self/cgroup` membership and
+checks the delegated subtree's writable controls and available controllers.
+Exec helpers discover the same kernel-owned policy; no environment setting
+enables isolation. Without writable delegation, OpenClaw leaves the cgroup
+layout unchanged and reports the missing prerequisite once at startup.
+
 OpenClaw places host agent-exec process trees in the sibling `agent-exec` cgroup.
 Its CPU weight is `10`, compared with the Gateway leaf's default `100`; these are
 relative shares during contention, not a fixed CPU cap. Aggregate `memory.high`

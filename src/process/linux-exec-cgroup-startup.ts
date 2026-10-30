@@ -1,14 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { parseKeyValueOutput } from "../daemon/runtime-parse.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveHostExecMemoryLimit } from "./child-memory.js";
 import { resolveExecIoDevices } from "./linux-exec-cgroup-device.js";
-import {
-  AGENT_EXEC_CGROUP_ENV,
-  getAgentExecCgroup,
-  resolveGatewayServiceCgroupDirectory,
-} from "./linux-exec-cgroup.js";
+import { resolveGatewayServiceCgroupDirectory } from "./linux-exec-cgroup.js";
 
 const cgroupMount = "/sys/fs/cgroup";
 const budgetKeys = ["rbps", "wbps", "riops", "wiops"] as const;
@@ -53,8 +48,6 @@ function ioBudget(root: string, device: string, bytesPerSecond: number): IoBudge
 
 /** One startup owner configures the delegated subtree before admitting exec. */
 export async function initializeGatewayExecCgroup(stateDir: string): Promise<string> {
-  delete process.env[AGENT_EXEC_CGROUP_ENV];
-  getAgentExecCgroup();
   if (process.platform !== "linux") {
     return "Agent exec cgroup isolation is only available on Linux.";
   }
@@ -68,30 +61,20 @@ export async function initializeGatewayExecCgroup(stateDir: string): Promise<str
     ) {
       throw new Error("requires Delegate=yes and DelegateSubgroup=gateway (systemd 254+)");
     }
-    fs.accessSync(path.join(root, "cgroup.subtree_control"), fs.constants.W_OK);
-    const { execSystemctl, execSystemctlUser } = await import("../daemon/systemd-exec.js");
-    const relative = root.slice(cgroupMount.length);
-    const args = ["show", path.basename(root), "--no-page", "--property=Delegate,ControlGroup"];
-    const manager = /\/user@\d+\.service\//u.test(relative)
-      ? await execSystemctlUser(process.env, args, 5_000)
-      : await execSystemctl(args, undefined, 5_000);
-    const properties = parseKeyValueOutput(manager.stdout, "=");
-    if (
-      manager.code !== 0 ||
-      manager.termination !== "exit" ||
-      properties.delegate !== "yes" ||
-      properties.controlgroup !== relative
-    ) {
-      throw new Error("the running service does not have verified Delegate=yes");
+    const leaf = path.join(root, "agent-exec");
+    try {
+      fs.accessSync(leaf, fs.constants.W_OK | fs.constants.X_OK);
+      fs.accessSync(path.join(leaf, "cgroup.procs"), fs.constants.W_OK);
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        throw error;
+      }
     }
-    const controllers = new Set(readOptional(path.join(root, "cgroup.controllers")).split(/\s+/u));
-    if (!["cpu", "io", "memory"].every((controller) => controllers.has(controller))) {
-      throw new Error("the service has not delegated cpu, io, and memory controllers");
-    }
-    if (readOptional(path.join(root, "cgroup.procs"))) {
-      throw new Error(
-        "the service root still contains processes; move its launcher into the gateway leaf",
-      );
+    // An earlier successful startup must not remain discoverable after a failed refresh.
+    if (readOptional(path.join(leaf, "memory.high"))) {
+      fs.accessSync(path.join(leaf, "memory.high"), fs.constants.W_OK);
+      directory = leaf;
+      fs.writeFileSync(path.join(leaf, "memory.high"), "max");
     }
     const devices = resolveExecIoDevices(stateDir);
     const memoryHigh = resolveHostExecMemoryLimit();
@@ -99,9 +82,9 @@ export async function initializeGatewayExecCgroup(stateDir: string): Promise<str
       throw new Error("the host memory or state-device budget is unavailable");
     }
     fs.writeFileSync(path.join(root, "cgroup.subtree_control"), "+cpu +io +memory");
-    directory = path.join(root, "agent-exec");
-    fs.mkdirSync(directory, { recursive: true });
-    // Retire any earlier policy while configuring; publish the inherited fact only on success.
+    fs.mkdirSync(leaf, { recursive: true });
+    directory = leaf;
+    // Keep the subtree undiscoverable until every controller policy succeeds.
     fs.writeFileSync(path.join(directory, "memory.high"), "max");
     fs.writeFileSync(path.join(directory, "cpu.weight"), "10");
     // A shared memory-sized IO backlog per five minutes, divided between reads
@@ -115,7 +98,6 @@ export async function initializeGatewayExecCgroup(stateDir: string): Promise<str
       return line;
     });
     fs.writeFileSync(path.join(directory, "memory.high"), String(memoryHigh));
-    process.env[AGENT_EXEC_CGROUP_ENV] = directory;
     return `Agent exec isolation active: cpu.weight=10 memory.high=${memoryHigh}; io.max: ${limits.join("; ")}. Gateway IO is uncapped.`;
   } catch (error) {
     if (directory) {

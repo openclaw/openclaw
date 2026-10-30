@@ -5,7 +5,6 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import * as execCgroup from "../linux-exec-cgroup.js";
 import { spawnProcess } from "../spawn-utils.js";
 import { bindInheritedNativeProcessOwner } from "../supervisor/inherited-process-lineage.js";
 import { createServiceChildRelayAdapter } from "../supervisor/service-child-relay-host.js";
@@ -20,26 +19,6 @@ vi.mock("../spawn-utils.js", async (importOriginal) => ({
   spawnProcess: vi.fn(),
 }));
 afterEach(() => vi.restoreAllMocks());
-
-it.each([undefined, "/sys/fs/cgroup/owned.service/agent-exec"])(
-  "passes only the startup owner's activation into a custom worker environment (%s)",
-  (activation) => {
-    vi.spyOn(execCgroup, "getAgentExecCgroup").mockReturnValue(activation);
-    vi.mocked(spawnProcess).mockReturnValue(new ChildProcess());
-    const env = { [execCgroup.AGENT_EXEC_CGROUP_ENV]: "/stale/operator/value" };
-    spawnServiceChildRelay({
-      workerUrl: pathToFileURL("/worker.mjs"),
-      env,
-      stdio: "ignore",
-      detached: false,
-      gatewayWorker: true,
-    });
-    expect(
-      vi.mocked(spawnProcess).mock.lastCall?.[2]?.env?.[execCgroup.AGENT_EXEC_CGROUP_ENV],
-    ).toBe(activation);
-    expect(env[execCgroup.AGENT_EXEC_CGROUP_ENV]).toBe("/stale/operator/value");
-  },
-);
 
 it("settles a streamless native spawn failure and releases its execution scope", async () => {
   const child = new ChildProcess();
