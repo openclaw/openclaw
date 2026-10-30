@@ -91,7 +91,6 @@ import {
   type CodexNativeSubagentNotification,
 } from "./native-subagent-notification.js";
 import {
-  canNativeParentConsumeCompletion,
   readNativeSubagentObservations,
   listNativePendingChildren,
   listNativeRequesterParents,
@@ -1078,12 +1077,12 @@ class Monitor {
     }
     const notificationState = this.resolveNotificationState(notification);
     const parent = threadId ? this.parentStates.get(threadId) : undefined;
-    if (parent) {
-      observeNativeParentTurn(parent, notification);
-    }
+    const nativeNotification = readCodexNativeSubagentNotification(notification);
+    const receipts = parent && observeNativeParentTurn(parent, notification, nativeNotification);
     if (
-      !notificationState &&
-      (!threadId || (!this.parentStates.has(threadId) && !this.currentChild(threadId)))
+      notification.method === "hook/started" ||
+      (!notificationState &&
+        (!threadId || (!this.parentStates.has(threadId) && !this.currentChild(threadId))))
     ) {
       return;
     }
@@ -1111,11 +1110,10 @@ class Monitor {
       return;
     }
     const childState = threadId && !pendingNativeTurn ? this.currentChild(threadId) : undefined;
-    const nativeNotification = readCodexNativeSubagentNotification(notification);
-    if (parent && canNativeParentConsumeCompletion(parent, readString(params, "turnId"))) {
+    if (parent && receipts) {
       observeCodexNativeSubagentDeliveryReceipts({
         state: parent,
-        receipts: nativeNotification.receipts,
+        receipts,
         knownChildren: this.knownChildren.values(),
         applyReceipts: (runIds) => this.completionDelivery.applyReceipts(parent, runIds),
       });

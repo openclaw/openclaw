@@ -4,6 +4,7 @@ import { releaseCompletionCustody } from "./native-subagent-admission-custody.js
 import type { CodexNativeSubagentAssignmentInventory } from "./native-subagent-assignment-inventory.js";
 import type { CodexNativeSubagentCloseOwner } from "./native-subagent-close-owner.js";
 import { CodexNativeSubagentDeliveryReceipts } from "./native-subagent-delivery-receipts.js";
+import { readNativeTurnEnd } from "./native-subagent-history-recovery.js";
 import {
   createNativeModelSourceOwner,
   notifyNativeModelSourceWaiters,
@@ -21,9 +22,10 @@ import type {
   ParentRegistrationHandle,
   ParentState,
 } from "./native-subagent-monitor-types.js";
+import type { CodexNativeSubagentNotification } from "./native-subagent-notification.js";
 import { matchesNativeAssignmentLifecycle } from "./native-subagent-pending-assignments.js";
 import type { CodexNativeSubagentSubmissionOwner } from "./native-subagent-submission-owner.js";
-import { isJsonObject, type CodexServerNotification } from "./protocol.js";
+import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
 
 export type NativeParentRegistration = Pick<
   ParentState,
@@ -75,7 +77,7 @@ type ParentDependencies = {
   interruptModelExecution?: (threadId: string, turnId: string) => void;
 };
 
-export function canNativeParentConsumeCompletion(state: ParentState, turnId?: string): boolean {
+function canNativeParentConsumeCompletion(state: ParentState, turnId?: string): boolean {
   if (
     !turnId ||
     !state.turnIds.has(turnId) ||
@@ -97,18 +99,49 @@ export function canNativeParentConsumeCompletion(state: ParentState, turnId?: st
   );
 }
 
+// Native can still complete a turn after compaction or a stopping hook without sampling again,
+// so held receipts are no longer evidence of a completed sampling. Stop hooks run only after a
+// final sampling completed.
+function mayEndWithoutSampling(notification: CodexServerNotification, params: JsonObject): boolean {
+  if (notification.method === "hook/started") {
+    return readString(isJsonObject(params.run) ? params.run : undefined, "eventName") !== "stop";
+  }
+  return (
+    (notification.method === "item/started" || notification.method === "item/completed") &&
+    isJsonObject(params.item) &&
+    params.item.type === "contextCompaction"
+  );
+}
+
+/** Observes parent turn lifecycle and returns the receipts this notification lets it consume. */
 export function observeNativeParentTurn(
   state: ParentState,
   notification: CodexServerNotification,
-): void {
+  { receipts }: CodexNativeSubagentNotification,
+): CodexNativeSubagentNotification["receipts"] | undefined {
   const params = isJsonObject(notification.params) ? notification.params : undefined;
-  const turnId = isJsonObject(params?.turn) ? readString(params.turn, "id") : undefined;
-  if (!turnId || !state.owners.size) {
-    return;
+  const turn = isJsonObject(params?.turn) ? params.turn : undefined;
+  const turnId = readString(turn, "id");
+  if (!turnId) {
+    const itemTurnId = readString(params, "turnId");
+    if (itemTurnId && params && mayEndWithoutSampling(notification, params)) {
+      state.deliveryReceipts.discardSampled(itemTurnId);
+    }
+    return canNativeParentConsumeCompletion(state, itemTurnId) ? receipts : undefined;
+  }
+  if (!state.owners.size) {
+    return undefined;
   }
   if (notification.method === "turn/started") {
     state.turnIds.add(turnId);
   } else if (notification.method === "turn/completed") {
+    // Without compaction or a stopping hook after it, a completed turn's latest request was
+    // the sampling that completed it. Failed or interrupted turns keep delivery pending.
+    const sampled = state.deliveryReceipts.takeSampled(turnId);
+    const settled =
+      sampled.length > 0 &&
+      readNativeTurnEnd(turn) === "completed" &&
+      canNativeParentConsumeCompletion(state, turnId);
     for (const owner of state.owners.values()) {
       if (owner.turnId === turnId) {
         owner.modelExecutionSettled = true;
@@ -118,7 +151,9 @@ export function observeNativeParentTurn(
     if ([...state.owners.values()].some((owner) => !owner.turnId)) {
       (state.completedModelTurnsBeforeBinding ??= new Set()).add(turnId);
     }
+    return settled ? sampled : undefined;
   }
+  return undefined;
 }
 
 /** Registers one foreground admission without owning later admissions to the same thread. */
@@ -373,9 +408,12 @@ export async function registerNativeSubagentParent(
         dependencies.closes.prune(current);
         if (owner.turnId) {
           current.turnIds.delete(owner.turnId);
+          current.deliveryReceipts.discardSampled(owner.turnId);
         }
         if (current.owners.size === 0) {
           current.turnIds.clear();
+          // Retained children keep this tracker for matching, not its foreground samplings.
+          current.deliveryReceipts.discardSampled();
           current.deliveryReceipts = new CodexNativeSubagentDeliveryReceipts();
         }
         if (![...current.owners.values()].some((candidate) => !candidate.turnId)) {

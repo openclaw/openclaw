@@ -180,6 +180,9 @@ export function createCodexInferenceModelBinding(params: {
               parentThreadId: metadata.parentThreadId,
               parentTurnId: metadata.parentTurnId,
               rootTurnId: metadata.rootTurnId,
+              ...(path === "/responses" && metadata.requestKind === "turn" && !imageTurnId
+                ? { input: body.input }
+                : {}),
             }),
         signal,
       });
