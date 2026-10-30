@@ -109,6 +109,59 @@ describe("prepareWorkerGitHubEnvironment", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("fast-forwards an unobstructed checkout with identical reconciled bytes", async () => {
+    const remoteHead = await publishEarlierTurn();
+    await fs.writeFile(path.join(cwd, filename), pushedContent);
+
+    await prepare();
+
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(remoteHead);
+    expect(await fs.readFile(path.join(cwd, filename), "utf8")).toBe(pushedContent);
+    expect(await git(cwd, "status", "--porcelain", "-z")).toBe("");
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { scenario: "file with a directory", localDirectory: false },
+    { scenario: "directory with a file", localDirectory: true },
+  ])("preserves a clean tracked $scenario without advancing HEAD", async ({ localDirectory }) => {
+    const collision = "collision";
+    if (localDirectory) {
+      await fs.mkdir(path.join(cwd, collision));
+      await fs.writeFile(path.join(cwd, collision, "base.txt"), "base file\n");
+    } else {
+      await fs.writeFile(path.join(cwd, collision), "base file\n");
+    }
+    initialHead = await commit(cwd, "Track collision path");
+    await git(cwd, "push", "--quiet", "--force", "origin", "HEAD:refs/heads/main");
+
+    const seed = path.join(root, "earlier-worker");
+    await git(root, "clone", "--quiet", "--branch", "main", origin, seed);
+    await fs.rm(path.join(seed, collision), { recursive: true });
+    if (localDirectory) {
+      await fs.writeFile(path.join(seed, collision), "remote file\n");
+    } else {
+      await fs.mkdir(path.join(seed, collision));
+      await fs.writeFile(path.join(seed, collision, "remote.txt"), "remote file\n");
+    }
+    const remoteHead = await commit(seed, "Earlier turn");
+    await git(seed, "push", "--quiet", "origin", `HEAD:refs/heads/${binding.branch}`);
+    const indexBefore = await git(cwd, "ls-files", "--stage", "-z");
+
+    await prepare();
+
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
+    expect(remoteHead).not.toBe(initialHead);
+    expect(await git(cwd, "ls-files", "--stage", "-z")).toBe(indexBefore);
+    expect(await git(cwd, "status", "--porcelain", "-z")).toBe("");
+    const localPath = localDirectory ? path.join(collision, "base.txt") : collision;
+    await expect(fs.readFile(path.join(cwd, localPath), "utf8")).resolves.toBe("base file\n");
+    expect((await fs.lstat(path.join(cwd, collision))).isDirectory()).toBe(localDirectory);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("GitHub checkout fast-forward skipped"),
+    );
+  });
+
   it("leaves diverged local history and files untouched with one warning", async () => {
     const remoteHead = await publishEarlierTurn();
     await fs.writeFile(path.join(cwd, "local.txt"), "local commit\n");
