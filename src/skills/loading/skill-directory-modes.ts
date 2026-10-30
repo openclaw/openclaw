@@ -20,7 +20,6 @@ export async function ensureWritableSkillDirectories(
     const scopedPath = `.${path.sep}${relativeDir}`;
     // Listing already admits child metadata; only a mode change needs a mutation descriptor.
     const current = observed ?? (await boundary.stat(scopedPath));
-    assertCurrent?.();
     if (
       !current.isDirectory ||
       current.isSymbolicLink ||
