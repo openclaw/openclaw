@@ -39,10 +39,15 @@ export async function captureCronJobTurnTarget(params: {
     return { target: await capture(), release: () => {} };
   }
   if (requester.kind !== "operator-source") {
-    const owner = await checkRequesterOwner(context.getRuntimeConfig(), requester);
-    const target = await capture({
-      requesterOwner: owner.assertCurrent ? { assertCurrent: owner.assertCurrent } : {},
-    });
+    const { owner, isOwner } = await checkRequesterOwner(context.getRuntimeConfig(), requester);
+    // Recheck against the Gateway's current config before each owner-only effect, as
+    // completions do for their requester; a revocation while queued is refused.
+    const assertCurrent = () => {
+      if (!isOwner?.(context.getRuntimeConfig())) {
+        throw new Error("The requester that authorized this automation is no longer an owner.");
+      }
+    };
+    const target = await capture({ requesterOwner: owner && isOwner ? { assertCurrent } : {} });
     return { target, release: () => {} };
   }
   // Operator-source jobs are owned by the conversation their source names.
@@ -63,9 +68,11 @@ export async function captureCronJobTurnTarget(params: {
         }
       },
     });
+    // As for the job's in-session runs, a restored source is an owner only when it was a
+    // Control UI administrator; otherwise it is the job's non-owner requester.
     const target = await capture({
       operatorAuthority: operator.authority,
-      ownerContinuation: true,
+      ...(operator.controlUiAdmin ? { ownerContinuation: true as const } : {}),
     });
     if (target.sessionId !== source.sessionId) {
       throw new Error("Automation owner conversation was reset");
