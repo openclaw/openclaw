@@ -4,6 +4,10 @@ import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import {
+  composeSessionSourceAssertion,
+  createDynamicSessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
@@ -185,8 +189,30 @@ function enqueueSessionEventAttempt(
       generationLease?.assertCurrent();
     }
   };
-  const assertEffectCurrent = () => {
-    assertCurrent();
+  Object.assign(assertCurrent, {
+    prepareSessionSourceEffect: () =>
+      composeSessionSourceAssertion(
+        [
+          operatorAuthority?.assertCurrent,
+          accepted ? undefined : acceptanceAssertion,
+          options.assertCurrent,
+          options.expectedTarget?.assertCurrent,
+          options.scheduledAutomation?.assertCurrent,
+          createDynamicSessionSourceAssertion(
+            () => generationLease?.assertCurrent,
+            () => {
+              throw new Error("Session event destination authority changed");
+            },
+          ),
+        ],
+        (assertSources) => {
+          assertSources();
+          assertCurrent();
+        },
+      ).prepareSessionSourceEffect(),
+  });
+  const assertEffectCurrent = composeSessionSourceAssertion([assertCurrent], (assertSource) => {
+    assertSource();
     if (
       getSessionEventRuntimeConfig() !== cfg ||
       getRuntimeConfigSnapshotMetadata() !== configPublication
@@ -196,7 +222,7 @@ function enqueueSessionEventAttempt(
       configPublicationChanged = true;
       throw new Error("Session event configuration changed; retry under the current policy");
     }
-  };
+  });
   const accept = () => {
     if (accepted || settlement === "finished") {
       return;

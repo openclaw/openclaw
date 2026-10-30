@@ -284,7 +284,6 @@ export const usageHandlers: GatewayRequestHandlers = {
                 startMs,
                 endMs,
                 visibilityFilter,
-                ...(p.projection === "overview" ? { statistics: false as const } : {}),
               }),
             () => [],
           );
