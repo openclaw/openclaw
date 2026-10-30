@@ -24,14 +24,12 @@ import {
 } from "./multimodal.js";
 import {
   resolveCanonicalRootMemoryFile,
-  shouldSkipConfiguredMemorySearchPath,
   shouldSkipRootMemoryAuxiliaryPath,
 } from "./openclaw-runtime-paths.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
 import type { MemoryExtraPath } from "./types.js";
 
 export const hashText: (value: string) => string = sha256Hex;
-export { shouldSkipConfiguredMemorySearchPath };
 export { encodeMemoryEmbedding, decodeMemoryEmbedding } from "./embedding-vector.js";
 export {
   chunkMarkdown,
@@ -164,6 +162,28 @@ export function matchesExtraMemoryPathEntry(
   } catch {
     return false;
   }
+}
+
+/** Match workspace-relative paths only; outside extra roots are not governed by workspace globs. */
+export function shouldSkipConfiguredMemorySearchPath(params: {
+  workspaceDir: string;
+  absPath: string;
+  excludePaths?: readonly string[];
+}): boolean {
+  if (!params.excludePaths?.length) {
+    return false;
+  }
+  const relative = path.relative(params.workspaceDir, params.absPath);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return false;
+  }
+  const normalized = relative.replaceAll(path.sep, "/");
+  return params.excludePaths.some(
+    (pattern) =>
+      // matchesGlob("dir", "dir/**") is false; match the directory so scans and watchers prune it.
+      (pattern.endsWith("/**") && normalized === pattern.slice(0, -3)) ||
+      path.posix.matchesGlob(normalized, pattern),
+  );
 }
 
 export function isMemoryPath(relPath: string): boolean {

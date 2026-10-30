@@ -18,6 +18,7 @@ import {
   normalizeExtraMemoryPaths,
   remapChunkLines,
   runWithConcurrency,
+  shouldSkipConfiguredMemorySearchPath,
   stripMemoryAnnotationCarriers,
 } from "./internal.js";
 import { normalizeMemoryMultimodalSettings, type MemoryMultimodalSettings } from "./multimodal.js";
@@ -239,6 +240,27 @@ describe("memory host SDK package internals", () => {
     expect(files.map((file) => path.relative(workspaceDir, file))).toEqual([
       path.join("memory", "current.md"),
     ]);
+  });
+
+  it("matches exclusion globs against workspace-relative paths only", () => {
+    const workspaceDir = path.resolve("/test/workspace");
+    const skipped = (
+      relative: string,
+      excludePaths = ["memory/dreaming/**", "memory/.dreams/**"],
+    ) =>
+      shouldSkipConfiguredMemorySearchPath({
+        workspaceDir,
+        absPath: path.resolve(workspaceDir, relative),
+        excludePaths,
+      });
+    expect(skipped("memory/dreaming")).toBe(true);
+    expect(skipped("memory/dreaming/light/report.md")).toBe(true);
+    expect(skipped("memory/.dreams/report.md")).toBe(true);
+    expect(skipped("memory/dreaming-notes.md")).toBe(false);
+    expect(skipped("memory/current.md")).toBe(false);
+    expect(skipped("../other/memory/dreaming/report.md")).toBe(false);
+    expect(skipped("..notes/report.md", ["..notes/**"])).toBe(true);
+    expect(skipped("memory/dreaming/light/report.md", [])).toBe(false);
   });
 
   it.each([

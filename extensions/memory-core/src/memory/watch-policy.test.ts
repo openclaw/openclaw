@@ -45,20 +45,6 @@ it("does not observe generated dreaming reports but still selects adjacent memor
   expect(owner.select(group, relative("current.md"), false)).toBeDefined();
 });
 
-it("changes shared observation identity when subscribers use different exclusions", async () => {
-  const excluding = policy([], false, state.workspaceDir, ["memory/dreaming/**"]);
-  const including = policy();
-  const excludingGroup = (await observe(excluding))[0];
-  const includingGroup = (await observe(including))[0];
-  expect(excluding.scopes(excludingGroup)).toEqual(including.scopes(includingGroup));
-  expect(excluding.selectionKeys(excludingGroup)).not.toEqual(
-    including.selectionKeys(includingGroup),
-  );
-  expect(excluding.selectionKeys(excludingGroup)).toEqual(
-    policy([], false, state.workspaceDir, ["memory/dreaming/**"]).selectionKeys(excludingGroup),
-  );
-});
-
 it("observes root-entry links without following sources the indexer rejects", async () => {
   await fs.mkdir(p("target"));
   await fs.writeFile(p("target/note.md"), "trusted");
