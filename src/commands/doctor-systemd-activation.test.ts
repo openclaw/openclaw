@@ -95,7 +95,18 @@ async function bootstrap() {
 
 it("backs up and migrates a managed activation, preserving data and skipping repair on healthy restart", async () => {
   await fixture(async (pathname) => {
+    const migrate = schemaMigrations.prepareDoctorDatabaseMigrations;
+    vi.spyOn(schemaMigrations, "prepareDoctorDatabaseMigrations").mockImplementationOnce(
+      async (params) => {
+        const result = await migrate(params);
+        return {
+          ...result,
+          warnings: [...result.warnings, "synthetic completion receipt warning"],
+        };
+      },
+    );
     await bootstrap();
+    expect(runtime.error).toHaveBeenCalledWith("synthetic completion receipt warning");
     {
       using db = new DatabaseSync(pathname, { readOnly: true });
       expect(db.prepare("PRAGMA user_version").get()).toEqual({

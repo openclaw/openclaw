@@ -74,11 +74,10 @@ export async function prepareSystemdGatewayActivation(params: {
           for (const change of result.changes) {
             params.runtime.log(change);
           }
-          if (result.warnings.length) {
-            throw new StartupMaintenanceRequiredError(
-              "state-migrations",
-              result.warnings.join("\n"),
-            );
+          // A completed migration can still warn about bookkeeping. Ordinary
+          // startup admission decides readiness after Doctor releases custody.
+          for (const warning of result.warnings) {
+            params.runtime.error(warning);
           }
         };
         const prepared = await prepareDoctorDatabaseMigrations({
