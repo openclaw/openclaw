@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { nodeRuntimePathEntries } from "../../node-runtime-env.mjs";
+import { nodeRuntimePathEntries, stripNodeStartupHooks } from "../../node-runtime-env.mjs";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { resolveNodeRuntimeExecutable } from "./node-runtime-executable.js";
 
@@ -23,6 +23,19 @@ vi.mock("node:path", async (importOriginal) => {
         (process.platform === "win32" ? actual.win32 : actual.posix).join(...parts),
     },
   };
+});
+
+it("strips startup hooks while preserving unrelated Node options", () => {
+  expect(
+    stripNodeStartupHooks(
+      '--im"port" "file:///instrumentation hook.mjs" --loader ./loader.mjs --max-old-space-size=256 --no-warnings',
+    ),
+  ).toBe('"--max-old-space-size=256" "--no-warnings"');
+  expect(stripNodeStartupHooks(undefined)).toBeUndefined();
+  expect(stripNodeStartupHooks("--no-warnings")).toBe("--no-warnings");
+  expect(() => stripNodeStartupHooks('"unterminated')).toThrow(
+    "Invalid NODE_OPTIONS for process owner",
+  );
 });
 
 beforeEach(() => probe.mockReset());
