@@ -253,9 +253,11 @@ Minimal plugin configuration (credentials are SecretRefs):
 }
 ```
 
-Also set `fromNumber` to an E.164 number permitted by the outbound trunk and
-configure the selected realtime provider's credentials. Outbound-only operation
-with `inboundPolicy: "disabled"` needs no public webhook or media WebSocket:
+Also set `fromNumber` to the caller ID permitted by the outbound trunk: an E.164
+number, or for LiveKit only a 1–15 digit PBX extension such as `"1001"`. The
+target and inbound allowlist still require E.164. Then configure the selected
+realtime provider's credentials. Outbound-only operation with
+`inboundPolicy: "disabled"` needs no public webhook or media WebSocket:
 RTC disconnection independently ends the call.
 
 For inbound calls, configure LiveKit signed webhooks to reach Voice Call's
