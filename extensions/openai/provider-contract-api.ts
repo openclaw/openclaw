@@ -103,6 +103,7 @@ export function createOpenAIProvider(): ProviderPlugin {
         {
           id: "device-code",
           kind: "device_code",
+          headless: true,
           label: "Codex login (device code)",
           hint: "Use a browser code when OpenClaw runs on a remote VM",
           matchesPersonalAccount,

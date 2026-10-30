@@ -169,6 +169,7 @@ const {
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
   runModelsAuthLoginFlowCore,
+  runModelsAuthLoginFlowForGateway,
 } = await import("./auth.js");
 
 function createRuntime(): RuntimeEnv {
@@ -682,6 +683,148 @@ it("refreshes saved credentials before presenting provider notes", async () => {
   });
   await expect(loginCommand()).rejects.toThrow("note delivery failed");
   expectRefresh();
+});
+
+it("allows explicit provider device-code login without an interactive TTY", async () => {
+  restoreStdin?.();
+  restoreStdin = withPipedStdin("");
+  const runDeviceCodeAuth = vi.fn().mockResolvedValue({ profiles: [] });
+  const runOauthAuth = vi.fn().mockResolvedValue({ profiles: [] });
+  mocks.resolvePluginProvidersCore.mockReturnValue([
+    createProvider("openai", "OpenAI Codex", [
+      { id: "oauth", label: "OAuth", kind: "oauth", run: runOauthAuth },
+      {
+        id: "device-code",
+        label: "Device code",
+        kind: "device_code",
+        headless: true,
+        run: runDeviceCodeAuth,
+      },
+    ]),
+  ]);
+
+  await loginCommand({ provider: "openai", method: "device-code" });
+
+  expect(runOauthAuth).not.toHaveBeenCalled();
+  expect(runDeviceCodeAuth).toHaveBeenCalledOnce();
+});
+
+it("rejects non-TTY login when a provider uses the device-code id for a non-headless method", async () => {
+  restoreStdin?.();
+  restoreStdin = withPipedStdin("");
+  const runDeviceCodeNamedOauth = vi.fn().mockResolvedValue({ profiles: [] });
+  mocks.resolvePluginProvidersCore.mockReturnValue([
+    createProvider("openai", "OpenAI Codex", [
+      {
+        id: "device-code",
+        label: "Interactive browser flow with colliding id",
+        kind: "oauth",
+        run: runDeviceCodeNamedOauth,
+      },
+    ]),
+  ]);
+
+  await expect(loginCommand({ provider: "openai", method: "device-code" })).rejects.toThrow(
+    "explicitly supports headless execution",
+  );
+
+  expect(runDeviceCodeNamedOauth).not.toHaveBeenCalled();
+});
+
+it("rejects non-TTY login without an explicit provider", async () => {
+  restoreStdin?.();
+  restoreStdin = withPipedStdin("");
+  const { select } = usePrompter();
+
+  await expect(loginCommand({})).rejects.toThrow("--provider is missing");
+  expect(select).not.toHaveBeenCalled();
+});
+
+it("rejects non-TTY CLI-backed provider fallback before opening a picker", async () => {
+  restoreStdin?.();
+  restoreStdin = withPipedStdin("");
+  const { select } = usePrompter();
+  mocks.isCliProvider.mockReturnValue(true);
+  mocks.resolvePluginProvidersCore.mockReturnValue([
+    createProvider("openai", "OpenAI Codex", [
+      {
+        id: "device-code",
+        label: "Device code",
+        kind: "device_code",
+        headless: true,
+        run: vi.fn(),
+      },
+    ]),
+  ]);
+
+  await expect(loginCommand({ provider: "claude-cli", method: "device-code" })).rejects.toThrow(
+    "does not expose a directly selectable OpenClaw auth flow",
+  );
+  expect(select).not.toHaveBeenCalled();
+});
+
+it.each(["fresh", "imported"] as const)(
+  "keeps existing model restrictions without prompting after %s headless credentials",
+  async (credentialSource) => {
+    restoreStdin?.();
+    restoreStdin = withPipedStdin("");
+    const { select } = usePrompter(vi.fn());
+    currentConfig = {
+      agents: { defaults: { modelPolicy: { allow: ["openai/gpt-5.2"] } } },
+    };
+    const runDeviceCodeAuth = vi.fn().mockResolvedValue({
+      profiles: [oauthProfile("openai:headless")],
+    });
+    mocks.resolvePluginProvidersCore.mockReturnValue([
+      createProvider("openai", "OpenAI Codex", [
+        {
+          id: "device-code",
+          label: "Device code",
+          kind: "device_code",
+          headless: true,
+          run: runDeviceCodeAuth,
+        },
+      ]),
+    ]);
+    if (credentialSource === "imported") {
+      mocks.tryImportProviderCredential.mockResolvedValue({
+        profileId: "openai:imported",
+        provider: "openai",
+        mode: "oauth",
+        configUpdated: false,
+      });
+    }
+
+    await loginCommand({ provider: "openai", method: "device-code" });
+
+    expect(select).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("Current model restrictions kept.");
+    expect(runDeviceCodeAuth).toHaveBeenCalledTimes(credentialSource === "fresh" ? 1 : 0);
+  },
+);
+
+it.each([
+  ["core", runModelsAuthLoginFlowCore],
+  ["Gateway", runModelsAuthLoginFlowForGateway],
+] as const)("keeps %s-hosted OAuth available without a TTY", async (_name, runHostedFlow) => {
+  restoreStdin?.();
+  restoreStdin = withPipedStdin("");
+  const runOauthAuth = vi.fn().mockResolvedValue({ profiles: [oauthProfile()] });
+  mocks.resolvePluginProvidersCore.mockReturnValue([
+    createProvider("openai", "OpenAI Codex", [
+      { id: "oauth", label: "OAuth", kind: "oauth", run: runOauthAuth },
+    ]),
+  ]);
+
+  await runHostedFlow({
+    provider: "openai",
+    method: "oauth",
+    config: currentConfig,
+    runtime,
+    prompter: mocks.createClackPrompter(),
+  });
+
+  expect(runOauthAuth).toHaveBeenCalledOnce();
 });
 
 it("does not persist credentials returned after app-owned cancellation", async () => {

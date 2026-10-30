@@ -231,11 +231,28 @@ export function resolveRequestedLoginProviderOrThrow(
   );
 }
 
+function assertModelsAuthProviderSelectionIsNonInteractive(params: {
+  nonInteractiveCli: boolean;
+  requestedProviderId?: string;
+  useProviderPicker: boolean;
+}): void {
+  if (!params.nonInteractiveCli || (params.requestedProviderId && !params.useProviderPicker)) {
+    return;
+  }
+  const selection = params.requestedProviderId
+    ? `provider "${params.requestedProviderId}" does not expose a directly selectable OpenClaw auth flow`
+    : "--provider is missing";
+  throw new Error(
+    `models auth login cannot open the provider picker because ${selection} and stdin is not an interactive TTY.`,
+  );
+}
+
 async function pickProviderAuthMethod(params: {
   provider: ProviderPlugin;
   requestedMethod?: string;
   prompter: WizardPrompter;
   tokenOnly?: boolean;
+  nonInteractiveCli?: boolean;
 }) {
   const rawRequestedMethod = params.requestedMethod?.trim();
   if (rawRequestedMethod) {
@@ -256,6 +273,11 @@ async function pickProviderAuthMethod(params: {
   if (methods.length === 1) {
     return methods[0] ?? null;
   }
+  if (params.nonInteractiveCli) {
+    throw new Error(
+      `models auth login requires --method for ${params.provider.label} when stdin is not an interactive TTY.`,
+    );
+  }
   return params.prompter
     .select({
       message: `${params.tokenOnly ? "Token" : "Auth"} method for ${params.provider.label}`,
@@ -275,6 +297,7 @@ async function runProviderAuthMethod(
       method: ProviderAuthMethod;
       existingProfiles?: Readonly<Record<string, AuthProfileCredential>>;
       allowMissingReusedProfile?: boolean;
+      keepModelRestrictions?: boolean;
     },
 ) {
   params.signal?.throwIfAborted();
@@ -472,12 +495,13 @@ function completeLoginModelAccess(
   params: Pick<
     ModelsAuthLoginFlowOptions,
     "prompter" | "runtime" | "onModelAccessRequested" | "signal" | "assertCurrent"
-  >,
+  > & { keepModelRestrictions?: boolean },
   prepared: ReturnType<typeof prepareProviderModelAccess>,
 ) {
   return completeProviderModelAccess({
     prepared,
     prompter: params.prompter,
+    mode: params.keepModelRestrictions ? "keep" : "prompt",
     onRequested: params.onModelAccessRequested,
     runtime: params.runtime,
     assertCurrent: () => {
@@ -763,19 +787,23 @@ export type ModelsAuthLoginFlowOptions = LoginOptions & {
 export async function runModelsAuthLoginFlowCore(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
-  return runModelsAuthLoginFlow(opts, true);
+  // Shared Core/Gateway callers supply their own interaction surface; only the
+  // terminal CLI owns the non-TTY / headless admission policy.
+  return runModelsAuthLoginFlow(opts, "core");
 }
 
 export async function runModelsAuthLoginFlowForGateway(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
-  return runModelsAuthLoginFlow(opts, opts.isRemote === false);
+  return runModelsAuthLoginFlow(opts, "gateway");
 }
 
 async function runModelsAuthLoginFlow(
   opts: ModelsAuthLoginFlowOptions,
-  showScopeNote: boolean,
+  entrypoint: "core" | "gateway" | "cli",
 ): Promise<ModelsAuthLoginFlowResult> {
+  const showScopeNote = entrypoint === "gateway" ? opts.isRemote === false : true;
+  const nonInteractiveCli = entrypoint === "cli" && !process.stdin.isTTY;
   const requestedProviderId = opts.provider
     ? normalizeManualAuthProvider(opts.provider)
     : undefined;
@@ -795,6 +823,11 @@ async function runModelsAuthLoginFlow(
     requestedProviderId !== undefined &&
     requestedProvider === null &&
     isCliProvider(requestedProviderId, context.config);
+  assertModelsAuthProviderSelectionIsNonInteractive({
+    nonInteractiveCli,
+    requestedProviderId,
+    useProviderPicker,
+  });
   if (useProviderPicker) {
     context = await resolveModelsAuthContext({
       rawAgentId: opts.agent,
@@ -855,11 +888,18 @@ async function runModelsAuthLoginFlow(
         provider: selectedProvider,
         requestedMethod: opts.method,
         prompter,
+        nonInteractiveCli,
       });
 
   if (!chosenMethod) {
     throw new Error(
       `Unknown auth method. Run ${formatCliCommand("openclaw models auth login --provider " + selectedProvider.id)} without --method to choose interactively.`,
+    );
+  }
+
+  if (nonInteractiveCli && chosenMethod.headless !== true) {
+    throw new Error(
+      `models auth login requires an interactive TTY unless the resolved provider auth method explicitly supports headless execution. In automation, use ${formatCliCommand("openclaw models auth login --provider openai --device-code")} for provider device-code auth, or ${formatCliCommand("openclaw models auth paste-token --provider <provider>")} when token auth is available.`,
     );
   }
 
@@ -904,7 +944,10 @@ async function runModelsAuthLoginFlow(
     opts.runtime.log(
       `Auth profile: ${imported.profileId} (${imported.provider}/${imported.mode}, imported)`,
     );
-    await completeLoginModelAccess(opts, modelAccess);
+    await completeLoginModelAccess(
+      { ...opts, keepModelRestrictions: nonInteractiveCli },
+      modelAccess,
+    );
     return {
       providerId: selectedProvider.id,
       methodId: chosenMethod.id,
@@ -953,6 +996,7 @@ async function runModelsAuthLoginFlow(
     prompter,
     existingProfiles,
     allowMissingReusedProfile: forceLogin,
+    keepModelRestrictions: nonInteractiveCli,
   });
   if (selectedProvider.id === "openai") {
     opts.runtime.log(
@@ -973,16 +1017,14 @@ async function runModelsAuthLoginFlow(
 }
 
 export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
-  if (!process.stdin.isTTY) {
-    throw new Error(
-      `models auth login requires an interactive TTY. In automation, use ${formatCliCommand("openclaw models auth paste-token --provider <provider>")} when token auth is available.`,
-    );
-  }
-
-  await runModelsAuthLoginFlowCore({
-    ...opts,
-    runtime,
-    prompter: createClackPrompter(),
-  });
+  // Only the CLI owns the TTY / headless admission policy.
+  await runModelsAuthLoginFlow(
+    {
+      ...opts,
+      runtime,
+      prompter: createClackPrompter(),
+    },
+    "cli",
+  );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

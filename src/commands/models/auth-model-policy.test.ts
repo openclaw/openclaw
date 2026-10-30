@@ -65,6 +65,22 @@ describe("provider model access consent", () => {
     expect(await readBytes()).toBe(before);
   });
 
+  it("keeps restrictions in keep mode without prompting", async () => {
+    const before = await readBytes();
+    const select = vi.fn();
+    const outcome = await complete({
+      mode: "keep",
+      prompter: { select },
+    });
+    expect(outcome).toEqual({
+      kind: "unchanged",
+      message: "Current model restrictions kept.",
+    });
+    expect(select).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("Current model restrictions kept.");
+    expect(await readBytes()).toBe(before);
+  });
+
   it("preserves deferred legacy restrictions across consent and later config writes", async () => {
     delete config.agents!.defaults!.modelPolicy;
     config.agents!.defaults!.models = { "existing-model": {} };

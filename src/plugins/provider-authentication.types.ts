@@ -205,6 +205,16 @@ export type ProviderAuthMethod = {
    * method-specific auth choices while keeping the provider id stable.
    */
   wizard?: ProviderPluginWizardSetup;
+  /**
+   * Opt this method into non-TTY `models auth login`.
+   *
+   * Set this to true only when `run` is guaranteed not to read terminal input
+   * or wait for an interactive prompt. The method may still display progress
+   * or verification instructions and wait for an external callback or device
+   * confirmation. This is a provider-owned capability; `kind` alone does not
+   * establish that the flow is safe for non-interactive execution.
+   */
+  headless?: boolean;
   /** Proven provider identity for reconnecting an owned personal account; absent means a new slot. */
   matchesPersonalAccount?: (
     credential: AuthProfileCredential,
