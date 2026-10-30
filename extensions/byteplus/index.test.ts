@@ -55,13 +55,17 @@ describe("byteplus plugin", () => {
     ]);
   });
 
-  it("declares its coding provider auth alias in the manifest", () => {
+  it("declares provider auth and streaming usage capabilities in the manifest", () => {
     const pluginJson = JSON.parse(
       readFileSync(resolve(import.meta.dirname, "openclaw.plugin.json"), "utf-8"),
     );
 
     expect(pluginJson.providerAuthAliases).toEqual({
       "byteplus-plan": "byteplus",
+    });
+    expect(pluginJson.providerRequest?.providers).toMatchObject({
+      byteplus: { openAICompletions: { supportsStreamingUsage: true } },
+      "byteplus-plan": { openAICompletions: { supportsStreamingUsage: true } },
     });
   });
 
