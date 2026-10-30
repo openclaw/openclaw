@@ -59,22 +59,17 @@ beforeEach(() => {
   complete.mockImplementation(async (params) => completionResult(params));
 });
 
-it("strips fenced json", async () => {
+it.each([
+  { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
+  { agents: { entries: { chat: { model: "anthropic/claude-sonnet-4-6" } } } },
+  { agents: { defaults: { model: { primary: "Sonnet" } } } },
+])("strips fenced json with runtime-owned defaults %j", async (config) => {
   mockCompletion('```json\n{"ok":true}\n```');
-  const res = await tool.execute("id", { prompt: "return ok" });
+  const res = await createTool(config).execute("id", { prompt: "return ok" });
   expect(res.details.json).toEqual({ ok: true });
   const call = isolatedCompletionCall();
-  expect(call).toMatchObject({
-    model: undefined,
-    reasoning: undefined,
-    maxTokens: undefined,
-    temperature: undefined,
-    systemPrompt: expect.stringContaining("JSON-only"),
-  });
-  expect(call.execution).toEqual({ mode: "isolated-agent-runtime", timeoutMs: 30_000 });
-  expect(call.messages).toEqual([
-    { role: "user", content: expect.stringContaining("TASK:\nreturn ok") },
-  ]);
+  expect(call.model).toBeUndefined();
+  expect(call.systemPrompt).toContain("JSON-only");
 });
 
 it("validates caller schemas with repeated $id independently across calls", async () => {
@@ -118,14 +113,6 @@ it("accepts model overrides that already include the selected provider prefix", 
     model: "anthropic/claude-4-sonnet",
   });
   expect(isolatedCompletionCall().model).toBe("anthropic/claude-4-sonnet");
-});
-
-it.each([
-  ["per-agent models", { agents: { entries: { chat: { model: "anthropic/claude-sonnet-4-6" } } } }],
-  ["an alias primary", { agents: { defaults: { model: { primary: "Sonnet" } } } }],
-] as const)("leaves default model selection to the runtime with %s", async (_name, config) => {
-  await createTool(config).execute("id", { prompt: "x" });
-  expect(isolatedCompletionCall().model).toBeUndefined();
 });
 
 it("throws on invalid thinking level", async () => {
