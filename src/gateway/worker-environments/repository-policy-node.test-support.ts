@@ -11,6 +11,34 @@ import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 
+/** Unprepared node runtime and real HTTP transfer, with the durable environment owner. */
+export async function createRepositoryNodeFixture({
+  nodeHome,
+  store,
+}: {
+  nodeHome: string;
+  store: WorkerEnvironmentStore;
+}) {
+  const env = { ...process.env, HOME: nodeHome, OPENCLAW_STATE_DIR: path.join(nodeHome, "state") };
+  const runtime = new NodeWorkerWorkspaceRuntime({ env, ephemeral: true });
+  const workspaceTransfer = createNodeWorkspaceTransferService({
+    temporaryRoot: path.join(nodeHome, "transfers"),
+    getOwner: (environmentId) => {
+      const environment = store.get(environmentId);
+      return environment
+        ? { credential: store.getCredential(environmentId), environment }
+        : undefined;
+    },
+  });
+  const server = await startNodeWorkspaceTransferTestServer(workspaceTransfer);
+  onTestFinished(async () => {
+    await server.close();
+    await workspaceTransfer.closeAll();
+    await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
+  });
+  return { runtime, workspaceTransfer, gatewayUrl: server.gatewayUrl };
+}
+
 /** Actual prepared-node storage and HTTP checkpoint transport; no caller authority is fabricated here. */
 export async function createPreparedRepositoryNodeFixture(params: {
   nodeHome: string;
@@ -32,9 +60,8 @@ export async function createPreparedRepositoryNodeFixture(params: {
     path.join(manifests, base.manifestRef.slice(7) + ".json"),
     serializeWorkerWorkspaceManifest(base.manifest),
   );
-  const env = { ...process.env, HOME: nodeHome, OPENCLAW_STATE_DIR: path.join(nodeHome, "state") };
-  const runtime = new NodeWorkerWorkspaceRuntime({ env, ephemeral: true });
-  await runtime.prepare({
+  const node = await createRepositoryNodeFixture({ nodeHome, store });
+  await node.runtime.prepare({
     action: "register",
     ...identity,
     workspaceDir,
@@ -42,22 +69,7 @@ export async function createPreparedRepositoryNodeFixture(params: {
     sourceManifestRef: base.manifestRef,
     preparedManifestRef: base.manifestRef,
   });
-  const workspaceTransfer = createNodeWorkspaceTransferService({
-    temporaryRoot: path.join(nodeHome, "transfers"),
-    getOwner: (environmentId) => {
-      const environment = store.get(environmentId);
-      return environment
-        ? { credential: store.getCredential(environmentId), environment }
-        : undefined;
-    },
-  });
-  const server = await startNodeWorkspaceTransferTestServer(workspaceTransfer);
-  onTestFinished(async () => {
-    await server.close();
-    await workspaceTransfer.closeAll();
-    await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
-  });
-  return { runtime, workspaceTransfer, gatewayUrl: server.gatewayUrl };
+  return node;
 }
 
 export async function createRepositoryPolicySource(stagingRoot: string) {
