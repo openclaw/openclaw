@@ -725,6 +725,11 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         if (kind === "native-error") {
           expect(result.stderr).toMatch(/No test tags found|standalone mode requires --watch/u);
         }
+        if (kind === "idle") {
+          expect(result.stdout).toContain(
+            `cleared fs module cache at ${path.join(reports.root, "fs-cache-")}`,
+          );
+        }
       }
       if (entry === "batch-cli") {
         expect(result.stderr.match(/Usage: pnpm test:extensions:batch/gu)).toHaveLength(1);
