@@ -68,6 +68,7 @@ import type {
   ChildState,
   KnownChild,
   MonitorOptions,
+  NativeCompletionCatalogRequest,
   NativeDescendantCancellation,
   NativeDescendantCancellationResult,
   NativeSubagentsReadRequest,
@@ -95,6 +96,7 @@ import {
   readNativeSubagentObservations,
   listNativePendingChildren,
   listNativeRequesterParents,
+  releaseNativeParentIfChildrenSettled,
   observeNativeParentTurn,
   registerNativeSubagentParent,
   type NativeParentRegistration,
@@ -801,6 +803,10 @@ class Monitor {
         this.pruneParentIfUnused(state);
       }
     }
+  }
+
+  captureCompletionCatalog(request: NativeCompletionCatalogRequest): (() => void) | undefined {
+    return this.completionDelivery.captureCatalog(request);
   }
 
   async captureModelSource(
@@ -2337,20 +2343,11 @@ class Monitor {
   }
 
   private releaseParentThreadIfChildrenSettled(parentThreadId: string): void {
-    for (const childState of this.childStates.values()) {
-      if (
-        childState.parentThreadId === parentThreadId &&
-        !childState.terminal &&
-        !childState.settledWithoutCompletion
-      ) {
-        return;
-      }
-    }
-    // Pending completion delivery keeps its own custody, but must not block
-    // the parent from resuming to receive those results.
-    const releaseParentThread = this.parentThreadRetentions.get(parentThreadId);
-    this.parentThreadRetentions.delete(parentThreadId);
-    releaseParentThread?.();
+    releaseNativeParentIfChildrenSettled(
+      parentThreadId,
+      this.childStates,
+      this.parentThreadRetentions,
+    );
   }
 
   private hasChildrenForParent(parentThreadId: string): boolean {
