@@ -167,6 +167,45 @@ it("prepares deferred discovery guidance with the model tool projection", async 
   expect(guidance).not.toContain("Call a unique deferred tool name directly");
 });
 
+it("projects the Code Mode turn contract only while catalog tools sit behind exec", async () => {
+  const codeMode = createToolSurfacePresentationForTest({
+    tools: { codeMode: true, toolSearch: false },
+  });
+  const { runtime } = fixture([], async () => ({
+    tools: [tool("web_fetch")],
+    policy,
+    presentation: codeMode,
+  }));
+  const projection = await runtime.getPromptProjection(identity);
+  expect(projection.tools.map(({ name }) => name)).toEqual(["exec", "wait"]);
+  expect(projection.codeModeTurnFragments).toEqual([
+    {
+      kind: "runtime-instruction",
+      text: expect.stringContaining(
+        "Code Mode is on for this turn: only tools in your provider tool list",
+      ),
+    },
+  ]);
+
+  runtime.applyPromptToolsAllow([]);
+  expect((await runtime.getPromptProjection(identity)).codeModeTurnFragments).toEqual([]);
+
+  const direct = fixture([tool("web_fetch")]);
+  expect((await direct.runtime.getPromptProjection(identity)).codeModeTurnFragments).toEqual([]);
+
+  // Tool Search also hides catalog tools, behind its dispatcher rather than exec.
+  const toolSearch = fixture([], async () => ({
+    tools: [tool("web_fetch")],
+    policy,
+    presentation: createToolSurfacePresentationForTest({
+      tools: { codeMode: false, toolSearch: { enabled: true, mode: "directory" } },
+    }),
+  }));
+  const deferred = await toolSearch.runtime.getPromptProjection(identity);
+  expect(deferred.tools.map(({ name }) => name)).toContain("dispatch_action");
+  expect(deferred.codeModeTurnFragments).toEqual([]);
+});
+
 it("issues one finite surface and invokes only an issued Gateway handle with valid arguments", async () => {
   const execute = vi.fn(async () => success);
   const remote = tool("remote", execute);
