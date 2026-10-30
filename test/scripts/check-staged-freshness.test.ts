@@ -42,8 +42,10 @@ describe("selectStagedFreshnessChecks", () => {
         path.join(fixture.checkout, entrypoint),
         `import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import value from "fixture-pkg";
 assert.equal(value, "qualified");
+assert.equal(createRequire(import.meta.url)("fixture-pkg").default, "qualified");
 assert.equal(process.env.TOOLING_FIXTURE_PRELOADED, "1");
 assert.equal(process.env.TSX_DISABLE_CACHE, "1");
 assert.equal(process.versions.bun, undefined);
