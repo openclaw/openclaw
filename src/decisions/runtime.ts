@@ -23,19 +23,17 @@ import {
 import { finalizePluginModelUsage } from "../plugins/runtime/runtime-model-usage.js";
 import { modelKey } from "../shared/model-key.js";
 import { logDecisionEvaluation } from "./diagnostics.js";
+import type { DecisionEvaluateOptions, DecisionEvaluateOptionsV2 } from "./execution-types.js";
 import type { DecisionProviderHost, PreparedDecisionBilling } from "./provider-host.js";
-import type { DecisionEvaluateOptionsV2, DecisionRuntimeV1 } from "./runtime-types.js";
 import type { DecisionBatchV2, DecisionOutcomeV2 } from "./types-v2.js";
 import type { DecisionBatch, DecisionOutcome } from "./types.js";
 import { validateDecisionBatchV2 } from "./validation-v2.js";
 import { DecisionContractError, validateDecisionBatch } from "./validation.js";
 
-type Options = Parameters<DecisionRuntimeV1["evaluate"]>[1];
-
 /** Core calls carry their owner's abort signal; plugin callers additionally bind their exact instance. */
 export async function evaluateDecision(
   batch: DecisionBatch,
-  options: Options,
+  options: DecisionEvaluateOptions,
 ): Promise<DecisionOutcome> {
   return evaluateDecisionInRegistry(
     batch,
@@ -103,7 +101,7 @@ export async function evaluateDecisionV2InRegistry(
 /** Internal callers with outer lifecycle checks retain completion until those checks pass. */
 export function evaluateDecisionOperation(
   batch: DecisionBatch,
-  options: Options,
+  options: DecisionEvaluateOptions,
   registry: PluginRegistry | null | undefined,
   config: OpenClawConfig,
   consumerId?: string,

@@ -18,9 +18,9 @@ import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { decisionBatchV1ToV2 } from "./compatibility.js";
 import { createDecisionRegistry, unavailable } from "./contract.test-support.js";
+import type { DecisionEvaluateOptionsV2 } from "./execution-types.js";
 import type { DecisionProviderContextV2 } from "./provider-context.js";
 import type { DecisionProviderV2, DecisionProviderV1 } from "./provider-types.js";
-import type { DecisionEvaluateOptionsV2 } from "./runtime-types.js";
 import {
   evaluateDecisionInRegistry,
   evaluateDecisionV2InRegistry,

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { createFixedWindowBudget } from "../infra/fixed-window-rate-limit.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { DecisionRuntimeV1 } from "./runtime-types.js";
+import type { DecisionEvaluateOptions } from "./execution-types.js";
 import type { DecisionOutcome } from "./types.js";
 
 const log = createSubsystemLogger("decisions");
@@ -33,7 +33,7 @@ export function logDecisionToolPrefilter(params: {
 const reference = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 24);
 
 export function logDecisionEvaluation(params: {
-  options: Parameters<DecisionRuntimeV1["evaluate"]>[1];
+  options: DecisionEvaluateOptions;
   providerId?: string;
   model?: string;
   facts: DecisionEvaluationFacts;

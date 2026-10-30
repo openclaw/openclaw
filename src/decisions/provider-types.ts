@@ -1,4 +1,5 @@
 import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
+import type { DecisionExecutionLifetime } from "./execution-types.js";
 import type { DecisionProviderContextV2 } from "./provider-context.js";
 import type { DecisionBatchV2, ProviderDecisionOutcomeV2 } from "./types-v2.js";
 import type { DecisionBatch, ProviderDecisionOutcome } from "./types.js";
@@ -11,14 +12,10 @@ export interface DecisionProviderV1 {
   isReady?(): boolean;
   evaluate(
     batch: DecisionBatch,
-    context: {
+    context: DecisionExecutionLifetime & {
       /** Explicit model selected by the host's decisionModel role. */
       readonly model: string;
       readonly agentId?: string;
-      /** Composed by host from caller, per-call deadline, and retirement. */
-      readonly signal: AbortSignal;
-      /** Deadline on the same process-local performance.now() time base. */
-      readonly deadlineMonotonicMs: number;
       /** Host-owned request admission. Check synchronously immediately before external I/O.
        * False closes this evaluation; a thrown authority assertion remains terminal.
        * Omission preserves explicit evaluations and older hosts. */

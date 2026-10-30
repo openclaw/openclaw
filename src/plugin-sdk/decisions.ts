@@ -14,11 +14,8 @@ export type {
   DecisionOutcome,
 } from "../decisions/types.js";
 export type { DecisionProviderV1, DecisionProviderV2 } from "../decisions/provider-types.js";
-export type {
-  DecisionRuntimeV1,
-  DecisionEvaluateOptionsV2,
-  DecisionRuntimeV2,
-} from "../decisions/runtime-types.js";
+export type { DecisionEvaluateOptionsV2 } from "../decisions/execution-types.js";
+export type { DecisionRuntimeV1, DecisionRuntimeV2 } from "../decisions/runtime-types.js";
 
 export type {
   DecisionContentV2,
