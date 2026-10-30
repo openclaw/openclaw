@@ -160,8 +160,8 @@ function historyEntry(storePath: string, jobId: string) {
 }
 
 async function expectState(storePath: string, jobId: string, expected: Partial<CronJob["state"]>) {
-  const job = (await loadCronStore(storePath)).jobs.find((job) => job.id === jobId);
-  expect(job?.state).toMatchObject(expected);
+  const storedJob = (await loadCronStore(storePath)).jobs.find((job) => job.id === jobId);
+  expect(storedJob?.state).toMatchObject(expected);
 }
 
 describe("cron delivery outcomes", { concurrent: false }, () => {
