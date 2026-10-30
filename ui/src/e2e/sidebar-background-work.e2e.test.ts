@@ -62,6 +62,10 @@ suite.define(() => {
         expect(await row.locator(".sidebar-session-indicator .session-glyph__ring").count()).toBe(
           1,
         );
+        // The chat pane admits its initial child roster after the sidebar is ready.
+        await gateway.waitForRequest("sessions.list", {
+          match: { source: "chat-pane", spawnedBy: "agent:main:main" },
+        });
         const listReads = (await gateway.getRequests("sessions.list")).length;
         await gateway.emitGatewayEvent("sessions.changed", {
           reason: "background-processes",
