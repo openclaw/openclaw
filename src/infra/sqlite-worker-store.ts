@@ -73,7 +73,13 @@ function resolveSqliteWorkerBroker() {
   return resolveGlobalSingleton(
     Symbol.for("openclaw.sqliteWorkerBroker"),
     () => new SqliteWorkerBroker(),
-    (broker) => withCallerErrors(broker.close()),
+    async (broker) => {
+      // Canonical state cleanup releases its leases before the broker seals its clients.
+      const { closeOpenClawStateDatabaseAsync } =
+        await import("../state/openclaw-state-db-cache.js");
+      await closeOpenClawStateDatabaseAsync();
+      await withCallerErrors(broker.close());
+    },
     "shared-state",
   );
 }
