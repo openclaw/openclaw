@@ -126,17 +126,18 @@ describe("offline node bootstrap", () => {
     );
     expect(stdout.trim()).toBe("1.0.0:2.0.0:plugin-owned");
   });
-
-  it("rejects a target dependency input whose frozen input fingerprints differ", async () => {
+  it.each(["mismatched", "non-object"])("rejects a %s target dependency receipt", async (kind) => {
     const { packageRoot, sourcePackage, options } = await fixture();
     const target = process.platform === "linux" ? "darwin-arm64" : "linux-x64";
-    await write(packageRoot, `node-runtime-dependencies/${target}/package.json`, sourcePackage);
-    await write(packageRoot, `node-runtime-dependencies/${target}/runtime-input.json`, {
+    const input = path.join(packageRoot, "node-runtime-dependencies", target);
+    const receipt = {
       platform: target.split("-")[0],
       arch: target.split("-")[1],
       packageJsonSha256: "0".repeat(64),
       lockfileSha256: "0".repeat(64),
-    });
+    };
+    await write(input, "package.json", sourcePackage);
+    await write(input, "runtime-input.json", kind === "non-object" ? "null" : receipt);
     await expect(createProvider({ ...options, install: "bundle" }).prepare()).rejects.toThrow(
       "does not match the running source/dependencies",
     );
