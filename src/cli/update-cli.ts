@@ -39,6 +39,17 @@ function inheritedUpdateTimeout(
   return timeout !== undefined ? timeout : inheritOptionFromParent<string>(command, option);
 }
 
+function parseUpdateHistoryLimit(raw: unknown): number | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 100) {
+    throw new Error("--limit must be an integer between 1 and 100");
+  }
+  return value;
+}
+
 type CommanderUpdateOptions = Record<string, unknown> &
   Omit<UpdateCommandOptions, "admission"> & { admission?: string };
 
@@ -488,6 +499,37 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           json: Boolean(opts.json) || inheritedUpdateJson(command),
           timeout: inheritedUpdateTimeout(opts, command),
         });
+      }),
+    );
+
+  update
+    .command("history")
+    .description("List recorded update runs")
+    .option("--limit <count>", "How many runs to show (default 10, max 100)")
+    .option("--run <runId>", "Show one recorded run by id")
+    .option("--json", "Output result as JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw update history", "List the ten most recent update runs."],
+          ["openclaw update history --limit 50", "Widen the window over older attempts."],
+          ["openclaw update history --run <runId> --json", "Inspect one attempt as JSON."],
+        ])}\n\n${theme.muted(
+          "Reads the local update ledger, so it works without a running Gateway.",
+        )}`,
+    )
+    .action(
+      createUpdateLeafAction(async (opts, command) => {
+        const { updateHistoryCommand } = await import("./update-cli/history.js");
+        await updateHistoryCommand(
+          {
+            limit: parseUpdateHistoryLimit(opts.limit),
+            runId: typeof opts.run === "string" ? opts.run : undefined,
+            json: Boolean(opts.json) || inheritedUpdateJson(command),
+          },
+          defaultRuntime,
+        );
       }),
     );
 }
