@@ -1132,6 +1132,18 @@
     "target": "Fireworks"
   },
   {
+    "source": "Google (Gemini)",
+    "target": "Google（Gemini）"
+  },
+  {
+    "source": "Google (Vertex AI)",
+    "target": "Google（Vertex AI）"
+  },
+  {
+    "source": "google-vertex",
+    "target": "google-vertex"
+  },
+  {
     "source": "Google Chat",
     "target": "Google Chat"
   },
