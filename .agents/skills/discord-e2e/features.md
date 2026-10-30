@@ -1,5 +1,9 @@
 # Discord feature recipes
 
+Use [bot API readiness](bot-api.md) when the question is only whether the shared
+bot identities and channel reads work. Mutations stay with the existing QA Lab
+lane below, which also owns a SUT Gateway, event recorder, and fixture cleanup.
+
 ## Select the boundary
 
 | Claim                          | Drive                                                                                 | Required evidence                                                                                                               |
@@ -89,6 +93,7 @@ Manage Threads is optional: an existing grant permits deletion of owned threads;
 otherwise cleanup archives them and records that retained disposition. No
 Manage Messages grant is needed to delete a bot's own messages. SUT attachments
 and public component/embed metadata can be observed, but ephemeral content,
-slash-command invocation, user component/modal interactions, and bot DMs require
-an authorized manual Discord client. Synthetic interaction payloads are isolated
+slash-command invocation, user component/modal interactions, and human-to-bot DM
+behavior need an authorized manual Discord client. The leased bot pair does not
+represent a human DM participant. Synthetic interaction payloads are isolated
 boundary tests, never live Discord interaction evidence.

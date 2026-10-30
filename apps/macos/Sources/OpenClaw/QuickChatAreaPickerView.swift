@@ -3,12 +3,16 @@ import AppKit
 enum QuickChatAreaPickerLogic {
     static let minimumSelectionDimension: CGFloat = 8
 
-    static func normalizedSelection(from start: CGPoint, to end: CGPoint) -> CGRect? {
-        let rect = CGRect(
+    fileprivate static func normalizedRect(from start: CGPoint, to end: CGPoint) -> CGRect {
+        CGRect(
             x: min(start.x, end.x),
             y: min(start.y, end.y),
             width: abs(end.x - start.x),
             height: abs(end.y - start.y))
+    }
+
+    static func normalizedSelection(from start: CGPoint, to end: CGPoint) -> CGRect? {
+        let rect = Self.normalizedRect(from: start, to: end)
         // Tiny drags are almost always clicks or hand jitter; treating them as cancel
         // avoids surprising one-pixel captures and invalid capture-area requests.
         guard rect.width >= Self.minimumSelectionDimension,
@@ -69,7 +73,7 @@ final class QuickChatAreaPickerView: NSView {
     override func mouseDragged(with event: NSEvent) {
         guard let dragStart else { return }
         let point = self.clamped(self.convert(event.locationInWindow, from: nil))
-        self.selection = self.normalizedRect(from: dragStart, to: point)
+        self.selection = QuickChatAreaPickerLogic.normalizedRect(from: dragStart, to: point)
         self.needsDisplay = true
     }
 
@@ -126,14 +130,6 @@ final class QuickChatAreaPickerView: NSView {
         text.draw(
             at: CGPoint(x: badgeRect.minX + 7, y: badgeRect.minY + 4),
             withAttributes: attributes)
-    }
-
-    private func normalizedRect(from start: CGPoint, to end: CGPoint) -> CGRect {
-        CGRect(
-            x: min(start.x, end.x),
-            y: min(start.y, end.y),
-            width: abs(end.x - start.x),
-            height: abs(end.y - start.y))
     }
 
     private func clamped(_ point: CGPoint) -> CGPoint {

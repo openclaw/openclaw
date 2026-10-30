@@ -1,240 +1,196 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Command } from "commander";
-import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginApi, OpenClawPluginService } from "./api.js";
+import { assert, expect, it, vi } from "vitest";
+import type { OpenClawPluginApi } from "./api.js";
 import plugin from "./index.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { WorkboardStore } from "./src/store.js";
+import { createGatewayMethodCapture } from "./src/test/gateway-method-capture.js";
+import {
+  WORKBOARD_CARD_TOOL_NAMES,
+  WORKBOARD_SESSIONS_BOARD_TOOL_NAMES,
+} from "./src/workspace-access.js";
 
 const workerModuleUrl = new URL("./src/sqlite-store.worker.ts", import.meta.url);
-
 const runtimeSource = fileURLToPath(new URL("./index.ts", import.meta.url));
+const closedStore = "workboard store is closed.";
 
-function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.register) {
-  const services: OpenClawPluginService[] = [];
-  const methods = new Map<string, Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>();
-  let gatewayStart = () => {};
-  let gatewayStop = () => {};
-  const captured = capturePluginRegistration({
-    ...plugin,
-    register(api) {
-      api.registerService = (service) => {
-        services.push(service);
-      };
-      api.registerGatewayMethod = (method, handler) => {
-        methods.set(method, handler);
-      };
-      api.on = (name, handler) => {
-        if (name === "gateway_start") {
-          gatewayStart = () => {
-            void (handler as Parameters<typeof api.on<"gateway_start">>[1])({ port: 0 }, {});
-          };
-        } else if (name === "gateway_stop") {
-          gatewayStop = () => {
-            void (handler as Parameters<typeof api.on<"gateway_stop">>[1])({}, {});
-          };
-        }
-      };
-      register({ ...api, runtimeSource });
+it("discovers tool schemas without creating storage and persists executed tools", () =>
+  withStateDirEnv("workboard-discovery-", async ({ stateDir }) => {
+    {
+      await using discovery = registerGeneration(plugin.register, "tool-discovery");
+      const tools = discovery.tools();
+      expect(tools.map((tool) => tool.name).toSorted()).toEqual(
+        [...WORKBOARD_CARD_TOOL_NAMES, ...WORKBOARD_SESSIONS_BOARD_TOOL_NAMES].toSorted(),
+      );
+      const create = tools.find((tool) => tool.name === "workboard_create")!;
+      expect(existsSync(path.join(stateDir, "plugins/workboard/workboard.sqlite"))).toBe(false);
+      await create.execute("create", { title: "Retained discovery card" });
+    }
+    await using reopened = openStore();
+    expect(await reopened.list()).toMatchObject([{ title: "Retained discovery card" }]);
+  }));
+
+function openStore() {
+  const store = WorkboardStore.openSqlite(workerModuleUrl);
+  return Object.assign(store, { [Symbol.asyncDispose]: () => store.close() });
+}
+
+function registerGeneration(
+  register: (api: OpenClawPluginApi) => void = plugin.register,
+  registrationMode: OpenClawPluginApi["registrationMode"] = "full",
+) {
+  const captured = createCapturedPluginRegistration({ ...plugin, registrationMode });
+  const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
+  const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
+  const { registerGatewayMethod, invoke: rpc } = createGatewayMethodCapture();
+  let gatewayStart: Parameters<typeof captured.api.on<"gateway_start">>[1] = () => {};
+  let gatewayStop: Parameters<typeof captured.api.on<"gateway_stop">>[1] = () => {};
+  register({
+    ...captured.api,
+    runtimeSource,
+    registerService,
+    registerTool,
+    registerGatewayMethod,
+    on: (name, handler) => {
+      if (name === "gateway_start") {
+        gatewayStart = handler as typeof gatewayStart;
+      } else if (name === "gateway_stop") {
+        gatewayStop = handler as typeof gatewayStop;
+      }
     },
   });
-  const warn = vi.fn();
-  const emit = vi.fn();
+  const mocks = { warn: vi.fn(), emit: vi.fn() };
   const serviceContext = {
     config: {},
     stateDir: process.env.OPENCLAW_STATE_DIR!,
-    logger: { ...captured.api.logger, warn },
-    gatewayEvents: { emit, onSessionsChanged: () => () => {} },
+    logger: { ...captured.api.logger, warn: mocks.warn },
+    gatewayEvents: { emit: mocks.emit, onSessionsChanged: () => () => {} },
   };
   const start = async () => {
-    for (const service of services) {
+    for (const [service] of registerService.mock.calls) {
+      assert(service.apiVersion !== 2, "Workboard uses v1 services without a host scheduler");
       await service.start(serviceContext);
     }
-    gatewayStart();
+    void gatewayStart({ port: 0 }, {});
     await vi.advanceTimersByTimeAsync(0);
   };
-  const stop = async () => {
-    gatewayStop();
-    for (const service of services) {
-      await service.stop?.(serviceContext);
-    }
-  };
-  const cleanup = async (
-    context: Parameters<NonNullable<(typeof captured.runtimeLifecycles)[number]["cleanup"]>>[0],
+  const retire = async (
+    context?: Parameters<NonNullable<(typeof captured.runtimeLifecycles)[number]["cleanup"]>>[0],
   ) => {
     for (const lifecycle of captured.runtimeLifecycles) {
-      await lifecycle.cleanup?.(context);
+      await (context ? lifecycle.cleanup?.(context) : lifecycle.dispose?.());
     }
   };
-  const dispose = async () => {
-    for (const lifecycle of captured.runtimeLifecycles) {
-      await lifecycle.dispose?.();
-    }
+  const expectCall = async (
+    method: string,
+    expected: { ok?: boolean; payload?: object; error?: object; params?: object } = {},
+  ) => {
+    const { params = {}, ...response } = expected;
+    const [ok, payload, error] = (await rpc(`workboard.${method}`, { ...params })).mock.calls[0]!;
+    expect({ ok, payload, error }).toMatchObject({ ok: true, ...response });
   };
-  const run = async (...args: string[]): Promise<unknown> => {
-    const program = new Command().exitOverride();
-    for (const registration of captured.cliRegistrars) {
-      await registration.register({
-        program,
-        parentPath: [],
-        config: {},
-        logger: captured.api.logger,
-      });
-    }
-    const chunks: string[] = [];
-    const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-      chunks.push(String(chunk));
-      return true;
+  const expectCards = (titles: string[], allowOthers = false) => {
+    const cards = titles.map((title) => expect.objectContaining({ title }));
+    return expectCall("cards.list", {
+      payload: { cards: allowOthers ? expect.arrayContaining(cards) : cards },
     });
-    try {
-      await program.parseAsync(["workboard", ...args, "--json"], { from: "user" });
-      return JSON.parse(chunks.join(""));
-    } finally {
-      write.mockRestore();
-    }
   };
-  const call = async (method: string, params = {}) => {
-    const handler = methods.get(method);
-    if (!handler) {
-      throw new Error(`Missing Gateway method: ${method}`);
-    }
-    const respond = vi.fn<Parameters<typeof handler>[0]["respond"]>();
-    await handler({ params, respond } as unknown as Parameters<typeof handler>[0]);
-    const [ok, payload, error] = respond.mock.calls[0] ?? [];
-    return { ok, payload, error };
-  };
-  return { cleanup, dispose, run, start, stop, warn, emit, call };
+  return Object.assign(
+    { cleanup: retire, start, ...mocks, expectCall, expectCards },
+    {
+      tools: () =>
+        registerTool.mock.calls.flatMap(
+          ([factory]) =>
+            (typeof factory === "function"
+              ? factory({})
+              : "create" in factory
+                ? factory.create({ assertInvocationCurrent: () => {} })
+                : factory) ?? [],
+        ),
+      async [Symbol.asyncDispose]() {
+        void gatewayStop({}, {});
+        await retire();
+      },
+    },
+  );
 }
 
-describe("Workboard registration cleanup", () => {
-  it("registers store disposal before a later runtime dependency throws", async () => {
-    await withStateDirEnv("workboard-registration-failure-", async () => {
-      const store = WorkboardStore.openSqlite(workerModuleUrl);
-      const opened = vi.spyOn(WorkboardStore, "openSqlite").mockReturnValueOnce(store);
-      const failure = new Error("synthetic Gateway runtime unavailable");
-      try {
-        const captured = capturePluginRegistration({
-          ...plugin,
-          register(api) {
-            const runtime = new Proxy(api.runtime, {
-              get(target, property) {
-                if (property === "gateway") {
-                  throw failure;
-                }
-                return Reflect.get(target, property, target);
-              },
-            });
-            expect(() => plugin.register({ ...api, runtime, runtimeSource })).toThrow(failure);
-          },
-        });
-        expect(captured.runtimeLifecycles).toHaveLength(1);
-        await captured.runtimeLifecycles[0]!.dispose?.();
-        await expect(store.list()).rejects.toThrow("workboard store is closed.");
-      } finally {
-        opened.mockRestore();
-        await store.close();
-      }
+it("registers store disposal before a later runtime dependency throws", () =>
+  withStateDirEnv("workboard-registration-failure-", async () => {
+    await using store = openStore();
+    using _ = vi.spyOn(WorkboardStore, "openSqlite").mockReturnValueOnce(store);
+    const failure = new Error("synthetic worktree runtime unavailable");
+    const captured = createCapturedPluginRegistration(plugin);
+    const runtime = new Proxy(captured.api.runtime, {
+      get(target, property) {
+        if (property === "worktrees") {
+          throw failure;
+        }
+        return Reflect.get(target, property, target);
+      },
     });
-  });
+    expect(() => plugin.register({ ...captured.api, runtime, runtimeSource })).toThrow(failure);
+    await captured.runtimeLifecycles[0]!.dispose?.();
+    await expect(store.list()).rejects.toThrow(closedStore);
+  }));
 
-  it.each(["disable", "restart", "dispose"] as const)(
-    "closes only the retired generation on %s",
-    async (action) => {
+it.each(["disable", "restart", "dispose"] as const)(
+  "closes only the retired generation on %s",
+  (action) =>
+    withStateDirEnv("workboard-registration-lifecycle-", async () => {
       const reason = action === "dispose" ? "disable" : action;
-      await withStateDirEnv("workboard-registration-lifecycle-", async () => {
-        vi.useFakeTimers();
-        const first = registerGeneration();
-        const second = registerGeneration();
-        const retire = () => (action === "dispose" ? first.dispose() : first.cleanup({ reason }));
-        try {
-          await first.start();
-          await first.run("create", "Retained card");
-          for (const context of [
-            { reason: "reset" as const },
-            { reason: "delete" as const },
-            { reason, sessionKey: "agent:other:session" },
-            { reason, runId: "other-run" },
-          ]) {
-            await first.cleanup(context);
-            await expect(first.run("list")).resolves.toMatchObject({
-              cards: [expect.objectContaining({ title: "Retained card" })],
-            });
-          }
+      vi.useFakeTimers();
+      using _ = { [Symbol.dispose]: () => vi.useRealTimers() };
+      await using first = registerGeneration();
+      await using second = registerGeneration();
+      const retire = () => first.cleanup(action === "dispose" ? undefined : { reason });
+      await first.start();
+      await first.expectCall("cards.create", { params: { title: "Retained card" } });
+      for (const context of [
+        { reason: "reset" as const },
+        { reason: "delete" as const },
+        { reason, sessionKey: "agent:other:session" },
+        { reason, runId: "other-run" },
+      ]) {
+        await first.cleanup(context);
+        await first.expectCards(["Retained card"]);
+      }
 
-          expect(vi.getTimerCount()).toBeGreaterThan(0);
-          await retire();
-          await expect(first.run("list")).rejects.toThrow("workboard store is closed.");
-          await vi.advanceTimersByTimeAsync(60_000);
-          expect(first.warn).not.toHaveBeenCalled();
-          expect(vi.getTimerCount()).toBe(0);
-          await second.start();
-          await expect(second.run("create", "Fresh card")).resolves.toMatchObject({
-            card: { title: "Fresh card" },
-          });
-          await expect(second.run("list")).resolves.toMatchObject({
-            cards: expect.arrayContaining([
-              expect.objectContaining({ title: "Retained card" }),
-              expect.objectContaining({ title: "Fresh card" }),
-            ]),
-          });
-          await retire();
-          second.emit.mockClear();
-          await second.run("create", "After repeated retirement");
-          expect(second.emit).toHaveBeenCalled();
-        } finally {
-          await first.stop();
-          await second.stop();
-          await first.cleanup({ reason: "disable" });
-          await second.cleanup({ reason: "disable" });
-          vi.useRealTimers();
-        }
-      });
-    },
-  );
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      await retire();
+      await first.expectCall("cards.list", { ok: false, error: { message: closedStore } });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(first.warn).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      await second.start();
+      await second.expectCall("cards.create", { params: { title: "Fresh card" } });
+      await second.expectCards(["Retained card", "Fresh card"], true);
+      await retire();
+      second.emit.mockClear();
+      await second.expectCall("cards.create", { params: { title: "After retirement" } });
+      expect(second.emit).toHaveBeenCalled();
+    }),
+);
 
-  it.each(["internal", "injected"] as const)(
-    "retains public Gateway store ownership for %s stores",
-    async (ownership) => {
-      await withStateDirEnv("workboard-gateway-lifecycle-", async () => {
-        const store =
-          ownership === "injected" ? WorkboardStore.openSqlite(workerModuleUrl) : undefined;
-        const generation = registerGeneration((api) =>
-          registerWorkboardGatewayMethods({ api, store }),
-        );
-        try {
-          expect(await generation.call("workboard.cards.list")).toMatchObject({
-            ok: true,
-            payload: { cards: [] },
-          });
-          expect(
-            await generation.call("workboard.boards.upsert", {
-              id: "retained",
-              name: "Retained board",
-            }),
-          ).toMatchObject({ ok: true });
-          await generation.cleanup({ reason: "disable", sessionKey: "agent:other:session" });
-          expect(await generation.call("workboard.cards.list")).toMatchObject({ ok: true });
-          await generation.cleanup({ reason: "disable" });
-          expect(await generation.call("workboard.cards.list")).toMatchObject({
-            ok: ownership === "injected",
-          });
-          const reopened = WorkboardStore.openSqlite(workerModuleUrl);
-          try {
-            expect(await reopened.listBoards()).toMatchObject({
-              boards: expect.arrayContaining([
-                expect.objectContaining({ id: "retained", name: "Retained board" }),
-              ]),
-            });
-          } finally {
-            await reopened.close();
-          }
-        } finally {
-          await generation.cleanup({ reason: "disable" });
-          await store?.close();
-        }
-      });
-    },
-  );
-});
+it.each(["internal", "injected"] as const)(
+  "retains public Gateway store ownership for %s stores",
+  (ownership) =>
+    withStateDirEnv("workboard-gateway-lifecycle-", async () => {
+      await using store = ownership === "injected" ? openStore() : undefined;
+      await using generation = registerGeneration((api) =>
+        registerWorkboardGatewayMethods({ api, store }),
+      );
+      const board = { id: "retained", name: "Retained board" };
+      await generation.expectCall("boards.upsert", { params: board });
+      await generation.cleanup({ reason: "disable", sessionKey: "agent:other:session" });
+      await generation.expectCall("cards.list");
+      await generation.cleanup({ reason: "disable" });
+      await generation.expectCall("cards.list", { ok: ownership === "injected" });
+      await using reopened = openStore();
+      expect((await reopened.listBoards()).boards).toContainEqual(expect.objectContaining(board));
+    }),
+);

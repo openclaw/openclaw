@@ -17,6 +17,7 @@ struct DeviceSettingsBridgeTests {
         ("app.nativeExperienceEnabled", .nativeExperienceEnabled),
         ("app.iconAnimationsEnabled", .iconAnimationsEnabled),
         ("app.launchAtLogin", .launchAtLogin),
+        ("app.keepGatewayRunning", .keepGatewayRunning),
         ("app.quickChatEnabled", .quickChatEnabled),
         ("app.debugPaneEnabled", .debugPaneEnabled),
         ("capabilities.canvasEnabled", .canvasEnabled),
@@ -101,6 +102,7 @@ struct DeviceSettingsBridgeTests {
             ("app.iconStyle", ["paper"]),
             ("app.quickChatShortcut", "⌥Space"),
             ("app.launchAtLoginAvailable", true),
+            ("app.keepGatewayRunningAvailable", true),
             ("capabilities.cuaDriverBundled", true),
             ("voice.supported", true),
             ("voice.triggerWords", ["computer"]),
@@ -142,11 +144,26 @@ struct DeviceSettingsBridgeTests {
     @Test func `action requests retain the closed panel and permission identities`() {
         #expect(DeviceSettingsRequest(body: ["type": "status"]) == .status)
         #expect(DeviceSettingsRequest(body: ["type": "check-for-updates"]) == .checkForUpdates)
+        for action in ChromeExtensionSetupAction.allCases {
+            #expect(DeviceSettingsRequest(body: [
+                "type": "chrome-extension-setup", "action": action.rawValue,
+            ]) == .chromeExtensionSetup(action))
+        }
         #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension"]) == .installChromeExtension)
-        #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension", "command": "other"]) == nil)
+        #expect(DeviceSettingsRequest(body: ["type": "chrome-extension-setup"]) == nil)
+        #expect(DeviceSettingsRequest(body: ["type": "chrome-extension-setup", "action": "pair"]) == nil)
+        for field in ["command", "profile", "url", "host"] {
+            #expect(DeviceSettingsRequest(body: [
+                "type": "install-chrome-extension", field: "other",
+            ]) == nil)
+            #expect(DeviceSettingsRequest(body: [
+                "type": "chrome-extension-setup", "action": "install", field: "other",
+            ]) == nil)
+        }
         let panels: [(String, DeviceSettingsPanel)] = [
             ("quick-chat-shortcut", .quickChatShortcut), ("microphone-test", .microphoneTest),
-            ("browser-import", .browserImport), ("connection", .connection), ("gateways", .gateways), ("debug", .debug),
+            ("browser-import", .browserImport), ("ai-setup", .aiSetup),
+            ("connection", .connection), ("gateways", .gateways), ("debug", .debug),
             ("diagnostics", .diagnostics), ("licenses", .licenses), ("about", .about), ("watch", .watch),
         ]
         #expect(Set(DeviceSettingsPanel.allCases.map(\.rawValue)) == Set(panels.map(\.0)))
@@ -177,6 +194,44 @@ struct DeviceSettingsBridgeTests {
         }
     }
 
+    @Test func `new permissions do not enter the released contract-1 entry list`() throws {
+        let permissions = DeviceSettingsSnapshot.Permissions(
+            entries: DeviceSettingsPermission.macOSPermissions.map { .init(id: $0, status: .notDetermined) },
+            location: .init(mode: .off, precise: true),
+            additionalEntries: DeviceSettingsPermission.macOSAdditionalPermissions.map {
+                .init(id: $0, status: .notDetermined)
+            })
+        let payload = try #require(JSONSerialization
+            .jsonObject(with: JSONEncoder().encode(permissions)) as? [String: Any])
+        let entries = try #require(payload["entries"] as? [[String: Any]])
+        #expect(entries.compactMap { $0["id"] as? String } == [
+            "notifications", "accessibility", "screenRecording", "microphone", "camera", "speechRecognition",
+            "location",
+        ])
+        let additional = try #require(payload["additionalEntries"] as? [[String: Any]])
+        #expect(additional.compactMap { $0["id"] as? String } == ["eventPosting"])
+    }
+
+    @Test func `permission card requests preserve the node and typed capability state`() throws {
+        let request = try #require(DeviceSettingsRequest(body: [
+            "type": "resolve-permission",
+            "request": [
+                "nodeId": "synthetic-mac",
+                "command": "computer.act",
+                "capabilities": ["accessibility", "computerControl"],
+                "state": "disabled-in-openclaw",
+            ],
+        ]))
+        guard case let .resolvePermission(permission) = request else {
+            Issue.record("Expected the permission grant request")
+            return
+        }
+        #expect(permission.nodeId == "synthetic-mac")
+        #expect(permission.command == "computer.act")
+        #expect(permission.capabilities == ["accessibility", "computerControl"])
+        #expect(permission.state == .disabledInOpenClaw)
+    }
+
     @Test func `malformed actions never select a default native panel or permission`() {
         let invalid: [Any] = [
             "status", NSNull(), [String: Any](), ["type": true], ["type": "unknown"],
@@ -201,10 +256,6 @@ struct DeviceSettingsBridgeTests {
             #expect(mapped.nativeMode == native)
             #expect(try String(decoding: JSONEncoder().encode(mapped), as: UTF8.self) == "\"\(wire)\"")
         }
-        #expect(DeviceSettingsPermissionStatus(.granted) == .granted)
-        #expect(DeviceSettingsPermissionStatus(.notGranted).rawValue == "notDetermined")
-        #expect(DeviceSettingsPermissionStatus(.unknown) == .unavailable)
-        #expect(DeviceSettingsPermissionStatus(nil) == .unavailable)
         let statuses: [DeviceSettingsPermissionStatus] = [
             .granted, .denied, .notDetermined, .unavailable, .limited,
         ]

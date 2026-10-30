@@ -1,0 +1,107 @@
+import path from "node:path";
+import { z } from "zod";
+import { buildGatewayInstallEntrypointCandidates } from "../../daemon/gateway-entrypoint.js";
+import { OPENCLAW_WRAPPER_ENV_KEY } from "../../daemon/program-args.js";
+import { resolvePinnedDaemonRuntimePath } from "../../daemon/runtime-paths.js";
+import type { DaemonRuntimePinSnapshot } from "../../daemon/runtime-pin-types.js";
+import { isUpdateOwnedGatewayServiceCommand } from "../../daemon/service-update-authority.js";
+import { isTruthyEnvValue } from "../../infra/env.js";
+import { isRegularFile } from "../../infra/executable-path.js";
+import { resolveStableNodePath } from "../../infra/stable-node-path.js";
+import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
+import type { DaemonInstallOptions } from "./types.js";
+
+const expectedRuntimePinSchema = z.strictObject({
+  revision: z.string(),
+  definition: z.string().nullable(),
+});
+
+export function assertExpectedRuntimePin(
+  raw: string,
+  current: DaemonRuntimePinSnapshot,
+  service: "Gateway" | "Node",
+): void {
+  const expected = safeParseJsonWithSchema(expectedRuntimePinSchema, raw);
+  if (!expected) {
+    throw new Error("Invalid expected runtime pin snapshot.");
+  }
+  if (
+    expected.revision !== current.revision ||
+    expected.definition !== (current.definition ?? null)
+  ) {
+    throw new Error(
+      `${service} service or runtime pin changed before installation. The newer selection was preserved; inspect it before retrying.`,
+    );
+  }
+}
+
+const serviceFile = z
+  .string()
+  .refine((file) => path.isAbsolute(file) && !/[\0\r\n]/.test(file) && isRegularFile(file));
+const restoreServiceCliSchema = z.strictObject({
+  executable: z.string(),
+  entrypoint: serviceFile
+    .refine(
+      (entry) =>
+        path.basename(entry) === "openclaw.mjs" ||
+        buildGatewayInstallEntrypointCandidates(path.dirname(path.dirname(entry))).includes(
+          path.normalize(entry),
+        ),
+    )
+    .nullable(),
+  sqliteLibrary: serviceFile.nullable(),
+});
+
+/** Validate recovery before config preparation; SQLite selection changes only the service env. */
+export async function resolveRestoreServiceCli(
+  raw: string,
+  opts: DaemonInstallOptions,
+  installEnv: NodeJS.ProcessEnv,
+) {
+  const serviceCli = safeParseJsonWithSchema(restoreServiceCliSchema, raw);
+  if (!serviceCli) {
+    throw new Error("Invalid restore service CLI.");
+  }
+  const { runtime, runtimePath: pin, wrapper, expectedRuntimePin } = opts;
+  const { executable, sqliteLibrary } = serviceCli;
+  try {
+    if (expectedRuntimePin === undefined) {
+      throw new Error("requires --expected-runtime-pin.");
+    }
+    if (runtime !== "node" && runtime !== "bun" && runtime !== "standalone") {
+      throw new Error('requires an explicit --runtime ("node", "bun", or "standalone").');
+    }
+    if ((runtime === "standalone") !== (serviceCli.entrypoint === null)) {
+      throw new Error(
+        "standalone recovery requires a null entrypoint; Node and Bun require an entry script.",
+      );
+    }
+    if (wrapper !== undefined || installEnv[OPENCLAW_WRAPPER_ENV_KEY]?.trim()) {
+      throw new Error("cannot be combined with a wrapper.");
+    }
+    if (pin !== undefined && path.normalize(pin) !== path.normalize(executable)) {
+      throw new Error("executable must match --runtime-path.");
+    }
+    if (
+      isUpdateOwnedGatewayServiceCommand() ||
+      isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS)
+    ) {
+      throw new Error("cannot be combined with update-owned reconciliation.");
+    }
+    if (sqliteLibrary === null) {
+      delete installEnv.OPENCLAW_SQLITE_LIBRARY;
+    } else {
+      installEnv.OPENCLAW_SQLITE_LIBRARY = sqliteLibrary;
+    }
+    let runtimePath = await resolvePinnedDaemonRuntimePath(executable, runtime, installEnv);
+    if (runtime === "node" && pin === undefined && runtimePath) {
+      runtimePath = await resolveStableNodePath(runtimePath);
+    }
+    return { serviceCli, runtimePath };
+  } catch (error) {
+    throw new Error(
+      `--restore-service-cli ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+}

@@ -5,8 +5,8 @@ import {
   type AgentPlanStep,
   type ChannelProgressDraftCompositorSnapshot,
   type ChannelProgressDraftLine,
-  formatChannelProgressDraftDiffStat,
-  formatPlanChecklistLines,
+  compactChannelProgressDraftLine,
+  selectPlanChecklistSteps,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import { normalizeSlackOutboundText } from "./format.js";
@@ -29,12 +29,7 @@ type SlackPlanTaskStatus = TaskUpdateChunk["status"];
 type SlackPlanTask = Pick<TaskUpdateChunk, "id" | "title" | "status" | "details" | "output">;
 type SlackProgressDiffStat = NonNullable<ChannelProgressDraftCompositorSnapshot["diffStat"]>;
 
-function buildSessionSources(url: string): NonNullable<TaskUpdateChunk["sources"]> {
-  // The live Slack API requires url_source; @slack/types 3.0.0 still declares the old `url` tag.
-  return [{ type: "url_source", url, text: "Open in OpenClaw" }] as unknown as NonNullable<
-    TaskUpdateChunk["sources"]
-  >;
-}
+export type SlackProgressSessionLink = { url: string; text: string };
 
 function field(text: string) {
   return { type: "mrkdwn" as const, text: truncateSlackText(text, SLACK_PROGRESS_FIELD_MAX) };
@@ -90,17 +85,13 @@ function compactDetail(value: string, maxChars: number): string {
     .trimStart()}`;
 }
 
-function compactTitle(value: string): string {
-  return truncateSlackText(value.replace(/\s+/g, " ").trim(), SLACK_PROGRESS_TASK_TITLE_MAX);
-}
-
-function compactChunkText(value: string): string {
-  return truncateSlackText(value.replace(/\s+/g, " ").trim(), SLACK_PROGRESS_CHUNK_TEXT_MAX);
+function compactTitle(value: string, maxChars = SLACK_PROGRESS_TASK_TITLE_MAX): string {
+  return truncateSlackText(value.replace(/\s+/g, " ").trim(), maxChars);
 }
 
 // Card text is transient status: render authored Markdown as mrkdwn, but never
-// let it ping anyone or nest the card's own bold/italic wrapper.
-function renderProgressCardText(text: string, enclosingStyle?: "bold" | "italic"): string {
+// let it ping anyone or nest the card's own italic wrapper.
+function renderProgressCardText(text: string, enclosingStyle?: "italic"): string {
   return normalizeSlackOutboundText(text, { mentions: "escape", enclosingStyle });
 }
 
@@ -115,17 +106,6 @@ function lineDetailParts(line: ChannelProgressDraftLine): string[] {
     .filter((part): part is string => Boolean(part));
 }
 
-function activityLineDetail(line: ChannelProgressDraftLine, maxChars: number): string {
-  const detail = lineDetailParts(line).join(" · ");
-  if (detail) {
-    return escapeSlackMrkdwn(compactDetail(detail, maxChars));
-  }
-  const text = line.text.replace(/^(?:🧠|💬)\s+/u, "").trim();
-  return line.kind === "item" && !line.toolName && text && text !== line.label
-    ? renderProgressCardText(compactDetail(text, maxChars))
-    : "—";
-}
-
 function lineTaskTitle(line: ChannelProgressDraftLine): string {
   const label = line.label.replace(/\s+/g, " ").trim() || line.toolName || line.kind || "Update";
   const fallback = line.text.replace(/\s+/g, " ").trim();
@@ -133,16 +113,6 @@ function lineTaskTitle(line: ChannelProgressDraftLine): string {
     return compactTitle(lineDetailParts(line).length > 0 || line.status ? label : fallback);
   }
   return compactTitle(label);
-}
-
-// Native tasks append details/output; keep details stable and put results in
-// output so a status change cannot repeat the command.
-function lineTaskDetails(line: ChannelProgressDraftLine, maxLineChars: number): string | undefined {
-  const detail = line.detail
-    ?.replace(SLACK_PROGRESS_LINE_DELTA_RE, "")
-    .replace(/\s+·\s*$/u, "")
-    .trim();
-  return detail && detail !== line.status?.trim() ? compactDetail(detail, maxLineChars) : undefined;
 }
 
 function lineTaskOutput(line: ChannelProgressDraftLine): string | undefined {
@@ -207,41 +177,6 @@ function resolveLineTaskIdentity(
   return `${id}_${occurrence}`;
 }
 
-// Native tasks follow the full plan or compositor window. Block Kit's block
-// limit does not apply here: truncation hides late failures and shifts plan IDs.
-function buildNativeTasks(params: {
-  lines: readonly ChannelProgressDraftLine[];
-  plan?: readonly AgentPlanStep[];
-  maxLineChars?: number;
-}): SlackPlanTask[] {
-  // Slack cannot remove native rows. Position-keyed plan IDs let snapshots
-  // replace row i; reconciliation completes rows that disappear.
-  const tasks: SlackPlanTask[] = (params.plan ?? []).map((entry, index) => ({
-    id: `plan_step_${index + 1}`,
-    title: compactTitle(entry.step),
-    status: entry.status === "completed" ? "complete" : entry.status,
-  }));
-  const maxLineChars = resolveMaxLineChars(
-    params.maxLineChars,
-    DEFAULT_SLACK_PROGRESS_TASK_DETAIL_MAX_CHARS,
-  );
-  const contentIdOccurrences = new Map<string, number>();
-  for (const line of params.lines) {
-    const id = resolveLineTaskIdentity(line, contentIdOccurrences);
-    const task: SlackPlanTask = { id, title: lineTaskTitle(line), status: lineTaskStatus(line) };
-    const details = lineTaskDetails(line, maxLineChars);
-    const output = lineTaskOutput(line);
-    if (details) {
-      task.details = details;
-    }
-    if (output) {
-      task.output = output;
-    }
-    tasks.push(task);
-  }
-  return tasks;
-}
-
 function formatProgressAttentionTitle(
   line: ChannelProgressDraftLine,
   finalStatus: "complete" | "error" | undefined,
@@ -258,14 +193,7 @@ function formatProgressAttentionTitle(
   return compactTitle(finalStatus === "complete" ? `Recovered: ${title}` : title);
 }
 
-function formatTaskDiffOutput(diffStat: SlackProgressDiffStat | undefined): string | undefined {
-  return diffStat && (diffStat.added > 0 || diffStat.removed > 0)
-    ? `+${diffStat.added} −${diffStat.removed}`
-    : undefined;
-}
-
 export function buildSlackProgressStreamChunks(params: {
-  label?: string;
   title?: string;
   lines: readonly ChannelProgressDraftLine[];
   plan?: readonly AgentPlanStep[];
@@ -275,14 +203,46 @@ export function buildSlackProgressStreamChunks(params: {
   /** Terminal status applied to rows still in progress when the turn finishes. */
   finalInProgressStatus?: "complete" | "error";
   diffStat?: SlackProgressDiffStat;
-  sessionUrl?: string;
+  sessionLinks?: readonly SlackProgressSessionLink[];
 }): AnyChunk[] | undefined {
   const approvals = params.lines.filter((line) => line.kind === "approval");
-  const tasks = buildNativeTasks({
-    lines: params.summaryRow ? [] : params.lines.filter((line) => line.kind !== "approval"),
-    plan: params.plan,
-    maxLineChars: params.maxLineChars,
-  });
+  const taskLines = params.summaryRow
+    ? []
+    : params.lines.filter((line) => line.kind !== "approval");
+  // Native tasks follow the full plan or compositor window. Block Kit's block
+  // limit does not apply here: truncation hides late failures and shifts plan IDs.
+  // Slack cannot remove native rows. Position-keyed plan IDs let snapshots
+  // replace row i; reconciliation completes rows that disappear.
+  const tasks: SlackPlanTask[] = (params.plan ?? []).map((entry, index) => ({
+    id: `plan_step_${index + 1}`,
+    title: compactTitle(entry.step),
+    status: entry.status === "completed" ? "complete" : entry.status,
+  }));
+  const maxLineChars = resolveMaxLineChars(
+    params.maxLineChars,
+    DEFAULT_SLACK_PROGRESS_TASK_DETAIL_MAX_CHARS,
+  );
+  const taskContentIdOccurrences = new Map<string, number>();
+  for (const line of taskLines) {
+    const id = resolveLineTaskIdentity(line, taskContentIdOccurrences);
+    const task: SlackPlanTask = { id, title: lineTaskTitle(line), status: lineTaskStatus(line) };
+    // Native tasks append details/output; keep details stable and put results in
+    // output so a status change cannot repeat the command.
+    const detail = line.detail
+      ?.replace(SLACK_PROGRESS_LINE_DELTA_RE, "")
+      .replace(/\s+·\s*$/u, "")
+      .trim();
+    const details =
+      detail && detail !== line.status?.trim() ? compactDetail(detail, maxLineChars) : undefined;
+    const output = lineTaskOutput(line);
+    if (details) {
+      task.details = details;
+    }
+    if (output) {
+      task.output = output;
+    }
+    tasks.push(task);
+  }
   const contentIdOccurrences = new Map<string, number>();
   const attention: SlackPlanTask[] = [];
   for (const line of approvals) {
@@ -295,21 +255,31 @@ export function buildSlackProgressStreamChunks(params: {
       });
     }
   }
-  const headline = params.title?.trim() || params.label?.trim();
+  const headline = params.title?.trim();
+  const summaryTitle =
+    params.finalInProgressStatus === "error"
+      ? "Failed"
+      : params.finalInProgressStatus === "complete" || !params.summaryRow
+        ? "Completed"
+        : "Working";
   const newest = tasks.at(-1);
-  const title = compactChunkText(
+  const title = compactTitle(
     headline ||
       (newest?.details ? `${newest.title} — ${newest.details}` : newest?.title) ||
-      (params.summaryRow ? "Working" : attention.at(-1)?.title) ||
+      (params.summaryRow ? summaryTitle : attention.at(-1)?.title) ||
       SLACK_PROGRESS_PLAN_FALLBACK_TITLE,
+    SLACK_PROGRESS_CHUNK_TEXT_MAX,
   );
-  const diffOutput = formatTaskDiffOutput(params.diffStat);
-  if (tasks.length === 0 && (params.summaryRow || params.sessionUrl || diffOutput)) {
+  const diffOutput =
+    params.diffStat && (params.diffStat.added > 0 || params.diffStat.removed > 0)
+      ? `+${params.diffStat.added} −${params.diffStat.removed}`
+      : undefined;
+  if (tasks.length === 0 && (params.summaryRow || params.sessionLinks?.length || diffOutput)) {
     // Native rows cannot be removed, so the quiet card owns one replaceable
     // summary row for the whole turn; detailed cards add it only as a receipt.
     tasks.push({
       id: "openclaw_summary",
-      title: params.summaryRow ? compactTitle(title) : "Completed",
+      title: params.summaryRow ? compactTitle(title) : summaryTitle,
       status: params.finalInProgressStatus ?? (params.summaryRow ? "in_progress" : "complete"),
     });
   }
@@ -326,27 +296,22 @@ export function buildSlackProgressStreamChunks(params: {
   const finalTaskIndex = tasks.length - 1;
   const taskChunks: TaskUpdateChunk[] = tasks.map((task, index) => {
     const recovered = params.finalInProgressStatus === "complete" && task.status === "error";
-    const chunk: TaskUpdateChunk = {
-      type: "task_update",
-      id: task.id,
-      title: recovered ? compactTitle(`Recovered: ${task.title}`) : task.title,
-      status: recovered
-        ? "complete"
-        : task.status === "in_progress"
-          ? (params.finalInProgressStatus ?? task.status)
-          : task.status,
-    };
-    if (task.details) {
-      chunk.details = task.details;
-    }
-    if (task.output) {
-      chunk.output = task.output;
-    }
+    const chunk: TaskUpdateChunk = Object.assign({ type: "task_update" as const }, task);
+    chunk.title = recovered ? compactTitle(`Recovered: ${task.title}`) : task.title;
+    chunk.status = recovered
+      ? "complete"
+      : task.status === "in_progress"
+        ? (params.finalInProgressStatus ?? task.status)
+        : task.status;
     if (index === finalTaskIndex && diffOutput) {
       chunk.output = [task.output, diffOutput].filter(Boolean).join(" · ");
     }
-    if (index === finalTaskIndex && params.sessionUrl) {
-      chunk.sources = buildSessionSources(params.sessionUrl);
+    if (index === finalTaskIndex && params.sessionLinks?.length) {
+      // The live Slack API requires url_source; @slack/types 3.0.0 still declares the old `url` tag.
+      chunk.sources = params.sessionLinks.map((link) => ({
+        type: "url_source",
+        ...link,
+      })) as unknown as NonNullable<TaskUpdateChunk["sources"]>;
     }
     return chunk;
   });
@@ -369,91 +334,111 @@ function joinRecentProgressRows(rows: readonly string[]): string {
   return rendered.toReversed().join("\n");
 }
 
-function buildActivityText(lines: readonly ChannelProgressDraftLine[], maxLineChars: number) {
-  return joinRecentProgressRows(
-    lines.slice(-SLACK_MAX_BLOCKS).map((line) => {
-      const title = `${line.icon ?? "•"} *${renderProgressCardText(line.label, "bold")}*`;
-      return `${title} — ${activityLineDetail(line, maxLineChars)}`;
-    }),
-  );
-}
-
 export function buildSlackProgressCardBlocks(params: {
   state: SlackProgressCardState;
-  title: string;
-  titleFormat?: "plain";
+  detailed: boolean;
+  title?: string;
   lines: readonly ChannelProgressDraftLine[];
   plan?: readonly AgentPlanStep[];
-  narration?: string | readonly SlackProgressText[];
+  narration?: readonly SlackProgressText[];
   maxLineChars?: number;
   toolCalls?: number;
   elapsedSeconds?: number;
   diffStat?: SlackProgressDiffStat;
-  sessionUrl?: string;
+  sessionLinks?: readonly SlackProgressSessionLink[];
 }): (Block | KnownBlock)[] {
   const maxLineChars = resolveMaxLineChars(
     params.maxLineChars,
     DEFAULT_SLACK_PROGRESS_DETAIL_MAX_CHARS,
   );
-  const planLines = formatPlanChecklistLines(params.plan ?? [], {
+  const selected = selectPlanChecklistSteps(params.detailed ? (params.plan ?? []) : [], {
     maxLines: SLACK_MAX_BLOCKS,
-    maxLineChars,
   });
-  const narration = (
-    typeof params.narration === "string" ? [{ text: params.narration }] : (params.narration ?? [])
-  )
-    .map(({ text, format }: SlackProgressText) => ({
-      text: text.replace(/\s+/g, " ").trim(),
-      format,
-    }))
-    .filter((part) => part.text);
-  const diffStat = formatChannelProgressDraftDiffStat(params.diffStat);
+  const planLines = [
+    ...(selected.summary ? [selected.summary] : []),
+    ...selected.steps.map(
+      ({ step, status }) =>
+        `${status === "completed" ? "✓" : status === "in_progress" ? "▸" : "▢"} ${step}`,
+    ),
+  ].map((line) => compactChannelProgressDraftLine(line, maxLineChars));
+  const narration = new Map<string, SlackProgressText["format"]>();
+  for (const part of params.narration ?? []) {
+    const text = part.text.replace(/\s+/g, " ").trim();
+    if (text) {
+      narration.set(text, part.format ?? narration.get(text));
+    }
+  }
+  const lines = params.lines.filter((line) =>
+    line.kind === "item" && !line.toolName
+      ? !narration.has(
+          line.text
+            .replace(/^_(.*)_$/gmu, "$1")
+            .replace(/\s+/g, " ")
+            .trim(),
+        )
+      : params.detailed || line.kind === "approval",
+  );
+  const { diffStat: diff, toolCalls, elapsedSeconds } = params;
+  const diffStat =
+    diff && (diff.files || diff.added || diff.removed)
+      ? [
+          `${diff.files} ${diff.files === 1 ? "file" : "files"}`,
+          ...(diff.added > 0 ? [`+${diff.added}`] : []),
+          ...(diff.removed > 0 ? [`−${diff.removed}`] : []),
+        ].join(" ")
+      : undefined;
   const workingFooter = [
-    ...(params.toolCalls && params.toolCalls > 0 ? [`🛠️ ${params.toolCalls} tools`] : []),
+    ...(toolCalls && toolCalls > 0 ? [`${toolCalls} ${toolCalls === 1 ? "tool" : "tools"}`] : []),
     ...(diffStat ? [diffStat] : []),
-    ...(params.elapsedSeconds && params.elapsedSeconds > 0 ? [`⏱ ${params.elapsedSeconds}s`] : []),
+    ...(elapsedSeconds && elapsedSeconds > 0 ? [`${elapsedSeconds}s`] : []),
   ].join(" · ");
   // A finished card keeps only the durable diff stat. Tool-call/elapsed counters
   // are live working state, not a receipt to leave behind in the transcript.
   const footer = params.state === "working" ? workingFooter : diffStat;
-  const icon = params.state === "working" ? "🔄" : params.state === "success" ? "✅" : "❌";
   const finalStatus =
     params.state === "working" ? undefined : params.state === "success" ? "complete" : "error";
-  const attention = params.lines.flatMap((line) => {
+  const attention = lines.flatMap((line) => {
     const title = formatProgressAttentionTitle(line, finalStatus);
     return title === undefined ? [] : [escapeSlackMrkdwn(title)];
   });
   const sections = [
     planLines.map((line) => renderProgressCardText(line)).join("\n"),
-    buildActivityText(
-      params.lines.filter((line) => line.kind !== "approval" && lineTaskStatus(line) !== "error"),
-      maxLineChars,
+    joinRecentProgressRows(
+      lines
+        .filter((line) => line.kind !== "approval" && lineTaskStatus(line) !== "error")
+        .slice(-SLACK_MAX_BLOCKS)
+        .map((line) => {
+          if (line.kind === "item" && !line.toolName) {
+            return `_${renderProgressCardText(compactDetail(line.text, maxLineChars), "italic")}_`;
+          }
+          const detail = compactDetail(lineDetailParts(line).join(" · "), maxLineChars);
+          return escapeSlackMrkdwn(detail ? `${line.label} — ${detail}` : line.label);
+        }),
     ),
     // Attention has its own bounded section so activity truncation cannot hide it.
     joinRecentProgressRows(attention),
   ];
-  const title = params.title.trim() || "Working";
+  const title = params.title?.trim();
   const blocks: (Block | KnownBlock)[] = [
-    params.titleFormat === "plain"
-      ? progressTextSection({ text: `${icon} ${title}`, format: "plain" })
-      : { type: "section", text: field(`${icon} *${renderProgressCardText(title, "bold")}*`) },
-    ...narration.map((part) => progressTextSection(part, "italic")),
+    // A failed turn may end without any error reply; the card is its only visible outcome.
+    ...(params.state === "error" ? [progressTextSection({ text: "Failed", format: "plain" })] : []),
+    ...(title ? [progressTextSection({ text: title, format: "plain" })] : []),
+    ...[...narration].map(([text, format]) => progressTextSection({ text, format }, "italic")),
     ...sections.filter(Boolean).map((text) => ({ type: "section" as const, text: field(text) })),
   ];
-  if (footer) {
+  if (params.detailed && footer) {
     blocks.push({ type: "context", elements: [field(footer)] });
   }
-  if (params.state !== "working" && params.sessionUrl) {
+  if (params.state !== "working" && params.sessionLinks?.length) {
     blocks.push({
       type: "actions",
-      elements: [
-        {
-          type: "button",
-          action_id: SLACK_SESSION_LINK_ACTION_ID,
-          text: { type: "plain_text", text: "Open in OpenClaw" },
-          url: params.sessionUrl,
-        },
-      ],
+      elements: params.sessionLinks.map((link, index) => ({
+        type: "button" as const,
+        action_id:
+          index === 0 ? SLACK_SESSION_LINK_ACTION_ID : `${SLACK_SESSION_LINK_ACTION_ID}:${index}`,
+        text: { type: "plain_text" as const, text: link.text },
+        url: link.url,
+      })),
     });
   }
   return blocks.slice(0, SLACK_MAX_BLOCKS);
@@ -518,6 +503,11 @@ export function reconcileSlackNativeTaskChunks(params: {
   const nextTasks = new Map<string, SlackNativeTaskRow>();
   let planTitle = params.previous.planTitle;
   const emitted: AnyChunk[] = [];
+  // Empty authoritative snapshots retract the headline as well as their task rows.
+  if (!params.chunks?.length && planTitle && planTitle !== SLACK_PROGRESS_PLAN_FALLBACK_TITLE) {
+    planTitle = SLACK_PROGRESS_PLAN_FALLBACK_TITLE;
+    emitted.push({ type: "plan_update", title: planTitle });
+  }
   for (const chunk of params.chunks ?? []) {
     if (chunk.type === "plan_update") {
       if (chunk.title !== planTitle) {
@@ -531,17 +521,26 @@ export function reconcileSlackNativeTaskChunks(params: {
       continue;
     }
     const previousRow = params.previous.tasks.get(chunk.id);
-    const details = resolveTaskFieldDelta(previousRow?.details, chunk.details);
-    const output = resolveTaskFieldDelta(previousRow?.output, chunk.output);
+    const row: SlackNativeTaskRow = { title: chunk.title, status: chunk.status };
+    const update: TaskUpdateChunk = {
+      type: "task_update",
+      id: chunk.id,
+      title: chunk.title,
+      status: chunk.status,
+    };
+    let fieldsChanged = false;
+    for (const key of ["details", "output"] as const) {
+      const { field: nextField, delta } = resolveTaskFieldDelta(previousRow?.[key], chunk[key]);
+      if (nextField) {
+        row[key] = nextField;
+      }
+      if (delta) {
+        update[key] = delta;
+        fieldsChanged = true;
+      }
+    }
     // The session source is a per-turn constant; deliver it once.
     const sourcesChanged = Boolean(chunk.sources) && !previousRow?.sourcesSent;
-    const row: SlackNativeTaskRow = { title: chunk.title, status: chunk.status };
-    if (details.field) {
-      row.details = details.field;
-    }
-    if (output.field) {
-      row.output = output.field;
-    }
     if (sourcesChanged || previousRow?.sourcesSent) {
       row.sourcesSent = true;
     }
@@ -550,23 +549,10 @@ export function reconcileSlackNativeTaskChunks(params: {
       !previousRow ||
       previousRow.title !== chunk.title ||
       previousRow.status !== chunk.status ||
-      Boolean(details.delta) ||
-      Boolean(output.delta) ||
+      fieldsChanged ||
       sourcesChanged;
     if (!rowChanged) {
       continue;
-    }
-    const update: TaskUpdateChunk = {
-      type: "task_update",
-      id: chunk.id,
-      title: chunk.title,
-      status: chunk.status,
-    };
-    if (details.delta) {
-      update.details = details.delta;
-    }
-    if (output.delta) {
-      update.output = output.delta;
     }
     if (sourcesChanged) {
       update.sources = chunk.sources;

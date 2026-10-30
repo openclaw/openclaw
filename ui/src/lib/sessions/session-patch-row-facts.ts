@@ -21,39 +21,42 @@ export function projectSessionPatchRowFields(
         : {}),
     });
   }
-  if (patch.thinkingLevel !== undefined) {
-    fields.push({
-      thinkingLevel:
-        result.resolved && Object.hasOwn(result.resolved, "thinkingLevel")
-          ? result.resolved.thinkingLevel
-          : entry.thinkingLevel,
-      ...(result.resolved?.thinkingLevels !== undefined
-        ? { thinkingLevels: result.resolved.thinkingLevels }
-        : {}),
-    });
+  for (const [key, choices] of [
+    ["thinkingLevel", "thinkingLevels"],
+    ["contextWindow", "contextWindows"],
+  ] as const) {
+    if (patch[key] !== undefined) {
+      fields.push({
+        [key]:
+          result.resolved && Object.hasOwn(result.resolved, key)
+            ? result.resolved[key]
+            : entry[key],
+        ...(result.resolved?.[choices] !== undefined
+          ? { [choices]: result.resolved[choices] }
+          : {}),
+      });
+    }
   }
-  if (patch.contextWindow !== undefined) {
-    fields.push({
-      contextWindow:
-        result.resolved && Object.hasOwn(result.resolved, "contextWindow")
-          ? result.resolved.contextWindow
-          : entry.contextWindow,
-      ...(result.resolved?.contextWindows !== undefined
-        ? { contextWindows: result.resolved.contextWindows }
-        : {}),
-    });
+  if (patch.cyberAccessProgram !== undefined) {
+    fields.push({ cyberAccessProgram: entry.cyberAccessProgram });
   }
   if (patch.fastMode !== undefined) {
     fields.push({ fastMode: entry.fastMode });
   }
-  if (typeof patch.archived === "boolean") {
+  if (patch.archived !== undefined) {
     fields.push(projectSessionArchiveFields(patch.archived, entry));
   }
-  if (patch.category !== undefined) {
-    fields.push({ category: entry.category });
-  }
-  if (patch.boardPresentation !== undefined) {
-    fields.push({ boardPresentation: entry.boardPresentation });
+  for (const key of [
+    "label",
+    "icon",
+    "color",
+    "category",
+    "boardPresentation",
+    "boardFace",
+  ] as const) {
+    if (patch[key] !== undefined) {
+      fields.push({ [key]: entry[key] });
+    }
   }
   if (patch.pinned !== undefined || patch.unread === false) {
     const pin = { pinned: entry.pinnedAt !== undefined, pinnedAt: entry.pinnedAt };
@@ -61,6 +64,7 @@ export function projectSessionPatchRowFields(
       unread: deriveSessionUnread(entry),
       lastReadAt: entry.lastReadAt,
       markedUnreadAt: entry.markedUnreadAt,
+      agentStatus: entry.agentStatus,
     };
     fields.push(
       patch.pinned === undefined ? read : patch.unread === false ? { ...pin, ...read } : pin,

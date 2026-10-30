@@ -1,12 +1,87 @@
 /** Process-local reverse registry from prepared agent directories to agent ids. */
+import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { resolveUserPath } from "../utils.js";
 
 // Process-local registry mapping resolved agent directories back to agent ids.
 // It lets later runtime paths recover scope from an already-prepared agent dir.
 const agentIdsByDir = new Map<string, Set<string>>();
+const preparedPaths = resolveGlobalMap<string, { key: string; close(): void }>(
+  Symbol.for("openclaw.agentDirPreparedPaths"),
+  (paths) => {
+    for (const prepared of paths.values()) {
+      prepared.close();
+    }
+    paths.clear();
+  },
+  "shared-state",
+);
+
+function forgetPreparedPaths(key: string) {
+  for (const [pathname, prepared] of preparedPaths) {
+    if (prepared.key === key) {
+      preparedPaths.delete(pathname);
+      prepared.close();
+    }
+  }
+}
+
+function registryPath(agentDir: string, env?: NodeJS.ProcessEnv, registering = false): string {
+  const pathname = path.resolve(resolveUserPath(agentDir, env));
+  // Repair can change paths itself; resolve them directly without retaining native watches.
+  const maintenance = getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance === true;
+  const cached = maintenance ? undefined : preparedPaths.get(pathname);
+  if (cached) {
+    return cached.key;
+  }
+  const key = normalizeAgentDirRegistryPath(pathname, env);
+  if (maintenance || !isMainThread || (!registering && !agentIdsByDir.has(key))) {
+    return key;
+  }
+  const observations: Array<{ close(): void }> = [];
+  const prepared = {
+    key,
+    close: () => observations.forEach((observation) => observation.close()),
+  };
+  preparedPaths.set(pathname, prepared);
+  let observedThisTurn = false;
+  // Each lexical ancestor can be a symlink replaced independently of the leaf.
+  for (let child = pathname; path.dirname(child) !== child; child = path.dirname(child)) {
+    const basename = path.basename(child);
+    observations.push(
+      observeOwnedDirectory(path.dirname(child), (filename) => {
+        if (!observedThisTurn && (filename === undefined || filename === basename)) {
+          // One synchronous recovery sweep notifies every ancestor of this path.
+          observedThisTurn = true;
+          queueMicrotask(() => {
+            observedThisTurn = false;
+          });
+          if (resolveIdentityPathViaExistingAncestorSync(pathname) === key) {
+            return;
+          }
+          preparedPaths.delete(pathname);
+          prepared.close();
+        }
+      }),
+    );
+  }
+  // Fit the registered fleet plus this registration while bounding extra aliases.
+  const capacity = Math.max(256, agentIdsByDir.size + 1);
+  for (const [oldestPath, oldest] of preparedPaths) {
+    if (preparedPaths.size <= capacity) {
+      break;
+    }
+    preparedPaths.delete(oldestPath);
+    oldest.close();
+  }
+  return key;
+}
 
 export function normalizeAgentDirRegistryPath(
   agentDir: string,
@@ -21,7 +96,7 @@ export function registerResolvedAgentDir(params: {
   agentDir: string;
   env?: NodeJS.ProcessEnv;
 }): boolean {
-  const key = normalizeAgentDirRegistryPath(params.agentDir, params.env);
+  const key = registryPath(params.agentDir, params.env, true);
   const agentIds = agentIdsByDir.get(key) ?? new Set<string>();
   const agentId = normalizeAgentId(params.agentId);
   if (agentIds.has(agentId)) {
@@ -45,6 +120,7 @@ export function unregisterResolvedAgentDir(params: {
   }
   if (agentIds.size === 0) {
     agentIdsByDir.delete(key);
+    forgetPreparedPaths(key);
   }
   return true;
 }
@@ -54,7 +130,7 @@ export function resolveRegisteredAgentIdForDir(
   agentDir: string,
   env?: NodeJS.ProcessEnv,
 ): string | undefined {
-  const agentIds = agentIdsByDir.get(normalizeAgentDirRegistryPath(agentDir, env));
+  const agentIds = agentIdsByDir.get(registryPath(agentDir, env));
   return agentIds?.size === 1 ? agentIds.values().next().value : undefined;
 }
 

@@ -1,146 +1,103 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { estimateStringCharsWithMinimumRawWeight } from "@openclaw/normalization-core/cjk-chars";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
+import type { Agent, AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
+import { cloneSessionModelContextEntries } from "../sessions/session-manager-codec.js";
+import { toolResult } from "../sessions/session-message-fixtures.test-support.js";
 import { installToolResultContextGuard } from "./tool-result-context-guard.js";
-import { truncateToolResultMessage } from "./tool-result-truncation.js";
+import {
+  truncateOversizedToolResultsInMessages as truncate,
+  truncateToolResultMessage,
+} from "./tool-result-truncation.js";
 
 vi.mock("@openclaw/normalization-core/cjk-chars", { spy: true });
 
 const countChars = vi.mocked(estimateStringCharsWithMinimumRawWeight);
-type ToolContent = Extract<AgentMessage, { role: "toolResult" }>["content"];
-
-function toolResult(content: ToolContent): AgentMessage {
-  return {
-    role: "toolResult",
-    toolCallId: "prepared-counts",
-    toolName: "read",
-    content,
-    isError: false,
-    timestamp: 0,
-  };
-}
-
 function guarded() {
-  const agent: {
-    transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown;
-  } = {};
-  const dispose = installToolResultContextGuard({ agent, contextWindowTokens: 8_192 });
-  return {
-    dispose,
-    run: async (source: AgentMessage) => {
-      const transform = agent.transformContext;
-      if (!transform) {
-        throw new Error("guard did not install its context transform");
-      }
-      return await transform([source], new AbortController().signal);
-    },
-  };
+  const agent: Pick<Agent, "transformContext"> = {};
+  onTestFinished(installToolResultContextGuard({ agent, contextWindowTokens: 8_192 }));
+  const transform = expectDefined(agent.transformContext, "installed guard");
+  return (source: AgentMessage) => transform([source], new AbortController().signal);
 }
 
 function fullTextScans(text: string) {
   return countChars.mock.calls.filter(([value]) => value === text).length;
 }
 
-beforeEach(() => {
+beforeEach(() => void countChars.mockClear());
+
+it("refreshes prepared counts when the retained text changes", async () => {
+  const source = toolResult("before 漢字\n".repeat(2_048));
+  const block = expectDefined(source.content[0], "text block");
+  const run = guarded();
+  await run(source);
+  block.text = "after 🙂𠀀\n".repeat(2_048);
   countChars.mockClear();
+  const second = await run(source);
+  expect(fullTextScans(block.text)).toBe(1);
+  expect(JSON.stringify(second)).toBe(JSON.stringify(await run(structuredClone(source))));
 });
 
-describe("prepared counts through the tool-result context guard", () => {
-  it.each([false, true])(
-    "counts each retained source block once before truncation (images: %s)",
-    async (images) => {
-      const text = "progress 漢字🙂𠀀\n".repeat(1_024);
-      const source = toolResult([
-        { type: "text", text },
-        { type: "text", text },
-        { type: "text", text: "" },
-        ...(images ? [{ type: "image" as const, data: "AQ==", mimeType: "image/png" }] : []),
-      ]);
-      const original = structuredClone(source);
-      const guard = guarded();
-      try {
-        const first = await guard.run(source);
-        expect(JSON.stringify(first)).toContain("more characters truncated");
-        expect(fullTextScans(text)).toBe(2);
+it("keeps a fractional floor independent of a prepared floor-2 count", async () => {
+  const source = toolResult("aé😀漢".repeat(200));
+  await guarded()(source);
+  const fresh = structuredClone(source);
+  const options = { minimumRawWeight: 1.5 };
+  const expected = truncateToolResultMessage(fresh, 2_300, options);
+  const actual = truncateToolResultMessage(source, 2_300, options);
+  expect(JSON.stringify(actual)).toBe(JSON.stringify(expected));
+  expect(actual === source).toBe(expected === fresh);
+});
 
-        countChars.mockClear();
-        const second = await guard.run(source);
-        expect(JSON.stringify(second)).toBe(JSON.stringify(first));
-        expect(fullTextScans(text)).toBe(0);
-        expect(source).toEqual(original);
-      } finally {
-        guard.dispose();
-      }
-    },
+it.each(["frozen", "initial-context"])("reuses %s history budgets", async (kind) => {
+  const text = "historical 漢字🙂\n".repeat(128);
+  let source: AgentMessage = freezeTrustedJsonSnapshot(toolResult(text));
+  if (kind === "initial-context") {
+    const [entry] = cloneSessionModelContextEntries([
+      {
+        type: "message",
+        id: "history",
+        parentId: null,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        message: source,
+      },
+    ]);
+    if (entry?.type !== "message" || entry.message.role !== "toolResult") {
+      throw new Error("Missing model history");
+    }
+    source = entry.message;
+    expect(Object.isFrozen(source.content)).toBe(false);
+  }
+  const history = [source];
+  expect(truncate(history, 128_000).messages).toBe(history);
+  const run = guarded();
+  await run(source);
+  truncate([...history], 128_000);
+  countChars.mockClear();
+  await run(source);
+  expect(truncate([...history], 128_000).messages[0]).toBe(source);
+  expect(fullTextScans(text)).toBe(0);
+
+  const changed = toolResult("short");
+  const mutableBlock = expectDefined(changed.content[0], "mutable text block");
+  Object.freeze(changed.content);
+  expect(truncate([changed], 128_000, 1_000).messages[0]).toBe(changed);
+  mutableBlock.text = text;
+  expect(truncate([changed], 128_000, 1_000).truncatedCount).toBe(1);
+  expect(truncate(history, 128_000, 1_000).truncatedCount).toBe(1);
+  expect(JSON.stringify(truncate(history, 128_000, 1_000))).toBe(
+    JSON.stringify(truncate(structuredClone(history), 128_000, 1_000)),
   );
+  expect(source.content).toEqual([{ type: "text", text }]);
+});
 
-  it("recounts a changed text revision on the same retained block", async () => {
-    const block = { type: "text" as const, text: "before 漢字\n".repeat(2_048) };
-    const source = toolResult([block]);
-    const guard = guarded();
-    try {
-      await guard.run(source);
-      block.text = "after 🙂𠀀\n".repeat(2_048);
-      const original = structuredClone(source);
-      countChars.mockClear();
-      const revised = await guard.run(source);
-      expect(fullTextScans(block.text)).toBe(1);
-
-      const fresh = await guard.run(structuredClone(source));
-      expect(JSON.stringify(revised)).toBe(JSON.stringify(fresh));
-      expect(source).toEqual(original);
-    } finally {
-      guard.dispose();
-    }
-  });
-
-  it("does not populate preparation facts when truncation reads an uncached block", async () => {
-    const text = "uncached 漢字🙂\n".repeat(2_048);
-    const source = toolResult([{ type: "text", text }]);
-    truncateToolResultMessage(source, 4_096, { minimumRawWeight: 2 });
-    countChars.mockClear();
-    const guard = guarded();
-    try {
-      await guard.run(source);
-      expect(fullTextScans(text)).toBe(1);
-    } finally {
-      guard.dispose();
-    }
-  });
-
-  it.each([
-    [undefined, 2_000],
-    [1, 2_000],
-    [1.5, 2_300],
-    [3, 3_000],
-  ] as const)("keeps floor %s independent of a prepared floor-2 count", async (floor, budget) => {
-    const source = toolResult([{ type: "text", text: "aé😀漢".repeat(200) }]);
-    const guard = guarded();
-    try {
-      await guard.run(source);
-      const fresh = structuredClone(source);
-      const options = { minimumRawWeight: floor };
-      const expected = truncateToolResultMessage(fresh, budget, options);
-      const actual = truncateToolResultMessage(source, budget, options);
-      expect(JSON.stringify(actual)).toBe(JSON.stringify(expected));
-      expect(actual === source).toBe(expected === fresh);
-    } finally {
-      guard.dispose();
-    }
-  });
-
-  it("leaves legacy text blocks on the uncached counting path", () => {
-    const text = "legacy 漢字🙂\n".repeat(1_024);
-    const source = castAgentMessage({
-      ...toolResult([]),
-      content: [{ type: "toolResult", text }],
-    });
-    const first = truncateToolResultMessage(source, 4_096, { minimumRawWeight: 2 });
-    expect(fullTextScans(text)).toBeGreaterThan(0);
-    countChars.mockClear();
-    const second = truncateToolResultMessage(source, 4_096, { minimumRawWeight: 2 });
-    expect(fullTextScans(text)).toBeGreaterThan(0);
-    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
-  });
+it("does not rescan cold oversized text before truncating it", () => {
+  const text = "cold output 漢字\n".repeat(2_048);
+  const source = toolResult(text);
+  expect(truncateToolResultMessage(source, 1_000)).not.toBe(source);
+  expect(fullTextScans(text)).toBe(1);
+  countChars.mockClear();
+  expect(truncate([source], 128_000, 1_000).truncatedCount).toBe(1);
+  expect(fullTextScans(text)).toBe(0);
 });

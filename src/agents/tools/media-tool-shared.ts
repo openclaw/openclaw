@@ -1,32 +1,31 @@
-/** Shared media tool routing, auth, path, and reference helpers. */
 import path from "node:path";
+import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { normalizeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   findCapabilityProviderById,
   resolveCapabilityModelRefForProviders,
 } from "../../../packages/media-generation-core/src/capability-model-ref.js";
+import { parseGenerationModelRef } from "../../../packages/media-generation-core/src/model-ref.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { safeFileURLToPath } from "../../infra/local-file-access.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
-import type { Model } from "../../llm/types.js";
 import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
 import { getDefaultLocalRootsCore } from "../../media/local-media-access.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
+import { getMediaDir } from "../../media/store.js";
 import type { WebMediaResult } from "../../media/web-media.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
 import {
   listAvailableManifestContractValues,
   loadManifestContractSnapshot,
 } from "../../plugins/manifest-contract-eligibility.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { resolveUserPath } from "../../utils.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -36,19 +35,23 @@ import {
   type SandboxedBridgeMediaPathConfig,
 } from "../sandbox-media-paths.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
+import { normalizeWorkspaceDir } from "../workspace-dir.js";
+import type { AgentWorkspaceReadiness } from "../workspace-readiness.js";
 import {
   ToolInputError,
+  readFiniteNumberParam,
+  readNumberParam,
   readPositiveIntegerParam,
   readStringArrayParam,
   readToolStringParam,
 } from "./common.js";
-import type { decodeDataUrl, ImageModelConfig } from "./image-tool.helpers.js";
+import type { decodeDataUrl } from "./image-tool.helpers.js";
 import {
+  capabilityAuthOperation,
   getCurrentCapabilityMetadataSnapshot,
   hasSnapshotCapabilityAvailability,
 } from "./manifest-capability-availability.js";
 import {
-  applyAgentDefaultModelConfig,
   buildToolModelConfigFromCandidates,
   coerceToolModelConfig,
   hasProviderAuthForTool,
@@ -56,65 +59,40 @@ import {
   resolveDefaultModelRef,
   type ToolModelConfig,
 } from "./model-config.helpers.js";
-import {
-  getApiKeyForModelCore,
-  normalizeWorkspaceDir,
-  requireApiKey,
-} from "./tool-runtime.helpers.js";
-
-type TextToolAttempt = {
-  provider: string;
-  model: string;
-  error: string;
-};
 
 type TextToolResult = {
   text: string;
   provider: string;
   model: string;
-  attempts: TextToolAttempt[];
-};
-
-type GenerationModelRef = {
-  provider: string;
-  model: string;
-};
-
-type ParseGenerationModelRef = (raw: string | undefined) => GenerationModelRef | null;
-
-type TaskRunDetailHandle = {
-  taskId: string;
-  runId: string;
+  attempts: {
+    provider: string;
+    model: string;
+    error: string;
+  }[];
 };
 
 export const REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS = 120_000;
 
-/**
- * Applies an image-editing model as the agent default without mutating the loaded config.
- */
-export function applyImageModelConfigDefaults(
-  cfg: OpenClawConfig | undefined,
-  imageModelConfig: ImageModelConfig,
-): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "imageModel", imageModelConfig);
+export const MEDIA_GENERATE_DESCRIPTIONS = {
+  action: '"generate" default, "status" active task, "list" providers/models.',
+  filename: "Output filename hint; basename preserved in managed media dir.",
+} as const;
+
+export function readGenerationDurationSeconds(args: Record<string, unknown>): number | undefined {
+  const value = readNumberParam(args, "durationSeconds", {
+    positiveInteger: true,
+    strict: true,
+  });
+  if (value === undefined && readSnakeCaseParamRaw(args, "durationSeconds") !== undefined) {
+    throw new ToolInputError("durationSeconds must be a positive integer");
+  }
+  return value;
 }
 
-/**
- * Reads an optional generation timeout while preserving common tool parameter validation.
- */
 export function readGenerationTimeoutMs(args: Record<string, unknown>): number | undefined {
   return readPositiveIntegerParam(args, "timeoutMs", {
     message: "timeoutMs must be a positive integer in milliseconds.",
   });
-}
-
-/**
- * Resolves the shared remote-media SSRF policy used by media tools that fetch URLs.
- */
-export function resolveRemoteMediaSsrfPolicy(
-  cfg: OpenClawConfig | undefined,
-): SsrFPolicy | undefined {
-  return cfg?.tools?.web?.fetch?.ssrfPolicy;
 }
 
 type CapabilityProvider = {
@@ -123,34 +101,16 @@ type CapabilityProvider = {
   defaultModel?: string;
   models?: readonly string[];
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
+  isConfiguredAsync?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => Promise<boolean>;
 };
 
-type CapabilityProviderSource = CapabilityProvider[] | (() => CapabilityProvider[]);
+type CapabilityProviderSource =
+  | readonly CapabilityProvider[]
+  | (() => readonly CapabilityProvider[]);
 
-type GenerationCapabilityProviderKey =
-  | "imageGenerationProviders"
-  | "videoGenerationProviders"
-  | "musicGenerationProviders";
-
-function parseCapabilityModelRefForProviders(params: {
-  providers: CapabilityProvider[];
-  raw?: string;
-  parseModelRef: ParseGenerationModelRef;
-}): GenerationModelRef | null {
-  return resolveCapabilityModelRefForProviders({
-    providers: params.providers,
-    raw: params.raw,
-    parseModelRef: params.parseModelRef,
-    normalizeProviderId,
-  });
-}
-
-/**
- * Checks whether a generation provider is usable from either its custom readiness hook or
- * the generic tool auth profile/config lookup.
- */
+/** @deprecated Only synchronous tool-constructor compatibility uses this path. */
 export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
-  providers: T[];
+  providers: readonly T[];
   provider?: T;
   providerId?: string;
   cfg?: OpenClawConfig;
@@ -165,30 +125,43 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
       providerId: params.providerId,
       normalizeProviderId,
     });
-  if (!provider) {
-    return params.providerId
-      ? hasProviderAuthForTool({
-          provider: params.providerId,
-          cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
-          agentDir: params.agentDir,
-          authStore: params.authStore,
-        })
-      : false;
+  const providerId = provider ? provider.id : params.providerId;
+  if (providerId === undefined || (!provider && !providerId)) {
+    return false;
   }
-  if (provider.isConfigured) {
+  if (provider?.isConfigured) {
+    warnPluginSdkDeprecation({
+      family: "provider-sync-configuration",
+      method: "media provider isConfigured",
+      replacement: "isConfiguredAsync",
+    });
     return provider.isConfigured({
       cfg: params.cfg,
       agentDir: params.agentDir,
     });
   }
   return hasProviderAuthForTool({
-    provider: provider.id,
+    provider: providerId,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
   });
+}
+
+export async function isCapabilityProviderConfiguredAsync<T extends CapabilityProvider>(
+  params: Parameters<typeof isCapabilityProviderConfigured<T>>[0],
+): Promise<boolean> {
+  const provider =
+    params.provider ??
+    findCapabilityProviderById({
+      providers: params.providers,
+      providerId: params.providerId,
+      normalizeProviderId,
+    });
+  return provider?.isConfiguredAsync
+    ? await provider.isConfiguredAsync({ cfg: params.cfg, agentDir: params.agentDir })
+    : isCapabilityProviderConfigured({ ...params, provider });
 }
 
 export function createCapabilityProviderRuntimeDeps<T extends CapabilityProvider>(
@@ -204,43 +177,36 @@ export function createCapabilityProviderRuntimeDeps<T extends CapabilityProvider
     : undefined;
 }
 
-/**
- * Resolves the provider implied by a model override or configured primary model.
- */
 export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(params: {
-  providers: T[];
+  providers: readonly T[];
   modelConfig: ToolModelConfig;
   modelOverride?: string;
-  parseModelRef: ParseGenerationModelRef;
 }): T | undefined {
-  const selectedRef =
-    parseCapabilityModelRefForProviders({
+  for (const raw of [params.modelOverride, params.modelConfig.primary]) {
+    const selectedRef = resolveCapabilityModelRefForProviders({
       providers: params.providers,
-      raw: params.modelOverride,
-      parseModelRef: params.parseModelRef,
-    }) ??
-    parseCapabilityModelRefForProviders({
-      providers: params.providers,
-      raw: params.modelConfig.primary,
-      parseModelRef: params.parseModelRef,
+      raw,
+      parseModelRef: parseGenerationModelRef,
+      normalizeProviderId,
     });
-  if (!selectedRef) {
-    return undefined;
+    if (selectedRef) {
+      return findCapabilityProviderById({
+        providers: params.providers,
+        providerId: selectedRef.provider,
+        normalizeProviderId,
+      });
+    }
   }
-  return findCapabilityProviderById({
-    providers: params.providers,
-    providerId: selectedRef.provider,
-    normalizeProviderId,
-  });
+  return undefined;
 }
 
-function resolveCapabilityModelCandidatesForTool(params: {
+async function resolveCapabilityModelCandidatesForTool(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
-  providers: CapabilityProvider[];
-}): string[] {
+  providers: readonly CapabilityProvider[];
+}): Promise<string[]> {
   const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
   for (const provider of params.providers) {
     const providerId = provider.id.trim();
@@ -249,14 +215,10 @@ function resolveCapabilityModelCandidatesForTool(params: {
       !providerId ||
       !modelId ||
       providerDefaults.has(providerId) ||
-      !isCapabilityProviderConfigured({
-        providers: params.providers,
+      !(await isCapabilityProviderConfiguredAsync({
+        ...params,
         provider,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-      })
+      }))
     ) {
       continue;
     }
@@ -270,35 +232,21 @@ function resolveCapabilityModelCandidatesForTool(params: {
   const primaryProvider = resolveDefaultModelRef(params.cfg).provider;
   const normalizedPrimaryProvider = normalizeProviderId(primaryProvider);
   const providerIds = [...providerDefaults.keys()].toSorted();
-  const matchesPrimaryProvider = (providerId: string): boolean => {
-    const entry = providerDefaults.get(providerId);
-    return (
-      normalizeProviderId(providerId) === normalizedPrimaryProvider ||
-      (entry?.aliases ?? []).includes(normalizedPrimaryProvider)
-    );
-  };
+  const matchesPrimaryProvider = (providerId: string): boolean =>
+    normalizeProviderId(providerId) === normalizedPrimaryProvider ||
+    providerDefaults.get(providerId)!.aliases.includes(normalizedPrimaryProvider);
   const orderedProviders = [
     ...providerIds.filter(matchesPrimaryProvider),
     ...providerIds.filter((providerId) => !matchesPrimaryProvider(providerId)),
   ];
-  const orderedRefs: string[] = [];
-  const seen = new Set<string>();
-  for (const providerId of orderedProviders) {
-    const entry = providerDefaults.get(providerId);
-    if (!entry || seen.has(entry.ref)) {
-      continue;
-    }
-    seen.add(entry.ref);
-    orderedRefs.push(entry.ref);
-  }
-  return orderedRefs;
+  return uniqueStrings(orderedProviders.map((id) => providerDefaults.get(id)!.ref));
 }
 
 /**
  * Builds the model config for a generation tool from explicit config first, then configured
  * provider defaults ordered around the agent's primary provider.
  */
-export function resolveCapabilityModelConfigForTool(params: {
+export async function resolveCapabilityModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   agentDir?: string;
@@ -306,59 +254,32 @@ export function resolveCapabilityModelConfigForTool(params: {
   modelConfig?: AgentModelConfig;
   modelOverride?: string;
   providers: CapabilityProviderSource;
-}): ToolModelConfig | null {
+}): Promise<ToolModelConfig | null> {
   const configured = coerceToolModelConfig(params.modelConfig);
   const modelOverride = normalizeOptionalString(params.modelOverride);
   const explicit = modelOverride ? { ...configured, primary: modelOverride } : configured;
   if (hasToolModelConfig(explicit)) {
     return explicit;
   }
-  let resolvedProviders: CapabilityProvider[] | undefined;
-  const getProviders = (): CapabilityProvider[] => {
-    resolvedProviders ??=
-      typeof params.providers === "function" ? params.providers() : params.providers;
-    return resolvedProviders;
-  };
+  const providers = typeof params.providers === "function" ? params.providers() : params.providers;
   return buildToolModelConfigFromCandidates({
+    ...params,
     explicit,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-    candidates: resolveCapabilityModelCandidatesForTool({
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      authStore: params.authStore,
-      providers: getProviders(),
-    }),
-    isProviderConfigured: (providerId) =>
-      isCapabilityProviderConfigured({
-        providers: getProviders(),
-        providerId,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-      }),
+    candidates: await resolveCapabilityModelCandidatesForTool({ ...params, providers }),
+    // Candidate selection already checked each provider against its current auth owner.
+    isProviderConfigured: () => true,
   });
 }
 
-export function hasExplicitMediaModel(modelConfig?: AgentModelConfig): boolean {
-  return hasToolModelConfig(coerceToolModelConfig(modelConfig));
-}
-
-/**
- * Reports whether a generation tool should be offered for the current config and auth state.
- */
+/** @deprecated Only synchronous tool-constructor compatibility uses this path. */
 export function hasGenerationToolAvailability(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
   modelConfig?: AgentModelConfig;
-  providers?: CapabilityProvider[] | (() => CapabilityProvider[]);
-  providerKey: GenerationCapabilityProviderKey;
+  providers?: CapabilityProviderSource;
+  providerKey: "imageGenerationProviders" | "videoGenerationProviders" | "musicGenerationProviders";
 }): boolean {
   if (params.cfg?.plugins?.enabled === false) {
     return false;
@@ -369,14 +290,7 @@ export function hasGenerationToolAvailability(params: {
   const providers = typeof params.providers === "function" ? params.providers() : params.providers;
   if (providers) {
     return providers.some((provider) =>
-      isCapabilityProviderConfigured({
-        providers,
-        provider,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-      }),
+      isCapabilityProviderConfigured({ ...params, providers, provider }),
     );
   }
   const snapshot =
@@ -409,28 +323,40 @@ export function hasGenerationToolAvailability(params: {
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
+      capability: capabilityAuthOperation(params.providerKey),
     }),
   );
 }
 
-/**
- * Reads a constrained generation action and raises a tool-input error for invalid values.
- */
+export async function hasGenerationToolAvailabilityAsync(
+  params: Parameters<typeof hasGenerationToolAvailability>[0],
+): Promise<boolean> {
+  if (params.cfg?.plugins?.enabled === false) {
+    return false;
+  }
+  if (hasToolModelConfig(coerceToolModelConfig(params.modelConfig))) {
+    return true;
+  }
+  const providers = typeof params.providers === "function" ? params.providers() : params.providers;
+  if (providers) {
+    for (const provider of providers) {
+      if (await isCapabilityProviderConfiguredAsync({ ...params, providers, provider })) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return hasGenerationToolAvailability({ ...params, providers: undefined });
+}
+
 export function resolveGenerateAction(
   args: Record<string, unknown>,
 ): "generate" | "status" | "list" {
-  const action = normalizeOptionalLowercaseString(readToolStringParam(args, "action"));
-  switch (action) {
-    case undefined:
-    case "generate":
-      return "generate";
-    case "status":
-      return "status";
-    case "list":
-      return "list";
-    default:
-      throw new ToolInputError('action must be "generate", "status", or "list"');
+  const action = readToolStringParam(args, "action")?.toLowerCase() ?? "generate";
+  if (action === "generate" || action === "status" || action === "list") {
+    return action;
   }
+  throw new ToolInputError('action must be "generate", "status", or "list"');
 }
 
 /**
@@ -446,18 +372,10 @@ export function normalizeMediaReferenceInputs(params: {
 }): string[] {
   const single = readToolStringParam(params.args, params.singularKey);
   const multiple = readStringArrayParam(params.args, params.pluralKey);
-  const combined = [...(single ? [single] : []), ...(multiple ?? [])];
-  const deduped: string[] = [];
-  const seen = new Set<string>();
-  for (const candidate of combined) {
-    const trimmed = candidate.trim();
-    const dedupe = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
-    if (!dedupe || (params.dedupe !== false && seen.has(dedupe))) {
-      continue;
-    }
-    seen.add(dedupe);
-    deduped.push(trimmed);
-  }
+  const deduped = normalizeMediaReferenceList(
+    [...(single ? [single] : []), ...(multiple ?? [])],
+    params.dedupe,
+  );
   if (deduped.length > params.maxCount) {
     throw new ToolInputError(
       `Too many ${params.label}: ${deduped.length} provided, maximum is ${params.maxCount}.`,
@@ -466,31 +384,39 @@ export function normalizeMediaReferenceInputs(params: {
   return deduped;
 }
 
-/**
- * Builds result detail fields for one or many rewritten media references.
- */
-export function buildMediaReferenceDetails<T extends { rewrittenFrom?: string }>(params: {
-  entries: readonly T[];
-  singleKey: string;
-  pluralKey: string;
-  getResolvedInput: (entry: T) => string | undefined;
-  singleRewriteKey?: string;
-}): Record<string, unknown> {
-  if (params.entries.length === 1) {
-    const entry = params.entries[0];
-    if (!entry) {
-      return {};
+// Keep the first spelling, but treat optional @ prefixes as the same reference.
+export function normalizeMediaReferenceList(candidates: string[], dedupe = true): string[] {
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const trimmed = candidate.trim();
+    const key = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
+    if (!key || (dedupe && seen.has(key))) {
+      continue;
     }
-    const rewriteKey = params.singleRewriteKey ?? "rewrittenFrom";
+    seen.add(key);
+    deduped.push(trimmed);
+  }
+  return deduped;
+}
+
+export function buildMediaReferenceDetails(
+  entries: readonly { resolvedInput: string; rewrittenFrom?: string }[],
+  kind: "image" | "video" | "pdf",
+  options?: { includeEmpty?: boolean; singleRewriteKey?: string },
+): Record<string, unknown> {
+  const single = entries.length === 1 ? entries[0] : undefined;
+  if (single) {
+    const rewriteKey = options?.singleRewriteKey ?? "rewrittenFrom";
     return {
-      [params.singleKey]: params.getResolvedInput(entry),
-      ...(entry.rewrittenFrom ? { [rewriteKey]: entry.rewrittenFrom } : {}),
+      [kind]: single.resolvedInput,
+      ...(single.rewrittenFrom ? { [rewriteKey]: single.rewrittenFrom } : {}),
     };
   }
-  if (params.entries.length > 1) {
+  if (entries.length > 1 || options?.includeEmpty) {
     return {
-      [params.pluralKey]: params.entries.map((entry) => ({
-        [params.singleKey]: params.getResolvedInput(entry),
+      [`${kind}s`]: entries.map((entry) => ({
+        [kind]: entry.resolvedInput,
         ...(entry.rewrittenFrom ? { rewrittenFrom: entry.rewrittenFrom } : {}),
       })),
     };
@@ -498,25 +424,6 @@ export function buildMediaReferenceDetails<T extends { rewrittenFrom?: string }>
   return {};
 }
 
-/**
- * Adds task/run provenance details when an async media generation handle is present.
- */
-export function buildTaskRunDetails(
-  handle: TaskRunDetailHandle | null | undefined,
-): Record<string, unknown> {
-  return handle
-    ? {
-        task: {
-          taskId: handle.taskId,
-          runId: handle.runId,
-        },
-      }
-    : {};
-}
-
-/**
- * Resolves the common filesystem access shape for media-tool references.
- */
 export async function resolveMediaToolReferenceAccess(params: {
   input: string;
   isDataUrl: boolean;
@@ -529,7 +436,7 @@ export async function resolveMediaToolReferenceAccess(params: {
     params.sandbox?.root ?? params.fsPolicy?.root ?? params.cwd ?? params.workspaceDir,
   );
   const cwd = normalizeWorkspaceDir(params.cwd) ?? root;
-  const workspaceRoots = root ? [root] : [];
+  const hostRoots = [getMediaDir(), ...(root ? [root] : [])];
   const workspaceOnly = params.fsPolicy?.workspaceOnly ?? params.sandbox?.workspaceOnly === true;
   const reference = classifyMediaReferenceSource(params.input);
   const resolveHostPath = () => {
@@ -539,10 +446,8 @@ export async function resolveMediaToolReferenceAccess(params: {
     if (reference.isHttpUrl || reference.isMediaStoreUrl || reference.looksLikeWindowsDrivePath) {
       return params.input;
     }
-    if (params.input.startsWith("~")) {
-      return resolveUserPath(params.input);
-    }
-    return cwd ? path.resolve(cwd, params.input) : params.input;
+    const input = params.input.startsWith("~") ? resolveUserPath(params.input) : params.input;
+    return cwd ? path.resolve(cwd, input) : input;
   };
   const pathInfo: { resolved: string; rewrittenFrom?: string } = params.isDataUrl
     ? { resolved: "" }
@@ -553,17 +458,32 @@ export async function resolveMediaToolReferenceAccess(params: {
           inboundFallbackDir: "media/inbound",
         })
       : { resolved: resolveHostPath() };
+  // A policy that lets read open host files lets media tools load the same file.
+  const hostReadRoot =
+    params.fsPolicy?.workspaceOnly === false &&
+    !params.sandbox &&
+    !params.isDataUrl &&
+    path.isAbsolute(pathInfo.resolved)
+      ? [path.dirname(pathInfo.resolved)]
+      : [];
   return {
     resolvedPath: params.isDataUrl ? null : pathInfo.resolved,
     localRoots: uniqueStrings([
-      ...(workspaceOnly ? workspaceRoots : [...getDefaultLocalRootsCore(), ...workspaceRoots]),
+      ...(workspaceOnly ? hostRoots : [...getDefaultLocalRootsCore(), ...hostRoots]),
       ...(params.fsPolicy?.readOnlyRoots ?? []),
+      ...hostReadRoot,
     ]),
     ...(pathInfo.rewrittenFrom ? { rewrittenFrom: pathInfo.rewrittenFrom } : {}),
   };
 }
 
 type LoadedToolReferenceMedia = WebMediaResult | ReturnType<typeof decodeDataUrl>;
+
+export type LoadedMediaToolReference<T> = {
+  source: T;
+  resolvedInput: string;
+  rewrittenFrom?: string;
+};
 
 export type MediaToolSandbox = Pick<
   SandboxedBridgeMediaPathConfig,
@@ -592,12 +512,12 @@ export async function loadMediaToolReferences<T>(params: {
   fsPolicy?: ToolFsPolicy;
   maxBytes: number;
   ssrfPolicy?: SsrFPolicy;
-  timeoutMs?: number;
   signal?: AbortSignal;
+  workspaceReadiness?: AgentWorkspaceReadiness;
   mapMedia: (media: LoadedToolReferenceMedia) => T;
   mapRemote?: (url: string) => T;
-}): Promise<Array<{ source: T; resolvedInput: string; rewrittenFrom?: string }>> {
-  const loaded: Array<{ source: T; resolvedInput: string; rewrittenFrom?: string }> = [];
+}): Promise<LoadedMediaToolReference<T>[]> {
+  const loaded: LoadedMediaToolReference<T>[] = [];
   for (const rawInput of params.inputs) {
     params.signal?.throwIfAborted();
     const input = normalizeMediaReferenceSource(rawInput.trim().replace(/^@\s*/, ""));
@@ -613,6 +533,16 @@ export async function loadMediaToolReferences<T>(params: {
     if (params.sandbox && reference.isHttpUrl) {
       const label = params.toolName === "image_generate" ? "" : `${params.expectedKind} `;
       throw new ToolInputError(`Sandboxed ${params.toolName} does not allow remote ${label}URLs.`);
+    }
+    const workspaceReadiness =
+      !reference.isHttpUrl && !reference.isDataUrl && !reference.isMediaStoreUrl
+        ? params.workspaceReadiness
+        : undefined;
+    if (workspaceReadiness) {
+      workspaceReadiness.assertCurrent();
+      await workspaceReadiness.waitUntilReady();
+      params.signal?.throwIfAborted();
+      workspaceReadiness.assertCurrent();
     }
     const resolvedInput = !params.sandbox && input.startsWith("~") ? resolveUserPath(input) : input;
     if (reference.isHttpUrl && params.mapRemote) {
@@ -634,41 +564,51 @@ export async function loadMediaToolReferences<T>(params: {
       );
     }
     let media: LoadedToolReferenceMedia;
-    if (reference.isDataUrl) {
-      const { decodeDataUrl } = await import("./image-tool.helpers.js");
-      params.signal?.throwIfAborted();
-      media = decodeDataUrl(resolvedInput, { maxBytes: params.maxBytes });
-    } else {
-      const { loadWebMedia } = await import("../../media/web-media.js");
-      params.signal?.throwIfAborted();
-      const timeout =
-        params.toolName === "music_generate" && !params.sandbox
-          ? buildTimeoutAbortSignal({
-              timeoutMs: params.timeoutMs ?? 30_000,
-              operation: "music-generate.reference-fetch",
-              ...(params.signal ? { signal: params.signal } : {}),
-              ...(reference.isHttpUrl ? { url: resolvedPath ?? resolvedInput } : {}),
-            })
-          : undefined;
-      try {
-        media = await loadWebMedia(resolvedPath ?? resolvedInput, {
-          maxBytes: params.maxBytes,
-          ...(params.sandbox
-            ? {
-                sandboxValidated: true,
-                readFile: createSandboxBridgeReadFile({ sandbox: params.sandbox }),
-              }
-            : { localRoots, ssrfPolicy: params.ssrfPolicy }),
-          ...(params.toolName === "image_generate" && reference.isHttpUrl
-            ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS }
-            : {}),
-          ...(timeout?.signal || params.signal
-            ? { requestInit: { signal: timeout?.signal ?? params.signal } }
-            : {}),
-        });
-      } finally {
-        timeout?.cleanup();
+    try {
+      if (reference.isDataUrl) {
+        const { decodeDataUrl } = await import("./image-tool.helpers.js");
+        params.signal?.throwIfAborted();
+        media = decodeDataUrl(resolvedInput, { maxBytes: params.maxBytes });
+      } else {
+        const { loadWebMedia } = await import("../../media/web-media.js");
+        params.signal?.throwIfAborted();
+        workspaceReadiness?.assertCurrent();
+        const timeout =
+          params.toolName === "music_generate" && !params.sandbox
+            ? buildTimeoutAbortSignal({
+                timeoutMs: 30_000,
+                operation: "music-generate.reference-fetch",
+                ...(params.signal ? { signal: params.signal } : {}),
+                ...(reference.isHttpUrl ? { url: resolvedPath ?? resolvedInput } : {}),
+              })
+            : undefined;
+        try {
+          media = await loadWebMedia(resolvedPath ?? resolvedInput, {
+            maxBytes: params.maxBytes,
+            ...(params.sandbox
+              ? {
+                  sandboxValidated: true,
+                  readFile: createSandboxBridgeReadFile({ sandbox: params.sandbox }),
+                }
+              : { localRoots, ssrfPolicy: params.ssrfPolicy }),
+            ...(params.toolName === "image_generate" && reference.isHttpUrl
+              ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS }
+              : {}),
+            ...(timeout?.signal || params.signal
+              ? { requestInit: { signal: timeout?.signal ?? params.signal } }
+              : {}),
+          });
+        } finally {
+          timeout?.cleanup();
+        }
       }
+    } catch (error) {
+      params.signal?.throwIfAborted();
+      // Generated outputs share this cap, so name the input that failed.
+      const message = `${params.expectedKind} reference ${loaded.length + 1} could not be loaded: ${error instanceof Error ? error.message : String(error)}`;
+      throw error instanceof ToolInputError
+        ? new ToolInputError(message)
+        : new Error(message, { cause: error });
     }
     params.signal?.throwIfAborted();
     if (media.kind !== params.expectedKind) {
@@ -702,24 +642,24 @@ export function resolveMediaToolInboundRoots(options?: {
   );
 }
 
-/**
- * Resolves the effective prompt and optional model override from common media tool args.
- */
-export function resolvePromptAndModelOverride(
+export function resolveMediaAnalysisParams(
   args: Record<string, unknown>,
   defaultPrompt: string,
 ): {
   prompt: string;
   modelOverride?: string;
+  maxBytesMb?: number;
 } {
   const prompt = normalizeOptionalString(args.prompt) ?? defaultPrompt;
   const modelOverride = normalizeOptionalString(args.model);
-  return { prompt, modelOverride };
+  const maxBytesMb = readFiniteNumberParam(args, "maxBytesMb", {
+    min: 0,
+    minExclusive: true,
+    message: "maxBytesMb must be greater than 0",
+  });
+  return { prompt, modelOverride, maxBytesMb };
 }
 
-/**
- * Wraps a generated text result in the common tool result shape with model attempt details.
- */
 export function buildTextToolResult(
   result: TextToolResult,
   extraDetails: Record<string, unknown>,
@@ -737,35 +677,4 @@ export function buildTextToolResult(
       attempts: result.attempts,
     },
   };
-}
-
-/**
- * Loads the runtime API key for a resolved model and caches it in per-run auth storage.
- */
-export async function resolveModelRuntimeApiKey(params: {
-  model: Model;
-  cfg: OpenClawConfig | undefined;
-  agentDir: string;
-  authStorage: {
-    setRuntimeApiKey: (provider: string, apiKey: string) => void;
-  };
-}): Promise<string> {
-  const apiKeyInfo = await getApiKeyForModelCore({
-    model: params.model,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    secretSentinels: true,
-  });
-  // Bedrock's runtime client owns AWS credential-chain resolution. Keep the
-  // empty sentinel out of auth storage and pass it through to the stream.
-  if (
-    !apiKeyInfo.apiKey?.trim() &&
-    apiKeyInfo.mode === "aws-sdk" &&
-    params.model.api === "bedrock-converse-stream"
-  ) {
-    return "";
-  }
-  const apiKey = requireApiKey(apiKeyInfo, params.model.provider);
-  params.authStorage.setRuntimeApiKey(params.model.provider, apiKey);
-  return apiKey;
 }

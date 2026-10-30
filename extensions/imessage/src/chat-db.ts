@@ -1,4 +1,7 @@
-import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
+import {
+  createPluginRuntimeProcessEntrypoint,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   openSqliteWorkerStore,
@@ -10,6 +13,10 @@ import type { IMessageTarget } from "./targets.js";
 export type IMessageChatDbOperations = {
   startupWatermark: { input: undefined; output: number | null };
   messageGuid: { input: { messageId: string }; output: string | null };
+  messageChats: {
+    input: { messageGuid: string };
+    output: { chatId: unknown; chatGuid: unknown; chatIdentifier: unknown }[];
+  };
   latestSentGuid: {
     input: { target: IMessageTarget; text: string; sentAfterMs?: number };
     output: string | null;
@@ -20,17 +27,11 @@ type ReadReceiptGuid = (
   command: SqliteWorkerCommand<Pick<IMessageChatDbOperations, "messageGuid" | "latestSentGuid">>,
 ) => Promise<string | null>;
 
-function openIMessageChatDbReader(databasePath: string) {
+export function openIMessageChatDbReader(databasePath: string) {
   return openSqliteWorkerStore<IMessageChatDbOperations>({
-    moduleUrl: resolveRuntimeWorkerUrl({
-      currentModuleUrl: import.meta.url,
-      sourceWorkerName: "chat-db.worker",
-      distWorkerPath: "extensions/imessage/src/chat-db.worker.js",
-      package: {
-        name: "@openclaw/imessage",
-        distWorkerPath: "src/chat-db.worker.js",
-      },
-    }),
+    moduleUrl: resolveRuntimeWorkerUrl(
+      createPluginRuntimeProcessEntrypoint("iMessageChatDb", import.meta.url),
+    ),
     databasePath,
     existingOnly: true,
     input: undefined,

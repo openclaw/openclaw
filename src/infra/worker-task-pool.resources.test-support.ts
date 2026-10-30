@@ -3,8 +3,17 @@ import { threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { serveOwnedWorkerTasks } from "./worker-task-server.js";
 
-export type ResourceFixtureInput = { retain?: string; wait?: SharedArrayBuffer };
-export type ResourceFixtureReply = { keys: string[]; threadId: number };
+export type ResourceFixtureInput = {
+  retain?: string;
+  wait?: SharedArrayBuffer;
+  database?: { agentId: string; path: string; readAuthStore?: boolean };
+};
+export type ResourceFixtureReply = {
+  keys: string[];
+  threadId: number;
+  databaseFound?: boolean;
+  authStore?: string;
+};
 const resources = new Set<string>();
 serveOwnedWorkerTasks<ResourceFixtureReply>(
   async (input) => {
@@ -19,7 +28,35 @@ serveOwnedWorkerTasks<ResourceFixtureReply>(
       Atomics.store(barrier, 0, 1);
       await Atomics.waitAsync(barrier, 1, 0).value;
     }
-    return { keys: [...resources], threadId };
+    let databaseFound: boolean | undefined;
+    let authStore: string | undefined;
+    if (input.database) {
+      assert.ok(isRecord(input.database));
+      assert.ok(typeof input.database.agentId === "string");
+      assert.ok(typeof input.database.path === "string");
+      const [{ readAuthProfileJsonCellText }, { withScopedOpenClawAgentDatabaseReadOnly }] =
+        await Promise.all([
+          import("../agents/auth-profiles/sqlite-json.js"),
+          import("../state/openclaw-agent-db-readonly-scope.js"),
+        ]);
+      const readAuthStore = input.database.readAuthStore === true;
+      const result = withScopedOpenClawAgentDatabaseReadOnly(
+        (database) =>
+          readAuthStore ? readAuthProfileJsonCellText(database.db, "store", "agent") : undefined,
+        {
+          agentId: input.database.agentId,
+          path: input.database.path,
+        },
+      );
+      databaseFound = result.found;
+      authStore = result.found ? result.value : undefined;
+    }
+    return {
+      keys: [...resources],
+      threadId,
+      ...(databaseFound !== undefined ? { databaseFound } : {}),
+      ...(authStore !== undefined ? { authStore } : {}),
+    };
   },
   {
     closeResource(key) {

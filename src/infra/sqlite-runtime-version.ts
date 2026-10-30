@@ -1,1 +1,1 @@
-export { isSqliteWalResetSafeVersion } from "../../node-sqlite.mjs";
+export { isSqliteWalResetSafeVersion } from "../../node-sqlite-capabilities.mjs";

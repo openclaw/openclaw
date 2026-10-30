@@ -7,6 +7,7 @@ import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionPathTarget } from "../../app-session-route-paths.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
 import { sessionKeyUuid } from "./route-loader-short-cache.ts";
@@ -27,12 +28,16 @@ type PreparedShortSessionReference = {
   isCurrent: () => boolean;
 };
 
+type ResolvedShortSessionReference = SessionReferenceResolution & {
+  isCurrent: () => boolean;
+};
+
 export async function resolveShortSessionReference(
   context: ApplicationContext,
   target: Extract<SessionPathTarget, { kind: "short" }>,
   location: RouteLocation,
   signal: AbortSignal,
-): Promise<SessionReferenceResolution | PreparedShortSessionReference> {
+): Promise<ResolvedShortSessionReference | PreparedShortSessionReference> {
   const client = await waitForGatewayClient(context.gateway, signal);
   signal.throwIfAborted();
   const { gateway, sessions } = context;
@@ -40,26 +45,7 @@ export async function resolveShortSessionReference(
   const profileId = gateway.snapshot.selfUser?.id;
   const connectionRevision = gateway.connectionRevision;
   const lifecycleSignal = context.lifecycleAbortSignal;
-  // Subscribe before sending: an accepted connect publication can resolve the same short URL.
-  const resolution = Promise.resolve().then(async () => {
-    signal.throwIfAborted();
-    const result = await client.request<SessionsResolveResult>("sessions.resolve", {
-      shortId: target.shortId,
-      ...(target.slugHint ? { slugHint: target.slugHint } : {}),
-      agentId: target.agentId,
-      allowMissing: true,
-    });
-    signal.throwIfAborted();
-    return sessionReferenceResolution(result);
-  });
-  if (target.namespace !== "chat" || location.search || location.hash || !hello) {
-    return resolution;
-  }
-  const prepared = createDeferredCore<PreparedShortSessionReference>();
   let retired = false;
-  let canonicalizationPending = false;
-  let stopEvents = () => {};
-  let stopGateway = () => {};
   const isCurrent = () =>
     !retired &&
     !signal.aborted &&
@@ -70,11 +56,30 @@ export async function resolveShortSessionReference(
     gateway.snapshot.client === client &&
     gateway.snapshot.hello === hello &&
     gateway.snapshot.selfUser?.id === profileId;
+  // Subscribe before sending: an accepted connect publication can resolve the same short URL.
+  const resolution = Promise.resolve().then(async () => {
+    signal.throwIfAborted();
+    const result = await client.request<SessionsResolveResult>("sessions.resolve", {
+      shortId: target.shortId,
+      ...(target.slugHint ? { slugHint: target.slugHint } : {}),
+      agentId: target.agentId,
+      allowMissing: true,
+    });
+    signal.throwIfAborted();
+    return { ...sessionReferenceResolution(result), isCurrent };
+  });
+  if (target.namespace !== "chat" || location.search || location.hash || !hello) {
+    return resolution;
+  }
+  const prepared = createDeferredCore<PreparedShortSessionReference>();
+  let canonicalizationPending = false;
+  let stopEvents = () => {};
+  let stopGateway = () => {};
+  const listeners = new AbortController();
   const stop = () => {
     stopEvents();
     stopGateway();
-    signal.removeEventListener("abort", abort);
-    lifecycleSignal?.removeEventListener("abort", abort);
+    listeners.abort();
   };
   const retire = () => {
     retired = true;
@@ -112,13 +117,17 @@ export async function resolveShortSessionReference(
       isCurrent,
     });
   });
+  // Retire the prepared result before a later connection publication can reuse its scope.
   stopGateway = gateway.subscribe(() => {
     if (!isCurrent()) {
       retire();
     }
   });
-  signal.addEventListener("abort", abort, { once: true });
-  lifecycleSignal?.addEventListener("abort", abort, { once: true });
+  const listenerOptions = { once: true, signal: listeners.signal };
+  listen(signal, "abort", abort, listenerOptions);
+  if (lifecycleSignal) {
+    listen(lifecycleSignal, "abort", abort, listenerOptions);
+  }
   try {
     signal.throwIfAborted();
     lifecycleSignal?.throwIfAborted();

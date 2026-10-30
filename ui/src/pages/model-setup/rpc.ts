@@ -1,5 +1,4 @@
-import { initialState, Task } from "@lit/task";
-import type { ReactiveControllerHost } from "lit";
+import { onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SystemAgentSetupDetectResult,
@@ -15,74 +14,77 @@ type ModelSetupDetectTaskResult = ModelSetupTaskResult<SystemAgentSetupDetectRes
   token: object;
 };
 
-export function createModelSetupDetectTask(
-  host: ReactiveControllerHost,
-  options: {
-    getHello: () => ModelSetupConnection["hello"];
-    onComplete: (outcome: ModelSetupDetectTaskResult) => void;
-  },
+export type ModelSetupDetection = {
+  completion: Promise<ModelSetupDetectTaskResult | undefined>;
+};
+
+function createSetupRequest<Args, Result>(
+  request: (args: Args, signal: AbortSignal) => Promise<Result | undefined>,
+  onComplete?: (result: Result) => boolean | void,
 ) {
-  return new Task<
+  let controller: AbortController | undefined;
+  // Request primitives also retire when their owner is disposed before its first settle.
+  onCleanup(() => {
+    const retired = controller;
+    controller = undefined;
+    retired?.abort();
+  });
+  return async (args: Args): Promise<Result | undefined> => {
+    controller?.abort();
+    const current = new AbortController();
+    controller = current;
+    const result = await request(args, current.signal);
+    if (controller !== current || current.signal.aborted) {
+      return undefined;
+    }
+    // Owner rejection also retires the result exposed to async readers.
+    if (result !== undefined && onComplete?.(result) === false) {
+      return undefined;
+    }
+    return result;
+  };
+}
+
+export function createModelSetupDetectRequest(options: {
+  getHello: () => ModelSetupConnection["hello"];
+  onComplete: (outcome: ModelSetupDetectTaskResult) => boolean | void;
+}) {
+  return createSetupRequest<
     readonly [GatewayBrowserClient | null, string | null, object | null],
     ModelSetupDetectTaskResult
-  >(host, {
-    autoRun: false,
-    args: () => [null, null, null],
-    task: async ([client, agentId, token], { signal }) => {
-      if (!client || !token) {
-        return initialState;
-      }
-      const hello = options.getHello();
-      return {
-        ...(await captureModelSetupResult(client, () =>
-          detectModelSetup(client, agentId ?? undefined, signal),
-        )),
-        agentId,
-        hello,
-        token,
-      };
-    },
-    onComplete: options.onComplete,
-  });
+  >(async ([client, agentId, token], signal) => {
+    if (!client || !token) {
+      return undefined;
+    }
+    const hello = options.getHello();
+    return {
+      ...(await captureModelSetupResult(client, () =>
+        client.request<SystemAgentSetupDetectResult>(
+          "openclaw.setup.detect",
+          agentId ? { agentId } : {},
+          { timeoutMs: MODEL_SETUP_DETECT_TIMEOUT_MS, signal },
+        ),
+      )),
+      agentId,
+      hello,
+      token,
+    };
+  }, options.onComplete);
 }
 
-function detectModelSetup(
-  client: GatewayBrowserClient,
-  agentId?: string,
-  signal?: AbortSignal,
-): Promise<SystemAgentSetupDetectResult> {
-  return client.request<SystemAgentSetupDetectResult>(
-    "openclaw.setup.detect",
-    agentId ? { agentId } : {},
-    { timeoutMs: MODEL_SETUP_DETECT_TIMEOUT_MS, ...(signal ? { signal } : {}) },
-  );
-}
-
-function verifyModelSetup(
-  client: GatewayBrowserClient,
-  agentId?: string,
-  signal?: AbortSignal,
-  modelTarget?: "utility",
-): Promise<SystemAgentSetupVerifyResult> {
-  return client.request<SystemAgentSetupVerifyResult>(
-    "openclaw.setup.verify",
-    { ...(agentId ? { agentId } : {}), ...(modelTarget ? { modelTarget } : {}) },
-    { timeoutMs: MODEL_SETUP_VERIFY_TIMEOUT_MS, ...(signal ? { signal } : {}) },
-  );
-}
-
-export function createModelSetupVerifyTask(host: ReactiveControllerHost) {
-  return new Task<
+export function createModelSetupVerifyRequest() {
+  return createSetupRequest<
     readonly [GatewayBrowserClient | null, string | null, "utility" | undefined],
     ModelSetupTaskResult<SystemAgentSetupVerifyResult>
-  >(host, {
-    autoRun: false,
-    args: () => [null, null, undefined],
-    task: async ([client, agentId, modelTarget], { signal }) =>
-      client
-        ? captureModelSetupResult(client, () =>
-            verifyModelSetup(client, agentId ?? undefined, signal, modelTarget),
-          )
-        : initialState,
-  });
+  >(async ([client, agentId, modelTarget], signal) =>
+    client
+      ? captureModelSetupResult(client, () =>
+          client.request<SystemAgentSetupVerifyResult>(
+            "openclaw.setup.verify",
+            { ...(agentId ? { agentId } : {}), ...(modelTarget ? { modelTarget } : {}) },
+            { timeoutMs: MODEL_SETUP_VERIFY_TIMEOUT_MS, signal },
+          ),
+        )
+      : undefined,
+  );
 }

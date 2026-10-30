@@ -1,33 +1,77 @@
-import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 // @vitest-environment node
 // Control UI tests cover localized update and recovery status copy.
-import {
-  UpdateAvailableSchema,
-  UpdateScheduleStateSchema,
-} from "../../../packages/gateway-protocol/src/schema/config.js";
 import type { GatewayHelloOk } from "../api/gateway.ts";
+import type { UpdateScheduleState } from "../api/types.ts";
 import { i18n } from "../i18n/index.ts";
+import { client } from "./overlays-access.test-support.ts";
 import {
+  createUpdateStatusRefresher,
   projectUpdateSentinel,
   projectUpdateStatusResponse,
   resolveUpdateStatusBanner,
   resolveUpdateStatusCheckBanner,
 } from "./update-overlay-helpers.ts";
 import {
-  readUpdateAvailable,
-  readUpdateAvailableValue,
-  readUpdateSchedule,
-  readUpdateScheduleValue,
-} from "./update-schedule-dto.ts";
-import { formatUpdateCampaignLabel } from "./update-schedule-projection.ts";
+  formatUpdateCampaignLabel,
+  projectConnectedUpdateSnapshot,
+} from "./update-schedule-projection.ts";
+
+it("awaits status projection and retires a refresh whose authority changes while projecting", async () => {
+  const entered = createDeferred();
+  const pending = createDeferred();
+  let current = true;
+  let published = false;
+  const gatewayClient = client(async () => ({}));
+  const refresh = createUpdateStatusRefresher({
+    getClient: () => gatewayClient,
+    getEpoch: () => 1,
+    getAuthorization: () => undefined,
+    canRefresh: () => current,
+    isCurrent: () => current,
+    onRefreshing: () => {},
+    onStatus: async (_response, isCurrent) => {
+      entered.resolve();
+      await pending.promise;
+      published = isCurrent();
+    },
+    onError: () => {},
+  });
+  const result = refresh("background");
+  await entered.promise;
+  current = false;
+  pending.resolve();
+  await expect(result).resolves.toBe(false);
+  expect(published).toBe(false);
+});
+
+it("reports a failed status projection without completing the refresh", async () => {
+  const error = new Error("Update report could not load");
+  const onError = vi.fn();
+  const gatewayClient = client(async () => ({}));
+  const refresh = createUpdateStatusRefresher({
+    getClient: () => gatewayClient,
+    getEpoch: () => 1,
+    getAuthorization: () => undefined,
+    canRefresh: () => true,
+    isCurrent: () => true,
+    onRefreshing: () => {},
+    onStatus: async () => {
+      throw error;
+    },
+    onError,
+  });
+  await expect(refresh("completion")).resolves.toBe(false);
+  expect(onError).toHaveBeenLastCalledWith(error, "completion");
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe("update schedule hydration", () => {
-  it("preserves additive git availability and the hello schedule DTO", () => {
+  it("hydrates git availability and a held campaign from the Gateway snapshot", () => {
     const updateSchedule = {
       channel: "dev",
       autoEnabled: true,
@@ -36,6 +80,8 @@ describe("update schedule hydration", () => {
         git: {
           status: "behind",
           currentSha: "a".repeat(40),
+          upstreamSha: "b".repeat(40),
+          repositoryUrl: "https://github.com/example/openclaw",
           commitAtMs: 1_000,
           installedAtMs: 2_000,
           commitsBehind: 3,
@@ -56,27 +102,10 @@ describe("update schedule hydration", () => {
         updatedAtMs: 2_000,
       },
     } as const;
-    const hello = {
-      snapshot: {
-        updateAvailable: {
-          currentVersion: "2026.8.1",
-          latestVersion: "2026.8.1",
-          channel: "dev",
-          currentSha: "a".repeat(40),
-          upstreamRef: "origin/main",
-          upstreamSha: "b".repeat(40),
-          repositoryUrl: "https://github.com/example/openclaw",
-          commitsBehind: 3,
-          commits: [
-            { sha: "b0b0b0b", subject: "Improve update scheduling" },
-            { sha: "a0a0a0a", subject: "Tighten update checks" },
-          ],
-        },
-        updateSchedule,
-      },
-    } as GatewayHelloOk;
-
-    expect(readUpdateAvailable(hello)).toMatchObject({
+    const updateAvailable = {
+      currentVersion: "2026.8.1",
+      latestVersion: "2026.8.1",
+      channel: "dev",
       currentSha: "a".repeat(40),
       upstreamRef: "origin/main",
       upstreamSha: "b".repeat(40),
@@ -86,8 +115,24 @@ describe("update schedule hydration", () => {
         { sha: "b0b0b0b", subject: "Improve update scheduling" },
         { sha: "a0a0a0a", subject: "Tighten update checks" },
       ],
+    };
+    const hello = { snapshot: { updateAvailable, updateSchedule } } as GatewayHelloOk;
+
+    const projected = projectConnectedUpdateSnapshot(
+      {
+        updateAvailable: null,
+        updateSchedule: null,
+        heldUpdateCampaignId: null,
+        updateCampaignStatusHydrated: false,
+      },
+      hello,
+    );
+    expect(projected).toEqual({
+      updateAvailable,
+      updateSchedule,
+      heldUpdateCampaignId: "campaign-1",
+      updateCampaignStatusHydrated: false,
     });
-    expect(readUpdateSchedule(hello)).toEqual(updateSchedule);
   });
 
   it("formats countdown deadlines with a stable minutes-and-seconds shape", () => {
@@ -103,229 +148,19 @@ describe("update schedule hydration", () => {
       },
     } as const;
 
-    expect(formatUpdateCampaignLabel(schedule, 1_000)).toBe(
-      "Waiting for active work · forced update in 0:54",
-    );
-    expect(
+    const label = (
+      campaign: Partial<NonNullable<UpdateScheduleState["campaign"]>> = {},
+      now = 1_000,
+    ) =>
       formatUpdateCampaignLabel(
-        {
-          ...schedule,
-          campaign: { ...schedule.campaign, state: "countdown", applyAtMs: 762_000 },
-        },
-        1_000,
-      ),
-    ).toBe("Updating in 12:41");
-    expect(formatUpdateCampaignLabel(schedule, 56_000)).toBe(
-      "Waiting for active work · forced update in 0:00",
-    );
-    expect(
-      formatUpdateCampaignLabel(
-        {
-          ...schedule,
-          campaign: { ...schedule.campaign, holdUntilMs: 762_000 },
-        },
-        1_000,
-      ),
-    ).toBe("Update held · resumes in 12:41");
-    expect(
-      formatUpdateCampaignLabel(
-        {
-          ...schedule,
-          campaign: { ...schedule.campaign, state: "applying", holdUntilMs: 762_000 },
-        },
-        1_000,
-      ),
-    ).toBe("Applying update…");
-  });
-
-  it.each([
-    [
-      "availability channel",
-      { currentVersion: "2026.8.1", latestVersion: "2026.8.2", channel: "" },
-    ],
-    [
-      "availability currentVersion",
-      { currentVersion: "", latestVersion: "2026.8.2", channel: "s" },
-    ],
-  ])("rejects a blank required %s, as the canonical schema does", (_label, payload) => {
-    expect(readUpdateAvailableValue(payload)).toBeNull();
-    expect(Value.Check(UpdateAvailableSchema, payload)).toBe(false);
-  });
-
-  it("rejects a blank required schedule channel, as the canonical schema does", () => {
-    const blankSchedule = { channel: "", autoEnabled: true };
-    expect(readUpdateScheduleValue(blankSchedule)).toBeNull();
-    expect(Value.Check(UpdateScheduleStateSchema, blankSchedule)).toBe(false);
-  });
-
-  it("drops blank optional strings instead of discarding the whole payload", () => {
-    expect(
-      readUpdateAvailableValue({
-        currentVersion: "2026.8.1",
-        latestVersion: "2026.8.2",
-        channel: "stable",
-        currentSha: "",
-        upstreamRef: "",
-      }),
-    ).toEqual({ currentVersion: "2026.8.1", latestVersion: "2026.8.2", channel: "stable" });
-  });
-
-  // The canonical schemas are closed, but they are a producer-side contract the
-  // Gateway enforces on its own outbound results. A service-worker-cached
-  // document keeps an older bundle across a Gateway upgrade, so an additive
-  // field must never blank the overlay.
-  it("keeps rendering when a newer Gateway adds an unknown field", () => {
-    const withFutureField = {
-      currentVersion: "2026.8.1",
-      latestVersion: "2026.8.2",
-      channel: "stable",
-      releaseNotesUrl: "https://example.invalid/notes",
-    };
-    expect(readUpdateAvailableValue(withFutureField)).toEqual({
-      currentVersion: "2026.8.1",
-      latestVersion: "2026.8.2",
-      channel: "stable",
-    });
-
-    const scheduleWithFutureField = {
-      channel: "dev",
-      autoEnabled: true,
-      install: { kind: "git", git: { status: "current", futureNested: 1 } },
-      rolloutCohort: "canary",
-    };
-    expect(readUpdateScheduleValue(scheduleWithFutureField)).toEqual({
-      channel: "dev",
-      autoEnabled: true,
-      install: { kind: "git", git: { status: "current" } },
-    });
-  });
-
-  it("ignores prototype-named wire keys without polluting the result", () => {
-    const hostile = JSON.parse(
-      '{"currentVersion":"2026.8.1","latestVersion":"2026.8.2","channel":"stable","__proto__":{"polluted":true},"constructor":"x","toString":"y"}',
-    );
-    const parsed = readUpdateAvailableValue(hostile);
-    expect(parsed).toEqual({
-      currentVersion: "2026.8.1",
-      latestVersion: "2026.8.2",
-      channel: "stable",
-    });
-    expect(Object.hasOwn(parsed as object, "toString")).toBe(false);
-    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
-  });
-
-  // Canonical maxLength counts grapheme clusters; String#length counts UTF-16
-  // code units, so a length-based copy of that rule drops valid emoji subjects.
-  it("preserves a commit subject the canonical schema accepts but String#length overcounts", () => {
-    const subject = "\u{1F44D}".repeat(100);
-    const payload = {
-      currentVersion: "2026.8.1",
-      latestVersion: "2026.8.2",
-      channel: "stable",
-      commits: [{ sha: "abc1234", subject }],
-    };
-    expect(subject.length).toBeGreaterThan(120);
-    expect(Value.Check(UpdateAvailableSchema, payload)).toBe(true);
-    expect(readUpdateAvailableValue(payload)?.commits).toEqual([{ sha: "abc1234", subject }]);
-  });
-
-  it("keeps valid commits when a sibling entry is malformed", () => {
-    expect(
-      readUpdateAvailableValue({
-        currentVersion: "2026.8.1",
-        latestVersion: "2026.8.2",
-        channel: "stable",
-        commits: [{ sha: "", subject: "dropped" }, { sha: "abc", subject: "kept" }, { sha: 7 }],
-      })?.commits,
-    ).toEqual([{ sha: "abc", subject: "kept" }]);
-  });
-
-  // The canonical schema caps commits at 5 entries (maxItems: 5) and the
-  // Updates page renders every entry this reader returns. An out-of-contract
-  // producer payload past that cap must not grow the rendered list.
-  it("caps commits at five entries even when every entry is valid", () => {
-    const commits = Array.from({ length: 8 }, (_, index) => ({
-      sha: `sha${index}`,
-      subject: `commit ${index}`,
-    }));
-    expect(
-      readUpdateAvailableValue({
-        currentVersion: "2026.8.1",
-        latestVersion: "2026.8.2",
-        channel: "stable",
-        commits,
-      })?.commits,
-    ).toEqual(commits.slice(0, 5));
-  });
-
-  // Drift guard: whatever the canonical schema accepts must still reach the
-  // overlay. This fails if a schema change outgrows the reader.
-  it.each([
-    [
-      "availability",
-      { currentVersion: "2026.8.1", latestVersion: "2026.8.2", channel: "stable" },
-      UpdateAvailableSchema,
-      readUpdateAvailableValue,
-    ],
-    [
-      "availability with git detail",
-      {
-        currentVersion: "2026.8.1",
-        latestVersion: "2026.8.2",
-        channel: "dev",
-        currentSha: "aaa",
-        upstreamRef: "origin/main",
-        upstreamSha: "bbb",
-        commitsBehind: 3,
-        commits: [{ sha: "abc", subject: "fix things" }],
-      },
-      UpdateAvailableSchema,
-      readUpdateAvailableValue,
-    ],
-    [
-      "schedule with package target",
-      {
-        channel: "beta",
-        autoEnabled: true,
-        install: { kind: "package" },
-        target: { kind: "package", version: "2026.8.1-beta.1" },
-      },
-      UpdateScheduleStateSchema,
-      readUpdateScheduleValue,
-    ],
-    [
-      "schedule with diverged git install and campaign",
-      {
-        channel: "dev",
-        autoEnabled: false,
-        install: {
-          kind: "git",
-          git: {
-            status: "diverged",
-            currentSha: "aaa",
-            commitAtMs: 1,
-            installedAtMs: 2,
-            commitsAhead: 1,
-            commitsBehind: 2,
-          },
-        },
-        target: { kind: "git", upstreamRef: "origin/main", upstreamSha: "bbb", commitsBehind: 2 },
-        campaign: {
-          id: "c1",
-          state: "countdown",
-          announcedAtMs: 1,
-          applyAtMs: 2,
-          holdUntilMs: 3,
-          forceAtMs: 4,
-          updatedAtMs: 5,
-        },
-      },
-      UpdateScheduleStateSchema,
-      readUpdateScheduleValue,
-    ],
-  ])("round-trips canonical-valid %s unchanged", (_label, payload, schema, read) => {
-    expect(Value.Check(schema, payload)).toBe(true);
-    expect(read(payload)).toEqual(payload);
+        { ...schedule, campaign: { ...schedule.campaign, ...campaign } },
+        now,
+      );
+    expect(label()).toBe("Waiting for active work · forced update in 0:54");
+    expect(label({ state: "countdown", applyAtMs: 762_000 })).toBe("Updating in 12:41");
+    expect(label({}, 56_000)).toBe("Waiting for active work · forced update in 0:00");
+    expect(label({ holdUntilMs: 762_000 })).toBe("Update held · resumes in 12:41");
+    expect(label({ state: "applying", holdUntilMs: 762_000 })).toBe("Applying update…");
   });
 });
 
@@ -478,13 +313,16 @@ describe("update status localization", () => {
     },
   );
 
-  it("preserves unknown status details inside localized fallback guidance", () => {
-    const translate = vi.spyOn(i18n, "t");
+  it.each(["disk-read-only", "constructor", "__proto__", "toString"])(
+    "preserves unknown status %s inside localized fallback guidance",
+    (reason) => {
+      const translate = vi.spyOn(i18n, "t");
 
-    expect(resolveUpdateStatusBanner({ status: "error", reason: "disk-read-only" })).toEqual({
-      tone: "danger",
-      text: "Update error: disk-read-only. See the gateway logs for the exact failure and retry once the cause is fixed.",
-    });
-    expect(translate).toHaveBeenCalledWith("updates.failureReasons.default", undefined);
-  });
+      expect(resolveUpdateStatusBanner({ status: "error", reason })).toEqual({
+        tone: "danger",
+        text: `Update error: ${reason}. See the gateway logs for the exact failure and retry once the cause is fixed.`,
+      });
+      expect(translate).toHaveBeenCalledWith("updates.failureReasons.default", undefined);
+    },
+  );
 });

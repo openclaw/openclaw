@@ -88,6 +88,5 @@ describe("schema-derived channel config types", () => {
     expect(emptyReactionSchema.parse({})).toEqual({});
     expect(falseReactionSchema.parse({})).toEqual({});
     expect(optionalReactionSchema.parse({})).toEqual({});
-    expect(true).toBe(true);
   });
 });

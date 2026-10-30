@@ -86,6 +86,9 @@ describe("config writes through a symlinked state root", () => {
   it("preserves the symlink, logical config identity, and rotating backups", async () => {
     const { io, stateDir, configPath, physicalPath, raw } = await fixture();
     const originalLink = await fs.readlink(stateDir);
+    if (process.platform !== "win32") {
+      await fs.chmod(stateDir, 0o750);
+    }
 
     expect(io.configPath).toBe(configPath);
     await io.writeConfigFile({ gateway: { mode: "local", port: 19001 } });
@@ -96,6 +99,9 @@ describe("config writes through a symlinked state root", () => {
     await io.writeConfigFile({ gateway: { mode: "local", port: 19002 } });
 
     expect(await fs.readlink(stateDir)).toBe(originalLink);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(stateDir)).mode & 0o777).toBe(0o750);
+    }
     expect(await fs.readFile(`${physicalPath}.bak`, "utf8")).toBe(firstWrite);
     expect(await fs.readFile(`${physicalPath}.bak.1`, "utf8")).toBe(raw);
     const snapshot = await io.readConfigFileSnapshot();

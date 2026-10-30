@@ -1,10 +1,11 @@
+import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
-import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
 
 export function createAttemptSetupFixture(
   overrides: Partial<EmbeddedAttemptSetup> = {},
 ): EmbeddedAttemptSetup {
   return {
+    [Symbol.dispose]() {},
     agentCoreThinkingLevel: "off",
     providerThinkingLevel: undefined,
     effectiveCwd: "/tmp/workspace",
@@ -14,6 +15,7 @@ export function createAttemptSetupFixture(
     sessionPermissionRoot: "/tmp/workspace",
     sessionPermissionPolicy: undefined,
     sandbox: null,
+    sandboxReport: { mode: "off", sandboxed: false },
     sandboxSessionKey: "session",
     sessionAgentId: "main",
     emitCorePluginToolStageSummary: () => {},
@@ -25,7 +27,7 @@ export function createAttemptSetupFixture(
       workspaceDir: "/tmp/workspace",
       prepared: true,
     }),
-    prepStages: createEmbeddedRunStageTracker(),
+    prepStages: createStageTimingTracker(Date.now),
     proactiveSubagentOrchestration: false,
     ...overrides,
   };

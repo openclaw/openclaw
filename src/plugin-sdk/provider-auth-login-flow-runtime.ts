@@ -135,7 +135,9 @@ export function reserveProviderLoginFlow(params: {
     },
     { once: true },
   );
-  params.flows.logins.set(params.flowKey, record);
+  if (!signal.aborted) {
+    params.flows.logins.set(params.flowKey, record);
+  }
   return { status: "reserved", record };
 }
 

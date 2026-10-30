@@ -1,8 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -11,17 +10,23 @@ import type {
   SessionRowObservation,
 } from "../../lib/sessions/session-capability.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
-import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
+import { renderControls } from "./chat-pane-session-controls.test-support.ts";
 import type { TestChatPane } from "./chat-pane.test-support.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
+import { createTestTranscript } from "./chat-view.test-helpers.ts";
+import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
+import { mountChatThread } from "./components/chat-thread.test-support.ts";
 import {
+  flushDeferredRowPrune,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
@@ -32,7 +37,87 @@ import { RealtimeTalkSession } from "./talk/session.ts";
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
+function globalSession(
+  agentId: string,
+  overrides: Partial<GatewaySessionRow> = {},
+): GatewaySessionRow {
+  return {
+    key: "global",
+    agentId,
+    sessionId: `${agentId}-global`,
+    kind: "global",
+    updatedAt: 1,
+    ...overrides,
+  };
+}
+
+function composerControls(state: ChatPageHost, agentDefaultModel?: string) {
+  return renderControls(state, {
+    selectedSession: selectedChatSessionRow(state),
+    agentDefaultModel,
+    contextWindowAccess: { allowed: true, requiredScope: "operator.write" },
+  });
+}
+
 describe("mounted pane session event ownership", () => {
+  it("keeps completed-work metadata when the retained roster omits the observed conversation", async () => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:dashboard:observed-work",
+      agentId: "main",
+      sessionId: "observed-work",
+      kind: "direct",
+      label: "Observed work",
+      status: "done",
+      lastRunId: "work-run",
+      runtimeMs: 180_000,
+    };
+    const history = {
+      sessionId: row.sessionId,
+      sessionInfo: row,
+      messages: [
+        {
+          role: "user",
+          content: "Review the report",
+          timestamp: 1_000,
+          __openclaw: { id: "request" },
+        },
+        {
+          role: "toolResult",
+          toolName: "read",
+          toolCallId: "read-report",
+          runId: "work-run",
+          content: "Report read",
+          timestamp: 2_000,
+        },
+        { role: "assistant", runId: "work-run", content: "Report reviewed", timestamp: 3_000 },
+      ],
+    };
+    const { context, mount } = createMountedPanes([row], "main", undefined, {
+      "chat.history": async () => history,
+      "chat.startup": async () => history,
+    });
+    const pane = mount(row.key);
+    await refreshPane(pane);
+    vi.spyOn(context.sessions, "presentation", "get").mockReturnValue({
+      result: sessionsResult([], 1),
+      agentId: "main",
+    });
+    pane.state.sessionsResult = context.sessions.presentation.result;
+    const layout = pane.render().layout;
+    assert(layout, "Expected chat layout");
+    const transcript = createTestTranscript();
+    const view = mountChatThread({ ...layout.primary.chat, showToolCalls: true }, transcript);
+    onTestFinished(() => {
+      view.unmount();
+      transcript.dispose();
+    });
+    transcript.start();
+    await flushDeferredRowPrune();
+    expect(view.container.querySelector(".chat-activity-group__label")?.textContent).toBe(
+      "Worked for 3 minutes",
+    );
+  });
+
   it("retires Talk on a provider pause and prevents it from starting again", async () => {
     const row: GatewaySessionRow = {
       key: "agent:main:provider-pause",
@@ -51,8 +136,8 @@ describe("mounted pane session event ownership", () => {
     }
     const talk = new RealtimeTalkSession(client, row.key);
     const stop = vi.spyOn(talk, "stop").mockResolvedValue(undefined);
-    pane.state.realtimeTalkSession = talk;
-    pane.state.realtimeTalkActive = true;
+    pane.state.realtimeTalk.update({ realtimeTalkSession: talk });
+    pane.state.realtimeTalk.update({ realtimeTalkActive: true });
     emitGatewayEvent("sessions.changed", {
       sessionKey: row.key,
       agentId: "main",
@@ -67,10 +152,10 @@ describe("mounted pane session event ownership", () => {
       },
     });
     expect(stop).toHaveBeenCalledTimes(1);
-    expect(pane.state.realtimeTalkSession).toBeNull();
-    expect(pane.state.realtimeTalkActive).toBe(false);
+    expect(pane.state.realtimeTalk.snapshot.realtimeTalkSession).toBeNull();
+    expect(pane.state.realtimeTalk.snapshot.realtimeTalkActive).toBe(false);
     await pane.state.toggleRealtimeTalk();
-    expect(pane.state.realtimeTalkSession).toBeNull();
+    expect(pane.state.realtimeTalk.snapshot.realtimeTalkSession).toBeNull();
   });
 
   it("publishes one shared event and applies its message to every mounted pane", async () => {
@@ -131,13 +216,7 @@ describe("mounted pane session event ownership", () => {
   ] as const)(
     "keeps a foreign $key descriptor after history refresh without changing primary membership (archived: $archived)",
     async ({ key, kind, archived }) => {
-      const primary: GatewaySessionRow = {
-        key: "global",
-        agentId: "main",
-        sessionId: "main-global",
-        kind: "global",
-        updatedAt: 1,
-      };
+      const primary = globalSession("main");
       const selected: GatewaySessionRow = {
         key,
         agentId: "research",
@@ -185,7 +264,7 @@ describe("mounted pane session event ownership", () => {
   );
 
   it.each([false, true])(
-    "keeps a same-key successor and its first message after retirement (reentrant publication: %s)",
+    "keeps a same-key successor when its old descriptor retires (reentrant publication: %s)",
     async (reentrant) => {
       const previous: GatewaySessionRow = {
         key: "agent:main:replaced",
@@ -201,8 +280,21 @@ describe("mounted pane session event ownership", () => {
         updatedAt: 3,
         label: "Newest session",
       };
+      const message = {
+        role: "user",
+        content: "First message in the successor session",
+        __openclaw: { id: "successor-first-message", seq: 1 },
+      };
       const listed = [previous];
-      const { sessions, mount, emitGatewayEvent } = createMountedPanes(listed);
+      const history = () => ({
+        messages: listed[0]?.sessionId === next.sessionId ? [message] : [],
+        sessionInfo: listed[0],
+        sessionId: listed[0]?.sessionId,
+      });
+      const { sessions, mount, emitGatewayEvent } = createMountedPanes(listed, "main", undefined, {
+        "chat.history": history,
+        "chat.startup": history,
+      });
       let armed = false;
       const unsubscribe = sessions.subscribe((state) => {
         if (armed && state.result?.sessions.some((row) => row.sessionId === next.sessionId)) {
@@ -220,45 +312,29 @@ describe("mounted pane session event ownership", () => {
       listed.splice(0, 1, next);
       await sessions.refresh({ agentId: "main", force: true });
       expect(selectedChatSessionRow(pane.state)).toMatchObject(reentrant ? newest : next);
-      await pane.updateComplete;
-
       emitGatewayEvent("session.message", {
         sessionKey: next.key,
         agentId: "main",
         sessionId: next.sessionId,
-        hasActiveRun: true,
-        messageId: "successor-user",
+        messageId: "successor-first-message",
         messageSeq: 1,
-        message: {
-          role: "user",
-          content: "First successor prompt",
-          __openclaw: { id: "successor-user", seq: 1 },
-        },
-        session: { ...next, updatedAt: 4, hasActiveRun: true, status: "running" },
+        message,
+        session: { ...(reentrant ? newest : next), updatedAt: 4 },
       });
-      expect(pane.state.chatMessages).toContainEqual(
-        expect.objectContaining({ role: "user", content: "First successor prompt" }),
-      );
+      expect.soft(pane.state.currentSessionId).toBe(previous.sessionId);
+      expect.soft(pane.state.chatMessages).toEqual([]);
+      await refreshPane(pane);
+      expect(pane.state.currentSessionId).toBe(next.sessionId);
+      expect(pane.state.chatMessages).toContainEqual(expect.objectContaining(message));
     },
   );
 
-  it("does not admit fenced hidden history and hydrates its foreign descriptor when presented", async () => {
-    const primary: GatewaySessionRow = {
-      key: "global",
-      agentId: "main",
-      sessionId: "main-global",
-      kind: "global",
-      updatedAt: 1,
-    };
-    const original: GatewaySessionRow = {
-      key: "global",
-      agentId: "research",
-      sessionId: "research-global",
-      kind: "global",
+  it("hydrates a hidden foreign descriptor when presented", async () => {
+    const primary = globalSession("main");
+    const original = globalSession("research", {
       archived: true,
-      updatedAt: 1,
       label: "Earlier history",
-    };
+    });
     const latest = { ...original, updatedAt: 2, label: "Current research session" };
     const oldHistory = createDeferred<ChatHistoryResult>();
     const freshHistory = createDeferred<ChatHistoryResult>();
@@ -266,7 +342,6 @@ describe("mounted pane session event ownership", () => {
     const freshDescribe = createDeferred<{ session: GatewaySessionRow | null }>();
     const initialHistoryStarted = createDeferred();
     const freshReadStarted = createDeferred();
-    const oldHistoryReconciled = createDeferred();
     const freshRowObserved = createDeferred();
     let eventDelivered = false;
     const reads: Array<{ method: string; params: unknown; afterEvent: boolean }> = [];
@@ -300,8 +375,8 @@ describe("mounted pane session event ownership", () => {
     vi.spyOn(sessions, "observeRow").mockImplementation((target, listener, options) => {
       const observation = observeRow(
         target,
-        (row) => {
-          listener(row);
+        (row, notification) => {
+          listener(row, notification);
           if (
             options?.onEvent &&
             row !== null &&
@@ -317,20 +392,6 @@ describe("mounted pane session event ownership", () => {
         observations.push(observation);
       }
       return observation;
-    });
-    const oldOutcomes: Array<boolean | "defaults-only"> = [];
-    const captureReconcile = sessions.captureReconcile;
-    vi.spyOn(sessions, "captureReconcile").mockImplementation(() => {
-      const reconcile = captureReconcile();
-      const beforeEvent = !eventDelivered;
-      return (...args) => {
-        const outcome = reconcile(...args);
-        if (beforeEvent && args[0]?.agentId === "research") {
-          oldOutcomes.push(outcome);
-          oldHistoryReconciled.resolve();
-        }
-        return outcome;
-      };
     });
     let initialHistory: ReturnType<typeof loadChatHistory> | undefined;
     let initialRefresh: Promise<void> | undefined;
@@ -369,10 +430,6 @@ describe("mounted pane session event ownership", () => {
       oldHistory.resolve({ messages: [], sessionInfo: original, sessionId: original.sessionId });
       await initialHistory;
       await initialRefresh;
-      expect(observation.hasObserved).toBe(false);
-      await oldHistoryReconciled.promise;
-      expect(oldOutcomes.length).toBeGreaterThan(0);
-      expect.soft(oldOutcomes).not.toContain(true);
       expect(pane.presented).toBe(false);
       pane.presented = true;
       await freshReadStarted.promise;
@@ -454,7 +511,7 @@ describe("mounted pane session event ownership", () => {
   });
 
   it.each([false, true])(
-    "shows the admitted run's model before provisional descriptor reads settle (reentrant publication: %s)",
+    "keeps the saved model while execution metadata changes before descriptor reads settle (reentrant publication: %s)",
     async (reentrant) => {
       const row: GatewaySessionRow = {
         key: "agent:main:provisional-model",
@@ -502,24 +559,20 @@ describe("mounted pane session event ownership", () => {
         ];
         adoptStartedChatRun(state, "current-run", 2);
         const container = document.createElement("div");
+        const view = mountSolid(
+          ChatPaneModelControl,
+          composerControls(state, "example/primary").composerControls,
+          container,
+        );
         const draw = () => {
-          const controls = renderChatPaneComposerControls({
-            state,
-            selectedSession: selectedChatSessionRow(state),
-            agentDefaultModel: "example/primary",
-            modelAccess: { allowed: true, requiredScope: "operator.write" },
-            effortAccess: { allowed: true, requiredScope: "operator.write" },
-            contextWindowAccess: { allowed: true, requiredScope: "operator.write" },
-            permissionAccess: { allowed: true, requiredScope: "operator.write" },
-            canSelectFull: true,
-            onModelSetup: vi.fn(),
-          });
-          render(controls.composerControls, container);
+          const controls = composerControls(state, "example/primary");
+          view.update(controls.composerControls);
           return container.querySelector<HTMLElement>("[data-chat-model-select]");
         };
         const initialModel = draw();
         expect(initialModel?.textContent).toContain("Primary");
-        expect(initialModel?.getAttribute("aria-busy")).toBe("true");
+        expect(initialModel?.getAttribute("aria-busy")).toBe("false");
+        expect(initialModel?.querySelector(".btn__spinner")).toBeNull();
 
         reenter = reentrant;
         emitGatewayEvent("sessions.changed", {
@@ -537,7 +590,7 @@ describe("mounted pane session event ownership", () => {
         expect(descriptor.hasObserved).toBe(false);
         expect(state.chatLoading).toBe(true);
         const model = draw();
-        expect(model?.textContent).toContain(reentrant ? "Primary" : "Fallback");
+        expect(model?.textContent).toContain("Primary");
         expect(model?.getAttribute("aria-busy")).toBe("false");
       } finally {
         reads.resolve();
@@ -548,25 +601,15 @@ describe("mounted pane session event ownership", () => {
   );
 
   it("projects an admitted equal-clock terminal descriptor while a newer local run continues", async () => {
-    const primary: GatewaySessionRow = {
-      key: "global",
-      agentId: "main",
-      sessionId: "main-global",
-      kind: "global",
-      updatedAt: 100,
-    };
-    const running: GatewaySessionRow = {
-      key: "global",
-      agentId: "research",
-      sessionId: "research-global",
-      kind: "global",
+    const primary = globalSession("main", { updatedAt: 100 });
+    const running = globalSession("research", {
       updatedAt: 100,
       startedAt: 50,
       hasActiveRun: true,
       status: "running",
       activeRunIds: ["completed-run"],
       lastRunId: "completed-run",
-    };
+    });
     const terminal = {
       key: running.key,
       agentId: running.agentId,
@@ -619,8 +662,13 @@ describe("mounted pane session event ownership", () => {
         runId: "newer-run",
         state: "delta",
         deltaText: "The newer run continues.",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "The newer run continues." }],
+        },
       });
-      expect(continuing.state.chatStream).toBe("The newer run continues.");
+      await vi.dynamicImportSettled();
+      await expect.poll(() => continuing.state.chatStream).toBe("The newer run continues.");
       holdLaterReads = true;
       emitGatewayEvent("chat", {
         sessionKey: "global",
@@ -654,22 +702,11 @@ describe("mounted pane session event ownership", () => {
   });
 
   it("recovers a foreign pane's permission picker from history after scoped readback fails", async () => {
-    const primary: GatewaySessionRow = {
-      key: "global",
-      agentId: "main",
-      sessionId: "main-global",
-      kind: "global",
-      updatedAt: 1,
-    };
-    const selected: GatewaySessionRow = {
-      key: "global",
-      agentId: "research",
-      sessionId: "research-global",
-      kind: "global",
-      updatedAt: 1,
+    const primary = globalSession("main");
+    const selected = globalSession("research", {
       permissionMode: "workspace",
       label: "Initial research session",
-    };
+    });
     const observed = { ...selected, label: "Observed research session" };
     const recovered = { ...observed, label: "Recovered through history" };
     const historyReply = createDeferred<ChatHistoryResult>();
@@ -722,26 +759,19 @@ describe("mounted pane session event ownership", () => {
       });
       expect(descriptor.row).toMatchObject(observed);
       expect(selectedChatSessionRow(state)).toMatchObject(observed);
-      const controls = () =>
-        renderChatPaneComposerControls({
-          state,
-          selectedSession: selectedChatSessionRow(state),
-          agentDefaultModel: undefined,
-          modelAccess: { allowed: true, requiredScope: "operator.write" },
-          effortAccess: { allowed: true, requiredScope: "operator.write" },
-          contextWindowAccess: { allowed: true, requiredScope: "operator.write" },
-          permissionAccess: { allowed: true, requiredScope: "operator.write" },
-          canSelectFull: true,
-          onModelSetup: vi.fn(),
-        });
       const container = document.createElement("div");
+      const view = mountSolid(
+        ChatPermissionPicker,
+        composerControls(state).permissionPicker,
+        container,
+      );
       const draw = () => {
-        render(renderChatPermissionPicker(controls().permissionPicker), container);
+        view.update(composerControls(state).permissionPicker);
         return container.querySelector<HTMLButtonElement>("[data-chat-permission-select]");
       };
       expect(draw()?.dataset.chatSelectValue).toBe("workspace");
 
-      await controls().permissionPicker.onSelect("full");
+      await composerControls(state).permissionPicker.onSelect("full");
       expect(patch.mock.calls[0]?.[1]).toMatchObject({
         key: "global",
         agentId: "research",
@@ -950,17 +980,18 @@ describe("mounted pane session event ownership", () => {
           }
         };
         assertProjection();
+        expect(delivered).toHaveBeenCalledOnce();
         if (generation === "stale") {
-          expect(delivered).not.toHaveBeenCalled();
-        } else {
-          expect(delivered).toHaveBeenCalledOnce();
-          if (generation === "rowless" || reentrant) {
-            expect(delivered.mock.calls[0]?.[1]).toEqual({ applied: false });
-          }
+          expect(delivered.mock.calls[0]?.[1]).toEqual({
+            applied: false,
+            generationRejected: true,
+          });
+        } else if (generation === "rowless" || reentrant) {
+          expect(delivered.mock.calls[0]?.[1]).toEqual({ applied: false });
         }
         laterHistory.reject(new Error("Incarnation history temporarily unavailable"));
-        await refresh;
         if (preservesSuccessor) {
+          await refresh;
           expect(getChatHistoryLoadState(state)).toMatchObject({
             phase: "failed",
             sessionKey: row.key,

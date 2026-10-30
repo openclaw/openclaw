@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { completeDoctorPreflightMigrations } from "../commands/doctor-config-preflight-startup.js";
+import { assertDoctorPreflightMigrationsComplete } from "../commands/doctor-config-preflight-migrations.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -10,7 +10,10 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import * as migrationTargets from "./state-migrations.media-persistence-targets.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
@@ -24,7 +27,33 @@ import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.
 
 afterEach(() => vi.restoreAllMocks());
 
-it("preserves refused archives when a healthy database shares their directory", async () => {
+function mutateDatabase(target: string, sql: string, ...values: SQLInputValue[]) {
+  using database = new DatabaseSync(target);
+  database.prepare(sql).run(...values);
+}
+
+async function copiedOwnerFixture(
+  state: OpenClawTestState,
+  eventsBySession: Parameters<typeof createLegacyDatabaseFixture>[0]["eventsBySession"] = {},
+) {
+  const cfg = { agents: { entries: { main: {}, cleaner: {} } } };
+  await state.writeConfig(cfg);
+  const source = createLegacyDatabaseFixture({ env: state.env, eventsBySession });
+  const target = state.statePath("agents", "cleaner", "agent", "openclaw-agent.sqlite");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
+  const run = () =>
+    autoMigrateLegacyState({
+      cfg,
+      doctorOnlyStateMigrations: true,
+      env: state.env,
+      homedir: () => state.home,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    });
+  return { cfg, source, target, run };
+}
+
+it("retains archives beside a refused database", async () => {
   await withOpenClawTestState({ prefix: "openclaw shared archives " }, async (state) => {
     const source = createLegacyDatabaseFixture({ env: state.env, eventsBySession: {} });
     const healthy = createLegacyDatabaseFixture({
@@ -38,12 +67,7 @@ it("preserves refused archives when a healthy database shares their directory", 
     fs.mkdirSync(directory, { recursive: true });
     fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
     fs.renameSync(healthy, healthyPath);
-    const database = new DatabaseSync(target);
-    try {
-      database.prepare("UPDATE schema_meta SET updated_at = updated_at + 1").run();
-    } finally {
-      database.close();
-    }
+    mutateDatabase(target, "UPDATE schema_meta SET updated_at = updated_at + 1");
     const original = fs.readFileSync(target);
     const archivePath = path.join(directory, "history.jsonl.deleted.2026-09-10T01-02-03.000Z");
     writeArchive(
@@ -78,14 +102,9 @@ it("preserves refused archives when a healthy database shares their directory", 
   });
 });
 
-it("recovers an identical wrong-owner copy despite unequal short reads", async () => {
+it("recovers identical wrong-owner copies despite short reads", async () => {
   await withOpenClawTestState({ prefix: "openclaw owner mismatch " }, async (state) => {
-    const cfg = { agents: { entries: { main: {}, cleaner: {} } } };
-    await state.writeConfig(cfg);
-    const source = createLegacyDatabaseFixture({ env: state.env, eventsBySession: {} });
-    const target = state.statePath("agents", "cleaner", "agent", "openclaw-agent.sqlite");
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
+    const { cfg, source, target, run } = await copiedOwnerFixture(state);
     const original = fs.readFileSync(source);
     expect(fs.readFileSync(target).equals(original)).toBe(true);
     const discovery = vi.spyOn(migrationTargets, "resolveAgentDatabaseMigrationTargets");
@@ -121,13 +140,7 @@ it("recovers an identical wrong-owner copy despite unequal short reads", async (
         },
       );
 
-    const result = await autoMigrateLegacyState({
-      cfg,
-      doctorOnlyStateMigrations: true,
-      env: state.env,
-      homedir: () => state.home,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    });
+    const result = await run();
     reads.mockRestore();
 
     expect(files.every((file) => file.shortReads === 1)).toBe(true);
@@ -143,70 +156,39 @@ it("recovers an identical wrong-owner copy despite unequal short reads", async (
       .readdirSync(path.dirname(target))
       .filter((file) => file.startsWith("openclaw-agent.sqlite.corrupt-"));
     expect(copies).toHaveLength(1);
-    expect(fs.readFileSync(path.join(path.dirname(target), copies[0]!)).equals(original)).toBe(
-      true,
-    );
+    expect(fs.readFileSync(path.join(path.dirname(target), copies[0]!))).toEqual(original);
     expect(result.warnings.join("\n")).toContain(copies[0]);
     const fresh = openOpenClawAgentDatabase({ agentId: "cleaner", env: state.env });
-    expect(
-      fresh.db.prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'").get()
-        ?.agent_id,
-    ).toBe("cleaner");
-    expect(fresh.db.prepare("SELECT COUNT(*) AS count FROM transcript_events").get()?.count).toBe(
-      0,
-    );
+    const sql =
+      "SELECT agent_id, (SELECT COUNT(*) FROM transcript_events) AS count FROM schema_meta WHERE meta_key = 'primary'";
+    expect(fresh.db.prepare(sql).get()).toMatchObject({ agent_id: "cleaner", count: 0 });
     await expect(
       assertOpenClawDatabasesReady({ env: state.env, operation: "gateway-startup", config: cfg }),
     ).resolves.toBeUndefined();
   });
 });
 
-it("continues independent Doctor repairs while preserving a divergent wrong-owner database", async () => {
+it("runs independent repairs while refusing divergent copies", async () => {
   await withOpenClawTestState({ prefix: "openclaw divergent owner " }, async (state) => {
-    const cfg = { agents: { entries: { main: { default: true }, cleaner: {} } } };
-    await state.writeConfig(cfg);
-    const source = createLegacyDatabaseFixture({
-      env: state.env,
-      eventsBySession: {
-        history: [{ type: "message", id: "shared", timestamp: 1, message: { role: "user" } }],
-      },
+    const event = { type: "message", id: "shared", timestamp: 1, message: { role: "user" } };
+    const { cfg, target, run } = await copiedOwnerFixture(state, {
+      history: [event],
     });
-    const target = state.statePath("agents", "cleaner", "agent", "openclaw-agent.sqlite");
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
-    const database = new DatabaseSync(target);
-    try {
-      database
-        .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = 'history'")
-        .run(
-          JSON.stringify({
-            type: "message",
-            id: "shared",
-            timestamp: 1,
-            message: { role: "user", content: "History present only in the misplaced copy." },
-          }),
-        );
-    } finally {
-      database.close();
-    }
-    const original = fs.readFileSync(target);
-    const execPath = state.statePath("exec-approvals.json");
-    fs.writeFileSync(
-      execPath,
+    mutateDatabase(
+      target,
+      "UPDATE transcript_events SET event_json = ? WHERE session_id = 'history'",
       JSON.stringify({
-        version: 1,
-        defaults: { security: "allowlist", ask: "on-miss" },
-        agents: {},
+        ...event,
+        message: { ...event.message, content: "History present only in the misplaced copy." },
       }),
     );
-
-    const result = await autoMigrateLegacyState({
-      cfg,
-      doctorOnlyStateMigrations: true,
-      env: state.env,
-      homedir: () => state.home,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    const original = fs.readFileSync(target);
+    const execPath = await state.writeJson("exec-approvals.json", {
+      version: 1,
+      defaults: { security: "allowlist", ask: "on-miss" },
+      agents: {},
     });
+    const result = await run();
 
     expect(fs.existsSync(execPath)).toBe(false);
     expect(
@@ -217,29 +199,25 @@ it("continues independent Doctor repairs while preserving a divergent wrong-owne
         .get()?.default_security,
     ).toBe("allowlist");
     expect(fs.readFileSync(target).equals(original)).toBe(true);
-    expect(result.stepReceipts.find((receipt) => receipt.id === "media-persistence")).toMatchObject(
-      {
+    const receipts = Object.fromEntries(
+      result.stepReceipts.map((receipt) => [receipt.id, receipt]),
+    );
+    const blocked = {
+      outcome: "refused",
+      changes: [],
+      refusal: { code: "blocked-by-agent-database-refusal" },
+    };
+    expect(receipts).toMatchObject({
+      "media-persistence": {
         outcome: "refused",
         refusal: { code: "agent-database-ownership-mismatch" },
       },
-    );
+      "transcript-directives": blocked,
+      "plugin-doctor-post-session-state": blocked,
+    });
     expect(
       result.stepReceipts.flatMap((receipt) => receipt.recoveredAgentDatabasePaths ?? []),
     ).toEqual([]);
-    expect(
-      result.stepReceipts.find((receipt) => receipt.id === "transcript-directives"),
-    ).toMatchObject({
-      outcome: "refused",
-      changes: [],
-      refusal: { code: "blocked-by-agent-database-refusal" },
-    });
-    expect(
-      result.stepReceipts.find((receipt) => receipt.id === "plugin-doctor-post-session-state"),
-    ).toMatchObject({
-      outcome: "refused",
-      changes: [],
-      refusal: { code: "blocked-by-agent-database-refusal" },
-    });
     expect(result.postSessionPluginMigration).toBeUndefined();
     const warning = result.warnings.join("\n");
     expect(warning).toContain(target);
@@ -251,7 +229,7 @@ it("continues independent Doctor repairs while preserving a divergent wrong-owne
       "Independent state repairs were run",
     );
     await expect(
-      completeDoctorPreflightMigrations({
+      assertDoctorPreflightMigrationsComplete({
         cfg,
         stepReceipts: result.stepReceipts,
         report: () => {},

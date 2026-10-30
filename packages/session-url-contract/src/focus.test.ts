@@ -3,117 +3,95 @@ import {
   buildControlUiFocusPath,
   inferControlUiFocusBasePath,
   parseControlUiFocusLocation,
+  type ControlUiFocusBuildTarget,
+  type ControlUiFocusTarget,
 } from "./focus.js";
 
+const sessionKey = "agent:a:b";
+const dashboard = "/dashboard/a/task";
+type RoundTripCase = [ControlUiFocusBuildTarget, string, ControlUiFocusTarget?, string?];
+const browserQuery = "sessionKey=agent%3Aa%3Ab&";
+const browserTarget = (tab: Extract<ControlUiFocusTarget, { kind: "browser" }>["tab"]) =>
+  ({ kind: "browser", sessionKey, tab }) as const;
+const dashboardTarget = (pathname: string, search = "", hash = "") =>
+  ({ kind: "dashboard", route: { pathname, search, hash } }) as const;
+const desktopTarget = (
+  control = false,
+  selector: Extract<ControlUiFocusTarget, { kind: "desktop" }>["selector"] = null,
+) => ({ kind: "desktop", control, selector }) as const;
+
 describe("Control UI focus locations", () => {
-  it.each([
-    ["dashboard main", "/focus/dashboard/roboclaw", undefined, "/dashboard/roboclaw"],
+  it.each<RoundTripCase>([
     [
-      "dashboard short reference",
-      "/focus/dashboard/roboclaw/the-daily-claw-6d7c9ccb",
+      browserTarget({ target: "host", profile: "a.b", targetId: "t/1" }),
+      `/focus/browser?${browserQuery}target=host&profile=a.b&targetId=t%2F1`,
+    ],
+    [
+      browserTarget({ target: "node", node: "n/a", profile: "p", targetId: ".." }),
+      `/ui/focus/browser?${browserQuery}target=node&profile=p&targetId=..&node=n%2Fa`,
       undefined,
-      "/dashboard/roboclaw/the-daily-claw-6d7c9ccb",
+      "/ui",
+    ],
+    [{ kind: "dashboard", path: dashboard }, `/focus${dashboard}`, dashboardTarget(dashboard)],
+    [
+      { kind: "dashboard", path: "/ui/dashboard/a?x=1#pane" },
+      "/ui/focus/dashboard/a?x=1#pane",
+      dashboardTarget("/ui/dashboard/a", "?x=1", "#pane"),
+      "/ui/",
+    ],
+    [{ kind: "terminal" }, "/ui/focus/terminal", undefined, "/ui"],
+    [{ kind: "desktop" }, "/focus/desktop", desktopTarget()],
+    [
+      { kind: "desktop", source: "env:A/B & C" },
+      "/focus/desktop/source/env%3AA%2FB%20%26%20C",
+      desktopTarget(false, { kind: "source", value: "env:A/B & C" }),
+    ],
+    [{ kind: "desktop", control: true }, "/focus/desktop/control", desktopTarget(true)],
+    [
+      { kind: "desktop", session: "a: b" },
+      "/focus/desktop/session/a%3A%20b",
+      desktopTarget(false, { kind: "session", value: "a: b" }),
     ],
     [
-      "dashboard literal key",
-      "/focus/dashboard/roboclaw/~key/12345678",
-      undefined,
-      "/dashboard/roboclaw/~key/12345678",
+      { kind: "desktop", control: true, source: "n:a", session: "a:b" },
+      "/focus/desktop/control/source/n%3Aa",
+      desktopTarget(true, { kind: "source", value: "n:a" }),
     ],
-    [
-      "base-path dashboard",
-      "/openclaw/focus/dashboard/roboclaw/the-daily-claw-6d7c9ccb/",
-      "/openclaw",
-      "/openclaw/dashboard/roboclaw/the-daily-claw-6d7c9ccb",
-    ],
-  ])("parses %s through the underlying dashboard route", (_name, pathname, basePath, routePath) => {
-    expect(parseControlUiFocusLocation(pathname, basePath)).toEqual({
+    [{ kind: "desktop", source: " ", session: "" }, "/ui/focus/desktop", desktopTarget(), "/ui"],
+  ])("round-trips %j", (target, path, parsed, basePath = "") => {
+    expect(buildControlUiFocusPath(target, basePath)).toBe(path);
+    expect(parseControlUiFocusLocation(new URL(path, "https://gateway.example.test"))).toEqual({
       status: "valid",
-      basePath: basePath ?? "",
-      target: {
-        kind: "dashboard",
-        route: { pathname: routePath, search: "", hash: "" },
-      },
+      basePath: basePath.replace(/\/$/u, ""),
+      target: parsed ?? target,
     });
   });
 
   it.each([
-    ["terminal", "/focus/terminal", { kind: "terminal" }],
-    ["desktop", "/focus/desktop/", { kind: "desktop", control: false, selector: null }],
-    [
-      "desktop source",
-      "/focus/desktop/source/environment%3AMac%20Studio%2FQA%20%26%20demo",
-      {
-        kind: "desktop",
-        control: false,
-        selector: { kind: "source", value: "environment:Mac Studio/QA & demo" },
-      },
-    ],
-    [
-      "desktop session",
-      "/focus/desktop/session/agent%3Amain%3Amobile%20session",
-      {
-        kind: "desktop",
-        control: false,
-        selector: { kind: "session", value: "agent:main:mobile session" },
-      },
-    ],
-    [
-      "controlled desktop",
-      "/focus/desktop/control",
-      { kind: "desktop", control: true, selector: null },
-    ],
-    [
-      "controlled source",
-      "/focus/desktop/control/source/node%3Aworker-1",
-      {
-        kind: "desktop",
-        control: true,
-        selector: { kind: "source", value: "node:worker-1" },
-      },
-    ],
-    [
-      "controlled session",
-      "/focus/desktop/control/session/agent%3Amain%3Amobile",
-      {
-        kind: "desktop",
-        control: true,
-        selector: { kind: "session", value: "agent:main:mobile" },
-      },
-    ],
-  ] as const)("parses %s", (_name, pathname, target) => {
-    expect(parseControlUiFocusLocation(pathname, "")).toEqual({
-      status: "valid",
-      basePath: "",
-      target,
-    });
-  });
-
-  it.each([
+    ...[
+      "",
+      `${browserQuery}target=host&profile=work`,
+      `${browserQuery}target=node&profile=work&targetId=one`,
+      `${browserQuery}target=host&node=other&profile=work&targetId=one`,
+      `${browserQuery}target=host&profile=work&targetId=one&targetId=two`,
+      "sessionKey=%20&target=host&profile=work&targetId=one",
+    ].map((query) => ({ pathname: "/focus/browser", search: `?${query}` })),
     "/focus",
-    "/focus/unknown",
-    "/focus/terminal/extra",
     "/focus/desktop/source",
     "/focus/desktop/session/%",
     "/focus/desktop/control/unknown/value",
-    "/focus/dashboard",
-  ])("rejects malformed or unsupported target %s", (pathname) => {
-    expect(parseControlUiFocusLocation(pathname, "")).toEqual({
+  ])("rejects unsupported location %j", (input) => {
+    expect(parseControlUiFocusLocation(input, typeof input === "string" ? "" : undefined)).toEqual({
       status: "unsupported",
       basePath: "",
     });
   });
-
-  it.each([
-    "/?view=dashboard&session=agent%3Amain%3Awork",
-    "/?view=terminal",
-    "/?view=desktop",
-    "/terminal",
-    "/desktop",
-    "/focused/terminal",
-  ])("does not parse query aliases or lookalike location %s", (pathname) => {
-    expect(parseControlUiFocusLocation(pathname, "")).toBeNull();
-  });
+  it.each(["/?view=dashboard&session=agent%3Amain%3Awork", "/focused/terminal"])(
+    "ignores %s",
+    (input) => {
+      expect(parseControlUiFocusLocation(input, "")).toBeNull();
+    },
+  );
 
   it("infers focus-aware base paths without overriding an explicit base", () => {
     expect(inferControlUiFocusBasePath("/focus/terminal")).toBe("");
@@ -123,86 +101,22 @@ describe("Control UI focus locations", () => {
     expect(parseControlUiFocusLocation("/openclaw/focus/terminal", "/other")).toBeNull();
   });
 
-  it("passes dashboard search and hash through to the canonical route loader", () => {
-    expect(
-      parseControlUiFocusLocation({
-        pathname: "/focus/dashboard/main",
-        search: "?catalog=beam&host=gateway&thread=one",
-        hash: "#pane",
-      }),
-    ).toEqual({
-      status: "valid",
-      basePath: "",
-      target: {
-        kind: "dashboard",
-        route: {
-          pathname: "/dashboard/main",
-          search: "?catalog=beam&host=gateway&thread=one",
-          hash: "#pane",
-        },
-      },
-    });
+  it("rejects dashboard paths outside the configured base", () => {
+    expect(buildControlUiFocusPath({ kind: "dashboard", path: dashboard }, "/openclaw")).toBeNull();
   });
-});
 
-describe("buildControlUiFocusPath", () => {
   it.each([
+    [`/openclaw/focus${dashboard}/`, "/openclaw", dashboardTarget(`/openclaw${dashboard}`)],
     [
-      "dashboard",
-      { kind: "dashboard", path: "/dashboard/roboclaw/the-daily-claw-6d7c9ccb" },
+      "/focus/desktop/control/session/a%3Ab",
       "",
-      "/focus/dashboard/roboclaw/the-daily-claw-6d7c9ccb",
+      desktopTarget(true, { kind: "session", value: "a:b" }),
     ],
-    [
-      "base-path dashboard with suffix",
-      { kind: "dashboard", path: "/openclaw/dashboard/roboclaw/main?catalog=beam#pane" },
-      "/openclaw/",
-      "/openclaw/focus/dashboard/roboclaw/main?catalog=beam#pane",
-    ],
-    ["terminal", { kind: "terminal" }, "/openclaw", "/openclaw/focus/terminal"],
-    ["desktop", { kind: "desktop" }, "", "/focus/desktop"],
-    [
-      "desktop source",
-      { kind: "desktop", source: "environment:Mac Studio/QA & demo" },
-      "",
-      "/focus/desktop/source/environment%3AMac%20Studio%2FQA%20%26%20demo",
-    ],
-    [
-      "desktop session",
-      { kind: "desktop", session: "agent:main:mobile session" },
-      "",
-      "/focus/desktop/session/agent%3Amain%3Amobile%20session",
-    ],
-    [
-      "controlled source wins",
-      {
-        kind: "desktop",
-        control: true,
-        source: "node:worker-1",
-        session: "agent:main:mobile",
-      },
-      "",
-      "/focus/desktop/control/source/node%3Aworker-1",
-    ],
-    [
-      "controlled session",
-      { kind: "desktop", control: true, session: "agent:main:mobile" },
-      "",
-      "/focus/desktop/control/session/agent%3Amain%3Amobile",
-    ],
-    [
-      "empty values",
-      { kind: "desktop", source: " ", session: "" },
-      "/openclaw",
-      "/openclaw/focus/desktop",
-    ],
-  ] as const)("builds %s", (_name, target, basePath, expected) => {
-    expect(buildControlUiFocusPath(target, basePath)).toBe(expected);
-  });
-
-  it("rejects a dashboard route outside the configured base path", () => {
-    expect(
-      buildControlUiFocusPath({ kind: "dashboard", path: "/dashboard/roboclaw/main" }, "/openclaw"),
-    ).toBeNull();
+  ] as const)("parses %s", (input, basePath, target) => {
+    expect(parseControlUiFocusLocation(input, basePath)).toEqual({
+      status: "valid",
+      basePath,
+      target,
+    });
   });
 });

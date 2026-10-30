@@ -1,17 +1,15 @@
 import { beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
-  const release = vi.fn<() => void>();
   const database = { isOpen: true, close: vi.fn<() => void>() };
   return {
-    release,
     database,
-    acquire: vi.fn(() => ({ release })),
+    admit: vi.fn<() => void>(),
     open: vi.fn(() => database),
   };
 });
-vi.mock("../infra/state-database-coordinator.js", () => ({
-  acquireStateDatabaseHandleLease: mocks.acquire,
+vi.mock("../infra/gateway-state-owner.js", () => ({
+  assertStateDatabaseAccessAllowed: mocks.admit,
 }));
 vi.mock("../infra/node-sqlite.js", () => ({
   openNodeSqliteDatabase: mocks.open,
@@ -19,14 +17,12 @@ vi.mock("../infra/node-sqlite.js", () => ({
 }));
 
 import {
-  closeTrackedStateDatabase,
   openTrackedStateDatabase,
   openTrackedStateDatabaseResult,
 } from "./openclaw-state-db-handle.js";
 
 beforeEach(() => {
-  mocks.release.mockReset();
-  mocks.acquire.mockReset().mockReturnValue({ release: mocks.release });
+  mocks.admit.mockReset();
   mocks.open.mockReset().mockReturnValue(mocks.database);
   mocks.database.isOpen = true;
   mocks.database.close.mockReset().mockImplementation(() => {
@@ -34,7 +30,7 @@ beforeEach(() => {
   });
 });
 
-it("reports a native open failure only after releasing its handle lease", () => {
+it("reports native open failures without treating maintenance refusal as absence", () => {
   const failure = new Error("native open failed");
   mocks.open.mockImplementation(() => {
     throw failure;
@@ -43,43 +39,16 @@ it("reports a native open failure only after releasing its handle lease", () => 
     status: "unavailable",
     error: failure,
   });
-  expect(mocks.release).toHaveBeenCalledOnce();
   expect(() => openTrackedStateDatabase("/fixture/state.sqlite")).toThrow(failure);
 });
 
-it.each(["acquire", "release"])("keeps lease %s failure exceptional", (phase) => {
-  const failure = new Error(`lease ${phase} failed`);
-  if (phase === "acquire") {
-    mocks.acquire.mockImplementation(() => {
-      throw failure;
-    });
-  } else {
-    mocks.open.mockImplementation(() => {
-      throw new Error("native open failed");
-    });
-    mocks.release.mockImplementation(() => {
-      throw failure;
-    });
-  }
+it("keeps maintenance admission failure exceptional before native opening", () => {
+  const failure = new Error("maintenance owns this state");
+  mocks.admit.mockImplementation(() => {
+    throw failure;
+  });
   expect(() => openTrackedStateDatabaseResult("/fixture/state.sqlite", { readOnly: true })).toThrow(
     failure,
   );
-  if (phase === "acquire") {
-    expect(mocks.open).not.toHaveBeenCalled();
-  }
-});
-
-it("holds the successful reader lease through failed native close and releases it on retry", () => {
-  const result = openTrackedStateDatabaseResult("/fixture/state.sqlite", { readOnly: true });
-  expect(result.status).toBe("available");
-  if (result.status !== "available") {
-    throw new Error("Expected an opened native reader");
-  }
-  mocks.database.close.mockImplementationOnce(() => {
-    throw new Error("close failed");
-  });
-  expect(() => closeTrackedStateDatabase(result.database)).toThrow("close failed");
-  expect(mocks.release).not.toHaveBeenCalled();
-  closeTrackedStateDatabase(result.database);
-  expect(mocks.release).toHaveBeenCalledOnce();
+  expect(mocks.open).not.toHaveBeenCalled();
 });

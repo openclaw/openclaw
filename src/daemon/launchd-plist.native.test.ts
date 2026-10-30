@@ -31,9 +31,10 @@ describe.skipIf(process.platform !== "darwin")("native LaunchAgent definitions",
       );
       execFileSync("/usr/bin/plutil", ["-convert", format, "--", plistPath]);
 
-      expect(await findExtraGatewayServices({ HOME: home })).toEqual([
-        expect.objectContaining({ label: "org.synthetic.a&b", marker: "openclaw" }),
-      ]);
+      expect(await findExtraGatewayServices({ HOME: home })).toEqual({
+        services: [expect.objectContaining({ label: "org.synthetic.a&b", marker: "openclaw" })],
+        errors: [],
+      });
       await expect(
         readLaunchAgentProgramArgumentsFromFile(plistPath, { requireEffective: true }),
       ).resolves.toMatchObject({

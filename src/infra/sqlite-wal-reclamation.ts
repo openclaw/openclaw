@@ -8,6 +8,10 @@ import type {
   SqliteWalCheckpointSnapshot,
 } from "./sqlite-wal-checkpoint.js";
 
+const VACUUM_UNIT_TARGET_MS = 25;
+// Scheduling estimates belong to the native connection lifetime, never persisted store facts.
+const vacuumPageBudgets = new WeakMap<DatabaseSync, number>();
+
 export type SqliteWalReclamationOptions = {
   maxPages?: number;
   checkpointMode?: SqliteWalCheckpointMode;
@@ -47,6 +51,24 @@ export function createSqliteWalReclamationResult(): SqliteWalReclamationResult {
   };
 }
 
+/** Physical page accounting for both reclamation and its read-only eligibility probe. */
+export function readSqliteFreePageCount(
+  database: DatabaseSync,
+  diagnostics?: Pick<SqliteWalReclamationResult, "queryMs">,
+): number {
+  const startedAt = diagnostics ? performance.now() : 0;
+  try {
+    return Number(
+      // sqlite-allow-raw -- Physical page accounting belongs to the WAL owner.
+      database.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0,
+    );
+  } finally {
+    if (diagnostics) {
+      diagnostics.queryMs += performance.now() - startedAt;
+    }
+  }
+}
+
 /** One online unit never waits for readers or adds vacuum frames behind a blocked checkpoint. */
 export function reclaimSqliteWalFreePages(
   database: DatabaseSync,
@@ -58,9 +80,18 @@ export function reclaimSqliteWalFreePages(
     options.beforeMutation?.();
     const startedAt = performance.now();
     try {
-      const completed = runCheckpoint(options.checkpointMode ?? "TRUNCATE");
-      result.checkpointCompleted = completed;
+      const mode = options.checkpointMode ?? "TRUNCATE";
+      let completed = runCheckpoint(mode);
       result.checkpointCalls++;
+      if (!completed && mode === "TRUNCATE") {
+        // Readers can prevent WAL reset after every frame has been copied.
+        // Require a fresh complete checkpoint, not an empty WAL file, before
+        // adding vacuum frames or letting disk-budget eviction proceed.
+        options.beforeMutation?.();
+        completed = runCheckpoint("PASSIVE");
+        result.checkpointCalls++;
+      }
+      result.checkpointCompleted = completed;
       result.checkpointIncomplete += Number(!completed);
       return completed;
     } finally {
@@ -69,33 +100,29 @@ export function reclaimSqliteWalFreePages(
       result.checkpointMaxMs = Math.max(result.checkpointMaxMs, elapsed);
     }
   };
-  const freePages = () => {
-    const startedAt = performance.now();
-    try {
-      return Number(
-        // sqlite-allow-raw -- Physical page accounting belongs to the WAL owner.
-        database.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0,
-      );
-    } finally {
-      result.queryMs += performance.now() - startedAt;
-    }
-  };
+  // PASSIVE never invokes SQLite's busy handler; checkpoint-only ticks need no policy change.
+  if (options.maxPages === 0 && options.checkpointMode === "PASSIVE") {
+    checkpoint();
+    return result;
+  }
   return runWithSqliteBusyTimeout(database, 0, () => {
-    if (!checkpoint()) {
+    // A zero page budget is a checkpoint-only pass; vacuum keeps its own cadence.
+    if (!checkpoint() || options.maxPages === 0) {
       return result;
     }
-    const before = freePages();
+    const before = readSqliteFreePageCount(database, result);
     result.freePagesBefore = before;
     result.remainingFreePages = before;
     if (!Number.isSafeInteger(before) || before <= 0) {
       return result;
     }
-    const pages = Math.min(512, before, options.maxPages ?? 512);
+    const pages = Math.min(vacuumPageBudgets.get(database) ?? 8, before, options.maxPages ?? 512);
     if (!Number.isSafeInteger(pages) || pages <= 0) {
       throw new Error("SQLite page reclamation requires a positive integer page limit");
     }
     const startedAt = performance.now();
     let entered = false;
+    let completed = false;
     try {
       runSqliteImmediateTransactionSync(
         database,
@@ -108,19 +135,39 @@ export function reclaimSqliteWalFreePages(
           database.exec(`PRAGMA incremental_vacuum(${pages});`);
           options.onCommit?.();
         },
-        { busyTimeoutMs: 0, operationLabel: "incremental-vacuum" },
+        {
+          // The catch below owns pre-entry lock loss as a skipped best-effort pass.
+          beginLockFailureReporting: "suppress",
+          busyTimeoutMs: 0,
+          operationLabel: "incremental-vacuum",
+        },
       );
+      completed = true;
     } catch (error) {
       if (entered || !isSqliteLockError(error)) {
         throw error;
       }
       return result;
     } finally {
-      result.vacuumMs += performance.now() - startedAt;
+      const elapsedMs = performance.now() - startedAt;
+      result.vacuumMs += elapsedMs;
+      if (completed) {
+        vacuumPageBudgets.set(
+          database,
+          Math.max(
+            1,
+            Math.min(
+              512,
+              pages * 2,
+              Math.floor((pages * VACUUM_UNIT_TARGET_MS) / Math.max(elapsedMs, 0.001)),
+            ),
+          ),
+        );
+      }
     }
     options.afterCommit?.();
     if (checkpoint()) {
-      result.remainingFreePages = freePages();
+      result.remainingFreePages = readSqliteFreePageCount(database, result);
     }
     return result;
   });

@@ -25,10 +25,7 @@ export function closeGatewayTransportWithGrace(
     }
   };
   socket.once("close", handleClose);
-  const fallback = setTimeout(() => {
-    terminate();
-  }, WEBSOCKET_CLOSE_GRACE_MS);
-  fallback.unref?.();
+  const fallback = setTimeout(terminate, WEBSOCKET_CLOSE_GRACE_MS).unref();
   try {
     socket.close(code, reason);
   } catch {

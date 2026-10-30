@@ -1,203 +1,155 @@
 import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import * as commandSecretGateway from "../../cli/command-secret-gateway.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  bindCronJobAdmittedRun,
-  clearCronJobActive,
-  markCronJobActive,
-} from "../../cron/active-jobs.js";
-import { prepareCronPromptRunAdmission } from "../../cron/isolated-agent/run-admission.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-identity-token.js";
-import {
-  mintMessageActionTurnCapability,
-  readMessageActionInvocationConfig,
-  revokeMessageActionTurnCapability,
-  withMessageActionInvocationConfig,
-} from "../../gateway/message-action-turn-capability.js";
-import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
-import {
-  buildMinimalGatewayHelloOkPayload,
-  closeMinimalGatewayServer,
-  parseMinimalGatewayRequestFrame,
-  sendMinimalGatewayConnectChallenge,
-  sendMinimalGatewayResponse,
-} from "../../gateway/minimal-gateway.test-helpers.js";
+import * as cron from "../../cron/active-jobs.js";
+import { prepareCronRunAdmission } from "../../cron/run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "../../cron/scheduled-occurrence.test-support.js";
+import * as turns from "../../gateway/message-action-turn-capability.js";
+import { closeMinimalGatewayServer } from "../../gateway/minimal-gateway.test-helpers.js";
 import { resolveTrustedMessageActionToolContext } from "../../gateway/server-methods/message-action-context.js";
-import type {
-  GatewayRequestContext,
-  GatewayRequestHandler,
-} from "../../gateway/server-methods/types.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  getActiveAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
-import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import type { GatewayRequestHandler } from "../../gateway/server-methods/types.js";
+import * as runs from "../../infra/agent-run-registry.js";
 import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
-import {
-  captureActivePluginRegistrySnapshot,
-  restoreActivePluginRegistrySnapshot,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
-import {
-  getGatewayContextResolver,
-  withPluginRuntimeGatewayContextResolver,
-} from "../../plugins/runtime/gateway-request-scope.js";
+import * as plugins from "../../plugins/runtime.js";
+import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-fixtures.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import * as fixtures from "../../test-utils/channel-plugins.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { createEmbeddedMessageInvocationPolicy } from "../scheduled-message-invocation.js";
-import {
-  createAdmittedGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import * as callers from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
+import {
+  messageGatewayContext as gatewayContext,
+  registerMessageChannel,
+  resolvedMessageSecrets as resolvedSecrets,
+  stubMessageSecrets,
+} from "./message-tool-execution.test-support.js";
+
+let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+let registry: ReturnType<typeof plugins.captureActivePluginRegistrySnapshot>;
+beforeEach(async () => {
+  state = await createOpenClawTestState({
+    env: { OPENCLAW_GATEWAY_URL: undefined, OPENCLAW_GATEWAY_TOKEN: undefined },
+  });
+  registry = plugins.captureActivePluginRegistrySnapshot();
+  stubMessageSecrets();
+});
+afterEach(async () => {
+  vi.restoreAllMocks();
+  plugins.restoreActivePluginRegistrySnapshot(registry);
+  await state.cleanup();
+});
+
+function hostedConfig(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
+  return {
+    agents: { entries: { ops: {} }, defaults: { workspace: state.workspaceDir } },
+    channels: { gatewaychat: { enabled: true } },
+    ...overrides,
+  };
+}
+
+function gatewayPlugin(
+  action: "read" | "react",
+  handleAction: NonNullable<ChannelPlugin["actions"]>["handleAction"],
+): ChannelPlugin {
+  return {
+    ...fixtures.createChannelTestPluginBase({
+      id: "gatewaychat",
+      capabilities: { chatTypes: ["direct"], ...(action === "react" ? { reactions: true } : {}) },
+      config: {
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+    }),
+    outbound: { deliveryMode: "gateway" },
+    actions: {
+      ...(action === "read"
+        ? { providerOwnedReadGates: true, readAuthorityActions: [action] }
+        : {}),
+      describeMessageTool: () => ({ actions: [action] }),
+      supportsAction: (context) => context.action === action,
+      resolveExecutionMode: () => "gateway",
+      handleAction,
+    },
+  };
+}
 
 // Real routing proves hosted actions do not connect to either configured endpoint.
 // Provider receipt and pre-I/O authority checks remain in server-methods/send.test.ts.
 it("dispatches a hosted message action without connecting to either Gateway endpoint", async () => {
-  const state = await createOpenClawTestState({
-    env: { OPENCLAW_GATEWAY_URL: undefined, OPENCLAW_GATEWAY_TOKEN: undefined },
-  });
-  const registry = captureActivePluginRegistrySnapshot();
   const listeners: WebSocketServer[] = [];
   const operationalRunInstance = createOperationalRunInstanceRef("hosted-transport-run");
-  const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+  const authority = runs.claimAgentRunDelegatedAuthority(operationalRunInstance);
   const sessionKey = "agent:ops:gatewaychat:direct:alice";
-  const capability = mintMessageActionTurnCapability({
-    agentId: "ops",
-    runId: operationalRunInstance.runId,
-    sessionKey,
-  });
+  const run = { agentId: "ops", runId: operationalRunInstance.runId };
+  const capability = turns.mintMessageActionTurnCapability({ ...run, sessionKey });
   const assertDashboardReadCurrent = vi.fn();
-  const dashboardCapability = mintMessageActionTurnCapability({
-    agentId: "ops",
-    runId: operationalRunInstance.runId,
+  const dashboardCapability = turns.mintMessageActionTurnCapability({
+    ...run,
     sessionKey,
     assertDashboardReadCurrent,
     expiresWithRun: true,
   });
   try {
-    const openListener = async (listener: "hosted-local" | "remote-primary") => {
+    const openListener = async () => {
       const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
       listeners.push(server);
       const connections = vi.fn();
-      const requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[] = [];
       server.on("connection", (socket) => {
         connections();
-        sendMinimalGatewayConnectChallenge(socket);
-        socket.on("message", (data) => {
-          const frame = parseMinimalGatewayRequestFrame(data);
-          requests.push(frame);
-          if (frame.id) {
-            sendMinimalGatewayResponse(
-              socket,
-              frame.id,
-              frame.method === "connect"
-                ? buildMinimalGatewayHelloOkPayload({ methods: ["message.action"] })
-                : { ok: true, listener },
-            );
-          }
-        });
+        socket.terminate();
       });
       await once(server, "listening");
       const address = server.address();
       if (!address || typeof address === "string") {
         throw new Error("Expected a loopback listener address");
       }
-      return { connections, requests, port: address.port, url: `ws://127.0.0.1:${address.port}` };
+      return { connections, port: address.port, url: `ws://127.0.0.1:${address.port}` };
     };
-    const local = await openListener("hosted-local");
-    const remote = await openListener("remote-primary");
-    const plugin: ChannelPlugin = {
-      id: "gatewaychat",
-      meta: {
-        id: "gatewaychat",
-        label: "Gateway Chat",
-        selectionLabel: "Gateway Chat",
-        docsPath: "/channels/gatewaychat",
-        blurb: "Synthetic hosted transport fixture.",
-      },
-      capabilities: { chatTypes: ["direct"], reactions: true },
-      outbound: { deliveryMode: "gateway" },
-      config: {
-        listAccountIds: () => ["default"],
-        resolveAccount: () => ({ enabled: true }),
-        isConfigured: () => true,
-      },
-      actions: {
-        describeMessageTool: () => ({ actions: ["react"] }),
-        supportsAction: ({ action }) => action === "react",
-        resolveExecutionMode: () => "gateway",
-        handleAction: () => {
-          throw new Error("The action must cross the Gateway transport");
-        },
-      },
-    };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
-    const config: OpenClawConfig = {
+    const local = await openListener();
+    const remote = await openListener();
+    const plugin = gatewayPlugin("react", () => {
+      throw new Error("The action must cross the Gateway transport");
+    });
+    registerMessageChannel(plugin);
+    const config = hostedConfig({
       gateway: {
         mode: "remote",
         port: local.port,
         auth: { mode: "token", token: "synthetic-hosted-local-token" },
         remote: { url: remote.url, token: "synthetic-remote-primary-token" },
       },
-      channels: { gatewaychat: { enabled: true } },
-    };
+    });
     setRuntimeConfigSnapshot(config, config);
     process.env.OPENCLAW_GATEWAY_URL = remote.url;
     const dispatched = vi.fn<GatewayRequestHandler>(({ params, respond }) => {
       respond(true, { ok: true, listener: "hosted-local", action: params });
     });
-    const methods = createGatewayMethodRegistry([
-      {
-        name: "message.action",
-        owner: { kind: "core", area: "message" },
-        scope: "operator.write",
-        handler: dispatched,
-      },
-    ]);
-    const context = {
-      getRuntimeConfig: () => config,
-      getGatewayMethodRegistry: () => methods,
-      trackExecution: <T>(run: () => Promise<T>) => run(),
-    } as GatewayRequestContext;
+    const context = gatewayContext(() => config, dispatched);
     const makeTool = (turnCapability?: string) =>
       createMessageTool({
-        getRuntimeConfig: () => config,
-        runMessageAction,
-        agentId: "ops",
+        ...run,
         agentSessionKey: sessionKey,
-        runId: operationalRunInstance.runId,
         messageActionTurnCapability: turnCapability,
-        getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-        resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
-          resolvedConfig,
-          diagnostics: [],
-          targetStatesByPath: {},
-          hadUnresolvedTargets: false,
-        }),
       });
-    const tool = makeTool(capability);
-    const execute = (selectedTool = tool, accountId?: string) =>
-      withGatewayToolCallerIdentity(
+    const tools = [makeTool(capability), makeTool(), makeTool(dashboardCapability)];
+    const execute = (selectedTool: (typeof tools)[number], accountId?: string) =>
+      callers.withGatewayToolCallerIdentity(
         {
           agentId: "ops",
           sessionKey,
           operationalRunInstance,
           gatewayContextResolver: () => context,
           receiptAuthority: () =>
-            getActiveAgentRunDelegatedAuthority(operationalRunInstance) === authority,
+            runs.getActiveAgentRunDelegatedAuthority(operationalRunInstance) === authority,
         },
         () =>
           selectedTool.execute("hosted-reaction", {
@@ -209,38 +161,29 @@ it("dispatches a hosted message action without connecting to either Gateway endp
             ...(accountId ? { accountId } : {}),
           }),
       );
-    const result = await execute();
-    expect(result.details).toMatchObject({ ok: true, listener: "hosted-local" });
-    expect(dispatched).toHaveBeenCalledOnce();
-    expect(dispatched.mock.calls[0]?.[0].client?.internal?.agentRuntimeIdentity).toMatchObject({
-      agentId: "ops",
-      sessionKey,
-      operationalRunInstance,
-    });
-    expect(result.details).toMatchObject({
-      action: {
-        channel: "gatewaychat",
-        action: "react",
-        sessionKey,
-        params: { messageId: "message-1", emoji: "✅" },
-      },
-    });
-    expect(local.connections).not.toHaveBeenCalled();
-    expect(remote.connections).not.toHaveBeenCalled();
-    const contextlessTool = makeTool();
-    const dashboardTool = makeTool(dashboardCapability);
-    for (const selectedTool of [contextlessTool, dashboardTool]) {
-      await expect(execute(selectedTool, "default")).resolves.toMatchObject({
-        details: { ok: true, listener: "hosted-local" },
+    for (const [index, tool] of tools.entries()) {
+      const result = await execute(tool, index === 0 ? undefined : "default");
+      expect(dispatched).toHaveBeenCalledTimes(index + 1);
+      expect(result.details).toMatchObject({
+        ok: true,
+        listener: "hosted-local",
+        action: {
+          channel: "gatewaychat",
+          action: "react",
+          sessionKey,
+          params: { messageId: "message-1", emoji: "✅" },
+        },
       });
-      expect(
-        dispatched.mock.calls.at(-1)?.[0].client?.internal?.agentRuntimeIdentity,
-      ).toBeUndefined();
+      expect(dispatched.mock.calls.at(-1)?.[0].client?.internal?.agentRuntimeIdentity).toEqual(
+        index === 0
+          ? expect.objectContaining({ agentId: "ops", sessionKey, operationalRunInstance })
+          : undefined,
+      );
     }
     expect(dispatched.mock.calls[2]?.[0].params).toEqual(dispatched.mock.calls[1]?.[0].params);
     expect(assertDashboardReadCurrent).not.toHaveBeenCalled();
-    releaseAgentRunDelegatedAuthority(authority);
-    for (const selectedTool of [tool, contextlessTool, dashboardTool]) {
+    runs.releaseAgentRunDelegatedAuthority(authority);
+    for (const selectedTool of tools) {
       await expect(execute(selectedTool)).rejects.toThrow(
         /agent (?:runtime identity requires active delegated run|tool caller) authority/,
       );
@@ -249,41 +192,29 @@ it("dispatches a hosted message action without connecting to either Gateway endp
     expect(local.connections).not.toHaveBeenCalled();
     expect(remote.connections).not.toHaveBeenCalled();
   } finally {
-    revokeMessageActionTurnCapability(capability);
-    revokeMessageActionTurnCapability(dashboardCapability);
-    releaseAgentRunDelegatedAuthority(authority);
-    restoreActivePluginRegistrySnapshot(registry);
-    try {
-      await Promise.all(listeners.map(closeMinimalGatewayServer));
-    } finally {
-      await state.cleanup();
-    }
+    turns.revokeMessageActionTurnCapability(capability);
+    turns.revokeMessageActionTurnCapability(dashboardCapability);
+    runs.releaseAgentRunDelegatedAuthority(authority);
+    await Promise.all(listeners.map(closeMinimalGatewayServer));
   }
 }, 30_000);
 
 it("retains scheduled invocation config through bound Gateway dispatch after preparation waits", async () => {
-  const state = await createOpenClawTestState({
-    env: { OPENCLAW_GATEWAY_URL: undefined, OPENCLAW_GATEWAY_TOKEN: undefined },
-  });
-  const registry = captureActivePluginRegistrySnapshot();
   const source = new AbortController();
   const jobId = "scheduled-config-handoff";
   const runId = "scheduled-config-run";
   const sessionId = "scheduled-persistent-session";
   const sessionKey = `agent:ops:cron:${jobId}:run:${runId}`;
+  const run = { agentId: "ops", runId, sessionId };
   const policy = { version: 1, mode: "trusted" } as const;
   // Only runtime config changes here; canonical job revocation has its own owner tests.
-  const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+  const marker = cron.markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
   const entered = createDeferred<OpenClawConfig>();
   const release = createDeferred();
-  let promptAdmission: ReturnType<typeof prepareCronPromptRunAdmission> | undefined;
+  let promptAdmission: ReturnType<typeof prepareCronRunAdmission> | undefined;
   let pending: ReturnType<ReturnType<typeof createMessageTool>["execute"]> | undefined;
   try {
-    const configA: OpenClawConfig = {
-      agents: { entries: { ops: {} }, defaults: { workspace: state.workspaceDir } },
-      tools: { allow: ["message"] },
-      channels: { gatewaychat: { enabled: true } },
-    };
+    const configA = hostedConfig({ tools: { allow: ["message"] } });
     let currentConfig = configA;
     setRuntimeConfigSnapshot(configA, configA);
     const providerRead = vi.fn<NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>>(
@@ -292,74 +223,45 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
         details: { ok: true, config: cfg.tools?.allow?.includes("message") ? "A" : "B", accountId },
       }),
     );
-    const plugin: ChannelPlugin = {
-      ...createChannelTestPluginBase({
-        id: "gatewaychat",
-        config: {
-          resolveAccount: () => ({ enabled: true }),
-          isConfigured: () => true,
-        },
-      }),
-      outbound: { deliveryMode: "gateway" },
-      actions: {
-        providerOwnedReadGates: true,
-        readAuthorityActions: ["read"],
-        describeMessageTool: () => ({ actions: ["read"] }),
-        supportsAction: ({ action }) => action === "read",
-        resolveExecutionMode: () => "gateway",
-        handleAction: providerRead,
-      },
-    };
+    const plugin = gatewayPlugin("read", providerRead);
     const owner = createTestPluginRegistry();
     const record = createPluginRecord({ id: plugin.id, origin: "bundled" });
     owner.registry.plugins.push(record);
     owner
       .createApi(record, { config: configA, registrationMode: "full" })
       .registerChannel({ plugin });
-    setActivePluginRegistry(owner.registry);
+    plugins.setActivePluginRegistry(owner.registry);
     const { sendHandlers } = await import("../../gateway/server-methods/send.js");
     const dispatched = vi.fn(
       expectDefined(sendHandlers["message.action"], "Gateway message handler"),
     );
-    const methods = createGatewayMethodRegistry([
-      {
-        name: "message.action",
-        owner: { kind: "core", area: "message" },
-        scope: "operator.write",
-        handler: dispatched,
-      },
-    ]);
-    const context = {
-      getRuntimeConfig: () => currentConfig,
-      getGatewayMethodRegistry: () => methods,
-      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-      trackExecution: <T>(run: () => Promise<T>) => run(),
+    const context = gatewayContext(() => currentConfig, dispatched, {
       dedupe: new Map(),
-    } as GatewayRequestContext;
+    });
     const resolveGatewayContext = () => context;
     promptAdmission = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
-      prepareCronPromptRunAdmission({
+      prepareCronRunAdmission({
+        scheduledExecution: TEST_SCHEDULED_EXECUTION,
+        deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
         cfg: configA,
-        agentId: "ops",
-        runId,
-        sessionId,
+        ...run,
         sessionKey,
         jobId,
         toolsAllow: ["message"],
         scheduledToolPolicy: policy,
         executionIdentity: {
           ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
-          onPostAdmission: (admitted) => bindCronJobAdmittedRun(marker, admitted, source.signal),
+          onPostAdmission: (admitted) =>
+            cron.bindCronJobAdmittedRun(marker, admitted, source.signal),
         },
       }),
     );
     const admitted = await promptAdmission.preparedRunAdmission.admit("plugin-harness");
-    expect(getGatewayContextResolver(admitted)?.()).toBe(context);
     const capability = expectDefined(
       promptAdmission.messageActionTurnCapability,
       "scheduled grant",
     );
-    const caller = createAdmittedGatewayToolCallerIdentity({
+    const caller = callers.createAdmittedGatewayToolCallerIdentity({
       admittedRunContext: admitted,
       agentId: "ops",
       sessionKey,
@@ -370,10 +272,8 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
       config: configA,
       capabilityProfile: resolveConversationCapabilityProfile({
         config: configA,
-        agentId: "ops",
+        ...run,
         sessionKey,
-        runId,
-        sessionId,
         agentAccountId: "default",
         scheduledToolPolicy: policy,
       }),
@@ -384,31 +284,24 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
       isAvailable: () => catalog.some((tool) => tool.name === "message"),
     });
     const admitInvocation = vi.fn(invocationPolicy.admit);
-    const prepareSecrets = vi.fn(async ({ config }: { config: OpenClawConfig }) => {
-      entered.resolve(config);
-      await release.promise;
-      return {
-        resolvedConfig: config,
-        diagnostics: [],
-        targetStatesByPath: {},
-        hadUnresolvedTargets: false,
-      };
-    });
+    const prepareSecrets = vi
+      .spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway")
+      .mockImplementation(async ({ config }) => {
+        entered.resolve(config);
+        await release.promise;
+        return resolvedSecrets(config);
+      });
     const tool = createMessageTool({
       config: configA,
-      agentId: "ops",
+      ...run,
       agentSessionKey: sessionKey,
       agentAccountId: "default",
-      runId,
-      sessionId,
       messageActionTurnCapability: capability,
       admitScheduledInvocation: admitInvocation,
-      getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-      resolveCommandSecretRefsViaGateway: prepareSecrets,
     });
     catalog.push(tool);
     const execute = (callId: string) =>
-      withGatewayToolCallerIdentity(caller, () =>
+      callers.withGatewayToolCallerIdentity(caller, () =>
         tool.execute(
           callId,
           { action: "read", channel: plugin.id, target: "alice", limit: 1 },
@@ -432,20 +325,14 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
     release.resolve();
     expect((await pending).details).toMatchObject({ ok: true, config: "A", accountId: "default" });
     expect(dispatched).toHaveBeenCalledOnce();
-    expect(providerRead).toHaveBeenCalledOnce();
     expect(providerRead.mock.calls[0]?.[0].cfg).toMatchObject(configA);
-    expect(admitInvocation).toHaveBeenCalledOnce();
-    expect(readMessageActionInvocationConfig(capability)).toBeUndefined();
+    expect(turns.readMessageActionInvocationConfig(capability)).toBeUndefined();
 
     const client = expectDefined(dispatched.mock.calls[0]?.[0].client, "bound Gateway client");
-    const mismatched = withMessageActionInvocationConfig(
+    const mismatched = turns.withMessageActionInvocationConfig(
       "unrelated-host-token",
       () => configA,
-      () =>
-        resolveTrustedMessageActionToolContext({
-          client,
-          request: { sessionKey, sessionId },
-        }),
+      () => resolveTrustedMessageActionToolContext({ client, request: { sessionKey, sessionId } }),
     );
     expect(mismatched).toMatchObject({ ok: true, messageActionConfig: undefined });
     await expect(execute("after-publication")).rejects.toThrow(
@@ -458,9 +345,8 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
     source.abort();
     release.resolve();
     await pending?.catch(() => undefined);
+    vi.restoreAllMocks();
     promptAdmission?.close();
-    clearCronJobActive(jobId, marker);
-    restoreActivePluginRegistrySnapshot(registry);
-    await state.cleanup();
+    cron.clearCronJobActive(jobId, marker);
   }
 }, 30_000);

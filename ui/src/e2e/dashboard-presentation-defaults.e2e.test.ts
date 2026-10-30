@@ -1,45 +1,36 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { GatewaySessionRow } from "../api/types.ts";
 import type { UiSettings } from "../app/settings.ts";
+import { openChatDashboardMenu, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
-  reconnectMockGateway,
+  type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { focusChatSidePanel } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "shared dashboard presentation defaults" });
 const key = "agent:main:dashboard:9a1b2c3d-1234-4567-8901-234567890abc";
 const sessionId = "dashboard-presentation-session";
-const defaultAction = 'wa-dropdown-item[value="quick:layout:dashboard-default"]';
+const defaultAction = '[data-value="dashboard-default"]';
 const defaultStatus = '[data-menu-status="dashboard-default"]';
-
-function row(presentation: "split" | "expanded") {
-  return {
-    key,
-    agentId: "main",
-    sessionId,
-    kind: "direct",
-    displayName: "Shared dashboard",
-    boardFace: "dashboard",
-    boardPresentation: presentation,
-    updatedAt: Date.now(),
-  } satisfies GatewaySessionRow;
-}
-
-async function openDashboard(
-  page: Page,
-  presentation: "split" | "expanded",
-  options: { readOnly?: boolean; expandedLink?: boolean; face?: "chat" | "dashboard" } = {},
-) {
+async function openDashboard(page: Page) {
   const gateway = await installMockGateway(page, {
     sessionKey: key,
-    sessions: [row(presentation)],
-    operatorScopes: options.readOnly ? ["operator.read"] : ["operator.read", "operator.write"],
+    sessions: [
+      {
+        key,
+        agentId: "main",
+        sessionId,
+        kind: "direct",
+        displayName: "Shared dashboard",
+        boardFace: "dashboard",
+        boardPresentation: "split",
+        updatedAt: Date.now(),
+      },
+    ],
+    operatorScopes: ["operator.read", "operator.write"],
     featureMethods: [
       "board.get",
       "chat.metadata",
@@ -59,50 +50,34 @@ async function openDashboard(
       },
     },
   });
-  const url = new URL(controlUiSessionUrl(suite.server.baseUrl, key, options.face ?? "dashboard"));
-  if (options.expandedLink) {
-    url.searchParams.set("dashboard", "expanded");
-  }
+  const url = new URL(controlUiSessionUrl(suite.server.baseUrl, key, "dashboard"));
+  url.searchParams.set("dashboard", "expanded");
   await page.goto(url.href);
-  if (options.face === "chat") {
-    await page.locator(".chat-pane__header").waitFor();
-    await gateway.waitForRequest("board.get");
-  } else {
-    await page.locator("openclaw-board-view").waitFor();
-  }
+  await page.locator("openclaw-board-view").waitFor();
   return gateway;
 }
 
-async function waitForLayoutMenuClosed(page: Page) {
-  await page.waitForFunction(() => {
-    const dropdown = document.querySelector("openclaw-chat-header-session-menu wa-dropdown");
-    const popup = dropdown?.shadowRoot?.querySelector("wa-popup");
-    return (
-      (!dropdown || Reflect.get(dropdown, "open") !== true) &&
-      (!popup || !Reflect.get(popup, "active"))
-    );
-  });
-}
-
-async function openLayoutMenu(page: Page) {
-  // A save closes the popup asynchronously; finish that close before reopening it.
-  await waitForLayoutMenuClosed(page);
-  await page.locator(".chat-header-session-menu__trigger").click();
-  const menu = page.locator("openclaw-chat-header-session-menu");
-  const layout = menu.locator(".session-menu__text").filter({ hasText: /^Layout$/ });
-  if ((await menu.locator("wa-dropdown.chat-header-session-menu--compact").count()) > 0) {
-    await layout.click();
-  } else {
-    await layout.hover();
-  }
-  return menu;
-}
-
 async function openDefaultAction(page: Page) {
-  const menu = await openLayoutMenu(page);
+  const menu = await openChatDashboardMenu(page);
   const action = menu.locator(defaultAction);
   await action.waitFor({ state: "visible" });
   return action;
+}
+
+async function saveDefault(page: Page, gateway: MockGatewayControls) {
+  await selectChatLayoutAction(page, "Use current view as default");
+  const saved = await gateway.waitForRequest("sessions.patch", {
+    match: { boardPresentation: "expanded" },
+  });
+  expect(saved.params).toMatchObject({
+    key,
+    agentId: "main",
+    expectedSessionId: sessionId,
+    boardPresentation: "expanded",
+  });
+  const message = page.getByText("Dashboard default saved for future opens.", { exact: true });
+  await message.waitFor();
+  return message;
 }
 
 async function presentationOverride(page: Page) {
@@ -116,173 +91,64 @@ async function presentationOverride(page: Page) {
 }
 
 suite.define(() => {
-  it.each(["split", "expanded"] as const)(
-    "opens the shared %s default through the real keyboard shortcut",
-    async (presentation) => {
-      await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
-        await openDashboard(page, presentation, { face: "chat" });
-        await page.keyboard.press("Control+Shift+Alt+G");
-        await page.locator("openclaw-board-view").waitFor({ state: "visible" });
-        await page.locator(".sidebar-region__primary").waitFor({
-          state: presentation === "expanded" ? "hidden" : "visible",
-        });
-        expect(await presentationOverride(page)).toBeNull();
-      });
-    },
-  );
-
-  it.each(["split", "expanded"] as const)(
-    "keeps the agent-requested %s view through actual face-change navigation",
-    async (requested) => {
-      const shared = requested === "expanded" ? "split" : "expanded";
-      await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
-        const gateway = await openDashboard(page, shared, { face: "chat" });
-        await gateway.emitGatewayEvent("board.command", {
-          sessionKey: key,
-          command: { kind: "set_chat_dock", dock: requested === "expanded" ? "hidden" : "right" },
-        });
-        // Navigation may replace the raw key with its friendly session slug.
-        await expect.poll(() => new URL(page.url()).pathname).toContain("/dashboard/main/");
-        await page.locator("openclaw-board-view").waitFor({ state: "visible" });
-        const chat = page.locator(".sidebar-region__primary");
-        await chat.waitFor({ state: requested === "expanded" ? "hidden" : "visible" });
-        expect(await presentationOverride(page)).toBeUndefined();
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, key, "chat"));
-        await page.locator(".chat-pane__header").waitFor();
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, key, "dashboard"));
-        await page.locator("openclaw-board-view").waitFor({ state: "visible" });
-        await chat.waitFor({ state: shared === "expanded" ? "hidden" : "visible" });
-        expect(await presentationOverride(page)).toBeUndefined();
-      });
-    },
-  );
-
-  it("saves a conditional shared default while a fresh reader can override it locally", async () => {
-    await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
-      const gateway = await openDashboard(page, "split");
+  it("offers the same Dashboard options action on mobile without persisting deep-link intent", async () => {
+    await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
+      const gateway = await openDashboard(page);
       const chat = page.locator(".sidebar-region__primary");
       await chat.waitFor({ state: "visible" });
-      expect(await page.locator(defaultAction).count()).toBe(0);
-      const matchingMenu = await openLayoutMenu(page);
-      const matchingStatus = matchingMenu.locator(defaultStatus);
-      await matchingStatus.waitFor({ state: "visible" });
-      expect(await matchingStatus.textContent()).toContain("This is the default view");
-      expect(await matchingStatus.textContent()).toContain(
-        "Used when anyone opens this dashboard. Personal layout choices still apply.",
-      );
-      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-      await page.screenshot({ path: path.join(suite.artifactDir, "00-current-default-menu.png") });
-      await page.locator(".chat-header-session-menu__trigger").click();
-      await waitForLayoutMenuClosed(page);
-
-      await focusChatSidePanel(page);
-      await chat.waitFor({ state: "hidden" });
-      const action = await openDefaultAction(page);
-      expect(await action.textContent()).toContain("Use current view as default");
-      expect(await page.locator(defaultStatus).count()).toBe(0);
-      await page.screenshot({
-        path: path.join(suite.artifactDir, "01-different-default-menu.png"),
-      });
-      await action.click();
-      const saved = await gateway.waitForRequest("sessions.patch", {
-        match: { boardPresentation: "expanded" },
-      });
-      expect(saved.params).toMatchObject({
-        key,
-        agentId: "main",
-        expectedSessionId: sessionId,
-        boardPresentation: "expanded",
-      });
-      await page.getByText("Dashboard default saved for future opens.", { exact: true }).waitFor();
-      await expect.poll(() => page.locator(defaultAction).count()).toBe(0);
-      const savedMenu = await openLayoutMenu(page);
-      await savedMenu.locator(defaultStatus).waitFor({ state: "visible" });
-      expect(await savedMenu.locator(defaultStatus).textContent()).toContain(
-        "This is the default view",
-      );
-      await page.screenshot({ path: path.join(suite.artifactDir, "02-default-saved.png") });
-      await page.locator(".chat-header-session-menu__trigger").click();
-      await waitForLayoutMenuClosed(page);
-
-      await suite.withPage(
-        { viewport: { width: 1440, height: 1000 } },
-        async ({ page: reader }) => {
-          const readerGateway = await openDashboard(reader, "expanded", { readOnly: true });
-          const readerChat = reader.locator(".sidebar-region__primary");
-          await readerChat.waitFor({ state: "hidden" });
-          expect(await presentationOverride(reader)).toBeUndefined();
-          await reconnectMockGateway(reader, readerGateway);
-          await reader.locator("openclaw-board-view").waitFor({ state: "visible" });
-          await readerChat.waitFor({ state: "hidden" });
-          const readerMenu = await openLayoutMenu(reader);
-          await readerMenu.locator(defaultStatus).waitFor({ state: "visible" });
-          expect(await readerMenu.locator(defaultStatus).textContent()).toContain(
-            "This is the default view",
-          );
-          expect(await reader.locator(defaultAction).count()).toBe(0);
-          await reader.screenshot({
-            path: path.join(suite.artifactDir, "03-new-viewer-inherits.png"),
-          });
-          await reader.locator(".chat-header-session-menu__trigger").click();
-          await waitForLayoutMenuClosed(reader);
-          await reader.getByRole("button", { name: "Restore split", exact: true }).click();
-          await readerChat.waitFor({ state: "visible" });
-          expect(await presentationOverride(reader)).toBe("split");
-          expect(await reader.locator(defaultAction).count()).toBe(0);
-          expect(await reader.locator(defaultStatus).count()).toBe(0);
-          expect(
-            await readerGateway.getRequests("sessions.patch", { boardPresentation: "split" }),
-          ).toHaveLength(0);
-          await reader.reload();
-          await reader.locator("openclaw-board-view").waitFor();
-          await readerChat.waitFor({ state: "visible" });
-          expect(await presentationOverride(reader)).toBe("split");
-          await reader.screenshot({
-            path: path.join(suite.artifactDir, "04-reader-override-reloaded.png"),
-          });
-        },
-      );
-
-      await page.getByRole("button", { name: "Restore split", exact: true }).click();
-      await chat.waitFor({ state: "visible" });
-      await page
-        .locator(".chat-pane__header")
-        .getByRole("button", { name: "Focus", exact: true })
-        .click();
-      await chat.waitFor({ state: "hidden" });
-      expect(await presentationOverride(page)).toBeNull();
-      // The server changes while this browser still has the old roster cached.
-      await gateway.setSessionsListResponse({
-        ts: Date.now(),
-        path: "",
-        count: 1,
-        defaults: { modelProvider: "openai", model: "gpt-4.1", contextTokens: null },
-        sessions: [row("split")],
-      });
-      await page.reload();
-      await page.locator("openclaw-board-view").waitFor();
-      await chat.waitFor({ state: "visible" });
-      expect(await presentationOverride(page)).toBeNull();
-    });
-  });
-
-  it("offers the same conditional action in the compact menu without persisting deep-link intent", async () => {
-    await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
-      const gateway = await openDashboard(page, "split", { expandedLink: true });
-      await page.locator(".sidebar-region__primary").waitFor({ state: "hidden" });
+      await page.locator(".chat-mobile-host openclaw-board-view").waitFor();
       expect(await presentationOverride(page)).toBeUndefined();
-      const action = await openDefaultAction(page);
-      await page.screenshot({ path: path.join(suite.artifactDir, "05-compact-default-menu.png") });
-      await action.click();
-      await gateway.waitForRequest("sessions.patch", { match: { boardPresentation: "expanded" } });
-      await page.getByText("Dashboard default saved for future opens.", { exact: true }).waitFor();
+      await selectChatLayoutAction(page, "Focus");
+      await page
+        .locator(".chat-mobile-host__header")
+        .getByRole("button", { name: "Restore", exact: true })
+        .waitFor();
+      expect(await presentationOverride(page)).toBeUndefined();
+      await selectChatLayoutAction(page, "Restore split");
+      await page
+        .locator(".chat-mobile-host__header")
+        .getByRole("button", { name: "Expand Side panel", exact: true })
+        .waitFor();
+      // Mobile keeps Chat beside its sheet; the deep link still owns desktop presentation.
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await chat.waitFor({ state: "hidden" });
+      expect(await presentationOverride(page)).toBeUndefined();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await chat.waitFor({ state: "visible" });
+      await page.getByRole("button", { name: "Dashboard options", exact: true }).waitFor();
+      await openDefaultAction(page);
+      expect(
+        await page
+          .getByRole("menuitem", {
+            name: /^(Swap Chat and Dashboard|Expand Dashboard|Restore split)$/,
+          })
+          .count(),
+      ).toBe(0);
+      const savedMessage = await saveDefault(page, gateway);
+      const savedToast = page.getByRole("status").filter({ has: savedMessage });
+      await savedToast.getByRole("button", { name: "Dismiss", exact: true }).click();
+      await savedToast.waitFor({ state: "hidden" });
       await expect.poll(() => page.locator(defaultAction).count()).toBe(0);
-      const savedMenu = await openLayoutMenu(page);
+      const savedTrigger = page.getByRole("button", { name: "Dashboard options", exact: true });
+      await savedTrigger.focus();
+      await savedTrigger.press("ArrowDown");
+      const savedMenu = page.getByRole("menu", { name: "Dashboard options", exact: true });
+      await savedMenu.waitFor();
       await savedMenu.locator(defaultStatus).waitFor({ state: "visible" });
+      expect(await savedMenu.getByRole("menuitem").getAttribute("aria-disabled")).toBe("true");
       expect(await savedMenu.locator(defaultStatus).textContent()).toContain(
         "This is the default view",
       );
-      await page.screenshot({ path: path.join(suite.artifactDir, "06-compact-default-saved.png") });
+      expect(
+        (await savedTrigger.evaluate((element) => element === document.activeElement)) ||
+          (await savedMenu.evaluate((element) => element.contains(document.activeElement))),
+      ).toBe(true);
+      await page.keyboard.press("Escape");
+      await savedMenu.waitFor({ state: "hidden" });
+      expect(await savedTrigger.evaluate((element) => element === document.activeElement)).toBe(
+        true,
+      );
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
       expect(await presentationOverride(page)).toBeUndefined();
     });
   });

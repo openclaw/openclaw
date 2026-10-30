@@ -1,7 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { mergeUserGitHubConnection } from "./user-github-connections.js";
+import { mergeUserBackgroundImages } from "./user-background.store.js";
+import { mergeUserGitHubConnection } from "./user-github-connections.kernel.js";
 import { mergeUserModelAccounts } from "./user-model-accounts.js";
 import { mergeUserPreferences } from "./user-preferences.store.js";
 import {
@@ -12,10 +13,14 @@ import {
 import { prepareUserProfileGitHubMerge } from "./user-profile-github-identity.js";
 import { stageUserProfileCatalogChange } from "./user-profile-list.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
-import { requireResolvedUserProfileById, userProfilesDb } from "./user-profiles-internal.js";
+import {
+  requireResolvedUserProfileById,
+  setUserProfileEmailBinding,
+  userProfilesDb,
+} from "./user-profiles-internal.js";
 
 export function mergeUserProfiles(
-  db: DatabaseSync,
+  db: EngineConnection,
   sourceProfileId: string,
   targetProfileId: string,
   now: number,
@@ -51,17 +56,26 @@ export function mergeUserProfiles(
     );
   }
   mergeUserModelAccounts(db, sourceProfileId, targetProfileId);
-  mergeUserGitHubConnection(db, sourceProfileId, targetProfileId);
+  mergeUserGitHubConnection(
+    db,
+    sourceProfileId,
+    targetProfileId,
+    mutation?.publishGitHubConnections?.bind(mutation),
+  );
   for (const mergedProfileId of sourceProfileIds) {
+    mergeUserBackgroundImages(db, mergedProfileId, targetProfileId);
     mergeUserPreferences(db, mergedProfileId, targetProfileId);
   }
-  executeSqliteQuerySync(
+  const sourceEmails = executeSqliteQuerySync(
     db,
     kysely
-      .updateTable("user_profile_emails")
-      .set({ profile_id: targetProfileId })
+      .selectFrom("user_profile_emails")
+      .select("email")
       .where("profile_id", "in", sourceProfileIds),
-  );
+  ).rows;
+  for (const { email } of sourceEmails) {
+    setUserProfileEmailBinding(db, email, targetProfileId, now);
+  }
   executeSqliteQuerySync(
     db,
     kysely

@@ -1,4 +1,3 @@
-// Resolves attachment payloads for plugin host hooks.
 import * as fsPromises from "node:fs/promises";
 import { lstat } from "node:fs/promises";
 import {
@@ -25,10 +24,6 @@ import type {
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const DEFAULT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
-/** Filesystem adapter used by attachment MIME probes and tests. */
-const attachmentProbeFs = {
-  open: (...args: Parameters<typeof fsPromises.open>) => fsPromises.open(...args),
-};
 const MAX_ATTACHMENT_FILES = 10;
 
 type SendMessage = typeof import("../infra/outbound/message.js").sendMessage;
@@ -36,12 +31,6 @@ type SendMessage = typeof import("../infra/outbound/message.js").sendMessage;
 const loadSendMessage = createLazyRuntimeModule(() =>
   import("../infra/outbound/message.js").then((module) => module.sendMessage),
 );
-
-type AttachmentDeliveryChannelPlugin = {
-  outbound?: {
-    deliveryMode?: string;
-  };
-};
 
 const loadGetChannelPlugin = createLazyRuntimeModule(() =>
   import("../channels/plugins/index.js").then((module) => module.getChannelPlugin),
@@ -55,15 +44,6 @@ type ResolvedAttachmentDelivery = {
   threadId?: string | number;
 };
 
-function captionFormatToParseMode(
-  captionFormat: PluginSessionAttachmentCaptionFormat | undefined,
-): "HTML" | undefined {
-  if (captionFormat === "html") {
-    return "HTML";
-  }
-  return undefined;
-}
-
 function escapeHtmlText(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -75,33 +55,13 @@ function normalizeOptionalThreadId(value: unknown): string | number | undefined 
   return normalizeOptionalString(value);
 }
 
-async function readMimeSniffBuffer(
-  filePath: string,
-  size: number,
-): Promise<Buffer | { error: string }> {
-  let handle: Awaited<ReturnType<typeof fsPromises.open>> | undefined;
-  try {
-    handle = await attachmentProbeFs.open(filePath, "r");
-    const length = Math.min(Math.max(0, size), FILE_TYPE_SNIFF_MAX_BYTES);
-    const buffer = Buffer.alloc(length);
-    const { bytesRead } = await handle.read(buffer, 0, length, 0);
-    return buffer.subarray(0, bytesRead);
-  } catch (error) {
-    return {
-      error: `attachment file MIME read failed for ${filePath}: ${formatErrorMessage(error)}`,
-    };
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
-}
-
 /** Resolves portable attachment delivery options while honoring shipped channel-specific hints. */
 function resolveAttachmentDelivery(params: {
   channel: string;
   captionFormat?: PluginSessionAttachmentCaptionFormat;
   channelHints?: PluginAttachmentChannelHints;
 }): ResolvedAttachmentDelivery {
-  const fallbackParseMode = captionFormatToParseMode(params.captionFormat);
+  const fallbackParseMode = params.captionFormat === "html" ? "HTML" : undefined;
   const channel = params.channel.trim().toLowerCase();
   const hints = params.channelHints;
   // These nested fields shipped before attachment hints became transport-neutral.
@@ -127,101 +87,6 @@ function resolveAttachmentDelivery(params: {
   };
 }
 
-async function validateAttachmentFiles(
-  files: PluginSessionAttachmentParams["files"],
-  maxBytes: number,
-  options?: {
-    forceDocumentMime?: string;
-    config?: OpenClawConfig;
-    sessionKey?: string;
-  },
-): Promise<string[] | { error: string }> {
-  if (files.length > MAX_ATTACHMENT_FILES) {
-    return { error: `at most ${MAX_ATTACHMENT_FILES} attachment files are allowed` };
-  }
-  const paths: string[] = [];
-  let totalBytes = 0;
-  for (const file of files) {
-    if (!file || typeof file !== "object" || Array.isArray(file)) {
-      return { error: "attachment file entry must be an object" };
-    }
-    const filePath = normalizeOptionalString((file as { path?: unknown }).path);
-    if (!filePath) {
-      return { error: "attachment file path is required" };
-    }
-    const resolvedPath = resolveAttachmentFilePath({
-      filePath,
-      config: options?.config,
-      sessionKey: options?.sessionKey,
-    });
-    const info = await lstat(resolvedPath).catch(() => undefined);
-    if (info?.isSymbolicLink()) {
-      return { error: `attachment file symlinks are not allowed: ${resolvedPath}` };
-    }
-    if (!info?.isFile()) {
-      return { error: `attachment file not found: ${resolvedPath}` };
-    }
-    if (info.size > maxBytes) {
-      return { error: `attachment file exceeds ${maxBytes} bytes: ${resolvedPath}` };
-    }
-    if (options?.forceDocumentMime) {
-      const fileBuffer = await readMimeSniffBuffer(resolvedPath, info.size);
-      if (!Buffer.isBuffer(fileBuffer)) {
-        return fileBuffer;
-      }
-      let detectedMime: string | undefined;
-      try {
-        detectedMime = normalizeMimeType(await detectMime({ buffer: fileBuffer }));
-      } catch (error) {
-        return {
-          error:
-            `attachment file MIME detection failed for ${filePath}: ` + formatErrorMessage(error),
-        };
-      }
-      if (detectedMime !== options.forceDocumentMime) {
-        return {
-          error:
-            `attachment file MIME mismatch for ${resolvedPath}: ` +
-            `expected ${options.forceDocumentMime}, got ${detectedMime ?? "unknown"}`,
-        };
-      }
-    }
-    totalBytes += info.size;
-    if (totalBytes > maxBytes) {
-      return { error: `attachment files exceed ${maxBytes} bytes total` };
-    }
-    paths.push(resolvedPath);
-  }
-  return paths;
-}
-
-function resolveAttachmentFilePath(params: {
-  filePath: string;
-  config?: OpenClawConfig;
-  sessionKey?: string;
-}): string {
-  const workspaceDir =
-    params.sessionKey && params.config
-      ? resolveAgentWorkspaceDir(params.config, resolveAgentIdFromSessionKey(params.sessionKey))
-      : undefined;
-  return resolvePathFromInput(params.filePath, resolveWorkspaceRoot(workspaceDir));
-}
-
-/** Resolves the thread id used when delivering a plugin session attachment. */
-function resolveSessionAttachmentThreadId(params: {
-  deliveryThreadId?: unknown;
-  explicitThreadId?: unknown;
-  fallbackThreadId?: unknown;
-  hintThreadId?: unknown;
-}): string | number | undefined {
-  return (
-    normalizeOptionalThreadId(params.hintThreadId) ??
-    normalizeOptionalThreadId(params.explicitThreadId) ??
-    normalizeOptionalThreadId(params.fallbackThreadId) ??
-    normalizeOptionalThreadId(params.deliveryThreadId)
-  );
-}
-
 /** Sends a bundled-plugin session attachment through the session's active delivery route. */
 export async function sendPluginSessionAttachment(
   params: PluginSessionAttachmentParams & { config?: OpenClawConfig; origin?: PluginOrigin },
@@ -240,7 +105,9 @@ export async function sendPluginSessionAttachment(
     typeof params.maxBytes === "number" && Number.isFinite(params.maxBytes)
       ? Math.min(DEFAULT_ATTACHMENT_MAX_BYTES, Math.max(1, Math.floor(params.maxBytes)))
       : DEFAULT_ATTACHMENT_MAX_BYTES;
-  const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey, { cfg: params.config });
+  const { deliveryContext, threadId } = await extractDeliveryInfo(sessionKey, {
+    cfg: params.config,
+  });
   if (!deliveryContext?.channel || !deliveryContext.to) {
     return { ok: false, error: `session has no active delivery route: ${sessionKey}` };
   }
@@ -248,9 +115,7 @@ export async function sendPluginSessionAttachment(
   try {
     const deliveryPlugin =
       normalizedChannel && isDeliverableMessageChannel(normalizedChannel)
-        ? ((await loadGetChannelPlugin())(normalizedChannel) as
-            | AttachmentDeliveryChannelPlugin
-            | undefined)
+        ? (await loadGetChannelPlugin())(normalizedChannel)
         : undefined;
     if (deliveryPlugin?.outbound?.deliveryMode === "gateway") {
       return {
@@ -272,20 +137,88 @@ export async function sendPluginSessionAttachment(
     captionFormat: params.captionFormat,
     channelHints: params.channelHints,
   });
-  const validated = await validateAttachmentFiles(params.files, maxBytes, {
-    forceDocumentMime: resolvedDelivery.forceDocumentMime,
-    config: params.config,
-    sessionKey,
-  });
-  if (!Array.isArray(validated)) {
-    return { ok: false, error: validated.error };
+  const files = params.files;
+  const forceDocumentMime = resolvedDelivery.forceDocumentMime;
+  const validationConfig = params.config;
+  if (files.length > MAX_ATTACHMENT_FILES) {
+    return { ok: false, error: `at most ${MAX_ATTACHMENT_FILES} attachment files are allowed` };
   }
-  const resolvedThreadId = resolveSessionAttachmentThreadId({
-    deliveryThreadId: deliveryContext.threadId,
-    explicitThreadId: params.threadId,
-    fallbackThreadId: threadId,
-    hintThreadId: resolvedDelivery.threadId,
-  });
+  const validated: string[] = [];
+  let totalBytes = 0;
+  for (const file of files) {
+    if (!file || typeof file !== "object" || Array.isArray(file)) {
+      return { ok: false, error: "attachment file entry must be an object" };
+    }
+    const filePath = normalizeOptionalString((file as { path?: unknown }).path);
+    if (!filePath) {
+      return { ok: false, error: "attachment file path is required" };
+    }
+    const workspaceDir =
+      sessionKey && validationConfig
+        ? resolveAgentWorkspaceDir(validationConfig, resolveAgentIdFromSessionKey(sessionKey))
+        : undefined;
+    const resolvedPath = resolvePathFromInput(filePath, resolveWorkspaceRoot(workspaceDir));
+    const info = await lstat(resolvedPath).catch(() => undefined);
+    if (info?.isSymbolicLink()) {
+      return { ok: false, error: `attachment file symlinks are not allowed: ${resolvedPath}` };
+    }
+    if (!info?.isFile()) {
+      return { ok: false, error: `attachment file not found: ${resolvedPath}` };
+    }
+    if (info.size > maxBytes) {
+      return { ok: false, error: `attachment file exceeds ${maxBytes} bytes: ${resolvedPath}` };
+    }
+    if (forceDocumentMime) {
+      const size = info.size;
+      let fileBuffer: Buffer;
+
+      let handle: Awaited<ReturnType<typeof fsPromises.open>> | undefined;
+      try {
+        handle = await fsPromises.open(resolvedPath, "r");
+        const length = Math.min(Math.max(0, size), FILE_TYPE_SNIFF_MAX_BYTES);
+        const buffer = Buffer.alloc(length);
+        const { bytesRead } = await handle.read(buffer, 0, length, 0);
+        fileBuffer = buffer.subarray(0, bytesRead);
+      } catch (error) {
+        return {
+          ok: false,
+          error: `attachment file MIME read failed for ${resolvedPath}: ${formatErrorMessage(error)}`,
+        };
+      } finally {
+        await handle?.close().catch(() => undefined);
+      }
+
+      let detectedMime: string | undefined;
+      try {
+        detectedMime = normalizeMimeType(await detectMime({ buffer: fileBuffer }));
+      } catch (error) {
+        return {
+          ok: false,
+          error:
+            `attachment file MIME detection failed for ${filePath}: ` + formatErrorMessage(error),
+        };
+      }
+      if (detectedMime !== forceDocumentMime) {
+        return {
+          ok: false,
+          error:
+            `attachment file MIME mismatch for ${resolvedPath}: ` +
+            `expected ${forceDocumentMime}, got ${detectedMime ?? "unknown"}`,
+        };
+      }
+    }
+    totalBytes += info.size;
+    if (totalBytes > maxBytes) {
+      return { ok: false, error: `attachment files exceed ${maxBytes} bytes total` };
+    }
+    validated.push(resolvedPath);
+  }
+
+  const resolvedThreadId =
+    resolvedDelivery.threadId ??
+    normalizeOptionalThreadId(params.threadId) ??
+    normalizeOptionalThreadId(threadId) ??
+    normalizeOptionalThreadId(deliveryContext.threadId);
   let result: Awaited<ReturnType<SendMessage>>;
   try {
     const sendMessage = await loadSendMessage();

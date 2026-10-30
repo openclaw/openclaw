@@ -1,50 +1,51 @@
-// Command spec tests cover skill-provided command metadata and filtering.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
-import type { SkillEntry } from "../types.js";
 
-const bundleCommandState = vi.hoisted(() => ({
-  entries: [] as Array<{
-    pluginId: string;
-    rawName: string;
-    description: string;
-    promptTemplate: string;
-    sourceFilePath: string;
-  }>,
-}));
+const bundleCommandState = vi.hoisted<{ plugins: PluginManifestRecord[] }>(() => ({ plugins: [] }));
 
 const skillsLoggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
   trace: vi.fn(),
 }));
 
-vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => skillsLoggerMock,
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      ...skillsLoggerMock,
+    }),
+  };
+});
+
+vi.mock("../../plugins/plugin-registry-contributions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/plugin-registry-contributions.js")>()),
+  loadPluginManifestRegistryForPluginRegistry: () => ({
+    diagnostics: [],
+    plugins: bundleCommandState.plugins,
+  }),
 }));
 
-vi.mock("../../plugins/bundle-commands.js", () => ({
-  loadEnabledClaudeBundleCommands: () => bundleCommandState.entries,
-}));
+const tempDirs = createTempDirTracker();
+let buildWorkspaceSkillCommandSpecs: typeof import("./command-specs.js").buildWorkspaceSkillCommandSpecs;
 
-vi.mock("../loading/workspace-skill-loader.js", () => ({
-  filterWorkspaceSkills: (entries: SkillEntry[]) => entries,
-  loadVisibleSkills: () => [],
-}));
-
-beforeEach(() => {
+beforeEach(async () => {
   vi.resetModules();
-  bundleCommandState.entries = [];
-  skillsLoggerMock.debug.mockClear();
-  skillsLoggerMock.trace.mockClear();
+  bundleCommandState.plugins = [];
+  vi.clearAllMocks();
+  ({ buildWorkspaceSkillCommandSpecs } = await import("./command-specs.js"));
 });
 
-afterEach(() => {
-  bundleCommandState.entries = [];
-});
+afterEach(() => tempDirs.cleanup());
 
 describe("buildWorkspaceSkillCommandSpecs", () => {
-  it("uses shared user-invocable skill exposure policy", async () => {
-    const { buildWorkspaceSkillCommandSpecs } = await import("./command-specs.js");
+  it("uses shared user-invocable skill exposure policy", () => {
     const specs = buildWorkspaceSkillCommandSpecs("/workspace", {
       entries: [
         createFixtureSkillEntry("visible"),
@@ -67,38 +68,53 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(specs.map((spec) => spec.skillName)).toEqual(["visible"]);
   });
 
-  it("preserves workspace skill descriptions for provider-specific limits", async () => {
-    const { buildWorkspaceSkillCommandSpecs } = await import("./command-specs.js");
-    const prefix = "a".repeat(98);
+  it("preserves workspace skill descriptions for provider-specific limits", () => {
     const entry = createFixtureSkillEntry("emoji-skill");
     entry.skill.displayName = "Emoji Skill";
-    entry.skill.description = `${prefix}😀 extra text beyond the limit`;
+    entry.skill.description = `${"a".repeat(98)}😀 extra text beyond the limit`;
 
     const specs = buildWorkspaceSkillCommandSpecs("/workspace", {
       entries: [entry],
     });
 
-    expect(specs[0]?.displayName).toBe("Emoji Skill");
-    expect(specs[0]?.description).toBe(entry.skill.description);
-    expect(specs[0]?.skillFile).toBe(entry.skill.filePath);
+    expect(specs[0]).toMatchObject({
+      displayName: "Emoji Skill",
+      description: entry.skill.description,
+      skillFile: entry.skill.filePath,
+    });
+    expect(specs[0]).not.toHaveProperty("skillFileHost");
   });
 
   it("preserves bundle command descriptions for provider-specific limits", async () => {
-    const { buildWorkspaceSkillCommandSpecs } = await import("./command-specs.js");
-    const prefix = "a".repeat(98);
-    const description = `${prefix}😀 extra text beyond the limit`;
-    bundleCommandState.entries = [
-      {
-        pluginId: "bundle-plugin",
-        rawName: "bundle-emoji",
-        description,
-        promptTemplate: "Run the bundled command.",
-        sourceFilePath: "/plugins/bundle-plugin/commands/bundle-emoji.md",
-      },
+    const description = `${"a".repeat(98)}😀 extra text beyond the limit`;
+    const workspaceDir = tempDirs.make("openclaw-command-specs-");
+    const pluginRoot = path.join(workspaceDir, "bundle-plugin");
+    const files = [
+      [".claude-plugin/plugin.json", JSON.stringify({ name: "bundle-plugin" })],
+      [
+        "commands/bundle-emoji.md",
+        `---\nname: bundle-emoji\ndescription: ${description}\n---\nRun the bundled command.\n`,
+      ],
+    ] as const;
+    for (const [file, content] of files) {
+      const target = path.join(pluginRoot, file);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, content);
+    }
+    bundleCommandState.plugins = [
+      createPluginManifestRecordFixture({
+        id: "bundle-plugin",
+        format: "bundle",
+        bundleFormat: "claude",
+        bundleCapabilities: ["commands"],
+        origin: "global",
+        rootDir: pluginRoot,
+      }),
     ];
 
-    const specs = buildWorkspaceSkillCommandSpecs("/workspace", {
+    const specs = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       entries: [],
+      config: { plugins: { entries: { "bundle-plugin": { enabled: true } } } },
     });
 
     expect(specs[0]).toMatchObject({
@@ -108,25 +124,15 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     });
   });
 
-  it("bounds the skill command debug cache and re-logs evicted keys", async () => {
-    const { buildWorkspaceSkillCommandSpecs } = await import("./command-specs.js");
-    const entries = [];
-    for (let index = 0; index < 1025; index += 1) {
-      entries.push({
-        pluginId: "bundle-plugin",
-        rawName: `raw ${index}`,
-        description: "Run the bundled command.",
-        promptTemplate: "Run the bundled command.",
-        sourceFilePath: `/plugins/bundle-plugin/commands/raw-${index}.md`,
-      });
-    }
+  it("bounds the skill command debug cache and re-logs evicted keys", () => {
+    const entries = Array.from({ length: 1025 }, (_, index) =>
+      createFixtureSkillEntry(`raw ${index}`),
+    );
 
-    bundleCommandState.entries = entries;
-    buildWorkspaceSkillCommandSpecs("/workspace", { entries: [] });
-    expect(skillsLoggerMock.debug).toHaveBeenCalledTimes(1025);
+    buildWorkspaceSkillCommandSpecs("/workspace", { entries });
+    expect(skillsLoggerMock.trace).toHaveBeenCalledTimes(1025);
 
-    bundleCommandState.entries = [entries[0]!];
-    buildWorkspaceSkillCommandSpecs("/workspace", { entries: [] });
-    expect(skillsLoggerMock.debug).toHaveBeenCalledTimes(1026);
+    buildWorkspaceSkillCommandSpecs("/workspace", { entries: [entries[0]!] });
+    expect(skillsLoggerMock.trace).toHaveBeenCalledTimes(1026);
   });
 });

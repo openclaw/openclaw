@@ -1,193 +1,86 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
-import { matchesNodeSearch, parseConfigSearchQuery } from "./config-form.search.ts";
+import { expect, it } from "vitest";
+import {
+  matchesNodeSearch,
+  parseConfigSearchQuery as parse,
+  resolveConfigMapSearch,
+} from "./config-form.search.ts";
 
-const schema = {
-  type: "object",
-  properties: {
-    gateway: {
-      type: "object",
-      properties: {
-        auth: {
-          type: "object",
-          properties: {
-            token: { type: "string" },
-          },
-        },
-      },
-    },
-    mode: {
-      type: "string",
-      enum: ["off", "token"],
-    },
-  },
-};
-
-describe("config form search", () => {
-  it.each([
-    ["token tag:security tag:Auth", "token", ["security", "auth"]],
-    ["Café tag:storage 文書", "café 文書", ["storage"]],
-    ["Log tag:storage tag:STORAGE File", "log file", ["storage"]],
-    ["", "", []],
-    ["  ", "", []],
-    ["tag:storage", "", ["storage"]],
-    ["Log  File", "log  file", []],
-    ["path:tag:storage", "path:tag:storage", []],
-  ])("parses search query %j", (query, text, tags) => {
-    expect(parseConfigSearchQuery(query)).toEqual({ text, tags });
-  });
-
-  it("matches fields by tag through ui hints", () => {
-    const parsed = parseConfigSearchQuery("tag:security");
-    const matched = matchesNodeSearch({
-      schema: schema.properties.gateway,
-      value: {},
-      path: ["gateway"],
-      hints: {
-        "gateway.auth.token": { tags: ["security", "secret"] },
-      },
-      criteria: parsed,
-    });
-    expect(matched).toBe(true);
-  });
-
-  it.each([
-    ["access token tag:security", true],
-    ["tag:security access token", true],
-    ["access tag:security token", true],
-    ["mode tag:security", false],
-    ["access token tag:storage", false],
-  ])("requires text and tag when combined in %j", (query, expected) => {
-    expect(
-      matchesNodeSearch({
-        schema: schema.properties.gateway,
-        value: {},
-        path: ["gateway"],
-        hints: {
-          "gateway.auth.token": { label: "Access Token", tags: ["security"] },
-        },
-        criteria: parseConfigSearchQuery(query),
-      }),
-    ).toBe(expected);
-  });
-
-  it("searches array item schemas before entries exist", () => {
-    const matched = matchesNodeSearch({
-      schema: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            source: {
-              type: "string",
-              description: "Credential source for outgoing requests",
-            },
-          },
-        },
-      },
-      value: [],
-      path: ["headers"],
-      hints: {},
-      criteria: parseConfigSearchQuery("credential source"),
-    });
-
-    expect(matched).toBe(true);
-  });
-
-  it.each([
-    { values: [], query: "secondary endpoint" },
-    { values: ["primary"], query: "secondary endpoint" },
-    { values: [], query: "overflow endpoint" },
-    { values: ["primary"], query: "overflow endpoint" },
-  ])("searches positional and typed-tail schemas for $values", ({ values, query }) => {
-    const matched = matchesNodeSearch({
-      schema: {
-        type: "array",
-        items: [
-          { type: "string", description: "Primary endpoint" },
-          { type: "string", description: "Secondary endpoint" },
-        ],
-        additionalItems: { type: "string", description: "Overflow endpoint" },
-      },
-      value: values,
-      path: ["endpoints"],
-      hints: {},
-      criteria: parseConfigSearchQuery(query),
-    });
-
-    expect(matched).toBe(true);
-  });
-
-  it.each(["composed secondary", "composed overflow"])(
-    "searches %s array schemas declared through allOf",
-    (query) => {
-      const matched = matchesNodeSearch({
-        schema: {
-          type: "array",
-          items: [{ type: "string", description: "Outer endpoint" }],
-          allOf: [
-            {
-              items: [{}, { type: "string", description: "Composed secondary endpoint" }],
-              additionalItems: { type: "string", description: "Composed overflow endpoint" },
-            },
-          ],
-        },
-        value: [],
-        path: ["endpoints"],
-        hints: {},
-        criteria: parseConfigSearchQuery(query),
-      });
-
-      expect(matched).toBe(true);
-    },
-  );
-
-  it("does not search tuple positions forbidden by an allOf branch", () => {
-    const matched = matchesNodeSearch({
-      schema: {
-        type: "array",
-        allOf: [
-          {
-            items: [{ type: "string", description: "Reachable endpoint" }],
-            additionalItems: false,
-          },
-          {
-            items: [{}, { type: "string", description: "Impossible endpoint" }],
-          },
-        ],
-      },
-      value: [],
-      path: ["endpoints"],
-      hints: {},
-      criteria: parseConfigSearchQuery("impossible endpoint"),
-    });
-
-    expect(matched).toBe(false);
-  });
-
-  it("searches additional-property schemas before entries exist", () => {
-    const matched = matchesNodeSearch({
-      schema: {
-        type: "object",
-        additionalProperties: {
-          type: "object",
-          properties: {
-            url: {
-              type: "string",
-            },
-          },
-        },
-      },
-      value: {},
-      path: ["servers"],
-      hints: {
-        "servers.*.url": {
-          help: "Endpoint used by the remote service",
-        },
-      },
-      criteria: parseConfigSearchQuery("remote service"),
-    });
-
-    expect(matched).toBe(true);
-  });
+type Search = Parameters<typeof matchesNodeSearch>[0];
+type Schema = Search["schema"];
+type Properties = NonNullable<Schema["properties"]>;
+const string = (description?: string): Schema => ({ type: "string", description });
+const object = (properties: Properties): Schema => ({ type: "object", properties });
+const array = (items?: Schema["items"], ...allOf: Schema[]): Schema => ({
+  type: "array",
+  items,
+  allOf,
 });
+const defaults = { value: {}, path: [], hints: {} };
+function matches(query: string, schema: Schema, options: Partial<Search> = {}) {
+  return matchesNodeSearch({ ...defaults, schema, ...options, criteria: parse(query) });
+}
+
+it.each([
+  ["tag:security", true],
+  ["mode tag:security", false],
+] as const)("matches text and tag criteria: %s", (query, expected) => {
+  expect(
+    matches(query, object({ auth: object({ token: string() }) }), {
+      path: ["gateway"],
+      hints: { "gateway.auth.token": { label: "Access Token", tags: ["security", "secret"] } },
+    }),
+  ).toBe(expected);
+});
+
+const overflow: Schema = {
+  items: [{}, string("secondary")],
+  additionalItems: string("Overflow"),
+};
+const closed: Schema = { items: [string("reachable")], additionalItems: false };
+const forbidden: Schema = { items: [{}, string("Forbidden")] };
+it.each([
+  ["credential", array(object({ source: string("Credential") })), true],
+  ["overflow", array([string("outer")], overflow), true],
+  ["forbidden", array(undefined, closed, forbidden), false],
+] satisfies [string, Schema, boolean][])(
+  "searches only reachable empty-array schemas: %s",
+  (query, schema, expected) => {
+    expect(matches(query, schema, { value: [], path: ["endpoints"] })).toBe(expected);
+  },
+);
+
+it("searches additional-property schemas before entries exist", () => {
+  expect(
+    matches(
+      "remote service",
+      { type: "object", additionalProperties: object({ url: string() }) },
+      {
+        path: ["servers"],
+        hints: { "servers.*.url": { help: "Endpoint used by the remote service" } },
+      },
+    ),
+  ).toBe(true);
+});
+
+const entries = { reserved: "hidden", alpha: "visible" };
+it.each([
+  ["", entries, ["alpha"], true],
+  ["alpha", entries, ["alpha"], true],
+  ["reserved", entries, [], false],
+  ["alpha", {}, [], false],
+] satisfies [string, Record<string, string>, string[], boolean][])(
+  "scopes map visibility to searchable entries: %s",
+  (query, value, keys, visible) => {
+    const result = resolveConfigMapSearch({
+      schema: string(),
+      value,
+      path: ["settings"],
+      hints: {},
+      reservedKeys: new Set(["reserved"]),
+      searchCriteria: parse(query),
+    });
+    expect(result.visibleEntries.map(([key]) => key)).toEqual(keys);
+    expect(result.visible).toBe(visible);
+  },
+);

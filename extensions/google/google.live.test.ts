@@ -6,8 +6,8 @@ import {
   type ProviderContext,
   type ProviderModel,
   type ProviderStreamFunction,
+  type SimpleStreamOptions,
 } from "openclaw/plugin-sdk/llm";
-import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-ffmpeg";
 import {
   createCapturedPluginRegistration,
   registerProviderPlugin,
@@ -17,6 +17,13 @@ import { normalizeTranscriptForMatch } from "openclaw/plugin-sdk/provider-test-c
 import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
+import { hasTrustedFfmpegForLiveVoiceNote } from "../test-support/generation-live-test-helpers.js";
+import { createLiveValueTool } from "../test-support/live-value-tool.test-support.js";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
+import { RED_H264_VIDEO_BASE64 as GOOGLE_LIVE_RED_VIDEO_BASE64 } from "../test-support/native-video-fixture.test-support.js";
 import plugin from "./index.js";
 import { buildGoogleLiveCatalogProvider } from "./provider-catalog-runtime.js";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
@@ -29,25 +36,6 @@ const GOOGLE_API_KEY =
   "";
 const LIVE = isLiveTestEnabled() && GOOGLE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
-
-// Two 64x64 solid-red H.264 frames keep native-video proof bounded and reproducible.
-const GOOGLE_LIVE_RED_VIDEO_BASE64 = [
-  "AAAAJGZ0eXBpc29tAAACAGlzb21pc282aXNvMmF2YzFtcDQxAAAC5m1vb3YAAABsbXZoZAAAAAAAAAAAAAAAAAAAA+gAAAAA",
-  "AAEAAAEAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-  "AAAAAAAAAAIAAAHodHJhawAAAFx0a2hkAAAAAwAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAA",
-  "AAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAABAAAAAQAAAAAABhG1kaWEAAAAgbWRoZAAAAAAAAAAAAAAAAAAAQAAAAAAA",
-  "VcQAAAAAAC1oZGxyAAAAAAAAAAB2aWRlAAAAAAAAAAAAAAAAVmlkZW9IYW5kbGVyAAAAAS9taW5mAAAAFHZtaGQAAAABAAAA",
-  "AAAAAAAAAAAkZGluZgAAABxkcmVmAAAAAAAAAAEAAAAMdXJsIAAAAAEAAADvc3RibAAAAKNzdHNkAAAAAAAAAAEAAACTYXZj",
-  "MQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAABAAEAASAAAAEgAAAAAAAAAARVMYXZjNjIuMjguMTAyIGxpYngyNjQAAAAAAAAA",
-  "AAAAABj//wAAAC1hdmNDAULACv/hABZnQsAK2hCbARAAAAMAEAAAAwAo8SJqAQAEaM4PyAAAABBwYXNwAAAAAQAAAAEAAAAQ",
-  "c3R0cwAAAAAAAAAAAAAAEHN0c2MAAAAAAAAAAAAAABRzdHN6AAAAAAAAAAAAAAAAAAAAEHN0Y28AAAAAAAAAAAAAAChtdmV4",
-  "AAAAIHRyZXgAAAAAAAAAAQAAAAEAAAAAAAAAAAAAAAAAAABidWR0YQAAAFptZXRhAAAAAAAAACFoZGxyAAAAAAAAAABtZGly",
-  "YXBwbAAAAAAAAAAAAAAAAC1pbHN0AAAAJal0b28AAAAdZGF0YQAAAAEAAAAATGF2ZjYyLjEyLjEwMgAAAHhtb29mAAAAEG1m",
-  "aGQAAAAAAAAAAQAAAGB0cmFmAAAAJHRmaGQAAAA5AAAAAQAAAAAAAAMKAABAAAAAACMBAQAAAAAAFHRmZHQBAAAAAAAAAAAA",
-  "AAAAAAAgdHJ1bgAAAgUAAAACAAAAgAIAAAAAAAAjAAAACgAAADVtZGF0AAAAH2WIhDoRigACGPHAAED2OAAIeUnJyddddddd",
-  "dddddeAAAAAGQZogF6CMAAAAQ21mcmEAAAArdGZyYQEAAAAAAAABAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAMKAQEBAAAAEG1m",
-  "cm8AAAAAAAAAQw==",
-].join("");
 
 async function withGoogleApiEnvUnset<T>(fn: () => Promise<T>): Promise<T> {
   const geminiApiKey = process.env.GEMINI_API_KEY;
@@ -79,20 +67,6 @@ function isTransientGeminiSearchError(error: unknown): boolean {
   }
   const message = error.message.toLowerCase();
   return message.includes("timeout") || message.includes("aborted");
-}
-
-function hasTrustedFfmpegForLiveVoiceNote(): boolean {
-  try {
-    resolveFfmpegBin();
-    return true;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("ffmpeg not found in trusted system directories")) {
-      console.warn("[google:live] skip voice-note transcode: ffmpeg unavailable");
-      return false;
-    }
-    throw error;
-  }
 }
 
 async function waitForGoogleLive(
@@ -140,7 +114,7 @@ function registerGoogleRealtimeVoiceProvider() {
 }
 
 describeLive("google plugin live", () => {
-  it.each(["gemini-3.7-flash", "gemini-3.5-flash-lite"])(
+  it.each(["gemini-4-argon", "gemini-3.8-flash", "gemini-3.5-flash-lite"])(
     "discovers and completes through %s",
     async (modelId) => {
       const provider = await buildGoogleLiveCatalogProvider({
@@ -158,13 +132,7 @@ describeLive("google plugin live", () => {
           api: "google-generative-ai",
         } as Model<"google-generative-ai">,
         {
-          messages: [
-            {
-              role: "user",
-              content: "Reply with exactly: OpenClaw live catalog OK",
-              timestamp: Date.now(),
-            },
-          ],
+          messages: [makeUserMessage("Reply with exactly: OpenClaw live catalog OK", Date.now())],
         },
         { apiKey: GOOGLE_API_KEY, maxTokens: 64 },
       );
@@ -176,6 +144,82 @@ describeLive("google plugin live", () => {
     },
     90_000,
   );
+
+  it("completes a Gemini 4 tool-call round trip with unsigned replay through the registered transport", async () => {
+    const catalog = await buildGoogleLiveCatalogProvider({
+      apiKey: "GEMINI_API_KEY",
+      discoveryApiKey: GOOGLE_API_KEY,
+    });
+    const definition = catalog.models.find((model) => model.id === "gemini-4-argon");
+    expect(definition, "gemini-4-argon missing from Google models.list").toBeDefined();
+    const model = {
+      ...definition!,
+      provider: "google",
+      baseUrl: catalog.baseUrl,
+      api: "google-generative-ai",
+    } as ProviderModel<"google-generative-ai">;
+    const { providers } = await registerGooglePlugin();
+    const provider = requireRegisteredProvider(providers, "google");
+    const streamFn = provider.createStreamFn?.({
+      provider: "google",
+      modelId: model.id,
+      model: model as never,
+    }) as
+      | ProviderStreamFunction<
+          "google-generative-ai",
+          SimpleStreamOptions & { toolChoice: "required" | "none" }
+        >
+      | undefined;
+    if (!streamFn) {
+      throw new Error("registered Google provider did not create its chat transport");
+    }
+    const tool = createLiveValueTool("live_echo");
+    const userPrompt = makeUserMessage(
+      "Call live_echo with value argon. Do not answer directly.",
+      Date.now(),
+    );
+    const first = await streamFn(
+      model,
+      { messages: [userPrompt], tools: [tool] },
+      { apiKey: GOOGLE_API_KEY, reasoning: "low", maxTokens: 2048, toolChoice: "required" },
+    ).result();
+    expect(first.stopReason, first.errorMessage).toBe("toolUse");
+    const call = first.content.find((block) => block.type === "toolCall");
+    if (!call || call.type !== "toolCall") {
+      throw new Error("Gemini 4 did not return the requested tool call");
+    }
+    expect(call.name).toBe("live_echo");
+    expect(call.arguments).toEqual({ value: "argon" });
+    expect(call.thoughtSignature).toBeTruthy();
+
+    // Cross-model/transcript history lacks Google's signature; the transport must repair it.
+    const unsignedCall = {
+      type: "toolCall" as const,
+      id: call.id,
+      name: call.name,
+      arguments: call.arguments,
+    };
+    const second = await streamFn(
+      model,
+      {
+        messages: [
+          userPrompt,
+          { ...first, content: [unsignedCall] },
+          makeTextToolResult(call.id, call.name, "argon", false, Date.now()),
+          { role: "user", content: "Reply with exactly: argon", timestamp: Date.now() },
+        ],
+        tools: [tool],
+      },
+      { apiKey: GOOGLE_API_KEY, reasoning: "low", maxTokens: 2048, toolChoice: "none" },
+    ).result();
+    expect(second.stopReason, second.errorMessage).toBe("stop");
+    const answer = second.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join(" ")
+      .trim();
+    expect(answer).toMatch(/^argon[.!]?$/iu);
+  }, 180_000);
 
   it("understands native video through the registered Google chat transport", async () => {
     const catalog = await buildGoogleLiveCatalogProvider({
@@ -263,7 +307,7 @@ describeLive("google plugin live", () => {
   }, 120_000);
 
   it("transcodes speech to Opus for voice-note targets", async () => {
-    if (!hasTrustedFfmpegForLiveVoiceNote()) {
+    if (!hasTrustedFfmpegForLiveVoiceNote("google")) {
       return;
     }
 

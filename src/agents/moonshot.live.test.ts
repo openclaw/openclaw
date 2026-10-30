@@ -6,6 +6,7 @@ import {
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
 } from "./live-test-helpers.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const MOONSHOT_KEY = process.env.MOONSHOT_API_KEY ?? "";
 const MOONSHOT_BASE_URL = process.env.MOONSHOT_BASE_URL?.trim() || "https://api.moonshot.ai/v1";
@@ -26,18 +27,16 @@ function forceMoonshotInstantMode(payload: unknown): void {
 
 describeLive("moonshot live", () => {
   it("returns assistant text", async () => {
-    const model: Model<"openai-completions"> = {
+    const model: Model<"openai-completions"> = makeProviderModelFixture({
       id: MOONSHOT_MODEL,
       name: `Moonshot ${MOONSHOT_MODEL}`,
       api: "openai-completions",
       provider: "moonshot",
       baseUrl: MOONSHOT_BASE_URL,
-      reasoning: false,
       input: ["text", "image"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 256000,
       maxTokens: 8192,
-    };
+    });
 
     let lastContent: unknown = null;
     let text = "";

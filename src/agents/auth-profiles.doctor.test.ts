@@ -1,7 +1,3 @@
-/**
- * Auth-profile doctor copy tests.
- * Covers provider-specific repair hints without invoking real auth flows.
- */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const buildProviderAuthDoctorHintWithPluginMock = vi.hoisted(() => vi.fn());

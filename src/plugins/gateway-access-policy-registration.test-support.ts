@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 import { types } from "node:util";
+import type {
+  PluginGatewayAccessAuthority,
+  PluginGatewayAccessPolicy,
+} from "./gateway-access-policy.types.js";
 import { createPluginRecord } from "./loader-records.js";
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
+
+const grantId = "780a6c68-5d66-4df6-b4e8-dba6d24264a2";
 
 const context = {
   config: {},
@@ -16,7 +22,22 @@ const context = {
   requiredByRole: true,
 };
 
-function createRegisteredPolicy() {
+const resumedContext = {
+  ...context,
+  profile: { ...context.profile, assignedRole: "staff" },
+  requiredByRole: false,
+  grantId,
+};
+
+function assertNativeAuthority(authority: PluginGatewayAccessAuthority | undefined) {
+  assert.ok(authority);
+  assert.equal(authority.grantId, grantId, "Registration must preserve the original grant");
+  assert.equal(types.isProxy(authority.signal), false, "Native cleanup must not enter a proxy");
+  authority.assertCurrent();
+  return authority;
+}
+
+function createRegisteredPolicy(resumable = true) {
   const builder = createTestPluginRegistry();
   const record = createPluginRecord({
     id: "person-access",
@@ -31,27 +52,34 @@ function createRegisteredPolicy() {
   assert.ok(instance, "Registration must use the production PluginInstance owner");
   const grant = new AbortController();
   const lifetime = new AbortController();
-  api.registerGatewayAccessPolicy({
-    authorize() {
-      return Object.freeze({
-        assertCurrent() {
-          grant.signal.throwIfAborted();
-          lifetime.signal.throwIfAborted();
-        },
-        signal: AbortSignal.any([grant.signal, lifetime.signal]),
-      });
+  const createAuthority = () =>
+    Object.freeze({
+      grantId,
+      assertCurrent() {
+        grant.signal.throwIfAborted();
+        lifetime.signal.throwIfAborted();
+      },
+      signal: AbortSignal.any([grant.signal, lifetime.signal]),
+    });
+  const originalPolicy: PluginGatewayAccessPolicy = {
+    authorize(currentContext) {
+      return currentContext.requiredByRole ? createAuthority() : undefined;
     },
-  });
+    resume(currentContext) {
+      assert.equal(this, originalPolicy, "Resume must retain its plugin receiver");
+      assert.deepEqual(currentContext, resumedContext);
+      return currentContext.grantId === grantId ? createAuthority() : undefined;
+    },
+  };
+  if (!resumable) {
+    delete originalPolicy.resume;
+  }
+  api.registerGatewayAccessPolicy(originalPolicy);
   const registration = builder.registry.gatewayAccessPolicies[0];
   assert.ok(registration);
-  const authorize = () => {
-    const authority = registration.policy.authorize(context);
-    assert.ok(authority);
-    assert.equal(types.isProxy(authority.signal), false, "Native cleanup must not enter a proxy");
-    authority.assertCurrent();
-    return authority;
-  };
-  return { grant, lifetime, instance, registration, authorize };
+  const authorize = () => assertNativeAuthority(registration.policy.authorize(context));
+  const resume = () => assertNativeAuthority(registration.policy.resume?.(resumedContext));
+  return { grant, lifetime, instance, registration, authorize, resume };
 }
 
 type Policy = ReturnType<typeof createRegisteredPolicy>;
@@ -82,7 +110,8 @@ class RevocationReason extends Promise<void> {
 }
 
 async function retireRegisteredPolicy(): Promise<References> {
-  const policy = createRegisteredPolicy();
+  const policy = createRegisteredPolicy(false);
+  assert.equal(typeof policy.registration.policy.resume, "undefined");
   const authority = policy.authorize();
   const hostInvalidated = new AbortController();
   const hostSignal = AbortSignal.any([hostInvalidated.signal, authority.signal]);
@@ -92,7 +121,6 @@ async function retireRegisteredPolicy(): Promise<References> {
 
   // Preserve the failing order: requester release, service stop, instance retirement, GC.
   hostSignal.removeEventListener("abort", onAbort);
-  // A pending Promise is valid abort data; projecting it must not retain plugin work.
   const reason = new RevocationReason(() => undefined);
   policy.grant.abort(reason);
   policy.lifetime.abort();
@@ -135,7 +163,8 @@ async function observeLiveGrant() {
   const policy = createRegisteredPolicy();
   try {
     const completed = completeCapture(policy);
-    const retainedSignal = policy.authorize().signal;
+    assert.equal(policy.registration.policy.authorize(resumedContext), undefined);
+    const retainedSignal = policy.resume().signal;
     await collect(completed);
     assert.equal(policy.grant.signal.aborted, false, "Collection must not end the live grant");
     assert.equal(retainedSignal.aborted, false);
@@ -147,10 +176,13 @@ async function observeLiveGrant() {
   }
 
   const nextPolicy = createRegisteredPolicy();
-  const nextSignal = nextPolicy.authorize().signal;
+  const nextAuthority = nextPolicy.resume();
+  const nextSignal = nextAuthority.signal;
   assert.deepEqual((await nextPolicy.instance.dispose()).errors, []);
   assert.equal(nextPolicy.grant.signal.aborted, false);
   assert.equal(nextSignal.aborted, true, "Plugin retirement must end still-live access");
+  assert.throws(nextPolicy.resume, PluginInstanceUnavailableError);
+  assert.throws(nextAuthority.assertCurrent, PluginInstanceUnavailableError);
 }
 
 const scenario = process.argv[2];

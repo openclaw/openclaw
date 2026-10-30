@@ -199,9 +199,12 @@ export async function reconcileGatewayServiceDefinition(params: {
           warn(
             `Service definition refresh failed: ${String(error)}. Recovery could not be verified: ${String(recoveryError)}; backups retained: ${transaction.backupPaths.join(", ")}`,
           );
-          throw new Error(
-            `UPDATE_NATIVE_AUTHORITY: Service definition recovery is unverified: ${String(recoveryError)}`,
-            { cause: error },
+          throw new GatewayServiceAuthorityError(
+            new Error(
+              `UPDATE_NATIVE_AUTHORITY: Service definition recovery is unverified: ${String(recoveryError)}`,
+              { cause: error },
+            ),
+            "recovery-pending",
           );
         }
         return deny(

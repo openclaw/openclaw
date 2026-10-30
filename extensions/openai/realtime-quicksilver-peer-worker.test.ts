@@ -1,12 +1,23 @@
 import { once } from "node:events";
 import { createRequire } from "node:module";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { MessageChannel, Worker } from "node:worker_threads";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
-import {
-  OpenAIQuicksilverAudioPeer,
-  type QuicksilverAudioWorkerEvent,
-} from "./realtime-quicksilver-peer.runtime.js";
+import { realtimeAudioTestEntrypoints } from "./realtime-audio-worker-entrypoints.test-support.js";
+import type { QuicksilverAudioWorkerEvent } from "./realtime-quicksilver-peer.runtime.js";
+
+const { OpenAIQuicksilverAudioPeer }: typeof import("./realtime-quicksilver-peer.runtime.js") =
+  await import(resolveRuntimeWorkerUrl(realtimeAudioTestEntrypoints.peer).href);
+const weriftUrl = pathToFileURL(createRequire(import.meta.url).resolve("werift")).href;
+
+function createPeer(
+  callbacks: Parameters<typeof OpenAIQuicksilverAudioPeer.create>[0]["callbacks"],
+  options: Omit<Parameters<typeof OpenAIQuicksilverAudioPeer.create>[0], "callbacks"> = {},
+) {
+  return OpenAIQuicksilverAudioPeer.create({ iceServers: [], callbacks, ...options });
+}
 
 // Observe encrypted RTP on another event loop: a same-thread receiver would
 // hide the gap by processing its queued callbacks after the deliberate stall.
@@ -49,8 +60,10 @@ const receiverSource = `const { parentPort, workerData } = require('node:worker_
 // in the same turn avoids racing the 80 ms reorder timer on a loaded test host.
 const interruptionSource = `const { parentPort, workerData } = require('node:worker_threads');
 (async () => {
-  const { register } = await import(workerData.tsxApiUrl);
-  register();
+  if (workerData.tsxApiUrl) {
+    const { register } = await import(workerData.tsxApiUrl);
+    register();
+  }
   const { OpenAIQuicksilverAudioPeer } = await import(workerData.mediaUrl);
   const { RtpHeader, RtpPacket } = await import(workerData.weriftUrl);
   const create = OpenAIQuicksilverAudioPeer.create;
@@ -82,23 +95,24 @@ const interruptionSource = `const { parentPort, workerData } = require('node:wor
 
 describe("GPT-Live audio thread", () => {
   it("does not restamp pre-clear reordered RTP as the next output generation", async () => {
-    const workerUrl = new URL("./realtime-quicksilver-audio.worker.ts", import.meta.url);
+    const workerUrl = resolveRuntimeWorkerUrl(realtimeAudioTestEntrypoints.worker);
     const worker = new Worker(interruptionSource, {
       eval: true,
-      // Register inside the worker: tsx automatic preloads only install on main.
+      // Source fallback registers inside the worker; prepared children need no loader.
       execArgv: [],
       workerData: {
         iceServers: [],
         reportMediaErrors: false,
         workerUrl: workerUrl.href,
-        tsxApiUrl: import.meta.resolve("tsx/esm/api"),
-        mediaUrl: new URL("./realtime-quicksilver-media.runtime.ts", import.meta.url).href,
-        weriftUrl: pathToFileURL(createRequire(import.meta.url).resolve("werift")).href,
+        tsxApiUrl: workerUrl.pathname.endsWith(".ts")
+          ? import.meta.resolve("tsx/esm/api")
+          : undefined,
+        mediaUrl: resolveRuntimeWorkerUrl(realtimeAudioTestEntrypoints.media).href,
+        weriftUrl,
       },
     });
     const events: (QuicksilverAudioWorkerEvent | { type: "test-drained" | "test-resumed" })[] = [];
     const post = (message: { type: string }) => {
-      // Node Worker messages have no browser targetOrigin.
       // oxlint-disable-next-line unicorn/require-post-message-target-origin
       worker.postMessage(message);
     };
@@ -112,8 +126,9 @@ describe("GPT-Live audio thread", () => {
       });
       post({ type: "test-clear" });
       await vi.waitFor(() => expect(events.at(-1)?.type).toBe("test-drained"));
-      const beforeResume = events.filter((event) => event.type === "audio");
-      expect(beforeResume.map((event) => event.generation)).toEqual([0]);
+      expect(
+        events.filter((event) => event.type === "audio").map((event) => event.generation),
+      ).toEqual([0]);
 
       post({ type: "test-resume" });
       await vi.waitFor(() => expect(events.at(-1)?.type).toBe("test-resumed"));
@@ -127,14 +142,11 @@ describe("GPT-Live audio thread", () => {
   }, 15_000);
 
   it("fences already-posted PCM at interruption while accepting the next output generation", async () => {
-    const audio: Buffer[] = [];
-    const peer = await OpenAIQuicksilverAudioPeer.create({
-      iceServers: [],
-      callbacks: {
-        onAudio: (chunk) => audio.push(chunk),
-        onError: (error) => {
-          throw error;
-        },
+    const onAudio = vi.fn();
+    const peer = await createPeer({
+      onAudio,
+      onError: (error) => {
+        throw error;
       },
     });
     try {
@@ -143,9 +155,9 @@ describe("GPT-Live audio thread", () => {
       // Emulate PCM already queued on the real Worker emitter when sideband clear
       // ran first. A worker command alone cannot recall these posted messages.
       worker.emit("message", { type: "audio", audio: new Uint8Array([1, 2]), generation: 0 });
-      expect(audio).toEqual([]);
+      expect(onAudio).not.toHaveBeenCalled();
       worker.emit("message", { type: "audio", audio: new Uint8Array([3, 4]), generation: 1 });
-      expect(audio).toEqual([Buffer.from([3, 4])]);
+      expect(onAudio).toHaveBeenCalledExactlyOnceWith(Buffer.from([3, 4]));
     } finally {
       peer.close();
     }
@@ -155,16 +167,12 @@ describe("GPT-Live audio thread", () => {
     const controller = new AbortController();
     const errors: Error[] = [];
     const callbacks = { onAudio: () => {}, onError: (error: Error) => errors.push(error) };
-    const starting = OpenAIQuicksilverAudioPeer.create({
-      callbacks,
-      iceServers: [],
-      signal: controller.signal,
-    });
+    const starting = createPeer(callbacks, { signal: controller.signal });
     const reason = new Error("call cancelled during worker startup");
     controller.abort(reason);
     await expect(starting).rejects.toBe(reason);
 
-    const peer = await OpenAIQuicksilverAudioPeer.create({ callbacks, iceServers: [] });
+    const peer = await createPeer(callbacks);
     const offer = peer.createOffer();
     peer.close();
     peer.close();
@@ -186,8 +194,21 @@ describe("GPT-Live audio thread", () => {
         workerData: {
           counts: counts.buffer,
           output: channel ? { port: channel.port1, state } : undefined,
-          weriftUrl: pathToFileURL(createRequire(import.meta.url).resolve("werift")).href,
+          weriftUrl,
         },
+      });
+      // The receiver outlives each hang-up under test. On Linux, Bun reports the
+      // ICMP refusal of its next echo or RTCP send as a socket error that werift
+      // leaves uncaught, which fails the receiver thread. Only that is expected.
+      let hungUp = false;
+      const receiverErrors: unknown[] = [];
+      receiver.on("error", (error) => {
+        if (
+          !hungUp ||
+          !(error instanceof Error && "code" in error && error.code === "ECONNREFUSED")
+        ) {
+          receiverErrors.push(error);
+        }
       });
       const errors: Error[] = [];
       let audibleSamples = 0;
@@ -196,9 +217,8 @@ describe("GPT-Live audio thread", () => {
       let peer: Awaited<ReturnType<typeof OpenAIQuicksilverAudioPeer.create>> | undefined;
       try {
         await once(receiver, "message");
-        peer = await OpenAIQuicksilverAudioPeer.create({
-          output: channel ? { port: channel.port2, state } : undefined,
-          callbacks: {
+        peer = await createPeer(
+          {
             onAudio: (audio) => {
               if (direct) {
                 throw new Error("Direct PCM returned to the Gateway event loop");
@@ -214,8 +234,8 @@ describe("GPT-Live audio thread", () => {
             },
             onError: (error) => errors.push(error),
           },
-          iceServers: [],
-        });
+          { output: channel ? { port: channel.port2, state } : undefined },
+        );
         const tone = Buffer.alloc(24_000 * 2);
         for (let sample = 0; sample < 24_000; sample++) {
           tone.writeInt16LE(
@@ -226,54 +246,45 @@ describe("GPT-Live audio thread", () => {
         peer.sendAudio(tone);
         tone.fill(0); // Capture may immediately recycle this caller-owned buffer.
         const answer = once(receiver, "message");
-        // Node Worker messaging has no browser targetOrigin.
         // oxlint-disable-next-line unicorn/require-post-message-target-origin
         receiver.postMessage({ type: "offer", sdp: await peer.createOffer() });
         await peer.applyAnswer((await answer)[0] as string);
         const observedAudibleSamples = () => (direct ? Atomics.load(counts, 2) : audibleSamples);
-        const deadline = Date.now() + 10_000;
-        while (
-          (Atomics.load(counts, 0) < 5 || observedAudibleSamples() < 1_000) &&
-          Date.now() < deadline
-        ) {
-          await new Promise((resolve) => {
-            setTimeout(resolve, 20);
-          });
-        }
-        expect(Atomics.load(counts, 0)).toBeGreaterThanOrEqual(5);
-        expect(observedAudibleSamples()).toBeGreaterThan(1_000);
+        await vi.waitFor(
+          () => {
+            expect(Atomics.load(counts, 0)).toBeGreaterThanOrEqual(5);
+            expect(observedAudibleSamples()).toBeGreaterThan(1_000);
+          },
+          { timeout: 10_000, interval: 20 },
+        );
         const before = Atomics.load(counts, 0);
         const outputBefore = Atomics.load(counts, 1);
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
         const duringStall = Atomics.load(counts, 0) - before;
         // 25 nominal 20ms packets; tolerate loaded CI, but not a stopped pump.
-        console.info(`RTP packets during 500 ms Gateway stall: ${duringStall}`);
         expect(duringStall).toBeGreaterThanOrEqual(10);
         expect(errors).toEqual([]);
         if (direct) {
           const mediaDuringStall = Atomics.load(counts, 1) - outputBefore;
-          console.info(
-            "PCM messages reaching the playback worker during stall: " + mediaDuringStall,
-          );
           expect(mediaDuringStall).toBeGreaterThanOrEqual(10);
+          hungUp = true;
           peer.close();
           expect(Atomics.load(new Int32Array(state), 0)).toBe(1);
           const afterClose = Atomics.load(counts, 1);
-          await new Promise((resolve) => {
-            setTimeout(resolve, 80);
-          });
+          await delay(80);
           expect(Atomics.load(counts, 1)).toBe(afterClose);
+          expect(receiverErrors).toEqual([]);
           return;
         }
+        // The next PCM batch fails the sink, which hangs up the peer.
+        hungUp = true;
         failAudioSink = true;
-        const failureDeadline = Date.now() + 2_000;
-        while (errors.length === 0 && Date.now() < failureDeadline) {
-          await new Promise((resolve) => {
-            setTimeout(resolve, 20);
-          });
-        }
-        expect(errors).toEqual([sinkError]);
+        await vi.waitFor(() => expect(errors).toEqual([sinkError]), {
+          timeout: 2_000,
+          interval: 20,
+        });
         await expect(peer.createOffer()).rejects.toThrow("closed");
+        expect(receiverErrors).toEqual([]);
       } finally {
         peer?.close();
         await receiver.terminate();

@@ -1,12 +1,15 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { inspect } from "node:util";
+import { withServer } from "openclaw/plugin-sdk/test-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
+import { releaseQaCredentialLease } from "./live-transports/shared/credential-lease-cleanup.js";
 import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.js";
 import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
 import { runQaFlowSuiteStandard } from "./suite-run-standard.js";
@@ -68,6 +71,8 @@ if (command === "descendant") {
 
 type Identity = { leaderPid: number; pgid: number; descendantPid?: number };
 type Event = { at: number; kind: string; [key: string]: unknown };
+const validPid = (pid: number) => Number.isSafeInteger(pid) && pid > 1;
+const serializeError = (error: unknown) => inspect(error, { depth: null });
 
 function readIdentity(root: string): Identity | undefined {
   const identityPath = path.join(root, "identity.json");
@@ -76,29 +81,20 @@ function readIdentity(root: string): Identity | undefined {
   }
   const identity = JSON.parse(readFileSync(identityPath, "utf8")) as Identity;
   if (
-    !Number.isSafeInteger(identity.leaderPid) ||
-    identity.leaderPid <= 1 ||
+    !validPid(identity.leaderPid) ||
     identity.leaderPid !== identity.pgid ||
-    (identity.descendantPid !== undefined &&
-      (!Number.isSafeInteger(identity.descendantPid) || identity.descendantPid <= 1))
+    (identity.descendantPid !== undefined && !validPid(identity.descendantPid))
   ) {
     throw new Error("invalid owned fixture identity; refusing to signal");
   }
   return identity;
 }
 
-function serializeError(error: unknown): unknown {
-  return error instanceof Error
-    ? {
-        name: error.name,
-        message: error.message,
-        ...(error.cause ? { cause: serializeError(error.cause) } : {}),
-        ...(error instanceof AggregateError ? { errors: error.errors.map(serializeError) } : {}),
-      }
-    : String(error);
-}
-
-async function reproduce(denyGroupSignals: boolean, surface: "gateway" | "bootstrap") {
+async function reproduce(
+  denyGroupSignals: boolean,
+  surface: "gateway" | "bootstrap",
+  testSignal: AbortSignal,
+) {
   await fs.mkdir(artifactRoot, { recursive: true });
   const root = await fs.mkdtemp(path.join(artifactRoot, denyGroupSignals ? "fault-" : "control-"));
   const eventsPath = path.join(root, "events.jsonl");
@@ -131,6 +127,7 @@ async function reproduce(denyGroupSignals: boolean, surface: "gateway" | "bootst
     };
   };
   const releases: ReturnType<typeof snapshot>[] = [];
+  let onHeartbeat: (() => void) | undefined;
   let stopHeartbeat: (() => Promise<void>) | undefined;
   let suiteError: unknown;
   let groupProbeCount = 0;
@@ -142,253 +139,208 @@ async function reproduce(denyGroupSignals: boolean, surface: "gateway" | "bootst
 
   // A local synthetic broker doubles as the supplied lab's readiness endpoint.
   // Requests/headers/payloads are never recorded; the release observation is PID-only.
-  const server = createServer((request, response) => {
+  const handleRequest: Parameters<typeof withServer>[0] = (request, response) => {
     request.resume();
     response.setHeader("content-type", "application/json");
+    let payload: unknown = { status: "ok" };
     if (request.url === "/readyz") {
       record("lab-ready-request");
-      response.end('{"ok":true}');
+      payload = { ok: true };
     } else if (request.url === "/qa-credentials/v1/acquire") {
       record("lease-acquire");
-      response.end(
-        JSON.stringify({
-          status: "ok",
-          credentialId: "synthetic-only",
-          leaseToken: "synthetic-only",
-          payload: { synthetic: true },
-          heartbeatIntervalMs: 250,
-          leaseTtlMs: 60_000,
-        }),
-      );
+      payload = {
+        status: "ok",
+        credentialId: "synthetic-only",
+        leaseToken: "synthetic-only",
+        payload: { synthetic: true },
+        heartbeatIntervalMs: 250,
+        leaseTtlMs: 60_000,
+      };
     } else if (request.url === "/qa-credentials/v1/heartbeat") {
       record("lease-heartbeat");
-      response.end('{"status":"ok"}');
+      onHeartbeat?.();
     } else if (request.url === "/qa-credentials/v1/release") {
       const observation = snapshot();
       releases.push(observation);
       record("lease-release", observation);
-      response.end('{"status":"ok"}');
     } else {
       record("unexpected-http-request");
       response.writeHead(404).end();
+      return;
     }
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("missing local broker address");
-  }
-  const baseUrl = `http://127.0.0.1:${address.port}`;
+    response.end(JSON.stringify(payload));
+  };
   const state = createQaBusState();
-  const unexpected = () => {
-    throw new Error("startup failure must precede lab publication");
-  };
-  const lab: QaLabServerHandle = {
-    baseUrl,
-    listenUrl: baseUrl,
-    state,
-    setControlUi: unexpected,
-    setScenarioRun: unexpected,
-    setLatestReport: unexpected,
-    runSelfCheck: async () => unexpected(),
-    stop: async () => {
-      record("suite-lab-finish");
-      state.reset(true);
-    },
-  };
-  const factory: QaTransportAdapterFactory = {
-    id: "startup-lease-fixture",
-    matches: ({ channelId, driver }) => channelId === "startup-lease-fixture" && driver === "live",
-    async create({ credentials, messages }) {
-      const lease = await credentials.acquire({
-        kind: "synthetic-startup-lease",
-        source: "convex",
-        role: "ci",
-        resolveEnvPayload: () => {
-          throw new Error("real env credentials forbidden");
-        },
-        parsePayload: (payload) => {
-          if (JSON.stringify(payload) !== '{"synthetic":true}') {
-            throw new Error("non-synthetic lease payload forbidden");
-          }
-          return { synthetic: true };
-        },
-      });
-      const heartbeat = credentials.startHeartbeat(lease);
-      stopHeartbeat = () => heartbeat.stop();
-      return {
-        id: "startup-lease-fixture",
-        label: "Synthetic lease",
-        accountId: "sut",
-        requiredPluginIds: [],
-        supportedActions: [],
-        sendInbound: async (input) => messages.addInboundMessage(input),
-        createGatewayConfig: () => ({}),
-        waitReady: async () => unexpected(),
-        buildAgentDelivery: ({ target }) => ({
-          channel: "startup-lease-fixture",
-          to: target,
-          replyChannel: "startup-lease-fixture",
-          replyTo: target,
-        }),
-        handleAction: async () => unexpected(),
-        createReportNotes: () => [],
-        cleanup: async () => {
-          record("transport-before-gateway-stop");
-        },
-        cleanupAfterGatewayStop: async () => {
-          record("transport-after-gateway-stop");
-          try {
-            await heartbeat.stop();
-          } finally {
-            await lease.release();
-          }
+  let cleaned = snapshot();
+  try {
+    await withServer(handleRequest, async (baseUrl) => {
+      const unexpected = () => {
+        throw new Error("startup failure must precede lab publication");
+      };
+      const lab: QaLabServerHandle = {
+        baseUrl,
+        listenUrl: baseUrl,
+        state,
+        setControlUi: unexpected,
+        setScenarioRun: unexpected,
+        setLatestReport: unexpected,
+        runSelfCheck: async () => unexpected(),
+        stop: async () => {
+          record("suite-lab-finish");
+          state.reset(true);
         },
       };
-    },
-  };
-  vi.stubEnv("OPENCLAW_QA_CONVEX_SITE_URL", baseUrl);
-  vi.stubEnv("OPENCLAW_QA_CONVEX_SECRET_CI", "synthetic-only");
-  vi.stubEnv("OPENCLAW_QA_ALLOW_INSECURE_HTTP", "1");
-  vi.stubEnv("OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN", undefined);
-  vi.stubEnv("OPENCLAW_LIVE_SETUP_TOKEN_VALUE", undefined);
-  const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-    const identity = readIdentity(root);
-    if (identity && pid === -identity.pgid) {
-      if (signal === 0) {
-        groupProbeCount += 1;
-      } else if (signal === "SIGTERM" || signal === "SIGKILL") {
-        record("group-signal", { signal, denied: denyGroupSignals, ...snapshot() });
-        if (denyGroupSignals) {
-          throw Object.assign(new Error("synthetic EPERM for owned fixture group"), {
-            code: "EPERM",
+      const factory: QaTransportAdapterFactory = {
+        id: "startup-lease-fixture",
+        matches: ({ channelId, driver }) =>
+          channelId === "startup-lease-fixture" && driver === "live",
+        async create({ credentials }) {
+          const lease = await credentials.acquire({
+            kind: "synthetic-startup-lease",
+            source: "convex",
+            role: "ci",
+            resolveEnvPayload: () => {
+              throw new Error("real env credentials forbidden");
+            },
+            parsePayload: (payload) => {
+              if (JSON.stringify(payload) !== '{"synthetic":true}') {
+                throw new Error("non-synthetic lease payload forbidden");
+              }
+              return { synthetic: true };
+            },
           });
+          const heartbeat = credentials.startHeartbeat(lease);
+          stopHeartbeat = () => heartbeat.stop();
+          return {
+            id: "startup-lease-fixture",
+            label: "Synthetic lease",
+            accountId: "sut",
+            requiredPluginIds: [],
+            supportedActions: [],
+            sendInbound: unexpected,
+            createGatewayConfig: () => ({}),
+            waitReady: async () => unexpected(),
+            buildAgentDelivery: unexpected,
+            handleAction: async () => unexpected(),
+            createReportNotes: () => [],
+            cleanup: async () => {
+              record("transport-before-gateway-stop");
+            },
+            cleanupAfterGatewayStop: async () => {
+              record("transport-after-gateway-stop");
+              await releaseQaCredentialLease(lease, heartbeat);
+            },
+          };
+        },
+      };
+      vi.stubEnv("OPENCLAW_QA_CONVEX_SITE_URL", baseUrl);
+      vi.stubEnv("OPENCLAW_QA_CONVEX_SECRET_CI", "synthetic-only");
+      vi.stubEnv("OPENCLAW_QA_ALLOW_INSECURE_HTTP", "1");
+      vi.stubEnv("OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN", undefined);
+      vi.stubEnv("OPENCLAW_LIVE_SETUP_TOKEN_VALUE", undefined);
+      const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        const identity = readIdentity(root);
+        if (identity && pid === -identity.pgid) {
+          if (signal === 0) {
+            groupProbeCount += 1;
+          } else if (signal === "SIGTERM" || signal === "SIGKILL") {
+            record("group-signal", { signal, denied: denyGroupSignals, ...snapshot() });
+            if (denyGroupSignals) {
+              throw Object.assign(new Error("synthetic EPERM for owned fixture group"), {
+                code: "EPERM",
+              });
+            }
+          }
         }
-      }
-    }
-    return realKill(pid, signal);
-  });
-  try {
-    record("suite-start", { denyGroupSignals });
-    const context: QaSuiteResolvedRunContext = {
-      startedAt: new Date(),
-      repoRoot,
-      outputDir: root,
-      transportId: "qa-channel",
-      selectedScenarios: [],
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      fastMode: true,
-      enabledPluginIds: [],
-      gatewayConfigPatches: [],
-      gatewayRuntimeOptions: undefined,
-      concurrency: 1,
-      progressEnabled: true,
-      gatewayHeapCheckpointsEnabled: false,
-    };
-    try {
-      await runQaFlowSuiteStandard(
-        {
-          startLab: async () => lab,
-          controlUiEnabled: false,
-          channelDriver: "live",
-          channelId: "startup-lease-fixture",
-          adapterFactories: [factory],
-          sutOpenClawCommand: {
-            executablePath: process.execPath,
-            argsPrefix: [fixturePath, root, surface],
-            tempParentDir,
-            usePackagedPlugins: true,
-          },
-        },
-        context,
-        async () => {
-          scenarioCalls += 1;
-          return unexpected();
-        },
-      );
-    } catch (error) {
-      suiteError = error;
-      record("suite-rejected", { error: serializeError(error), ...snapshot() });
-    }
-    if (denyGroupSignals) {
-      const before = readFileSync(eventsPath, "utf8").match(/lease-heartbeat/g)?.length ?? 0;
-      await vi.waitFor(() =>
-        expect(
-          readFileSync(eventsPath, "utf8").match(/lease-heartbeat/g)?.length ?? 0,
-        ).toBeGreaterThan(before),
-      );
-    }
-  } finally {
-    killSpy.mockRestore();
-    let cleaned: ReturnType<typeof snapshot>;
-    try {
-      record("fault-restored", { groupProbeCount });
-      const identity = readIdentity(root);
-      if (identity && alive(-identity.pgid)) {
-        record("diagnostic-force-kill", snapshot());
-        expect(signalQaPosixProcessGroup(identity.pgid, "SIGKILL")).toBeUndefined();
-      }
-      const deadline = Date.now() + 5_000;
-      cleaned = snapshot();
-      while (cleaned.groupAlive && Date.now() < deadline) {
-        await sleep(25);
-        cleaned = snapshot();
-      }
-      record("process-cleanup-verified", cleaned);
-    } finally {
+        return realKill(pid, signal);
+      });
       try {
-        await stopHeartbeat?.();
-      } finally {
+        record("suite-start", { denyGroupSignals });
+        const context: QaSuiteResolvedRunContext = {
+          startedAt: new Date(),
+          repoRoot,
+          outputDir: root,
+          transportId: "qa-channel",
+          selectedScenarios: [],
+          providerMode: "mock-openai",
+          primaryModel: "mock-openai/gpt-5.6-luna",
+          alternateModel: "mock-openai/gpt-5.6-luna-alt",
+          fastMode: true,
+          enabledPluginIds: [],
+          gatewayConfigPatches: [],
+          gatewayRuntimeOptions: undefined,
+          concurrency: 1,
+          progressEnabled: true,
+          gatewayHeapCheckpointsEnabled: false,
+        };
         try {
-          await new Promise<void>((resolve, reject) => {
-            server.close((error) => (error ? reject(error) : resolve()));
-            server.closeAllConnections();
-          });
+          await runQaFlowSuiteStandard(
+            {
+              startLab: async () => lab,
+              controlUiEnabled: false,
+              channelDriver: "live",
+              channelId: "startup-lease-fixture",
+              adapterFactories: [factory],
+              sutOpenClawCommand: {
+                executablePath: process.execPath,
+                argsPrefix: [fixturePath, root, surface],
+                tempParentDir,
+                usePackagedPlugins: true,
+              },
+            },
+            context,
+            async () => {
+              scenarioCalls += 1;
+              return unexpected();
+            },
+          );
+        } catch (error) {
+          suiteError = error;
+          record("suite-rejected", { error: serializeError(error), ...snapshot() });
+        }
+        if (denyGroupSignals) {
+          const nextHeartbeat = Promise.withResolvers<void>();
+          onHeartbeat = () => nextHeartbeat.resolve();
+          await withinTest(nextHeartbeat.promise, testSignal);
+        }
+      } finally {
+        killSpy.mockRestore();
+        try {
+          record("fault-restored", { groupProbeCount });
+          const identity = readIdentity(root);
+          if (identity && alive(-identity.pgid)) {
+            record("diagnostic-force-kill", snapshot());
+            expect(signalQaPosixProcessGroup(identity.pgid, "SIGKILL")).toBeUndefined();
+          }
+          const deadline = Date.now() + 5_000;
+          cleaned = snapshot();
+          while (cleaned.groupAlive && Date.now() < deadline) {
+            await sleep(25);
+            cleaned = snapshot();
+          }
+          record("process-cleanup-verified", cleaned);
         } finally {
-          vi.unstubAllEnvs();
-          state.reset(true);
+          await stopHeartbeat?.();
         }
       }
-    }
-    const retainedGatewayRoots = await fs.readdir(tempParentDir);
-    if (!cleaned.groupAlive && !cleaned.descendantAlive && !cleaned.leaderAlive) {
-      await fs.rm(tempParentDir, { recursive: true, force: true });
-    }
-    record("cleanup-complete", {
-      ...cleaned,
-      brokerListening: server.listening,
-      retainedGatewayRoots,
-      tempParentRemoved: !existsSync(tempParentDir),
     });
-    await fs.writeFile(
-      path.join(root, "verdict.json"),
-      `${JSON.stringify(
-        {
-          denyGroupSignals,
-          releases,
-          scenarioCalls,
-          groupProbeCount,
-          error: serializeError(suiteError),
-          cleanup: cleaned,
-          retainedGatewayRoots,
-          invariantViolated: releases.some((release) => release.descendantAlive),
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    console.log(`startup lease evidence: ${path.relative(repoRoot, root)}`);
-    expect(cleaned).toMatchObject({
-      leaderAlive: false,
-      descendantAlive: false,
-      groupAlive: false,
-    });
+  } finally {
+    vi.unstubAllEnvs();
+    state.reset(true);
   }
+  if (!cleaned.groupAlive && !cleaned.descendantAlive && !cleaned.leaderAlive) {
+    await fs.rm(tempParentDir, { recursive: true, force: true });
+  }
+  record("cleanup-complete", {
+    ...cleaned,
+    tempParentRemoved: !existsSync(tempParentDir),
+  });
+  console.log(`startup lease evidence: ${path.relative(repoRoot, root)}`);
+  expect(cleaned).toMatchObject({
+    leaderAlive: false,
+    descendantAlive: false,
+    groupAlive: false,
+  });
   const events = readFileSync(eventsPath, "utf8")
     .trim()
     .split("\n")
@@ -396,83 +348,65 @@ async function reproduce(denyGroupSignals: boolean, surface: "gateway" | "bootst
   return { events, releases, suiteError, groupProbeCount, scenarioCalls };
 }
 
-describe.skipIf(process.platform === "win32")(
-  "gateway startup lease lifetime (real process group)",
-  () => {
-    it.each([
-      { surface: "gateway", denyGroupSignals: false },
-      { surface: "gateway", denyGroupSignals: true },
-      { surface: "bootstrap", denyGroupSignals: false },
-      { surface: "bootstrap", denyGroupSignals: true },
-    ] as const)(
-      "$surface startup releases only after descendant exit (denied=$denyGroupSignals)",
-      { timeout: 45_000 },
-      async ({ denyGroupSignals, surface }) => {
-        const result = await reproduce(denyGroupSignals, surface);
-        expect(result.scenarioCalls).toBe(0);
-        const repaired = result.events.findIndex(
-          (event) => event.kind === "plugin-repair-completed",
-        );
-        if (surface === "gateway") {
-          expect(repaired).toBeGreaterThan(-1);
-          expect(
-            result.events.findIndex((event) => event.kind === "gateway-start"),
-          ).toBeGreaterThan(repaired);
-        } else {
-          expect(repaired).toBe(-1);
-        }
-        expect(result.events.filter((event) => event.kind === "gateway-start")).toHaveLength(
-          surface === "gateway" ? 1 : 0,
-        );
-        expect(result.events.filter((event) => event.kind === `${surface}-start`)).toHaveLength(1);
-        expect(result.events.find((event) => event.kind === "leader-exit")).toMatchObject({
-          exitCode: 17,
-        });
-        expect(result.events.some((event) => event.kind === "descendant-failsafe-exit")).toBe(
-          false,
-        );
-        expect(result.groupProbeCount).toBeGreaterThan(0);
-        const signals = result.events.filter((event) => event.kind === "group-signal");
-        expect(signals.length).toBeGreaterThan(0);
-        expect(
-          signals.every((event) => event.leaderAlive === false && event.descendantAlive === true),
-        ).toBe(true);
-        const afterCleanup = result.events.findIndex(
-          (event) => event.kind === "transport-after-gateway-stop",
-        );
-        const rejected = result.events.findIndex((event) => event.kind === "suite-rejected");
-        expect(rejected).toBeGreaterThan(-1);
-        if (denyGroupSignals) {
-          expect(afterCleanup).toBe(-1);
-          expect(result.releases).toEqual([]);
-          expect(
-            result.events.findLastIndex((event) => event.kind === "lease-heartbeat"),
-          ).toBeGreaterThan(rejected);
-        } else {
-          expect(result.releases.length).toBeGreaterThan(0);
-          expect(result.releases.every((release) => !release.groupAlive)).toBe(true);
-          expect(afterCleanup).toBeGreaterThan(
-            result.events.findLastIndex((event) => event.kind === "group-signal"),
-          );
-        }
-        if (denyGroupSignals) {
-          expect(result.suiteError).toBeInstanceOf(AggregateError);
-          expect(JSON.stringify(serializeError(result.suiteError))).toContain(
-            "process tree remained alive",
-          );
-        } else {
-          expect(result.suiteError).toBeInstanceOf(Error);
-        }
-        expect(JSON.stringify(serializeError(result.suiteError))).toContain(
-          surface === "gateway"
-            ? "gateway exited before listening (exitCode=17"
-            : "OpenClaw CLI exited 17",
-        );
-        expect(
-          result.releases.every((release) => !release.descendantAlive),
-          "credential lease released while the failed-start gateway descendant was still alive",
-        ).toBe(true);
-      },
+it.skipIf(process.platform === "win32").for([
+  { surface: "gateway", denyGroupSignals: false },
+  { surface: "gateway", denyGroupSignals: true },
+  { surface: "bootstrap", denyGroupSignals: false },
+  { surface: "bootstrap", denyGroupSignals: true },
+] as const)(
+  "$surface startup lease releases only after descendant exit (denied=$denyGroupSignals)",
+  { timeout: 45_000 },
+  async ({ denyGroupSignals, surface }, { signal }) => {
+    const { events, releases, suiteError, groupProbeCount, scenarioCalls } = await reproduce(
+      denyGroupSignals,
+      surface,
+      signal,
     );
+    const eventsOf = (kind: string) => events.filter((event) => event.kind === kind);
+    const first = (kind: string) => events.findIndex((event) => event.kind === kind);
+    const last = (kind: string) => events.findLastIndex((event) => event.kind === kind);
+    const errorText = JSON.stringify(serializeError(suiteError));
+    expect(scenarioCalls).toBe(0);
+    const repaired = first("plugin-repair-completed");
+    if (surface === "gateway") {
+      expect(repaired).toBeGreaterThan(-1);
+      expect(first("gateway-start")).toBeGreaterThan(repaired);
+    } else {
+      expect(repaired).toBe(-1);
+    }
+    expect(eventsOf("gateway-start")).toHaveLength(surface === "gateway" ? 1 : 0);
+    expect(eventsOf(`${surface}-start`)).toHaveLength(1);
+    expect(eventsOf("leader-exit")[0]).toMatchObject({ exitCode: 17 });
+    expect(eventsOf("descendant-failsafe-exit")).toHaveLength(0);
+    expect(groupProbeCount).toBeGreaterThan(0);
+    const signals = eventsOf("group-signal");
+    expect(signals.length).toBeGreaterThan(0);
+    expect(
+      signals.every((event) => event.leaderAlive === false && event.descendantAlive === true),
+    ).toBe(true);
+    const afterCleanup = first("transport-after-gateway-stop");
+    const rejected = first("suite-rejected");
+    expect(rejected).toBeGreaterThan(-1);
+    if (denyGroupSignals) {
+      expect(afterCleanup).toBe(-1);
+      expect(releases).toEqual([]);
+      expect(last("lease-heartbeat")).toBeGreaterThan(rejected);
+      expect(suiteError).toBeInstanceOf(AggregateError);
+      expect(errorText).toContain("process tree remained alive");
+    } else {
+      expect(releases.length).toBeGreaterThan(0);
+      expect(releases.every((release) => !release.groupAlive)).toBe(true);
+      expect(afterCleanup).toBeGreaterThan(last("group-signal"));
+      expect(suiteError).toBeInstanceOf(Error);
+    }
+    expect(errorText).toContain(
+      surface === "gateway"
+        ? "gateway exited before listening (exitCode=17"
+        : "OpenClaw CLI exited 17",
+    );
+    expect(
+      releases.every((release) => !release.descendantAlive),
+      "credential lease released while the failed-start gateway descendant was still alive",
+    ).toBe(true);
   },
 );

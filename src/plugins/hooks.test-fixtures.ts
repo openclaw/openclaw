@@ -1,13 +1,7 @@
 /** Test-only helpers for exercising plugin hook behavior. */
 import { createHookRunner } from "./hooks.js";
 import { addTestHook, createMockPluginRegistry } from "./hooks.test-helpers.js";
-import type { PluginRegistry } from "./registry.js";
-import type {
-  PluginHookAgentContext,
-  PluginHookAgentTrigger,
-  PluginHookRegistration,
-  PluginToolMatcher,
-} from "./types.js";
+import type { PluginHookAgentContext, PluginHookAgentTrigger } from "./types.js";
 
 export { addTestHook, createMockPluginRegistry };
 export type { PluginHookReplyDispatchResult } from "./hook-types.js";
@@ -24,31 +18,6 @@ export const TEST_PLUGIN_AGENT_CTX: PluginHookAgentContext = {
   messageProvider: "test",
 };
 
-export function addStaticTestHooks<TResult>(
-  registry: PluginRegistry,
-  params: {
-    hookName: PluginHookRegistration["hookName"];
-    hooks: ReadonlyArray<{
-      pluginId: string;
-      result: TResult;
-      matcher?: PluginToolMatcher;
-      priority?: number;
-      handler?: () => TResult | Promise<TResult>;
-    }>;
-  },
-) {
-  for (const { pluginId, result, matcher, priority, handler } of params.hooks) {
-    addTestHook({
-      registry,
-      pluginId,
-      hookName: params.hookName,
-      handler: (handler ?? (() => result)) as PluginHookRegistration["handler"],
-      ...(matcher ? { matcher } : {}),
-      ...(priority !== undefined ? { priority } : {}),
-    });
-  }
-}
-
 export function createHookRunnerWithRegistry(
   hooks: Array<{
     hookName: string;
@@ -58,6 +27,7 @@ export function createHookRunnerWithRegistry(
     timeoutMs?: number;
     eligibleTriggers?: readonly PluginHookAgentTrigger[];
     requiresToolAuthority?: true;
+    conversationAccessAllowed?: true;
   }>,
   options?: Parameters<typeof createHookRunner>[1],
 ) {

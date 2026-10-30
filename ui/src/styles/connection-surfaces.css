@@ -1,0 +1,466 @@
+/* One card, two layouts. data-mode="form": the operator fixes the connection
+   here, so the form leads. data-mode="status": the fix happens on the Gateway
+   host, so the explanation and one command lead and the form folds away. */
+
+.login-gate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100%;
+  overflow-y: auto;
+  background: var(--bg);
+  padding: 24px;
+}
+
+.login-gate__card {
+  width: min(560px, 100%);
+  margin-block: auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 24px 32px 28px;
+  box-shadow: var(--shadow-sm);
+  animation: scale-in 0.25s var(--ease-out);
+}
+
+.login-gate__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 24px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.login-gate__logo {
+  width: 22px;
+  height: 22px;
+}
+
+.login-gate__brand-name {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+
+.login-gate__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+
+.login-gate__status-icon,
+.gateway-switch__icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-full);
+}
+
+.login-gate__status-icon {
+  color: var(--login-gate-tone, var(--accent));
+  background: color-mix(in srgb, var(--login-gate-tone, var(--accent)) 12%, transparent);
+}
+
+.login-gate__failure[data-tone="pending"] {
+  --login-gate-tone: var(--accent);
+}
+
+.login-gate__failure[data-tone="warn"] {
+  --login-gate-tone: var(--warn);
+}
+
+.login-gate__failure[data-tone="danger"] {
+  --login-gate-tone: var(--danger);
+}
+
+.login-gate__status-text {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.login-gate__heading,
+.login-gate__failure-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: var(--text-strong);
+}
+
+.login-gate__lede,
+.login-gate__failure-summary {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.login-gate__hero {
+  display: grid;
+  gap: 6px;
+}
+
+.login-gate__failure-steps {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.login-gate__failure-steps li + li {
+  margin-top: 6px;
+}
+
+.login-gate__failure-steps li::marker {
+  color: var(--muted);
+}
+
+.login-gate__failure-steps .login-gate__command {
+  display: inline-flex;
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 1px 2px;
+  padding: 1px 4px 1px 8px;
+  vertical-align: middle;
+  font-size: 12px;
+}
+
+.login-gate__failure-steps .login-gate__command code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.login-gate__failure-steps .login-gate__command .chat-copy-btn {
+  padding: 3px 4px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.login-gate__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.login-gate__failure-refresh {
+  justify-self: start;
+}
+
+.login-gate__form {
+  display: grid;
+  gap: 14px;
+}
+
+.login-gate__form .field input[aria-invalid="true"] {
+  border-color: var(--login-gate-tone, var(--danger));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--login-gate-tone, var(--danger)) 14%, transparent);
+}
+
+.login-gate__connect {
+  margin-top: 2px;
+  justify-content: center;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.login-gate__form .login-gate__connect {
+  width: 100%;
+}
+
+.login-gate__connection {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.login-gate__connection > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.login-gate__connection > summary::-webkit-details-marker {
+  display: none;
+}
+
+.login-gate__connection-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.login-gate__connection-target span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.login-gate__connection-target svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+
+.login-gate__connection-cred {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.login-gate__connection-change {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.login-gate__connection[open] .login-gate__connection-change {
+  color: var(--muted);
+}
+
+.login-gate__connection[open] > summary {
+  margin-bottom: 14px;
+}
+
+.login-gate__foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.login-gate__failure-detail {
+  min-width: 0;
+  flex: 1;
+}
+
+.login-gate__failure-detail summary {
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.login-gate__failure-raw {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+.login-gate__failure-docs {
+  flex: 0 0 auto;
+}
+
+.login-gate__recovery {
+  margin-top: var(--space-5);
+  text-align: center;
+}
+
+.login-gate__help {
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.login-gate__help-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.login-gate__steps {
+  margin: 10px 0 0;
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.login-gate__steps li {
+  margin-bottom: 6px;
+}
+
+.login-gate__steps li:last-child {
+  margin-bottom: 0;
+}
+
+.login-gate__docs {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+/* The outer app owns safe areas for the login gate as well as the shell. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .login-gate {
+    padding: 16px var(--chat-mobile-edge-inset);
+  }
+
+  .login-gate__card {
+    padding: 20px 20px 24px;
+  }
+
+  .login-gate__status-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .login-gate__heading,
+  .login-gate__failure-title {
+    font-size: 20px;
+  }
+
+  /* 44px touch targets per platform guidelines. */
+  .login-gate__form .field input {
+    min-height: 44px;
+  }
+
+  /* Inset reveal eye keeps a comfortable coarse-pointer hit area. */
+  .login-gate__form .settings-secret__toggle {
+    width: 32px;
+    height: 32px;
+    right: 6px;
+  }
+
+  .login-gate__connect {
+    min-height: 44px;
+  }
+
+  .login-gate__actions .login-gate__connect {
+    width: 100%;
+  }
+
+  .login-gate__connection-cred {
+    display: none;
+  }
+}
+
+/* A link pointed this browser at another Gateway. Show where it goes and what
+   travels with it; the guard is honest, not alarmed. */
+
+.gateway-switch {
+  display: grid;
+  gap: 18px;
+  width: min(520px, 100%);
+  padding: 22px 24px 24px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.login-gate__status-head,
+.gateway-switch__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.gateway-switch__icon {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+
+.login-gate__status-icon svg,
+.gateway-switch__icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.gateway-switch__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+
+.gateway-switch__summary {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.gateway-switch__hosts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.gateway-switch__host {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-accent);
+}
+
+.gateway-switch__host--next {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+}
+
+.login-gate__hero-label,
+.gateway-switch__label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.gateway-switch__host code {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.gateway-switch__arrow {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.gateway-switch__arrow svg {
+  width: 18px;
+  height: 18px;
+}
+
+.gateway-switch__note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+@media (max-width: 560px) {
+  .gateway-switch__hosts {
+    grid-template-columns: 1fr;
+  }
+
+  .gateway-switch__arrow {
+    justify-self: center;
+    transform: rotate(90deg);
+  }
+}
+
+.gateway-switch__text {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}

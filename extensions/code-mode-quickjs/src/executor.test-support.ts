@@ -13,6 +13,7 @@ import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { Snapshot } from "quickjs-wasi";
 import { onTestFinished, vi } from "vitest";
 import { codeModeExecutor } from "./executor.js";
+import { quickJsWorkerTestEntrypoint } from "./worker-entrypoint.test-support.js";
 
 export function createQuickJsTestConfig(overrides: Partial<CodeModeConfig> = {}): CodeModeConfig {
   return {
@@ -38,8 +39,12 @@ export async function runQuickJsExecutor(
   signal?: AbortSignal,
   inlineHost?: CodeModeExecutorInlineHost,
 ) {
-  const resolver = workerUrl
-    ? vi.spyOn(processRuntime, "resolveRuntimeWorkerUrl").mockReturnValue(workerUrl)
+  const fixturePool = workerUrl
+    ? new processRuntime.WorkerTaskPool({ workerUrl, workerClass: "compute", sharedCompute: true })
+    : undefined;
+  const fixtureRun = fixturePool?.run.bind(fixturePool);
+  const run = fixtureRun
+    ? vi.spyOn(processRuntime.WorkerTaskPool.prototype, "run").mockImplementation(fixtureRun)
     : undefined;
   try {
     const options = { timeoutMs, signal, inlineHost };
@@ -58,12 +63,13 @@ export async function runQuickJsExecutor(
     }
     return result;
   } finally {
-    resolver?.mockRestore();
+    run?.mockRestore();
+    await fixturePool?.close();
   }
 }
 
 const resolve = createRequire(import.meta.url).resolve;
-const modules = Promise.all([
+export const quickJsTestModules = Promise.all([
   readFile(resolve("quickjs-wasi/quickjs.wasm")).then((bytes) => WebAssembly.compile(bytes)),
   readFile(resolve("quickjs-wasi/encoding.so")).then((bytes) => WebAssembly.compile(bytes)),
 ]).then(([wasmModule, encoding]) => ({
@@ -74,11 +80,11 @@ const modules = Promise.all([
 /** Exercises real persisted VM bytes without exposing them through the executor contract. */
 export async function runQuickJsWire(input: CodeModeWorkerPayload<Snapshot>, timeoutMs: number) {
   const pool = new processRuntime.WorkerTaskPool<unknown, CodeModeWorkerThreadResult<Snapshot>>({
-    workerUrl: new URL("./code-mode.worker.ts", import.meta.url),
+    workerUrl: processRuntime.resolveRuntimeWorkerUrl(quickJsWorkerTestEntrypoint),
     maxWorkers: 1,
   });
   try {
-    return await pool.run({ ...input, ...(await modules) }, { timeoutMs });
+    return await pool.run({ ...input, ...(await quickJsTestModules) }, { timeoutMs });
   } finally {
     await pool.close();
   }

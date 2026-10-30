@@ -3,6 +3,9 @@
   "name": "QuickJS Code Mode",
   "description": "Hardened JavaScript execution for Code Mode using QuickJS in WebAssembly.",
   "categories": ["infrastructure"],
+  "activation": {
+    "onStartup": false
+  },
   "contracts": {
     "codeModeExecutors": ["quickjs"]
   },

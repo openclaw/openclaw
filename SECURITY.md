@@ -63,7 +63,7 @@ If you are unsure, report privately. We would rather route a careful report than
 
 - Search existing advisories before filing.
 - Include likely duplicate GHSA IDs in your report when applicable.
-- Maintainers may close lower-quality/later duplicates in favor of the earliest high-quality canonical report.
+- Maintainers may close lower-quality/later duplicates in favor of the earliest high-quality report.
 
 ## Security Posture and Report Rules
 
@@ -158,7 +158,7 @@ Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
 
 ### Code Mode Executors
 
-OpenClaw Code Mode is opt-in. When enabled, its default `node` executor runs JavaScript with Node.js `node:vm` in a worker thread. **`node:vm` is not a security boundary.** The worker keeps guest computation off the Gateway event loop, but it runs with the Gateway process's OS privileges. Enabling Node Code Mode is a trusted-host execution choice.
+When global `tools.codeMode` is absent, OpenClaw uses automatic per-model activation. Explicit `false` disables it, and an authored object without `enabled` remains off. When engaged, its default `node` executor runs JavaScript with Node.js `node:vm` in a worker thread. **`node:vm` is not a security boundary.** The worker keeps guest computation off the Gateway event loop, but it runs with the Gateway process's OS privileges. Node Code Mode is a trusted-host execution choice.
 
 The intended guest API omits filesystem, network, subprocess, environment, and module-loading APIs. Its limited globals and module guards are programming constraints, not containment against hostile JavaScript. Tool policy, approvals, hooks, and session ownership still apply to calls made through the shared tool bridge; they cannot contain code that escapes the Node VM context. Agent sandbox settings for nested tools do not turn this Gateway worker into an OS sandbox.
 
@@ -324,29 +324,29 @@ OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for *
   - This operator-selected tradeoff is by design and not, by itself, a security vulnerability.
 - Canvas host note: network-visible canvas is **intentional** for trusted node scenarios (LAN/tailnet).
   - Expected setup: non-loopback bind + Gateway auth (token/password/trusted-proxy) + firewall/tailnet controls.
-  - Expected routes: `/__openclaw__/canvas/`, `/__openclaw__/a2ui/`.
+  - Expected routes: `/__openclaw__/canvas/`.
   - This deployment model alone is not a security vulnerability.
 - Do **not** expose it to the public internet (no direct bind to `0.0.0.0`, no public reverse proxy). It is not hardened for public exposure.
 - If you need remote access, prefer an SSH tunnel or Tailscale serve/funnel (so the Gateway still binds to loopback), plus strong Gateway auth.
-- The Gateway HTTP surface includes the canvas host (`/__openclaw__/canvas/`, `/__openclaw__/a2ui/`). Treat canvas content as sensitive/untrusted and avoid exposing it beyond loopback unless you understand the risk.
+- The Gateway HTTP surface includes the canvas host (`/__openclaw__/canvas/`). Treat canvas content as sensitive/untrusted and avoid exposing it beyond loopback unless you understand the risk.
 
 ## Runtime Requirements
 
 ### Node.js Version
 
-OpenClaw requires **Node.js 24.16+ or Node.js 26.1+**. Node 26 is recommended; Node 24 is the supported LTS line. These minimum versions include the upstream SQLite WAL-reset corruption fix and preserve embedded NUL characters in SQLite TEXT reads. Node 22, 23, and 25 are unsupported.
+OpenClaw requires **Node.js 24.22.1+ or Node.js 26.12.1+**. Node 26 is recommended; Node 24 is the supported LTS line. These minimum versions include the upstream SQLite WAL-reset corruption fix, preserve embedded NUL characters in SQLite TEXT reads, and reject the keys compromised in the October 2026 eMudhra incident. Node 22, 23, and 25 are unsupported.
 
 Verify your Node.js version:
 
 ```bash
-node --version  # Should be v24.16+ or v26.1+
+node --version  # Should be v24.22.1+ or v26.12.1+
 ```
 
 ### Docker Security
 
 When running OpenClaw in Docker:
 
-1. The official image runs as a non-root user (`node`) for reduced attack surface
+1. The official image runs as a non-root user (`node`) to limit what a compromised process can do
 2. Use `--read-only` flag when possible for additional filesystem protection
 3. Limit container capabilities with `--cap-drop=ALL`
 

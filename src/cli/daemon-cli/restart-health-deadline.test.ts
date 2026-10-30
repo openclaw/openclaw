@@ -10,7 +10,10 @@ import {
   inspectPortUsage,
   makeGatewayService,
   monotonicClock,
+  readActiveGatewayLockIdentity,
   readBestEffortConfig,
+  readGatewayOwnerLease,
+  requestReadinessProbe,
   requestStartupProbe,
   resetRestartHealthMocks,
   resolveGatewayProbeAuthSafeWithSecretInputs,
@@ -18,11 +21,21 @@ import {
   restoreRestartHealthMocks,
 } from "./restart-health.test-helpers.js";
 
+const { resolveGatewayServiceMock } = vi.hoisted(() => ({
+  resolveGatewayServiceMock: vi.fn(),
+}));
+vi.mock("../../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/service.js")>()),
+  resolveGatewayService: resolveGatewayServiceMock,
+}));
+
 const { inspectGatewayRestart, waitForGatewayHealthyRestart } = await import("./restart-health.js");
+const { observeUpdateGatewayReadiness } = await import("../update-cli/update-command-readiness.js");
 
 describe("shared restart observation deadline", () => {
   beforeEach(() => {
     resetRestartHealthMocks();
+    resolveGatewayServiceMock.mockReset();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     inspectPortUsage.mockResolvedValue({
       port: 18789,
@@ -45,6 +58,7 @@ describe("shared restart observation deadline", () => {
     "port-inspection",
     "startup-health",
     "gateway-health",
+    "legacy-owner",
   ])("bounds a stalled %s read and stops its late continuation", async (phase) => {
     const entered = createDeferred();
     const released = createDeferred();
@@ -96,6 +110,19 @@ describe("shared restart observation deadline", () => {
           return gatewayHealthResponse()(options);
         });
         break;
+      case "legacy-owner":
+        vi.mocked(service.readRuntime).mockResolvedValue({ status: "stopped", missingUnit: true });
+        inspectPortUsage.mockResolvedValue({
+          port: 18789,
+          status: "free",
+          listeners: [],
+          hints: [],
+        });
+        readActiveGatewayLockIdentity.mockImplementation(async () => {
+          await stall();
+          return undefined;
+        });
+        break;
     }
     const deadline = createGatewayRestartDeadline({ timeoutMs: 1_000 });
     try {
@@ -104,7 +131,7 @@ describe("shared restart observation deadline", () => {
         port: 18789,
         deadline,
         requirePluginHealth: false,
-        settle: { probes: 3 },
+        waitForMissingService: phase === "legacy-owner" ? false : undefined,
       }).catch((error: unknown) => error);
       await entered.promise;
       monotonicClock.nowMs = 1_000;
@@ -119,6 +146,8 @@ describe("shared restart observation deadline", () => {
         inspectPortUsage.mock.calls.length,
         requestStartupProbe.mock.calls.length,
         callGateway.mock.calls.length,
+        readActiveGatewayLockIdentity.mock.calls.length,
+        readGatewayOwnerLease.mock.calls.length,
       ];
       const atExpiry = readCounts();
       released.resolve();
@@ -130,7 +159,7 @@ describe("shared restart observation deadline", () => {
     }
   });
 
-  it("spends the remaining allowance on reconciliation after managed settlement", async () => {
+  it("spends the remaining allowance on reconciliation after managed readiness", async () => {
     const deadline = createGatewayRestartDeadline({ timeoutMs: 2_000 });
     const service = makeGatewayService({ status: "running", pid: 8000 });
     try {
@@ -139,9 +168,8 @@ describe("shared restart observation deadline", () => {
         port: 18789,
         deadline,
         requirePluginHealth: false,
-        settle: { probes: 3 },
       });
-      expect(settled).toMatchObject({ healthy: true, waitOutcome: "healthy", elapsedMs: 1_000 });
+      expect(settled).toMatchObject({ healthy: true, waitOutcome: "healthy", elapsedMs: 0 });
       const entered = createDeferred();
       inspectPortUsage.mockImplementation(() => {
         entered.resolve();
@@ -166,27 +194,119 @@ describe("shared restart observation deadline", () => {
     }
   });
 
-  it("honors caller cancellation while a native read is pending", async () => {
-    const caller = new AbortController();
-    const deadline = createGatewayRestartDeadline({ timeoutMs: 1_000, signal: caller.signal });
-    const entered = createDeferred();
-    const service = makeGatewayService({ status: "running", pid: 8000 });
-    vi.mocked(service.readRuntime).mockImplementation(() => {
-      entered.resolve();
-      return createDeferred<never>().promise;
-    });
-    try {
-      const observed = inspectGatewayRestart({ service, port: 18789, deadline }).catch(
-        (error: unknown) => error,
-      );
-      await entered.promise;
-      const reason = new Error("operator canceled observation");
-      caller.abort(reason);
-      expect(await observed).toBe(reason);
-      expect(deadline.expiredPhase).toBeUndefined();
-      expect(inspectPortUsage).not.toHaveBeenCalled();
-    } finally {
-      deadline.dispose();
-    }
-  });
+  it.each(["restart", "update-recovery", "update-verification"] as const)(
+    "keeps native inspection independent of the RPC cap at %s",
+    async (boundary) => {
+      const service = {
+        ...makeGatewayService({ status: "running", pid: 8000 }),
+        isLoaded: vi.fn(async () => true),
+      };
+      resolveGatewayServiceMock.mockReturnValue(service);
+      vi.mocked(service.readRuntime).mockImplementation(async (_env, options) => {
+        const inspectionMs = 6_000;
+        const allowanceMs = options?.timeoutMs ?? inspectionMs;
+        monotonicClock.nowMs += Math.min(inspectionMs, allowanceMs);
+        if (allowanceMs < inspectionMs) {
+          throw new Error("native service inspection timed out");
+        }
+        return { status: "running", pid: 8000 };
+      });
+      callGateway.mockImplementation(async (options) => {
+        const responseMs = 1_000;
+        const allowanceMs = options.timeoutMs ?? responseMs;
+        monotonicClock.nowMs += Math.min(responseMs, allowanceMs);
+        if (allowanceMs < responseMs) {
+          throw new Error("Gateway health probe timed out");
+        }
+        return gatewayHealthResponse()(options);
+      });
+      requestReadinessProbe.mockResolvedValue({ statusCode: 200, body: "" });
+
+      const deadline = createGatewayRestartDeadline({ timeoutMs: 30_000 });
+      try {
+        let health: Awaited<ReturnType<typeof inspectGatewayRestart>>;
+        if (boundary === "restart") {
+          health = await waitForGatewayHealthyRestart({
+            service,
+            port: 18789,
+            deadline,
+            deadlineOutcome: "snapshot",
+            probeTimeoutMs: 5_000,
+            requireRunningService: true,
+            requirePluginHealth: false,
+          });
+        } else {
+          const observed = await observeUpdateGatewayReadiness({
+            serviceEnv: {},
+            gatewayPort: 18789,
+            timeoutMs: 30_000,
+            deadlineMs: deadline.deadlineMs,
+            probeTimeoutMs: 5_000,
+            waitForStartup: boundary === "update-verification",
+            requireRunningService: true,
+          });
+          expect(observed.readyz).toBe(true);
+          health = observed.health;
+        }
+        expect(health).toMatchObject({
+          healthy: true,
+          runtime: { status: "running", pid: 8000 },
+        });
+        expect(monotonicClock.nowMs).toBeGreaterThan(6_000);
+        expect(monotonicClock.nowMs).toBeLessThan(30_000);
+        expect(callGateway.mock.calls.length).toBeGreaterThan(0);
+        for (const [request] of callGateway.mock.calls) {
+          expect(request.timeoutMs).toBeLessThanOrEqual(5_000);
+        }
+      } finally {
+        deadline.dispose();
+      }
+    },
+  );
+
+  it.each(["native runtime", "legacy owner"])(
+    "honors caller cancellation while %s is pending",
+    async (phase) => {
+      const caller = new AbortController();
+      const deadline = createGatewayRestartDeadline({ timeoutMs: 1_000, signal: caller.signal });
+      const entered = createDeferred();
+      const service = makeGatewayService({ status: "running", pid: 8000 });
+      const pendingRead = () => {
+        entered.resolve();
+        return createDeferred<never>().promise;
+      };
+      if (phase === "native runtime") {
+        vi.mocked(service.readRuntime).mockImplementation(pendingRead);
+      } else {
+        vi.mocked(service.readRuntime).mockResolvedValue({ status: "stopped", missingUnit: true });
+        inspectPortUsage.mockResolvedValue({
+          port: 18789,
+          status: "free",
+          listeners: [],
+          hints: [],
+        });
+        readActiveGatewayLockIdentity.mockImplementation(pendingRead);
+      }
+      try {
+        const observed = (
+          phase === "native runtime"
+            ? inspectGatewayRestart({ service, port: 18789, deadline })
+            : waitForGatewayHealthyRestart({
+                service,
+                port: 18789,
+                deadline,
+                waitForMissingService: false,
+              })
+        ).catch((error: unknown) => error);
+        await entered.promise;
+        const reason = new Error("operator canceled observation");
+        caller.abort(reason);
+        expect(await observed).toBe(reason);
+        expect(deadline.expiredPhase).toBeUndefined();
+        expect(inspectPortUsage).toHaveBeenCalledTimes(phase === "native runtime" ? 0 : 1);
+      } finally {
+        deadline.dispose();
+      }
+    },
+  );
 });

@@ -1,0 +1,181 @@
+title: Background completions keep only their owner's owner-only tools
+
+scenario:
+  id: exec-completion-owner-authority
+  surface: runtime-tools
+  coverage:
+    primary:
+      - tools.process-lifecycle
+    secondary:
+      - automation.agent-cron-tool-qa-channel
+  gatewayConfigPatch:
+    commands:
+      ownerAllowFrom:
+        - qa-owner-completion-owner
+  objective: Verify a background command's completion turn can use owner-only tools only when its requester is a current configured channel owner.
+  successCriteria:
+    - An owner's background command completion persists an automation through the owner-only automations tool without another message.
+    - A guest's completion is refused the same tool and persists nothing.
+  docsRefs:
+    - docs/gateway/background-process.md
+  codeRefs:
+    - src/agents/bash-tools.exec-notify.ts
+    - src/auto-reply/reply/session-event-target.ts
+    - src/auto-reply/reply/session-event-context.ts
+    - extensions/qa-lab/src/providers/mock-openai/mock-openai-owner-completion.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Configures a channel owner and persists automations from background completions.
+    channel: qa-channel
+    retryCount: 0
+    summary: Start a background command from an owner and a guest, then check which completion turn creates an automation.
+    config:
+      requiredProviderMode: mock-openai
+      promptSnippet: Owner completion QA check
+      ownerId: qa-owner-completion-owner
+      # Non-owner turns either omit the owner-only tool from their catalog or gate its execution.
+      refusals:
+        - needs the owner's authority
+        - "Unknown tool id: automations"
+
+flow:
+  steps:
+    - name: prepares the owner completion check
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: owner completion proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - resetTransport: true
+    - name: owner completion persists an automation
+      actions:
+        - set: job
+          value:
+            expr: "`o${randomUUID().slice(0, 8)}`"
+        - set: outboundStart
+          value:
+            expr: "state.getSnapshot().messages.length"
+        - set: requestCursor
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - sendInbound:
+            conversation:
+              id: qa-owner-completion-owner
+              kind: direct
+            senderId: qa-owner-completion-owner
+            senderName: Owner Completion QA
+            text:
+              expr: "`${config.promptSnippet}: job=${job}`"
+        - set: started
+          value:
+            expr: |-
+              await (async () => {
+                const deadline = Date.now() + 60000;
+                const outbound = () => state.getSnapshot().messages.slice(outboundStart).filter((candidate) => candidate.direction === 'outbound');
+                while (Date.now() < deadline) {
+                  if (outbound().some((candidate) => candidate.conversation.id === 'qa-owner-completion-owner' && String(candidate.text ?? '').includes('QA-OWNER-COMPLETION-STARTED'))) {
+                    return { ok: true };
+                  }
+                  await new Promise((resolve) => setTimeout(resolve, 250));
+                }
+                const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursor}`);
+                return { ok: false, outbound: outbound().map((candidate) => ({ conversation: candidate.conversation, text: String(candidate.text ?? '').slice(0, 200) })), requests: requests.map((request) => ({ prompt: String(request.prompt ?? '').slice(0, 160), tool: request.plannedToolName, args: request.plannedToolArgs, output: String(request.toolOutput ?? '').slice(0, 200) })) };
+              })()
+        - assert:
+            expr: "started.ok === true"
+            message:
+              expr: "`no start reply: ${JSON.stringify(started).slice(0, 3000)}`"
+        - call: waitForOutboundMessage
+          saveAs: done
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === 'qa-owner-completion-owner' && String(candidate.text ?? '').includes('QA-OWNER-COMPLETION-DONE')"
+            - 90000
+            - sinceIndex:
+                ref: outboundStart
+        - set: addOutput
+          value:
+            expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursor}`).then((requests) => { const index = requests.findIndex((request) => (request.plannedToolName === 'dispatch_action' ? request.plannedToolArgs?.id : request.plannedToolName) === 'automations'); return index < 0 ? '' : String(requests[index + 1]?.toolOutput ?? ''); })"
+        - set: persisted
+          value:
+            expr: "((await env.gateway.call('cron.list', { includeDisabled: true }, { timeoutMs: 30000 })).jobs ?? []).find((entry) => entry.name === `qa-owner-completion-${job}`)"
+        - assert:
+            expr: "Boolean(persisted) && !config.refusals.some((refusal) => addOutput.includes(refusal))"
+            message:
+              expr: "`owner completion persists an automation: persisted=${JSON.stringify(persisted ?? null)} output=${addOutput.slice(0, 400)}`"
+        - call: env.gateway.call
+          args:
+            - cron.remove
+            - id:
+                expr: persisted.id
+            - timeoutMs: 30000
+      detailsExpr: "`job=${job} persisted=${Boolean(persisted)} completionToolOutput=${JSON.stringify(addOutput.slice(0, 240))}`"
+    - name: guest completion is refused
+      actions:
+        - set: job
+          value:
+            expr: "`g${randomUUID().slice(0, 8)}`"
+        - set: outboundStart
+          value:
+            expr: "state.getSnapshot().messages.length"
+        - set: requestCursor
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - sendInbound:
+            conversation:
+              id: qa-owner-completion-guest
+              kind: direct
+            senderId: qa-owner-completion-guest
+            senderName: Guest Completion QA
+            text:
+              expr: "`${config.promptSnippet}: job=${job}`"
+        - set: started
+          value:
+            expr: |-
+              await (async () => {
+                const deadline = Date.now() + 60000;
+                const outbound = () => state.getSnapshot().messages.slice(outboundStart).filter((candidate) => candidate.direction === 'outbound');
+                while (Date.now() < deadline) {
+                  if (outbound().some((candidate) => candidate.conversation.id === 'qa-owner-completion-guest' && String(candidate.text ?? '').includes('QA-OWNER-COMPLETION-STARTED'))) {
+                    return { ok: true };
+                  }
+                  await new Promise((resolve) => setTimeout(resolve, 250));
+                }
+                const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursor}`);
+                return { ok: false, outbound: outbound().map((candidate) => ({ conversation: candidate.conversation, text: String(candidate.text ?? '').slice(0, 200) })), requests: requests.map((request) => ({ prompt: String(request.prompt ?? '').slice(0, 160), tool: request.plannedToolName, args: request.plannedToolArgs, output: String(request.toolOutput ?? '').slice(0, 200) })) };
+              })()
+        - assert:
+            expr: "started.ok === true"
+            message:
+              expr: "`no start reply: ${JSON.stringify(started).slice(0, 3000)}`"
+        - call: waitForOutboundMessage
+          saveAs: done
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === 'qa-owner-completion-guest' && String(candidate.text ?? '').includes('QA-OWNER-COMPLETION-DONE')"
+            - 90000
+            - sinceIndex:
+                ref: outboundStart
+        - set: addOutput
+          value:
+            expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursor}`).then((requests) => { const index = requests.findIndex((request) => (request.plannedToolName === 'dispatch_action' ? request.plannedToolArgs?.id : request.plannedToolName) === 'automations'); return index < 0 ? '' : String(requests[index + 1]?.toolOutput ?? ''); })"
+        - set: persisted
+          value:
+            expr: "((await env.gateway.call('cron.list', { includeDisabled: true }, { timeoutMs: 30000 })).jobs ?? []).find((entry) => entry.name === `qa-owner-completion-${job}`)"
+        - assert:
+            expr: "!persisted && config.refusals.some((refusal) => addOutput.includes(refusal))"
+            message:
+              expr: "`guest completion is refused: persisted=${JSON.stringify(persisted ?? null)} output=${addOutput.slice(0, 400)}`"
+      detailsExpr: "`job=${job} persisted=${Boolean(persisted)} completionToolOutput=${JSON.stringify(addOutput.slice(0, 240))}`"

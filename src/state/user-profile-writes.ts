@@ -1,24 +1,41 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import type { RetainedWorkerTransactionAdmission } from "../infra/sqlite-worker-operation-settlement.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
+import { publishUserGitHubConnectionCommit } from "./user-github-connection-events.js";
+import {
+  afterUserPreferenceOperationSettled,
+  beginUserPreferenceMutation,
+  waitForUserPreferenceReadPermits,
+} from "./user-preferences-publication.js";
+import { normalizeProfileEmail } from "./user-profile-email.kernel.js";
 import {
   emitUserProfilesChanged,
   fenceUserProfileMutationAuthority,
   publishUserProfileAliasChange,
 } from "./user-profile-events.js";
-import { retainUserProfileMutationPublication } from "./user-profile-list.js";
+import {
+  readResidentGatewayOwnerProfile,
+  readResidentUserProfileForEmail,
+  retainUserProfileMutationPublication,
+} from "./user-profile-list.js";
 import {
   isUserProfileMutationPublication,
   type UserProfileMutationPublication,
 } from "./user-profile-mutation.js";
-import type {
-  UserProfileWriteOperations,
-  UserProfileWriteResult,
-} from "./user-profile-writes.worker.js";
-import { UserProfileNotFoundError, UserProfileOwnerError } from "./user-profiles-schema.js";
+import type { UserProfileWriteResult } from "./user-profile-writes.worker.js";
+import {
+  UserProfileMergeError,
+  UserProfileNotFoundError,
+  UserProfileOwnerError,
+} from "./user-profiles-schema.js";
+import { classifyTailscaleLogin } from "./user-profiles-tailscale-login.js";
+import type { UserProfile } from "./user-profiles.types.js";
+import type { UserProfileWriteOperations } from "./user-profiles.worker.js";
 
 type ProfileWriteOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
   assertCurrent?: () => void;
@@ -31,6 +48,9 @@ function unwrap<T>(result: UserProfileWriteResult<T>): T {
   if (result.kind === "not-found") {
     throw new UserProfileNotFoundError(result.profileId);
   }
+  if (result.kind === "merge") {
+    throw new UserProfileMergeError(result.message);
+  }
   throw new UserProfileOwnerError(result.code);
 }
 
@@ -38,19 +58,31 @@ async function write<Key extends keyof UserProfileWriteOperations>(
   type: Key,
   input: UserProfileWriteOperations[Key]["input"],
   options: ProfileWriteOptions,
+  onCommitted?: (publication: UserProfileMutationPublication) => void,
 ): Promise<UserProfileWriteOperations[Key]["output"]> {
   const context = captureOpenClawStateWorkerContext(options);
   const assertCurrent = options.assertCurrent;
-  const captured = structuredClone(input);
   let publicationSettled: Promise<void> | undefined;
+  let retained: RetainedWorkerTransactionAdmission | undefined;
+  // These identity operations can merge profiles and move or discard personal shortcuts.
+  const movesPreferences =
+    type === "userProfiles.merge" ||
+    type === "userProfiles.linkEmail" ||
+    type === "userProfiles.syncGitHub";
+  const finishPreferences = movesPreferences
+    ? beginUserPreferenceMutation(context.admission)
+    : undefined;
   try {
+    if (movesPreferences) {
+      await waitForUserPreferenceReadPermits(context.admission);
+    }
     return await runOpenClawStateWorkerOperation(
       context,
-      (scope) => scope.execute({ type, input: captured }),
+      (scope) => scope.execute({ type, input }),
       {
         assertCurrent,
         createAdmission: (operation) => {
-          let inTransaction = false;
+          retained = operation;
           const pending = new Map<
             number,
             {
@@ -87,15 +119,27 @@ async function write<Key extends keyof UserProfileWriteOperations>(
               if (entry.published) {
                 continue;
               }
-              entry.publication.reconcile(facts.after);
-              if (facts.changes.identities.length || facts.changes.channels.length) {
-                publishUserProfileAliasChange();
-              }
-              if (facts.changes.profiles.length && isDeepStrictEqual(facts.before, facts.after)) {
+              entry.publication.reconcile(facts.after, facts.emailBindings, () => {
+                if (facts.changes.identities.length || facts.changes.channels.length) {
+                  publishUserProfileAliasChange();
+                }
+                entry.published = true;
+                entry.fence.settle(true);
+                if (facts.githubConnections) {
+                  publishUserGitHubConnectionCommit(
+                    context.admission.databasePath,
+                    facts.githubConnections,
+                  );
+                }
+                onCommitted?.(facts);
+              });
+              if (
+                facts.changes.profiles.length &&
+                facts.emailBindings.length === 0 &&
+                isDeepStrictEqual(facts.before, facts.after)
+              ) {
                 emitUserProfilesChanged();
               }
-              entry.published = true;
-              entry.fence.settle(true);
             }
           };
           const admission = createSqliteWorkerOperationAdmission((request, grant) => {
@@ -108,18 +152,10 @@ async function write<Key extends keyof UserProfileWriteOperations>(
               request.facts.kind === "user-profile-write" &&
               request.facts.operation === type
             ) {
-              if (inTransaction) {
-                throw new Error("Profile mutation requested overlapping transactions");
-              }
-              inTransaction = grant();
+              grant();
               return;
             }
-            if (
-              !inTransaction ||
-              request.stage !== "commit" ||
-              !isUserProfileMutationPublication(request.facts) ||
-              pending.has(request.facts.sequence)
-            ) {
+            if (request.stage !== "commit" || !isUserProfileMutationPublication(request.facts)) {
               throw new Error(
                 "Profile mutation requires its exact transaction and commit admission",
               );
@@ -128,12 +164,12 @@ async function write<Key extends keyof UserProfileWriteOperations>(
             const publication = retainUserProfileMutationPublication(
               context.admission.identity,
               facts.before,
+              facts.emailBindings,
             );
             const fence = fenceUserProfileMutationAuthority(context.admission, facts.changes);
             const entry = { facts, publication, fence, granted: false, published: false };
             pending.set(facts.sequence, entry);
             entry.granted = grant();
-            inTransaction = false;
           });
           publicationSettled = operation.settled.then((settlement) => {
             let receiptsValid = false;
@@ -148,9 +184,11 @@ async function write<Key extends keyof UserProfileWriteOperations>(
                   (receiptsValid && settlement.kind === "completed");
                 if (!entry.published && entry.granted) {
                   if (known) {
-                    entry.publication.reconcile(entry.facts.before);
+                    entry.publication.reconcile(entry.facts.before, [], () =>
+                      entry.fence.settle(true),
+                    );
                   } else {
-                    entry.publication.invalidate();
+                    entry.publication.invalidate(() => entry.fence.settle(false));
                   }
                 }
                 entry.fence.settle(known);
@@ -165,16 +203,47 @@ async function write<Key extends keyof UserProfileWriteOperations>(
     );
   } finally {
     // Caller revocation cannot discard a committed mutation or its catalog publication.
-    await publicationSettled;
+    try {
+      await publicationSettled;
+    } finally {
+      if (retained && finishPreferences) {
+        afterUserPreferenceOperationSettled(retained, finishPreferences);
+      } else {
+        finishPreferences?.();
+      }
+    }
   }
 }
 
 export async function setCanonicalUserProfileRole(
   profileId: string,
   role: string | null,
+  options: ProfileWriteOptions & { onCommitted?: (profileId: string) => void } = {},
+) {
+  const onCommitted = options.onCommitted;
+  return unwrap(
+    await write("userProfiles.setRole", { profileId, role }, options, (publication) => {
+      // The validated receipt names the canonical profile even when the caller used an alias.
+      for (const [id] of publication.after) {
+        onCommitted?.(id);
+      }
+    }),
+  );
+}
+export async function setCanonicalUserProfileDisplayName(
+  profileId: string,
+  name: string | null,
   options: ProfileWriteOptions = {},
 ) {
-  return unwrap(await write("userProfiles.setRole", { profileId, role }, options));
+  return unwrap(await write("userProfiles.setDisplayName", { profileId, name }, options));
+}
+export async function setCanonicalUserProfileAvatar(
+  profileId: string,
+  bytes: Uint8Array,
+  mime: string,
+  options: ProfileWriteOptions = {},
+) {
+  return unwrap(await write("userProfiles.setAvatar", { profileId, bytes, mime }, options));
 }
 export async function linkCanonicalUserProfileEmail(
   email: string,
@@ -183,16 +252,75 @@ export async function linkCanonicalUserProfileEmail(
 ) {
   return unwrap(await write("userProfiles.linkEmail", { email, targetProfileId }, options));
 }
+export async function mergeCanonicalUserProfiles(
+  sourceProfileId: string,
+  targetProfileId: string,
+  options: ProfileWriteOptions & { onCommitted?: (profileIds: string[]) => void } = {},
+) {
+  return unwrap(
+    await write(
+      "userProfiles.merge",
+      { sourceProfileId, targetProfileId },
+      options,
+      (publication) => {
+        if (publication.changes.profiles.length) {
+          options.onCommitted?.(publication.changes.profiles);
+        }
+      },
+    ),
+  );
+}
 export async function ensureCanonicalUserProfileForEmail(
   email: string,
-  options: ProfileWriteOptions = {},
+  options: ProfileWriteOptions & { expectedGitHubAccountId?: number } = {},
 ) {
-  return unwrap(await write("userProfiles.ensureEmail", { email }, options));
+  const { expectedGitHubAccountId, ...writeOptions } = options;
+  const normalized = normalizeProfileEmail(email);
+  // OIDC conflict checks still belong to the canonical identity writer.
+  if (expectedGitHubAccountId === undefined) {
+    const profile = readResidentUserProfileForEmail(normalized, resolveDatabasePath(options));
+    if (profile) {
+      options.assertCurrent?.();
+      return profile;
+    }
+  }
+  return unwrap(
+    await write(
+      "userProfiles.ensureEmail",
+      { email: normalized, expectedGitHubAccountId },
+      writeOptions,
+    ),
+  );
+}
+export async function ensureCanonicalEnterpriseGitHubProfile(
+  principal: string,
+  name: string,
+  options: ProfileWriteOptions,
+  verifiedMetadata: { login: string; email?: string },
+) {
+  return unwrap(
+    await write(
+      "userProfiles.ensureEnterpriseGitHub",
+      { principal, name, verifiedMetadata },
+      options,
+    ),
+  );
 }
 export async function ensureCanonicalUserProfileForTailscaleIdentity(
   identity: UserProfileWriteOperations["userProfiles.ensureTailscale"]["input"],
   options: ProfileWriteOptions = {},
 ) {
+  const login = classifyTailscaleLogin(identity.login);
+  if (login.kind === "email") {
+    const profile = readResidentUserProfileForEmail(
+      normalizeProfileEmail(login.email),
+      resolveDatabasePath(options),
+    );
+    if (profile && (profile.displayName?.trim() || !identity.name?.trim())) {
+      options.assertCurrent?.();
+      return profile;
+    }
+  }
   return unwrap(await write("userProfiles.ensureTailscale", identity, options));
 }
 export async function syncCanonicalGitHubIdentity(
@@ -202,8 +330,19 @@ export async function syncCanonicalGitHubIdentity(
   return unwrap(await write("userProfiles.syncGitHub", input, options));
 }
 export async function ensureCanonicalGatewayOwnerProfile(
-  displayName: string | null,
+  displayName: string | null | (() => Promise<string | null>),
   options: ProfileWriteOptions = {},
-) {
+): Promise<UserProfile> {
+  const owner = readResidentGatewayOwnerProfile(resolveDatabasePath(options));
+  if (
+    owner &&
+    (owner.displayName?.trim() || (typeof displayName !== "function" && !displayName?.trim()))
+  ) {
+    options.assertCurrent?.();
+    return owner;
+  }
+  if (typeof displayName === "function") {
+    return ensureCanonicalGatewayOwnerProfile(await displayName(), options);
+  }
   return unwrap(await write("userProfiles.ensureOwner", { displayName }, options));
 }

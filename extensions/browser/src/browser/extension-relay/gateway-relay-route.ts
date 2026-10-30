@@ -1,22 +1,23 @@
 /** Direct Gateway extension relay with in-band Browser Relay Authentication v2. */
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   rejectWebSocketUpgrade,
   WebSocketServer,
   type WebSocket,
 } from "openclaw/plugin-sdk/websocket-runtime";
-import { getRuntimeConfig } from "../../config/config.js";
 import {
   getBrowserControlState,
   startBrowserControlServiceFromConfig,
 } from "../../control-service.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { describeBrowserControlUnavailable } from "../../plugin-enabled.js";
-import { resolveProfile } from "../config.js";
+import { resolveFirstExtensionProfileName, resolveProfile } from "../config.js";
 import { getProfileLifecycle } from "../server-context.lifecycle.js";
+import { trackAuthenticatedRelaySocket } from "./auth-v2-websocket.js";
 import {
   BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
   getBrowserRelayAuthV2Authority,
@@ -51,15 +52,6 @@ function requestedProfileName(resource: string, fallback: string): string {
   return new URL(resource, "http://127.0.0.1").searchParams.get("profile") ?? fallback;
 }
 
-function defaultExtensionProfileName(profiles: Record<string, { driver?: string }>): string {
-  for (const [name, profile] of Object.entries(profiles)) {
-    if (profile.driver === "extension") {
-      return name;
-    }
-  }
-  return "chrome";
-}
-
 async function resolveGatewayRelay(resource: string) {
   let state = getBrowserControlState();
   if (!state) {
@@ -70,7 +62,7 @@ async function resolveGatewayRelay(resource: string) {
   }
   const profileName = requestedProfileName(
     resource,
-    defaultExtensionProfileName(state.resolved.profiles),
+    resolveFirstExtensionProfileName(state.resolved) ?? "chrome",
   );
   const resolved = resolveProfile(state.resolved, profileName);
   if (!resolved || resolved.driver !== "extension") {
@@ -82,13 +74,13 @@ async function resolveGatewayRelay(resource: string) {
     throw new Error("Gateway relay profile is unavailable");
   }
   const lifecycle = getProfileLifecycle(runtime);
-  const generation = lifecycle.generation;
+  const profileSignal = lifecycle.controller.signal;
   return {
     relay,
     profileName,
     assertCurrent: () => {
       if (
-        lifecycle.generation !== generation ||
+        profileSignal.aborted ||
         lifecycle.transitionReason ||
         lifecycle.terminal ||
         getBrowserControlState() !== state ||
@@ -231,15 +223,9 @@ export async function handleGatewayExtensionUpgrade(
     ws.pause();
     // Borrowed ingress never passes through the local bridge's socket binding.
     ws.on("error", (err) => log.warn(`relay socket error: ${String(err)}`));
-    if (
-      !authority.registerAuthenticatedConnection(ws, () =>
-        ws.close(4003, "browser relay key rotated"),
-      )
-    ) {
-      ws.terminate();
+    if (!trackAuthenticatedRelaySocket(authority, ws)) {
       return;
     }
-    ws.once("close", () => authority.releaseConnection(ws));
     void prepareGatewayIngress(resolved, ws, assertAuthenticated)
       .then((attach) => {
         if (ws.readyState === 1) {

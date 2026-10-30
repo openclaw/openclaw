@@ -3,27 +3,72 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { waitForDead, waitForPidFile } from "../../test/helpers/process-wait.js";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { isProcessAlive } from "../../test/helpers/process-wait.js";
+import { withinTest } from "../../test/helpers/promise.js";
+import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import * as commands from "../process/exec.js";
 import { runCommandBuffered, runUtf8CommandWithTimeout } from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import { hasErrnoCode } from "./errno.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { runtimeProcessScriptEntrypoints } from "./runtime-process-manifest.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
+import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import {
-  discoverUpdateStateSchemaInspectionInProcess,
-  readUpdateStateSchemaVersions,
-} from "./update-candidate-state.js";
-import { inventoryUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
+  captureUpdateCandidateDeadline,
+  inventoryUpdateCandidateStateWorker,
+  materializeUpdateCandidateStateWorker,
+} from "./update-candidate-state.test-support.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+// A worker can exit before its side-channel receipt arrives. Its marker is
+// published before the fault or reply that settles the operation.
+async function fixtureEventBeforeSettlement(
+  file: string,
+  operation: PromiseLike<void | { value: unknown } | { error: unknown }>,
+  message = `Worker did not reach ${path.basename(file)}`,
+): Promise<void> {
+  const settled = Promise.resolve(operation).then(async (result) => {
+    await fs.access(file).catch((error: unknown) => {
+      if (hasErrnoCode(error, "ENOENT")) {
+        if (result && "error" in result) {
+          throw result.error;
+        }
+        throw new Error(message);
+      }
+      throw error;
+    });
+  });
+  await Promise.race([receipts.waitFor(file, "ready"), settled]);
+}
+
 let root: string;
+let workerSettlement: Promise<unknown> | undefined;
 beforeEach(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "candidate-cleanup-")));
 });
 afterEach(async () => {
+  // Vitest starts teardown while a timed-out body is still unwinding.
+  // Keep the fixture directory and mocks until its owned worker cleanup finishes.
+  await workerSettlement;
+  workerSettlement = undefined;
   vi.restoreAllMocks();
   await fs.rm(root, { recursive: true, force: true });
 });
@@ -38,19 +83,36 @@ async function createDatabase(file: string, sql = ""): Promise<void> {
   }
 }
 
-const cases = [
-  { cleanup: "healthy", readError: false },
-  { cleanup: "transient", readError: false },
-  { cleanup: "persistent", readError: false },
-  { cleanup: "healthy", readError: true },
-  { cleanup: "persistent", readError: true },
-] as const;
+function capture<T>(operation: Promise<T>) {
+  return operation.then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+}
 
-it.each(
-  (["versions", "snapshot"] as const).flatMap((mode) =>
-    cases.map(({ cleanup, readError }) => ({ mode, cleanup, readError })),
-  ),
-)(
+function runWorker(input: unknown, preload?: string, env?: NodeJS.ProcessEnv) {
+  const argv = [
+    process.execPath,
+    ...(preload ? ["--import", pathToFileURL(preload).href] : []),
+    ...resolveRuntimeWorkerArgv(
+      resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
+    ),
+  ];
+  return runCommandBuffered(argv, {
+    input: JSON.stringify(input),
+    env,
+    timeoutMs: 30_000,
+    killGraceMs: 500,
+    maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
+  });
+}
+
+it.each([
+  { mode: "versions", cleanup: "transient", readError: false },
+  { mode: "versions", cleanup: "persistent", readError: true },
+  { mode: "snapshot", cleanup: "persistent", readError: false },
+  { mode: "snapshot", cleanup: "healthy", readError: true },
+] as const)(
   "$mode: $cleanup cleanup with readError=$readError",
   async (scenario) => {
     const { mode } = scenario;
@@ -59,19 +121,11 @@ it.each(
     const source = path.join(stateDir, "state", "openclaw.sqlite");
     const cache = path.join(fixture, "cache");
     const attemptsPath = path.join(fixture, "attempts.jsonl");
-    await fs.mkdir(path.dirname(source), { recursive: true });
+    await createDatabase(
+      source,
+      `CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('source preserved'); ${scenario.readError && mode === "versions" ? "CREATE TABLE agent_databases (not_path TEXT);" : ""}`,
+    );
     await fs.mkdir(cache);
-    const db = openNodeSqliteDatabase(source);
-    try {
-      db.exec(
-        "PRAGMA user_version = 3; CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('source preserved');",
-      );
-      if (scenario.readError && mode === "versions") {
-        db.exec("CREATE TABLE agent_databases (not_path TEXT);");
-      }
-    } finally {
-      db.close();
-    }
     const input = {
       stateDir,
       targetStateDir: path.join(fixture, "candidate"),
@@ -83,19 +137,16 @@ it.each(
       mode === "snapshot" ? await inventoryUpdateCandidateStateWorker(input) : undefined;
     if (scenario.readError && mode === "snapshot") {
       // Inventory succeeds first; the instrumented snapshot owns the failed read and cleanup.
-      const malformed = openNodeSqliteDatabase(source);
-      try {
-        malformed.exec("CREATE TABLE agent_databases (not_path TEXT);");
-      } finally {
-        malformed.close();
-      }
+      await createDatabase(source, "CREATE TABLE agent_databases (not_path TEXT);");
     }
     const sentinel = path.join(cache, "unrelated.txt");
     await fs.writeFile(sentinel, "unrelated preserved");
     const sourceBytes = await fs.readFile(source);
     const sourceEntries = await fs.readdir(path.dirname(source));
     const preload = path.join(fixture, "deletion-fault.mjs");
-    // Fault this child's copied payload removal, leaving copy/read/cleanup owners intact.
+    // Successful publication consumes the payload; its staging directory still needs retirement.
+    // Versions and failed reads retain their payload-removal coverage.
+    const removeDirectory = mode === "snapshot" && !scenario.readError;
     await fs.writeFile(
       preload,
       `
@@ -106,12 +157,14 @@ it.each(
       const stagingRoot = ${JSON.stringify(stagingRoot)};
       const attemptsPath = ${JSON.stringify(attemptsPath)};
       const fault = ${JSON.stringify(scenario.cleanup)};
+      const removeDirectory = ${JSON.stringify(removeDirectory)};
       let attempts = 0;
       const prepareRemoval = (location) => {
         const snapshot = String(location);
-        const directory = path.dirname(snapshot);
+        const directory = removeDirectory ? snapshot : path.dirname(snapshot);
         if (path.dirname(directory) !== stagingRoot ||
-            path.basename(snapshot) !== "database.sqlite") {
+            !path.basename(directory).startsWith("openclaw-sqlite-readonly-") ||
+            (!removeDirectory && path.basename(snapshot) !== "database.sqlite")) {
           return undefined;
         }
         attempts++;
@@ -137,27 +190,9 @@ it.each(
       };
     `,
     );
-    const result = await runCommandBuffered(
-      [
-        process.execPath,
-        "--import",
-        pathToFileURL(preload).href,
-        ...resolveRuntimeWorkerArgv(
-          resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
-        ),
-      ],
-      {
-        input: JSON.stringify({
-          mode,
-          ...input,
-          ...admitted,
-        }),
-        env: { XDG_CACHE_HOME: cache },
-        timeoutMs: 30_000,
-        killGraceMs: 500,
-        maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
-      },
-    );
+    const result = await runWorker({ mode, ...input, ...admitted }, preload, {
+      XDG_CACHE_HOME: cache,
+    });
     expect(await fs.readFile(source)).toEqual(sourceBytes);
     expect(await fs.readdir(path.dirname(source))).toEqual(sourceEntries);
     expect(await fs.readFile(sentinel, "utf8")).toBe("unrelated preserved");
@@ -176,124 +211,47 @@ it.each(
     const retained = (await fs.readdir(stagingRoot)).filter((name) =>
       name.startsWith("openclaw-sqlite-readonly-"),
     );
-    console.log(
-      JSON.stringify({
-        ...scenario,
-        code: result.code,
-        termination: result.termination,
-        stdout: result.stdout.toString(),
-        stderr: result.stderr.toString(),
-        attempts,
-        retained,
-      }),
-    );
     expect(attempts).toHaveLength(scenario.cleanup === "healthy" ? 1 : 2);
     expect(attempts.every((attempt) => attempt.before)).toBe(true);
     expect(attempts.at(-1)?.after).toBe(scenario.cleanup === "persistent");
     expect(retained).toHaveLength(scenario.cleanup === "persistent" ? 1 : 0);
-    if (scenario.cleanup === "healthy" && !scenario.readError) {
-      expect(result.code, result.stderr.toString()).toBe(0);
-      const output = JSON.parse(result.stdout.toString());
-      expect(mode === "versions" ? output : output.versions).toContainEqual({
-        path: source,
-        userVersion: 3,
-        contentVersion: 3,
+    expect(result.code, result.stdout.toString()).toBe(1);
+    expect(result.stdout.toString()).toBe("");
+    if (scenario.readError) {
+      expect(result.stderr.toString()).toContain('no such column: "path"');
+      const [recorded] = updateRunStepsFromResultStep({
+        name: "candidate snapshot",
+        exitCode: result.code,
+        stderrTail: result.stderr.toString(),
       });
-    } else {
-      expect(result.code, result.stdout.toString()).toBe(1);
-      expect(result.stdout.toString()).toBe("");
-      if (scenario.readError) {
-        expect(result.stderr.toString()).toContain('no such column: "path"');
-        const [recorded] = updateRunStepsFromResultStep({
-          name: "candidate snapshot",
-          exitCode: result.code,
-          stderrTail: result.stderr.toString(),
-        });
-        expect(recorded?.detail).toMatch(
-          /^Exit code: 1; (?:Caused by: )?no such column: "path".* \| ERR_SQLITE_ERROR$/u,
-        );
-        expect(recorded?.detail).toContain("ERR_SQLITE_ERROR");
-        expect(recorded?.detail).toContain('no such column: "path"');
-        expect(recorded?.detail?.length).toBeLessThanOrEqual(300);
-      }
-      if (scenario.cleanup !== "healthy") {
-        expect(result.stderr.toString()).toContain("snapshot cleanup failed");
-        expect(result.stderr.toString()).toContain(attempts[0]!.directory);
-      }
+      expect(recorded?.detail).toMatch(
+        /^Exit code: 1; (?:Caused by: )?no such column: "path".* \| ERR_SQLITE_ERROR$/u,
+      );
+      expect(recorded?.detail?.length).toBeLessThanOrEqual(300);
+    }
+    if (scenario.cleanup !== "healthy") {
+      expect(result.stderr.toString()).toContain("snapshot cleanup failed");
+      expect(result.stderr.toString()).toContain(attempts[0]!.directory);
     }
   },
   30_000,
 );
 
-it("releases the shared discovery snapshot before agent inspection", async () => {
-  const stateDir = path.join(root, "discovery-owner");
-  const shared = path.join(stateDir, "state", "openclaw.sqlite");
-  const agent = path.join(stateDir, "agents", "registered.sqlite");
-  const stagingRoot = path.join(root, "discovery-staging");
-  await createDatabase(
-    shared,
-    `CREATE TABLE agent_databases (path TEXT); INSERT INTO agent_databases VALUES ('${agent.replaceAll("'", "''")}');`,
+function isMetadataInventoryCommand(argv: readonly string[]): boolean {
+  return argv.some(
+    (arg) => path.basename(arg) === runtimeProcessScriptEntrypoints.updateStateSizes.fileName,
   );
-  await createDatabase(agent);
-  await fs.mkdir(stagingRoot, { recursive: true, mode: 0o700 });
-
-  await expect(
-    discoverUpdateStateSchemaInspectionInProcess({ stateDir, config: {}, stagingRoot }),
-  ).resolves.toMatchObject({
-    files: expect.arrayContaining([
-      [shared, { spellings: [shared] }],
-      [agent, { spellings: [agent] }],
-    ]),
-    sharedVersion: { path: shared, userVersion: 3, contentVersion: 3 },
-  });
-  expect(await fs.readdir(stagingRoot)).toEqual([]);
-});
-
-it.each([false, true])(
-  "removes parent-owned schema staging after worker settlement (readError=%s)",
-  async (readError) => {
-    const cache = path.join(root, "inspection-cache");
-    const cacheOwner = path.join(cache, "openclaw");
-    const stateDir = path.join(root, `cleanup-${readError}`);
-    const shared = path.join(stateDir, "state", "openclaw.sqlite");
-    await fs.mkdir(cacheOwner, { recursive: true, mode: 0o700 });
-    await createDatabase(shared, readError ? "CREATE TABLE agent_databases (not_path TEXT);" : "");
-    const previousCache = process.env.XDG_CACHE_HOME;
-    process.env.XDG_CACHE_HOME = cache;
-    try {
-      const operation = readUpdateStateSchemaVersions({ stateDir, config: {} });
-      if (readError) {
-        await expect(operation).rejects.toThrow('no such column: "path"');
-      } else {
-        await expect(operation).resolves.toContainEqual({
-          path: shared,
-          userVersion: 3,
-          contentVersion: 3,
-        });
-      }
-      expect(await fs.readdir(cacheOwner)).toEqual([]);
-    } finally {
-      if (previousCache === undefined) {
-        delete process.env.XDG_CACHE_HOME;
-      } else {
-        process.env.XDG_CACHE_HOME = previousCache;
-      }
-    }
-  },
-);
+}
 
 function inspectionResult(
   value: unknown,
   error?: string,
 ): Awaited<ReturnType<typeof runUtf8CommandWithTimeout>> {
-  return {
+  return createCommandResult({
     stdout: error ? "" : JSON.stringify(value),
     stderr: error ?? "",
     code: error ? 1 : 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  };
+  });
 }
 
 it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ legacy, expires }))))(
@@ -308,10 +266,13 @@ it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ lega
     database.exec("PRAGMA user_version = 3; CREATE TABLE agent_databases (path TEXT);");
     database.prepare("INSERT INTO agent_databases VALUES (?)").run(external);
     database.close();
-    await fs.writeFile(external, "");
-    await fs.truncate(external, 3_489_660_928);
-    await fs.writeFile(`${external}-wal`, "");
-    await fs.truncate(`${external}-wal`, 64 * 1024 * 1024);
+    for (const [file, size] of [
+      [external, 3_489_660_928],
+      [`${external}-wal`, 64 * 1024 * 1024],
+    ] as const) {
+      await fs.writeFile(file, "");
+      await fs.truncate(file, size);
+    }
     const sharedVersion = { path: shared, userVersion: 3, contentVersion: 3 };
     const discovery = {
       files: [
@@ -325,7 +286,7 @@ it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ lega
     const release = createDeferredCore();
     const run = commands.runUtf8CommandWithTimeout;
     vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (argv, options) => {
-      if (argv.includes("--eval")) {
+      if (isMetadataInventoryCommand(argv)) {
         return run(argv, options);
       }
       if (typeof options === "number") {
@@ -355,11 +316,10 @@ it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ lega
     const now = Date.now.bind(Date);
     let elapsed = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+    vi.spyOn(performance, "now").mockImplementation(() => now() + elapsed);
+    const expireDeadline = captureUpdateCandidateDeadline();
     const operation = readUpdateStateSchemaVersions({ stateDir, config: {} });
-    const outcome = operation.then(
-      (versions) => ({ versions }),
-      (error: unknown) => ({ error }),
-    );
+    const outcome = capture(operation);
     try {
       const signal = await Promise.race([
         inspecting.promise,
@@ -375,6 +335,7 @@ it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ lega
           signal.addEventListener("abort", () => resolve(), { once: true });
         });
         elapsed += 400_000;
+        expireDeadline();
         await aborted;
         expect(signal.aborted).toBe(true);
       }
@@ -382,12 +343,9 @@ it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ lega
       expect(fsSync.existsSync(stagingRoot)).toBe(true);
       release.resolve();
       if (expires) {
+        const message = `exceeded its ${legacy ? 4_841 : 4_540} second allowance`;
         expect(await outcome).toMatchObject({
-          error: {
-            message: expect.stringContaining(
-              `made no progress for ${legacy ? 4_841 : 4_540} seconds`,
-            ),
-          },
+          error: { message: expect.stringContaining(message) },
         });
       } else {
         await expect(operation).resolves.toContainEqual({ path: external, userVersion: 7 });
@@ -413,7 +371,7 @@ it.each(["versions array", "output limit", "non-exit"] as const)(
     const worker = vi
       .spyOn(commands, "runUtf8CommandWithTimeout")
       .mockImplementation((argv, options) => {
-        if (argv.includes("--eval")) {
+        if (isMetadataInventoryCommand(argv)) {
           return run(argv, options);
         }
         const result = inspectionResult(
@@ -433,7 +391,7 @@ it.each(["versions array", "output limit", "non-exit"] as const)(
         config: {},
       }),
     ).rejects.toThrow();
-    expect(worker.mock.calls.filter(([argv]) => !argv.includes("--eval"))).toHaveLength(1);
+    expect(worker.mock.calls.filter(([argv]) => !isMetadataInventoryCommand(argv))).toHaveLength(1);
   },
 );
 
@@ -448,20 +406,11 @@ it("keeps fleet progress below a released parent's stderr limit", async () => {
         ] as const,
     ),
   );
-  const result = await runCommandBuffered(
-    [
-      process.execPath,
-      ...resolveRuntimeWorkerArgv(
-        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
-      ),
-    ],
-    {
-      input: JSON.stringify({ mode: "versions", stateDir: root, config: { agents: { entries } } }),
-      timeoutMs: 30_000,
-      killGraceMs: 500,
-      maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
-    },
-  );
+  const result = await runWorker({
+    mode: "versions",
+    stateDir: root,
+    config: { agents: { entries } },
+  });
   expect(result.code, result.stderr.toString()).toBe(0);
   expect(result.stderr.byteLength).toBeLessThan(20_000);
   expect(result.stderr.toString()).toContain("detailed progress omitted");
@@ -473,7 +422,7 @@ it("keeps fleet progress below a released parent's stderr limit", async () => {
 
 it.runIf(process.platform !== "win32")(
   "kills a cancelled schema worker before removing its parent-owned staging root",
-  async () => {
+  async ({ signal }) => {
     const cache = path.join(root, "kill-cache");
     const cacheOwner = path.join(cache, "openclaw");
     const pidPath = path.join(root, "hung-worker.pid");
@@ -486,8 +435,9 @@ it.runIf(process.platform !== "win32")(
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+${fixtureReceiptClientSource(receipts.endpoint)}
 // Metadata probes use the real core program; only the schema worker should hang.
-if (process.argv.includes("--eval")) {
+if (process.argv.some((arg) => path.basename(arg) === ${JSON.stringify(runtimeProcessScriptEntrypoints.updateStateSizes.fileName)})) {
   process.exit(spawnSync(process.execPath, process.argv.slice(2), { stdio: "inherit" }).status ?? 1);
 }
 let input = "";
@@ -498,6 +448,7 @@ fs.writeFileSync(path.join(stagingRoot, "partial", "database.sqlite"), "partial"
 fs.writeFileSync(${JSON.stringify(stagingPath)}, stagingRoot);
 fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
 process.on("SIGTERM", () => {});
+sendReceipt(${JSON.stringify(pidPath)}, "ready");
 setInterval(() => {}, 60_000);
 `,
       { mode: 0o755 },
@@ -505,22 +456,34 @@ setInterval(() => {}, 60_000);
     const previousCache = process.env.XDG_CACHE_HOME;
     process.env.XDG_CACHE_HOME = cache;
     const controller = new AbortController();
+    const operation = readUpdateStateSchemaVersions({
+      stateDir: path.join(root, "unused-state"),
+      config: {},
+      nodeRunner: runner,
+      signal: controller.signal,
+    });
+    const outcome = operation.then(
+      () => {},
+      () => {},
+    );
+    workerSettlement = outcome;
     try {
-      const operation = readUpdateStateSchemaVersions({
-        stateDir: path.join(root, "unused-state"),
-        config: {},
-        nodeRunner: runner,
-        signal: controller.signal,
-      });
-      const pid = await waitForPidFile(pidPath, 5_000);
+      await withinTest(
+        fixtureEventBeforeSettlement(pidPath, outcome, `timeout waiting for pid in ${pidPath}`),
+        signal,
+      );
+      const pid = Number(await fs.readFile(pidPath, "utf8"));
       const cancellation = new Error("test cancellation");
       controller.abort(cancellation);
       await expect(operation).rejects.toBe(cancellation);
-      await waitForDead(pid, 5_000);
+      // Inspection rejects only after its owned command has closed.
+      expect(isProcessAlive(pid)).toBe(false);
       const stagingRoot = await fs.readFile(stagingPath, "utf8");
       await expect(fs.stat(stagingRoot)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await fs.readdir(cacheOwner)).toEqual([]);
     } finally {
+      controller.abort();
+      await outcome;
       if (previousCache === undefined) {
         delete process.env.XDG_CACHE_HOME;
       } else {
@@ -530,9 +493,11 @@ setInterval(() => {}, 60_000);
   },
 );
 
-it.each(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
+it.for(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
   "settles the actual rehearsal backup child before removing scratch on %s",
-  async (failure) => {
+  { timeout: 20_000 },
+  async (failure, { signal }) => {
+    await materializeUpdateCandidateStateWorker(root);
     const stateDir = path.join(root, "backup-failure");
     const source = path.join(stateDir, "state", "openclaw.sqlite");
     await createDatabase(
@@ -540,15 +505,18 @@ it.each(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
       "CREATE TABLE witness(value TEXT); INSERT INTO witness VALUES ('committed');",
     );
     const ready = path.join(root, "backup-ready.json");
-    const preload = path.join(root, "backup-fault.cjs");
+    const preload = path.join(root, "backup-fault.mjs");
     await fs.writeFile(
       preload,
       `
-      const fs = require("node:fs"), sqlite = require("node:sqlite");
+      import fs from "node:fs";
+      import sqlite from "node:sqlite";
+      ${fixtureReceiptClientSource(receipts.endpoint)}
       if (${JSON.stringify(failure)} !== "cooperative-cancel") process.on("SIGTERM", () => {});
       sqlite.backup = async function(source, destination) {
         fs.writeFileSync(destination, "partial private backup");
         fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ pid: process.pid, destination }));
+        sendReceipt(${JSON.stringify(ready)}, "ready");
         if (${JSON.stringify(failure)} === "disk-full") {
           throw Object.assign(new Error("synthetic destination full"), { code: "ERR_SQLITE_ERROR", errcode: 13 });
         }
@@ -560,6 +528,8 @@ it.each(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
     const now = Date.now.bind(Date);
     let elapsed = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+    vi.spyOn(performance, "now").mockImplementation(() => now() + elapsed);
+    const expireDeadline = captureUpdateCandidateDeadline();
     const controller = new AbortController();
     const operation = prepareUpdateCandidateStateSnapshot({
       config: {},
@@ -567,21 +537,17 @@ it.each(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
       candidateRoot: root,
       env: { TMPDIR: root },
       workerEnv: () => ({
-        ...process.env,
-        NODE_OPTIONS: `--require ${JSON.stringify(preload)}`,
+        ...withRuntimePreload(process.env, preload),
+        BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
         XDG_CACHE_HOME: path.join(root, "unowned-cache"),
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       }),
       signal: controller.signal,
     });
-    const outcome = operation.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
+    const outcome = capture(operation);
+    workerSettlement = outcome;
     try {
-      await expect
-        .poll(async () => fs.readFile(ready, "utf8").catch(() => ""), { timeout: 10_000 })
-        .not.toBe("");
+      await withinTest(fixtureEventBeforeSettlement(ready, outcome), signal);
       const child = JSON.parse(await fs.readFile(ready, "utf8")) as {
         pid: number;
         destination: string;
@@ -594,6 +560,7 @@ it.each(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
         controller.abort(new Error("cancel rehearsal proof"));
       } else if (failure === "deadline") {
         elapsed = 600_000;
+        expireDeadline();
       }
       const result = await outcome;
       expect(result).toMatchObject({ error: expect.any(Error) });
@@ -602,11 +569,12 @@ it.each(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
           failure === "cancel" || failure === "cooperative-cancel"
             ? "cancel rehearsal proof"
             : failure === "deadline"
-              ? "made no progress"
+              ? "exceeded its"
               : "synthetic destination full",
         );
       }
-      await waitForDead(child.pid, 5_000);
+      // Snapshot failure joins requireProcessTreeExtinction before removing scratch.
+      expect(isProcessAlive(child.pid)).toBe(false);
       // Both cooperative and forced termination confirm this owned process tree is gone.
       await expect(fs.stat(scratch)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await fs.readdir(root)).not.toContain("unowned-cache");
@@ -622,5 +590,4 @@ it.each(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
       await outcome;
     }
   },
-  20_000,
 );

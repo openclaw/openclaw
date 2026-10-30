@@ -51,6 +51,8 @@ export function createConfiguredProviderModelResolver<T extends { id: string }>(
   const canonicalize = (id: string) =>
     stripSelfProviderModelPrefix(provider, id) !== id ? id : canonicalizeModelId?.(id).trim() || id;
   let configuredModels: Map<string, T> | undefined;
+  let hasFallback = false;
+  let legacyRows: [string, T][] | undefined;
   return (modelId) => {
     const id = modelId.trim();
     if (!configuredModels) {
@@ -78,9 +80,26 @@ export function createConfiguredProviderModelResolver<T extends { id: string }>(
     }
     // Declared equivalents precede legacy self-provider prefixes. The selected
     // namespace itself is never stripped or merged with a legacy row.
-    for (const [candidate, row] of rows) {
-      const legacy = stripSelfProviderModelPrefix(provider, candidate);
-      if (legacy !== candidate && (legacy === id || canonicalize(legacy.trim()) === canonicalId)) {
+    // One-shot callers keep the short-circuit scan; repeated fallbacks reuse
+    // the legacy projection. Normalizers must not reenter this resolver.
+    if (!legacyRows) {
+      if (hasFallback) {
+        legacyRows = [];
+        for (const [candidate, row] of rows) {
+          const legacy = stripSelfProviderModelPrefix(provider, candidate);
+          if (legacy !== candidate) {
+            legacyRows.push([legacy, row]);
+          }
+        }
+      }
+      hasFallback = true;
+    }
+    for (const [candidate, row] of legacyRows ?? rows) {
+      const legacy = legacyRows ? candidate : stripSelfProviderModelPrefix(provider, candidate);
+      if (
+        (legacyRows !== undefined || legacy !== candidate) &&
+        (legacy === id || canonicalize(legacy.trim()) === canonicalId)
+      ) {
         return row;
       }
     }
@@ -110,6 +129,14 @@ function hasRequestCompatOverrides(compat: ModelDefinitionConfig["compat"]): boo
             /^(minimal|low|medium|high|xhigh|max|ultra)$/u.test(effort),
         )
       );
+    }
+    // Capability metadata is not an authored request override. Explicit temperature
+    // parameters still count as transport; native runtimes own their tool strategy.
+    if (key === "supportsTemperature") {
+      return typeof value !== "boolean";
+    }
+    if (key === "codeMode") {
+      return value !== "preferred" && value !== "capable";
     }
     return true;
   });
