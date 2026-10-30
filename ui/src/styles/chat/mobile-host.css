@@ -25,6 +25,8 @@
     );
   background: var(--bg);
   grid-template-areas: "main-header" "main" "mobile-host";
+  /* The exiting sheet must not give focus scrolling an off-screen destination. */
+  overflow: clip;
   /* The conversation edge rides the same spring as the sheet it reveals. */
   transition: grid-template-rows var(--motion-sheet);
 }

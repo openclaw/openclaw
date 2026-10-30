@@ -97,11 +97,11 @@ export function ResizeEdge(props: { options: () => ComposerWidthOptions }) {
       measure(next);
     },
     {
+      // WebKit can stall style resolution while a closing details element commits.
       targets: (next) =>
         [shell(), input(), shell() && region(), next?.getTranscriptElement?.()].filter(
           (node): node is Element => Boolean(node),
         ),
-      changeTiming: "sync",
     },
   );
   onSettled(() => {
