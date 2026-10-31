@@ -67,6 +67,8 @@ type Source = {
   unavailable?: boolean;
   watchDirectories?: string[];
   observations: Map<string, ReturnType<typeof observeOwnedDirectory>>;
+  /** Why a reset removed this registration; a config refresh is not a shutdown. */
+  retiredBy?: "refresh" | "shutdown";
 };
 type DiscoveryState = {
   catalog: Map<string, Skill>;
@@ -331,10 +333,21 @@ function readRegisteredSource({ key, source }: Awaited<ReturnType<typeof registe
   return source.sources;
 }
 
-async function publishRegisteredSource(registration: Awaited<ReturnType<typeof registerSource>>) {
+async function publishRegisteredSource(
+  registration: Awaited<ReturnType<typeof registerSource>>,
+  retried = false,
+): Promise<WorkspaceSkillSources> {
   const { source } = registration;
   if (source.dirty || !source.sources) {
-    await scanDirtySources();
+    await scanDirtySources().catch((error: unknown) => {
+      if (source.retiredBy !== "refresh") {
+        throw error;
+      }
+    });
+  }
+  // A config refresh replaces registrations mid-read; publish the same selection once more.
+  if (!retried && source.retiredBy === "refresh") {
+    return publishRegisteredSource(await registerSource(source.selection, source.watch), true);
   }
   return readRegisteredSource(registration);
 }
@@ -552,6 +565,7 @@ async function resetSkillsDiscoverySources(
   }
   for (const source of state.sources.values()) {
     closeSource(source);
+    source.retiredBy = retireWorker ? "shutdown" : "refresh";
   }
   state.sources.clear();
   state.plans.clear();
