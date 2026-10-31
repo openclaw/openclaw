@@ -1,0 +1,2 @@
+71
+# Native HTTP fixture gate, admitted bundle identity, and async failure regression.

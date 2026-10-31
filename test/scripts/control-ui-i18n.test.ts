@@ -540,8 +540,9 @@ describe("control-ui-i18n generated ownership", () => {
       isolationError,
     );
     isolated([locale("en"), generated("raw-copy-baseline.json")]).not.toThrow();
-    isolated(["package.json", locale("de")], "release/2026.7.3").not.toThrow();
-    isolated(["package.json", locale("de")], "main").not.toThrow();
+    for (const branch of ["main", "release/2026.7.3"]) {
+      isolated(["package.json", generated("de.tm.jsonl")], branch).not.toThrow();
+    }
     expect(
       [[locale("de")], [generated("de.tm.jsonl")], [locale("en")], null].map(
         shouldStrictControlUiI18n,
@@ -569,7 +570,7 @@ describe("control-ui-i18n generated ownership", () => {
     expect(shouldStrictControlUiI18n(["extensions/example/src/i18n/.i18n/fr.tm.jsonl"])).toBe(true);
   });
 
-  it("allows only a complete canonical translation-memory ownership migration", () => {
+  it("rejects the completed canonical translation-memory ownership migration", () => {
     const locales = readdirSync(path.resolve("ui/src/i18n/.i18n"))
       .filter((fileName) => fileName.endsWith(".tm.jsonl"))
       .map((fileName) => fileName.slice(0, -".tm.jsonl".length));
@@ -594,10 +595,7 @@ describe("control-ui-i18n generated ownership", () => {
       ]),
     ];
     const migration = [...owners, ...adapters, ...artifacts];
-    isolated(migration).not.toThrow();
-    isolated(migration.slice(1)).toThrow(isolationError);
-    isolated(migration.filter((filePath) => filePath !== artifacts[1])).toThrow(isolationError);
-    isolated([...migration, generated("other.tm.jsonl")]).toThrow(isolationError);
+    isolated(migration).toThrow(isolationError);
   });
 
   it.each([

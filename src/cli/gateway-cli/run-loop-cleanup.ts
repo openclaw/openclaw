@@ -32,11 +32,17 @@ export function createGatewayRunCleanup(
   let cleanupFailed = false;
   let processResourcesDrained = false;
   let resourcesRetained = false;
+  const retainedDetails = new Set<string>();
   const canClearRequestWatchdogs = () =>
     !resourcesRetained && (!ownsProcessLifecycle || !cleanupFailed);
   const retainResources = (name: string, detail: string) => {
     resourcesRetained = true;
     onRetained();
+    // The CLI fallback can observe a supervisor failure already included in core close.
+    if ([...retainedDetails].some((reported) => reported.includes(detail))) {
+      return;
+    }
+    retainedDetails.add(detail);
     logger.warn(`${name}: ${detail}; resources remain`);
   };
   const settleResource = async (name: string, run: () => void | Promise<void>, graceMs = 5_000) => {

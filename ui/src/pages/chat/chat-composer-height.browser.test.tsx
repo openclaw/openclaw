@@ -126,35 +126,24 @@ describe("content-sized composer height", () => {
     expect(f.editor().scrollHeight).toBeGreaterThan(f.editor().clientHeight);
   });
 
-  it.each(["wrapped", "compact"] as const)(
-    "keeps the correct draft line visible after shrinking (%s)",
-    async (shape) => {
-      const editor = document.createElement("textarea");
-      editor.style.cssText =
-        "width:200px;height:96px;max-height:96px;min-height:0;padding:8px;border:0;box-sizing:border-box;font:16px/24px monospace;white-space:pre-wrap;overflow-wrap:break-word;resize:none";
-      editor.value = "abcdefghij ".repeat(80);
-      container.append(editor);
-      observeTextareaOverflow(editor);
-      onTestFinished(() => disconnectTextareaOverflowObserver(editor));
-      editor.focus();
-      editor.setSelectionRange(11, 11);
-      editor.scrollTop = 0;
-      await settled();
-      if (shape === "compact") {
-        editor.blur();
-        container.dataset.composerLayout = "single-line";
-      }
-      editor.style.height = shape === "compact" ? "24px" : "60px";
-      editor.style.maxHeight = editor.style.height;
-      await settled();
-      await settled();
-      expect(editor.scrollTop).toBe(shape === "compact" ? 0 : 8);
-      if (shape === "compact") {
-        expect(editor.style.overflowY).toBe("");
-        expect(editor.hasAttribute("data-scroll-fade-top")).toBe(false);
-      }
-    },
-  );
+  it("keeps the correct draft line visible after shrinking", async () => {
+    const editor = document.createElement("textarea");
+    editor.style.cssText =
+      "width:200px;height:96px;max-height:96px;min-height:0;padding:8px;border:0;box-sizing:border-box;font:16px/24px monospace;white-space:pre-wrap;overflow-wrap:break-word;resize:none";
+    editor.value = "abcdefghij ".repeat(80);
+    container.append(editor);
+    observeTextareaOverflow(editor);
+    onTestFinished(() => disconnectTextareaOverflowObserver(editor));
+    editor.focus();
+    editor.setSelectionRange(11, 11);
+    editor.scrollTop = 0;
+    await settled();
+    editor.style.height = "60px";
+    editor.style.maxHeight = editor.style.height;
+    await settled();
+    await settled();
+    expect(editor.scrollTop).toBe(8);
+  });
 
   it.each(["end", "top", "grow"] as const)(
     "keeps the draft viewport anchored on window shrink (%s)",

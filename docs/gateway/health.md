@@ -330,6 +330,10 @@ stopping the sampler. At most two windows are retained; no profile files are
 written. Symbols and locations use the same redaction policy as on-demand
 diagnostic profiles. Inclusive counts overlap when a sampled stack contains
 several listed frames; they are not independent durations.
+The `deepest` stacks preserve the sampled leaf and nearest available OpenClaw
+caller, including across dependency frames. `[...]` marks omitted intermediate
+frames. Lower-ranked entries are dropped first to keep each report within 2 KiB;
+`reportTruncated=true` identifies this log-size trimming.
 
 The recorder skips Bun, Node 24 (which lacks the bounded coarse-sampling API),
 and processes already started with conflicting profiling, tracing, or debugger

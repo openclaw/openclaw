@@ -568,6 +568,11 @@ export async function backupDoctorSqliteDatabases(params: {
   for (const { path: sourcePath } of inventory) {
     assertCapture();
     const targetPath = targetFor(sourcePath);
+    // Narrow source admission never weakens certification of the retained backup image.
+    const sourceIntegrity = params.integrityChecks?.get(sourcePath);
+    const backupIntegrity = sourceIntegrity?.schemaOnly
+      ? { check: sourceIntegrity.check, tables: sourceIntegrity.tables }
+      : sourceIntegrity;
     const existing = lstatSync(targetPath, { bigint: true, throwIfNoEntry: false });
     if (existing) {
       try {
@@ -586,7 +591,7 @@ export async function backupDoctorSqliteDatabases(params: {
           try {
             snapshot.exec("PRAGMA trusted_schema = OFF;");
             assertCapture();
-            assertSqliteIntegrity(snapshot, targetPath, params.integrityChecks?.get(sourcePath));
+            assertSqliteIntegrity(snapshot, targetPath, backupIntegrity);
             params.repair?.validate?.(snapshot);
           } finally {
             snapshot.close();
@@ -628,7 +633,7 @@ export async function backupDoctorSqliteDatabases(params: {
           sourcePath,
           targetPath,
           preserveRowIds: true,
-          integrity: params.integrityChecks?.get(sourcePath),
+          integrity: backupIntegrity,
           transform: sanitizeOpenClawStateLeaseRows,
           beforePublish: assertCapture,
           afterPublish: (guard) =>

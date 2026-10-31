@@ -90,8 +90,8 @@ it("rejects successor bytes substituted after fresh validation and before snapsh
       (error) => error instanceof Error && /identity|source.*changed/i.test(error.message),
     ),
   ).toBe(true);
-  expect(fs.readFileSync(archived)).toEqual(originalBytes);
-  expect(fs.readFileSync(options.path)).toEqual(replacementBytes);
+  expect(fs.readFileSync(archived).equals(originalBytes), archived).toBe(true);
+  expect(fs.readFileSync(options.path).equals(replacementBytes), options.path).toBe(true);
 });
 
 it.runIf(process.platform === "darwin" && fs.existsSync("/usr/bin/SetFile"))(

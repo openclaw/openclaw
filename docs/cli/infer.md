@@ -126,6 +126,7 @@ Text inference and model/provider inspection.
 
 ```bash
 openclaw infer model run --prompt "Reply with exactly: smoke-ok" --json
+openclaw infer model run --prompt-file ./prompts/judge.txt --json
 openclaw infer model run --prompt "Summarize this changelog entry" --model openai/gpt-5.4 --json
 openclaw infer model run --prompt "Describe this image in one sentence" --file ./photo.jpg --model google/gemini-2.5-flash --json
 openclaw infer model run --prompt "Use more reasoning here" --thinking high --json
@@ -156,7 +157,7 @@ Notes:
 - OpenAI ChatGPT/Codex OAuth (`openai-chatgpt-responses` API) local checks add a minimal system instruction so the transport can populate its required `instructions` field — no full agent context, tools, memory, or session transcript.
 - `model run --file` attaches image content directly to the single user message. Common formats (PNG, JPEG, WebP) work when MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called. Use `infer image describe` instead when you want OpenClaw's image-model routing and fallbacks rather than a direct multimodal-model check.
 - The selected model must support image input; text-only models may reject the request at the provider layer.
-- `model run --prompt` must contain non-whitespace text; empty prompts are rejected before any provider or Gateway call.
+- Use exactly one of `model run --prompt <text>` or `--prompt-file <path>`. The file path must be relative to the current directory and remain inside it; symlinks and hardlinks are rejected. Files are read at invocation time as UTF-8 with a 1 MiB limit. Empty or whitespace-only prompts are rejected before any provider or Gateway call. File input keeps prompt text out of process arguments and does not add it to command output or a chat transcript; the selected provider still receives the prompt.
 - Local `model run` exits non-zero for empty output or a failed/aborted response, even when partial text was received. These runs do not emit a successful JSON envelope.
 - `model run --gateway` also exits non-zero when the Gateway reports a failed, timed-out, or cancelled run, preserving its error detail instead of wrapping the reply in a successful JSON envelope.
 - When a completed response contains only reasoning and no final text, local `model run` reports that it returned reasoning but no text output, and notes when it stopped at the output token limit. Failed or aborted responses keep the generic no-text error with any provider error detail. Reasoning content is not printed as the answer.

@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { ensureMemoryIndexSchema } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareConfigFileWrite } from "../config/backup-rotation.js";
 import { withDeferredPluginMigrationsCurrent } from "../infra/deferred-plugin-migrations.js";
@@ -134,7 +135,7 @@ it("preserves missing history for an on-disk incognito store without discovering
   });
   expect(migration.warningDisposition).toBe("recoverable");
   expect(migration.warnings.join("\n")).toContain(pathname);
-  expect(fs.readFileSync(pathname)).toEqual(bytes);
+  expectBytesEqual(fs.readFileSync(pathname), bytes, pathname);
 });
 
 it("ignores a reconstructed reindex-lock hold while still reporting a missing registered store", () => {
@@ -227,11 +228,9 @@ it.each(["reconstructed", "deleted-during-integrity", "lost-during-integrity"])(
         "held after deletion journal reconstruction",
       );
     }
-    expect({
-      version: db.prepare("PRAGMA user_version").get(),
-      schema: readSchema(),
-      bytes: fs.readFileSync(pathname),
-    }).toEqual({ version: { user_version: 0 }, schema, bytes });
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
+    expect(readSchema()).toEqual(schema);
+    expectBytesEqual(fs.readFileSync(pathname), bytes, pathname);
     expect(
       openStateDb({ env }).db.prepare("SELECT count(*) AS count FROM agent_databases").get(),
     ).toEqual({ count: 0 });
@@ -269,7 +268,7 @@ it("captures checkpoint freshness after earlier config publication and process o
     expect(journal).toBeUndefined();
     expect(fs.readFileSync(pathname, "utf8")).toBe(config);
     expect(discover(env, customPath).targets).toEqual([]);
-    expect(fs.readFileSync(customPath)).toEqual(bytes);
+    expectBytesEqual(fs.readFileSync(customPath), bytes, customPath);
   } finally {
     publication.mockRestore();
   }
@@ -312,7 +311,7 @@ it.each(["missing-table", "missing-database-session-store"])(
       });
       expect(migration.warningDisposition, JSON.stringify(migration)).toBe("recoverable");
       expect(migration.warnings.join("\n")).toContain("1 store held back");
-      expect(fs.readFileSync(agentPath)).toEqual(bytes);
+      expectBytesEqual(fs.readFileSync(agentPath), bytes, agentPath);
     }
   },
 );
@@ -380,6 +379,6 @@ it("retains selected storage environment when an agent lease opens shared state"
 
   const opened = openAgentDb({ agentId: "new", path: newPath, env });
   expect(opened.path).toBe(newPath);
-  expect(fs.readFileSync(retained)).toEqual(bytes);
+  expectBytesEqual(fs.readFileSync(retained), bytes, retained);
   expect(journalTable(openStateDb({ env }).db)).toBeUndefined();
 });

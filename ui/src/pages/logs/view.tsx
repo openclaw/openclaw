@@ -155,8 +155,13 @@ export function LogsView(props: LogsProps) {
     autoFollow = props.autoFollow,
   ) => {
     // Measurement writes interrupt WebKit's wheel travel. Keep idle reader anchoring.
-    instance.shouldAdjustScrollPositionOnItemSizeChange =
-      scrolling && !autoFollow ? skipSizeAdjustment : undefined;
+    const reading = scrolling && !autoFollow;
+    instance.shouldAdjustScrollPositionOnItemSizeChange = reading ? skipSizeAdjustment : undefined;
+    // The end anchor bypasses the size predicate; a negative distance disarms it during travel.
+    const scrollEndThreshold = autoFollow ? 120 : reading ? -1 : 0;
+    if (instance.options.scrollEndThreshold !== scrollEndThreshold) {
+      instance.setOptions({ ...instance.options, scrollEndThreshold });
+    }
   };
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLDivElement>({
     count: 0,
@@ -188,6 +193,7 @@ export function LogsView(props: LogsProps) {
     cancelLayout(scrollRequest);
     readerScrollPending = true;
     virtualizer.cancelScroll();
+    updateSizeAdjustment(virtualizer, true);
   };
   onSettled(() => {
     const { _didMount: mountVirtualizer } = virtualizer;
@@ -225,8 +231,6 @@ export function LogsView(props: LogsProps) {
         count: next.rows.length,
         getItemKey: next.getItemKey,
         followOnAppend: next.autoFollow,
-        // Follow-off readers pin measurements only once they reach the end.
-        scrollEndThreshold: next.autoFollow ? 120 : 0,
       });
       publish();
     },

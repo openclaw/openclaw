@@ -79,6 +79,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/components/sandbox-host.ts":
+    case "ui/src/lib/widget-sandbox-host.ts":
+    case "ui/src/lib/reactive/window-message.ts":
+      // Shared sandbox transport helpers otherwise add a separate HTTP wave to Board.
+      return "widget-sandbox-runtime";
     case "ui/src/components/modal-dialog.tsx":
     case "ui/src/components/solid/modal-dialog.tsx":
     case "ui/src/components/solid/modal-dialog.css":
@@ -204,6 +209,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/connect-command.tsx":
       // Creation fetches these together; keep their compression without a whole route.
       return "route-controls-runtime";
+    case "ui/src/components/solid/tabs.tsx":
+    case "ui/src/lib/tabs.ts":
+    case "ui/src/lib/reactive/shadow-styles.ts":
+    case "ui/src/styles/tabs.css":
+      // Both tab renderers already load the owner, adapter, and generic styles together.
+      return "tabs-runtime";
     case "ui/src/components/solid/hub-page-header.tsx":
     case "ui/src/components/solid/settings-workspace.tsx":
     case "ui/src/components/solid/settings-select.tsx":

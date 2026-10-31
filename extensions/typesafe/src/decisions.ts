@@ -153,7 +153,10 @@ export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): 
           mode: "api-key",
         };
       },
-      normalizeTransport: () => {
+      normalizeTransport: ({ provider }) => {
+        if (provider !== "typesafe") {
+          return undefined;
+        }
         return { baseUrl: effectiveBaseUrl(getConfig()) };
       },
       augmentModelCatalog: ({ entries }) =>

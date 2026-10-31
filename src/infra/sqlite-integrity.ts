@@ -151,13 +151,14 @@ export function runSqliteIntegrityOperationSync<T>(
   operation: SqliteIntegrityOperation<T>,
   beforeResume?: () => void,
   repairIntegrityError?: (check: SqliteIntegrityCheck, error: unknown) => boolean,
+  runCheck = runSqliteIntegrityCheckSync,
 ): T {
   beforeResume?.();
   let step = operation.next();
   while (!step.done) {
     let failure: { error: unknown } | undefined;
     try {
-      runSqliteIntegrityCheckSync(step.value);
+      runCheck(step.value);
     } catch (error) {
       failure = { error };
     }
@@ -256,6 +257,11 @@ export function assertSqliteIntegrity(
     allFindings?: boolean;
   } = {},
 ): SqliteIntegrityChecks {
+  if (options.check === "quick" && options.schemaOnly) {
+    // The owner only widens a stored CHECK; unchanged payloads and FKs need no scan.
+    runSqliteCheck(database, databaseLabel, "quick_check", "schema_meta");
+    return { integrityCheck: "ok" };
+  }
   const check = options.check === "quick" ? "quick_check" : "integrity_check";
   let staleFts = false;
   try {
@@ -445,7 +451,7 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
   if (violationCount > MAX_REPORTED_FOREIGN_KEY_VIOLATIONS) {
     details.push("additional violations omitted");
   }
-  throw new SqliteForeignKeyIntegrityError(
+  throw new SqliteIntegrityError(
     `SQLite foreign_key_check failed for ${databaseLabel}: ${details.join("; ")}`,
   );
 }
@@ -484,9 +490,6 @@ export class SqliteIntegrityError extends Error {
     this.name = "SqliteIntegrityError";
   }
 }
-
-/** Relational findings can be retained in an original image without declaring it healthy. */
-export class SqliteForeignKeyIntegrityError extends SqliteIntegrityError {}
 
 function retainSortedForeignKeyViolation(
   retained: SqliteForeignKeyViolation[],

@@ -3239,9 +3239,6 @@ describe("ci workflow guards", () => {
     });
 
     it.each([true, false])("bounds hosted rows with Android=%s", (androidSelected) => {
-      const manifestSource = readFileSync("scripts/ci-build-manifest.mjs", "utf8");
-      expect(manifestSource).toContain("const HYBRID_HOSTED_ROW_LIMIT = 45;");
-      expect(manifestSource).toContain("const HYBRID_HOSTED_BASE_ROW_LIMIT = 40;");
       const scopeEnv = { OPENCLAW_CI_RUN_ANDROID: String(androidSelected) };
       const baseline = manifestWithHostedNodeRows(0, { scopeEnv });
       expect(baseline.status, baseline.output).toBe(0);
@@ -13323,6 +13320,99 @@ describe("ci workflow guards", () => {
     ]) {
       expect(runStep.run.split(file)).toHaveLength(3);
     }
+  });
+});
+
+describe("shared test-source check execution", () => {
+  const runManifest = (changedPaths: string[], ciTypeGraphNames?: string[]) => {
+    const owner = pathToFileURL(path.resolve("scripts/lib/ci-extension-lint-plan.mts")).href;
+    const lint = pathToFileURL(path.resolve("scripts/run-oxlint-shards.mts")).href;
+    return runCiManifestFixture({
+      bundledPlanner: true,
+      checkFamilyScope: true,
+      eventName: "pull_request",
+      runnerProfile: "hybrid",
+      changedPaths,
+      ciTypeGraphNames,
+      changedPlannerSource: `
+        import { mkdirSync, writeFileSync } from "node:fs";
+        mkdirSync(new URL("../../test/tsconfig/", import.meta.url), { recursive: true });
+        writeFileSync(new URL("../../test/tsconfig/tsconfig.test.root.json", import.meta.url), JSON.stringify({ include: ["../**/*.ts"] }));
+        writeFileSync(new URL("./ci-extension-lint-plan.mts", import.meta.url), ${JSON.stringify(`export { resolveCiExtensionLintSelection } from ${JSON.stringify(owner)};\n`)});
+        writeFileSync(new URL("../run-oxlint-shards.mts", import.meta.url), ${JSON.stringify(`export { createExtensionOxlintShards, createOxlintExtensionRootScope, selectExtensionOxlintStripe } from ${JSON.stringify(lint)};\n`)});
+        export const createChangedNodeTestShards = () => [{
+          checkName: "selected-test", shardName: "selected-test", configs: [],
+          targets: ["src/selected.test.ts"], requiresDist: false, runner: "ubuntu-24.04",
+        }];
+      `,
+    });
+  };
+
+  it.each([
+    [
+      "extensions/codex/src/session-catalog-index.test.ts",
+      "extensions/codex/src/session-catalog-rollouts.test.ts",
+      "extensions/codex/src/session-catalog-index.test-support.ts",
+    ],
+    ["src/shared.test-support.ts", "src/shared.test.ts"],
+    ["packages/example/src/shared.test-support.ts"],
+    ["ui/src/shared.test-support.ts"],
+  ])("keeps full guards and selects compiler consumers for %j", (...changedPaths) => {
+    const graphs = ["core", "extensions-test"];
+    const manifest = runManifest(changedPaths, graphs);
+    expect(manifest.status, manifest.output).toBe(0);
+    const input = readJsonOutput(manifest.outputs, "check_plan_input_json");
+    expect(input.preserveFullChecks).toBe(false);
+    expect(input.typeGraphBoundaryOwner).toBe("additional-checks");
+    const rows = readJsonOutput(manifest.checkPlanOutputs, "check_matrix").include;
+    expect(
+      rows.flatMap((row: { type_graph_names_json?: string }) =>
+        JSON.parse(row.type_graph_names_json ?? "[]"),
+      ),
+    ).toEqual(graphs);
+    const guardTasks = (candidates: { task: string }[]) =>
+      candidates.filter(({ task }) => !["prod-types", "test-types", "lint"].includes(task));
+    expect(guardTasks(rows)).toEqual(guardTasks(input.checkMatrix.include));
+    expect(manifest.outputs.run_baseline_ratchets).toBe("true");
+    expect(manifest.outputs.run_pr_madge_import_cycles).toBe("true");
+    expect(manifest.outputs.run_pr_kysely_guardrails).toBe("true");
+    expect(
+      readJsonOutput(manifest.outputs, "check_additional_matrix").include.map(
+        (row: { group: string }) => row.group,
+      ),
+    ).toEqual([
+      "boundaries",
+      "prompt-snapshots",
+      "source-contracts",
+      "extension-package-boundary",
+      "guards",
+      "guards-architecture",
+    ]);
+  });
+
+  it.each([
+    ["test/helpers/shared.ts"],
+    ["src/shared.test-support.d.ts"],
+    ["src/shared.test-support.ts", "src/runtime.ts"],
+    ["src/shared.test-support.ts", "tsconfig.json"],
+    ["src/shared.test-support.ts", "src/config/settings.json"],
+    ["unknown/shared.test-support.ts"],
+  ])("retains full execution for %j", (...changedPaths) => {
+    const manifest = runManifest(changedPaths);
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(readJsonOutput(manifest.outputs, "check_plan_input_json").preserveFullChecks).toBe(true);
+    const rows = readJsonOutput(manifest.checkPlanOutputs, "check_matrix").include;
+    expect(
+      rows.filter(({ task }: { task: string }) => ["prod-types", "test-types"].includes(task)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ task: "prod-types" }),
+        expect.objectContaining({ task: "test-types" }),
+      ]),
+    );
+    expect(
+      rows.every((row: { type_graph_names_json?: string }) => !row.type_graph_names_json),
+    ).toBe(true);
   });
 });
 

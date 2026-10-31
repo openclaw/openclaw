@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
-import { getCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -325,7 +324,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         pruneMapToMaxSize(iterationsBySession, EXPERIENCE_REVIEW_MAX_COUNTERS);
         return;
       }
-      const workspaceDir = getCanonicalSkillWorkspace() ?? params.ctx.workspaceDir?.trim();
+      const workspaceDir = params.ctx.workspaceDir?.trim();
       const modelProviderId = params.ctx.modelProviderId?.trim();
       const modelId = params.ctx.modelId?.trim();
       const { source } = params;

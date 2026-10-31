@@ -335,7 +335,7 @@ describe("triageCommand", () => {
     expect(mocks.confirm).not.toHaveBeenCalled();
   });
 
-  it("preserves local diagnostics and redacted snapshot failures while the Gateway is offline", async () => {
+  it("keeps separate-installation diagnostics without inspecting the host service", async () => {
     const { writeDiagnosticSupportExport } = await vi.importActual<
       typeof import("../logging/diagnostic-support-export.js")
     >("../logging/diagnostic-support-export.js");
@@ -370,7 +370,8 @@ describe("triageCommand", () => {
     const diagnostics = JSON.parse(await zip.file("diagnostics.json")!.async("string"));
     expect(diagnostics.config).toMatchObject({ exists: true, parseOk: true });
     expect(diagnostics.health).toMatchObject({ status: "failed" });
-    expect(diagnostics.status).toMatchObject({ status: "failed" });
+    expect(diagnostics.status).toMatchObject({ status: "skipped" });
+    expect(mocks.gatherDaemonStatus).not.toHaveBeenCalled();
     const entries = await Promise.all(
       Object.values(zip.files)
         .filter((entry) => !entry.dir)

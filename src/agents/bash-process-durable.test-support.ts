@@ -12,6 +12,8 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { shutdownProcessSupervisor } from "../process/supervisor/index.js";
 import type { SecretEgressProxyHandle } from "../secrets/egress-proxy/proxy-server.js";
 import {
@@ -49,6 +51,7 @@ const sessionId = "durable-session";
 const managerSource = `#!${process.execPath}
 const fs = require('node:fs');
 const file = process.env.OPENCLAW_DURABLE_MANAGER_FIXTURE;
+fs.appendFileSync(file + '.parents', process.ppid + '\\n');
 const args = process.argv.slice(2);
 const read = () => JSON.parse(fs.readFileSync(file, 'utf8'));
 const save = value => fs.writeFileSync(file, JSON.stringify(value));
@@ -126,7 +129,22 @@ async function scenario(run: (state: OpenClawTestState, managerFile: string) => 
           openOpenClawStateDatabase({ env: state.env });
           const agent = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
           writeSessionEntry(agent, sessionKey, { sessionId, updatedAt: Date.now() });
-          await run(state, managerFile);
+          const broker = createSpawnBrokerHost();
+          try {
+            await broker.ready();
+            await runWithSpawnBroker(broker, () => run(state, managerFile));
+            const parents = (await fs.readFile(managerFile + ".parents", "utf8"))
+              .trim()
+              .split("\n")
+              .map(Number);
+            assert.ok(parents.length > 0);
+            assert.ok(
+              parents.every((pid) => pid === broker.pid),
+              JSON.stringify(parents),
+            );
+          } finally {
+            await broker.close();
+          }
         } finally {
           clearSecretEgressProxy(proxy);
           await disposeDurableProcesses();
@@ -216,7 +234,9 @@ void it("re-adopts persisted work with scoped list/log/poll/kill and restart adm
     const adopted = getSession(id)!;
     await tool.execute("kill", { action: "kill", sessionId: id });
     await waitForExecSession(adopted);
-    const poll = await tool.execute("poll", { action: "poll", sessionId: id });
+    const poll = await runWithSpawnBroker(undefined, () =>
+      tool.execute("poll", { action: "poll", sessionId: id }),
+    );
     assert.partialDeepStrictEqual(poll.details, {
       status: "completed",
       exitReason: "manual-cancel",
@@ -253,7 +273,9 @@ void it("records a downtime exit and queues one unattributed session completion"
       await initializeDurableProcesses();
       const tool = createProcessTool({ agentId: "main", sessionKey, scopeKey: sessionKey });
       const adopted = getSession(id)!;
-      const poll = await tool.execute("downtime", { action: "poll", sessionId: id });
+      const poll = await runWithSpawnBroker(undefined, () =>
+        tool.execute("downtime", { action: "poll", sessionId: id }),
+      );
       await waitForExecSession(adopted);
       assert.match(JSON.stringify(poll), /worker final output/);
       assert.equal(getFinishedSession(id)?.exitCode, 7);

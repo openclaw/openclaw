@@ -405,8 +405,12 @@ describe("sessions.files RPC handlers", () => {
   it.each([
     ["München", "Mu\u0308nchen.md"],
     ["Mu\u0308nchen", "München.md"],
+    ["Σ", "ΕΛΕΓΧΟΣ/README.md"],
+    ["σ", "ΕΛΕΓΧΟΣ/README.md"],
+    ["ς", "ΕΛΕΓΧΟΣ/README.md"],
+    ["ς", "σ/README.md"],
   ])(
-    "finds a canonically equivalent workspace filename without rewriting it (%s)",
+    "finds case- and canonically equivalent workspace paths without rewriting them (%s)",
     async (query, filename) => {
       writeWorkspace(filename, "# Canonically equivalent filename\n");
 

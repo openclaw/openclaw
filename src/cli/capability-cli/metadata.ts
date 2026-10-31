@@ -48,6 +48,7 @@ export const CAPABILITY_METADATA: {
     transports: ["local", "gateway"],
     flags: [
       "--prompt",
+      "--prompt-file",
       "--file",
       "--model",
       "--thinking",

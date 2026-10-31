@@ -39,10 +39,10 @@ import {
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { createMsFormatter } from "../../lib/format.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { formatDateTimeMs } from "../../lib/reactive/format.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
-import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ApprovalErrorNotice } from "./approval-error-notice.tsx";
 
 registerEnglishCatalog(registerApprovalsEnglish);
@@ -181,6 +181,16 @@ export function ApprovalsPage() {
     revision();
     return state;
   };
+  const historyItems = createMemo(() => view().items);
+  const formatResolvedAt = createMemo(
+    () => {
+      // Refresh the system timezone with history, not unrelated grants or loading notices.
+      historyItems();
+      getLocale();
+      return createMsFormatter({ dateStyle: "medium", timeStyle: "short" });
+    },
+    { lazy: true },
+  );
   type ReadReceipt = { generation: number; completion: Promise<void> };
   const [historyReceipt, setHistoryReceipt] = createSignal<ReadReceipt | null>(null);
   const [grantsReceipt, setGrantsReceipt] = createSignal<ReadReceipt | null>(null);
@@ -523,10 +533,7 @@ export function ApprovalsPage() {
       <tr>
         <Cell
           labelKey="approvalHistory.columns.resolved"
-          value={formatDateTimeMs(props.item.resolvedAtMs, {
-            dateStyle: "medium",
-            timeStyle: "short",
-          })}
+          value={formatResolvedAt()(props.item.resolvedAtMs)}
         />
         <Cell
           labelKey="approvalHistory.columns.kind"
@@ -678,7 +685,7 @@ export function ApprovalsPage() {
                             )}
                           />
                         ) : (
-                          <For each={view().items} keyed={(item) => item.id}>
+                          <For each={historyItems()} keyed={(item) => item.id}>
                             {(item) => <HistoryRow item={item()} />}
                           </For>
                         )}

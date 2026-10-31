@@ -16,5 +16,5 @@ scenario:
   execution:
     kind: playwright
     path: ui/src/e2e/chat-flow.messaging.e2e.test.ts
-    testNamePattern: sends a chat turn through the GUI and renders the final Gateway event
+    testNamePattern: adopts a browser-local prompt from a metadata-free gateway event without duplication
     summary: Focused Playwright smoke coverage for the Control UI chat flow.
