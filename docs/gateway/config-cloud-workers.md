@@ -71,6 +71,56 @@ This setting selects execution, not provider credentials or an OS sandbox. For
 node-only credentials, configure the required profile and node as described in
 [Worker-local inference](/gateway/cloud-workers/native-inference).
 
+### Repository workspace durability
+
+Profiles mirror accepted workspace changes to the Gateway by default. To keep a
+repository on its original retained disk between turns, select a finite compute
+window on a provider with exact-resource receipts, retained lifecycle operations,
+and a dedicated enrolled node:
+
+```json5
+{
+  cloudWorkers: {
+    profiles: {
+      retained: {
+        provider: "crabbox",
+        workspaceDurability: { mode: "retained-disk", computeWindowSeconds: 3600 },
+        settings: {
+          provider: "azure-sandbox",
+          target: "linux",
+          ttl: "1h",
+          idleTimeout: "45m",
+          warmImage: false,
+        },
+      },
+    },
+  },
+}
+```
+
+Omission or `{ mode: "mirrored" }` keeps the existing behavior. The selection is
+recorded with each new allocation; changing a profile does not convert an active
+workspace or reinterpret pending results. Retained mode requires a repository-only
+cloud session and bundled installation. Fixed-lease prepared workers and image
+reserves are not consumed or replenished for that profile.
+
+The compute window is a positive whole number of seconds; the provider may impose
+a smaller supported maximum. Activity does not renew it. Explicit new input or
+file/publication/Move operations can prepare the original disk through its lifecycle
+owner. Legacy `suspendAfter` reclaim/replacement does not apply to retained
+environments. **Move to Gateway** exports current files and private Git history,
+then retires the original resource. Stop, archive/delete cleanup, and other Move
+targets cannot destructively drain a bound disk before that handoff. Fork the
+workspace after Move as well; an old initialization checkpoint cannot represent
+the current disk. Explicitly pinned historical publication snapshots remain usable.
+
+Crabbox requires Linux Azure Sandbox, `warmImage: false`, and an executable that
+advertises the retained-disk and pause/resume contracts. Unsupported capabilities
+refuse before allocation. A qualified node/controller deployment is still required
+for cold-boot reconnect; a version number or capability advertisement alone does
+not prove readiness. This option does not install or adopt a controller release.
+See [lifecycle and durability](/gateway/cloud-workers/session-lifecycle#retained-disk-lifecycle-integration).
+
 ### Crabbox profile
 
 Manage profiles under **Settings → Connections → Cloud environments → Advanced → Machines**. Repository defaults, snapshot actions, pool limits, and retention are described in [Cloud environments](/gateway/cloud-workers/warm-images#inspect-snapshots-in-the-control-ui). Saving settings does not start a build.
@@ -204,7 +254,8 @@ Setup secrets do not disable snapshots. Names and store references affect compat
 - `profiles`: named worker profiles with non-empty, whitespace-trimmed ids. Each profile selects a provider registered by a plugin.
 - `provider`: non-empty worker provider id. The examples use the bundled `crabbox` provider and the QA Lab `static-ssh` provider.
 - `install`: SSH-backed `remote-exec` worker installation method. `"bundle"` (default) transfers a content-hashed bundle of the gateway's installed build and supports released, development, and unreleased versions. `"npm"` is an opt-in optimization for an unmodified packaged release; it installs `openclaw@<exact gateway version>` from the public npm registry and never installs `latest`. Node-backed `worker-turn` and `remote-exec` providers install the pinned Gateway bundle through node transport instead.
-- `suspendAfter`: optional profile-level duration such as `45m`, `90m`, or `2h`; minimum `1m`. The Gateway safely reclaims the worker after its session stays idle for this long. The next message provisions a replacement, warm when an image exists. Omit this field to disable automatic idle suspension; Crabbox lifetime limits still apply.
+- `workspaceDurability`: optional repository durability selection; omission or `{ mode: "mirrored" }` keeps mirroring. `{ mode: "retained-disk", computeWindowSeconds: 3600 }` selects the exact original disk and a finite explicit compute window; see [requirements and limits](/gateway/config-cloud-workers#repository-workspace-durability).
+- `suspendAfter`: optional profile-level duration such as `45m`, `90m`, or `2h`; minimum `1m`. Applies to mirrored/fixed-lease workers, not retained environments. The Gateway safely reclaims the worker after its session stays idle for this long. The next message provisions a replacement, warm when an image exists. Omit this field to disable automatic idle suspension; Crabbox lifetime limits still apply.
 - Bundled provider plugins are selected automatically when configured, but explicit disables and `plugins.allow` still apply. Include the provider id (for example, `crabbox`) when an allowlist is configured. External provider plugins must also be installed and explicitly enabled.
 - `settings`: provider-owned bounded JSON. The selected plugin defines and validates its keys; use [SecretRef objects](/gateway/secrets) for secret-bearing values. The static SSH provider requires `host`, `user`, `hostKey`, and `keyRef`; `port` defaults to `22`. `hostKey` must be one OpenSSH public host-key line (`algorithm base64`) obtained from the known host or another trusted channel, with no options prefix.
 

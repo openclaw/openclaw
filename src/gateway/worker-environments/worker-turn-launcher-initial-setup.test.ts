@@ -179,8 +179,7 @@ describe("initial worker setup admission", () => {
       await fixture.operation;
       if (mode === "worker-turn") {
         await expect(run).rejects.toThrow("does not match its attached environment");
-        expect(environments.get).toHaveBeenCalledOnce();
-        expectUncalled(runLocal);
+        expectUncalled(environments.ensureRetainedRunning, environments.startTunnel, runLocal);
       } else {
         await expect(run).resolves.toMatchObject({ meta: { durationMs: 1 } });
         expect(runLocal).toHaveBeenCalledOnce();

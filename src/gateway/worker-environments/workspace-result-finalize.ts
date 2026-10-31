@@ -198,7 +198,8 @@ export async function reconcileWorkspaceAfterTurn(params: {
   const priorWorkspaceConflict =
     currentPlacement.workspaceResultConflict ??
     latestDurableWorkspaceConflict(completed.getBranch());
-  if (!params.placements.preparedWorkspaceResult(params.turnClaim)) {
+  const pendingResult = params.placements.preparedWorkspaceResult(params.turnClaim);
+  if (!pendingResult) {
     throw new Error("Cloud worker completed without a durable workspace-result fence");
   }
   const assertWorkspaceResultCurrent = () => {
@@ -207,15 +208,33 @@ export async function reconcileWorkspaceAfterTurn(params: {
       throw new Error("Cloud worker workspace result lost its placement owner");
     }
   };
-  const journal = createWorkspaceResultJournal({
-    placement: currentPlacement,
-    placements: params.placements,
-    turnClaim: params.turnClaim,
-    assertCurrent: assertWorkspaceResultCurrent,
-  });
   let workspaceConflict: WorkspaceConflictReport | undefined;
   try {
     const reconcile = async () => {
+      if (pendingResult.repositoryDiskAuthority) {
+        // Accepted custody selects settlement, not a later config/workspace read. The
+        // result writer checks the original disk; only queued publication may capture it.
+        assertResultCurrent();
+        await params.prepareAcceptedWorkspacePublication?.(params.turnClaim).catch(() => undefined);
+        await params.placements.acceptWorkspaceResult(params.turnClaim, assertResultCurrent);
+        assertResultCurrent();
+        await params.publishAcceptedWorkspace?.(params.turnClaim);
+        assertResultCurrent();
+        if (params.turnClaim.owner.kind === "worker") {
+          await params.placements.closeWorkerTurnToolState(params.turnClaim);
+        }
+        await params.placements.completeWorkspaceResultAndReleaseTurn(
+          params.turnClaim,
+          assertResultCurrent,
+        );
+        return;
+      }
+      const journal = createWorkspaceResultJournal({
+        placement: currentPlacement,
+        placements: params.placements,
+        turnClaim: params.turnClaim,
+        assertCurrent: assertWorkspaceResultCurrent,
+      });
       if (!params.placements.validateTurnClaim(params.turnClaim)) {
         throw new Error("Cloud worker workspace result lost its turn claim");
       }

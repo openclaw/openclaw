@@ -597,8 +597,9 @@ describe("repository workspace result ownership", () => {
     expect(await fs.readFile(path.join(f.remote, "publish.txt"), "utf8")).toBe(
       "later unselected edit\n",
     );
-    await placements.acceptWorkspaceResult(owned.turnClaim);
-    await placements.completeWorkspaceResultAndReleaseTurn(owned.turnClaim);
+    await f.finishTurn(owned);
+    expect(capture).toHaveBeenCalledTimes(1);
+    await f.expectSettled();
   });
 
   it("recovers unknown editor writes through pending result custody", async () => {

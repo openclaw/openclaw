@@ -539,6 +539,7 @@ export function unusedEnvironments(): WorkerTurnEnvironmentService {
   const unexpectedAsync = async () => unexpected();
   return {
     get: vi.fn(() => undefined),
+    ensureRetainedRunning: vi.fn(unexpectedAsync),
     createGatewayTools: prepareGatewayTools,
     resolveSshIdentity: vi.fn(unexpectedAsync),
     acquireTurnCredential: vi.fn(unexpectedAsync),

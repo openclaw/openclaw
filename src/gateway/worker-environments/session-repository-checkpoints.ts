@@ -77,6 +77,11 @@ async function owner(params: CheckpointOwner) {
 }
 
 function checkpointRef(workspace: SessionRepositoryWorkspaceRecord, ref?: string): string {
+  if (workspace.diskAuthority && ref === undefined) {
+    throw new Error(
+      "Repository work requires a fresh disk export, not its initialization checkpoint",
+    );
+  }
   const selected = ref ?? workspace.checkpointRef;
   if (!selected || !/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(selected)) {
     throw new Error("Repository workspace has no valid checkpoint");
@@ -604,6 +609,11 @@ export async function forkSessionRepositoryWorkspace(params: {
     params.assertCurrent();
   };
   const source = (await owner({ workspaceId: params.sourceWorkspaceId, store })).workspace;
+  if (source.diskAuthority) {
+    throw new Error(
+      "Fork requires a fresh disk export; Move to Gateway before forking this workspace",
+    );
+  }
   const existing = await store.find(params);
   if (existing !== undefined) {
     throw new Error("Fork session already owns a repository workspace");

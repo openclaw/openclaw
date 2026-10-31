@@ -30,6 +30,11 @@ export async function syncSessionRepositoryWorkspace(params: {
 }) {
   const store = getSessionRepositoryWorkspaceStore();
   let repository = params.repository;
+  if (repository.diskAuthority) {
+    throw new Error(
+      "Repository disk is already authoritative; resume the original resource instead of restoring a mirror",
+    );
+  }
   const prepared = params.preparedRepository;
   if (prepared && repository.baseCommit && prepared.baseCommit !== repository.baseCommit) {
     throw new Error("Prepared repository does not match the pinned session commit");

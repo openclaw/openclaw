@@ -6,6 +6,7 @@ import {
   WorkerOperatingSystemSchema,
 } from "../../../packages/gateway-protocol/src/schema/environments.js";
 import { validateProviderSettings } from "../../config/provider-settings.js";
+import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
@@ -34,6 +35,15 @@ export function requireWorkerProfile(value: unknown): WorkerProfile {
   }
   // SAFETY: Validation accepts only bounded JSON objects and checks any secret references.
   return value as WorkerProfile;
+}
+
+/** Allocation and prepared-worker retention compare the same admitted profile fields. */
+export function snapshotWorkerAllocationProfile(profile: CloudWorkerProfileConfig): WorkerProfile {
+  return {
+    install: profile.install ?? "bundle",
+    settings: requireWorkerProfile(profile.settings ?? {}),
+    ...(profile.workspaceDurability ? { workspaceDurability: profile.workspaceDurability } : {}),
+  };
 }
 
 export function readWorkerProfileSelection(snapshot: WorkerProfile): {

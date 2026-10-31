@@ -266,7 +266,7 @@ export function acceptSessionRepositoryWorkspaceCheckpointInDatabase(
   });
 }
 
-/** No runtime selector calls this until explicit I/O and publication support is installed. */
+/** Activation calls this in the placement transaction after its active postimage exists. */
 export function bindSessionRepositoryWorkspaceDiskInDatabase(
   db: EngineConnection,
   input: RepositoryWorkspaceDiskBinding,

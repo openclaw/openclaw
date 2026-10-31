@@ -155,6 +155,7 @@ export function registerWorkerGoalChatCases(
         placements,
         environments: {
           get: () => environment,
+          ensureRetainedRunning: unexpectedTransport,
           acquireTurnCredential: unexpectedTransport,
           acknowledgeCredentialDelivery: unexpectedTransport,
           destroy: unexpectedTransport,
