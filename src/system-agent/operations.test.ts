@@ -184,6 +184,44 @@ describe("system agent operations", () => {
     expect(loggedOutput()).toContain("work | model=openai/gpt-5.2");
   });
 
+  it("formats the usage cost summary from the injected loader", async () => {
+    const loadedAgentIds: string[] = [];
+    await run(
+      { kind: "usage" },
+      {
+        requesterAgentId: "qa",
+        deps: {
+          loadUsage: async (agentId) => {
+            loadedAgentIds.push(agentId);
+            return {
+              updatedAt: 0,
+              days: 30,
+              daily: [],
+              totals: {
+                input: 1_000,
+                output: 500,
+                cacheRead: 200,
+                cacheWrite: 50,
+                totalTokens: 1_750,
+                totalCost: 0.1234,
+                inputCost: 0.01,
+                outputCost: 0.02,
+                cacheReadCost: 0.001,
+                cacheWriteCost: 0.002,
+                missingCostEntries: 2,
+              },
+            };
+          },
+        },
+      },
+    );
+    expect(loadedAgentIds).toEqual(["qa"]);
+    expect(loggedOutput()).toContain("Usage (last 30 days, agent qa):");
+    expect(loggedOutput()).toContain("Tokens: 1,750");
+    expect(loggedOutput()).toContain("Cost: $0.1234");
+    expect(loggedOutput()).toContain("2 entries had no cost data");
+  });
+
   it("redacts sensitive config values using their complete paths", async () => {
     mockConfig.setConfig({
       models: {

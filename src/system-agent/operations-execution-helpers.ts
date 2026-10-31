@@ -85,6 +85,17 @@ export async function loadOverviewForOperation(
   return await loadSystemAgentOverview();
 }
 
+export async function loadUsageForOperation(
+  deps: SystemAgentCommandDeps | undefined,
+  agentId: string,
+): Promise<import("../infra/session-cost-usage.js").CostUsageSummary> {
+  if (deps?.loadUsage) {
+    return await deps.loadUsage(agentId);
+  }
+  const { loadCostUsageSummary } = await import("../infra/session-cost-usage.js");
+  return await loadCostUsageSummary({ agentId });
+}
+
 export async function resolveChannelSetupState() {
   const { listChannelSetupPlugins } = await import("../channels/plugins/setup-registry.js");
   const { resolveChannelSetupEntries, shouldShowChannelInSetup } =

@@ -103,6 +103,25 @@ describe("openclaw tool", () => {
     expect(tool.description).toMatch(/Read now:.*health/);
   });
 
+  it("registers usage as a read-only action and routes it through the executor", async () => {
+    const tool = createSystemAgentTool({ surface: "cli" });
+    const result = await tool.execute("t-usage", { action: "usage" });
+    expect(toolText(result)).toContain("op-output");
+    expect(mocks.executeSystemAgentOperation).toHaveBeenCalledWith(
+      { kind: "usage" },
+      expect.anything(),
+      expect.objectContaining({ approved: false }),
+    );
+
+    const actionEnum = (
+      tool.parameters as {
+        properties: { action: { enum: string[] } };
+      }
+    ).properties.action.enum;
+    expect(actionEnum).toContain("usage");
+    expect(tool.description).toMatch(/Read now:.*usage/);
+  });
+
   it("routes action:overview through the canonical overview executor", async () => {
     const runtimeConfig = {
       agents: {
