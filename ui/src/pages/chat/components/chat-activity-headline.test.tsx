@@ -122,6 +122,17 @@ function query(part: string) {
 }
 
 describe("activity headline cadence", () => {
+  it("marks the headline as running only while its operation runs", () => {
+    const running = () => query("label--running")?.textContent;
+    update(operation("first"));
+    expect(running()).toBe("Read first…");
+    update(operation("first", "completed"));
+    expect(label()).toBe("Read first");
+    expect(running()).toBeUndefined();
+    update(operation("first", "failed"));
+    expect(running()).toBeUndefined();
+  });
+
   it("holds new copy for three seconds and replaces pending work instead of replaying a backlog", () => {
     update(operation("first"));
     advanceTimersByTime(400);
