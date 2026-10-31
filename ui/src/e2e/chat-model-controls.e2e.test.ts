@@ -737,7 +737,10 @@ suite.define(() => {
         expect(effortBox).not.toBeNull();
         expect(actionsBox).not.toBeNull();
         expect(modelBox!.x + modelBox!.width).toBeLessThanOrEqual(effortBox!.x + 1);
-        expect(effortBox!.x + effortBox!.width).toBeLessThanOrEqual(actionsBox!.x + 1);
+        expect(
+          effortBox!.x + effortBox!.width <= actionsBox!.x + 1 ||
+            effortBox!.y + effortBox!.height <= actionsBox!.y + 1,
+        ).toBe(true);
         expect(effortBox!.width).toBeGreaterThanOrEqual(44);
         await effort.click();
         expect(await composer.locator("[data-chat-thinking-slider]").count()).toBe(0);

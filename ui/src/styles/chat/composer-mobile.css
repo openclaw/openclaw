@@ -212,7 +212,13 @@
 
 .agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__composer-controls {
   inset-inline: 76px 8px;
-  justify-content: flex-end;
+  justify-content: flex-start;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"]
+  .agent-chat__composer-controls
+  .chat-composer-model-control {
+  margin-inline-start: 0;
 }
 
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
