@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import fs, { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -100,7 +100,9 @@ describe("extension executable test plans", () => {
     expect(shards[0]!.includePatterns?.toSorted()).toEqual(files.toSorted());
   });
 
-  it("reads each candidate checkout's filesystem plugin inventory", () => {
+  it("reads each candidate checkout's filesystem plugin inventory", async () => {
+    const { createChangedExtensionConfigShards } =
+      await import("../../scripts/lib/ci-extension-test-shards.mts");
     const root = "extensions/fixture";
     for (const snapshot of ["before", "after"]) {
       const cwd = tempDirs.make(`extension-inventory-${snapshot}-`);
@@ -112,6 +114,7 @@ describe("extension executable test plans", () => {
         `extensions/manifest-${snapshot}/openclaw.plugin.json`,
         `extensions/nested/${snapshot}/openclaw.plugin.json`,
         selected,
+        `extensions/unrelated/ignored.test.ts`,
         `${root}/browser/ui.test.ts`,
         `${root}/dist/generated.test.ts`,
         `${root}/node_modules/dependency/copied.test.ts`,
@@ -122,6 +125,14 @@ describe("extension executable test plans", () => {
       );
       expect(listFiles([root], cwd)).toEqual([selected]);
       expect(listFiles([selected], cwd)).toEqual([selected]);
+      const reads = vi.spyOn(fs, "readdirSync");
+      const shards = createChangedExtensionConfigShards([root], {
+        cwd,
+        targets: new Set([selected]),
+      });
+      expect(shards.flatMap((shard) => shard.includePatterns ?? [])).toEqual([selected]);
+      expect(reads.mock.calls.map(([dir]) => String(dir))).toEqual([path.join(cwd, root)]);
+      reads.mockRestore();
     }
   });
 
