@@ -11,6 +11,15 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
+  # Approved LanceDB compromised-CA remediation; remove after 2026-11-05T09:36:54.156Z.
+  - "@lancedb/lancedb@0.41.0"
+  - "@lancedb/lancedb-darwin-arm64@0.41.0"
+  - "@lancedb/lancedb-linux-arm64-gnu@0.41.0"
+  - "@lancedb/lancedb-linux-arm64-musl@0.41.0"
+  - "@lancedb/lancedb-linux-x64-gnu@0.41.0"
+  - "@lancedb/lancedb-linux-x64-musl@0.41.0"
+  - "@lancedb/lancedb-win32-arm64-msvc@0.41.0"
+  - "@lancedb/lancedb-win32-x64-msvc@0.41.0"
   - "@openai/codex"
   - "@openai/codex-*"
   # Solid itself is exempt from the release-age gate (Peter, 2026-10-11).
