@@ -117,6 +117,74 @@ describe("sandbox explain command", () => {
     },
   );
 
+  it("resolves the channel from a slash alias when the CLI registry has no channel plugins", async () => {
+    // `openclaw sandbox explain` loads plugins with the sandbox-backends scope,
+    // which activates an empty registry for stock docker/podman configs. Channel
+    // inference must not depend on runtime channel plugin registration.
+    const previousRegistry = captureActivePluginRegistrySnapshot();
+    try {
+      setActivePluginRegistry(createTestRegistry([]));
+      await withOpenClawTestState({ label: "sandbox-explain-channel" }, async (state) => {
+        const storePath = path.join(state.sessionsDir("builder"), "sessions.json");
+        mockCfg = config(
+          { mode: "off" },
+          { builder: { workspace: state.workspaceDir } },
+          {
+            session: { store: storePath, mainKey: "main" },
+            tools: { elevated: { allowFrom: { telegram: ["123456"] } } },
+          },
+        );
+
+        const result = await explain({ session: "telegram:slash:123456" });
+        expect(result.sessionKey).toBe("agent:builder:telegram:slash:123456");
+        expect(result.elevated.channel).toBe("telegram");
+        expect(result.elevated.allowedByConfig).toBe(true);
+        expect(result.elevated.allowFrom.global).toEqual(["123456"]);
+      });
+    } finally {
+      restoreActivePluginRegistrySnapshot(previousRegistry);
+    }
+  });
+
+  it("resolves stored delivery channel when the CLI registry has no channel plugins", async () => {
+    const previousRegistry = captureActivePluginRegistrySnapshot();
+    try {
+      setActivePluginRegistry(createTestRegistry([]));
+      await withOpenClawTestState({ label: "sandbox-explain-channel" }, async (state) => {
+        const storePath = path.join(state.sessionsDir("builder"), "sessions.json");
+        const sessionKey = "agent:builder:telegram:slash:123456";
+        await replaceSessionEntry(
+          { storePath, sessionKey },
+          {
+            sessionId: "explain-session",
+            updatedAt: 1,
+            delivery: {
+              kind: "external",
+              route: { channel: "telegram", target: { to: "123456" } },
+              context: { channel: "telegram", to: "123456" },
+              origin: { provider: "telegram" },
+            },
+          },
+        );
+        mockCfg = config(
+          { mode: "off" },
+          { builder: { workspace: state.workspaceDir } },
+          {
+            session: { store: storePath, mainKey: "main" },
+            tools: { elevated: { allowFrom: { telegram: ["123456"] } } },
+          },
+        );
+
+        const result = await explain({ session: sessionKey });
+        expect(result.elevated.channel).toBe("telegram");
+        expect(result.elevated.allowedByConfig).toBe(true);
+        expect(result.elevated.allowFrom.global).toEqual(["123456"]);
+      });
+    } finally {
+      restoreActivePluginRegistrySnapshot(previousRegistry);
+    }
+  });
+
   it.each([
     [
       "unknown",
