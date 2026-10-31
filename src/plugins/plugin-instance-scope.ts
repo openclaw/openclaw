@@ -143,7 +143,7 @@ export function resolvePluginInstanceOwner(record: PluginRecord, registry: Plugi
 
 /** Record and resource keys resolve the same owner through adoption and failed registration. */
 export function getPluginInstanceOwner(
-  instance: PluginInstanceResource,
+  instance: PluginRecord | PluginInstanceResource,
 ): PluginInstanceOwner | undefined {
   return pluginInstanceState.records.get(instance);
 }
