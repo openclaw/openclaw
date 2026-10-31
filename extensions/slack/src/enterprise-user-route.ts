@@ -9,6 +9,7 @@ export async function resolveSlackEnterpriseUserTeamId(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   userId: string;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<string | undefined> {
   const account = resolveSlackAccount(params);
   if (getSlackInstallationKind(account.accountId) !== "enterprise") {
@@ -21,7 +22,7 @@ export async function resolveSlackEnterpriseUserTeamId(params: {
   if (!token) {
     throw new Error("unsupported_enterprise_slack_delivery: missing Slack sending token");
   }
-  const client = createSlackLookupClient(token);
+  const client = createSlackLookupClient(token, undefined, params.assertDirectAdapterHandoff);
   const response = await client.users.info({ user: params.userId });
   const user = response.user;
   if (

@@ -370,6 +370,7 @@ export const slackPlugin = createChatChannelPlugin<ResolvedSlackAccount, SlackPr
             cfg: params.cfg,
             accountId: params.accountId,
             userId: apiTargetId,
+            assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
           });
           if (teamId) {
             parsed.teamId = teamId;
@@ -381,13 +382,17 @@ export const slackPlugin = createChatChannelPlugin<ResolvedSlackAccount, SlackPr
         let recipientSessionExact = isDm
           ? /^[UW][A-Z0-9]{8,}$/i.test(parsed.id)
           : /^C[A-Z0-9]{8,}$/i.test(parsed.id);
+        // D- and G-prefix conversation classification share one route-discovery
+        // lookup scope, including the transport-authority handoff.
+        const conversationMetadataLookup = {
+          cfg: params.cfg,
+          accountId: params.accountId,
+          channelId: apiTargetId,
+          teamId: parsed.teamId,
+          assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+        };
         if (!isDm && /^D/i.test(parsed.id)) {
-          const conversation = await resolveSlackConversationInfo({
-            cfg: params.cfg,
-            accountId: params.accountId,
-            channelId: apiTargetId,
-            teamId: parsed.teamId,
-          });
+          const conversation = await resolveSlackConversationInfo(conversationMetadataLookup);
           if (conversation.type !== "dm" || !conversation.user) {
             return null;
           }
@@ -399,12 +404,7 @@ export const slackPlugin = createChatChannelPlugin<ResolvedSlackAccount, SlackPr
           });
           recipientSessionExact = true;
         } else if (!isDm && /^G/i.test(parsed.id)) {
-          const channelType = await resolveSlackChannelType({
-            cfg: params.cfg,
-            accountId: params.accountId,
-            channelId: apiTargetId,
-            teamId: parsed.teamId,
-          });
+          const channelType = await resolveSlackChannelType(conversationMetadataLookup);
           if (channelType === "group") {
             peerKind = "group";
           }
