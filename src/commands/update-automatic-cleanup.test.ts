@@ -333,6 +333,25 @@ it("allows its current Gateway owner to mutate a recovery destination during ret
       .filter((move) => move.artifact?.classification !== "protected")
       .map((move) => [move.archivePath, fs.readFileSync(move.archivePath)]),
   );
+  const protectedOriginals = new Map(
+    fixture.target.completedMoves
+      .filter((move) => move.artifact?.classification === "protected")
+      .map((move) => [move.archivePath, fs.readFileSync(move.archivePath)]),
+  );
+  fs.writeFileSync(
+    fixture.store.configPath,
+    `${JSON.stringify({ agents: { defaults: { workspace: "/existing-workspace" } } })}\n`,
+  );
+  const configBefore = fs.readFileSync(fixture.store.configPath);
+  let sessionsBefore: Record<string, unknown>[];
+  let transcriptBefore: Record<string, unknown>[];
+  {
+    using database = new DatabaseSync(fixture.target.sqlitePath, { readOnly: true });
+    sessionsBefore = database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all();
+    transcriptBefore = database
+      .prepare("SELECT * FROM transcript_events ORDER BY session_id, seq")
+      .all();
+  }
   const { runId } = capturedRun(now, "succeeded");
   await closeOpenClawStateDatabaseAsync();
   const owner = acquireGatewayStateOwner({
@@ -368,7 +387,17 @@ it("allows its current Gateway owner to mutate a recovery destination during ret
     for (const file of originals.keys()) {
       expect(fs.existsSync(file), file).toBe(false);
     }
+    for (const [file, contents] of protectedOriginals) {
+      expect(fs.readFileSync(file), file).toEqual(contents);
+    }
+    expect(fs.readFileSync(fixture.store.configPath)).toEqual(configBefore);
     using database = new DatabaseSync(fixture.target.sqlitePath, { readOnly: true });
+    expect(database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all()).toEqual(
+      sessionsBefore,
+    );
+    expect(
+      database.prepare("SELECT * FROM transcript_events ORDER BY session_id, seq").all(),
+    ).toEqual(transcriptBefore);
     expect(database.prepare("SELECT value FROM live_gateway_write").get()).toEqual({
       value: "current owner",
     });
