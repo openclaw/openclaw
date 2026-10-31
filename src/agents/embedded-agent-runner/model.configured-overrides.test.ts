@@ -67,7 +67,18 @@ it.each(["provider", "model"] as const)(
         ...(scope === "provider" ? { api: "google-generative-ai" as const } : {}),
         models:
           scope === "model"
-            ? [{ id: model.id, name: model.name, api: "google-generative-ai" }]
+            ? [
+                {
+                  id: model.id,
+                  name: model.name,
+                  api: "google-generative-ai" as const,
+                  reasoning: false,
+                  input: ["text" as const],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1,
+                  maxTokens: 1,
+                },
+              ]
             : [],
       },
       manifestAlias: { provider: "google" },
