@@ -1,37 +1,4 @@
-/** Typed decision contract, version 1. */
-export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | readonly JsonValue[]
-  | { readonly [key: string]: JsonValue };
-
-export type DecisionEntry =
-  | string
-  | null
-  | readonly JsonValue[]
-  | { readonly [key: string]: JsonValue };
-
-export type DecisionQuestion =
-  | {
-      readonly type: "choice";
-      readonly instructions?: DecisionEntry;
-      readonly criteria: Readonly<Record<string, DecisionEntry>>;
-    }
-  | {
-      readonly type: "score";
-      readonly instructions?: DecisionEntry;
-      readonly criteria: readonly DecisionEntry[];
-    }
-  | {
-      readonly type: "boolean";
-      readonly instructions?: DecisionEntry;
-      readonly criteria?: {
-        readonly true?: DecisionEntry;
-        readonly false?: DecisionEntry;
-      } | null;
-    };
+import type { DecisionEntry, DecisionQuestion } from "./input-types.js";
 
 export type DecisionBatch = {
   readonly state: DecisionEntry;
