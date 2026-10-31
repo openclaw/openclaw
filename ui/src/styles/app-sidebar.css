@@ -62,8 +62,8 @@
   }
 }
 
-/* Each person pays only for what it shows: the menu holds the edge axis and the counts
-   sit against it, so a row without a running count gives that width to its name. */
+/* Each person pays only for what it shows: the dots end on the filter control's edge and
+   the counts sit against them, so a row without a running count gives that width to its name. */
 .shell--mobile-nav {
   .sidebar-online__list {
     grid-template-columns: minmax(0, 1fr);
@@ -71,7 +71,8 @@
 
   .sidebar-online__row {
     --sidebar-online-menu-size: 44px;
-    grid-template-columns: minmax(0, 1fr) var(--sidebar-online-menu-size);
+    --sidebar-online-menu-width: 37px;
+    grid-template-columns: minmax(0, 1fr) var(--sidebar-online-menu-width);
     padding-inline-end: 0;
   }
 
@@ -82,8 +83,10 @@
   }
 
   .sidebar-online__menu-trigger.oc-menu-trigger {
-    width: var(--sidebar-online-menu-size);
+    justify-content: flex-end;
+    width: var(--sidebar-online-menu-width);
     height: var(--sidebar-online-menu-size);
+    padding-inline-end: 7.5px;
   }
 
   .sidebar-online__person {
@@ -97,7 +100,7 @@
   }
 
   .sidebar-online__row:has(> .sidebar-online__menu) > .sidebar-online__person {
-    padding-inline-end: var(--sidebar-online-menu-size);
+    padding-inline-end: var(--sidebar-online-menu-width);
   }
 
   .sidebar-online__avatar,
