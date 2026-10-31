@@ -152,7 +152,9 @@ describe("sandbox explain command", () => {
       setActivePluginRegistry(createTestRegistry([]));
       await withOpenClawTestState({ label: "sandbox-explain-channel" }, async (state) => {
         const storePath = path.join(state.sessionsDir("builder"), "sessions.json");
-        const sessionKey = "agent:builder:telegram:slash:123456";
+        // The key carries no channel, so only the stored delivery context can
+        // supply telegram. This fails if the stored-delivery fallback is removed.
+        const sessionKey = "agent:builder:main";
         await replaceSessionEntry(
           { storePath, sessionKey },
           {
