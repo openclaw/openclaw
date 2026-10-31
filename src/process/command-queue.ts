@@ -27,7 +27,7 @@ import {
   type QueueEntry,
   type QueuePriority,
 } from "./command-queue.state.js";
-import type { CommandLaneSnapshot, CommandQueueEnqueueOptions } from "./command-queue.types.js";
+import type { CommandLaneSnapshot, CommandQueueAdmissionOptions } from "./command-queue.types.js";
 import { isExpectedRunCancellation } from "./expected-run-cancellation.js";
 import {
   GatewayDrainingError,
@@ -133,7 +133,7 @@ function retireIdleScopedCommandLane(state: LaneState): void {
   }
 }
 
-function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]): QueuePriority {
+function resolveQueuePriority(priority: CommandQueueAdmissionOptions["priority"]): QueuePriority {
   switch (priority) {
     case "foreground":
       return 1;
@@ -344,7 +344,7 @@ export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
 export function enqueueCommandInLane<T>(
   lane: string,
   task: () => Promise<T>,
-  opts?: CommandQueueEnqueueOptions,
+  opts?: CommandQueueAdmissionOptions,
 ): Promise<T> {
   if (opts?.abortSignal?.aborted) {
     return Promise.reject(toErrorObject(opts.abortSignal.reason, "Queued command aborted"));

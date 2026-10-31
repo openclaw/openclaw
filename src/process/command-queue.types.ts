@@ -31,7 +31,8 @@ export type CommandQueueTaskDeadline =
   | { kind: "bounded"; deadlineAtMs: number }
   | { kind: "unlimited" };
 
-export type CommandQueueEnqueueOptions = {
+/** Options accepted by the queue's admission boundary. */
+export type CommandQueueAdmissionOptions = {
   sessionTarget?: Readonly<{ agentId?: string; sessionKey?: string; sessionId: string }>;
   /** Enqueue-time provenance for diagnostics only; never used for admission. */
   taskIdentity?: Readonly<{
@@ -50,6 +51,15 @@ export type CommandQueueEnqueueOptions = {
   onQueued?: () => void;
   warnAfterMs?: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
+  priority?: "foreground" | "normal" | "background";
+};
+
+/**
+ * Options exposed to embedded-run enqueue callbacks. The timeout hooks remain
+ * part of this exported callback contract because the controller consumes them
+ * after admission; direct queue calls use CommandQueueAdmissionOptions.
+ */
+export type CommandQueueEnqueueOptions = CommandQueueAdmissionOptions & {
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
   /** Replaces idle timing with an owner deadline; undefined restores idle timing. */
@@ -60,8 +70,9 @@ export type CommandQueueEnqueueOptions = {
   taskTimeoutAbortGraceMs?: number;
   /** Ends the task after a caller-owned timeout cleanup grace has already elapsed. */
   taskTimeoutReleaseSignal?: AbortSignal;
-  priority?: "foreground" | "normal" | "background";
 };
+
+export type CommandQueueTaskOptions = CommandQueueEnqueueOptions;
 
 export type CommandQueueEnqueueFn = <T>(
   task: () => Promise<T>,

@@ -27,7 +27,6 @@ vi.mock("../logging/diagnostic-runtime.js", () => ({
 }));
 
 type CommandQueueModule = typeof import("./command-queue.js");
-
 let queue: CommandQueueModule;
 
 function park<T>(
