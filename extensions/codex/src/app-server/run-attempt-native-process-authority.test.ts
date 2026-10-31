@@ -7,6 +7,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
@@ -48,6 +49,7 @@ import {
   readCodexAppServerBinding,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
+import { withCodexSessionDescendantCancellation } from "./session-cancellation.js";
 import {
   appendSqliteHistoryMessage,
   attachSqliteSessionTarget,
@@ -70,13 +72,17 @@ type Terminal = {
   settled: Promise<unknown>;
 };
 
-function createSourceBoundHostCapabilities(signal: AbortSignal) {
+function createSourceBoundHostCapabilities(
+  signal: AbortSignal,
+  requestCustody = Object.freeze({}),
+) {
   const bindModelExecution = () => ({
     signal,
     assertCurrent: () => signal.throwIfAborted(),
     release: () => {},
   });
   return createCodexTestHostCapabilities({
+    captureRequestCustody: () => requestCustody,
     bindModelExecution,
     retainSourceAuthority: () => ({
       ...bindModelExecution(),
@@ -121,6 +127,7 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
         error.errors.length > 0 &&
         error.errors.every(isExpectedSettlementFailure)));
   const turns: string[] = [];
+  const nativeChildTurns = new Map<string, string>();
   let attemptSequence = 0;
   let socket: WebSocket | undefined;
   let registeredUrl: string | undefined;
@@ -207,14 +214,18 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
         return turnStartResult(turnId);
       }
       if (method === "turn/interrupt") {
-        expect(input.threadId).toBe(threadId);
-        expect(input.turnId).toBe(turns.at(-1));
+        const interruptedThreadId = String(input.threadId);
+        expect(input.turnId).toBe(
+          interruptedThreadId === threadId
+            ? turns.at(-1)
+            : nativeChildTurns.get(interruptedThreadId),
+        );
         // Codex acknowledges the interrupt before publishing its matching terminal.
         void nextTurn().then(() =>
           harness.notify({
             method: "turn/completed",
             params: {
-              threadId,
+              threadId: interruptedThreadId,
               turn: { id: String(input.turnId), status: "interrupted", items: [] },
             },
           }),
@@ -261,7 +272,8 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     });
     params.agentDir = agentDir;
     params.sessionTarget = { ...sessionScope, sessionId: params.sessionId };
-    params.hostCapabilities = createSourceBoundHostCapabilities(source.signal);
+    const requestCustody = Object.freeze({});
+    params.hostCapabilities = createSourceBoundHostCapabilities(source.signal, requestCustody);
     params.senderId = actor;
     params.onAgentEvent = (event) => {
       events.push(event);
@@ -299,6 +311,7 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     const commandThreadId = nativeChild?.threadId ?? threadId;
     const commandTurnId = nativeChild?.turnId ?? turnId;
     if (nativeChild) {
+      nativeChildTurns.set(nativeChild.threadId, nativeChild.turnId);
       await harness.notify({
         method: "thread/started",
         params: {
@@ -433,6 +446,26 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
         }
       },
       run,
+      stopDescendants: async () => {
+        const current = await captureSessionEntryCurrentCheckAsync(sessionScope);
+        try {
+          return await withCodexSessionDescendantCancellation(
+            bindingStore,
+            {
+              agentId: sessionScope.agentId,
+              sessionKey: sessionScope.sessionKey,
+              sessionId: params.sessionId,
+              lifecycleRevision: current.entry?.lifecycleRevision,
+              requesterTurnRunId: params.runId,
+              acceptsRequest: (custody) => custody === requestCustody,
+              assertCurrent: () => source.signal.throwIfAborted(),
+            },
+            (cancel) => cancel(),
+          );
+        } finally {
+          current.release();
+        }
+      },
       complete: async (answer?: string) => {
         if (answer) {
           await harness.notify({
@@ -632,6 +665,29 @@ describe("native background process source authority", () => {
       await guest.terminal.settled;
       expect(f.terminated).toEqual([]);
       expect(staff.terminal.alive).toBe(true);
+    } finally {
+      await f.dispose();
+    }
+  });
+
+  it("descendant Stop settles its admitted child process without canceling foreground or retained peer work", async () => {
+    const f = await fixture();
+    try {
+      const staff = await f.begin("maintainer");
+      await f.retainSecondConsumer();
+      await staff.complete();
+      const guest = await f.begin("guest", {
+        threadId: "guest-native-child",
+        turnId: "guest-native-child-turn",
+      });
+      expect((await guest.stopDescendants()).killed).toBe(1);
+      expect(guest.terminal.alive).toBe(false);
+      await guest.terminal.settled;
+      expect(guest.controller.signal.aborted).toBe(false);
+      expect(guest.sourceSignal.aborted).toBe(false);
+      expect(staff.terminal.alive).toBe(true);
+      expect(f.terminated).toEqual([]);
+      expect(readAttemptTerminal(await guest.complete()).aborted).toBe(false);
     } finally {
       await f.dispose();
     }

@@ -93,6 +93,11 @@ export type NativeModelToolInputRequest = Omit<NativeModelInputRequest, "targetT
 
 export type ParentOwner = {
   requestCustody?: NativeRequestCustody;
+  cancelChildProcesses?: (
+    threadId: string,
+    turnId: string,
+    assertCurrent: () => void,
+  ) => Promise<void>;
   requesterAgentId?: string;
   requesterSessionKey?: string;
   requesterTurnRunId?: string;
@@ -199,6 +204,8 @@ export type NativeTurnObservation = {
 
 export type ChildState = NativeSubagentAssignment & {
   requestCustody?: NativeRequestCustody;
+  // Interruption releases execution admission, but explicit Stop still owes process cleanup.
+  cancelProcesses?: ParentOwner["cancelChildProcesses"];
   requesterTurnRunId?: string;
   cancellationRequested?: true;
   terminalHandling?: Promise<void>;

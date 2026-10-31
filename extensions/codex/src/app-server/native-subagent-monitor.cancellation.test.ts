@@ -75,6 +75,9 @@ async function nativeChild(startChild = true, keepParent = false, attributed = t
   const interruptBudgets: number[] = [];
   const releaseChild = vi.fn();
   const claimDirectChild = vi.fn(() => releaseChild);
+  const cancelChildProcesses = vi.fn<NonNullable<ParentOwner["cancelChildProcesses"]>>(
+    async (_threadId, _turnId, assertCurrent) => assertCurrent(),
+  );
   const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
     recoveryPollDelaysMs: [],
     retainParentThread: (threadId) => protectCodexAppServerLiveThread(client.client, threadId),
@@ -95,6 +98,7 @@ async function nativeChild(startChild = true, keepParent = false, attributed = t
     requestCustody: attributed ? requestCustody : undefined,
     modelSource: createNativeModelSourceFixture(["test-model"]),
     claimDirectChild,
+    cancelChildProcesses,
   });
   parent.bindTurn("parent-turn");
   await notifyChildStarted(client);
@@ -127,6 +131,7 @@ async function nativeChild(startChild = true, keepParent = false, attributed = t
     parentOwnership,
     releaseChild,
     claimDirectChild,
+    cancelChildProcesses,
     interruptBudgets,
     interrupted: interrupted.promise,
   };
@@ -331,6 +336,9 @@ it("cancels the current generation after a retained Codex parent thread is reuse
   const f = await nativeChild();
   const currentRequestCustody: NonNullable<ParentOwner["requestCustody"]> = Object.freeze({});
   const currentReleaseChild = vi.fn();
+  const currentCleanup = vi.fn<NonNullable<ParentOwner["cancelChildProcesses"]>>(
+    async (_threadId, _turnId, assertCurrent) => assertCurrent(),
+  );
   const currentInterrupted = createDeferred<void>();
   const request = f.client.request.getMockImplementation();
   if (!request) {
@@ -354,6 +362,7 @@ it("cancels the current generation after a retained Codex parent thread is reuse
     historyOwner: { ...nativeHistoryOwner(), lifecycleRevision: "revision-2" },
     modelSource: createNativeModelSourceFixture(["test-model"]),
     claimDirectChild: () => currentReleaseChild,
+    cancelChildProcesses: currentCleanup,
   });
   currentParent.bindTurn("current-parent-turn");
   await notifyChildStarted(f.client, parentThreadId, "current-child");
@@ -405,6 +414,7 @@ it("cancels the current generation after a retained Codex parent thread is reuse
       ],
     });
     expect(currentReleaseChild).toHaveBeenCalledOnce();
+    expect(currentCleanup).toHaveBeenCalledOnce();
     expect(f.releaseChild).not.toHaveBeenCalled();
   } finally {
     f.client.close();

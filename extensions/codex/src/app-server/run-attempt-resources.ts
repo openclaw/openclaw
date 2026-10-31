@@ -321,6 +321,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           requesterSessionKey: params.sessionKey,
           requesterTurnRunId: params.runId,
           requestCustody,
+          nativeProcessAuthority,
           completionScope: params.agentHarnessCompletionScope,
           historyOwner,
           submissionStore,
