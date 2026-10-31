@@ -4,7 +4,10 @@ import { createRequire } from "node:module";
 import { connect, type AddressInfo, type Socket } from "node:net";
 import { pathToFileURL } from "node:url";
 import { MessageChannel, Worker } from "node:worker_threads";
-import * as voice from "openclaw/plugin-sdk/realtime-voice-provider";
+import {
+  rawDataToString,
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { closeOpenAILiveSocket } from "./realtime-quicksilver-protocol.js";
@@ -119,22 +122,16 @@ describe("GPT-Live socket worker managed proxy", () => {
       // so an unauthorized direct fallback would be observable.
       stubManagedProxyEnv(proxy.url, admit ? "gateway-only" : "proxy");
       const authority = `${admit ? "gpt-live.openai.test" : "127.0.0.1"}:${target.port}`;
-      const audio: Buffer[] = [];
       const errors: Error[] = [];
-      const { promise: firstAudio, resolve: echoed } = Promise.withResolvers<void>();
-      const format = new Proxy(voice.REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ, {});
+      const { promise: firstAudio, resolve: echoed } = Promise.withResolvers<Buffer>();
+      const format = new Proxy(REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ, {});
       let socket: OpenAIQuicksilverWorkerSocket | undefined;
       try {
         socket = OpenAIQuicksilverWorkerSocket.create(
           `ws://${authority}`,
           { maxPayload: admit ? 1024 * 1024 : 1024 },
           { model: "gpt-live-1", paced: true, audioFormat: format },
-          {
-            onAudio: (chunk) => {
-              audio.push(chunk);
-              echoed();
-            },
-          },
+          { onAudio: echoed },
         );
         socket.on("error", (error) => errors.push(error));
         const startup = await settleStartup(socket);
@@ -145,8 +142,7 @@ describe("GPT-Live socket worker managed proxy", () => {
         } else {
           socket.sendAudio(Buffer.alloc(960, 1));
           socket.startAudio();
-          await firstAudio;
-          expect(audio[0]).toEqual(Buffer.alloc(960, 1));
+          expect(await firstAudio).toEqual(Buffer.alloc(960, 1));
           const closed = once(socket, "close");
           socket.close();
           await closed;
@@ -190,7 +186,7 @@ async function startAudioEchoTarget() {
   server.on("connection", (socket) => {
     connections += 1;
     socket.on("message", (data) => {
-      const event = JSON.parse(voice.rawDataToString(data)) as { type: string; audio?: string };
+      const event = JSON.parse(rawDataToString(data)) as { type: string; audio?: string };
       if (event.type === "session.input_audio.append") {
         socket.send(JSON.stringify({ type: "session.output_audio.delta", delta: event.audio }));
       }
