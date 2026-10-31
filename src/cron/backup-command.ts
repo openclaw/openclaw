@@ -17,6 +17,17 @@ const BACKUP_COMMANDS = {
   offsite: ["openclaw", "backup", "create"],
 } as const;
 
+/**
+ * A managed backup copies a whole installation, so its runtime is sized by the data
+ * (hours for a multi-gigabyte archive), not by a request. Cron's generic ten-minute
+ * command deadline killed those runs, so the schedule declares this archive-sized
+ * budget in its own command payload instead. Both cron deadline layers already honor
+ * an explicit `payload.timeoutSeconds`, so no scheduler policy has to special-case
+ * backups. Re-running `backup enable` re-stamps this managed declaration, which is how
+ * a schedule written by an earlier release picks the budget up.
+ */
+export const SCHEDULED_BACKUP_TIMEOUT_SECONDS = 24 * 60 * 60;
+
 export type BackupScheduleSpec = { everyMs: number } & (
   | {
       mode: "git";
@@ -108,7 +119,7 @@ export function buildBackupScheduleJob(spec: BackupScheduleSpec): CronJobCreate 
     schedule: { kind: "every", everyMs: spec.everyMs },
     sessionTarget: "isolated",
     wakeMode: "now",
-    payload: { kind: "command", argv },
+    payload: { kind: "command", argv, timeoutSeconds: SCHEDULED_BACKUP_TIMEOUT_SECONDS },
     delivery: { mode: "none" },
   };
 }
