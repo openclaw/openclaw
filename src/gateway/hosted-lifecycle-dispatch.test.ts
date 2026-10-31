@@ -8,6 +8,8 @@ import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gatewa
 import { deleteCronSessionViaGateway } from "../cron/isolated-agent/session-cleanup.js";
 import { resolveQuestionOverGateway } from "../infra/question-gateway-resolver.js";
 import { listSpawnedSessionKeysWithResult } from "../plugin-sdk/session-visibility-internal.js";
+import { createOwnedInstance } from "../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
 import { withPluginRuntimeGatewayContextResolver as withinGateway } from "../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -208,6 +210,50 @@ describe("hosted lifecycle Gateway dispatch", () => {
     expect(mutate).not.toHaveBeenCalled();
     expect(socketCall).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "re-admits transferred plugin cleanup after its caller closes with owner current=%s",
+    async (ownerStaysCurrent) => {
+      const { instance, registry } = createOwnedInstance("cleanup-owner");
+      const invocation = new PluginInvocationScope(registry, [instance], { retained: true });
+      const effect = vi.fn();
+      const cleanupPlugin = instance.wrap(effect);
+      const staleCleanup = invocation.wrap(cleanupPlugin);
+      const invoke = invocation.run(() => AsyncLocalStorage.snapshot());
+      invocation.release();
+      const beforeCommit = createDeferredCore();
+      const resumeCommit = createDeferredCore();
+      const resolveContext = createGateway({});
+      let current = true;
+      deleteGatewaySession.mockImplementation(async ({ params, assertCurrent }) => {
+        beforeCommit.resolve();
+        await resumeCommit.promise;
+        assertCurrent?.();
+        cleanupPlugin();
+        return { ok: true, result: { ok: true, key: params.key, deleted: true, archived: [] } };
+      });
+      const result = invoke(() => cleanupChild(resolveContext, () => current));
+      try {
+        expect(() => staleCleanup()).toThrow("Plugin cleanup-owner consumer is closed");
+        await awaitGateBeforeSettlement(
+          beforeCommit.promise,
+          result,
+          "Transferred cleanup never reached its captured Gateway",
+        );
+        current = ownerStaysCurrent;
+        resumeCommit.resolve();
+        await expect(result).resolves.toBe(ownerStaysCurrent ? "deleted" : "failed");
+        expect(effect).toHaveBeenCalledTimes(ownerStaysCurrent ? 1 : 0);
+        expect(() => staleCleanup()).toThrow("Plugin cleanup-owner consumer is closed");
+        expect(socketCall).not.toHaveBeenCalled();
+      } finally {
+        resumeCommit.resolve();
+        invocation.release();
+        await Promise.allSettled([result]);
+        await instance.dispose();
+      }
+    },
+  );
 
   it("answers on the same Gateway and rejects replacement during source authorization", async () => {
     const answer = vi.fn();

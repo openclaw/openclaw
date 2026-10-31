@@ -123,7 +123,36 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 /* Show the hamburger toggle at the same breakpoint where the drawer takes over;
    the desktop rail toggle makes no sense once the sidebar is a drawer. */
 .shell--mobile-nav .topbar .topbar-nav-toggle {
-  display: inline-flex;
+  display: grid;
+}
+
+/* One drawer button for the topbar, mobile chat and pending-session headers. */
+.mobile-nav-toggle {
+  display: grid;
+  flex: 0 0 40px;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--bg-hover);
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.mobile-nav-toggle:hover {
+  color: var(--text);
+}
+
+.mobile-nav-toggle > svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.mobile-nav-toggle > .gateway-status-dot {
+  inset: 4px 4px auto auto;
 }
 
 .shell--mobile-nav .topbar {
@@ -139,10 +168,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 .mobile-connection-status {
   min-width: 0;
   height: 18px;
-}
-
-:is(.topbar-nav-toggle, .chat-pane__nav-toggle) .gateway-status-dot {
-  inset: 8px 8px auto auto;
 }
 
 .shell--mobile-nav .topbar-brand {

@@ -196,6 +196,11 @@ extracts speech text defensively:
 This keeps spoken playback focused on caller-facing text and avoids leaking
 planning text into audio.
 
+If response generation fails or times out before delivering speech, Voice Call
+attempts a short spoken apology through the configured TTS path and keeps the
+call open for another question. Error details are never spoken. An explicit
+`{"spoken":""}` response remains silent.
+
 ### Conversation startup behavior
 
 For outbound `conversation` calls, first-message handling is tied to live

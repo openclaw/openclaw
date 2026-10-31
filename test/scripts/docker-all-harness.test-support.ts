@@ -7,11 +7,16 @@ export function copyDockerSchedulerHarness(root: string) {
   const upgradeSurvivorDir = path.join(scriptsDir, "e2e/lib/upgrade-survivor");
   mkdirSync(libDir, { recursive: true });
   mkdirSync(upgradeSurvivorDir, { recursive: true });
+  copyFileSync(
+    "scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs",
+    path.join(upgradeSurvivorDir, "installed-recovery-cases.mjs"),
+  );
   copyFileSync("package.json", path.join(root, "package.json"));
   copyFileSync("scripts/test-docker-all.mjs", path.join(scriptsDir, "test-docker-all.mjs"));
   copyFileSync("scripts/test-docker-all.mts", path.join(scriptsDir, "test-docker-all.mts"));
   copyFileSync("scripts/lib/tsx-cli-shim.mjs", path.join(libDir, "tsx-cli-shim.mjs"));
   copyFileSync("scripts/tsx.mjs", path.join(scriptsDir, "tsx.mjs"));
+  copyFileSync("scripts/run-with-env.mts", path.join(scriptsDir, "run-with-env.mts"));
   copyFileSync(
     "scripts/prepublish-plugin-registry-artifact.mjs",
     path.join(scriptsDir, "prepublish-plugin-registry-artifact.mjs"),
@@ -20,7 +25,10 @@ export function copyDockerSchedulerHarness(root: string) {
   for (const fileName of [
     "docker-e2e-plan.mts",
     "docker-e2e-scenarios.mts",
+    "docker-e2e-container.sh",
+    "docker-e2e-resource-diagnostics.sh",
     "local-check-runtime.mts",
+    "numeric-options.mjs",
     "managed-child-process.mts",
     "managed-cleanup-handoff.mts",
     "vitest-resource-ownership.mts",

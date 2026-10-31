@@ -51,6 +51,43 @@ const {
   proxy = undefined;
 });
 
+it("rejects oversized UTF-8 requests without disconnecting or losing a smaller retry", async () => {
+  const { server, url } = await startWebSocketServer();
+  server.options.maxPayload = 8_192;
+  const connected = createDeferred();
+  const onClose = vi.fn();
+  const received: string[] = [];
+  server.on("connection", (socket) => {
+    socket.on("error", () => {}); // ws reports its payload rejection before closing with 1009.
+    sendChallenge(socket, { nonce: "payload-limit", ts: Date.now() });
+    socket.on("message", (raw) => {
+      const frame = JSON.parse(rawDataToString(raw)) as { id: string; method: string };
+      received.push(frame.method);
+      sendResponse(
+        socket,
+        frame.id,
+        frame.method === "connect"
+          ? { type: "hello-ok", policy: { maxPayload: 8_192, tickIntervalMs: 30_000 } }
+          : { ok: true },
+      );
+    });
+  });
+  const { client } = startClient({
+    url,
+    deviceIdentity: null,
+    onHelloOk: () => connected.resolve(),
+    onConnectError: connected.reject,
+    onClose,
+  });
+  await connected.promise;
+  await expect(client.request("chat.send", { message: "🦞".repeat(3_000) })).rejects.toThrow(
+    /payload limit.*\(\d+ > 8192 bytes\)/,
+  );
+  await expect(client.request("health")).resolves.toEqual({ ok: true });
+  expect(received).toEqual(["connect", "health"]);
+  expect(onClose).not.toHaveBeenCalled();
+});
+
 async function startProxy(targetPort: number) {
   const server = createHttpServer();
   let tunnels = 0;

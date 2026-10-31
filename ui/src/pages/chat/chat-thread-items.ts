@@ -74,7 +74,7 @@ export function messageMatchesSearchQuery(
   query: string,
   recovery?: ChatMessageRecovery,
 ): boolean {
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
   if (!normalizedQuery) {
     return true;
   }
@@ -88,10 +88,14 @@ export function messageMatchesSearchQuery(
     if (resolveCappedMessageId(message, role)) {
       return normalizeLowercaseStringOrEmpty(
         role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown,
-      ).includes(normalizedQuery);
+      )
+        .normalize("NFC")
+        .includes(normalizedQuery);
     }
   }
-  return normalizeLowercaseStringOrEmpty(extractTextCached(message)).includes(normalizedQuery);
+  return normalizeLowercaseStringOrEmpty(extractTextCached(message))
+    .normalize("NFC")
+    .includes(normalizedQuery);
 }
 
 type ChatMessagePreview = NonNullable<ReturnType<typeof readChatMessagePreview>>;

@@ -62,6 +62,26 @@ describe("PostgreSQL schema generation", () => {
     }
   });
 
+  it("preserves the preceding PostgreSQL v39 catalog when SQLite adds deletion indexes", async () => {
+    const { files, report } = await generatePostgresSchemas(root);
+    const directory = fixture("");
+    fs.writeFileSync(
+      path.join(directory, "src/state/openclaw-agent-schema.sql"),
+      readRoot("src/state/openclaw-agent-schema.sql").replace(
+        /CREATE INDEX IF NOT EXISTS idx_agent_(?:session_input_completions_session_key|conversation_deliveries_source_session)\b[^;]*;/gu,
+        "",
+      ),
+    );
+    const previous = await generatePostgresSchemas(directory);
+    expect(files["agent.postgres.sql"]).toBe(previous.files["agent.postgres.sql"]);
+    expect(files["agent-runtime.ts"]).toBe(previous.files["agent-runtime.ts"]);
+    expect(
+      report.catalogs.agent!.objects.filter(
+        (item) => item.category === "same-version SQLite index",
+      ),
+    ).toHaveLength(2);
+  });
+
   it("refuses unsupported agent objects and trigger bodies", async () => {
     const directory = fixture("");
     const file = path.join(directory, "src/state/openclaw-agent-schema.sql");

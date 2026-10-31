@@ -13,6 +13,7 @@ import { connectRestartClient, restartEnv } from "./gateway-restart.test-support
 import { startOpenAiResponsesModelServer } from "./helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
+import { withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
 it("upgrades a tombstoned root, resumes it, and completes a fresh Gateway chat turn", async ({
@@ -97,9 +98,20 @@ it("upgrades a tombstoned root, resumes it, and completes a fresh Gateway chat t
           "chat.history",
           { sessionKey: scope.sessionKey, limit: 100 },
         );
-      await vi.waitFor(async () => {
-        expect(JSON.stringify((await history()).messages), instance.logs()).toContain("RESUME_OK");
-      });
+      const waitFinal = (text: string) =>
+        withinTest(
+          vi.waitFor(
+            async () => {
+              const result = await history();
+              expect(JSON.stringify(result.messages), instance.logs()).toContain(text);
+              expect(result.sessionInfo.hasActiveRun).toBe(false);
+              return result;
+            },
+            { timeout: 30_000 },
+          ),
+          signal,
+        );
+      await waitFinal("RESUME_OK");
       expect(
         await client.request(
           "chat.send",
@@ -111,12 +123,8 @@ it("upgrades a tombstoned root, resumes it, and completes a fresh Gateway chat t
           { expectFinal: false },
         ),
       ).toMatchObject({ runId: expect.any(String) });
-      await vi.waitFor(async () => {
-        const result = await history();
-        expect(JSON.stringify(result.messages), instance.logs()).toContain("FRESH_OK");
-        expect(JSON.stringify(result.messages)).toContain("Keep this original transcript");
-        expect(result.sessionInfo.hasActiveRun).toBe(false);
-      });
+      const result = await waitFinal("FRESH_OK");
+      expect(JSON.stringify(result.messages)).toContain("Keep this original transcript");
       process.stdout.write(
         "[tombstone-upgrade-proof] real Gateway + agent + synthetic HTTP model: startup resume completed; fresh chat.send completed; original transcript preserved\n",
       );

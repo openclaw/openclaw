@@ -58,6 +58,7 @@ let targets = explicitTargets
   : [
       "extensions/workboard",
       "extensions/logbook/src/postgres-store.test.ts",
+      "extensions/clickclack/src/discussions/revoked-channel-store.postgres.test.ts",
       "extensions/imessage/src/monitor/recovery-cursor.postgres.test.ts",
       "extensions/matrix/src/matrix/account-state.postgres.test.ts",
       "extensions/team-reports/src/postgres-store.test.ts",
@@ -76,6 +77,7 @@ let targets = explicitTargets
       "src/config/sessions/session-turn-resident.postgres.test.ts",
       "src/config/sessions/session-turn-commit.postgres.test.ts",
       "src/infra/client-credential-migration.postgres.test.ts",
+      "src/infra/state-migrations.plugin-doctor-context.postgres.test.ts",
       "src/infra/gateway-lock-recovery.postgres.test.ts",
       "src/infra/exec-approvals-native.test.ts",
       "src/infra/client-credential-update.test.ts",

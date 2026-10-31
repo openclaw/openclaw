@@ -39,6 +39,8 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     37: ["session_transcript_cold_archive_chunks"],
     // PostgreSQL-only full-text token split; SQLite advances metadata only.
     38: [],
+    // The table definition changes; rollback retains it without rebuilding indexes/statistics.
+    39: ["transcript_events"],
   },
   state: {
     [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [

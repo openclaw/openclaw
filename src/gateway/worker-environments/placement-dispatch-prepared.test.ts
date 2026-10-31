@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,8 +7,12 @@ import vm from "node:vm";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createGitHubReadIdentity } from "../../agents/github-read-identity.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import {
+  setRuntimeConfigSnapshot,
+  clearRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
@@ -20,6 +25,7 @@ import { getSessionRepositoryWorkspaceStore } from "../../state/session-reposito
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import type { NodeWorkerPreparedWorkspaceResult } from "../../worker/node-workspace-prepared-protocol.js";
+import * as publicationAvailability from "../github-publication-availability.js";
 import {
   createNodeRegistryRuntime,
   updateNodeRunnerInventory,
@@ -31,6 +37,7 @@ import { sessionLog } from "../session-log.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import type { EnvironmentRecipe } from "./environment-recipe.js";
 import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
+import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
@@ -39,6 +46,10 @@ import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import type { WorkerProjectPreparationIdentity } from "./preparation-identity.schema.js";
 import { prepareRepositoryGitHubIdentity } from "./repository-github-identity.js";
+import {
+  createPreparedRepositoryNodeFixture,
+  createRepositoryPolicySource,
+} from "./repository-policy-node.test-support.js";
 import * as support from "./service.test-support.js";
 import {
   readSessionRepositoryArtifacts,
@@ -343,6 +354,143 @@ async function preparedHarness(
 
 describe("prepared worker dispatch", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it.each([false, true])(
+    "cold repository checkout uses dispatch admission and revokes its token (revoked=%s)",
+    async (revoked) => {
+      const repositoryStore = getSessionRepositoryWorkspaceStore();
+      const created = await repositoryStore.create({
+        agentId: REQUEST.agentId,
+        sessionKey: REQUEST.sessionKey,
+        url: "https://github.com/example/project.git",
+        assertCurrent() {},
+      });
+      const repository = await repositoryStore.bindBase({
+        workspaceId: created.workspaceId,
+        expectedRevision: created.revision,
+        baseCommit: "a".repeat(40),
+        baseManifestHash: "sha256:" + "b".repeat(64),
+        assertCurrent() {},
+      });
+      const { harness, request } = await preparedHarness({
+        emptyWorkspace: true,
+        repository: { ...repository, baseCommit: "a".repeat(40) },
+      });
+      const config: OpenClawConfig = {
+        tools: {
+          github: {
+            kind: "app-installation",
+            profileId: "ghp_00000000000000000000000000000001",
+            app: {
+              appId: 101,
+              installationId: 202,
+              accountId: 303,
+              repositories: [{ id: 404, fullName: "example/project" }],
+              permissions: { contents: "read" },
+              privateKey: generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
+                type: "pkcs8",
+                format: "pem",
+              }),
+              keyVersion: "synthetic-v1",
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(config);
+      vi.spyOn(publicationAvailability, "currentGitHubPublicationConfig").mockReturnValue(config);
+      const native = await vi.importActual<typeof import("./repository-github-identity.js")>(
+        "./repository-github-identity.js",
+      );
+      vi.mocked(prepareRepositoryGitHubIdentity).mockImplementation(
+        native.prepareRepositoryGitHubIdentity,
+      );
+      vi.stubEnv("FACTORY_AUTH_MODE", "github");
+      let current = true;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("dispatch revoked");
+        }
+      };
+      const readNativeCredential = vi.fn(async () => {
+        await Promise.resolve();
+        current = !revoked;
+        return undefined;
+      });
+      const permissions = { contents: "read", metadata: "read" };
+      const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+        const pathname = new URL(new Request(input).url).pathname;
+        if (init?.method === "DELETE") {
+          return new Response(null, { status: 204 });
+        }
+        const bodies: Record<string, unknown> = {
+          "/app": { id: 101, slug: "synthetic", permissions },
+          "/app/installations/202": {
+            id: 202,
+            app_id: 101,
+            account: { id: 303 },
+            suspended_at: null,
+            permissions,
+          },
+          "/users/synthetic%5Bbot%5D": {
+            id: 9001,
+            login: "synthetic[bot]",
+            type: "Bot",
+            avatar_url: null,
+          },
+          "/installation/repositories": {
+            total_count: 1,
+            repositories: [{ id: 404, full_name: "example/project" }],
+          },
+          "/app/installations/202/access_tokens": {
+            token: "synthetic-dispatch-token",
+            expires_at: new Date(Date.now() + 3600000).toISOString(),
+            permissions,
+          },
+        };
+        if (!bodies[pathname]) {
+          throw new Error("Unexpected fixture endpoint: " + pathname);
+        }
+        return Response.json(bodies[pathname]);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      const tunnel = vi.mocked(harness.environments.startTunnel);
+      const originalTunnel = tunnel.getMockImplementation()!;
+      const checkout = vi.fn(async () => {
+        throw new Error("Synthetic checkout unavailable");
+      });
+      tunnel.mockImplementation(async (tunnelRequest) => {
+        const handle = await originalTunnel(tunnelRequest);
+        handle.syncWorkspace = async (input) => {
+          input.authorize?.();
+          if (input.source.kind !== "repository") {
+            throw new Error("Wrong source");
+          }
+          expect(input.source.gitToken).toBe("synthetic-dispatch-token");
+          return checkout();
+        };
+        return handle;
+      });
+      try {
+        await expect(
+          harness.service.dispatch({ ...request, readNativeCredential }, undefined, assertCurrent),
+        ).rejects.toThrow(revoked ? "dispatch revoked" : "Synthetic checkout unavailable");
+        expect(readNativeCredential).toHaveBeenCalledOnce();
+        expect(checkout).toHaveBeenCalledTimes(revoked ? 0 : 1);
+        expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(
+          revoked ? 0 : 1,
+        );
+        expect(fetcher.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(
+          revoked ? 0 : 1,
+        );
+        expect(harness.log).not.toContain("activation");
+      } finally {
+        clearRuntimeConfigSnapshot();
+        vi.unstubAllEnvs();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+      }
+    },
+  );
 
   function expectUnusedReserve(
     fixture: Pick<Awaited<ReturnType<typeof preparedHarness>>, "harness" | "store" | "ready">,
@@ -673,40 +821,30 @@ describe("prepared worker dispatch", () => {
     expect(harness.environments.destroy).toHaveBeenCalledWith(ready.environmentId);
     expect(harness.environments.schedulePreparedRefill).not.toHaveBeenCalled();
   });
-  it.each([true, false])(
-    "claims a repository-only reserve with setup %s and overlays its accepted checkpoint on the bound source",
-    async (runSetupScript) => {
+  it.each([
+    ["allowed", true],
+    ["allowed", false],
+    ["forbidden", false],
+    ["revoked-after-checkpoint", false],
+    ["revoked-before-command", false],
+  ] as const)(
+    "checks %s repository policy at real prepared Git/checkpoint effects (setup=%s)",
+    async (scenario, runSetupScript) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", support.testState.root);
       onTestFinished(() => {
         vi.unstubAllEnvs();
       });
-      vi.mocked(prepareRepositoryGitHubIdentity).mockResolvedValue(
-        createGitHubReadIdentity({
-          token: undefined,
-          selection: { source: "anonymous" },
-          assertSelected: () => {},
-          readToken: async () => undefined,
-        }),
+      vi.mocked(prepareRepositoryGitHubIdentity).mockClear();
+      const nodeHome = path.join(support.testState.root, "policy-node");
+      const stagingRoot = path.join(
+        nodeHome,
+        ".openclaw-worker",
+        "prepared",
+        "policy-gateway",
+        "a".repeat(64),
+        "workspace",
       );
-      const stagingRoot = path.join(support.testState.root, "checkpoint-source");
-      await fs.mkdir(stagingRoot);
-      await fs.writeFile(path.join(stagingRoot, "tracked.txt"), "pinned source\n");
-      await requireWorkspaceResultGit(stagingRoot, ["init", "--quiet"]);
-      await requireWorkspaceResultGit(stagingRoot, ["add", "."]);
-      await requireWorkspaceResultGit(stagingRoot, [
-        "-c",
-        "user.name=Dispatch Fixture",
-        "-c",
-        "user.email=dispatch@example.invalid",
-        "-c",
-        "commit.gpgsign=false",
-        "commit",
-        "--quiet",
-        "-m",
-        "source",
-      ]);
-      const baseCommit = await requireWorkspaceResultGit(stagingRoot, ["rev-parse", "HEAD"]);
-      const base = await captureWorkspaceManifest({ root: stagingRoot, baseCommit });
+      const { baseCommit, base } = await createRepositoryPolicySource(stagingRoot);
       await fs.writeFile(path.join(stagingRoot, "session.txt"), "accepted session change\n");
       const current = await captureWorkspaceManifest({ root: stagingRoot, baseCommit });
       const repositoryStore = getSessionRepositoryWorkspaceStore();
@@ -742,7 +880,7 @@ describe("prepared worker dispatch", () => {
       }
       const accepted = (await repositoryStore.get(created.workspaceId))!;
       const boundWorkspace = {
-        workspaceDir: "/worker/prepared/project",
+        workspaceDir: stagingRoot,
         sourceManifestRef: base.manifestRef,
         preparedManifestRef: base.manifestRef,
       };
@@ -751,53 +889,123 @@ describe("prepared worker dispatch", () => {
         boundWorkspace,
         ...(runSetupScript ? { recipe: lifecycleRecipe } : {}),
       });
+      await fs.rm(path.join(stagingRoot, "session.txt"));
+      await requireWorkspaceResultGit(stagingRoot, ["checkout", "--detach", baseCommit]);
+      await requireWorkspaceResultGit(stagingRoot, ["remote", "add", "origin", accepted.url]);
+      const nodeIdentity = {
+        gatewayNamespace: "policy-gateway",
+        environmentId: ready.environmentId,
+        preparationKey: PREPARATION_KEY,
+        cacheKey: "a".repeat(64),
+      };
+      const { runtime, workspaceTransfer, gatewayUrl } = await createPreparedRepositoryNodeFixture({
+        nodeHome,
+        workspaceDir: stagingRoot,
+        base,
+        store,
+        identity: nodeIdentity,
+      });
+      let policyCurrent = scenario !== "forbidden";
+      const assertRepositoryCurrent = () => {
+        if (!policyCurrent) {
+          throw new Error("repository policy revoked");
+        }
+      };
+      const bind = vi.mocked(harness.environments.bindPreparedWorkspace);
+      const ordinaryBind = bind.getMockImplementation()!;
+      bind.mockImplementation(async (input) => {
+        assertRepositoryCurrent();
+        const prepared = await ordinaryBind(input);
+        await runtime.prepare({
+          action: "bind",
+          ...nodeIdentity,
+          sessionId: input.sessionId,
+          sessionKey: input.sessionKey,
+          ownerEpoch: input.ownerEpoch,
+        });
+        assertRepositoryCurrent();
+        return {
+          ...prepared,
+          assertCurrent: () => {
+            input.assertCurrent();
+            assertRepositoryCurrent();
+          },
+        };
+      });
+      let effects = 0;
       const startTunnel = vi.mocked(harness.environments.startTunnel);
       const ordinaryTunnel = startTunnel.getMockImplementation()!;
       startTunnel.mockImplementation(async (params) => {
         const tunnel = await ordinaryTunnel(params);
-        vi.spyOn(tunnel, "syncWorkspace").mockImplementation(async ({ source }) => {
+        vi.spyOn(tunnel, "syncWorkspace").mockImplementation(async (sync) => {
           harness.log.push("sync");
-          expect(source).toMatchObject({
-            kind: "repository",
-            url: accepted.url,
-            ref: accepted.requestedRef,
-            branch: accepted.branch,
-            baseCommit,
-            runSetupScript: false,
-            prepared: { ...boundWorkspace, baseCommit },
-          });
-          if (source.kind !== "repository" || !source.checkpoint) {
-            throw new Error("Prepared dispatch lost its accepted repository checkpoint");
+          if (sync.source.kind !== "repository" || !sync.source.checkpoint) {
+            throw new Error("Missing accepted checkpoint");
           }
           expect(
-            await fs.readFile(path.join(source.checkpoint.stagingRoot, "session.txt"), "utf8"),
+            await fs.readFile(path.join(sync.source.checkpoint.stagingRoot, "session.txt"), "utf8"),
           ).toBe("accepted session change\n");
-          return {
-            mode: "repository",
-            remoteWorkspaceDir: boundWorkspace.workspaceDir,
-            baseCommit,
-            baseManifestRef: base.manifestRef,
-            manifestRef: current.manifestRef,
-          };
+          if (scenario === "revoked-after-checkpoint") {
+            policyCurrent = false;
+          }
+          const actions = createNodeWorkerWorkspaceActions({
+            environmentId: ready.environmentId,
+            ownerEpoch: params.ownerEpoch,
+            sessionId: request.sessionId,
+            ownerSignal: new AbortController().signal,
+            isOwnerCurrent: () => true,
+            workspaceTransfer,
+            runWorkspaceCommand: async (command) => {
+              if (scenario === "revoked-before-command" && effects === 0) {
+                await Promise.resolve();
+                policyCurrent = false;
+              }
+              command.assertCurrent?.();
+              effects++;
+              return await runtime.exec(
+                {
+                  ...nodeIdentity,
+                  sessionId: request.sessionId,
+                  sessionKey: command.sessionKey,
+                  generation: params.ownerEpoch,
+                  argv: [...command.argv],
+                  input: command.input,
+                  timeoutMs: command.timeoutMs,
+                  resetWorkspace: command.resetWorkspace,
+                  seed: command.seed,
+                  transfer: command.transfer,
+                },
+                undefined,
+                { url: gatewayUrl },
+              );
+            },
+          });
+          return await actions.syncWorkspace(sync);
         });
         return tunnel;
       });
-
-      const active = await harness.service.dispatch({ ...request, runSetupScript });
-
-      expect(harness.environments.prepareProjectIntent).toHaveBeenCalledWith(
-        request.profileId,
-        expect.objectContaining({
-          repository: {
-            agentId: request.agentId,
-            url: accepted.url,
-            ref: accepted.requestedRef,
-            baseCommit,
-          },
-          runSetupScript,
-          setupAuthorized: true,
-        }),
+      const dispatch = harness.service.dispatch({ ...request, runSetupScript });
+      if (scenario !== "allowed") {
+        await expect(dispatch).rejects.toThrow("repository policy revoked");
+        expect(effects).toBe(0);
+        expect(prepareRepositoryGitHubIdentity).not.toHaveBeenCalled();
+        expect(await requireWorkspaceResultGit(stagingRoot, ["branch", "--show-current"])).toBe("");
+        await expect(
+          fs.readFile(path.join(stagingRoot, "session.txt"), "utf8"),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        expect(await repositoryStore.get(accepted.workspaceId)).toEqual(accepted);
+        return;
+      }
+      const active = await dispatch;
+      expect(effects).toBeGreaterThan(0);
+      expect(prepareRepositoryGitHubIdentity).not.toHaveBeenCalled();
+      expect(await requireWorkspaceResultGit(stagingRoot, ["branch", "--show-current"])).toBe(
+        accepted.branch,
       );
+      expect(await fs.readFile(path.join(stagingRoot, "session.txt"), "utf8")).toBe(
+        "accepted session change\n",
+      );
+
       expect(active).toMatchObject({
         state: "active",
         environmentId: ready.environmentId,

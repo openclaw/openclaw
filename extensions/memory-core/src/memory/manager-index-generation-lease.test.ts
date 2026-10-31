@@ -5,6 +5,51 @@ import {
 } from "./manager-index-generation-lease.js";
 
 describe("memory index generation lease", () => {
+  it("holds successor publication behind a predecessor module's admitted reader", async () => {
+    const key = "/memory-test/module-overlap.sqlite";
+    const release = await acquireMemoryIndexReadGeneration(key);
+    vi.resetModules();
+    const successor = await import("./manager-index-generation-lease.js");
+    expect(successor.withMemoryIndexGeneration).not.toBe(withMemoryIndexGeneration);
+    const publish = vi.fn(async () => {});
+    const pending = successor.withMemoryIndexGeneration(key, "write", publish);
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(publish).not.toHaveBeenCalled();
+    } finally {
+      await release();
+      await pending;
+    }
+    expect(publish).toHaveBeenCalledOnce();
+  });
+
+  it("shares reindex exclusion across overlapping module generations", async () => {
+    const predecessor = await import("./manager-reindex-lock.js");
+    const lock = await predecessor.waitForMemoryReindexLock("/memory-test/module-reindex.sqlite");
+    vi.resetModules();
+    const successor = await import("./manager-reindex-lock.js");
+    expect(successor.waitForMemoryReindexLock).not.toBe(predecessor.waitForMemoryReindexLock);
+    const entered = vi.fn();
+    const pending = successor
+      .waitForMemoryReindexLock("/memory-test/module-reindex.sqlite", {
+        waitForActive: true,
+      })
+      .then((next) => {
+        entered();
+        return next;
+      });
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(entered).not.toHaveBeenCalled();
+    } finally {
+      await lock.release();
+      await (await pending).release();
+    }
+    expect(entered).toHaveBeenCalledOnce();
+  });
+
   it("rejects a native signal that was aborted before admission", async () => {
     const controller = new AbortController();
     const reason = new Error("cancel before admission");

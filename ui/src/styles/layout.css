@@ -361,17 +361,10 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
    (settings-sidebar.ts). Below the drawer breakpoint the regular mobile
    shell stays in charge and the settings sidebar rides inside the drawer. */
 
-/* stylelint-disable-next-line no-duplicate-selectors -- settings navigation variable belongs with the takeover rules below */
-.shell {
-  --shell-settings-nav-width: 288px;
-}
-
 .shell--settings:not(.shell--mobile-nav) {
   --settings-content-block-start-padding: 44px;
   --settings-content-inline-padding: clamp(28px, 5vw, 72px);
-  grid-template-columns: var(--shell-settings-nav-width) minmax(0, 1fr);
   grid-template-rows: 0 auto minmax(0, 1fr);
-  --shell-nav-width: var(--shell-settings-nav-width);
 }
 
 .shell--settings:not(.shell--mobile-nav) .content {
@@ -650,12 +643,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.topbar .nav-collapse-toggle__icon,
-.topbar .nav-collapse-toggle__icon svg {
-  width: 20px;
-  height: 20px;
 }
 
 .topbar-search {
@@ -3347,8 +3334,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-identity-anchor,
-.topbar-nav-toggle,
-.chat-pane__nav-toggle {
+.mobile-nav-toggle {
   position: relative;
 }
 
@@ -3471,6 +3457,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 .settings-sidebar__subitem:focus-visible,
 .topbar-search:focus-visible,
 .topbar-icon-btn:focus-visible,
+.mobile-nav-toggle:focus-visible,
 .sidebar-brand__icon:focus-visible,
 .sidebar-online__retry:focus-visible,
 .sidebar-issues-button:focus-visible,

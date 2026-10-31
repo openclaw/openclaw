@@ -7,7 +7,7 @@ import {
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isMissingPathError } from "../infra/errors.js";
-import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
+import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { hashConfigIncludeRaw } from "./includes.js";
@@ -15,18 +15,11 @@ import { stampConfigWriteMetadata } from "./io.meta.js";
 import { hashConfigRaw, parseConfigJson5 } from "./io.read-helpers.js";
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type { ConfigWriteOptions } from "./io.types.js";
+import type { ConfigFileWritePathSnapshot } from "./io.write-path.types.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { resolveStateDir } from "./paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { createConfigWriteAuthorityGuard } from "./write-authority.js";
-
-export type ConfigFileWritePathSnapshot = {
-  targetPath: string;
-  entries: Array<
-    | { path: string; kind: "missing-directory" }
-    | { path: string; kind: "existing"; dev: string; ino: string; link?: string }
-  >;
-};
 
 /** The captured path facts survive an update's delegated finalizer; they grant no write authority. */
 export function assertConfigFileWritePathSnapshot(
@@ -507,11 +500,8 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
         filePath: params.configPath,
         content: previousRaw,
         dirMode: params.stateDirectory
-          ? (readExistingStateRootMode(
-              path.dirname(params.configPath),
-              params.stateDirectory.path,
-              params.fsModule,
-            ) ?? 0o700)
+          ? (stateRootDirectoryMode(path.dirname(params.configPath), params.stateDirectory.path) ??
+            0o700)
           : 0o700,
         mode: 0o600,
         copyFallbackOnPermissionError: true,

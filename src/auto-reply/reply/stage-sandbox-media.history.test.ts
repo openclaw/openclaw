@@ -7,6 +7,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import { hydratePromptMediaMessages } from "../../agents/embedded-agent-runner/run/images.js";
 import { createHostSandboxFsBridge } from "../../agents/test-helpers/host-sandbox-fs-bridge.js";
 import { sanitizeChatHistoryMessages } from "../../gateway/chat-display-projection.sanitize.js";
+import { STAGED_INPUT_MAX_BYTES } from "../../media/staged-inputs.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.message.js";
 import {
   createSandboxMediaContexts,
@@ -164,3 +165,73 @@ it.each(["present", "missing", "outside-root"] as const)(
       ]);
     }),
 );
+
+it.each(["copied", "missing"] as const)(
+  "requires an accepted ZIP at the turn barrier: %s",
+  (outcome) =>
+    withHome("managed-zip-stage-", async (home) => {
+      const fixture = await mediaFixture(home, true);
+      const source = path.join(path.dirname(fixture.source), "input.zip");
+      const bytes = Buffer.from("504b05060000000000000000000000000000000000000000", "hex");
+      await fs.writeFile(source, bytes);
+      fixture.ctx.media = [
+        { path: source, url: "media://inbound/input.zip", contentType: "application/zip" },
+      ];
+      if (outcome === "missing") {
+        await fs.rm(source);
+        await expect(stageSandboxMedia(fixture)).rejects.toThrow("Failed to prepare attachments");
+      } else {
+        const result = await stageSandboxMedia(fixture);
+        expect(await fs.readFile(path.resolve(fixture.root, result.staged.get(0)!))).toEqual(bytes);
+        expect(fixture.ctx.media[0]?.url).toBe("media://inbound/input.zip");
+      }
+    }),
+);
+
+it.each(["pdf", "zip", "aborted"] as const)(
+  "handles workspace preparation failure for managed %s",
+  (kind) =>
+    withHome("managed-stage-failure-", async (home) => {
+      const fixture = await mediaFixture(home, true);
+      const controller = new AbortController();
+      const reason = new Error("staging stopped");
+      fixture.ctx.media = [
+        {
+          path: fixture.source,
+          url: `media://inbound/input.${kind === "aborted" ? "pdf" : kind}`,
+          contentType: kind === "zip" ? "application/zip" : "application/pdf",
+        },
+      ];
+      workspace.mockImplementationOnce(async () => {
+        if (kind === "aborted") {
+          controller.abort(reason);
+          throw reason;
+        }
+        throw kind === "zip"
+          ? new DOMException("Aborted", "AbortError")
+          : new Error("synthetic workspace unavailable");
+      });
+      const pending = stageSandboxMedia({ ...fixture, abortSignal: controller.signal });
+      await expect(pending).rejects.toThrow(
+        kind === "aborted"
+          ? reason.message
+          : kind === "zip"
+            ? "Attachment workspace preparation was interrupted"
+            : "synthetic workspace unavailable",
+      );
+    }),
+);
+
+it("keeps the managed PDF host path when the workspace copy exceeds the staging cap", () =>
+  withHome("managed-pdf-fallback-", async (home) => {
+    const fixture = await mediaFixture(home, true);
+    const size = STAGED_INPUT_MAX_BYTES + 1;
+    await fs.writeFile(fixture.source, "%PDF-1.4\n");
+    await fs.truncate(fixture.source, size);
+    fixture.ctx.media = [
+      { path: fixture.source, url: "media://inbound/input.pdf", contentType: "application/pdf" },
+    ];
+    expect((await stageSandboxMedia(fixture)).staged.size).toBe(0);
+    expect(fixture.ctx.media[0]?.path).toBe(fixture.source);
+    expect((await fs.stat(fixture.source)).size).toBe(size);
+  }));

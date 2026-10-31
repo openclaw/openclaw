@@ -4,6 +4,7 @@ import path from "node:path";
 import { setEnvironmentData, threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { SqliteCleanCloseSealRefusal } from "./sqlite-clean-close-seal.js";
+import { changedAdmissionEntries } from "./sqlite-database-admission-delta.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
   isSoleDatabaseFileDescriptor,
@@ -350,19 +351,6 @@ export function createSqliteDatabaseAdmissionCursor(): SqliteDatabaseAdmissionCu
   return { revision: -1, records: new WeakMap() };
 }
 
-function changedAdmissionEntries<Key, Value>(
-  current: Map<Key, Value>,
-  previous: Map<Key, Value>,
-): Map<Key, Value> {
-  const changed = new Map<Key, Value>();
-  for (const [key, value] of current) {
-    if (previous.get(key) !== value) {
-      changed.set(key, value);
-    }
-  }
-  return changed;
-}
-
 export class SqliteDatabaseAdmissionRegistry {
   readonly records = new Map<string, Admission>();
   private exchangeCursor = createSqliteDatabaseAdmissionCursor();
@@ -454,7 +442,16 @@ export class SqliteDatabaseAdmissionRegistry {
   }
 
   forLocation(location: string): Admission | undefined {
-    const identity = this.locations.get(normalizeDatabasePath(path.resolve(location)));
+    return this.forPathname(normalizeDatabasePath(path.resolve(location)));
+  }
+
+  prepareLocation(location: string): () => Admission | undefined {
+    const pathname = normalizeDatabasePath(path.resolve(location));
+    return () => this.forPathname(pathname);
+  }
+
+  private forPathname(pathname: string): Admission | undefined {
+    const identity = this.locations.get(pathname);
     const record = identity === undefined ? undefined : this.records.get(identity);
     return record && !isSqliteDatabaseAdmissionRetired(record) ? record : undefined;
   }

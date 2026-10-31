@@ -22,7 +22,7 @@ import { SettingsSegmented, SettingsPage } from "../../components/solid/settings
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isJson5Warm, warmJson5 } from "../../lib/json5-runtime.ts";
-import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
 import { AppearanceSection } from "./view-appearance.tsx";
@@ -90,6 +90,48 @@ export function Config(props: ConfigProps) {
   const schemaAnalysis = createMemo(() =>
     getConfigSchemaAnalysis(schema(), includedSections(), excludedSections()),
   );
+  const activeSection = createMemo(() => props.activeSection);
+  const subsection = createMemo(() => props.activeSubsection);
+  const uiHints = createMemo(() => props.uiHints);
+  const editorInputs = createMemo(() => {
+    const scoped = schemaAnalysis().schema;
+    const channelSchema = activeSection() === "channels" ? scoped?.properties?.channels : undefined;
+    if (channelSchema) {
+      getLocale();
+    }
+    const channelGroups = channelSchema ? getChannelConfigGroups(channelSchema, uiHints()) : [];
+    const channelGroup = channelGroups.find(({ key }) => key === subsection()) ?? channelGroups[0];
+    const formSchema =
+      channelSchema && channelGroup
+        ? {
+            ...scoped,
+            properties: {
+              ...scoped?.properties,
+              channels: {
+                ...channelSchema,
+                properties: Object.fromEntries(
+                  Object.entries(channelSchema.properties ?? {}).filter(([key]) =>
+                    channelGroup.keys.includes(key),
+                  ),
+                ),
+                required: channelSchema.required?.filter((key) => channelGroup.keys.includes(key)),
+                additionalProperties: false,
+              },
+            },
+          }
+        : scoped;
+    const setupSchema = formSchema?.properties?.wizard;
+    const editorSchemaBase = setupSchema
+      ? {
+          ...formSchema,
+          properties: Object.fromEntries(
+            Object.entries(formSchema.properties ?? {}).filter(([key]) => key !== "wizard"),
+          ),
+        }
+      : formSchema;
+    const editorSchema = editorSchemaBase && omitCuratedOwnedConfigLeaves(editorSchemaBase);
+    return { channelGroups, channelGroup, editorSchema, setupSchema };
+  });
   const state = createMemo(() => {
     const viewState = view();
     const showModeToggle = props.showModeToggle ?? false;
@@ -148,41 +190,6 @@ export function Config(props: ConfigProps) {
     if (extras.length) {
       categories.push({ id: "other", label: t("configView.categories.other"), sections: extras });
     }
-    const channelSchema = props.activeSection === "channels" ? schemaProps.channels : undefined;
-    const channelGroups = channelSchema ? getChannelConfigGroups(channelSchema, props.uiHints) : [];
-    const channelGroup =
-      channelGroups.find((group) => group.key === props.activeSubsection) ?? channelGroups[0];
-    const formSchema =
-      channelSchema && channelGroup
-        ? {
-            ...analysis.schema,
-            properties: {
-              ...schemaProps,
-              channels: {
-                ...channelSchema,
-                properties: Object.fromEntries(
-                  Object.entries(channelSchema.properties ?? {}).filter(([key]) =>
-                    channelGroup.keys.includes(key),
-                  ),
-                ),
-                required: channelSchema.required?.filter((key) => channelGroup.keys.includes(key)),
-                additionalProperties: false,
-              },
-            },
-          }
-        : analysis.schema;
-    const setupSchema = formSchema?.properties?.wizard;
-    const editorSchemaBase = setupSchema
-      ? {
-          ...formSchema,
-          properties: Object.fromEntries(
-            Object.entries(formSchema.properties ?? {}).filter(([key]) => key !== "wizard"),
-          ),
-        }
-      : formSchema;
-    const editorSchema = editorSchemaBase
-      ? omitCuratedOwnedConfigLeaves(editorSchemaBase)
-      : editorSchemaBase;
     const topTabs: Array<{ key: string | null; label: string }> = [
       ...((props.showRootTab ?? true)
         ? [{ key: null, label: props.navRootLabel ?? t("nav.settings") }]
@@ -208,9 +215,6 @@ export function Config(props: ConfigProps) {
     const configBusy = props.loading || props.saving || props.applying || props.updating;
     const formBusy = configBusy || props.schemaLoading;
     const mutationAllowed = props.mutationAllowed !== false;
-    const showSetup = Boolean(
-      setupSchema && (!props.activeSection || props.activeSection === "wizard"),
-    );
     const showSectionTabs = props.settingsLayout !== "accordion" && topTabs.length > 1;
     const showToolbar = showModeToggle || showSectionTabs;
     const showValidityWarning = props.valid === false && !viewState.validityDismissed;
@@ -225,11 +229,10 @@ export function Config(props: ConfigProps) {
       rawDraftPending,
       formMode,
       categories,
-      channelGroups,
-      channelGroup,
-      editorSchema,
-      setupSchema,
-      showSetup,
+      ...editorInputs(),
+      showSetup: Boolean(
+        editorInputs().setupSchema && (!props.activeSection || props.activeSection === "wizard"),
+      ),
       topTabs,
       hasRawChanges,
       rawDiff,
@@ -243,7 +246,7 @@ export function Config(props: ConfigProps) {
         showToolbar ||
         props.settingsLayout === "accordion" ||
         showValidityWarning ||
-        Boolean(channelGroup),
+        Boolean(editorInputs().channelGroup),
     };
   });
   const schemaRead = createMemo(() => ({ completion: props.schemaRead }), {

@@ -620,6 +620,39 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     imports.push(namedImport([...names], targetFile, filePath, imports.length));
   }
 
+  const broadcastPath = "scripts/perf/transcript-broadcast-measure.ts";
+  const broadcastSource = fs.readFileSync(broadcastPath, "utf8");
+  for (const [, bindings, specifier] of broadcastSource.matchAll(
+    /(?:\\n|\b)import\s*\{([^}]+)\}\s*from\s*\$\{JSON\.stringify\(new URL\("([^"\r\n]+)", import\.meta\.url\)\.href\)\}/gu,
+  )) {
+    addNamedImport(
+      importedNames(`import {${bindings}} from "${specifier}"`, specifier),
+      path.resolve(path.dirname(broadcastPath), specifier),
+    );
+  }
+
+  const telemetryTestPath = "test/scripts/team-shape-stress.test.ts";
+  const telemetryTestSource = fs.readFileSync(telemetryTestPath, "utf8");
+  const telemetryUrls = new Map(
+    [
+      ...telemetryTestSource.matchAll(
+        /^[ \t]*const\s+([A-Za-z_$][\w$]*)\s*=\s*new URL\(\s*["']([^"'\r\n]+)["']\s*,\s*import\.meta\.url\s*,?\s*\)/gmu,
+      ),
+    ].map(([, binding, specifier]) => [binding, specifier]),
+  );
+  // The native child consumes the helper through an interpolated file URL.
+  for (const [, bindings, binding] of telemetryTestSource.matchAll(
+    /^[ \t]*const\s*\{([^}]+)\}\s*=\s*await\s+import\(\s*\$\{JSON\.stringify\(([A-Za-z_$][\w$]*)\.href\)\}\s*\)/gmu,
+  )) {
+    const specifier = telemetryUrls.get(binding);
+    if (specifier) {
+      addNamedImport(
+        importedNames(`import {${bindings}} from "${specifier}"`, specifier),
+        path.resolve(path.dirname(telemetryTestPath), specifier),
+      );
+    }
+  }
+
   for (const [targetFile, names] of prToolingNamedImportEdges(
     fs.readFileSync("scripts/pr", "utf8"),
   )) {

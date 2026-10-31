@@ -141,6 +141,7 @@ beforeEach(() => {
     observationConfig: {},
   };
   hoisted.acquireRuntimeLeaseMock.mockResolvedValue({
+    run: <T>(run: () => T): T => run(),
     snapshot: preparedModelRuntime,
     [Symbol.asyncDispose]: vi.fn(async () => {}),
   });

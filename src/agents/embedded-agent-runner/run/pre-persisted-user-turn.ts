@@ -412,7 +412,7 @@ export async function preparePersistedCurrentUserTurn(params: {
     );
     const current = currentId ? sessionManager.getEntry(currentId) : undefined;
     // A retry can retain the keyed current user with a newer prompt projection.
-    // The fallback owner may continue its timed-out request; a historical abort alone cannot.
+    // The fallback owner may continue its timed-out or output-limited request, not a historical retry.
     if (
       current?.type === "message" &&
       ((current.message.role === "user" &&
@@ -420,7 +420,8 @@ export async function preparePersistedCurrentUserTurn(params: {
         (current.message.role === "assistant" &&
           Reflect.get(current.message, "__openclaw")?.runId === runId &&
           (current.message.stopReason === "error" ||
-            (params.fallbackReason === "timeout" && current.message.stopReason === "aborted"))))
+            (params.fallbackReason === "timeout" && current.message.stopReason === "aborted") ||
+            (params.fallbackReason === "format" && current.message.stopReason === "length"))))
     ) {
       return undefined;
     }

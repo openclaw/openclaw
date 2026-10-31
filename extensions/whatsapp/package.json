@@ -12,7 +12,7 @@
     "audio-decode": "3.12.0",
     "baileys": "7.0.0-rc14",
     "solid-js": "2.0.0-rc.18",
-    "typebox": "1.4.2"
+    "typebox": "1.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

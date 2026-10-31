@@ -112,7 +112,9 @@ function traffic(database: AgentDatabase) {
 }
 
 function readTraffic(reader: ReturnType<typeof openNodeSqliteDatabase>) {
-  return reader.prepare("SELECT blob FROM cache_entries WHERE scope='wal-proof'").get()?.blob;
+  const blob = reader.prepare("SELECT blob FROM cache_entries WHERE scope='wal-proof'").get()?.blob;
+  assert(blob instanceof Uint8Array);
+  return blob;
 }
 
 function insertArchive(database: AgentDatabase, index: number, name: string, bytes = Buffer.of(0)) {
@@ -388,7 +390,7 @@ it("retries retained WAL after a complete passive checkpoint and reader release 
   traffic(database).run(payload, 1);
   const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
   reader.exec("BEGIN");
-  expect(readTraffic(reader)).toEqual(new Uint8Array(payload));
+  assert(payload.equals(readTraffic(reader)), "reader payload bytes");
   const diagnostics = observePruning();
   const { enforce, inspect, measure, kick } = budget(storePath, limit(), options);
   try {
@@ -414,7 +416,7 @@ it("retries retained WAL after a complete passive checkpoint and reader release 
     const after = await measure();
     expect(after.databaseWalBytes).toBe(0);
     expect(after.totalBytes).toBeLessThan(before.totalBytes);
-    expect(readTraffic(requireNativeSqliteDatabase(database.db))).toEqual(new Uint8Array(payload));
+    assert(payload.equals(readTraffic(requireNativeSqliteDatabase(database.db))), "WAL payload");
   } finally {
     reader.close();
   }

@@ -1,7 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import * as stringCoerce from "@openclaw/normalization-core/string-coerce";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { SessionRunStatusSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import * as harnessPolicy from "../agents/harness/policy.js";
 import { registerAgentHarness } from "../agents/harness/registry.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
@@ -11,6 +11,7 @@ import type { ProviderNormalizeModelIdContext } from "../plugins/provider-runtim
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
+import * as searchCase from "../shared/search-case.js";
 import { formatGoalSummary } from "../shared/session-goal-display.js";
 import { isSessionRunStateActive } from "../shared/session-run-state.js";
 import { normalizeSessionSearchText } from "../shared/session-search-text.js";
@@ -104,7 +105,7 @@ test("unchanged goal searches normalize only the query and refresh with the entr
     },
   ]);
   const { params, targets } = searchFixture(rows, { modelSearchMayMatch: () => false });
-  using lower = vi.spyOn(stringCoerce, "normalizeLowercaseStringOrEmpty");
+  using lower = vi.spyOn(searchCase, "foldSearchCase");
   for (const search of ["日本語", "🦞", "MIXED", "Pursuing goal (1.2k/2k)"]) {
     params.opts = { search };
     expect(searchKeys(params)).toEqual(rows.map(([key]) => key));
@@ -167,6 +168,44 @@ test("non-status vocabulary misses skip per-row run state and model facts", () =
   });
 });
 
+test("sigma searches reach literal goals and prepared model identities", () => {
+  const goalKey = "agent:main:goal";
+  const modelKey = "agent:main:model";
+  const { params } = searchFixture(
+    [
+      [
+        goalKey,
+        {
+          sessionId: "goal",
+          updatedAt: now,
+          goal: createSessionGoalFixture("goal", "ΕΛΕΓΧΟΣ — Cafe\u0301"),
+        },
+      ],
+      [modelKey, { sessionId: "model", updatedAt: now }],
+    ],
+    { cfg: { agents: { defaults: { model: "fixture/default" }, entries: { main: {} } } } },
+    (key) => ({
+      preparedRuntimeOwnership:
+        key === modelKey
+          ? {
+              model: "native",
+              auth: "native",
+              modelRef: { provider: "fixture", model: "ΟΔΗΓΟΣ" },
+            }
+          : null,
+      preparedAcpMeta: null,
+    }),
+  );
+  for (const search of ["Σ", "σ", "ς"]) {
+    params.opts = { search };
+    expect(searchKeys(params), search).toEqual([goalKey, modelKey]);
+  }
+  for (const search of ["café", "ελεγχος cafe"]) {
+    params.opts = { search };
+    expect(searchKeys(params), search).toEqual([]);
+  }
+});
+
 test("reuses model search vocabulary until the row facts owner publishes a change", () => {
   const key = "agent:main:search";
   const entry = {
@@ -223,6 +262,7 @@ test("reuses model search vocabulary until the row facts owner publishes a chang
 });
 
 test("native models and prepared runtime labels outside the catalog retain their matches", () => {
+  using policies = vi.spyOn(harnessPolicy, "resolveAgentHarnessPolicy");
   const cfg = {
     agents: {
       defaults: { model: "short", models: { "openai/gpt-4.1": { alias: "short" } } },
@@ -289,6 +329,7 @@ test("native models and prepared runtime labels outside the catalog retain their
   acp.backend = "agent:fixture-runtime";
   params.opts = { search: acp.backend };
   expect(searchKeys(params)).toEqual([key]);
+  expect(policies).not.toHaveBeenCalled();
 });
 
 // The original eager predicate is the oracle for query gates and per-call memo keys.

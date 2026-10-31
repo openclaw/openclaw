@@ -3,6 +3,7 @@ import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
 } from "@openclaw/gateway-client/browser";
+import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { SessionSystemPromptReport } from "../../../src/config/sessions/session-system-prompt-report.js";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
@@ -51,6 +52,57 @@ function setup(...reads: Promise<ReturnType<typeof response>>[]) {
   });
   return { gateway, publish, request, store: sessionContextReportsForGateway(gateway) };
 }
+
+it.each([true, false])(
+  "keeps reports bound to exact stored keys and agents (session IDs known: %s)",
+  async (knownSessionIds) => {
+    const selections = [
+      { sessionKey: "global", agentId: "main", sessionId: "raw-main" },
+      { sessionKey: "agent:main:global", agentId: "main", sessionId: "literal-main" },
+      { sessionKey: "global", agentId: "research", sessionId: "raw-research" },
+    ];
+    const rows = selections.map((selection, index) => ({
+      key: selection.sessionKey,
+      agentId: selection.agentId,
+      sessionId: selection.sessionId,
+      contextWeight: { ...report, sessionId: selection.sessionId, generatedAt: index + 1 },
+    }));
+    const pending = rows.map(() => createDeferredCore<{ sessions: typeof rows }>());
+    const { store, request } = setup();
+    request.mockImplementation((_method, params) => {
+      const query = asNullableObjectRecord(params);
+      const index = rows.findIndex(
+        (row) => row.key === query?.key && row.agentId === query?.agentId,
+      );
+      return index < 0 ? Promise.resolve({ sessions: [] }) : pending[index]!.promise;
+    });
+    const targets = selections.map((selection) => ({
+      sessionKey: selection.sessionKey,
+      agentId: selection.agentId,
+      sessionId: knownSessionIds ? selection.sessionId : undefined,
+      model: target.model,
+      provider: target.provider,
+      used: target.used,
+    }));
+    const owners = targets.map(() => ({}));
+    onTestFinished(() => owners.forEach((owner) => store.unwatch(owner)));
+    targets.forEach((selected, index) => store.watch(owners[index]!, selected));
+    const reads = targets.map((selected) => store.refresh(selected));
+    for (const index of [2, 1, 0]) {
+      pending[index]!.resolve({ sessions: [rows[index]!] });
+    }
+    await Promise.all(reads);
+    expect(request).toHaveBeenCalledTimes(3);
+    targets.forEach((selected, index) => {
+      expect(store.get(selected).report).toEqual(rows[index]!.contextWeight);
+    });
+
+    request.mockResolvedValueOnce({ sessions: [{ ...rows[0], contextWeight: null }] });
+    await store.refresh(targets[0]!);
+    expect(store.get(targets[0]!).report).toBeNull();
+    expect(store.get(targets[1]!).report).toEqual(rows[1]!.contextWeight);
+  },
+);
 
 it("does not read restricted context breakdowns and retires results across scope changes", async () => {
   const { gateway, publish, request, store } = setup();

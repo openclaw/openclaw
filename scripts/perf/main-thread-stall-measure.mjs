@@ -3,12 +3,16 @@
 // Compare five counterbalanced base/candidate pairs. Allocation is sampled separately
 // from untraced wall/CPU time; this measures the monitored decode probe, not a Gateway.
 // Leaf-attribution proof: main-thread-stall-measure.mjs flight (Node 26 native profiler).
+// Native launch cost: --expose-gc main-thread-stall-measure.mjs native-spawn 5 50
+// Use Linux with jemalloc for fork measurements; heap is ~1.76 GB of resident doubles.
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { pbkdf2Sync, scryptSync } from "node:crypto";
+import { once } from "node:events";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { performance } from "node:perf_hooks";
+import { getHeapStatistics } from "node:v8";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import {
   createMainThreadStallMonitor,
@@ -18,6 +22,61 @@ import {
 import { createStallFlightRecorder } from "../../src/logging/diagnostic-stall-flight-recorder.ts";
 
 const [mode = "phase", countText = "21", iterationsText = "200000"] = process.argv.slice(2);
+if (mode === "native-spawn") {
+  const count = Number(countText);
+  const iterations = Number(iterationsText);
+  assert(Number.isSafeInteger(count) && count > 0);
+  assert(Number.isSafeInteger(iterations) && iterations > 0);
+  assert.equal(typeof globalThis.gc, "function", "Run with --expose-gc");
+  const { spawnProcess } = await import("../../src/process/spawn-utils.ts");
+  const retained = Array.from({ length: 220 }, (_, index) =>
+    Array.from({ length: 1_000_000 }, () => index + 0.5),
+  );
+  globalThis.gc();
+  const monitor = createMainThreadStallMonitor();
+  try {
+    for (let sample = 0; sample < count; sample++) {
+      const spans = [];
+      let cpuMs = 0;
+      let allocatedBytes = 0;
+      for (let index = 0; index < iterations; index++) {
+        const allocated = getHeapStatistics().total_allocated_bytes;
+        assert(Number.isFinite(allocated), "Requires Node 26.12+ allocation counter");
+        const cpu = process.threadCpuUsage();
+        const startedAt = performance.now();
+        const child = spawnProcess("/bin/true", [], { stdio: "ignore" });
+        spans.push(performance.now() - startedAt);
+        const usedCpu = process.threadCpuUsage(cpu);
+        cpuMs += (usedCpu.user + usedCpu.system) / 1000;
+        allocatedBytes += getHeapStatistics().total_allocated_bytes - allocated;
+        assert.equal((await once(child, "close"))[0], 0);
+      }
+      spans.sort((a, b) => a - b);
+      console.log(
+        JSON.stringify({
+          node: process.version,
+          platform: process.platform,
+          arch: process.arch,
+          sample,
+          spawns: iterations,
+          retainedArrays: retained.length,
+          memory: process.memoryUsage(),
+          hostLoad: loadavg(),
+          launchMs: spans.reduce((sum, value) => sum + value, 0),
+          medianMs: spans[Math.floor(spans.length / 2)],
+          p95Ms: spans[Math.ceil(spans.length * 0.95) - 1],
+          maxMs: spans.at(-1),
+          cpuMs,
+          allocatedBytes,
+          stalls: monitor.drain().stalls,
+        }),
+      );
+    }
+  } finally {
+    monitor.stop();
+  }
+  process.exit(0);
+}
 if (mode === "flight") {
   const warnings = [];
   const recorder = createStallFlightRecorder((message) => warnings.push(message));

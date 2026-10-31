@@ -330,6 +330,12 @@ export function parseClaudeCliHistoryEntry(
   if ((type !== "user" && type !== "assistant") || role !== type) {
     return null;
   }
+  // Claude Code writes assistant-shaped lifecycle rows (aborted turns, harness
+  // errors) with a synthetic model marker. They are not replies: importing them
+  // renders them as assistant answers and feeds them back into resumed sessions.
+  if (type === "assistant" && entry.message.model === "<synthetic>") {
+    return null;
+  }
 
   const timestamp = parseDateStringTimestampMs(entry.timestamp);
   const externalId = normalizeOptionalString(entry.uuid);

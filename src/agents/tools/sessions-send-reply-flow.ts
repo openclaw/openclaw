@@ -1,8 +1,8 @@
-import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isGatewayProtocolResponseError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
+import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import type { GatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store.types.js";
@@ -228,10 +228,10 @@ export function prepareSessionsSendReplyContext(params: {
   ownedTask: boolean;
   isIsolatedCronRequester: boolean;
   targetIsSubagent: boolean;
+  targetAcpMode?: SessionAcpMeta["mode"];
   requesterSessionKey: string;
   targetSession:
-    | (NonNullable<Parameters<typeof isRequesterParentOfBackgroundAcpSession>[0]> &
-        AgentStepSession)
+    | (AgentStepSession & Pick<SessionEntry, "spawnedBy" | "parentSessionKey">)
     | undefined;
   requesterTarget: GatewaySessionStoreTargetWithStore;
   requesterSessionId?: string;
@@ -268,12 +268,16 @@ export function prepareSessionsSendReplyContext(params: {
           lifecycleRevision: requesterSession.lifecycleRevision ?? null,
         }
       : undefined;
+  const persistentParent =
+    params.targetAcpMode === "persistent" &&
+    (params.targetSession?.spawnedBy === params.requesterSessionKey ||
+      params.targetSession?.parentSessionKey === params.requesterSessionKey);
   const taskOwned =
     params.callerOwnsCompletion ||
     params.requesterIsSubagent ||
     params.ownedTask ||
     params.isIsolatedCronRequester ||
-    isRequesterParentOfBackgroundAcpSession(params.targetSession, params.requesterSessionKey);
+    persistentParent;
   return {
     ...params.context,
     requester,

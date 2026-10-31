@@ -55,32 +55,71 @@ export const controlUiParticipantPalette = {
 
 let operatorSeamColor: string | undefined;
 let userAccentOverride: string | undefined;
-const systemChromeRevisions = new WeakMap<HTMLElement, { source: string; palette: string }>();
+const systemChromeRevisions = new WeakMap<
+  HTMLElement,
+  {
+    source: string;
+    palette: string;
+    narrowCanvas: boolean;
+    pageBackground: string;
+    canvasBackground: string;
+  }
+>();
 
 // Project the independently rendered shell into the static document's chrome and head metadata.
-export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: boolean): void {
+// `contentCanvas` marks a committed route that leaves the shell's --bg-content canvas exposed at
+// the narrow viewport edges; every other layout, including the session workbench, paints --bg.
+export function syncControlUiSystemChrome(paletteChanged = false, contentCanvas?: boolean): void {
   if (typeof document === "undefined") {
     return;
   }
   const root = document.documentElement;
-  const hasChatShell = chatShell ?? root.classList.contains("control-ui-chat-shell");
-  if (root.classList.contains("control-ui-chat-shell") !== hasChatShell) {
-    root.classList.toggle("control-ui-chat-shell", hasChatShell);
+  const hasContentCanvas = contentCanvas ?? root.classList.contains("control-ui-content-canvas");
+  if (root.classList.contains("control-ui-content-canvas") !== hasContentCanvas) {
+    root.classList.toggle("control-ui-content-canvas", hasContentCanvas);
   }
   const narrow = globalThis.matchMedia?.(
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
   ).matches;
+  const narrowCanvas = narrow && hasContentCanvas;
   const revision = (style: string | null) =>
-    JSON.stringify([root.dataset.theme, root.dataset.themeMode, style, narrow && hasChatShell]);
+    JSON.stringify([root.dataset.theme, root.dataset.themeMode, style, narrowCanvas]);
   const source = revision(root.getAttribute("style"));
   const previous = systemChromeRevisions.get(root);
   // Most shell commits do not touch styles. Keep that path free of declaration scans.
   if (!paletteChanged && previous?.source === source) {
     return;
   }
-  const palette = revision(controlUiPaletteStyle(root));
+  const palette = JSON.stringify([
+    root.dataset.theme,
+    root.dataset.themeMode,
+    controlUiPaletteStyle(root),
+  ]);
+  const publishBackground = (pageBackground: string, canvasBackground: string) => {
+    const background = narrowCanvas ? canvasBackground || pageBackground : pageBackground;
+    if (!background) {
+      return;
+    }
+    root.style.setProperty("--control-ui-system-chrome-background", background);
+    for (const meta of controlUiDocumentHead().themeColors) {
+      meta.content = background;
+      meta.removeAttribute("media");
+    }
+    systemChromeRevisions.set(root, {
+      source: revision(root.getAttribute("style")),
+      palette,
+      narrowCanvas,
+      pageBackground,
+      canvasBackground,
+    });
+  };
   if (!paletteChanged && previous?.palette === palette) {
-    systemChromeRevisions.set(root, { source, palette });
+    // Routes and breakpoints select a prepared surface; they do not change its palette.
+    if (previous.narrowCanvas === narrowCanvas) {
+      systemChromeRevisions.set(root, { ...previous, source });
+    } else {
+      publishBackground(previous.pageBackground, previous.canvasBackground);
+    }
     return;
   }
   // Derived ink must not survive a reset or become the next palette's input.
@@ -140,20 +179,9 @@ export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: bo
       themeLinksValue = undefined;
     }
   }
-  const pageBackground = computedStyle.getPropertyValue("--bg").trim();
-  const background =
-    narrow && hasChatShell
-      ? computedStyle.getPropertyValue("--bg-content").trim() || pageBackground
-      : pageBackground;
-  if (!background) {
-    return;
-  }
-  root.style.setProperty("--control-ui-system-chrome-background", background);
-  for (const meta of controlUiDocumentHead().themeColors) {
-    meta.content = background;
-    meta.removeAttribute("media");
-  }
-  systemChromeRevisions.set(root, { source: revision(root.getAttribute("style")), palette });
+  // Browser chrome parses theme-color outside the cascade; publish concrete colors, not palette
+  // expressions such as the color-mix() surfaces named themes derive from --bg-content.
+  publishBackground(resolveThemeColor(computedStyle, "--bg"), canvas);
 }
 
 export function applyControlUiAccent(userAccent?: string): void {

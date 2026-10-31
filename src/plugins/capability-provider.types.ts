@@ -143,6 +143,10 @@ type WorkerNodeBootstrapAccess = {
     sha256: string;
     bytes: number;
     openclawVersion: string;
+    /** Explicit npm profiles resolve dependencies on the destination; bundles carry them. */
+    install?: "bundle" | "npm";
+    buildId?: string;
+    manifestSha256?: string;
     enabledPluginIds: readonly string[];
     tlsFingerprint?: string;
     /** Core-owned POSIX prerequisite script, applied only to Linux before invoking Node. */

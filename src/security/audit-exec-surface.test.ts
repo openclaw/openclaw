@@ -307,7 +307,7 @@ describe("security audit exec surface findings", () => {
     const report = await auditConfig(mcporterConfig(), stateDir);
     const checkIds = report.findings.map((finding) => finding.checkId);
     expect(checkIds).not.toContain("tools.exec.agent_skill_mcp_boundary_drift");
-    expect(checkIds).toContain("tools.exec.mcporter_registry_inspection_incomplete");
+    return requireFinding(report.findings, "tools.exec.mcporter_registry_inspection_incomplete");
   }
   function auditConfig(config: OpenClawConfig, stateDir?: string) {
     return runSecurityAuditCore({
@@ -374,9 +374,12 @@ describe("security audit exec surface findings", () => {
   it("warns when an oversized symlinked global mcporter registry cannot be inspected", async () => {
     const { stateDir, registry } = await registryFixture();
     const targetPath = path.join(stateDir, "real-mcporter.json");
-    await fs.writeFile(targetPath, Buffer.alloc(16 * 1024 * 1024 + 1, 0x20));
+    await fs.writeFile(targetPath, "");
+    await fs.truncate(targetPath, 16 * 1024 * 1024 + 1);
     await fs.symlink(targetPath, registry);
-    await expectIncompleteRegistry(stateDir);
+    expect((await expectIncompleteRegistry(stateDir)).detail).toContain(
+      "larger than the 16 MiB audit cap",
+    );
   });
 
   it("audits inherited defaults independently of an agent override", async () => {

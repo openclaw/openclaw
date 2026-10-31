@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 88758,
-  "reason": "Current-main Board containment build measures 88,758 B gzip, 7 B above its matched base, with three startup JavaScript requests and one CSS request; paired CPU qualification demonstrates the rendering win.",
-  "updatedAt": "2026-10-30"
+  "startupJsGzipBytes": 89354,
+  "reason": "New Session socket preconnect: 20 paired observations per profile improve 100 ms RTT composer readiness by 8.1%; accept measured startup 89354 B (+219 B vs exact base), with unchanged request counts and CPU/tail caveats recorded in PR evidence.",
+  "updatedAt": "2026-10-31"
 }

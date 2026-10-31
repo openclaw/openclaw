@@ -21,7 +21,7 @@
 // arms; use --diff-owner for the baseline collector that discards this inventory.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -45,12 +45,15 @@ const { values } = parseArgs({
     seed: { type: "boolean" },
     untracked: { type: "string", default: "100" },
     tracked: { type: "string", default: "0" },
+    "tracked-bytes": { type: "string", default: "0" },
     "changed-tracked": { type: "string", default: "0" },
     "changed-lines": { type: "string", default: "1" },
     "diff-owner": { type: "string" },
     "prepared-status": { type: "boolean" },
     "revisions-owner": { type: "string" },
     "revision-owner": { type: "string" },
+    "refresh-index": { type: "boolean" },
+    "restat-inventory": { type: "boolean" },
     detached: { type: "boolean" },
     allocation: { type: "boolean" },
     boundary: { type: "string", default: "worker" },
@@ -380,6 +383,7 @@ const git = (...args: string[]) =>
   promisify(execFile)("git", ["-C", repo, ...args], { env: gitEnv });
 
 async function seed() {
+  const trackedBytes = integer(values["tracked-bytes"], "--tracked-bytes");
   await fs.mkdir(root);
   for (const directory of [repo, gitEnv.HOME, gitEnv.TMPDIR]) {
     await fs.mkdir(directory);
@@ -423,7 +427,10 @@ async function seed() {
       }
       await fs.mkdir(bucket, { recursive: true });
     }
-    await fs.writeFile(path.join(bucket, `${index}.txt`), "");
+    await fs.writeFile(
+      path.join(bucket, `${index}.txt`),
+      trackedBytes ? randomBytes(trackedBytes) : "",
+    );
   }
   const changedContent = (index: number, changed: boolean) => {
     if (index === 0) {
@@ -527,6 +534,7 @@ async function seed() {
     tracked: 3 + changedTracked,
     changedLines,
     unchangedTracked: tracked + 1,
+    trackedBytes,
     nestedRepository: values["nested-repository"] === true,
     excludesFile: values["excludes-file"] === true,
   };
@@ -597,17 +605,26 @@ async function measure() {
     cwd: repo,
     scope,
     summaryOnly: values.summary === true,
+    refreshIndex: values["refresh-index"] === true,
   };
+  if (values["restat-inventory"]) {
+    for (const directory of await fs.readdir(path.join(repo, "inventory"))) {
+      const bucket = path.join(repo, "inventory", directory);
+      for (const name of await fs.readdir(bucket)) {
+        await fs.utimes(path.join(bucket, name), new Date(0), new Date(0));
+      }
+    }
+  }
   const prepared = values["prepared-status"]
     ? await (
         await import("../../src/gateway/control-ui-session-diff-revision.js")
-      ).readCheckoutDiffRevision(repo, [], input.summaryOnly)
+      ).readCheckoutDiffRevision(repo, [], input.summaryOnly, undefined, input.refreshIndex)
     : undefined;
   if (values["prepared-status"]) {
     assert(prepared?.worktreeStatus, "Expected the production status inventory");
   }
   const request = readCheckoutDiffRevision
-    ? () => readCheckoutDiffRevision(repo, [], input.summaryOnly)
+    ? () => readCheckoutDiffRevision(repo, [], input.summaryOnly, undefined, input.refreshIndex)
     : collectCheckoutDiff
       ? () => collectCheckoutDiff({ ...input, worktreeStatus: prepared?.worktreeStatus })
       : values.boundary === "read"
@@ -732,6 +749,8 @@ async function measure() {
       summaryOnly: values.summary === true,
       mutate: values.mutate === true,
       preparedStatus: values["prepared-status"] === true,
+      refreshIndex: values["refresh-index"] === true,
+      restatInventory: values["restat-inventory"] === true,
       pollMs,
       fixture,
       node: process.version,

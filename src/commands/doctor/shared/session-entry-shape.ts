@@ -35,7 +35,7 @@ export type SessionEntryStateRepair = {
 /** A dead owner is not proof that its custody belongs to this recovery cycle. */
 export function inspectLegacyRestartTombstone(
   value: Record<string, unknown>,
-): { retire: boolean; warning: string } | undefined {
+): { retire: boolean; doctorOnly?: true; warning: string } | undefined {
   if (!isRecord(value.mainRestartRecovery) || !isRecord(value.mainRestartRecovery.tombstone)) {
     return undefined;
   }
@@ -112,8 +112,20 @@ export function inspectLegacyRestartTombstone(
   ) {
     return defer("an execution owner is still live");
   }
+  const unmatched = (reason: string) =>
+    value.archivedAt !== undefined ||
+    value.status === "done" ||
+    value.status === "failed" ||
+    value.status === "killed" ||
+    value.status === "timeout"
+      ? {
+          retire: true,
+          doctorOnly: true as const,
+          warning: "Retired terminal unmatched legacy restart custody (original state backed up).",
+        }
+      : defer(reason);
   if (runs.some((run) => !ownsFence(run)) || custodyIds.some((id) => !ownsRun(id))) {
-    return defer("a fence or delivery claim has no matching tombstone run/generation");
+    return unmatched("a fence or delivery claim has no matching tombstone run/generation");
   }
   if (
     (pending ||
@@ -121,7 +133,7 @@ export function inspectLegacyRestartTombstone(
       normalizeOptionalString(value.pendingFinalDeliveryText)) &&
     !ownsRun(pendingId)
   ) {
-    return defer("pending final delivery has no matching tombstone source run");
+    return unmatched("pending final delivery has no matching tombstone source run");
   }
   if (
     runIds.size === 0 &&
@@ -133,7 +145,7 @@ export function inspectLegacyRestartTombstone(
         (!Array.isArray(value[key]) || value[key].length > 0),
     )
   ) {
-    return defer("no recorded generation links the retained custody to the tombstone");
+    return unmatched("no recorded generation links the retained custody to the tombstone");
   }
   return {
     retire: true,
@@ -146,9 +158,13 @@ export function inspectLegacyRestartTombstone(
 export function migrateLegacySessionRunOutcome(
   value: Record<string, unknown>,
   updatedAt: unknown = value.updatedAt,
+  options: { preserveTerminalRestartCustody?: boolean } = {},
 ): Record<string, unknown> {
   const tombstone = inspectLegacyRestartTombstone(value);
-  if (tombstone && !tombstone.retire) {
+  if (
+    tombstone &&
+    (!tombstone.retire || (tombstone.doctorOnly && options.preserveTerminalRestartCustody))
+  ) {
     return value;
   }
   if (tombstone?.retire) {
@@ -160,9 +176,11 @@ export function migrateLegacySessionRunOutcome(
         delete next[key];
       }
     }
-    delete next.activeWriterRunId;
-    delete next.lifecycleRunId;
-    if (next.archiveReason === "restart-recovery") {
+    if (!tombstone.doctorOnly) {
+      delete next.activeWriterRunId;
+      delete next.lifecycleRunId;
+    }
+    if (!tombstone.doctorOnly && next.archiveReason === "restart-recovery") {
       delete next.archivedAt;
       delete next.archivedBy;
       delete next.archiveReason;
@@ -176,7 +194,7 @@ export function migrateLegacySessionRunOutcome(
     if ((pending || next.pendingFinalDelivery === true) && deliveryUnknown) {
       next.lastRunError =
         "Legacy restart recovery retired pending final delivery with an unknown outcome; the original is preserved in the pre-startup migration backup.";
-      if (pending?.context && !next.pendingDeliveryNotice) {
+      if (!tombstone.doctorOnly && pending?.context && !next.pendingDeliveryNotice) {
         next.pendingDeliveryNotice = {
           createdAt: pending.createdAt,
           context: pending.context,
@@ -190,6 +208,10 @@ export function migrateLegacySessionRunOutcome(
       if (key.startsWith("pendingFinalDelivery")) {
         delete next[key];
       }
+    }
+    // Terminal unmatched rows are historical cleanup, never a new execution or notice.
+    if (tombstone.doctorOnly) {
+      return next;
     }
     next.status = "interrupted";
     next.abortedLastRun = true;
@@ -217,6 +239,7 @@ export function migrateLegacySessionRunOutcome(
 export function migrateLegacySessionEntryState(
   value: Record<string, unknown>,
   updatedAt: unknown = value.updatedAt,
+  options: { preserveTerminalRestartCustody?: boolean } = {},
 ): SessionEntryStateRepair {
   const next = { ...value };
   const numericChanges: SessionEntryNumericSnapshot = {};
@@ -291,7 +314,7 @@ export function migrateLegacySessionEntryState(
     }
   }
   return {
-    entry: migrateLegacySessionRunOutcome(next, updatedAt),
+    entry: migrateLegacySessionRunOutcome(next, updatedAt, options),
     numericChanges,
   };
 }
