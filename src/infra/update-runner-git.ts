@@ -5,6 +5,7 @@ import { readPackageVersion } from "./package-json.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
 import { getUpdateDoctorConfigFailureReason } from "./update-doctor-config.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
+import { createGitUpdateDownload } from "./update-git-download.js";
 import {
   readBuiltGatewayBuildId,
   readBuiltRuntimeCommit,
@@ -15,7 +16,7 @@ import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
 import { settleGitUpdateCleanup } from "./update-runner-git-cleanup.js";
-import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
+import { createGitUpdateStepFactories, gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import {
   readCurrentGitUpdateRecovery,
   recordGitRollbackOutcome,
@@ -40,12 +41,7 @@ import {
   withGitTargetInspectionRoot,
 } from "./update-runner-git-target.js";
 import { prepareGitCandidateTransfer } from "./update-runner-git-transfer.js";
-import type {
-  CommandRunner,
-  RunStepOptions,
-  UpdateRunResult,
-  UpdateRunnerOptions,
-} from "./update-runner-types.js";
+import type { CommandRunner, UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 export async function updateGitCheckout(params: {
@@ -111,35 +107,13 @@ export async function updateGitCheckout(params: {
     exitCode: 1,
     stderrTail,
   });
-  // Work and probes share ordering, including commands in the private inspection clone.
-  let stepIndex = 0;
-  const forRunner =
-    (runner: CommandRunner, deadline: number | undefined) =>
-    (name: string, argv: string[], cwd: string, env?: NodeJS.ProcessEnv): RunStepOptions => ({
-      runCommand: runner,
-      name,
-      argv,
-      cwd,
-      timeoutMs: deadline,
-      env,
-      progress: opts.progress,
-      stepIndex: stepIndex++,
-      totalSteps,
-      results: steps,
-    });
-  const step = forRunner(runCommand, timeoutMs);
-  // Work can outlive an observation allowance. Only the caller may cap it.
-  const workStep = forRunner(runCommand, opts.timeoutMs);
-  const recoveryStep = (name: string, argv: string[], cwd: string): RunStepOptions => ({
+  const { step, workStep, recoveryStep, forRunner } = createGitUpdateStepFactories({
     runCommand,
-    name,
-    argv,
-    cwd,
-    // Recovery retains its finite settlement allowance after work has failed.
-    timeoutMs,
-    stepIndex: 0,
-    totalSteps: 1,
-    results: steps,
+    probeTimeoutMs: timeoutMs,
+    workTimeoutMs: opts.timeoutMs,
+    progress: opts.progress,
+    totalSteps,
+    steps,
   });
 
   let createdDevBranchDuringUpdate = false;
@@ -147,6 +121,7 @@ export async function updateGitCheckout(params: {
   let sourceMutationStarted = false;
   let runtimePromotion: Awaited<ReturnType<typeof prepareGitRuntimePromotion>> | undefined;
   let runtimeRetained = false;
+  let download: Awaited<ReturnType<typeof createGitUpdateDownload>> | undefined;
   const runtimeCleanups: Partial<Record<"candidate" | "inspection", () => Promise<boolean>>> = {};
   const cleanupCandidateRuntime = async (assertCurrent = () => {}) => {
     assertCurrent();
@@ -343,9 +318,22 @@ export async function updateGitCheckout(params: {
   const runUpdate = async (): Promise<UpdateRunResult> => {
     const inspectAndPrepare = async (
       inspectionRoot: string,
-      runInspectionCommand: CommandRunner,
+      baseInspectionCommand: CommandRunner,
     ) => {
       let publishedCandidate = false;
+      download = await createGitUpdateDownload({
+        artifactRoot: opts.gitArtifactStorageRoot ?? gitRoot,
+        beforeSha,
+        step: () =>
+          forRunner(baseInspectionCommand, opts.timeoutMs)(
+            "git-download-objects",
+            [],
+            inspectionRoot,
+          ),
+        probeTimeoutMs: timeoutMs,
+        deadline: opts.timeoutMs === undefined ? undefined : startedAt + opts.timeoutMs,
+      });
+      const runInspectionCommand = download.runCommand;
       const inspectionStep = forRunner(runInspectionCommand, timeoutMs);
       const inspectionWorkStep = forRunner(runInspectionCommand, opts.timeoutMs);
       const importCandidate = async (candidateSha: string, upstreamRef?: string) => {
@@ -421,6 +409,7 @@ export async function updateGitCheckout(params: {
         defaultCommandEnv,
         steps,
         beforeCandidate: inspectTarget,
+        downloadCandidate: download.hydrate,
         validateCandidate: opts.validateCandidate,
         prepareGitExposure: opts.prepareGitExposure,
         onCleanupReportingError: (error) => cleanupReportingFailures.push(error),
@@ -689,42 +678,51 @@ export async function updateGitCheckout(params: {
       durationMs: Date.now() - startedAt,
     };
   };
-  return settleGitUpdateCleanup(
-    async () => {
-      try {
-        return await runUpdate();
-      } catch (error) {
-        cleanupUncertain = hasCommandProcessCleanupError(error);
-        if (!mutationPrepared || cleanupUncertain) {
-          throw error;
-        }
-        const fact = createUpdateErrorFact("git update", error, defaultCommandEnv);
-        steps.push({
-          ...failureStep("git-update", "update checkout", fact.message),
-          failureFacts: [fact],
-        });
-        let rollbackFailure: unknown;
+  let downloadSucceeded = false;
+  try {
+    const result = await settleGitUpdateCleanup(
+      async () => {
         try {
-          return await rollbackError(
-            error instanceof UpdateRequesterRevokedError ? error.code : "unexpected-error",
-          );
-        } catch (cause) {
-          cleanupUncertain = hasCommandProcessCleanupError(cause);
-          rollbackFailure = cause;
+          return await runUpdate();
+        } catch (error) {
+          cleanupUncertain = hasCommandProcessCleanupError(error);
+          if (!mutationPrepared || cleanupUncertain) {
+            throw error;
+          }
+          const fact = createUpdateErrorFact("git update", error, defaultCommandEnv);
+          steps.push({
+            ...failureStep("git-update", "update checkout", fact.message),
+            failureFacts: [fact],
+          });
+          let rollbackFailure: unknown;
+          try {
+            return await rollbackError(
+              error instanceof UpdateRequesterRevokedError ? error.code : "unexpected-error",
+            );
+          } catch (cause) {
+            cleanupUncertain = hasCommandProcessCleanupError(cause);
+            rollbackFailure = cause;
+          }
+          throw new AggregateError([error, rollbackFailure], "Git update and rollback failed", {
+            cause: error,
+          });
         }
-        throw new AggregateError([error, rollbackFailure], "Git update and rollback failed", {
-          cause: error,
-        });
-      }
-    },
-    async () => {
-      if (!cleanupUncertain) {
-        await candidateTransfer?.cleanup(step("git-update-pack-cleanup", [], gitRoot));
-        if (!runtimeRetained && (await cleanupCandidateRuntime())) {
-          await runtimePromotion?.cleanup();
+      },
+      async () => {
+        if (!cleanupUncertain) {
+          await candidateTransfer?.cleanup(step("git-update-pack-cleanup", [], gitRoot));
+          if (!runtimeRetained && (await cleanupCandidateRuntime())) {
+            await runtimePromotion?.cleanup();
+          }
         }
-      }
-    },
-    cleanupReportingFailures,
-  );
+      },
+      cleanupReportingFailures,
+    );
+    downloadSucceeded =
+      result.status === "ok" ||
+      (result.status === "skipped" && result.reason === "already-current");
+    return result;
+  } finally {
+    await download?.dispose(downloadSucceeded);
+  }
 }

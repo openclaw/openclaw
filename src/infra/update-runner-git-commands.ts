@@ -7,7 +7,7 @@ import { isFullGitObjectId } from "./update-dev-target.js";
 import { resolvePnpmCandidateEnv } from "./update-package-manager.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
-import type { CommandRunner, RunStepOptions } from "./update-runner-types.js";
+import type { CommandRunner, RunStepOptions, UpdateStepProgress } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 const BUILD_MAX_OLD_SPACE_MB = 8192;
@@ -30,6 +30,48 @@ export type StepFactory = (
 
 export function createGitStepFactory(root: string, step: StepFactory) {
   return (name: string, ...args: string[]) => step(name, ["git", "-C", root, ...args], root);
+}
+
+/** Inspection, work and recovery share progress ordering while retaining distinct budgets. */
+export function createGitUpdateStepFactories(params: {
+  runCommand: CommandRunner;
+  probeTimeoutMs: number;
+  workTimeoutMs?: number;
+  progress?: UpdateStepProgress;
+  totalSteps: number;
+  steps: UpdateStepResult[];
+}) {
+  let stepIndex = 0;
+  const forRunner =
+    (runner: CommandRunner, timeoutMs: number | undefined): StepFactory =>
+    (name, argv, cwd, env) => ({
+      runCommand: runner,
+      name,
+      argv,
+      cwd,
+      timeoutMs,
+      env,
+      progress: params.progress,
+      stepIndex: stepIndex++,
+      totalSteps: params.totalSteps,
+      results: params.steps,
+    });
+  return {
+    forRunner,
+    step: forRunner(params.runCommand, params.probeTimeoutMs),
+    workStep: forRunner(params.runCommand, params.workTimeoutMs),
+    // Recovery keeps its settlement allowance after forward work has failed.
+    recoveryStep: (name: string, argv: string[], cwd: string): RunStepOptions => ({
+      runCommand: params.runCommand,
+      name,
+      argv,
+      cwd,
+      timeoutMs: params.probeTimeoutMs,
+      stepIndex: 0,
+      totalSteps: 1,
+      results: params.steps,
+    }),
+  };
 }
 
 export function resolveTagFetchRef(candidate: string): string | null {

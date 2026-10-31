@@ -392,6 +392,7 @@ export async function runGitCandidatePreflight(params: {
   step: StepFactory;
   workStep: StepFactory;
   workTimeoutMs?: number;
+  downloadCandidate?: (revision: string) => Promise<void>;
   beforeCandidate: (revision: string) => Promise<void>;
 }): Promise<GitCandidatePreflightResult> {
   const step = createGitStepFactory(params.gitRoot, params.step);
@@ -539,6 +540,9 @@ export async function runGitCandidatePreflight(params: {
     if (params.referenceSource || (canSkipActivation && sha === params.beforeSha)) {
       return true;
     }
+    // Hydrate through the durable batch owner before reading even package.json;
+    // otherwise a partial clone can fetch that blob into disposable inspection storage.
+    await params.downloadCandidate?.(sha);
     // A local rebase can change the manifest; its final runtime check owns that result.
     if (
       rebaseFrom &&

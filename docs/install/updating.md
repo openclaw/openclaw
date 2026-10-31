@@ -1571,6 +1571,23 @@ not download unrelated branches or change the repository's shallow boundary.
 Stable and beta target inspection fetches release tags only, without refreshing
 remote branches.
 
+Official public `openclaw/openclaw` GitHub source updates retain completed Git
+object batches outside the temporary inspection checkout. Git first fetches
+commit and tree metadata, then downloads missing objects in batches of at most 128. Completed packs remain available after a connection failure, cancellation,
+or process exit. A retry fetches only the objects still missing, preserving
+Git's compression without requesting each file separately over HTTP. A
+successful update removes this download cache.
+
+Recovery is per completed batch. The interrupted batch and an unfinished initial
+metadata pack can restart; this does not resume inside a pack at a byte offset.
+Batch size limits object count, not bytes, and multiple requests can add latency.
+Separate object batches can also transfer more bytes than a single ordinary fetch.
+Cancellation and the original download deadline also bound retries. Candidate
+validation, admission, installation and rollback keep their existing checks.
+Private repositories, custom Git hosts, forks, and npm updates keep their existing
+transport. No publisher-created bundle, release asset, or additional configuration
+is required.
+
 On source installs, Doctor and plugin updates keep plugins built with the host.
 A registry plugin with the same version string can target a different SDK, so
 it does not replace the source build without matching SDK build evidence.
