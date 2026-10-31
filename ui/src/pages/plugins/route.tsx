@@ -58,7 +58,7 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
       return loadPluginsRouteData(context, options);
     },
     component: async () => {
-      const module = await import("./plugins-page.tsx");
+      const { PluginsPage } = await import("./plugins-page.tsx");
       if (surface === "settings") {
         // Let module evaluation finish its task before replacing the previous page.
         await new Promise<void>((resolve) => {
@@ -67,7 +67,7 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
       }
       return {
         renderSolid: (props: SolidRouteProps<PluginsRouteData>) => (
-          <module.PluginsPage routeData={props.data} surface={surface} />
+          <PluginsPage routeData={props.data} surface={surface} />
         ),
       };
     },
