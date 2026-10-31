@@ -198,6 +198,53 @@ describe("createApplicationGateway connection ownership", () => {
     }
   });
 
+  it("retires access restrictions with their connection and ignores the old socket", () => {
+    connect();
+    const previous = current();
+    const fact = { agentId: "main", sessionKey: "global", sessionId: "current", access: "revoked" };
+    const observed: unknown[] = [];
+    gateway.subscribeEvents(() => observed.push(gateway.snapshot.sessionAccess));
+    previous.testOptions.onEvent?.(createGatewayEvent("session.access.changed", fact));
+    expect(observed.at(-1)).toEqual([fact]);
+    const replacement = { ...fact, sessionId: "replacement" };
+    previous.testOptions.onEvent?.(createGatewayEvent("session.access.changed", replacement));
+    expect(gateway.snapshot.sessionAccess).toEqual([replacement]);
+    previous.testOptions.onEvent?.(
+      createGatewayEvent("session.access.changed", { ...fact, access: "read-write" }),
+    );
+    expect(gateway.snapshot.sessionAccess).toEqual([replacement]);
+    gateway.connect();
+    current().testOptions.onHello?.(HELLO);
+    expect(gateway.snapshot.sessionAccess).toBeUndefined();
+    previous.testOptions.onEvent?.(createGatewayEvent("session.access.changed", replacement));
+    expect(gateway.snapshot.sessionAccess).toBeUndefined();
+    current().testOptions.onEvent?.(createGatewayEvent("session.access.changed", fact));
+    current().testOptions.onClose?.({ code: 1006, reason: "lost transport", willRetry: true });
+    expect(gateway.snapshot.sessionAccess).toBeUndefined();
+  });
+
+  it("keeps global access facts scoped to their canonical agent and rejects malformed events", () => {
+    connect();
+    const publish = (payload: unknown) =>
+      current().testOptions.onEvent?.(createGatewayEvent("session.access.changed", payload));
+    const main = { agentId: "main", sessionKey: "global", sessionId: "current", access: "revoked" };
+    const other = { ...main, agentId: "other", access: "read-only" };
+    publish(main);
+    publish(other);
+    for (const malformed of [
+      null,
+      { ...main, agentId: " " },
+      { ...main, sessionKey: " " },
+      { ...main, sessionId: 1 },
+      { ...main, access: "owner" },
+    ]) {
+      publish(malformed);
+    }
+    expect(gateway.snapshot.sessionAccess).toEqual([main, other]);
+    publish({ ...main, access: "read-write" });
+    expect(gateway.snapshot.sessionAccess).toEqual([other]);
+  });
+
   it("retires attempt feedback on stop and ignores callbacks from a replaced client", () => {
     connect();
     const previous = current();

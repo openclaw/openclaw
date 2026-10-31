@@ -7,7 +7,9 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 // This state is transport-fed but can be constructed without HTTP or WebSocket servers.
 import { createEventWebPushDelivery } from "./event-web-push.js";
 import { createMentionInbox } from "./mention-inbox.js";
+import { authorizeCurrentOperatorRoleScopes } from "./operator-role-policy.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
+import { hasEventScope } from "./server-broadcast-scopes.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   createChatRunState,
@@ -20,10 +22,12 @@ import type { GatewayClient } from "./server-methods/client-types.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import { ConnectionSessionRows } from "./session-ancestor-references.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import type { SessionSharingTarget } from "./session-sharing-policy.js";
 import { canReceiveSessionEvent, prepareProjectedSessionSharing } from "./session-sharing.js";
 import type { SessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 
@@ -92,6 +96,16 @@ export function createGatewayConnectionState(params: {
     },
     () => sessionRowProjection,
   );
+  // Only this connection owner can admit its one synchronous access notification.
+  const accessPublications = new WeakMap<
+    object,
+    {
+      client: GatewayClient;
+      agentId: string;
+      sessionKey: string;
+      isCurrent: () => boolean;
+    }
+  >();
   const gatewayBroadcaster = createGatewayBroadcaster({
     clients,
     preparePresenceProjection: (presence) =>
@@ -107,6 +121,17 @@ export function createGatewayConnectionState(params: {
       }
     },
     canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) => {
+      if (event === "session.access.changed") {
+        const proof =
+          payload && typeof payload === "object" ? accessPublications.get(payload) : undefined;
+        return (
+          proof?.client === client &&
+          proof.agentId === agentId &&
+          sessionKeys.length === 1 &&
+          sessionKeys[0] === proof.sessionKey &&
+          proof.isCurrent()
+        );
+      }
       try {
         const projection = sessionRowProjection;
         const cfg = loadRuntimeConfig();
@@ -187,6 +212,132 @@ export function createGatewayConnectionState(params: {
         opts ? { agentId: opts.agentId, sessionKeys: opts.sessionKeys } : undefined,
       ),
   });
+  function prepareSessionAccessChange(selected: SessionSharingTarget): () => void {
+    const projection = sessionRowProjection;
+    const query = { key: selected.canonicalKey, agentId: selected.agentId };
+    const initialState = projection?.sharingTargetState(query);
+    if (!projection || initialState?.status !== "ready") {
+      return () => {};
+    }
+    const initial = initialState.target;
+    if (
+      initial.storePath !== selected.storePath ||
+      initial.storeKey !== selected.storeKey ||
+      initial.entry.sessionId !== selected.entry.sessionId ||
+      initial.entry.lifecycleRevision !== selected.entry.lifecycleRevision
+    ) {
+      return () => {};
+    }
+    const source = projection.readSource({ ...query, storePath: initial.storePath });
+    const currentTarget = () => {
+      if (projection !== sessionRowProjection) {
+        return undefined;
+      }
+      const state = projection.sharingTargetState(query);
+      if (state.status !== "ready") {
+        return undefined;
+      }
+      const target = state.target;
+      const currentSource = projection.readSource({ ...query, storePath: target.storePath });
+      return target.generation === initial.generation &&
+        target.storePath === initial.storePath &&
+        target.storeKey === initial.storeKey &&
+        target.entry.sessionId === initial.entry.sessionId &&
+        target.entry.lifecycleRevision === initial.entry.lifecycleRevision &&
+        source &&
+        currentSource?.path === source.path &&
+        currentSource.databaseIdentity === source.databaseIdentity &&
+        currentSource.databaseBirthtime === source.databaseBirthtime
+        ? target
+        : undefined;
+    };
+    const readAccess = (client: GatewayWsClient) => {
+      try {
+        if (
+          !clients.has(client) ||
+          client.invalidated ||
+          client.connectionSignal?.aborted ||
+          !hasEventScope(client, "session.access.changed", undefined, false, () => true)
+        ) {
+          return undefined;
+        }
+        const target = currentTarget();
+        if (!target) {
+          return undefined;
+        }
+        const cfg = loadRuntimeConfig();
+        const policyConfig = projection.getPolicyConfig() ?? cfg;
+        if (authorizeCurrentOperatorRoleScopes(client, policyConfig)) {
+          return undefined;
+        }
+        const sharing = prepareProjectedSessionSharing({
+          cfg: policyConfig,
+          client,
+          isMember: (candidate, identity) =>
+            projection.hasMembership(candidate.storePath, candidate.storeKey, identity),
+        });
+        const readable = canReceiveSessionEvent({
+          cfg,
+          policyConfig,
+          client,
+          sessionKeys: [target.canonicalKey],
+          agentId: target.agentId,
+          prepared: { sharing, target: () => target },
+        });
+        const access = !readable
+          ? ("revoked" as const)
+          : sharing.authorizeTarget(target)
+            ? ("read-only" as const)
+            : ("read-write" as const);
+        return { access, cacheKey: sharing.getCacheKey() };
+      } catch {
+        // Unavailable facts are not an observed revocation.
+        return undefined;
+      }
+    };
+    const recipients = [...clients].flatMap((client) => {
+      const before = readAccess(client);
+      return before ? [{ client, before }] : [];
+    });
+    let published = false;
+    return () => {
+      if (published) {
+        return;
+      }
+      published = true;
+      for (const { client, before } of recipients) {
+        const after = readAccess(client);
+        if (!after || after.cacheKey !== before.cacheKey || after.access === before.access) {
+          continue;
+        }
+        const payload = Object.freeze({
+          agentId: initial.agentId,
+          sessionKey: initial.canonicalKey,
+          sessionId: initial.entry.sessionId,
+          access: after.access,
+        });
+        accessPublications.set(payload, {
+          client,
+          agentId: initial.agentId,
+          sessionKey: initial.canonicalKey,
+          isCurrent: () => {
+            const current = readAccess(client);
+            return current?.cacheKey === before.cacheKey && current.access === after.access;
+          },
+        });
+        try {
+          gatewayBroadcaster.broadcastToConnIds(
+            "session.access.changed",
+            payload,
+            new Set([client.connId]),
+            { agentId: initial.agentId, sessionKeys: [initial.canonicalKey] },
+          );
+        } finally {
+          accessPublications.delete(payload);
+        }
+      }
+    };
+  }
   const mentionInbox = createMentionInbox({
     scheduler: params.scheduler,
     gatewayInstanceId: params.bootId,
@@ -242,6 +393,7 @@ export function createGatewayConnectionState(params: {
       sessionViewers = declarations;
     },
     clients,
+    prepareSessionAccessChange,
     forgetConnectionAncestors,
     connectionWork: new GatewayConnectionWork(),
     mentionInbox,

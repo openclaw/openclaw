@@ -44,6 +44,7 @@ import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
 import { ChatPaneHistory } from "./chat-pane-history.ts";
 import type { ChatBoardPanelSource } from "./chat-pane-panel-source.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
+import { readChatSessionAccess } from "./chat-pane-state.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { readChatSessionSnapshot } from "./session-message-cache.ts";
@@ -83,6 +84,11 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         listLoading: this.state.sessionsLoading,
         sessionKey: row.key,
         session: row,
+        access: readChatSessionAccess(this.context.gateway.snapshot, {
+          sessionKey: row.key,
+          agentId: this.resolveBoardConversation().agentId,
+          sessionId: row.sessionId,
+        }),
       }) &&
       readSessionMethodAccess(this.context.gateway.snapshot, {
         method: "sessions.patch",

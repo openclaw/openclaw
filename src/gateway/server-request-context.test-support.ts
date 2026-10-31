@@ -73,6 +73,7 @@ export function makeContextParams(
       broadcast: vi.fn(),
       publishPresence: vi.fn(),
       broadcastToConnIds: vi.fn(),
+      prepareSessionAccessChange: vi.fn(() => () => {}),
       nodeSendToSession: vi.fn(),
       nodeSendToAllSubscribed: vi.fn(),
       nodeSubscribe: vi.fn(),

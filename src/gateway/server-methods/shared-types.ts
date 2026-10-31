@@ -74,6 +74,7 @@ import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { ConnectionSessionRows } from "../session-ancestor-references.js";
 import type { SessionMutationTarget } from "../session-mutation-authorization-error.js";
 import type { SessionObserverService } from "../session-observer-contract.js";
+import type { SessionSharingTarget } from "../session-sharing-target.types.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
 import type { TerminalSessionManager } from "../terminal/session-manager.js";
 import type {
@@ -338,6 +339,8 @@ type GatewayTransportContext = {
   ensureSandboxHostPort?: () => Promise<number>;
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  /** Capture current recipients before a sharing commit; publish only its observed access changes. */
+  prepareSessionAccessChange?: (target: SessionSharingTarget) => () => void;
   getClientConnIds?: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
   nodeSendToSession: (
     sessionKey: string,

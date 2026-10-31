@@ -38,9 +38,11 @@ import {
 } from "./chat-pane-sidebar-layout.ts";
 import {
   chatSubmitState,
+  createChatPaneReplyProps,
   createChatPaneSendActions,
   createChatPaneRunRecoveryActions,
   dismissChatError,
+  readChatSessionAccess,
   resolveChatPaneFollowUpMode,
 } from "./chat-pane-state.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
@@ -147,13 +149,19 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const placementStartup = this.context.placementStartup.get(state.sessionKey);
     const pendingReason = chatSendPendingReason(state, state.sessionKey, placementStartup !== null);
     const runActive = hasDirectSessionRun(state);
+    const gatewaySnapshot = this.context.gateway.snapshot;
+    const sessionAccess = readChatSessionAccess(gatewaySnapshot, {
+      sessionKey: state.sessionKey,
+      agentId: currentAgentId,
+      sessionId: state.currentSessionId || selectedSession?.sessionId,
+    });
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
       catalog,
+      access: sessionAccess,
       listLoading: state.sessionsLoading,
       sessionKey: `${currentAgentId ?? ""}\0${state.sessionKey}`,
       session: cachedSession ?? selectedSession,
     });
-    const gatewaySnapshot = this.context.gateway.snapshot;
     const mainKey = resolveUiConfiguredMainKey({
       agentsList: this.context.agents.state.agentsList,
       hello: gatewaySnapshot.hello,
@@ -214,10 +222,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onRewind: (entryId) => this.rewindToMessage(entryId),
       onFork: (entryId) => this.forkFromMessage(entryId),
     });
-    const setReply = (target: ChatProps["replyTarget"]) => {
-      state.chatReplyTarget = target;
-      state.handleChatDraftChange(state.chatMessage);
-    };
     const replyMessageAccess = this.currentReplyMessageAccess(state.sessionKey);
     const composerControls = catalogKey
       ? undefined
@@ -272,14 +276,11 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       cached: cachedSession?.unarchiveAllowed === true,
     });
     const initialHistoryUnavailable = !catalogKey && isInitialChatHistoryUnavailable(state);
-    const presence = this.presence.snapshot;
-    const composerSessionKey = state.sessionKey;
-    const catalogCanContinue = this.history.catalogSession?.canContinue === true;
-    const composerPendingReason = state.connected ? null : pendingReason;
     const auth = gatewaySnapshot.hello?.auth ?? null;
     const hasWriteScope = hasOperatorWriteAccess(auth);
     const composerAccess = hasWriteScope || (!catalog && mutationAccess.composeScope.allowed);
     const suggestionViewer =
+      sessionAccess !== "revoked" &&
       multiIdentity &&
       !selectedSessionArchived &&
       hasWriteScope &&
@@ -297,19 +298,20 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       !selectedSession?.providerReview &&
       sessionDisabledBanner?.kind !== "composer-replacement" &&
       (catalog
-        ? catalogCanContinue
+        ? this.history.catalogSession?.canContinue === true
         : !disabledReason && !(selectedSessionArchived || placementComposer.blocksSend));
     const canWriteProgressCard = state.connected && !sessionParticipationBlocked && hasWriteScope;
     const typingEnabled =
+      sessionAccess !== "revoked" &&
       multiIdentity &&
       hasWriteScope &&
       !catalog &&
       isGatewayMethodAdvertised(gatewaySnapshot, "session.typing") === true &&
       hasSessionPresenceViewers(
-        presence,
+        this.presence.snapshot,
         gatewaySnapshot.selfUser,
         gatewaySnapshot.client?.instanceId,
-        composerSessionKey,
+        state.sessionKey,
       );
     const composerAvailability = {
       canCompose: composerAccess && available,
@@ -324,7 +326,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
           ? placementComposer.failedUnavailableMessage
           : null) ??
         // Offline sending stays available for the outbox; this band explains pending recovery.
-        composerPendingReason,
+        (state.connected ? null : pendingReason),
       disabledReasonTone:
         !composerAccess ||
         disabledReason ||
@@ -624,9 +626,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         this.connectionGeneration === selectionConnectionGeneration &&
         resolveChatAgentId(state) === currentAgentId &&
         this.stageSessionCompanionAttachment(attachment, sessionKey),
-      replyTarget: state.chatReplyTarget ?? null,
-      onClearReply: () => setReply(null),
-      onSetReply: sessionDisabledBanner ? undefined : setReply,
+      ...createChatPaneReplyProps(state, Boolean(sessionDisabledBanner)),
       replyMessageAccess: catalogKey || selectedSessionArchived ? undefined : replyMessageAccess,
       onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
       agentsList: state.agentsList,

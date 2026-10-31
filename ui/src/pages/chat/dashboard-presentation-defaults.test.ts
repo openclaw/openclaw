@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionsPatchResult } from "../../api/types.ts";
+import { projectGatewaySessionAccess } from "../../app/gateway-observers.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -604,6 +605,63 @@ describe("dashboard shared default in the native Dashboard menu", () => {
       message: t("chat.sidePanel.defaultSaved"),
       anchor: h.pane.element,
     });
+  });
+
+  it("does not save a stale writable dashboard after explicit read-only access and restores ordinary gates", async () => {
+    const row = session({ visibility: "shared", sharingRole: "member" });
+    const h = createDashboardHarness({ row });
+    h.sync();
+    h.state.updateSidebarLayout(openDashboardPresentation(h.state.sidebarLayout, "expanded"), {
+      persist: false,
+    });
+    const capturedMenu = await h.header();
+    expect(capturedMenu.querySelector(defaultAction)).not.toBeNull();
+    const patch = vi.spyOn(h.sessions, "patch");
+    const reply = pendingSave(h);
+    const snapshot = h.pane.context.gateway.snapshot;
+    const fact = {
+      agentId: "main",
+      sessionKey: row.key,
+      sessionId: "dashboard-session",
+      access: "read-only" as const,
+    };
+    snapshot.sessionAccess = projectGatewaySessionAccess(snapshot, fact);
+
+    await select(capturedMenu, "dashboard-default");
+
+    expect(patch).not.toHaveBeenCalled();
+    expect((await h.header()).querySelector(defaultAction)).toBeNull();
+    expect(h.state.chatError).toBeNull();
+    snapshot.sessionAccess = projectGatewaySessionAccess(snapshot, {
+      ...fact,
+      access: "read-write",
+    });
+    const hello = snapshot.hello;
+    if (!hello) {
+      throw new Error("Expected the admitted Gateway hello");
+    }
+    hello.auth = { role: "operator", scopes: ["operator.read"] };
+    await h.pane.saveDashboardDefault(row, "main");
+    expect(patch).not.toHaveBeenCalled();
+    hello.auth = { role: "operator", scopes: ["operator.write", "operator.read"] };
+    const saving = h.pane.saveDashboardDefault(row, "main");
+    expect(patch).toHaveBeenCalledExactlyOnceWith(
+      key,
+      { boardFace: "dashboard", boardPresentation: "expanded" },
+      { agentId: "main", expectedSessionId: "dashboard-session" },
+    );
+    reply.resolve({
+      ok: true,
+      key,
+      path: "(multiple)",
+      entry: {
+        sessionId: "dashboard-session",
+        updatedAt: 20,
+        boardFace: "dashboard",
+        boardPresentation: "expanded",
+      },
+    });
+    await saving;
   });
 
   it("shows a rejected save and releases the pending menu without changing either preference", async () => {

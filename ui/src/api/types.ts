@@ -51,6 +51,7 @@ export type {
   ChannelsPairingListResult,
   ChannelsPairingRequest,
   SessionVisibility,
+  SessionAccessChangedEvent,
   SessionMembersListEvidenceResult,
   SessionsRewindResult,
   SessionsForkResult,

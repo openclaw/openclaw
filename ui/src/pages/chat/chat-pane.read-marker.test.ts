@@ -6,6 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { projectGatewaySessionAccess } from "../../app/gateway-observers.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { withSessionMutationOperations } from "../../lib/sessions/session-mutation-operations.ts";
@@ -260,6 +261,46 @@ describe("chat pane read markers", () => {
 
     expect(patch).toHaveBeenCalledExactlyOnceWith(
       "agent:main:current",
+      { unread: false },
+      { agentId: "main", expectedMarkedUnreadAt: null },
+    );
+  });
+
+  it("keeps a stale writable row silent after revocation and rechecks scope after restoration", () => {
+    const { pane, state, patch } = createReadMarkerPane({});
+    const row = unreadRow({
+      sessionId: "read-access-session",
+      visibility: "shared",
+      sharingRole: "member",
+    });
+    state.sessionsResult = sessionsResult([row], 20);
+    authorize(pane, ["operator.write"]);
+    const snapshot = pane.context.gateway.snapshot;
+    const fact = {
+      agentId: "main",
+      sessionKey: row.key,
+      sessionId: "read-access-session",
+      access: "revoked" as const,
+    };
+    snapshot.sessionAccess = projectGatewaySessionAccess(snapshot, fact);
+
+    pane.markSessionRead(row);
+    pane.markSessionRead(row);
+
+    expect(patch).not.toHaveBeenCalled();
+    expect(state.chatError).toBeNull();
+    expect(state.lastError).toBeNull();
+    snapshot.sessionAccess = projectGatewaySessionAccess(snapshot, {
+      ...fact,
+      access: "read-write",
+    });
+    authorize(pane, ["operator.read"]);
+    pane.markSessionRead(row);
+    expect(patch).not.toHaveBeenCalled();
+    authorize(pane, ["operator.write"]);
+    pane.markSessionRead(row);
+    expect(patch).toHaveBeenCalledExactlyOnceWith(
+      sessionKey,
       { unread: false },
       { agentId: "main", expectedMarkedUnreadAt: null },
     );

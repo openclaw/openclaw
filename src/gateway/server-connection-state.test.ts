@@ -23,6 +23,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { makeClient as makeBroadcastClient } from "./server-broadcast.test-helpers.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import { callSessionSharingHandler } from "./server-methods/sessions-sharing.test-support.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
@@ -152,6 +153,223 @@ function makeClient(connId: string, reads: ConnectionIdReads = { count: 0 }, sen
 }
 
 describe("gateway connection state", () => {
+  it("publishes explicit access changes from sharing mutations", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const cfg: OpenClawConfig = {};
+      setRuntimeConfigSnapshot(cfg);
+      const owner = ensureProfileForEmail("access-owner@example.test");
+      const viewer = ensureProfileForEmail("access-viewer@example.test");
+      const scope = { agentId: "main", sessionKey: "agent:main:access-change" };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "access-change",
+        updatedAt: 1,
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id: owner.id },
+      });
+      await using state = makeState("access-change", cfg);
+      using projection = await project({ cfg, modelCatalog: [] }, state);
+      await projection.ensureMaterialized();
+      const ownerPeer = makeClient("access-owner");
+      const viewerPeer = makeClient("access-viewer");
+      for (const [peer, profile] of [
+        [ownerPeer, owner],
+        [viewerPeer, viewer],
+      ] as const) {
+        identify(peer.client, profile.id);
+        peer.client.connect.scopes = ["operator.read", "operator.write"];
+        controlUi(peer.client);
+        prepareGatewayRecipientProfile(peer.client);
+        state.clients.add(peer.client);
+      }
+      const context = createGatewayRequestContext(makeContextParams(state));
+      const accessEvents = (peer: Peer) =>
+        peer.send.mock.calls
+          .map(([frame]) => JSON.parse(String(frame)))
+          .filter((frame) => frame.event === "session.access.changed")
+          .map((frame) => frame.payload);
+      for (const [visibility, access] of [
+        ["read-only", "read-only"],
+        ["shared", "read-write"],
+        ["draft", "revoked"],
+        ["shared", "read-write"],
+      ] as const) {
+        viewerPeer.send.mockClear();
+        ownerPeer.send.mockClear();
+        const responses = await callSessionSharingHandler(
+          "session.visibility.set",
+          { ...scope, visibility },
+          context,
+          ownerPeer.client,
+        );
+        expect(responses[0]?.[0]).toBe(true);
+        expect(accessEvents(viewerPeer)).toEqual([
+          {
+            ...scope,
+            sessionId: "access-change",
+            access,
+          },
+        ]);
+        expect(accessEvents(ownerPeer)).toEqual([]);
+      }
+      viewerPeer.send.mockClear();
+      await callSessionSharingHandler(
+        "session.visibility.set",
+        { ...scope, visibility: "shared" },
+        context,
+        ownerPeer.client,
+      );
+      expect(accessEvents(viewerPeer)).toEqual([]);
+
+      await callSessionSharingHandler(
+        "session.visibility.set",
+        { ...scope, visibility: "read-only" },
+        context,
+        ownerPeer.client,
+      );
+      for (const [method, access] of [
+        ["session.members.add", "read-write"],
+        ["session.members.add", undefined],
+        ["session.members.remove", "read-only"],
+        ["session.members.remove", undefined],
+      ] as const) {
+        viewerPeer.send.mockClear();
+        ownerPeer.send.mockClear();
+        const responses = await callSessionSharingHandler(
+          method,
+          { ...scope, identityId: viewer.id },
+          context,
+          ownerPeer.client,
+        );
+        expect(responses[0]?.[0]).toBe(true);
+        expect(accessEvents(viewerPeer)).toEqual(
+          access
+            ? [
+                {
+                  ...scope,
+                  sessionId: "access-change",
+                  access,
+                },
+              ]
+            : [],
+        );
+        expect(accessEvents(ownerPeer)).toEqual([]);
+      }
+      await callSessionSharingHandler(
+        "session.visibility.set",
+        { ...scope, visibility: "shared" },
+        context,
+        ownerPeer.client,
+      );
+      for (const method of ["session.members.add", "session.members.remove"] as const) {
+        viewerPeer.send.mockClear();
+        const responses = await callSessionSharingHandler(
+          method,
+          { ...scope, identityId: viewer.id },
+          context,
+          ownerPeer.client,
+        );
+        expect(responses[0]?.[0]).toBe(true);
+        expect(accessEvents(viewerPeer)).toEqual([]);
+      }
+      viewerPeer.send.mockClear();
+      const denied = await callSessionSharingHandler(
+        "session.visibility.set",
+        { ...scope, visibility: "draft" },
+        context,
+        viewerPeer.client,
+      );
+      expect(denied[0]?.[0]).toBe(false);
+      expect(accessEvents(viewerPeer)).toEqual([]);
+    });
+  });
+
+  it.each(["identity", "scopes"] as const)(
+    "suppresses access changes when recipient %s drift before publication",
+    async (drift) => {
+      await withOpenClawTestState(
+        { scenario: "minimal", prepareProfileCatalog: true },
+        async () => {
+          const cfg: OpenClawConfig = {};
+          setRuntimeConfigSnapshot(cfg);
+          const owner = ensureProfileForEmail("drift-owner@example.test");
+          const viewer = ensureProfileForEmail("drift-viewer@example.test");
+          const replacement = ensureProfileForEmail("drift-replacement@example.test");
+          const scope = { agentId: "main", sessionKey: "agent:main:access-drift" };
+          await upsertSessionEntryCore(scope, humanEntry("access-drift", "shared", owner.id));
+          await using state = makeState("access-drift", cfg);
+          using projection = await project({ cfg, modelCatalog: [] }, state);
+          await projection.ensureMaterialized();
+          const ownerPeer = makeClient("drift-owner");
+          const viewerPeer = makeClient("drift-viewer");
+          for (const [peer, profile] of [
+            [ownerPeer, owner],
+            [viewerPeer, viewer],
+          ] as const) {
+            identify(peer.client, profile.id);
+            peer.client.connect.scopes = ["operator.read", "operator.write"];
+            controlUi(peer.client);
+            prepareGatewayRecipientProfile(peer.client);
+            state.clients.add(peer.client);
+          }
+          const context = createGatewayRequestContext(makeContextParams(state));
+          const publish = vi.fn<() => void>();
+          const prepare = vi.fn(
+            (target: Parameters<typeof state.prepareSessionAccessChange>[0]) => {
+              const publishAccessChange = state.prepareSessionAccessChange(target);
+              publish.mockImplementation(() => {
+                if (drift === "identity") {
+                  identify(viewerPeer.client, replacement.id);
+                  prepareGatewayRecipientProfile(viewerPeer.client);
+                } else {
+                  viewerPeer.client.connect.scopes = ["operator.read"];
+                }
+                publishAccessChange();
+              });
+              return publish;
+            },
+          );
+          context.prepareSessionAccessChange = prepare;
+          const responses = await callSessionSharingHandler(
+            "session.visibility.set",
+            { ...scope, visibility: "read-only" },
+            context,
+            ownerPeer.client,
+          );
+          expect(responses[0]?.[0]).toBe(true);
+          expect(
+            projection.sharingTarget({ agentId: scope.agentId, key: scope.sessionKey })?.entry
+              .visibility,
+          ).toBe("read-only");
+          expect(prepare).toHaveBeenCalledTimes(1);
+          expect(publish).toHaveBeenCalledTimes(1);
+          expect(
+            viewerPeer.send.mock.calls
+              .map(([frame]) => JSON.parse(String(frame)))
+              .filter((frame) => frame.event === "session.access.changed"),
+          ).toEqual([]);
+        },
+      );
+    },
+  );
+
+  it("rejects access events not minted for their current connection", async () => {
+    await using state = makeState("forged-access");
+    const peer = makeClient("forged-access");
+    state.clients.add(peer.client);
+    state.broadcast("session.access.changed", {});
+    state.broadcastToConnIds(
+      "session.access.changed",
+      {
+        agentId: "main",
+        sessionKey: "agent:main:private",
+        sessionId: "private",
+        access: "revoked",
+      },
+      new Set([peer.client.connId]),
+    );
+    expect(peer.send).not.toHaveBeenCalled();
+  });
+
   it("retires tool recipients across reconnects without retiring their active runs", () => {
     const state = makeState("tool-recipient-retirement");
     onTestFinished(() => state.mentionInbox.dispose());

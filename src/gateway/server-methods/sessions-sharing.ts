@@ -362,6 +362,7 @@ function createSessionMemberMutationHandler(
       }
       await runExclusiveSharingMutation(managed, access.lifecycleStorePath, async () => {
         const { target: current } = access.current();
+        const publishAccessChange = context.prepareSessionAccessChange?.(current);
         const scope = {
           agentId: current.agentId,
           sessionKey: current.storeKey,
@@ -401,6 +402,8 @@ function createSessionMemberMutationHandler(
           now = Date.now();
           actor = actorIdentity(client);
         }
+        access.assertCurrent();
+        publishAccessChange?.();
         publishSharingChange({
           context,
           actor,
@@ -549,6 +552,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       }
       await runExclusiveSharingMutation(managed, access.lifecycleStorePath, async () => {
         const { target: current } = access.current();
+        const publishAccessChange = context.prepareSessionAccessChange?.(current);
         const scope = {
           agentId: current.agentId,
           sessionKey: current.canonicalKey,
@@ -590,6 +594,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         const now = Date.now();
         const actor = actorIdentity(client);
         assertVisibilityCurrent();
+        publishAccessChange?.();
         publishSharingChange({
           context,
           actor,

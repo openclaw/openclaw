@@ -56,6 +56,7 @@ type GatewayRequestContextRuntime = Pick<
   | "broadcast"
   | "publishPresence"
   | "broadcastToConnIds"
+  | "prepareSessionAccessChange"
   | "nodeSendToSession"
   | "nodeSendToAllSubscribed"
   | "nodeSubscribe"
@@ -351,6 +352,7 @@ export function createGatewayRequestContext(
     publishPresence: runtime.publishPresence,
     getPresenceSnapshot: () => snapshotClientPresence(clients),
     broadcastToConnIds: runtime.broadcastToConnIds,
+    prepareSessionAccessChange: runtime.prepareSessionAccessChange,
     nodeSendToSession: runtime.nodeSendToSession,
     nodeSendToAllSubscribed: runtime.nodeSendToAllSubscribed,
     nodeSubscribe: runtime.nodeSubscribe,

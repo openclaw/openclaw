@@ -34,7 +34,7 @@ import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { ChatPaneComposerHandoff } from "./chat-pane-attachment-handoff.ts";
 import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
-import { chatProviderReviewRow } from "./chat-provider-review.ts";
+import { canStartChatRealtime } from "./chat-pane-state.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
@@ -311,7 +311,7 @@ export function createPageState(
   };
   attachChatRealtimeActions(
     state,
-    () => !chatProviderReviewRow(state)?.providerReview,
+    () => canStartChatRealtime(state, context.gateway.snapshot),
     (message, runId) =>
       requestChatSend(state, {
         message,

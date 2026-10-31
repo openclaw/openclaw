@@ -1,5 +1,6 @@
 import type {
   ModelCatalogTarget,
+  SessionAccessChangedEvent,
   UserProfile,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySuspension } from "../../../packages/gateway-protocol/src/schema/gateway-suspend.js";
@@ -42,6 +43,8 @@ export type ApplicationGatewaySnapshot = {
    */
   hello: GatewayHelloOk | null;
   pluginCapabilities?: PluginsUiDescriptorsResult | null;
+  /** Explicit restrictions from the current connection; list absence grants no access fact. */
+  sessionAccess?: readonly SessionAccessChangedEvent[];
   usagePublications?: Readonly<
     Record<string, Readonly<Omit<SessionCostUsagePublication, "agentId"> & { committedAt: number }>>
   >;
