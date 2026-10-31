@@ -4,6 +4,7 @@ import {
   resolveThreadBindingThreadName,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   getRuntimeConfigSnapshot,
@@ -14,7 +15,10 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { registerSessionBindingAdapterV2 } from "openclaw/plugin-sdk/thread-bindings-runtime";
+import {
+  registerSessionBindingAdapterV2,
+  type SessionBindingAdapterV2,
+} from "openclaw/plugin-sdk/thread-bindings-runtime";
 import { warnPluginSdkDeprecation } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { createDiscordRestClient } from "../client.js";
 import { getChannel } from "../internal/discord.js";
@@ -45,6 +49,7 @@ import {
   getThreadBindingToken,
   MANAGERS_BY_ACCOUNT_ID,
   PERSIST_BY_ACCOUNT_ID,
+  THREAD_BINDINGS_STATE,
   ensureBindingsLoadedAsync,
   rememberThreadBindingToken,
   normalizeTargetKind,
@@ -66,6 +71,12 @@ import {
   type ThreadBindingManager,
   type ThreadBindingRecord,
 } from "./thread-bindings.types.js";
+
+// Shared across loaders like the manager registry, so a replacement can retire any predecessor.
+const SESSION_ADAPTERS_BY_MANAGER = resolveGlobalSingleton(
+  Symbol.for("openclaw.discordThreadBindingSessionAdapters"),
+  () => new WeakMap<ThreadBindingManager, SessionBindingAdapterV2>(),
+);
 
 function isDirectConversationBindingId(value?: string | null): boolean {
   const trimmed = normalizeOptionalString(value);
@@ -105,11 +116,7 @@ function createLoadedThreadBindingManager(
   params: Parameters<typeof createThreadBindingManager>[0],
 ): ThreadBindingManager {
   const accountId = normalizeAccountId(params.accountId);
-  const existing = MANAGERS_BY_ACCOUNT_ID.get(accountId);
   rememberThreadBindingToken({ accountId, token: params.token });
-  if (existing) {
-    return existing;
-  }
 
   const persist = params.persist ?? shouldDefaultPersist();
   PERSIST_BY_ACCOUNT_ID.set(accountId, persist);
@@ -360,6 +367,11 @@ function createLoadedThreadBindingManager(
       };
       return runOwnedMutation(async () => {
         const assertCurrent = bindParams.assertCurrent;
+        // A replaced manager must not create Discord resources it can no longer publish.
+        const assertCreateAllowed = () => {
+          assertManagerCurrent();
+          assertCurrent?.();
+        };
         assertCurrent?.();
         const cfg = resolveCurrentCfg();
         let threadId = normalizeOptionalStringifiedId(bindParams.threadId);
@@ -390,7 +402,7 @@ function createLoadedThreadBindingManager(
               token: resolveCurrentToken(),
               channelId,
               threadName: normalizeOptionalString(bindParams.threadName) ?? threadName,
-              ...(assertCurrent ? { assertCreateAllowed: assertCurrent } : {}),
+              assertCreateAllowed,
             })) ?? undefined;
           nativeBindingCreated = Boolean(threadId);
         }
@@ -445,7 +457,7 @@ function createLoadedThreadBindingManager(
             accountId,
             token: resolveCurrentToken(),
             channelId,
-            ...(assertCurrent ? { assertCreateAllowed: assertCurrent } : {}),
+            assertCreateAllowed,
           });
           webhookId = createdWebhook.webhookId ?? "";
           webhookToken = createdWebhook.webhookToken ?? "";
@@ -478,7 +490,8 @@ function createLoadedThreadBindingManager(
           metadata: { ...previous?.metadata, ...bindParams.metadata },
         };
 
-        // A confirmed native create must be published even if its initiator was revoked in flight.
+        // A confirmed native create must be published even if its initiator was revoked or
+        // its manager was replaced in flight; the account's current owner serves the record.
         if (!nativeBindingCreated) {
           assertCurrent?.();
         }
@@ -489,8 +502,8 @@ function createLoadedThreadBindingManager(
             next: record,
             persist,
             assertCurrent: () => {
-              assertManagerCurrent();
               if (!nativeBindingCreated) {
+                assertManagerCurrent();
                 assertCurrent?.();
               }
             },
@@ -579,6 +592,14 @@ function createLoadedThreadBindingManager(
 
   if (params.enableSweeper !== false) {
     sweepTimer = setInterval(() => {
+      // Provider cleanup may never reach stop after handover, even with a sweep still pending.
+      if (MANAGERS_BY_ACCOUNT_ID.get(accountId) !== manager) {
+        if (sweepTimer) {
+          clearInterval(sweepTimer);
+          sweepTimer = null;
+        }
+        return;
+      }
       if (stopping || sweepPromise) {
         return;
       }
@@ -607,6 +628,19 @@ function createLoadedThreadBindingManager(
   });
 
   registerSessionBindingAdapterV2(sessionBindingAdapter);
+  // A predecessor that never stops must not resurface when this owner stops.
+  const predecessor = MANAGERS_BY_ACCOUNT_ID.get(accountId);
+  const predecessorAdapter = predecessor && SESSION_ADAPTERS_BY_MANAGER.get(predecessor);
+  if (predecessorAdapter) {
+    unregisterSessionBindingAdapter({ channel: "discord", accountId, adapter: predecessorAdapter });
+  }
+  SESSION_ADAPTERS_BY_MANAGER.set(manager, sessionBindingAdapter);
+  // Session-wide mutations queue on the current owner, so they must join its predecessor's work.
+  const predecessorTail =
+    predecessor && THREAD_BINDINGS_STATE.accountOperationTails.get(predecessor);
+  if (predecessorTail) {
+    THREAD_BINDINGS_STATE.accountOperationTails.set(manager, predecessorTail);
+  }
 
   MANAGERS_BY_ACCOUNT_ID.set(accountId, manager);
   return manager;
