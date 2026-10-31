@@ -19,4 +19,9 @@ export function getProcessSupervisor(): ProcessSupervisor {
   return (holder.current ??= createProcessSupervisor());
 }
 
+/** Process shutdown owns idle background commands even when another runtime stays retained. */
+export async function shutdownProcessSupervisor(): Promise<void> {
+  await holder.current?.shutdown();
+}
+
 export type { ManagedRun, ProcessSupervisor } from "./types.js";

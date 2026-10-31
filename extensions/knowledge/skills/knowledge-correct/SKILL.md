@@ -73,7 +73,7 @@ shared stable account ID), never on name similarity; `knowledge_diagnostics`
 `mergeCandidates` lists pages to check, not pages to merge. Retain the identity
 evidence with `knowledge_attach` and pass it as `evidence`.
 
-Inspect affected prose, claims, timelines and relationships within the correction
+Inspect affected prose, claims and relationships, including source notes, within the correction
 scope. Correct mistaken attribution and unresolved identity where the new evidence
 supports it, using the page/assertion operations above; preserve source labels,
 verbatim quotes, event dates and correction provenance. A confirmed author identity

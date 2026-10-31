@@ -213,7 +213,9 @@ export function formatEventLabel(event: WorkboardEvent): string {
 }
 
 export function matchesCardQuery(card: WorkboardCard, search: string): boolean {
-  const query = search.trim().toLowerCase();
+  // Normalize comparison text only; card labels/notes/diagnostics are user/agent-writable
+  // and may be NFD (e.g. from mobile IME), which would fail to match NFC storage text.
+  const query = search.trim().toLowerCase().normalize("NFC");
   if (!query) {
     return true;
   }
@@ -268,7 +270,7 @@ export function matchesCardQuery(card: WorkboardCard, search: string): boolean {
     ...card.labels,
   ]
     .filter((value): value is string => typeof value === "string")
-    .some((value) => value.toLowerCase().includes(query));
+    .some((value) => value.toLowerCase().normalize("NFC").includes(query));
 }
 
 export function isWorkboardSessionChoice(session: GatewaySessionRow): boolean {

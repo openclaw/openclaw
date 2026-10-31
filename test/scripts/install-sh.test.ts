@@ -406,6 +406,7 @@ NODE
       OS=macos
       check_git() { return 0; }
       ensure_pnpm() { :; }
+      ensure_node() { :; }
       resolve_git_openclaw_ref() { printf 'main\\n'; }
       checkout_git_openclaw_ref() {
         [[ "$1" == "$repo" && "$2" == "main" ]] || return 1
@@ -2146,6 +2147,76 @@ EOF
     );
   });
 
+  it.each([
+    ["24.21.0", ">=24.22.1 <25 || >=26.12.1", true],
+    ["24.22.1", ">=24.22.1 <25 || >=26.12.1", false],
+    ["24.21.0", ">=24.16.0 <25 || >=26.1.0", false],
+    ["24.21.0", "", true],
+    ["26.12.0", "", true],
+    ["26.12.1", "", false],
+  ])(
+    "selects a package-compatible runtime for Node %s and engines %s",
+    (version, engine, upgrade) => {
+      const result = runInstallShell(`
+      source "${SCRIPT_PATH}"
+      bootstrap_gum_temp() { :; }; print_installer_banner() { :; }; print_gum_status() { :; }
+      detect_os_or_die() { OS=linux; }; detect_openclaw_checkout() { return 1; }
+      show_install_plan() { :; }; check_existing_openclaw() { return 1; }
+      load_nvm_for_node_detection() { :; }; use_supported_nvm_node() { return 1; }
+      promote_supported_node_binary() { return 1; }; install_homebrew() { :; }
+      node_binary_has_safe_sqlite() { return 0; }
+      node() { printf 'v%s\\n' "$fixture_version"; }
+      npm() {
+        [[ "$*" == 'view openclaw@extended-stable engines.node --fetch-timeout=5000 --fetch-retries=0' ]] || exit 91
+        [[ -n "$fixture_engine" ]] || return 1
+        printf '%s\\n' "$fixture_engine"
+      }
+      install_node() { echo 'runtime upgraded'; fixture_version=26.12.1; }
+      check_git() { return 0; }; fix_npm_permissions() { :; }
+      prepare_git_wrapper_backup_for_npm() { :; }
+      install_openclaw() { check_node; echo 'package install reached'; exit 0; }
+      fixture_version='${version}' fixture_engine='${engine}'
+      INSTALL_METHOD=npm OPENCLAW_VERSION=extended-stable
+      main
+    `);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toContain("package install reached");
+      expect(result.stdout.includes("runtime upgraded")).toBe(upgrade);
+    },
+  );
+
+  it.each([
+    ["main", ">=24.16.0 <25 || >=26.1.0", false],
+    ["v2026.10.8", ">=24.22.1 <25 || >=26.12.1", true],
+  ])("uses git %s engines before provisioning Node", (ref, engine, upgrade) => {
+    const result = runInstallShell(`
+      source "${SCRIPT_PATH}"
+      bootstrap_gum_temp() { :; }; print_installer_banner() { :; }; print_gum_status() { :; }
+      detect_os_or_die() { OS=linux; }; detect_openclaw_checkout() { return 1; }
+      show_install_plan() { :; }; check_existing_openclaw() { return 1; }
+      load_nvm_for_node_detection() { :; }; use_supported_nvm_node() { return 1; }
+      promote_supported_node_binary() { return 1; }; install_homebrew() { :; }
+      node_binary_has_safe_sqlite() { return 0; }
+      node() { printf 'v%s\\n' "$fixture_version"; }
+      npm() { return 1; }
+      install_node() { echo 'runtime upgraded'; fixture_version=26.12.1; }
+      check_git() { return 0; }; validate_git_checkout() { :; }
+      clone_git_checkout_transactionally() { mkdir -p "$2/.git"; }
+      git() { return 0; }
+      resolve_git_openclaw_ref() { echo '${ref}'; }
+      checkout_git_openclaw_ref() {
+        printf '%s\\n' '{"engines":{"node":"${engine}"}}' > "$1/package.json"
+      }
+      ensure_pnpm() { check_node; echo 'git build reached'; exit 0; }
+      fixture_version=24.21.0
+      INSTALL_METHOD=git OPENCLAW_VERSION='${ref}' GIT_DIR="$HOME/checkout"
+      main
+    `);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("git build reached");
+    expect(result.stdout.includes("runtime upgraded")).toBe(upgrade);
+  });
+
   it.each(["install.sh", "install-cli.sh"])(
     "checks canonical Node release labels in %s",
     (installer) => {
@@ -2235,6 +2306,7 @@ EOF
         `
         source "scripts/${installer}"
         PATH="$FIXTURE_ROOT:$PATH"
+        NODE_PACKAGE_ENGINE=">=24.16.0 <25 || >=26.1.0"
         node_bin() { printf '%s/node' "$FIXTURE_ROOT"; }
         npm_bin() { printf '%s/npm' "$FIXTURE_ROOT"; }
         set +e
@@ -2364,17 +2436,22 @@ EOF
     expect(result.stdout).toContain("fund=false");
   });
 
-  it("warns before redirecting an unwritable npm prefix and persists it before shell guards", () => {
-    const tmp = tempDirs.make("openclaw-install-npm-prefix-");
-    const home = join(tmp, "home");
-    const events = join(tmp, "events.log");
-    mkdirSync(home, { recursive: true });
-    writeFileSync(
-      join(home, ".bashrc"),
-      'case $- in\n  *i*) ;;\n  *) return ;;\nesac\nexport PATH="$HOME/.npm-global/bin:$PATH"\n',
-    );
+  it.each(["success", "mkdir", "config"] as const)(
+    "redirects an unwritable npm prefix only after successful setup: %s",
+    (failure) => {
+      const tmp = tempDirs.make("openclaw-install-npm-prefix-");
+      const home = join(tmp, "home");
+      const events = join(tmp, "events.log");
+      mkdirSync(home, { recursive: true });
+      if (failure === "mkdir") {
+        writeFileSync(join(home, ".npm-global"), "existing user file");
+      }
+      writeFileSync(
+        join(home, ".bashrc"),
+        'case $- in\n  *i*) ;;\n  *) return ;;\nesac\nexport PATH="$HOME/.npm-global/bin:$PATH"\n',
+      );
 
-    const result = runInstallShell(`
+      const result = runInstallShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
       SHELL=/bin/bash
@@ -2390,6 +2467,7 @@ EOF
         fi
         if [[ "$1" == "config" && "$2" == "set" && "$3" == "prefix" ]]; then
           printf 'npm-set:%s\\n' "$4" >> "$events"
+          ${failure === "config" ? "return 73" : ""}
           return 0
         fi
         return 1
@@ -2397,30 +2475,43 @@ EOF
       ui_info() { printf 'info:%s\\n' "$*" >> "$events"; }
       ui_warn() { printf 'warn:%s\\n' "$*" >> "$events"; }
       ui_success() { printf 'success:%s\\n' "$*" >> "$events"; }
-      fix_npm_permissions
+      fix_npm_permissions || exit 1
       cat "$events"
       printf 'first=%s\\n' "$(sed -n '1p' "$HOME/.bashrc")"
       HOME=${JSON.stringify(home)} PATH=/usr/bin:/bin bash -c 'source_rc() { . "$HOME/.bashrc"; }; source_rc; printf "path=%s\\n" "\${PATH%%:*}"'
     `);
 
-    expect(result.status).toBe(0);
-    const lines = result.stdout.trim().split("\n");
-    const warningIndex = lines.findIndex((line) =>
-      line.includes("The installer will switch npm's user prefix"),
-    );
-    const npmSetIndex = lines.findIndex((line) => line.startsWith("npm-set:"));
-    const noSudoWarningIndex = lines.findIndex((line) => line.includes("Avoid sudo npm i -g"));
-    expect(warningIndex).toBeGreaterThanOrEqual(0);
-    expect(npmSetIndex).toBeGreaterThan(warningIndex);
-    expect(noSudoWarningIndex).toBeGreaterThan(npmSetIndex);
-    expect(result.stdout).toContain("npm global prefix is not writable");
-    expect(result.stdout).toContain("npm normally writes that setting to ~/.npmrc");
-    expect(result.stdout).toContain("npm i -g openclaw@latest");
-    expect(result.stdout).toContain("using this user prefix");
-    expect(result.stdout).not.toContain("has been saved");
-    expect(result.stdout).toContain('first=export PATH="$HOME/.npm-global/bin:$PATH"');
-    expect(result.stdout).toContain(`path=${home}/.npm-global/bin`);
-  });
+      if (failure !== "success") {
+        expect(result.status, result.stdout + result.stderr).toBe(1);
+        const recorded = readFileSync(events, "utf8");
+        expect(recorded).not.toContain("success:");
+        expect(recorded).not.toContain("Avoid sudo npm i -g");
+        expect(readFileSync(join(home, ".bashrc"), "utf8")).toMatch(/^case \$-/);
+        if (failure === "mkdir") {
+          expect(recorded).not.toContain("npm-set:");
+          expect(readFileSync(join(home, ".npm-global"), "utf8")).toBe("existing user file");
+        }
+        return;
+      }
+      expect(result.status).toBe(0);
+      const lines = result.stdout.trim().split("\n");
+      const warningIndex = lines.findIndex((line) =>
+        line.includes("The installer will switch npm's user prefix"),
+      );
+      const npmSetIndex = lines.findIndex((line) => line.startsWith("npm-set:"));
+      const noSudoWarningIndex = lines.findIndex((line) => line.includes("Avoid sudo npm i -g"));
+      expect(warningIndex).toBeGreaterThanOrEqual(0);
+      expect(npmSetIndex).toBeGreaterThan(warningIndex);
+      expect(noSudoWarningIndex).toBeGreaterThan(npmSetIndex);
+      expect(result.stdout).toContain("npm global prefix is not writable");
+      expect(result.stdout).toContain("npm normally writes that setting to ~/.npmrc");
+      expect(result.stdout).toContain("npm i -g openclaw@latest");
+      expect(result.stdout).toContain("using this user prefix");
+      expect(result.stdout).not.toContain("has been saved");
+      expect(result.stdout).toContain('first=export PATH="$HOME/.npm-global/bin:$PATH"');
+      expect(result.stdout).toContain(`path=${home}/.npm-global/bin`);
+    },
+  );
 
   it.each([
     { shell: "bash", profiles: [".bashrc", ".profile"], absent: [".zshrc", ".zprofile"] },

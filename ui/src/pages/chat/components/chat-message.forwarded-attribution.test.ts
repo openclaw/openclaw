@@ -224,6 +224,26 @@ it("keeps the sender on narrated file links in a run frame", () => {
   openReport();
 });
 
+it.each([{ phase: "final_answer" }, { stopReason: "stop" }])(
+  "keeps an explicit mixed forwarded answer visible with file and reply actions (%j)",
+  (terminal) => {
+    const [group] = groupMessages([
+      narration([{ type: "text", text: reportLink }, readCall("read-report", reportPath)], 1_000, {
+        senderSession: { sessionKey },
+        ...terminal,
+      }),
+    ]);
+    if (group?.kind !== "group") {
+      throw new Error("Missing forwarded answer group");
+    }
+    expect(group.role).toBe("assistant");
+    renderGroup(group, { onReply: vi.fn() });
+    openReport();
+    expect(query('button[aria-label="Reply to message"]')).not.toBeNull();
+    expect(query('button[aria-label="Copy as markdown"]')).not.toBeNull();
+  },
+);
+
 it.each([false, true])("preserves sender attribution (forwarded=%s)", async (forwarded) => {
   const group = createGroup(forwarded ? mainSession : undefined, {}, "Forwarded from main");
   renderGroup(group);

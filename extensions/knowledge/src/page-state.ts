@@ -57,6 +57,10 @@ export type PageState = {
   timer: ReturnType<typeof setTimeout> | undefined;
   suggestGeneration: number;
   vocabulary: Awaited<ReturnType<typeof loadVocabulary>> | undefined;
+  /** Agent whose Scribes tab count is shown; another agent's count is read again. */
+  scribesCountAgent: string;
+  /** Last committed content of recently left views, keyed by view key, shown again on return. */
+  retainedViews: Map<string, Node[]>;
   refreshing: boolean;
   refreshAgain: boolean;
   pendingReplaceLocation: boolean;
@@ -115,6 +119,8 @@ export function createPageState(
     timer: undefined,
     suggestGeneration: 0,
     vocabulary: undefined,
+    scribesCountAgent: "",
+    retainedViews: new Map(),
     refreshing: false,
     refreshAgain: false,
     pendingReplaceLocation: true,

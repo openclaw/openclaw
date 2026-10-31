@@ -58,7 +58,7 @@ export type LocalWorkspaceBaselineDocument = {
 };
 
 export type LocalWorkspaceManifestAction =
-  | { kind: "scan"; target: "canonical" | "projection"; canonicalRoot: string }
+  | { kind: "scan" | "probe"; target: "canonical" | "projection"; canonicalRoot: string }
   | { kind: "materialize" }
   | { kind: "convert" }
   | { kind: "repair"; canonicalRoot: string }
@@ -246,111 +246,126 @@ export async function executeLocalWorkspaceManifestRead(
     // Every candidate is scanned afresh and authenticated by the exact saved root.
     const baselinePaths = new Set(snapshot.records.keys());
     baselinePaths.delete("");
-    const baselineDirectories = new Set(
+    const knownDirectories = new Set(
       [...snapshot.records.values()]
         .filter(({ node }) => node.type === "directory" && node.path !== "")
         .map(({ node }) => node.path),
     );
+    // A checkpoint can retain empty ancestors whose physical contents are now excluded.
+    for (const node of documents[1]?.values() ?? []) {
+      if (node.type === "directory") {
+        knownDirectories.add(node.path);
+      }
+    }
     let canonicalPaths: Set<string> | undefined;
-    let projectionPaths: Set<string> | undefined;
-    let projectionDirectories: Set<string> | undefined;
     let scanFailure: unknown;
-    for (const candidate of ["projection", "canonical", "canonicalWithProjectionPaths"] as const) {
-      const extendCanonical = candidate === "canonicalWithProjectionPaths";
-      if (extendCanonical && !projectionPaths) {
-        continue;
-      }
-      const root = candidate === "projection" ? row.projection_path : action.canonicalRoot;
-      const nodes: LocalWorkspaceManifestNode[] = [];
-      try {
-        let includePaths: Set<string> | undefined;
-        const preserveDirectories = new Set(baselineDirectories);
-        if (candidate !== "projection") {
-          canonicalPaths ??= await selectLocalWorkspaceCanonicalPaths({
-            root,
-            admittedPaths: row.source_paths_json,
-            baselinePaths,
-            assertCurrent: () => undefined,
-          });
-          includePaths = new Set(canonicalPaths);
-          // Keep the original canonical candidate first: a later guest addition
-          // can share a name with unrelated host-only bytes.
-          if (extendCanonical) {
-            for (const entryPath of projectionPaths!) {
-              includePaths.add(entryPath);
-            }
-            for (const entryPath of projectionDirectories!) {
-              preserveDirectories.add(entryPath);
-            }
-          }
-          for (const document of documents) {
-            for (const entryPath of document.keys()) {
-              includePaths.add(entryPath);
-            }
-          }
+    // Older accepted roots can contain the pnpm fallback store. Try current
+    // membership first, then restore only that historical eligibility for repair.
+    for (const includeLegacyPnpmStore of [false, true]) {
+      let projectionPaths: Set<string> | undefined;
+      let projectionDirectories: Set<string> | undefined;
+      for (const candidate of [
+        "projection",
+        "canonical",
+        "canonicalWithProjectionPaths",
+      ] as const) {
+        const extendCanonical = candidate === "canonicalWithProjectionPaths";
+        if (extendCanonical && !projectionPaths) {
+          continue;
         }
-        await scanActualWorkspaceManifest({
-          root,
-          baseCommit: row.base_commit,
-          includePaths,
-          preserveDirectories,
-          buildCacheInputs: retained,
-          onEntry: (node) => nodes.push(node),
-        });
-      } catch (error) {
-        scanFailure = error;
-        continue;
-      }
-      if (candidate === "projection") {
-        // Failed scans never contribute partial hints. Names only select a later
-        // candidate; they do not enroll files or change source admission.
-        projectionPaths = new Set(nodes.map((node) => node.path));
-        projectionDirectories = new Set(
-          nodes.filter((node) => node.type === "directory").map((node) => node.path),
-        );
-      }
-      const records = createLocalWorkspaceManifestTree(nodes);
-      if (
-        checkpoint &&
-        records.get("")!.treeRef === checkpoint.treeRoot &&
-        expectedRoot === checkpoint.previousTreeRoot
-      ) {
-        const [base, result] = documents;
-        updateLocalWorkspaceManifestTree(
-          records,
-          [...new Set([...base!.keys(), ...result!.keys()])].map((entryPath) => ({
-            path: entryPath,
-            node: base!.get(entryPath),
-          })),
-        );
-      }
-      const treeRoot = records.get("")!.treeRef;
-      const repairedNodes = [...records.values()]
-        .map(({ node }) => node)
-        .filter((node) => node.path !== "");
-      const rebuiltRoot = row.tree_root_digest
-        ? treeRoot
-        : row.baseline_json
-          ? manifestDocument(repairedNodes, row.base_commit, undefined, "stored").manifestRef
-          : localWorkspaceManifestRootReference(records, row.base_commit);
-      // Reconstruct only the exact saved merge base. Divergent live files remain edits.
-      if (rebuiltRoot === expectedRoot) {
-        return {
-          kind: "replace",
-          update: prepareUpdate(
-            {
-              kind: "update",
-              revision: row.revision,
-              patch: {
-                tree_root_digest: localWorkspaceDigestBytes(treeRoot),
-                ...(!row.tree_root_digest && !row.pending_ref ? { baseline_json: null } : {}),
-                canonical_fingerprints: null,
-                projection_fingerprints: null,
+        const root = candidate === "projection" ? row.projection_path : action.canonicalRoot;
+        const nodes: LocalWorkspaceManifestNode[] = [];
+        try {
+          let includePaths: Set<string> | undefined;
+          const preserveDirectories = new Set(knownDirectories);
+          if (candidate !== "projection") {
+            canonicalPaths ??= await selectLocalWorkspaceCanonicalPaths({
+              root,
+              admittedPaths: row.source_paths_json,
+              baselinePaths,
+              assertCurrent: () => undefined,
+            });
+            includePaths = new Set(canonicalPaths);
+            // Keep the original canonical candidate first: a later guest addition
+            // can share a name with unrelated host-only bytes.
+            if (extendCanonical) {
+              for (const entryPath of projectionPaths!) {
+                includePaths.add(entryPath);
+              }
+              for (const entryPath of projectionDirectories!) {
+                preserveDirectories.add(entryPath);
+              }
+            }
+            for (const document of documents) {
+              for (const entryPath of document.keys()) {
+                includePaths.add(entryPath);
+              }
+            }
+          }
+          await scanActualWorkspaceManifest({
+            root,
+            baseCommit: row.base_commit,
+            includePaths,
+            preserveDirectories,
+            buildCacheInputs: retained,
+            includeLegacyPnpmStore,
+            onEntry: (node) => nodes.push(node),
+          });
+        } catch (error) {
+          scanFailure = error;
+          continue;
+        }
+        if (candidate === "projection") {
+          // Failed scans never contribute partial hints. Names only select a later
+          // candidate; they do not enroll files or change source admission.
+          projectionPaths = new Set(nodes.map((node) => node.path));
+          projectionDirectories = new Set(
+            nodes.filter((node) => node.type === "directory").map((node) => node.path),
+          );
+        }
+        const records = createLocalWorkspaceManifestTree(nodes);
+        if (
+          checkpoint &&
+          records.get("")!.treeRef === checkpoint.treeRoot &&
+          expectedRoot === checkpoint.previousTreeRoot
+        ) {
+          const [base, result] = documents;
+          updateLocalWorkspaceManifestTree(
+            records,
+            [...new Set([...base!.keys(), ...result!.keys()])].map((entryPath) => ({
+              path: entryPath,
+              node: base!.get(entryPath),
+            })),
+          );
+        }
+        const treeRoot = records.get("")!.treeRef;
+        const repairedNodes = [...records.values()]
+          .map(({ node }) => node)
+          .filter((node) => node.path !== "");
+        const rebuiltRoot = row.tree_root_digest
+          ? treeRoot
+          : row.baseline_json
+            ? manifestDocument(repairedNodes, row.base_commit, undefined, "stored").manifestRef
+            : localWorkspaceManifestRootReference(records, row.base_commit);
+        // Reconstruct only the exact saved merge base. Divergent live files remain edits.
+        if (rebuiltRoot === expectedRoot) {
+          return {
+            kind: "replace",
+            update: prepareUpdate(
+              {
+                kind: "update",
+                revision: row.revision,
+                patch: {
+                  tree_root_digest: localWorkspaceDigestBytes(treeRoot),
+                  ...(!row.tree_root_digest && !row.pending_ref ? { baseline_json: null } : {}),
+                  canonical_fingerprints: null,
+                  projection_fingerprints: null,
+                },
               },
-            },
-            prepareLocalWorkspaceTreePacks(records),
-          ),
-        };
+              prepareLocalWorkspaceTreePacks(records),
+            ),
+          };
+        }
       }
     }
     throw new Error(
@@ -537,26 +552,40 @@ export async function executeLocalWorkspaceManifestRead(
     previousTreeRoot ? previousFingerprints : null,
     scanStartedAtMs,
   );
-  await scanActualWorkspaceManifest({
-    root: action.target === "canonical" ? row.projection_path : action.canonicalRoot,
-    baseCommit: row.base_commit,
-    includePaths: action.target === "projection" ? canonicalPaths : undefined,
-    preserveDirectories,
-    buildCacheInputs: new Set(retained),
-    reuseFile: fingerprintScan.reuseFile,
-    onEntry(node, identity) {
-      seen.add(node.path);
-      const previous = records.get(node.path);
-      if (!sameEntry(previous?.node, node)) {
-        changes.push({ path: node.path, node });
-      }
-      if (identity !== undefined) {
-        fingerprintScan.observe(node.path, identity);
-      }
-    },
-  });
+  const changedDuringProbe = new Error("Workspace changed during reuse probe");
+  try {
+    await scanActualWorkspaceManifest({
+      root: action.target === "canonical" ? row.projection_path : action.canonicalRoot,
+      baseCommit: row.base_commit,
+      includePaths: action.target === "projection" ? canonicalPaths : undefined,
+      preserveDirectories,
+      buildCacheInputs: new Set(retained),
+      reuseFile: fingerprintScan.reuseFile,
+      onEntry(node, identity) {
+        seen.add(node.path);
+        const previous = records.get(node.path);
+        if (!sameEntry(previous?.node, node)) {
+          if (action.kind === "probe") {
+            throw changedDuringProbe;
+          }
+          changes.push({ path: node.path, node });
+        }
+        if (identity !== undefined) {
+          fingerprintScan.observe(node.path, identity);
+        }
+      },
+    });
+  } catch (error) {
+    if (error === changedDuringProbe) {
+      return { kind: "rescan" };
+    }
+    throw error;
+  }
   for (const entryPath of records.keys()) {
     if (entryPath !== "" && !seen.has(entryPath)) {
+      if (action.kind === "probe") {
+        return { kind: "rescan" };
+      }
       changes.push({ path: entryPath });
     }
   }
@@ -590,7 +619,7 @@ export async function executeLocalWorkspaceManifestRead(
       currentNodes.push(current.node);
     }
   }
-  const base = manifestDocument(previousNodes, row.base_commit, retained);
+  const base = manifestDocument(previousNodes, row.base_commit, retained, "stored");
   const current = manifestDocument(currentNodes, row.base_commit, retained);
   const replace = row.tree_root_digest === null;
   const treeRoot = records.get("")!.treeRef;

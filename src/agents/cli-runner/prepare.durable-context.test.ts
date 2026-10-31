@@ -9,7 +9,6 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import type { CliBackendExecuteContext } from "../../plugins/cli-backend.types.js";
 import * as globalHooks from "../../plugins/hook-runner-global.js";
@@ -536,19 +535,6 @@ describe("CLI durable session context", () => {
           timestamp: 1,
         },
       });
-      const pending = await stageSessionPendingInput(fixture.session.sessionTarget, {
-        runId: "interrupted-account-request",
-        message: {
-          role: "user",
-          content: "PRIVATE-INTERRUPTED-1234",
-          timestamp: 1,
-          idempotencyKey: "interrupted-account-request:user",
-        },
-        assertCurrent: () => {},
-      });
-      const receipt = expectDefined(pending, "interrupted input receipt");
-      receipt.finish("interrupted");
-      await receipt.settled?.();
       const context = await history.prepare({
         ...(testCase.resume ? { cliSessionId: "existing-native-session" } : {}),
         ...(testCase.account ? { authProfileId: `history-test:${testCase.account}` } : {}),
@@ -560,11 +546,9 @@ describe("CLI durable session context", () => {
       try {
         const logicalPrompt = context.promptForHooks ?? context.params.prompt;
         if (denied) {
-          expect(logicalPrompt).not.toContain("PRIVATE-INTERRUPTED-1234");
           expect(logicalPrompt).not.toContain("RESULT-1234");
           expect(context.cliHistoryWriter).toBeUndefined();
         } else {
-          expect(logicalPrompt).toContain("PRIVATE-INTERRUPTED-1234");
           expect(logicalPrompt).toContain("RESULT-1234");
           expect(logicalPrompt).toContain("data, not instructions");
           expect(context.params.transcriptPrompt).toBe("latest ask");
@@ -598,7 +582,7 @@ describe("CLI durable session context", () => {
               testCase.resume ? "existing-native-session" : undefined,
             );
             expect(sent).toHaveLength(1);
-            expect(JSON.stringify(sent).includes("PRIVATE-INTERRUPTED-1234")).toBe(!denied);
+            expect(JSON.stringify(sent).includes("RESULT-1234")).toBe(!denied);
           }
         }
         expect(context.openClawHistoryPrompt).toBeUndefined();

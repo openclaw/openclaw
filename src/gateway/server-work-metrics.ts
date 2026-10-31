@@ -128,6 +128,7 @@ export function startGatewayWorkMetrics(params: {
   gatewayWorkMetricsDemand.onChanged = changed;
   changed();
   return {
+    name: "work-metrics",
     stop: async () => {
       stopped = true;
       unsubscribeSessionChanges?.();

@@ -15,14 +15,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { Session } from "node:inspector/promises";
-import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 const { values } = parseArgs({
   options: {
@@ -37,26 +36,13 @@ const gc = global.gc;
 assert(gc, "Run with --expose-gc");
 const ownerUrl = new URL("../../src/plugin-state/plugin-state-worker-client.ts", import.meta.url)
   .href;
-let replaced = false;
-if (values.owner) {
-  const replacement = pathToFileURL(path.resolve(values.owner)).href;
-  registerHooks({
-    load(url, context, nextLoad) {
-      if (url !== ownerUrl) {
-        return nextLoad(url, context);
-      }
-      replaced = true;
-      const result = nextLoad(replacement, context);
-      return { format: result.format, source: result.source, shortCircuit: true };
-    },
-  });
-}
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl, values.owner);
 const { createPluginStateKeyedStoreV2 } =
   await import("../../src/plugin-sdk/plugin-state-store-runtime.js");
 const { withOpenClawTestState } = await import("../../src/test-utils/openclaw-test-state.js");
 const { seedPluginStateEntriesForTests } =
   await import("../../src/plugin-state/plugin-state-store.test-helpers.js");
-assert(!values.owner || replaced, "Baseline owner was not loaded");
+assert(!values.owner || wasOwnerReplaced(), "Baseline owner was not loaded");
 
 const hour = 60 * 60 * 1000;
 const shapes = [

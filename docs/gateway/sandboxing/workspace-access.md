@@ -82,12 +82,25 @@ not admit host files, including newly provisioned files. Existing admitted sourc
 edits and guest-created files continue to reconcile, including guest-created
 ignored files. Source filenames must be valid UTF-8; rename invalid Git paths
 before retrying preparation. Publication uses the same admission boundary.
+
+A newly created filename containing a literal backslash cannot pass workspace
+checkpoint validation. Its bytes and the pending checkpoint remain preserved.
+The same authorized session can continue using its retained sandbox workspace
+to inspect and explicitly correct that filename with its ordinary permitted
+tools. This workspace can still contain an older view of canonical files; newer
+canonical edits are not imported over the pending changes. File delivery and
+command finalization continue to report the checkpoint failure until correction
+allows normal reconciliation. Existing conflict checks protect concurrent
+canonical edits, and subsequent preparation imports those accepted changes.
+This continuation does not bypass staged conflicts, journal recovery, or the
+session's current permissions, and OpenClaw does not rename or omit the file.
+
 Host recovery snapshots retain host data under their existing rules, but
 restoration does not admit that data to the guest. Use the
 session's managed GitHub publication action to publish accepted changes; host credentials are not
 copied into the sandbox. The runtime-owned `.openclaw/sandbox-skills` subtree
-is excluded from workspace reconciliation and publication, as is the scratch
-directory described below. Other project content under `.openclaw` is retained.
+is excluded from workspace reconciliation and publication, as are the scratch
+directory and dependency cache described below. Other project content under `.openclaw` is retained.
 Its empty mount targets are created by the host
 workspace owner before container allocation, while the skill mounts remain
 read-only. This also keeps normal retention cleanup independent of container
@@ -99,7 +112,7 @@ recovery, including previously retained inputs. Similarly named source files
 such as `.gitignore`, `.gitmodules`, and `.git-notes` still reconcile normally.
 
 At the checkout root, `.cache/vitest/`, `.cache/bun-transpiler/`, `.cache/openclaw/bun/`,
-`.cache/ms-playwright/`, and `.local/share/pnpm/store/` caches stay with the runtime
+`.cache/ms-playwright/`, `.local/share/pnpm/store/`, and `.openclaw/.pnpm-store/` caches stay with the runtime
 that produced them, along with `.artifacts/vitest-workers/` compiler outputs,
 `.artifacts/vitest-worker-cache/` retained compiler outputs,
 `.artifacts/vitest-shard-timings.json` scheduling samples, and
@@ -114,6 +127,9 @@ Other guest-created files under `.cache/`, `.local/`, and `.artifacts/` still
 reconcile, including nested paths and explicit staged inputs; an ignore
 rule alone does not make a file disposable. Source changes cannot remove a
 runtime-owned lock subtree by replacing its parent directory.
+
+pnpm can select `.openclaw/.pnpm-store/` when installing beneath a protected
+`.openclaw` mount and its home store cannot hard-link into that project.
 
 Changed user files remain limited to 64 MiB each. If one exceeds the limit, reduce
 it or move it outside synchronization before retrying; repeated messages cannot
@@ -140,7 +156,9 @@ canonical candidate containing paths observed by a complete sandbox scan, so
 accepted guest-created files need not be in the host Git index. These paths are
 only recovery candidates: their current content must reproduce the exact saved
 baseline before replacement metadata is accepted. Recovery keeps other live
-edits and pending receipts. If neither can be verified, the error names
+edits and pending receipts. Repair can read `.openclaw/.pnpm-store/` when verifying
+an older saved baseline; subsequent synchronization still keeps new cache contents
+local. If neither can be verified, the error names
 both preserved paths and a command to compare them. That command only inspects
 differences; it does not restore the missing baseline. Keep both directories and
 ask a Gateway administrator to recover the saved baseline inventory before retrying.
@@ -210,7 +228,11 @@ fail with an explanation rather than falling back to host execution.
 
 The managed worktree remains the source of truth for files, snapshots, and
 publication. OpenClaw pauses the exact execution and browser runtimes that mount
-this checkout while capturing or applying changes, records pending results and
+this checkout while capturing or applying changes. An existing session first
+checks both workspaces against their accepted baseline without pausing. If both
+are unchanged and no recovery is pending, its runtimes keep running. Changed or
+interrupted checks return to paused reconciliation; file edits are never applied
+from the live check. OpenClaw records pending results and
 rollback journals in SQLite, and resumes
 only after settlement. New shell calls and command preparation wait for an active
 checkpoint to release the workspace before proceeding; background commands do not

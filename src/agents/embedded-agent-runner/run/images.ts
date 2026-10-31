@@ -22,7 +22,7 @@ import { resolveMediaReferenceLocalPath } from "../../../media/media-reference.j
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
 import { getMediaDir } from "../../../media/store.js";
-import { loadWebMedia, type WebMediaResult } from "../../../media/web-media.js";
+import { loadWebMediaRaw, type WebMediaResult } from "../../../media/web-media.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { resolveUserPath } from "../../../utils.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -31,7 +31,7 @@ import {
   resolveSandboxedBridgeMediaPath,
 } from "../../sandbox-media-paths.js";
 import type { SandboxFsBridge } from "../../sandbox/fs-bridge.js";
-import { sanitizeImageBlocks } from "../../tool-images.js";
+import { MAX_IMAGE_INPUT_BYTES, sanitizeImageBlocks } from "../../tool-images.js";
 import { getAgentWorkspaceAccess } from "../../workspace-access.js";
 import { log } from "../logger.js";
 import {
@@ -228,12 +228,12 @@ async function loadMediaFromRef(
     }
 
     const media = sandbox
-      ? await loadWebMedia(targetPath, {
+      ? await loadWebMediaRaw(targetPath, {
           maxBytes: options.maxBytes,
           sandboxValidated: true,
           readFile: createSandboxBridgeReadFile({ sandbox }),
         })
-      : await loadWebMedia(
+      : await loadWebMediaRaw(
           targetPath,
           localRoots ? { maxBytes: options.maxBytes, localRoots } : options.maxBytes,
         );
@@ -384,7 +384,8 @@ export async function detectAndLoadPromptImages(
   const loadRef = async (ref: MediaFileRef & { workspaceDir?: string }, attachment = false) => {
     const loadedMedia = await loadMediaFromRef(
       ref,
-      { ...params, signal: undefined },
+      // Agent sanitization owns resizing for inline and replayed images alike.
+      { ...params, maxBytes: MAX_IMAGE_INPUT_BYTES, signal: undefined },
       "Native image",
       attachment,
     );

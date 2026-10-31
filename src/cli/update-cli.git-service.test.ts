@@ -246,7 +246,7 @@ it.each(["stopped", "throws", "refused"] as const)(
     } else {
       f.expectFailedManagedGitRestart(
         failure === "stopped"
-          ? "Gateway responded, but the managed service did not report running after restart."
+          ? "Managed Gateway service status: stopped."
           : "Gateway: restart failed: Error: restart unavailable",
       );
     }

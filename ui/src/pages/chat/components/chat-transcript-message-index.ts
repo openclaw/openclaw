@@ -1,3 +1,4 @@
+import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { nativeHistoryMessageIdentity } from "../../../lib/chat/history-message-identity.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
@@ -157,8 +158,10 @@ export function projectTranscriptChain(
     bubbleMode?: boolean;
     messages?: readonly unknown[];
     activeRunId?: string | null;
+    session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
   },
 ): TranscriptChain {
+  const { session } = options;
   const liveIndex = findLiveStreamIndex(chatItems);
   const liveStream = chatItems[liveIndex];
   const key = [
@@ -170,6 +173,10 @@ export function projectTranscriptChain(
     options.bubbleMode,
     options.messages,
     options.activeRunId,
+    session?.key,
+    session?.lastRunId,
+    session?.status,
+    session?.runtimeMs,
     readLiveTerminalRevision(),
   ];
   const cached = chains.get(chatItems);
@@ -324,17 +331,12 @@ export function projectTranscriptIndex(
             transcriptMessageKeys.set(source.key, rowKey);
             const sourceMessageId = persistedMessageEntryId(source.message);
             if (sourceMessageId) {
-              // Split fragments share a persisted ID. Prefer a visible anchor and
-              // resolve actions against the original recorded envelope.
-              const previous = loadedReplySources.get(sourceMessageId);
-              if (!previous || source.hasVisibleContent) {
-                messageRowKeysById.set(sourceMessageId, rowKey);
-                loadedReplySources.set(sourceMessageId, {
-                  message: source.actionMessage ?? source.message,
-                  messageId: source.actionKey ?? source.key,
-                  senderLabel,
-                });
-              }
+              messageRowKeysById.set(sourceMessageId, rowKey);
+              loadedReplySources.set(sourceMessageId, {
+                message: source.message,
+                messageId: source.key,
+                senderLabel,
+              });
             }
           }
         }

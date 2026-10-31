@@ -499,64 +499,67 @@ export async function consultRealtimeVoiceAgent(params: {
       const abortSignal = runRegistration?.abortSignal
         ? AbortSignal.any([lifecycleAbortController.signal, runRegistration.abortSignal])
         : lifecycleAbortController.signal;
+      let runPromise: ReturnType<RealtimeVoiceAgentConsultRuntime["runEmbeddedAgent"]>;
       try {
         abortSignal.throwIfAborted();
         assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
-      } catch (error) {
-        runRegistration?.cleanupBeforeRun?.();
-        runRegistration?.cleanup?.();
-        throw error;
-      }
-
-      // Voice consults suppress verbose/reasoning output because the bridge needs a short,
-      // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.
-      const runPromise = params.agentRuntime.runEmbeddedAgent({
-        sessionId,
-        sessionKey: params.sessionKey,
-        sessionTarget: {
-          agentId,
+        // Voice consults suppress verbose/reasoning output because the bridge needs a short,
+        // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.
+        runPromise = params.agentRuntime.runEmbeddedAgent({
           sessionId,
           sessionKey: params.sessionKey,
-          storePath,
-        },
-        spawnedBy: sessionEntry.spawnedBy,
-        sandboxSessionKey: resolveRealtimeVoiceAgentSandboxSessionKey(agentId, params.sessionKey),
-        agentId,
-        ...toolAuthorityOverlay,
-        // ASR voice ingress has no trace/client-tool or privileged handoff capability.
-        messageProvider: toolAuthorityOverlay.messageProvider,
-        messageTo: consultDeliveryContext?.to,
-        messageThreadId: consultDeliveryContext?.threadId,
-        currentChannelId: consultDeliveryContext?.to,
-        currentThreadTs:
-          consultDeliveryContext?.threadId != null
-            ? String(consultDeliveryContext.threadId)
-            : undefined,
-        workspaceDir,
-        cwd,
-        config: params.cfg,
-        prompt: buildRealtimeVoiceAgentConsultPrompt(params),
-        provider: params.provider,
-        model: params.model,
-        thinkLevel: params.thinkLevel ?? "high",
-        fastMode: params.fastMode,
-        verboseLevel: "off",
-        reasoningLevel: "off",
-        toolResultFormat: "plain",
-        execSession: sessionEntry,
-        sessionRoot: normalizeOptionalString(sessionEntry.sessionRoot),
-        toolsAllow: params.toolsAllow,
-        toolBindings: params.toolBindings,
-        timeoutMs,
-        runId,
-        lane: params.lane,
-        extraSystemPrompt:
-          params.extraSystemPrompt ??
-          "You are the configured OpenClaw agent receiving delegated requests from a live voice bridge. Act on behalf of the user, use available tools when appropriate, and return a brief speakable result.",
-        agentDir,
-        ...params.prepareToolContext?.(sessionEntry),
-        abortSignal,
-      });
+          sessionTarget: {
+            agentId,
+            sessionId,
+            sessionKey: params.sessionKey,
+            storePath,
+          },
+          spawnedBy: sessionEntry.spawnedBy,
+          sandboxSessionKey: resolveRealtimeVoiceAgentSandboxSessionKey(agentId, params.sessionKey),
+          agentId,
+          ...toolAuthorityOverlay,
+          // ASR voice ingress has no trace/client-tool or privileged handoff capability.
+          messageProvider: toolAuthorityOverlay.messageProvider,
+          messageTo: consultDeliveryContext?.to,
+          messageThreadId: consultDeliveryContext?.threadId,
+          currentChannelId: consultDeliveryContext?.to,
+          currentThreadTs:
+            consultDeliveryContext?.threadId != null
+              ? String(consultDeliveryContext.threadId)
+              : undefined,
+          workspaceDir,
+          cwd,
+          config: params.cfg,
+          prompt: buildRealtimeVoiceAgentConsultPrompt(params),
+          provider: params.provider,
+          model: params.model,
+          thinkLevel: params.thinkLevel ?? "high",
+          fastMode: params.fastMode,
+          verboseLevel: "off",
+          reasoningLevel: "off",
+          toolResultFormat: "plain",
+          execSession: sessionEntry,
+          sessionRoot: normalizeOptionalString(sessionEntry.sessionRoot),
+          toolsAllow: params.toolsAllow,
+          toolBindings: params.toolBindings,
+          timeoutMs,
+          runId,
+          lane: params.lane,
+          extraSystemPrompt:
+            params.extraSystemPrompt ??
+            "You are the configured OpenClaw agent receiving delegated requests from a live voice bridge. Act on behalf of the user, use available tools when appropriate, and return a brief speakable result.",
+          agentDir,
+          ...params.prepareToolContext?.(sessionEntry),
+          abortSignal,
+        });
+      } catch (error) {
+        try {
+          runRegistration?.cleanupBeforeRun?.();
+        } finally {
+          runRegistration?.cleanup?.();
+        }
+        throw error;
+      }
       const result = await runPromise
         .catch((error: unknown) => {
           assertRealtimeVoiceConsultNotInterrupted(abortSignal);

@@ -2589,7 +2589,9 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       ) {
         throw new Error("Graph streaming lost content during finalization");
       }
-      await page.locator(`${activePane} .chat-send-btn--send`).waitFor();
+      // Empty mobile composers show voice input instead of the disabled Send button.
+      await page.locator(`${activePane} .chat-send-btn--send`).waitFor({ state: "attached" });
+      await page.locator(`${activePane} .chat-send-btn--stop`).waitFor({ state: "detached" });
       return { deltas: 100, finalized: true };
     },
   },

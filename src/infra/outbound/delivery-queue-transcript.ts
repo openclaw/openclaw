@@ -3,10 +3,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { commitConfirmedVisibleMessage } from "../../sessions/confirmed-visible-message.js";
 import type { DeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import { formatErrorMessage } from "../errors.js";
-import {
-  deliveryPlacementMatchesContext,
-  type DeliveryPlacementEvidence,
-} from "./delivery-placement-evidence.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
@@ -23,18 +19,8 @@ type RecoveryTranscriptOptions = {
 export async function commitRecoveredVisibleMessages(
   opts: RecoveryTranscriptOptions,
   stateContext: DeliveryQueueStateContext,
-  placement?: DeliveryPlacementEvidence,
 ): Promise<void> {
   const { entry } = opts;
-  if (
-    entry.transcriptProvenance?.kind === "recovery-notice" &&
-    !deliveryPlacementMatchesContext(placement, entry)
-  ) {
-    opts.log.warn(
-      `Delivery entry ${entry.id}: recovery notice receipt does not confirm its captured destination; conversation history was not changed`,
-    );
-    return;
-  }
   const accepted = acceptedPreparedOutboundEntries(entry.preparedBatch);
   const prepared = accepted[0];
   const rendered = entry.renderedBatchPlan?.items[0];
@@ -65,7 +51,6 @@ export async function commitRecoveredVisibleMessages(
       threadId: entry.threadId,
       producer: entry.session,
       provenance: entry.transcriptProvenance,
-      generation: entry.sessionGeneration,
       expectedGeneration: entry.sessionGeneration
         ? {
             sessionKey: entry.sessionGeneration.sessionKey,

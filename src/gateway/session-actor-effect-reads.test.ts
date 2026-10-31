@@ -15,8 +15,8 @@ import * as checkoutDiff from "../sessions/session-diff.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withControlUiSessionPrSource } from "./control-ui-session-pr-source.js";
 import { prepareGitHubPublicationSession } from "./github-publication-availability.js";
+import { withSessionFileRoot } from "./server-methods/session-files-root.js";
 import { loadSessionDiff } from "./server-methods/sessions-diff.js";
-import { withSessionFileRoot } from "./server-methods/sessions-files.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),

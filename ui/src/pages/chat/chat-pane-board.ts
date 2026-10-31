@@ -1,6 +1,7 @@
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import { isNativeMobileHost } from "../../app/native-web-chrome.ts";
 import {
   hasOperatorApprovalsAccess,
   hasOperatorReadAccess,
@@ -453,6 +454,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       this.observedBoardPresence.set(sessionKey, board.hasBoard);
       if (
         this.presented &&
+        !isNativeMobileHost() &&
         previous === false &&
         board.hasBoard &&
         board.face === "chat" &&
@@ -676,7 +678,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   protected handleBoardCommand(event: BoardCommandEvent): void {
-    if (!this.presented) {
+    if (!this.presented || isNativeMobileHost()) {
       return;
     }
     const board = this.resolveBoardView();

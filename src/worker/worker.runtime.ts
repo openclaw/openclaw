@@ -53,6 +53,11 @@ async function assertWorkerDirectory(pathname: string, label: string): Promise<s
 
 /** Holds process-local state until every command owned by this environment has exited. */
 export async function createWorkerRuntimeEnvironment(sessionId: string) {
+  // The dedicated node supplies this process-local transport outside the descriptor.
+  // Register again in the worker process before any turn can emit diagnostics.
+  if (process.env.IDENTITY_HEADER) {
+    registerSecretValueForRedaction(process.env.IDENTITY_HEADER);
+  }
   const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-"));
   await chmod(stateDir, 0o700);
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;

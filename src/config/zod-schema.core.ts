@@ -332,6 +332,7 @@ const ModelProviderSchema = z.strictObject({
       z.literal("oauth"),
       z.literal("token"),
       z.literal("none"),
+      z.literal("native-command"),
     ])
     .optional(),
   /** Default API adapter for models under this provider. */

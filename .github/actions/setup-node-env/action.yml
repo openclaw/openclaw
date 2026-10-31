@@ -11,6 +11,10 @@ inputs:
     description: Prepare Linux kernel memory containment for lint, compiler and tooling tests.
     required: false
     default: "false"
+  native-secret-service:
+    description: Install Linux binaries for the selected task-private native OAuth fixture.
+    required: false
+    default: "false"
   install-bun:
     description: Whether to install Bun alongside Node.
     required: false
@@ -157,6 +161,21 @@ runs:
             test "$(cat "/sys/fs/cgroup$group/memory.swap.max")" = 0
             test "$(cat "/sys/fs/cgroup$group/memory.oom.group")" = 1
           '
+
+    - name: Prepare native Secret Service fixture binaries
+      if: runner.os == 'Linux' && inputs.native-secret-service == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if command -v dbus-daemon >/dev/null && command -v gnome-keyring-daemon >/dev/null && command -v gdbus >/dev/null; then
+          exit 0
+        fi
+        sudo -n apt-get update
+        sudo -n apt-get install -y --no-install-recommends dbus gnome-keyring libglib2.0-bin
+        # Fixtures start their own bus and keyring; setup never opens a user credential store.
+        command -v dbus-daemon
+        command -v gnome-keyring-daemon
+        command -v gdbus
 
     - name: Normalize container toolcache
       shell: bash

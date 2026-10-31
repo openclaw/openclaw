@@ -35,6 +35,7 @@ import {
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
+import { readMeetingTranscriptMigrationDetectionState } from "../infra/state-migrations.meeting-transcripts-detection.js";
 import { createUpdateRunAsync, recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
 import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "./openclaw-agent-db-lease.js";
 import { repairOpenClawAgentDatabasePaths } from "./openclaw-agent-db-path-repair.js";
@@ -81,6 +82,16 @@ const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.
 const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type Result = { namespace: string; admissionId: string; catalogReads: number; threadId: number };
+function readStateArtifacts(directory: string, pathname: string) {
+  const credentialPath = path.join(directory, "client", "credentials.sqlite");
+  expect([
+    fs.readdirSync(directory).toSorted(),
+    fs.readdirSync(path.dirname(pathname)).toSorted(),
+    fs.readdirSync(path.dirname(credentialPath)).toSorted(),
+  ]).toEqual([["client", "state"], ["openclaw.sqlite"], ["credentials.sqlite"]]);
+  return [fs.readFileSync(pathname), fs.readFileSync(credentialPath)];
+}
+
 const legacyIndexOrderingSql = withLegacyPostgresIndexOrdering(
   postgresIndexOrderingMigration(
     [statePostgresRuntime.eagerSql, ...statePostgresRuntime.fragments.map(({ sql }) => sql)].join(
@@ -338,16 +349,10 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
             "before",
             1,
           );
-          return getPostgresPhysicalFacts(db)?.namespace;
+          return expectDefined(getPostgresPhysicalFacts(db), "PostgreSQL fixture").namespace;
         }, options),
       );
-      expect(namespace).toBeDefined();
-      const anchor = fs.readFileSync(pathname);
-      const credentialPath = path.join(directory, "client", "credentials.sqlite");
-      expect(fs.readdirSync(directory).toSorted()).toEqual(["client", "state"]);
-      expect(fs.readdirSync(path.dirname(pathname)).toSorted()).toEqual(["openclaw.sqlite"]);
-      expect(fs.readdirSync(path.dirname(credentialPath))).toEqual(["credentials.sqlite"]);
-      const credentialBytes = fs.readFileSync(credentialPath);
+      const artifacts = readStateArtifacts(directory, pathname);
       await withOpenClawStateDatabaseReadSnapshot(async () => {
         expect(await read()).toBe("before");
         await writer.query(
@@ -372,11 +377,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         expect(await read(true)).toBe("after");
       }, options);
       expect(await read()).toBe("after");
-      expect(fs.readFileSync(pathname)).toEqual(anchor);
-      expect(fs.readFileSync(credentialPath)).toEqual(credentialBytes);
-      expect(fs.readdirSync(directory).toSorted()).toEqual(["client", "state"]);
-      expect(fs.readdirSync(path.dirname(pathname)).toSorted()).toEqual(["openclaw.sqlite"]);
-      expect(fs.readdirSync(path.dirname(credentialPath))).toEqual(["credentials.sqlite"]);
+      expect(readStateArtifacts(directory, pathname)).toEqual(artifacts);
     } finally {
       await closeOpenClawStateDatabaseAsync();
       await cleanupPostgresStateFixture(writer, pathname, namespace);
@@ -505,33 +506,30 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       namespace = withEngineStoreAdmission(() =>
         runOpenClawStateWriteTransaction(({ db }) => {
           ensureAgentDatabaseLeaseSchema(db);
+          db.exec(`INSERT INTO migration_runs (id, started_at, status, report_json)
+            VALUES ('meeting-import', 1, 'imported', '{}');
+            INSERT INTO migration_sources
+            (source_key, migration_kind, source_path, target_table, last_run_id, status, imported_at, report_json)
+            VALUES ('meeting-import', 'meeting-transcripts-files-v1', 'synthetic', 'meeting_transcript_sessions', 'meeting-import', 'imported', 1, '{}');`);
           db.prepare(
             "INSERT INTO agent_database_leases (lease_id, agent_id, path, owner_pid, owner_start_time, opened_at) VALUES (?, ?, ?, ?, NULL, ?)",
           ).run("diagnostic-lease", "main", path.join(directory, "agent.sqlite"), process.pid, 1);
           db.prepare(
             "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
           ).run(stateKey, valueJson, 1);
-          return getPostgresPhysicalFacts(db)?.namespace;
+          return expectDefined(getPostgresPhysicalFacts(db), "PostgreSQL fixture").namespace;
         }, options),
       );
-      expect(namespace).toBeDefined();
-      const anchorBytes = fs.readFileSync(pathname);
-      const credentialPath = path.join(directory, "client", "credentials.sqlite");
-      expect(fs.readdirSync(directory).toSorted()).toEqual(["client", "state"]);
-      expect(fs.readdirSync(path.dirname(pathname)).toSorted()).toEqual(["openclaw.sqlite"]);
-      expect(fs.readdirSync(path.dirname(credentialPath))).toEqual(["credentials.sqlite"]);
-      const credentialBytes = fs.readFileSync(credentialPath);
+      const artifacts = readStateArtifacts(directory, pathname);
       let prepared: Promise<{ changes: string[]; warnings: string[] }> | undefined;
       withEngineStoreAdmission(() => {
         prepared = prepareOpenClawStateDatabaseSchema(options, "doctor-preparation");
-        expect(repairOpenClawStateDatabaseIndexesForDoctor(options)).toEqual({
-          changes: [],
-          warnings: [],
-        });
-        expect(repairOpenClawStateDatabaseReadabilityForDoctor(options)).toEqual({
-          changes: [],
-          warnings: [],
-        });
+        for (const repair of [
+          repairOpenClawStateDatabaseIndexesForDoctor,
+          repairOpenClawStateDatabaseReadabilityForDoctor,
+        ]) {
+          expect(repair(options)).toEqual({ changes: [], warnings: [] });
+        }
       });
       expect(await prepared).toEqual({ changes: [], warnings: [] });
       for (const source of ["warm", "cold"]) {
@@ -540,6 +538,12 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         }
         withEngineStoreAdmission(() => {
           expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
+          for (const artifactPreservingReadOnly of [false, true]) {
+            expect(
+              readMeetingTranscriptMigrationDetectionState({ env, artifactPreservingReadOnly })
+                .pendingImportCount,
+            ).toBe(1);
+          }
           expect(
             readActiveOpenClawAgentDatabaseLeasesReadOnly(
               options,
@@ -555,11 +559,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
           ),
         );
         expect(reply?.row).toEqual({ value_json: valueJson, updated_at_ms: 1 });
-        expect(fs.readFileSync(pathname)).toEqual(anchorBytes);
-        expect(fs.readFileSync(credentialPath)).toEqual(credentialBytes);
-        expect(fs.readdirSync(directory).toSorted()).toEqual(["client", "state"]);
-        expect(fs.readdirSync(path.dirname(pathname)).toSorted()).toEqual(["openclaw.sqlite"]);
-        expect(fs.readdirSync(path.dirname(credentialPath))).toEqual(["credentials.sqlite"]);
+        expect(readStateArtifacts(directory, pathname)).toEqual(artifacts);
       }
       using anchor = openNodeSqliteDatabase(pathname, { readOnly: true });
       expect(

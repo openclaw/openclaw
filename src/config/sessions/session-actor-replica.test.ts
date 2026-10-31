@@ -18,10 +18,6 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  beginRestartRecoveryTerminalDelivery,
-  completeRestartRecoveryTerminalDelivery,
-} from "./restart-recovery-receipt.js";
 import { createSessionEntryWithTranscript } from "./session-accessor.entry-mutation.js";
 import { loadSessionEntry } from "./session-accessor.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
@@ -832,13 +828,8 @@ it("invalidates pending custody for staging, promotion, terminal completion and 
   ]);
 });
 
-it("retires hot facts across the released SDK and restart delivery owners", async ({ fixture }) => {
+it("retires hot facts across the released SDK owner", async ({ fixture }) => {
   const { scope } = fixture;
-  replaceSessionEntrySync(scope, {
-    ...fixture.load().entry!,
-    restartRecoveryDeliveryRunId: "recovery-run",
-    restartRecoveryDeliverySourceRunId: "source-run",
-  });
   hydrate(fixture);
   await expect(
     patchSdkSessionEntry({
@@ -849,23 +840,7 @@ it("retires hot facts across the released SDK and restart delivery owners", asyn
   ).resolves.toMatchObject({ label: "sdk label" });
   expect(reloadInvalidated(fixture).entry).toMatchObject({
     label: "sdk label",
-    restartRecoveryDeliveryRunId: "recovery-run",
   });
-
-  const delivery = {
-    ...scope,
-    sessionId: "replica-session",
-    sourceTurnId: "source-run",
-    toolCallId: "synthetic-delivery",
-  };
-  await expect(beginRestartRecoveryTerminalDelivery(delivery)).resolves.toBe("started");
-  expect(reloadInvalidated(fixture).entry?.restartRecoveryDeliveryReceiptState).toBe(
-    "terminal-pending",
-  );
-  await expect(completeRestartRecoveryTerminalDelivery(delivery)).resolves.toBe("recorded");
-  expect(reloadInvalidated(fixture).entry?.restartRecoveryDeliveryReceiptState).toBe(
-    "delivered-terminal",
-  );
 });
 
 it("retires a resident session when native maintenance archives it", async ({ fixture }) => {

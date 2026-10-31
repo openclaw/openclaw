@@ -27,7 +27,6 @@ import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admissi
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "../../sessions/session-controller.lifecycle.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
-import { WORKER_ADMISSION_DEADLINE_MS } from "../../worker/worker-connection-contract.js";
 import { workerInferencePlacement } from "./inference-placement.js";
 import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type {
@@ -56,7 +55,6 @@ export type WorkerTurnAdmissionOptions = {
   environments: Pick<WorkerEnvironmentService, "get">;
   placements: WorkerSessionPlacementStore;
   reconcileActivePlacement: (environmentId: string) => Promise<void>;
-  isInterruptedTurn?: (placement: WorkerSessionPlacementRecord) => boolean;
   waitForAdmissionNode: (params: {
     placement: ActiveWorkerPlacement;
     signal: AbortSignal;
@@ -112,28 +110,6 @@ export async function admitWorkerTurn(
 /** Required policy uses current placement facts at the existing turn-admission boundary. */
 export function createRequiredWorkerTurnAdmission(options: WorkerTurnAdmissionOptions) {
   return {
-    async recoverInterruptedTurn(
-      placement: WorkerSessionPlacementRecord,
-      turn: SessionPlacementTurnParams,
-      assertCurrent: () => void,
-    ): Promise<WorkerSessionPlacementRecord> {
-      if (placement.state !== "active" || !options.isInterruptedTurn?.(placement)) {
-        return placement;
-      }
-      const signal = AbortSignal.timeout(Math.min(WORKER_ADMISSION_DEADLINE_MS, turn.timeoutMs));
-      await options.waitForAdmissionNode({
-        placement,
-        signal: turn.abortSignal ? AbortSignal.any([turn.abortSignal, signal]) : signal,
-        assertCurrent,
-      });
-      await options.reconcileActivePlacement(placement.environmentId);
-      const recovered = await options.placements.getAsync(placement.sessionId);
-      assertCurrent();
-      if (!recovered) {
-        throw new Error("Worker restart recovery lost placement");
-      }
-      return recovered;
-    },
     usesWorkerInference: async (identity: Omit<LocalTurnPlacementClaim, "runId">) => {
       const projection = await options.placements.readProjection([identity.sessionId], {
         current: true,

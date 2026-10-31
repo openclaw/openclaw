@@ -20,7 +20,12 @@ describe("chat pane history loading", () => {
     const { pane, state } = createRefreshChatPane(createGatewayBrowserClientFixture({ request }));
     const messages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
     state.chatMessages = messages;
-    state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
+    state.chatHistoryPagination = {
+      hasMore: true,
+      olderCursor: "older-loading",
+      nextOffset: 2,
+      totalMessages: 4,
+    };
     let refresh!: () => void;
     const { container } = mountSolid(() => {
       const [revision, setRevision] = createSignal(0);
@@ -61,7 +66,13 @@ describe("chat pane history loading", () => {
     loading.click();
     expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
 
-    response.resolve({ messages, hasMore: true, nextOffset: 2, totalMessages: 4 });
+    response.resolve({
+      messages,
+      hasMore: true,
+      olderCursor: "older-loading",
+      nextOffset: 2,
+      totalMessages: 4,
+    });
     await hydration;
     historyAction(false);
   });

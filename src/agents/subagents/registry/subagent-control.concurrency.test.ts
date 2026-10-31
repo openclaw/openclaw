@@ -40,7 +40,6 @@ import * as nativeControl from "./subagent-control.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { markSubagentRunTerminated } from "./subagent-registry.js";
-import { finalizeInterruptedSubagentRun } from "./subagent-registry.test-helpers.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
@@ -92,10 +91,9 @@ it("does not transfer a selected task cancellation to an admitted follow-up gene
       "Cancellation never reached its runtime handoff.",
     );
     expect(
-      await finalizeInterruptedSubagentRun({
+      await markSubagentRunTerminated({
         runId: original.runId,
-        expectedEntry: original,
-        error: "Original execution interrupted",
+        reason: "Original execution stopped",
       }),
     ).toBe(1);
     expect(

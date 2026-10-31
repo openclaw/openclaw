@@ -318,6 +318,7 @@ suite.define(() => {
           messages: recent,
           hasMore: true,
           nextOffset: 80,
+          olderCursor: "older-progress",
           totalMessages: 160,
           sessionId: "progress-scroll",
         },
@@ -344,7 +345,7 @@ suite.define(() => {
       await gateway.deferNext("chat.history");
       await thread.hover();
       await page.mouse.wheel(0, -100_000);
-      await gateway.waitForRequest("chat.history", { match: { offset: 80 } });
+      await gateway.waitForRequest("chat.history", { match: { cursor: "older-progress" } });
       await waitForHomeScrollIdle(thread);
       await card.locator("summary").click();
       await card.locator("summary").click();

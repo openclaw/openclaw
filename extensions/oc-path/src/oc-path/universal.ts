@@ -28,7 +28,7 @@ import type { JsonlAst } from "./jsonl/ast.js";
 import { appendJsonlOcPath as appendJsonlLine, setJsonlOcPath } from "./jsonl/edit.js";
 import { resolveJsonlOcPath } from "./jsonl/resolve.js";
 import type { OcPath } from "./oc-path.js";
-import { formatOcPath, isPattern, OcPathError } from "./oc-path.js";
+import { formatOcPath, isPattern, OcPathError, splitOcPathSlots } from "./oc-path.js";
 import { parseMdItemKeyValue } from "./parse.js";
 import { resolveMdOcPath } from "./resolve.js";
 import { guardSentinel } from "./sentinel.js";
@@ -92,9 +92,14 @@ interface InsertionInfo {
   readonly marker: "+" | { kind: "keyed"; key: string } | { kind: "indexed"; index: number };
 }
 
-function detectInsertion(path: OcPath): InsertionInfo | null {
+function detectInsertion(path: OcPath, kind: OcAst["kind"]): InsertionInfo | null {
   const slot = path.field !== undefined ? "field" : path.item !== undefined ? "item" : "section";
-  const value = path[slot];
+  // Whole-slot markers retain literal key spelling, including `+literal.dot`.
+  const segments =
+    (kind === "jsonc" || kind === "yaml") && !path[slot]?.startsWith("+")
+      ? splitOcPathSlots(path[slot])
+      : [path[slot]];
+  const value = segments.pop();
   if (!value?.startsWith("+")) {
     return null;
   }
@@ -112,6 +117,7 @@ function detectInsertion(path: OcPath): InsertionInfo | null {
     ...(slot !== "section" && path.section !== undefined ? { section: path.section } : {}),
     ...(slot !== "item" && path.item !== undefined ? { item: path.item } : {}),
     ...(slot !== "field" && path.field !== undefined ? { field: path.field } : {}),
+    ...(segments.length > 0 ? { [slot]: segments.join(".") } : {}),
     ...(path.session !== undefined ? { session: path.session } : {}),
   };
   return { parentPath, marker };
@@ -126,7 +132,7 @@ export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
       "OC_PATH_WILDCARD_IN_RESOLVE",
     );
   }
-  const insertion = detectInsertion(path);
+  const insertion = detectInsertion(path, ast.kind);
   if (insertion !== null) {
     if (ast.kind === "md") {
       const p = insertion.parentPath;
@@ -311,7 +317,7 @@ export function setOcPath(
       "setOcPath requires a concrete path; use findOcPaths to enumerate matches first",
     );
   }
-  const insertion = detectInsertion(path);
+  const insertion = detectInsertion(path, ast.kind);
   if (insertion !== null) {
     if (ast.kind === "md") {
       guardSentinel(value, () => formatOcPath(path));

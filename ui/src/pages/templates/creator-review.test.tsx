@@ -11,6 +11,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createContext } from "../skill-workshop/skill-workshop-page.test-support.ts";
 import { templateCreatorFlow } from "./creator-flow.ts";
+import { templateCreatorOwner } from "./creator-publication.ts";
 import { TemplateCreatorReview } from "./creator-review.tsx";
 
 const reviewed: TemplatesDraftsReviewResult = {
@@ -26,7 +27,7 @@ const reviewed: TemplatesDraftsReviewResult = {
   scope: { input: "Repository", job: "Summarize", output: "Brief", authority: "Read only" },
 };
 
-function createReviewContext(initial = reviewed) {
+function createReviewContext(initial = reviewed, open = true) {
   const request = vi.fn(async (method: string) => {
     if (method === "templates.drafts.read") {
       return { revision: initial.revision, content: JSON.stringify({ scope: initial.scope }) };
@@ -38,7 +39,9 @@ function createReviewContext(initial = reviewed) {
   });
   const context = createContext(request);
   context.router.subscribe = () => () => true;
-  templateCreatorFlow(context).open("research", "ec8f46b0-4ca3-4991-8a73-dfdcc8764087");
+  if (open) {
+    templateCreatorFlow(context).open("research", "ec8f46b0-4ca3-4991-8a73-dfdcc8764087");
+  }
   return { context, request };
 }
 
@@ -75,6 +78,24 @@ beforeEach(async () => {
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
+});
+
+it("observes a creator published after dormant chat mounts without constructing it early", async () => {
+  const { context, request } = createReviewContext(reviewed, false);
+  context.gateway.subscribe = vi.fn(() => () => {});
+  const page = mountSolid(() => <TemplateCreatorReview context={context} />);
+  await waitForSolid(() => expect(page.queryByRole("dialog")).toBeNull());
+  expect(templateCreatorOwner(context).flow).toBeNull();
+  expect(context.gateway.subscribe).not.toHaveBeenCalled();
+  expect(request).not.toHaveBeenCalled();
+  const flow = templateCreatorFlow(context);
+  flow.open("research", "ec8f46b0-4ca3-4991-8a73-dfdcc8764087");
+  await vi.advanceTimersByTimeAsync(0);
+  await waitForSolid(() =>
+    expect(page.getByLabelText<HTMLInputElement>("Name").value).toBe("Release Brief"),
+  );
+  expect(templateCreatorOwner(context).flow).toBe(flow);
+  expect(context.gateway.subscribe).toHaveBeenCalledOnce();
 });
 
 it.each([false, true])("holds review edits (retry=%s)", async (retry) => {

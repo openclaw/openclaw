@@ -1,9 +1,14 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { newChatPage } from "./chat-flow.test-support.ts";
 import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
 import { expectTranscriptLayoutCommitted } from "./claude-sessions.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { captureFrame } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Chat history loading",
@@ -16,6 +21,7 @@ function historyPage(messages: unknown[], hasMore: boolean, nextOffset?: number)
   return {
     messages,
     hasMore,
+    ...(hasMore && nextOffset !== undefined ? { olderCursor: `older-${nextOffset}` } : {}),
     nextOffset,
     totalMessages: 22,
     sessionId: "native-underfill-pagination",
@@ -24,6 +30,116 @@ function historyPage(messages: unknown[], hasMore: boolean, nextOffset?: number)
 }
 
 suite.define(() => {
+  it.each(["openai/gpt-5.5", null])(
+    "keeps existing empty sessions quiet and draft welcome reachable (model: %s)",
+    async (agentModel) => {
+      await suite.withPage(
+        { viewport: { width: 1440, height: 900 }, colorScheme: "light" },
+        async ({ page }) => {
+          const emptyKey = "agent:main:awaiting-automation";
+          const gateway = await installMockGateway(page, {
+            agentModel,
+            historyMessages: [],
+            sessions: [
+              { key: "agent:main:main", kind: "direct", label: "Home", updatedAt: 2 },
+              { key: emptyKey, kind: "direct", label: "Awaiting automation", updatedAt: 1 },
+            ],
+          });
+          await page.goto(`${suite.server.baseUrl}new`);
+          const draft = page.locator(".new-session-page");
+          await draft.locator(".agent-chat__welcome").waitFor();
+          if (agentModel) {
+            await draft.locator(".agent-chat__welcome-avatar").waitFor();
+            await draft.locator(".agent-chat__recents").waitFor();
+          } else {
+            await draft
+              .getByRole("button", { name: "Connect an AI provider", exact: true })
+              .waitFor();
+          }
+
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "main"));
+          const pane = page.locator(".chat-pane-cache__pane--active");
+          const composer = pane.locator("textarea").first();
+          await composer.waitFor();
+          await pane.locator(".chat-thread-inner").waitFor();
+          await expect.poll(() => pane.locator("openclaw-panel-loading-skeleton").count()).toBe(0);
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" && agentModel) {
+            const directory = createControlUiE2eArtifactDir("existing-empty-session");
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              page.locator(".shell"),
+              [composer, pane.locator(".chat-thread-inner")],
+              { animations: "disabled" },
+            );
+            await writeFile(path.join(directory, "existing-empty-session.png"), frame.png);
+          }
+          await expect
+            .poll(() => pane.locator(".agent-chat__empty").allTextContents())
+            .toEqual(["No messages yet"]);
+          await page.locator(`.sidebar-recent-session[data-session-key="${emptyKey}"] a`).click();
+          await expect.poll(() => pane.getAttribute("data-mcp-app-owner-key")).toContain(emptyKey);
+          await expect
+            .poll(() => pane.locator(".agent-chat__empty").allTextContents())
+            .toEqual(["No messages yet"]);
+          expect(
+            await pane
+              .locator(".agent-chat__welcome, .agent-chat__recents, .agent-chat__hint")
+              .count(),
+          ).toBe(0);
+          expect(await composer.isVisible()).toBe(true);
+          if (!agentModel) {
+            await pane.getByRole("button", { name: "Connect an AI provider", exact: true }).click();
+            await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+          }
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        },
+      );
+    },
+  );
+
+  it("does not offer earlier history for unanchored tool-only activity", async () => {
+    const page = await newChatPage(suite);
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "chat.startup": historyPage(
+          [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "read-1",
+                  name: "read",
+                  arguments: { path: "synthetic.txt" },
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolName: "read",
+              toolCallId: "read-1",
+              content: "Synthetic tool result",
+            },
+          ],
+          true,
+        ),
+      },
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+    const activity = pane.locator(".chat-tool-row, .chat-activity-group__summary").first();
+    await activity.waitFor();
+    await expectTranscriptLayoutCommitted(pane.locator(".chat-thread"));
+    await captureFrame(suite.artifactDir, "boundary.png", pane, [activity]);
+    expect(await pane.locator(".chat-history-boundary").count()).toBe(0);
+    expect(
+      await page
+        .getByText(/Couldn't load earlier messages|History has no usable older boundary/)
+        .count(),
+    ).toBe(0);
+    expect(await gateway.getRequests("chat.history")).toEqual([]);
+  });
+
   it("shows an inline retry after earlier history fails on mobile and recovers in place", async () => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
@@ -35,7 +151,7 @@ suite.define(() => {
           __openclaw: { id: "recent", seq: 22 },
         };
         const gateway = await installMockGateway(page, {
-          deferredRequests: [{ method: "chat.history", match: { offset: 1 } }],
+          deferredRequests: [{ method: "chat.history", match: { cursor: "older-1" } }],
           methodResponses: {
             "chat.startup": historyPage([recent], true, 1),
             "chat.history": historyPage(
@@ -56,7 +172,7 @@ suite.define(() => {
         await gateway.rejectDeferred(
           "chat.history",
           { code: "UNAVAILABLE", message: "The connection was interrupted. Try again." },
-          { match: { offset: 1 } },
+          { match: { cursor: "older-1" } },
         );
         const retry = pane.getByRole("button", { name: "Retry earlier messages", exact: true });
         await expect.poll(() => retry.count()).toBe(1);
@@ -67,8 +183,8 @@ suite.define(() => {
         expect(await pane.locator(".chat-history-boundary").count()).toBe(0);
         expect(await pane.getByText(recent.content, { exact: true }).count()).toBe(1);
         expect(await gateway.getRequests("chat.history")).toMatchObject([
-          { params: { offset: 1 } },
-          { params: { offset: 1 } },
+          { params: { cursor: "older-1" } },
+          { params: { cursor: "older-1" } },
         ]);
       },
     );
@@ -85,24 +201,24 @@ suite.define(() => {
     const messages = (first: number, count: number) =>
       Array.from({ length: count }, (_, index) => message(first + index));
     const gateway = await installMockGateway(page, {
-      deferredRequests: [{ method: "chat.history", match: { offset: 40 } }],
+      deferredRequests: [{ method: "chat.history", match: { cursor: "older-40" } }],
       // A landed page stages the next one in the background; holding it keeps
       // the post-load boundary state independent of that prefetch.
-      heldRequests: [{ method: "chat.history", match: { offset: 60 } }],
+      heldRequests: [{ method: "chat.history", match: { cursor: "older-60" } }],
       featureMethods: ["chat.metadata", "chat.startup"],
       methodResponses: {
         "chat.startup": historyPage(messages(41, 40), true, 40),
         "chat.history": {
           cases: [
-            { match: { offset: 40 }, response: historyPage(messages(21, 20), true, 60) },
-            { match: { offset: 60 }, response: historyPage(messages(1, 20), false) },
+            { match: { cursor: "older-40" }, response: historyPage(messages(21, 20), true, 60) },
+            { match: { cursor: "older-60" }, response: historyPage(messages(1, 20), false) },
           ],
         },
       },
     });
-    const offsets = async () =>
+    const cursors = async () =>
       (await gateway.getRequests("chat.history")).map(
-        (request) => (request.params as { offset?: number } | undefined)?.offset,
+        (request) => (request.params as { cursor?: string } | undefined)?.cursor,
       );
     await page.goto(`${suite.server.baseUrl}chat`);
     const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
@@ -129,10 +245,10 @@ suite.define(() => {
     expect(await actionFocused()).toBe(true);
     await page.keyboard.press("Enter");
     await page.keyboard.press("Space");
-    expect(await offsets()).toEqual([40]);
+    expect(await cursors()).toEqual(["older-40"]);
 
-    await gateway.resolveDeferred("chat.history", undefined, { match: { offset: 40 } });
-    await expect.poll(offsets).toEqual([40, 60]);
+    await gateway.resolveDeferred("chat.history", undefined, { match: { cursor: "older-40" } });
+    await expect.poll(cursors).toEqual(["older-40", "older-60"]);
     await expectHistoryBoundaryState(pane, false);
     expect(await actionFocused()).toBe(true);
     await page.close();
@@ -144,7 +260,7 @@ suite.define(() => {
     const emptyTailPage = (messages: unknown[], nextOffset?: number) => ({
       messages,
       hasMore: nextOffset !== undefined,
-      ...(nextOffset === undefined ? {} : { nextOffset }),
+      ...(nextOffset === undefined ? {} : { nextOffset, olderCursor: `older-${nextOffset}` }),
       totalMessages: 200,
       sessionId,
       sessionInfo,
@@ -173,9 +289,9 @@ suite.define(() => {
             "chat.startup": emptyTailPage(hiddenActivity, 80),
             "chat.history": {
               cases: [
-                { match: { offset: 80 }, response: emptyTailPage([], 160) },
+                { match: { cursor: "older-80" }, response: emptyTailPage([], 160) },
                 {
-                  match: { offset: 160 },
+                  match: { cursor: "older-160" },
                   response: emptyTailPage(
                     [
                       {
@@ -186,7 +302,7 @@ suite.define(() => {
                     180,
                   ),
                 },
-                { match: { offset: 180 }, response: emptyTailPage(olderMessages) },
+                { match: { cursor: "older-180" }, response: emptyTailPage(olderMessages) },
               ],
             },
           },
@@ -199,7 +315,7 @@ suite.define(() => {
         await expectHistoryBoundaryState(page, false);
         await expectTranscriptLayoutCommitted(thread);
         expect(await gateway.getRequests("chat.history")).toMatchObject([
-          { params: { offset: 80 } },
+          { params: { cursor: "older-80" } },
         ]);
         await thread.hover();
         await page.mouse.wheel(0, -100);
@@ -208,9 +324,9 @@ suite.define(() => {
         }
         expect(await page.locator(".agent-chat__welcome").count()).toBe(0);
         expect(await gateway.getRequests("chat.history")).toMatchObject([
-          { params: { offset: 80 } },
-          { params: { offset: 160 } },
-          { params: { offset: 180 } },
+          { params: { cursor: "older-80" } },
+          { params: { cursor: "older-160" } },
+          { params: { cursor: "older-180" } },
         ]);
       });
     });

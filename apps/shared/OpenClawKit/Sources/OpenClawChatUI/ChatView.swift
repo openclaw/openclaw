@@ -117,6 +117,10 @@ public struct OpenClawChatView: View {
     private let resolveComposerModel: (@MainActor () -> OpenClawChatViewModel?)?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    #endif
     @State private var contentWidth: CGFloat = 0
     @State private var scrollerBottomID = UUID()
     @State private var scrollCommand = ChatScrollCommand()
@@ -317,7 +321,7 @@ extension OpenClawChatView {
                         if wasPresented, !isPresented { self.composerFocusRequest += 1 }
                     }
                 #endif
-                    .padding(.horizontal, self.isTabletLayout ? 0 : Layout.outerPaddingHorizontal)
+                    .padding(.horizontal, self.usesExpandedLayout ? 0 : Layout.outerPaddingHorizontal)
             if !self.usesInlineProgressCard {
                 self.progressCard
                     .frame(maxWidth: self.readingColumnWidth)
@@ -330,7 +334,9 @@ extension OpenClawChatView {
             }
             self.swarmProgress
                 .frame(maxWidth: self.readingColumnWidth)
-                .padding(.horizontal, self.isTabletLayout ? self.tabletHorizontalMargin : Layout.swarmPaddingHorizontal)
+                .padding(
+                    .horizontal,
+                    self.usesExpandedLayout ? self.expandedHorizontalMargin : Layout.swarmPaddingHorizontal)
                 .padding(.vertical, Layout.swarmPaddingVertical)
                 .padding(.top, Layout.stackSpacing)
             if self.showsComposer {
@@ -338,13 +344,15 @@ extension OpenClawChatView {
                     .frame(maxWidth: self.readingColumnWidth)
                     .padding(.horizontal, self.composerHorizontalMargin)
                     .padding(.top, Layout.stackSpacing)
-                    .padding(.bottom, self.isTabletLayout || self.isDesktopLayout ? 12 : Layout.outerPaddingVertical)
+                    .padding(
+                        .bottom,
+                        self.usesExpandedLayout || self.isDesktopLayout ? 12 : Layout.outerPaddingVertical)
             }
         }
         .padding(.top, Layout.outerPaddingVertical)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { self.contentWidth = $0 }
-        .environment(\.openClawAssistantUsesReadingColumn, self.isTabletLayout)
+        .environment(\.openClawAssistantUsesReadingColumn, self.usesExpandedLayout)
     }
 
     @ViewBuilder
@@ -470,7 +478,7 @@ extension OpenClawChatView {
                 .frame(maxWidth: self.readingColumnWidth)
                 .padding(
                     .horizontal,
-                    self.isTabletLayout ? self.tabletHorizontalMargin :
+                    self.usesExpandedLayout ? self.expandedHorizontalMargin :
                         (self.isDesktopLayout ? 16 : Layout.messageListPaddingHorizontal))
                 .frame(maxWidth: .infinity)
             }
@@ -829,21 +837,6 @@ extension OpenClawChatView {
                 ChatSpeechStatusChip(isPreparing: isPreparing) { speech.stop() }
                     .padding(.leading, 8)
             }
-            #if os(iOS)
-            if !isUser, showsActions {
-                self.messageActionsMenu(for: actionMessage)
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .font(OpenClawChatTypography.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(
-                        width: CleanChatComposerMetrics.controlTouchSize,
-                        height: CleanChatComposerMetrics.controlTouchSize)
-                    .contentShape(Rectangle())
-                    .padding(.leading, 8)
-                    .padding(.bottom, 8)
-            }
-            #endif
             #if os(macOS)
             if self.isDesktopLayout, showsActions, isUser || self.isListenable(msg) {
                 HStack(spacing: 12) {
@@ -1569,9 +1562,9 @@ private struct ChatNoticeBanner: View {
 }
 
 extension OpenClawChatView {
-    private var isTabletLayout: Bool {
+    private var usesExpandedLayout: Bool {
         #if os(iOS)
-        UIDevice.current.userInterfaceIdiom == .pad
+        self.horizontalSizeClass == .regular && self.verticalSizeClass == .regular
         #else
         false
         #endif
@@ -1579,12 +1572,12 @@ extension OpenClawChatView {
 
     /// Measure the detail pane, not the screen: a visible sidebar and window resizing
     /// change the space available to chat independently of device orientation.
-    private var tabletHorizontalMargin: CGFloat {
+    private var expandedHorizontalMargin: CGFloat {
         min(24, max(12, (self.contentWidth - 480) / 20 + 12))
     }
 
     private var composerHorizontalMargin: CGFloat {
-        self.isTabletLayout ? self.tabletHorizontalMargin :
+        self.usesExpandedLayout ? self.expandedHorizontalMargin :
             (self.isDesktopLayout ? 16 : Layout.composerPaddingHorizontal)
     }
 
@@ -1592,7 +1585,7 @@ extension OpenClawChatView {
         #if os(macOS)
         self.isDesktopLayout ? 760 : .infinity
         #elseif os(iOS)
-        UIDevice.current.userInterfaceIdiom == .pad ? 760 : .infinity
+        self.usesExpandedLayout ? 760 : .infinity
         #else
         .infinity
         #endif

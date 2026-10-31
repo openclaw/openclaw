@@ -128,7 +128,30 @@ it checks the selected publisher at the publication boundary. A bot-authored PR
 from another conversation is not eligible for own-PR import just because the
 publisher created it; continue in its original publication conversation.
 
-To continue that PR in the same local conversation, use `github_publish` with
+For an open PR originally published from this conversation, `refresh_base`
+selects its current GitHub destination before integrating the base into the
+managed workspace. This includes a base branch changed outside the conversation.
+Ordinary publication then continues the same PR and head branch. The Gateway
+checks the current workspace, requester and shared publisher; an original
+publication receipt does not grant permission to import another person's PR.
+Prior receipts retain the destination recorded for their own publication, and
+recovery verifies accepted effects against the original PR before another write.
+
+If someone else pushes to that PR's head branch, publication refuses to overwrite
+their commits. Call `prepare_pr` with the PR URL in the same conversation. It
+starts from the head this conversation last published, merges the newer head into
+the saved work, and returns any conflicts. The next publication appends to the
+same PR. This also works when the managed publisher authored the PR, as long as
+the PR author is the publisher account recorded for this conversation's
+publication. Assigning a new session owner does not change who can prepare it:
+only the person who started the conversation can.
+
+For this recorded publication in public base and head repositories, a personal
+GitHub link is not required; the currently selected publisher must still match
+the recorded publisher. Private repositories and imports of other PRs retain
+their linked-account and repository-access requirements.
+
+To import your own existing PR into a local conversation, use `github_publish` with
 `action: "prepare_pr"` and `pullRequestUrl`. This action is offered only in
 sessions with a writable managed sandbox or an ordinary local Docker or Podman
 sandbox; sessions that run directly on the host do not see it. A separate
@@ -155,10 +178,13 @@ Input already being prepared retains its original source. New input after
 adoption uses the PR workspace.
 
 Initial preparation of an already managed workspace requires a clean workspace without dirty, untracked, or
-unpublished work. Otherwise it preserves that work and asks you to keep or finish
+unpublished work, except for a PR this conversation published, described above. Otherwise it preserves that work and asks you to keep or finish
 it separately before continuing. A clean workspace receives exactly the verified
-PR head's files, even when the selected project's base is newer. Preparation
-keeps an already managed directory and sandbox scope, and records the original PR
+PR head's files, even when the selected project's published base is newer than
+the base recorded by the PR or comes from a different project branch. Preparation
+verifies that newer history against the project's recorded source branch in its
+original repository; a clean checkout with unpublished commits remains
+protected. Preparation keeps an already managed directory and sandbox scope, and records the original PR
 association. The sandbox's current branch and HEAD remain intact; the source
 files are staged for work on the PR.
 
@@ -190,6 +216,11 @@ refresh refuses that case so its index-only version is not lost. The returned re
 head and its base, so an older PR head does not make newer base work appear to be
 deleted.
 
+Content acquisition errors identify the failed Git stage and retain a bounded,
+redacted native reason. A fetch timeout, failed object inventory, and objects
+still missing after a successful fetch are reported separately. Use that reason
+to investigate before retrying `prepare_pr`.
+
 An interrupted preparation retains the same accepted source for retry while
 reconciling the current destination for its review comparison.
 If recovery returns `headChanged: true`, it completed that original accepted
@@ -216,6 +247,12 @@ publication to recover it. Inspecting the remote PR does not settle the
 publication receipt. The Gateway's existing recovery continues the original
 request and reports its result without starting another agent turn.
 
+Local workspace snapshot staging allows up to ten minutes while Git reports
+progress, with a three-minute idle limit. Capture failures identify the staging phase
+and the reason, preserve the source index, and suggest what to inspect before
+retrying. A large file, scan, or buffered Git output can reach the idle limit
+even while Git is working.
+
 After preparation, existing metadata, readiness, fixed re-review and evidence
 actions select the original bound PR, including before any new push and when an
 older publication exists in the conversation. Read it with `edit` first. Its
@@ -235,9 +272,13 @@ Keep the updated Gateway when continuing an imported workspace; older versions
 do not understand this association.
 
 Use `github_publish` with `action: "edit"` to change the current session's shared
-PR title or description without publishing source. Call it without `title`/`body`
-to read the current metadata, then send `requestId`, `expectedHeadCommit`, and only
-the fields to change, each paired with its observed `expectedTitle`/`expectedBody`.
+PR title or description without publishing source. Read the current metadata with
+`{ "action": "edit" }`, omitting `expectedHeadCommit`, `title`/`body` and
+`expectedTitle`/`expectedBody`. Then send its top-level `headCommit` as
+`expectedHeadCommit`, its publication `requestId`, and only the fields to change,
+each paired with its observed `expectedTitle`/`expectedBody`. The observed head can
+be newer than `publication.headCommit`; editing metadata does not rewrite that
+historical receipt. Other receipt-backed actions still require the receipt head.
 Keep the attribution, publication marker and footer unchanged in the full body.
 Omitted fields stay unchanged. Guests can edit their own session's PR; no child or
 arbitrary PR selector is accepted. Edit never synchronizes, stages, commits or
@@ -245,10 +286,13 @@ pushes workspace files, and never changes PR lifecycle state. Closed PRs are rea
 An unsuccessful later source publication does not hide the existing PR from edit.
 
 Stale observed values are rejected. This is not atomic GitHub compare-and-swap:
-external edits can race the PATCH. After a lost response, the Gateway rereads the
-same PR; already-applied values need no second write. Read with `edit` before
-retrying uncertainty. Omitted action or `publish` still publishes workspace source;
-its title/body are creation-only and do not edit an existing PR.
+external edits or pushes can race the PATCH. A head change detected after dispatch
+can mean the metadata was applied but confirmation failed. After a lost response,
+the Gateway rereads the same PR; already-applied values need no second write.
+Before retrying uncertainty, read again with only `{ "action": "edit" }`, without
+reusing the previous write preconditions. Omitted action or `publish` still
+publishes workspace source; its title/body are creation-only and do not edit an
+existing PR.
 
 Guests can mark their own current session's shared draft ready for review with
 `github_publish` and `action: "ready"`. First read its state with `action: "edit"`,
@@ -319,7 +363,7 @@ Local session-owned worktrees can use the same **Publish PR** action in the Cont
 
 Automatic shared-publication recovery backs off after an unresolved attempt: one minute, then two, four, eight, sixteen, and at most one attempt every thirty minutes. Each request has its own cooldown; an unsettled request still prevents later requests from overtaking it in the same worktree. The cooldown and latest diagnostic are held in memory and reset when the Gateway restarts. The durable publication receipt and recorded effects remain unchanged.
 
-During cooldown, publication status includes the remaining wait and the latest failure. Base-fetch failures include bounded, redacted Git diagnostics in status and the recovery warning. Inspect the original branch and PR, repair the reported access, connectivity, or Git-object problem, and let recovery reconcile the existing request. A failed observation does not establish that a push or PR creation failed; do not request a replacement publication to recover it.
+During cooldown, publication status includes the remaining wait and the latest failure. Base-fetch failures identify the failed stage and native reason, including timeouts, with bounded, redacted Git diagnostics in status and the recovery warning. Inspect the original branch and PR, repair the reported access, connectivity, or Git-object problem, and let recovery reconcile the existing request. A failed observation does not establish that a push or PR creation failed; do not request a replacement publication to recover it.
 
 During publication, an accepted PR response still completes its owned receipt if the requesting connection closes or publication permission ends. A successful local branch update likewise finishes its matching index transaction while the execution retains workspace ownership. This settlement does not authorize another push or PR creation; unconfirmed outcomes retain their existing recovery or personal-confirmation requirements.
 

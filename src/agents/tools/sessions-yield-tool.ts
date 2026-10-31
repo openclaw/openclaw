@@ -27,6 +27,7 @@ export type SessionsYieldCallback = (
   message: string,
   acknowledgment?: string,
   messageWaitRegistered?: boolean,
+  options?: { conditional: true },
 ) => Promise<void> | void;
 
 function describePendingChild(child: UnsettledRequesterChild): string {

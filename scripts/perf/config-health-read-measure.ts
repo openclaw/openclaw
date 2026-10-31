@@ -17,13 +17,14 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { statSync, writeFileSync } from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -103,9 +104,6 @@ const observe = () =>
   withArtifactPreservingStateReads(() => captureConfigHealthStateStore(deps, configPath).read());
 type Snapshot = Awaited<ReturnType<typeof observe>>;
 let expected: Snapshot | undefined;
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
-}
 const inspector = new Session();
 let liveOwner: ChildProcess | undefined;
 let ownerExit: Promise<number | null> | undefined;
@@ -137,7 +135,7 @@ async function measure(count: number) {
   const memoryAfter = process.memoryUsage();
   const allocatedBytes =
     values.mode === "allocation"
-      ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+      ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
       : undefined;
   return {
     iterations: count,

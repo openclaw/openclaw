@@ -10,6 +10,20 @@ import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-s
 export const SESSION_PENDING_INPUTS_TABLE = "session_pending_inputs";
 export const SESSION_INPUT_COMPLETIONS_TABLE = "session_input_completions";
 
+/** Historical recovery envelopes are evidence, not permission to replay imported input. */
+export function interruptHistoricalPendingInputs(
+  db: EngineConnection,
+  previousVersion: number,
+): void {
+  if (
+    previousVersion === 24 &&
+    tableHasColumn(db, SESSION_PENDING_INPUTS_TABLE, "recovery_intent_json")
+  ) {
+    // sqlite-allow-raw -- Offline agent schema transaction retains input identity and payload.
+    db.exec("UPDATE session_pending_inputs SET state = 'interrupted' WHERE state = 'queued'");
+  }
+}
+
 const ensurePendingTable = createSqliteSchemaEnsurer(
   () =>
     extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, SESSION_PENDING_INPUTS_TABLE, {

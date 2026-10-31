@@ -326,6 +326,9 @@ export function runWorkflowCommand(
   args: string[],
   options: Omit<SpawnSyncOptions, "encoding" | "killSignal"> = {},
 ) {
+  // System Bash avoids Darwin's pipe-backed heredoc deadlocks. Explicit paths
+  // from resolveWorkflowBash still preserve Linux fixtures' Bash 5 semantics.
+  const executable = process.platform === "darwin" && command === "bash" ? "/bin/bash" : command;
   const timeout = options.timeout ?? WORKFLOW_COMMAND_TIMEOUT_MS;
   // Node shares detached handling between spawn and spawnSync; its types expose it on spawn only.
   const childOptions = {
@@ -336,7 +339,7 @@ export function runWorkflowCommand(
     // Synchronous fixture children must terminate even if they ignore SIGTERM.
     killSignal: "SIGKILL",
   } satisfies SpawnSyncOptionsWithStringEncoding & Pick<SpawnOptions, "detached">;
-  const result = spawnSync(command, args, childOptions);
+  const result = spawnSync(executable, args, childOptions);
   const error: NodeJS.ErrnoException | undefined = result.error;
   if (error) {
     if (process.platform !== "win32" && result.pid > 0) {
@@ -349,7 +352,7 @@ export function runWorkflowCommand(
     }
     const reason = error.code === "ETIMEDOUT" ? `timed out after ${timeout} ms` : error.message;
     throw new Error(
-      `Workflow fixture command ${reason}: ${[command, ...args].map(quoteShell).join(" ")}\n${result.stdout ?? ""}${result.stderr ?? ""}`,
+      `Workflow fixture command ${reason}: ${[executable, ...args].map(quoteShell).join(" ")}\n${result.stdout ?? ""}${result.stderr ?? ""}`,
       { cause: error },
     );
   }

@@ -118,6 +118,8 @@ type RuntimeNodeInvokeParams = {
   sessionKey?: string;
   /** Cancel the invocation and any work already dispatched to a first-party node. */
   signal?: AbortSignal;
+  /** Caller-owned authority remains current through dispatch and duplex delivery. */
+  assertCurrent?: () => void;
   /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
   scopes?: OperatorScope[];
 };

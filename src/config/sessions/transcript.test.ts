@@ -12,7 +12,7 @@ import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   isTranscriptOnlyOpenClawAssistantMessage,
 } from "../../shared/transcript-only-openclaw-assistant.js";
-import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
@@ -326,7 +326,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("uses the session key agent for configured session.store templates", async () => {
     const tempDir = sessionDirs.make();
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const environment = captureEnv(["OPENCLAW_STATE_DIR"]);
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
     try {
       setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, "default-state"));
@@ -375,11 +375,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       });
     } finally {
       emitSpy.mockRestore();
-      if (previousStateDir === undefined) {
-        deleteTestEnvValue("OPENCLAW_STATE_DIR");
-      } else {
-        setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
-      }
+      environment.restore();
     }
   });
 

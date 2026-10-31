@@ -287,6 +287,7 @@ function generatePowerShellCompletion(tree: ShellCompletionCommandTree): string 
         (pathSegments) => `            '${pathSegments.join(" ")}' {
                 $commandPath = $candidatePath
                 $valueOptions = ${formatPowerShellArray(context.valueOptions)}
+                $requiredValueOptions = ${formatPowerShellArray(context.requiredValueOptions)}
             }`,
       ),
     )
@@ -363,6 +364,8 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     $commandElements = @($commandAst.CommandElements.Where({ $_.Extent.StartOffset -lt $cursorPosition }))
     $commandPath = ""
     $valueOptions = ${formatPowerShellArray(root.valueOptions)}
+    $requiredValueOptions = ${formatPowerShellArray(root.requiredValueOptions)}
+    $pendingRequiredValue = $false
     $previousElementIndex = if ($wordToComplete -eq '') { $commandElements.Count - 1 } else { $commandElements.Count - 2 }
     $previousElement = if ($previousElementIndex -ge 1) { $commandElements[$previousElementIndex].Extent.Text } else { '' }
     $choiceFlag = $previousElement
@@ -388,6 +391,9 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
         if ($element -like "-*") {
             $flag = ($element -split '=', 2)[0]
             if ($element -notlike '*=*' -and $valueOptions -contains $flag) {
+                if ($i -eq $previousElementIndex -and $requiredValueOptions -contains $flag) {
+                    $pendingRequiredValue = $true
+                }
                 $i++
             }
             continue
@@ -423,6 +429,7 @@ ${commandPathUpdate}
     }
 
 ${choiceCompletion}
+    if ($pendingRequiredValue) { return }
     
     # Root command
     if ($commandPath -eq "") {

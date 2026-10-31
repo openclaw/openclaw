@@ -418,6 +418,13 @@ deadline, and live admission assertion. It never discovers credentials or
 constructs conversation history. Consumers own endpoint eligibility and any
 account-specific route grant before calling it.
 
+`executeOpenAIDecision(batch, execution)` accepts those same prepared facts as
+explicit fields: provider, model ID, base URL, headers, auth, request overrides,
+signal, deadline, admission assertion, and optional reasoning. Use it when a
+provider has already projected its execution inputs. Pass the full prepared
+request overrides, including auth metadata used to reject credential reflection.
+The context-based helper remains supported and delegates to this executor.
+
 `supportsOpenAIDecisionBatch(batch, reasoning)` gates protocol kinds, image and
 question bounds, and automatic reasoning before transport/discovery. Malformed
 caller contracts throw; structurally valid requests outside protocol support or
@@ -436,3 +443,16 @@ type and `omitNullRequestHeaders`. Runtime headers can contain `null` deletion
 markers; preserve them through header merges and OpenAI SDK calls. Use the helper
 after the final merge when a direct HTTP client needs a string-only header map.
 This entrypoint loads no provider policy, transport host, or credential runtime.
+
+### Node workspace process environment
+
+A node-host workspace lease may expose `processEnvironment`. Call `prepare` after
+generic environment sanitization and `assertCurrent` synchronously immediately
+before a process effect. The lease and invocation own its lifetime; saved copies
+do not survive release or cancellation. Use `redactOutput` at diagnostic egress.
+This capability is host-local and is never a wire environment override.
+
+`process-runtime` exports `createBoundedLineFramer` for bounded LF-delimited byte
+streams. It preserves incomplete lines and leaves CR handling to the consumer.
+Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
+the runtime's existing dispatch and delivery authority.

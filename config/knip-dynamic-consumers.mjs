@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { parse } from "@babel/parser";
+import traverse from "@babel/traverse";
 
 function relativeSpecifier(fromFile, targetFile) {
   const relative = path
@@ -120,7 +122,7 @@ function lazyRuntimeModuleMemberEdges(source, consumerFile, targetSpecifier) {
         /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*createLazyRuntimeModule\(\s*\(\s*\)\s*=>\s*import\(\s*["']([^"'\r\n]+)["']\s*\)\s*,?\s*\)\s*;/gu,
       ),
     ]
-      .filter(([, , specifier]) => specifier === targetSpecifier)
+      .filter((match) => match[2] === targetSpecifier)
       .map(([, loader, specifier]) => [loader, specifier]),
   );
   const edges = new Map();
@@ -145,6 +147,30 @@ function lazyRuntimeModuleMemberEdges(source, consumerFile, targetSpecifier) {
     }
   }
 
+  const specifiersByBinder = new Map(
+    [
+      ...source.matchAll(
+        /^[ \t]*const\s+([A-Za-z_$][\w$]*)\s*=\s*createLazyRuntimeMethodBinder\(\s*([A-Za-z_$][\w$]*)\s*\)\s*;/gmu,
+      ),
+    ].flatMap(([, binder, loader]) => {
+      const specifier = specifiersByLoader.get(loader);
+      return specifier ? [[binder, specifier]] : [];
+    }),
+  );
+  // The binder forwards only the method selected from its supplying module.
+  for (const match of source.matchAll(
+    /^[ \t]*[A-Za-z_$][\w$]*:\s*([A-Za-z_$][\w$]*)\(\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*=>\s*\2\.([A-Za-z_$][\w$]*)\s*\)[ \t]*,?[ \t]*$/gmu,
+  )) {
+    const specifier = specifiersByBinder.get(match[1]);
+    if (!specifier) {
+      continue;
+    }
+    const targetFile = path.resolve(path.dirname(consumerFile), specifier);
+    const names = edges.get(targetFile) ?? new Set();
+    names.add(match[3]);
+    edges.set(targetFile, names);
+  }
+
   return edges;
 }
 
@@ -155,10 +181,7 @@ function computedCheckoutNamespaceMemberEdges(source) {
         /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*join\(\s*source\s*,\s*["']([^"'\r\n]+)["']\s*\)\s*;/gu,
       ),
     ]
-      .filter(
-        ([, , directory]) =>
-          !path.isAbsolute(directory) && !directory.split(/[\\/]/u).includes(".."),
-      )
+      .filter((match) => !path.isAbsolute(match[2]) && !match[2].split(/[\\/]/u).includes(".."))
       .map(([, binding, directory]) => [binding, directory]),
   );
   const edges = new Map();
@@ -266,11 +289,106 @@ function emittedSelfNamedImportNames(source) {
   );
 }
 
+function prToolingNamedImportEdges(source) {
+  // The wrapper supplies quoted argv to this specific stdin module. Keep the
+  // import and its path argument attached to the same live heredoc launch.
+  const tooling = source.match(
+    /^[ \t]*node[ \t]+--input-type=module[ \t]+-[ \t]+((?:"[^"\r\n]*"[ \t]+)+)<<'EOF_TOOLING'\r?\n([\s\S]*?)^EOF_TOOLING$/mu,
+  );
+  const edges = new Map();
+  if (!tooling) {
+    return edges;
+  }
+  const args = [...tooling[1].matchAll(/"([^"\r\n]*)"/gu)].map((match) => match[1]);
+  for (const match of tooling[2].matchAll(
+    /^[ \t]*const\s*\{([^{}]+)\}\s*=\s*await\s+import\(\s*\(\s*await\s+import\(["']node:url["']\)\s*\)\.pathToFileURL\(\s*process\.argv\[(\d+)\]\s*\)\s*\)\s*;/gmu,
+  )) {
+    const modulePath = args[Number(match[2]) - 2]?.match(
+      /^\$pr_bootstrap_root\/(scripts\/pr-lib\/[^"\r\n]+\.mjs)$/u,
+    )?.[1];
+    if (!modulePath) {
+      continue;
+    }
+    const target = path.resolve(modulePath);
+    const names = edges.get(target) ?? new Set();
+    for (const binding of match[1].split(",")) {
+      const name = binding.trim().split(/\s*:\s*/u)[0];
+      if (/^[A-Za-z_$][\w$]*$/u.test(name)) {
+        names.add(name);
+      }
+    }
+    edges.set(target, names);
+  }
+  return edges;
+}
+
 function namedImport(names, targetFile, consumerFile, index) {
   const bindings = names.map(
     (name, bindingIndex) => `${name} as __dynamic${index}_${bindingIndex}`,
   );
   return `import { ${bindings.join(", ")} } from ${JSON.stringify(relativeSpecifier(consumerFile, targetFile))};`;
+}
+
+function optionalImportMemberEdges(source, consumerFile) {
+  const edges = new Map();
+  const ast = parse(source, {
+    sourceType: "module",
+    plugins: ["typescript"],
+    createImportExpressions: true,
+  });
+  // Link the optional prelaunch import to calls on that same retained binding.
+  // Syntax and binding identity exclude types, text and shadowed namespaces.
+  traverse(ast, {
+    AssignmentExpression(assignment) {
+      const { left, right, operator } = assignment.node;
+      if (
+        operator !== "=" ||
+        left.type !== "Identifier" ||
+        right.type !== "ConditionalExpression"
+      ) {
+        return;
+      }
+      const awaited = right.consequent;
+      if (awaited.type !== "AwaitExpression" || awaited.argument.type !== "CallExpression") {
+        return;
+      }
+      const caught = awaited.argument.callee;
+      if (
+        caught.type !== "MemberExpression" ||
+        caught.computed ||
+        caught.property.type !== "Identifier" ||
+        caught.property.name !== "catch" ||
+        caught.object.type !== "ImportExpression" ||
+        caught.object.source.type !== "StringLiteral" ||
+        !caught.object.source.value.startsWith(".")
+      ) {
+        return;
+      }
+      const binding = assignment.scope.getBinding(left.name);
+      if (!binding) {
+        return;
+      }
+      const targetFile = path.resolve(path.dirname(consumerFile), caught.object.source.value);
+      const names = edges.get(targetFile) ?? new Set();
+      for (const reference of binding.referencePaths) {
+        const member = reference.parentPath;
+        if (
+          member.isMemberExpression() &&
+          !member.node.computed &&
+          member.node.object === reference.node &&
+          member.node.property.type === "Identifier" &&
+          member.parentPath.isCallExpression() &&
+          member.parentPath.node.callee === member.node
+        ) {
+          names.add(member.node.property.name);
+        }
+      }
+      if (names.size > 0) {
+        edges.set(targetFile, names);
+      }
+    },
+  });
+  return edges;
 }
 
 function sideEffectImport(targetFile, consumerFile) {
@@ -398,7 +516,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   const archiveChurnSource = fs.readFileSync(archiveChurnPath, "utf8");
   const archiveChurnLaunch =
     archiveChurnSource.match(
-      /^if \(values\.allocations\) \{([\s\S]*?)^\}\nconst inspector = new Session\(\);/mu,
+      /^if \(values\.allocations(?: \|\| values\.entry)?\) \{([\s\S]*?)^\}\nconst inspector = new Session\(\);/mu,
     )?.[1] ?? "";
   if (
     /^\s*const\s+preload\s*=\s*pathToFileURL\(\s*path\.join\(\s*path\.dirname\(\s*fileURLToPath\(\s*import\.meta\.url\s*\)\s*\)\s*,\s*["']archive-worker-churn-preload\.mjs["']\s*\)\s*,\s*\)\.href\s*;/mu.test(
@@ -472,7 +590,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     imports.push(namedImport([...names], targetFile, filePath, imports.length));
   }
 
-  const codexLazyConsumers = [
+  const lazyRuntimeConsumers = [
     ["extensions/codex/src/native-plugin-tool.ts", "./app-server/binding-connection.js"],
     ["extensions/codex/src/native-thread-tool.ts", "./app-server/binding-connection.js"],
     [
@@ -480,24 +598,73 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
       "./session-catalog-node-adoption.js",
     ],
     ["extensions/codex/src/session-catalog-control.ts", "./app-server/shared-client.js"],
+    ["src/plugins/runtime/index.ts", "../../tts/tts.js"],
+    ["src/plugins/runtime/index.ts", "../../tts/tts-request.js"],
   ];
-  const codexLazyEdges = new Map();
-  for (const [consumerPath, targetSpecifier] of codexLazyConsumers) {
+  const lazyRuntimeEdges = new Map();
+  for (const [consumerPath, targetSpecifier] of lazyRuntimeConsumers) {
     const consumerSource = fs.readFileSync(consumerPath, "utf8");
     for (const [targetFile, memberNames] of lazyRuntimeModuleMemberEdges(
       consumerSource,
       consumerPath,
       targetSpecifier,
     )) {
-      const names = codexLazyEdges.get(targetFile) ?? new Set();
+      const names = lazyRuntimeEdges.get(targetFile) ?? new Set();
       for (const name of memberNames) {
         names.add(name);
       }
-      codexLazyEdges.set(targetFile, names);
+      lazyRuntimeEdges.set(targetFile, names);
     }
   }
-  for (const [targetFile, names] of codexLazyEdges) {
+  for (const [targetFile, names] of lazyRuntimeEdges) {
     imports.push(namedImport([...names], targetFile, filePath, imports.length));
+  }
+
+  const broadcastPath = "scripts/perf/transcript-broadcast-measure.ts";
+  const broadcastSource = fs.readFileSync(broadcastPath, "utf8");
+  for (const [, bindings, specifier] of broadcastSource.matchAll(
+    /(?:\\n|\b)import\s*\{([^}]+)\}\s*from\s*\$\{JSON\.stringify\(new URL\("([^"\r\n]+)", import\.meta\.url\)\.href\)\}/gu,
+  )) {
+    addNamedImport(
+      importedNames(`import {${bindings}} from "${specifier}"`, specifier),
+      path.resolve(path.dirname(broadcastPath), specifier),
+    );
+  }
+
+  const telemetryTestPath = "test/scripts/team-shape-stress.test.ts";
+  const telemetryTestSource = fs.readFileSync(telemetryTestPath, "utf8");
+  const telemetryUrls = new Map(
+    [
+      ...telemetryTestSource.matchAll(
+        /^[ \t]*const\s+([A-Za-z_$][\w$]*)\s*=\s*new URL\(\s*["']([^"'\r\n]+)["']\s*,\s*import\.meta\.url\s*,?\s*\)/gmu,
+      ),
+    ].map(([, binding, specifier]) => [binding, specifier]),
+  );
+  // The native child consumes the helper through an interpolated file URL.
+  for (const [, bindings, binding] of telemetryTestSource.matchAll(
+    /^[ \t]*const\s*\{([^}]+)\}\s*=\s*await\s+import\(\s*\$\{JSON\.stringify\(([A-Za-z_$][\w$]*)\.href\)\}\s*\)/gmu,
+  )) {
+    const specifier = telemetryUrls.get(binding);
+    if (specifier) {
+      addNamedImport(
+        importedNames(`import {${bindings}} from "${specifier}"`, specifier),
+        path.resolve(path.dirname(telemetryTestPath), specifier),
+      );
+    }
+  }
+
+  for (const [targetFile, names] of prToolingNamedImportEdges(
+    fs.readFileSync("scripts/pr", "utf8"),
+  )) {
+    addNamedImport([...names], targetFile);
+  }
+
+  const anchorPath = "src/process/supervisor/service-child-group-anchor.ts";
+  for (const [targetFile, names] of optionalImportMemberEdges(
+    fs.readFileSync(anchorPath, "utf8"),
+    anchorPath,
+  )) {
+    addNamedImport([...names], targetFile);
   }
 
   return `${source}\n${imports.join("\n")}`;

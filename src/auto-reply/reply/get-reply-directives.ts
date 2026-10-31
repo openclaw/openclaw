@@ -54,6 +54,7 @@ import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
 import { HISTORY_CONTEXT_MARKER, RECENT_HISTORY_CONTEXT_MARKER } from "./history.js";
 import { stripMentions } from "./mentions.js";
+import { prepareInlineModelDirectiveMatcher } from "./model-selection-directive.js";
 import { createModelSelectionState } from "./model-selection.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
@@ -262,15 +263,39 @@ export async function resolveReplyDirectives(params: {
     explicitDirectiveCommand
       ? { kind: commandTurn.kind === "native" ? "native" : "text", name: explicitDirectiveCommand }
       : undefined;
+  let preparedModelCatalog = params.preparedModelCatalog;
+  let isKnownInlineModel: ((raw: string) => boolean) | undefined;
   const parseDirectives = (text: string) =>
     parseInlineSessionDirectives(text, {
       modelAliases: configuredAliases,
+      isKnownInlineModel,
       allowStatusDirective: canInterpretMessageDirectives,
       command: routingCommand,
     });
   const cleanStatus = (text: string) =>
     canInterpretMessageDirectives ? stripInlineStatus(text).cleaned : text;
   let directives = parseDirectives(directiveCommandText);
+  const rawModel = directives.rawModelDirective?.trim();
+  if (
+    canInterpretMessageDirectives &&
+    !isDirectiveOnly({ directives, cleanedBody: directives.cleaned, ctx, cfg, agentId, isGroup }) &&
+    directives.hasModelDirective &&
+    directives.modelDirectiveSource === "model" &&
+    rawModel &&
+    !rawModel.includes("/") &&
+    !["default", "list", "status"].includes(rawModel.toLowerCase())
+  ) {
+    ({ preparedModelCatalog, isKnownInlineModel } = await prepareInlineModelDirectiveMatcher({
+      cfg,
+      agentId,
+      defaultProvider,
+      defaultModel,
+      aliasIndex: params.aliasIndex,
+      preparedModelCatalog,
+    }));
+    // Qualify before sender projection and reuse the decision when stripping that span.
+    directives = parseDirectives(directiveCommandText);
+  }
   const hasInlineStatus = directives.hasStatusDirective && directives.cleaned.trim().length > 0;
   if (hasInlineStatus) {
     directives = { ...directives, hasStatusDirective: false };
@@ -540,7 +565,7 @@ export async function resolveReplyDirectives(params: {
       model,
       hasModelDirective: directives.hasModelDirective,
       hasResolvedTurnModelOverride,
-      preparedModelCatalog: params.preparedModelCatalog,
+      preparedModelCatalog,
       operatorAuthority: opts?.operatorAuthority,
     });
   } catch (error) {

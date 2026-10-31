@@ -104,7 +104,7 @@ function visibilityProbe() {
   return { activeObservers, observed };
 }
 
-it.each([30, 44])(
+it.each([32, 44])(
   "restores offscreen session content and live indicators with %i px rows",
   async (rowFloor) => {
     const probe = visibilityProbe();
@@ -131,7 +131,7 @@ it.each([30, 44])(
       expect(row(0)).not.toBeNull();
       expect(row(0)!.getBoundingClientRect().height).toBe(rowFloor);
       expect(row(1)!.getBoundingClientRect().top - row(0)!.getBoundingClientRect().top).toBe(
-        rowFloor + 2,
+        rowFloor,
       );
       expect(row(29)).toBeNull();
       expect(sidebar.querySelectorAll("[data-session-key]").length).toBeLessThan(40);

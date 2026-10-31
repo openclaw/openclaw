@@ -35,6 +35,7 @@ openclaw-chat-summary-automations {
     line-height: 24px;
 
     &:hover {
+      background: transparent;
       color: var(--text);
     }
 

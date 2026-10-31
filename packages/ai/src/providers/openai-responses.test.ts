@@ -116,10 +116,10 @@ describe("OpenAI Responses provider", () => {
   it("routes the SDK fetch through the host guard without changing the request or response", async () => {
     const { hostResponse, hostFetch } = guardedResponse("synthetic rejection");
     const result = await runRequest({ apiKey: "sentinel-key" });
-    // The provider rejected the request with an error body, so it did no billable work.
+    // Fail before a terminal usage event: zeros are unmeasured, not free.
     expect(result).toMatchObject({
       stopReason: "error",
-      usage: { input: 0, output: 0, totalTokens: 0, usageReport: { state: "available" } },
+      usage: { input: 0, output: 0, totalTokens: 0, usageReport: { state: "unavailable" } },
     });
     expect(openAiMockState.configs).toHaveLength(1);
     expect(openAiMockState.configs[0]).toMatchObject({ maxRetries: 0 });

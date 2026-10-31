@@ -106,6 +106,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   cron: "Global scheduler settings for stored automations, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling automation volume or integrating external webhook receivers.",
   "cron.enabled":
     "Enables automation execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all automation execution without deleting jobs.",
+  "cron.defaultTools":
+    'Tools added when the automations tool creates or explicitly revises a nonempty toolsAllow list, before creator-policy checks and approval. Unset adds nothing. Use toolsAllowMode: "exact" on that request to opt out; [] remains tool-less. Existing jobs and unrelated edits are unchanged.',
   "cron.skipMissedJobs":
     "Skips missed recurring cron/every slots at Gateway startup and schedules their next future occurrence instead of catching up. Default: false. Enable to avoid stale reminders after downtime; one-shot at jobs still catch up.",
   "cron.webhookToken":
@@ -289,7 +291,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "messages.queue.mode":
     'Queue mode for active runs. Use "steer" to inject prompts into the active run, "followup" to run later, "collect" to batch compatible messages later, or "interrupt" to abort the active run before starting the newest prompt.',
   "messages.queue.allowCollaborativeSteering":
-    "Allow admitted human input in the same conversation to steer under the active turn's unchanged identity and prepared permissions, even when its author has fewer permissions (default: true). When false, collaborativeSteeringFallback selects a quiet requester-owned queued turn (queue) or strict refusal (reject). Ordinary same-requester guidance retains the active execution’s prepared permissions. Current access, live execution authority, execution-setting checks, queue modes, and cross-session steering authorization still apply.",
+    "Allow admitted human input in the same conversation to steer under the active turn's unchanged identity and prepared permissions, even when its author has fewer permissions (default: true). Shared-credential WebUI and channel input can also continue the exact same active session. When false, that exception requires current WebUI admin and channel-owner authority; verified personal continuity also remains available. Otherwise collaborativeSteeringFallback selects a quiet requester-owned queued turn (queue) or strict refusal (reject). Current access, live execution authority, execution-setting checks, queue modes, and cross-session steering authorization still apply.",
   "messages.queue.collaborativeSteeringFallback":
     'What happens when another person cannot steer because collaborative steering is disabled: "queue" (default) runs their input as a separate turn without a status notice; "reject" preserves strict refusal and requires a fresh /followup request. Does not enable collaborative steering or bypass access checks.',
   "messages.queue.byChannel":

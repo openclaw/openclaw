@@ -355,6 +355,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "agent-id"),
     sourcePackageAlias("normalization-core", "code-points"),
     sourcePackageAlias("normalization-core", "error-coercion"),
+    sourcePackageAlias("normalization-core", "expect"),
     sourcePackageAlias("normalization-core", "grapheme"),
     sourcePackageAlias("normalization-core", "json-coercion"),
     sourcePackageAlias("normalization-core", "json-schema"),
@@ -772,7 +773,26 @@ export default function controlUiViteConfig(
       ? createControlUiDevGateway(process.env.OPENCLAW_UI_DEV_GATEWAY_URL)
       : undefined;
   const staticImports = new Map<string, readonly string[]>();
+  const styledChunks = new Set<string>();
+  const parallelStyleTargets = new Set<string>();
+  const parallelStyleEntries = [
+    "/ui/src/pages/config/config-page.tsx",
+    "/ui/src/pages/usage/usage-page.tsx",
+    "/ui/src/components/board/board-view.tsx",
+    "/ui/src/pages/chat/components/chat-sidebar-region.runtime.tsx",
+  ];
   const copiedInputs = new Set<string>();
+  const collectStaticImports = (entry: string) => {
+    const loaded = new Set<string>();
+    const imports = [...(staticImports.get(entry) ?? [])];
+    for (const dependency of imports) {
+      if (!loaded.has(dependency)) {
+        loaded.add(dependency);
+        imports.push(...(staticImports.get(dependency) ?? []));
+      }
+    }
+    return loaded;
+  };
   const resolveModulePreloadDependencies: ResolveModulePreloadDependenciesFn = (
     filename,
     deps,
@@ -783,18 +803,17 @@ export default function controlUiViteConfig(
     }
     // The executing importer has already loaded its whole static JS graph.
     // Keep the lazy target, its other dependencies, and Vite's CSS preloads.
-    const loaded = new Set<string>();
-    const imports = [...(staticImports.get(context.hostId) ?? [])];
-    for (const dependency of imports) {
-      if (!loaded.has(dependency)) {
-        loaded.add(dependency);
-        imports.push(...(staticImports.get(dependency) ?? []));
-      }
-    }
-    // Without stylesheet waits, import() immediately fetches its own target.
-    // Keep the target preload when CSS would otherwise delay that request.
-    const waitsForStyles = deps.some((dep) => dep.endsWith(".css"));
-    return deps.filter((dep) => !loaded.has(dep) && (waitsForStyles || dep !== filename));
+    const loaded = collectStaticImports(context.hostId);
+    // Vite removes CSS before calling this hook. Chunk metadata tells us when
+    // its stylesheet wait would otherwise delay fetching the target script.
+    // Keep optional artwork behind its existing wait so it cannot compete
+    // with foreground data on a slow connection.
+    const waitsForStyles =
+      parallelStyleTargets.has(filename) &&
+      (styledChunks.has(filename) ||
+        [...collectStaticImports(filename)].some((dep) => styledChunks.has(dep)));
+    const dependencies = deps.filter((dep) => !loaded.has(dep) && dep !== filename);
+    return waitsForStyles && !loaded.has(filename) ? [filename, ...dependencies] : dependencies;
   };
   return {
     base,
@@ -829,7 +848,9 @@ export default function controlUiViteConfig(
       ],
     },
     build: {
-      target: ["chrome147", "firefox150", "safari26.2"],
+      // iOS Safari is listed separately: desktop Safari alone lets the CSS minifier drop
+      // WebKit prefixes that only iOS reads, such as -webkit-text-size-adjust.
+      target: ["chrome147", "firefox150", "safari26.2", "ios26.2"],
       outDir: options.outDir ?? outDir,
       emptyOutDir: true,
       // The canonical sidecar performance report already measures shipped compressed bytes.
@@ -858,8 +879,13 @@ export default function controlUiViteConfig(
       host: devGateway ? "127.0.0.1" : true,
       port: 5173,
       strictPort: true,
-      // Chokidar selects FSEvents before reading its environment override on macOS.
-      ...(usePolling ? { watch: { usePolling: true } } : {}),
+      // FSEvents can delay or drop SSD edits under load. Native fs.watch keeps HMR
+      // prompt without polling the source tree; retain the explicit polling opt-in.
+      ...(process.platform === "darwin"
+        ? { watch: { useFsEvents: false, usePolling } }
+        : usePolling
+          ? { watch: { usePolling: true } }
+          : {}),
       ...(devGateway ? { proxy: devGateway.proxy } : {}),
     },
     plugins: [
@@ -870,9 +896,21 @@ export default function controlUiViteConfig(
         name: "control-ui-static-import-preloads",
         generateBundle(_options, bundle) {
           staticImports.clear();
+          styledChunks.clear();
+          parallelStyleTargets.clear();
           for (const chunk of Object.values(bundle)) {
             if (chunk.type === "chunk") {
               staticImports.set(chunk.fileName, chunk.imports);
+              if (chunk.viteMetadata?.importedCss.size) {
+                styledChunks.add(chunk.fileName);
+              }
+              if (
+                chunk.moduleIds.some((id) =>
+                  parallelStyleEntries.some((entry) => id.replaceAll("\\", "/").endsWith(entry)),
+                )
+              ) {
+                parallelStyleTargets.add(chunk.fileName);
+              }
             }
           }
         },

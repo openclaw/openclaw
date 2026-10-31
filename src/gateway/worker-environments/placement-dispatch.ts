@@ -36,10 +36,7 @@ import {
   type WorkerPlacementReclaimOptions,
 } from "./placement-reclaim.js";
 import { reportPlacementTransition } from "./placement-record.js";
-import type {
-  PlacementRecoveryDeps,
-  WorkerPlacementRecoveryBarrier,
-} from "./placement-recovery-contract.js";
+import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import {
   isFailedWorkerPlacementEnvironmentGone,
   matchesWorkerPlacementTarget,
@@ -81,7 +78,6 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
     isShuttingDown?: () => boolean;
     runnerAvailability: WorkerPlacementRunnerAvailabilityReader;
     runLocalBarrier: WorkerLocalDispatchBarrier;
-    runRecoveryBarrier: WorkerPlacementRecoveryBarrier;
     runActivationBarrier: WorkerActivationBarrier;
     runMoveBarrier: WorkerPlacementMoveBarrier;
     resolveMoveDestination: (
@@ -101,10 +97,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   const { environments, placements } = options;
   const failure = createPlacementFailureActions({ environments, placements });
 
-  const startup = createWorkerPlacementDispatchStartup({
-    ...options,
-    failure,
-  });
+  const startup = createWorkerPlacementDispatchStartup(options);
 
   // Background recovery observes previously requested cleanup; explicit Stop and
   // Move retain their retry contract. Pending-result recovery must inherit this too.
@@ -306,9 +299,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         throw error;
       }
       try {
-        if (placement && (await startup.retainInterruptedProvisioning(placement, error))) {
-          throw error;
-        }
         const current = placement ? await placements.getAsync(request.sessionId) : undefined;
         if (current && current.state !== "local" && current.state !== "reclaimed") {
           if (current.state === "active") {
@@ -577,8 +567,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     subscribeOrphanWorkspaceChanges: recovery.subscribeOrphanWorkspaceChanges,
     reconcile: recovery.reconcile,
     reconcileActive: recovery.reconcileActive,
-    isInterruptedTurn: recovery.isInterruptedTurn,
-    resumeProvisioning: startup.resumeProvisioning,
   };
 }
 

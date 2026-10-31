@@ -209,7 +209,7 @@ it.each(["queued", "retired"] as const)(
     await withInputs(async ({ scope, stage, read, discard }) => {
       const receipt = await stage("lost-result");
       if (kind === "retired") {
-        receipt.finish("interrupted");
+        receipt.finish("cancelled");
         await receipt.settled?.();
       }
       const outcome =

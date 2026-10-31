@@ -24,6 +24,7 @@ const loadPrs = fixture.load;
 vi.mock("../infra/git-worker.js", () => ({ runGitWorkerOperation: vi.fn() }));
 
 let cacheEpochMs = Date.now();
+let elapsedMs = 0;
 const subscriptionsToStop = new Set<ReturnType<typeof createSubscriptions>>();
 const mergedPull = pullListItem({ merged_at: "2026-07-09T10:00:00Z" });
 
@@ -85,6 +86,8 @@ function subscribe(
 }
 
 async function pollAfter(subscriptions: ReturnType<typeof subscribe>, elapsed: number) {
+  // Move cache clocks without firing the scheduler's queued polls.
+  elapsedMs += elapsed;
   vi.setSystemTime(Date.now() + elapsed);
   await subscriptions.pollNow();
 }
@@ -92,6 +95,8 @@ async function pollAfter(subscriptions: ReturnType<typeof subscribe>, elapsed: n
 beforeEach(() => {
   vi.mocked(runGitWorkerOperation).mockReset();
   vi.useFakeTimers();
+  elapsedMs = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
   vi.stubEnv("GH_TOKEN", "");
   vi.stubEnv("GITHUB_TOKEN", "");
   cacheEpochMs += 10 * 60_000;
@@ -103,6 +108,7 @@ afterEach(async () => {
     await subscriptions.stop();
   }
   subscriptionsToStop.clear();
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.useRealTimers();
   vi.unstubAllGlobals();

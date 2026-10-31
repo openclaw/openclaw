@@ -10,6 +10,7 @@ import {
 } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
+import { captureGatewayToolCallerAssertion } from "../../agents/tools/gateway-caller-context.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
@@ -27,9 +28,9 @@ import {
   readAgentDatabaseAdmissionRefusal,
   readAgentDatabaseReadAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
-import type { InternalAgentTurnDispatchOptions } from "../agent-turn/internal-facade.types.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
+import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import {
   prepareGatewaySessionAccessAuthority,
   type GatewaySessionAccessAuthority,
@@ -59,7 +60,6 @@ import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { gatewayRouterUploadPolicyError } from "./core-handlers.js";
 import { authorizeAuthenticatedProfileForMethod } from "./gateway-client-identity.js";
 import { authorizeGatewayMethod } from "./method-authorization.js";
-import { isGatewayRecoveryInput } from "./request-recovery-admission.js";
 import type {
   GatewayRequestContext,
   GatewayRequestOptions,
@@ -173,6 +173,14 @@ async function prepareStartupAgentTargets(
   cfg: OpenClawConfig,
   signal: AbortSignal,
 ) {
+  return [...new Set([...agents, ...(await prepareStartupStoreAgents(agents, cfg, signal))])];
+}
+
+async function prepareStartupStoreAgents(
+  agents: string[],
+  cfg: OpenClawConfig,
+  signal: AbortSignal,
+) {
   const targets = await Promise.all(
     agents.map((agentId) =>
       prepareSqliteTargetFromSessionStorePath(
@@ -187,7 +195,7 @@ async function prepareStartupAgentTargets(
       ),
     ),
   );
-  return [...new Set([...agents, ...targets.flatMap(({ agentId }) => agentId ?? [])])];
+  return [...new Set(targets.flatMap(({ agentId }) => agentId ?? []))];
 }
 
 /** Applies the router-owned authorization fence before any transport or typed dispatch. */
@@ -202,7 +210,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   signal?: AbortSignal;
   assertInvocationCurrent?: () => void;
   assertPreparationCurrent?: () => void;
-  recoveryInput?: InternalAgentTurnDispatchOptions["recoveryInput"];
   controllerInput?: SessionControllerInput;
   markSessionSubscribePhase?: (phase: SessionSubscribePhase) => void;
   consumeSessionTurn?: {
@@ -247,14 +254,29 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
       details: { ...gatewayStartupUnavailableDetails(), method: params.method },
     });
-  const startupError = () =>
-    params.context.unavailableGatewayMethods?.has(params.method) &&
-    !(
+  const startupError = (pending = params.context.unavailableGatewayMethods?.has(params.method)) => {
+    if (!pending) {
+      return null;
+    }
+    // Admitted runs can use their tools while startup retains external input admission.
+    try {
+      const assertCallerCurrent = captureGatewayToolCallerAssertion(params.method);
+      if (assertCallerCurrent) {
+        assertCallerCurrent();
+        return null;
+      }
+    } catch {
+      return errorShape(ErrorCodes.FORBIDDEN, "agent tool caller authority is no longer active");
+    }
+    return !(
       params.method === "chat.send" &&
-      isGatewayRecoveryInput(params, params.context.getRuntimeConfig())
+      readQueuedChatInputAdmission(
+        readSessionSharingStringParam(params.requestParams, "idempotencyKey") ?? "",
+      )
     )
       ? unavailableDuringStartup()
       : null;
+  };
   let assertChatRoutingCurrent: (() => void) | undefined;
   while (true) {
     signal?.throwIfAborted();
@@ -330,9 +352,11 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       );
       const cfg = params.context.getRuntimeConfig();
       let agents = startupWriteAgents(params, cfg);
+      let inputAgents = agents;
       let refusal = startupWriteRefusal(agents);
-      if (!refusal && !isPerAgentSessionStoreConfig(cfg.session?.store)) {
-        agents = await prepareStartupAgentTargets(agents, cfg, waitSignal);
+      if (!refusal && cfg.session?.store) {
+        inputAgents = await prepareStartupStoreAgents(agents, cfg, waitSignal);
+        agents = [...new Set([...agents, ...inputAgents])];
         if (params.context.getRuntimeConfig() !== cfg) {
           continue;
         }
@@ -347,17 +371,19 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         }
         return { error };
       }
-    }
-    // Database refusals keep precedence, including the pending agent's retry contract.
-    if (
-      (params.method === "chat.send" || params.method === "agent") &&
-      params.context.inputRecovery &&
-      startupWriteAgents(params, params.context.getRuntimeConfig()).some((agentId) =>
-        params.context.inputRecovery!.isPending(agentId),
-      ) &&
-      !isGatewayRecoveryInput(params, params.context.getRuntimeConfig())
-    ) {
-      return { error: unavailableDuringStartup() };
+      if (
+        inputAgents.some((agentId) =>
+          params.context.agentDatabaseStartup?.isAgentInputRecoveryPending(agentId),
+        )
+      ) {
+        const error = startupError(true);
+        if (error) {
+          if (params.consumeSessionTurn && error.retryable) {
+            delete error.details;
+          }
+          return { error };
+        }
+      }
     }
     const startup =
       startupReadMethods.has(params.method) &&

@@ -9,6 +9,7 @@ import {
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
+import { parseQaArtifactBase } from "./script-options.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/gateway-rpc-account-health.ts";
 const SCENARIO_PATH = "qa/scenarios/observability/gateway-rpc-account-health.yaml";
@@ -242,17 +243,8 @@ export async function runGatewayRpcAccountHealthProof(
   }
 }
 
-function parseArtifactBase(argv: readonly string[]) {
-  const index = argv.indexOf("--artifact-base");
-  const value = index >= 0 ? argv[index + 1] : undefined;
-  if (!value) {
-    throw new Error("--artifact-base is required");
-  }
-  return path.resolve(value);
-}
-
 export async function main(argv = process.argv.slice(2)) {
-  const artifactBase = parseArtifactBase(argv);
+  const artifactBase = parseQaArtifactBase(argv);
   const repoRoot = path.resolve(import.meta.dirname, "../../../..");
   const writer = createQaScriptEvidenceWriter({
     artifactBase,

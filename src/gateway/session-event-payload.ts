@@ -153,8 +153,6 @@ export function buildGatewaySessionSnapshot(params: {
     sendPolicy: sessionRow.sendPolicy,
     systemSent: sessionRow.systemSent,
     abortedLastRun: sessionRow.abortedLastRun,
-    restartRecoveryStatus: sessionRow.restartRecoveryStatus ?? null,
-    restartRecoveryCycleId: sessionRow.restartRecoveryCycleId ?? null,
     inputTokens: sessionRow.inputTokens,
     outputTokens: sessionRow.outputTokens,
     usageReport: sessionRow.usageReport,
@@ -183,6 +181,7 @@ export function buildGatewaySessionSnapshot(params: {
     providerReview: sessionRow.providerReview ?? null,
     lastRunId: sessionRow.lastRunId ?? null,
     hasAutomation: sessionRow.hasAutomation ?? false,
+    backgroundProcessCount: sessionRow.backgroundProcessCount ?? null,
     ...(params.activeRunState == null
       ? {}
       : {

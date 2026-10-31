@@ -214,7 +214,7 @@ it.each(["auto", "off"] as const)(
     const f = await fixture(true);
     const previous = getFsSafeNativeConfig();
     const audit = vi.spyOn(sqliteIntegrity, "assertSqliteIntegrity");
-    const generations = vi.spyOn(generationReads, "readUpdateDatabaseGenerations");
+    const generations = vi.spyOn(generationReads, "readUpdateDatabaseGeneration");
     const engineImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
     try {
       configureFsSafeNative({ mode });
@@ -334,7 +334,7 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
       "INSERT INTO payload VALUES ('checkpoint pending');",
     );
     const parentImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
-    const generations = vi.spyOn(generationReads, "readUpdateDatabaseGenerations");
+    const generations = vi.spyOn(generationReads, "readUpdateDatabaseGeneration");
     await using scope =
       mode === "ordinary" || mode === "maintenance" ? maintenanceScope() : undefined;
     const input = { ...f.input, preserveSourceArtifacts: true };
@@ -362,8 +362,8 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
       expect(parentImages.mock.calls.map(([file]) => file)).toEqual(
         mode === "original-custody" ? [f.shared] : [],
       );
-      expect(generations.mock.calls.flatMap(([paths]) => paths)).toEqual(
-        mode === "original-custody" ? [] : [f.shared, f.shared],
+      expect(generations.mock.calls.map(([file]) => file)).toEqual(
+        mode === "original-custody" ? [] : [f.shared],
       );
     }
     expect(await readFiles(files)).toEqual(family);

@@ -75,6 +75,10 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.65);
 
   --grid-line: rgba(235, 235, 235, 0.04);
+
+  --link: var(--accent);
+
+  --link-on-tint: var(--link);
 }
 
 :root[data-theme="crt-light"] {
@@ -115,4 +119,8 @@
   --shadow-lg: 0 12px 28px rgba(20, 20, 20, 0.09);
 
   --grid-line: rgba(20, 20, 20, 0.04);
+
+  --link: var(--accent);
+
+  --link-on-tint: var(--link);
 }

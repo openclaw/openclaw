@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -17,27 +16,21 @@ import {
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import {
   gatewayCallsitesGuard,
+  createFixtureGit,
   createChangedNodeTestShards,
   materializeGatewayCallsitesFixture,
   selectedFiles,
   fallbackGroups,
   expectProtectedOwnerExpansion,
+  writeFiles,
 } from "./ci-changed-node-test-plan.test-support.js";
 
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const sourcePolicyTest = "src/infra/fs-safe-import-boundary.test.ts";
 const lintSuppressionInventory = "test/scripts/lint-suppressions.test.ts";
-
-function writeFiles(cwd: string, files: Record<string, string>) {
-  for (const [file, source] of Object.entries(files)) {
-    mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-    writeFileSync(path.join(cwd, file), source);
-  }
-}
 
 function createSourceFixture(prefix: string, files: Record<string, string>) {
   const cwd = argvTempDirs.make(prefix);
@@ -86,22 +79,7 @@ function createErasedCoreSourceFixture() {
     "src/example/runtime-before.ts": "export const value = 1;\n",
   });
   materializeGatewayCallsitesFixture(cwd);
-  const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.test",
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "core.hooksPath=/dev/null",
-        ...args,
-      ],
-      { cwd, env: createNestedGitEnv(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ).trim();
+  const git = createFixtureGit(cwd);
   git("init", "--quiet");
   git("add", ".");
   git("commit", "--quiet", "-m", "fixture baseline");
@@ -729,7 +707,7 @@ describe("CI changed Node test plan", () => {
     // Child-process E2Es: the import graph reaches only the test-instance helper.
     {
       changedPath: "src/gateway/server-startup-observers.ts",
-      expected: ["test/gateway-background-process-restart.e2e.test.ts"],
+      expected: ["test/gateway-restart-resume.e2e.test.ts"],
     },
     {
       changedPath: "src/process/command-queue.capacity-groups.ts",
@@ -738,7 +716,7 @@ describe("CI changed Node test plan", () => {
     {
       changedPath: "src/sessions/session-controller.steer.ts",
       expected: [
-        "test/gateway-background-process-restart.e2e.test.ts",
+        "test/gateway-restart-resume.e2e.test.ts",
         "test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts",
       ],
     },

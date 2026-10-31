@@ -84,6 +84,7 @@ import {
 } from "../helpers/fixture-receipts.js";
 import { withinTest } from "../helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { isProcessPresent } from "./run-process.test-support.js";
 
 const WRAPPERS = {
   linux: "scripts/e2e/parallels-linux-smoke.sh",
@@ -261,18 +262,9 @@ function createMacosGuest(phases: PhaseRunner): MacosGuest {
   );
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // The host wrapper escalates then settles; it exposes no foreign-PID reap signal.
 async function waitForProcessGone(pid: number, signal: AbortSignal): Promise<void> {
-  while (isProcessAlive(pid)) {
+  while (isProcessPresent(pid)) {
     await delay(5, undefined, { signal }).catch((error: unknown) => {
       throw new Error(`condition was not met before timeout: process ${pid} is still alive`, {
         cause: error,
@@ -580,10 +572,10 @@ run(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(parentScrip
 }
 
 function forceKillSignaledFixture(runnerPid: number, grandchildPid: number): void {
-  if (runnerPid && isProcessAlive(runnerPid)) {
+  if (runnerPid && isProcessPresent(runnerPid)) {
     process.kill(-runnerPid, "SIGKILL");
   }
-  if (grandchildPid && isProcessAlive(grandchildPid)) {
+  if (grandchildPid && isProcessPresent(grandchildPid)) {
     process.kill(grandchildPid, "SIGKILL");
   }
 }
@@ -2021,7 +2013,7 @@ if (commandArgs[0] === "list") {
         expect(Number.isInteger(grandchildPid)).toBe(true);
         await waitForProcessGone(grandchildPid, signal);
       } finally {
-        if (grandchildPid && isProcessAlive(grandchildPid)) {
+        if (grandchildPid && isProcessPresent(grandchildPid)) {
           process.kill(grandchildPid, "SIGKILL");
         }
       }
@@ -2074,7 +2066,11 @@ if (commandArgs[0] === "list") {
         expect(readFileSync(deadlineFile, "utf8")).toBe("elapsed");
         expect(durationMs).toBeLessThan(2_000);
       } finally {
-        if (Number.isInteger(grandchildPid) && grandchildPid > 1 && isProcessAlive(grandchildPid)) {
+        if (
+          Number.isInteger(grandchildPid) &&
+          grandchildPid > 1 &&
+          isProcessPresent(grandchildPid)
+        ) {
           process.kill(-grandchildPid, "SIGKILL");
         }
       }
@@ -2108,7 +2104,7 @@ if (commandArgs[0] === "list") {
         forceKillSignaledFixture(runnerPid, grandchildPid);
         if (existsSync(fixture.parentPidPath)) {
           const parentPid = Number.parseInt(readFileSync(fixture.parentPidPath, "utf8"), 10);
-          if (isProcessAlive(parentPid)) {
+          if (isProcessPresent(parentPid)) {
             process.kill(-parentPid, "SIGKILL");
           }
         }

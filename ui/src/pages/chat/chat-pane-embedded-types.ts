@@ -38,6 +38,7 @@ export type ChatDetailSlotProps = {
   presentation?: "desktop" | "mobile";
   fileBack?: ChatDetailPanelProps["fileBack"];
   fileWorkspace?: ChatDetailPanelProps["fileWorkspace"];
+  onBrowseFiles?: ChatDetailPanelProps["onBrowseFiles"];
   onOpenMobilePage?: SessionDiffProps["onOpenMobilePage"];
   filePresentation?: ChatDetailPanelProps["filePresentation"];
   onFileInteraction?: ChatDetailPanelProps["onFileInteraction"];

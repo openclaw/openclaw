@@ -4,6 +4,7 @@ import { extractModelDirective } from "./model.js";
 describe("extractModelDirective", () => {
   it.each([
     ["-s opus", undefined, undefined, "opus"],
+    ['"openrouter/free"', "openrouter/free", undefined, ""],
     ["--runtime codex", undefined, "codex", ""],
     ["runtime=codex", undefined, "codex", ""],
     ["harness=codex", undefined, "codex", ""],
@@ -17,14 +18,6 @@ describe("extractModelDirective", () => {
   ] as const)("parses model options: %s", (args, rawModel, rawRuntime, cleaned) => {
     const parsed = extractModelDirective(`/model ${args}`);
     expect(parsed).toMatchObject({ hasDirective: true, rawModel, rawRuntime, cleaned });
-  });
-
-  it("parses a quoted model ID", () => {
-    expect(extractModelDirective('/model "openrouter/free"')).toMatchObject({
-      hasDirective: true,
-      rawModel: "openrouter/free",
-      cleaned: "",
-    });
   });
 
   it("allows profile overrides after OpenRouter preset paths", () => {

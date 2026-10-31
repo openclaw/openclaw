@@ -16,6 +16,8 @@ import {
 import {
   loadedSidebarContent,
   createSidebarContentRecorder,
+  textFile,
+  workspaceFile,
 } from "./chat-session-workspace.test-support.ts";
 import {
   createSessionWorkspaceProps as workspaceProps,
@@ -26,26 +28,6 @@ import {
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-
-function workspaceFile(
-  path: string,
-  overrides: Partial<SessionWorkspaceGetResult["file"]> = {},
-): SessionWorkspaceGetResult["file"] {
-  return { path, name: path.split(/[\\/]/).at(-1)!, kind: "read", missing: false, ...overrides };
-}
-
-function textFile(
-  path: string,
-  content: string,
-  overrides: Partial<SessionWorkspaceGetResult["file"]> = {},
-) {
-  return workspaceFile(path, {
-    previewKind: "text",
-    contentEncoding: "utf8",
-    content,
-    ...overrides,
-  });
-}
 
 function imageFile(mimeType: string) {
   return workspaceFile("screenshots/result.png", {

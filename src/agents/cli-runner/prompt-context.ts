@@ -22,7 +22,6 @@ import {
 } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { resolveSessionGitCoauthorPrompt } from "../git-coauthor-prompt.js";
 import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
-import { buildInterruptedInputContext } from "../interrupted-input-context.js";
 import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
@@ -133,11 +132,6 @@ export async function prepareCliTurnPromptContext(
       includeEmptySnapshots: true,
     });
     const mediaTaskMessage = buildRuntimeContextCustomMessage(mediaTaskContext);
-    const interruptedInputContext = await buildInterruptedInputContext({
-      sessionTarget: params.sessionTarget,
-      capabilityToolNames: params.capabilityToolNames,
-      includeEmptySnapshots: true,
-    });
     await prepareActiveNodeContext(params.requesterProfileId);
     const preparedAppendContext = [
       runtimeFacts?.relocatable,
@@ -151,9 +145,6 @@ export async function prepareCliTurnPromptContext(
         hasSessionsSpawn: params.capabilityToolNames.has("sessions_spawn"),
         nativeDelegationTools: params.nativeDelegationTools,
       }).join("\n"),
-      interruptedInputContext
-        ? labelRuntimeContextText(projectRuntimeContextFragments([interruptedInputContext]))
-        : undefined,
       labelRuntimeContextText(
         buildTemporalContextText({
           configuredTimezone: params.configuredTimezone,

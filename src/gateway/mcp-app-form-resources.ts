@@ -30,9 +30,9 @@ import {
   prepareQuestionAuthorization,
   withPreparedQuestionSessions,
 } from "./question-session-access.js";
+import { withSessionFileRoot } from "./server-methods/session-files-root.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { retainSessionScopedRead } from "./server-methods/session-scoped-read.js";
-import { withSessionFileRoot } from "./server-methods/sessions-files.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createWorkspaceUploadBatch } from "./server-methods/workspace-fs.js";
 import { captureGatewayClientUploadCommitGuard } from "./upload-policy.js";

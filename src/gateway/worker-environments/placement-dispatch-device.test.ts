@@ -593,65 +593,6 @@ describe("device worker placement dispatch", () => {
     expect(result).toMatchObject({ ok: false, error: expect.stringContaining("reconnect") });
   });
 
-  it.each([
-    {
-      name: "saturated worker-turn node",
-      executionMode: "worker-turn" as const,
-      node: deviceProof(0),
-      providerId: "device",
-      expectedMessage: "at capacity",
-    },
-    {
-      name: "remote-exec node missing its required command",
-      executionMode: "remote-exec" as const,
-      node: deviceProof(0, ["system.run"]),
-      providerId: "device",
-      expectedMessage: "not advertised by node",
-    },
-    {
-      name: "non-device remote-exec cloud node missing its required command",
-      executionMode: "remote-exec" as const,
-      node: deviceProof(0, ["system.run"]),
-      providerId: "generic-cloud-node",
-      expectedMessage: "not advertised by node",
-    },
-    {
-      name: "saturated non-device worker-turn cloud node",
-      executionMode: "worker-turn" as const,
-      node: deviceProof(0),
-      providerId: "generic-cloud-node",
-      expectedMessage: "at capacity",
-    },
-  ])("fences recovery of a $name before workspace sync", async (scenario) => {
-    const harness = await createHarness(database, placementStore);
-    const provisioning = await harness.placements.seedProvisioning(scenario.executionMode);
-    if (provisioning.state !== "provisioning") {
-      throw new Error("paired-device recovery fixture did not enter provisioning");
-    }
-    const environment = {
-      ...harness.ready,
-      providerId: scenario.providerId,
-      nodeDeviceId: "device-1",
-      sshEndpoint: null,
-    };
-    vi.mocked(harness.environments.get).mockImplementation((environmentId) =>
-      environmentId === environment.environmentId ? environment : undefined,
-    );
-    bindDeviceWorkerAvailability(harness.environments, async () => ({
-      available: true,
-      node: scenario.node,
-    }));
-
-    await harness.service.resumeProvisioning(provisioning, async () => {});
-
-    expect(harness.environments.attachSession).not.toHaveBeenCalled();
-    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
-    expect(harness.placements.current()).toMatchObject({
-      state: "failed",
-      recoveryError: expect.stringContaining(scenario.expectedMessage),
-    });
-  });
-
   it("adopts an offline paired-device placement without eagerly starting its tunnel", async () => {
     const harness = await createHarness(database, placementStore);
     await harness.environments.attachSession({

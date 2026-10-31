@@ -686,12 +686,27 @@ AFTER_CD
   });
 
   it.each([
-    // name, body, override, permission, issue, admitted, reacts
-    ["multiline", "context\r\n \t/merge now \r\n", "", "write", false, true, true],
-    ["non-maintainer", "/merge", "", "read", false, true, false],
+    // name, body, override, permission, issue, admitted, reacts, permission lookup
+    ["multiline", "context\r\n \t/merge now \r\n", "", "write", false, true, true, true],
+    ["non-maintainer", "/merge", "", "read", false, true, false, true],
+    ["link", "https://example.com/project", "", "write", false, false, false, false],
+    ["path", "see src/example.ts", "", "write", false, false, false, false],
+    ["untracked", "try /help", "", "write", false, false, false, false],
+    ["autoclose", "/autoclose", "", "write", false, true, true, true],
+    ["sweeper close", "/clawsweeper autoclose", "", "write", false, true, true, true],
+    ["sweeper merge", "/clawsweeper automerge", "", "write", false, true, true, true],
+    ["merge", "/merge", "", "write", false, true, true, true],
+    ["land", "/land", "", "write", false, true, true, true],
+    ["landpr", "/landpr", "", "write", false, true, true, true],
+    ["custom", "ship", "ship", "write", false, true, true, true],
+    ["custom no match", "ordinary text", "ship", "write", false, true, false, false],
+    ["prefix only", "/landscape", "", "write", false, true, false, false],
+    ["issue autoclose", "/autoclose", "", "write", true, true, true, true],
+    ["issue sweeper close", "/clawsweeper autoclose", "", "write", true, true, true, true],
+    ["issue merge", "/merge", "", "write", true, true, false, false],
   ] as const)(
     "preserves reaction admission and actions for %s",
-    async (_name, body, commands, permission, issue, admitted, reacts) => {
+    async (_name, body, commands, permission, issue, admitted, reacts, lookup) => {
       const job = readWorkflow(".github/workflows/maintainer-command-reactions.yml").jobs.react;
       const event = {
         comment: { id: 456, body, user: { login: "comment-author" } },
@@ -736,7 +751,7 @@ AFTER_CD
         },
       });
       expect(reactions).toEqual(reacts ? ["eyes"] : []);
-      expect(permissionUsers.every((login) => login === "comment-author")).toBe(true);
+      expect(permissionUsers).toEqual(lookup ? ["comment-author"] : []);
       expect(Boolean(evaluateWorkflowExpression(job.if, context))).toBe(admitted);
     },
   );
@@ -1273,9 +1288,9 @@ AFTER_CD
       const run = expectDefined(installStep.run, `Install opengrep script in ${workflowPath}`);
 
       expect(installStep.env, workflowPath).toMatchObject({
-        OPENGREP_VERSION: "v1.31.0",
+        OPENGREP_VERSION: "v1.32.0",
         OPENGREP_LINUX_X64_SHA256:
-          "dbbe3c2058dbe600c449a8ba22ea79a1643a6660658400090d0323a8d0d31147",
+          "7360d60174880bd9214f2dfbe439b7bce82b7a3d44cfe945ba833c85cc8bda75",
       });
       expectIncludes(
         run,
@@ -2848,6 +2863,20 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           const authority = `${jobCondition ?? ""} ${step.if ?? ""}`;
           expect(authority).toContain("github.repository == 'openclaw/openclaw'");
           expect(authority).toContain("github.event_name == 'workflow_dispatch'");
+          continue;
+        }
+        const releaseCacheId = new Map([
+          ["${{ runner.temp }}/openclaw-watch-rtc-release-libraries", "watch-rtc-cache"],
+          ["~/Library/Developer/Xcode/DerivedData/OpenClaw-*/SourcePackages", "ios-packages-cache"],
+        ]).get(String(step.with?.path));
+        if (file === ".github/workflows/ios-store-release.yml" && releaseCacheId) {
+          expect(jobId).toBe("release");
+          expectIncludes(jobCondition, [
+            "github.repository == 'openclaw/openclaw'",
+            "github.ref == 'refs/heads/main'",
+          ]);
+          expect(step.if).toBe(`steps.${releaseCacheId}.outputs.cache-hit != 'true'`);
+          expect(step.with?.key).toBe(`\${{ steps.${releaseCacheId}.outputs.cache-primary-key }}`);
           continue;
         }
         if (step.with?.path === ".artifacts/ci-sdk-declarations/sdk.json.gz") {
@@ -6471,10 +6500,25 @@ it("pins generated publisher and maturity owners before credentials and selected
     "Create generated PR tokens",
     "Publish generated pull request",
   ]);
-  expect(action.runs.steps[0]).toEqual(PINNED_GIT_OWNER);
+  expect(action.runs.steps[0]).toEqual({
+    ...PINNED_GIT_OWNER,
+    uses: "openclaw/openclaw/.github/actions/git-owner@c30efcb58a050bc5c449381e732125662e87faae",
+  });
+  const sanitySteps: WorkflowStep[] = readWorkflowSanityWorkflow().jobs.actionlint.steps;
+  const audit = sanitySteps.findIndex(
+    ({ name }) => name === "Prepare trusted workflow audit configs",
+  );
+  expect(sanitySteps[audit - 1]).toEqual({
+    ...PINNED_GIT_OWNER,
+    if: "steps.scope.outputs.changed == 'true'",
+    uses: "openclaw/openclaw/.github/actions/git-owner@c30efcb58a050bc5c449381e732125662e87faae",
+  });
   const steps: WorkflowStep[] = readMaturityScorecardWorkflow().jobs.validate_selected_ref.steps;
   const checkout = steps.findIndex(({ name }) => name === "Checkout selected ref");
-  expect(steps[checkout - 1]).toEqual(PINNED_GIT_OWNER);
+  expect(steps[checkout - 1]).toEqual({
+    ...PINNED_GIT_OWNER,
+    uses: "openclaw/openclaw/.github/actions/git-owner@c30efcb58a050bc5c449381e732125662e87faae",
+  });
   expect(steps[checkout + 1]?.name).toBe("Validate selected ref");
   const policy = expectDefined(steps[checkout + 1]?.run, "validation body");
   expect(policy).toContain('exec python3 -I -S "$CI_GIT_OWNER" --policy -');

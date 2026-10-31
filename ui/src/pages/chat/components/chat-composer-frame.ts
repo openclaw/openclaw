@@ -41,6 +41,7 @@ import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu-state.ts";
 import { resolveChatSlashCommandArgOptions, resolveComposerMenus } from "./chat-composer-menus.ts";
 import type { ComposerPrediction } from "./chat-composer-prediction.ts";
+import { createQueuedSubmit } from "./chat-composer-queued-submit.ts";
 import { isSkillMenuVisible, type SkillMenuHost } from "./chat-composer-skill-menu-state.ts";
 import type { SlashMenuHost } from "./chat-composer-slash-menu-state.ts";
 import {
@@ -126,7 +127,11 @@ export function createChatComposerContext(
     }
     state.composerTextarea = nextTextarea;
     if (nextTextarea) {
-      observeTextareaOverflow(nextTextarea, () => props.getTranscriptElement?.() ?? null);
+      observeTextareaOverflow(
+        nextTextarea,
+        () => props.getTranscriptElement?.() ?? null,
+        () => state.composerContext,
+      );
       scheduleTextareaHeightAdjustment(nextTextarea);
       if (state.restoreComposerFocus) {
         state.restoreComposerFocus = false;
@@ -305,6 +310,8 @@ export function createChatComposerContext(
     }
   };
 
+  const queuedSubmit = createQueuedSubmit(props, state, visibleDraft, canSubmitDraft, submitDraft);
+
   const acceptPrediction = () => {
     if (state.composerComposing || !canCompose) {
       return;
@@ -322,6 +329,7 @@ export function createChatComposerContext(
     sendShortcut,
     canSubmitDraft,
     submitDraft,
+    queueSubmit: queuedSubmit.queueSubmit,
     showAbortableUi,
     alternateFollowUpMode,
     goalComposer,
@@ -624,6 +632,9 @@ export function createChatComposerContext(
     canCompose,
     showAbortableUi,
     visibleDraft,
+    submitQueued: queuedSubmit.submitQueued,
+    queuedSubmitDue: queuedSubmit.queuedSubmitDue,
+    flushQueuedSubmit: queuedSubmit.flushQueuedSubmit,
     predictionText: prediction?.text ?? null,
     acceptPrediction,
     dismissPrediction: () => prediction?.dismiss(),

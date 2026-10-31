@@ -10,9 +10,7 @@ import type { ControlUiSessionTaskPullRequest } from "./control-ui-contract.js";
 import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import { hasEntry, type EntryRow, type Lookup, type Row } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
-import type { createSessionListEntryFilter } from "./session-sharing.js";
-
-type PublicationFilter = ReturnType<typeof createSessionListEntryFilter>;
+type PublicationFilter = ((row: EntryRow) => boolean) | undefined;
 
 type PublicationNode = {
   query: Lookup;
@@ -86,7 +84,7 @@ function allowsPublicationRow(row: Row | undefined, allows: PublicationFilter): 
     hasEntry(row) &&
     !row.entry.incognito &&
     !isIncognitoSessionKey(row.key) &&
-    allows?.(row.key, row.entry) !== false
+    allows?.(row) !== false
   );
 }
 

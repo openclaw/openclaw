@@ -421,6 +421,8 @@ export const ChatSendParamsSchema = closedObject({
 export const ChatAbortParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  // Optional physical-session fence; an exact runId is required when supplied.
+  sessionId: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   preserveSideRuns: Type.Optional(Type.Boolean()),
   discardPendingInput: Type.Optional(Type.Boolean()),

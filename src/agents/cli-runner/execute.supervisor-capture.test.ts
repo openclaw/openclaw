@@ -3,6 +3,7 @@
 import { assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { buildExternalRunFailureReply } from "../../auto-reply/reply/agent-runner-failure-reply.js";
+import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
 import {
   markMcpLoopbackRequestFinished,
   markMcpLoopbackRequestStarted,
@@ -17,8 +18,8 @@ import {
   onTrustedToolExecutionEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
-  type TrustedToolExecutionEvent,
   waitForDiagnosticEventsDrained,
+  type TrustedToolExecutionEvent,
 } from "../../infra/diagnostic-events.js";
 import {
   closeDiagnosticEmbeddedRunOwner,
@@ -42,7 +43,6 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
-import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
 import { findCliTerminalStopError } from "../failover-error.js";
 import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
 import { buildCliDeliveredFailure, buildCliRunResult } from "./cli-run-settlement.js";
@@ -88,6 +88,7 @@ function terminal(result = "done", session_id = "session-jsonl") {
 function messageUse(id: string, input: Record<string, unknown>) {
   return toolUse(id, "mcp__openclaw__message", input);
 }
+
 function streamDelta(delta: unknown, index?: number) {
   return jsonl({
     type: "stream_event",
@@ -213,17 +214,12 @@ function buildPreparedCliRunContext(params: {
     input: "stdin" as const,
     serialize: true,
   };
-  return createPreparedCliContext(
+  const context = createPreparedCliContext(
     { provider, model: "model", runId, agentId: "main", sessionKey: "agent:main:main" },
     { id: provider, config: backend, bundleMcp: false, parseJsonlEvent: params.parseJsonlEvent },
-    {
-      preparedBackend: {
-        backend,
-        env: {},
-        ...(params.beforeExecution ? { beforeExecution: params.beforeExecution } : {}),
-      },
-    },
   );
+  context.preparedBackend.beforeExecution = params.beforeExecution;
+  return context;
 }
 
 function claudeJsonlContext() {
@@ -234,6 +230,7 @@ function captureContext(provider = "claude-cli", output: "text" | "jsonl" = "jso
   context.mcpDeliveryCapture = true;
   return context;
 }
+
 function settledResult(
   context: PreparedCliRunContext,
   output: Awaited<ReturnType<typeof executePreparedCliRun>>,
@@ -264,11 +261,9 @@ function installCaptureGrant(context: PreparedCliRunContext) {
 }
 
 function requireSupervisorSpawnInput(index = 0): SupervisorSpawnInput {
-  const call = supervisorSpawnMock.mock.calls[index];
-  if (!call) {
-    throw new Error("Expected supervisor spawn");
-  }
-  return call[0] as SupervisorSpawnInput;
+  const input = supervisorSpawnMock.mock.calls[index]?.[0];
+  assert.isDefined(input, "Expected supervisor spawn");
+  return input;
 }
 beforeEach(() => {
   vi.unstubAllEnvs();
@@ -289,6 +284,7 @@ beforeEach(() => {
   });
   setActivePluginRegistry(registry);
 });
+
 function createDiagnosticFixture() {
   const time = { now: 1_000_000 };
   const clock = vi.spyOn(Date, "now").mockImplementation(() => time.now);
@@ -1036,28 +1032,30 @@ it("correlates parallel same-name loopback calls by arguments instead of admissi
 
 it("keeps identical parallel outcomes unknown with first tool finishes before second CLI identity", async () => {
   const toolEvents = captureToolEvents();
+  const recordEvent = vi.fn();
   mockCaptureSpawn((input, captureKey) => {
     const toolArgs = { action: "react", emoji: "same" };
-    const emitToolStarts = (...ids: string[]) =>
-      input.onStdout?.(assistant(...ids.map((id) => messageUse(id, toolArgs))));
-    const recordOutcome = (outcome: "completed" | "failed") =>
-      recordToolOutcome(captureKey, "message", toolArgs, outcome);
-    const emitToolResults = (...ids: string[]) =>
-      input.onStdout?.(user(...ids.map((id) => toolResult(id, "ok"))));
-    emitToolStarts("call-identical-a");
-    recordOutcome("failed");
-    recordOutcome("completed");
-    emitToolResults("call-identical-a");
-    emitToolStarts("call-identical-b");
-    emitToolResults("call-identical-b");
-    emitToolStarts("call-identical-later");
-    recordOutcome("completed");
+    input.onStdout?.(assistant(messageUse("call-identical-a", toolArgs)));
+    recordToolOutcome(captureKey, "message", toolArgs, "failed");
+    recordToolOutcome(captureKey, "message", toolArgs, "completed");
+    input.onStdout?.(user(toolResult("call-identical-a", "ok")));
+    input.onStdout?.(assistant(messageUse("call-identical-b", toolArgs)));
+    input.onStdout?.(user(toolResult("call-identical-b", "ok")));
+    input.onStdout?.(assistant(messageUse("call-identical-later", toolArgs)));
+    recordToolOutcome(captureKey, "message", toolArgs, "completed");
     input.onStdout?.(`${user(toolResult("call-identical-later", "ok"))}${terminal()}`);
   });
   const context = captureContext();
+  context.trajectoryRecorder = { recordEvent };
 
   await executePreparedCliRun(context);
-
+  const results = recordEvent.mock.calls.filter(([type]) => type === "tool.result");
+  const outcomes = results.map(([, row]) => [row?.toolCallId, row?.status, row?.success]);
+  expect(outcomes).toEqual([
+    ["call-identical-a", "unknown", undefined],
+    ["call-identical-b", "unknown", undefined],
+    ["call-identical-later", "completed", true],
+  ]);
   expect(toolEvents).toHaveLength(6);
   expectToolEvents(
     toolEvents,
@@ -1177,8 +1175,9 @@ it.each([
       timedOut: true,
     },
   );
-
   const context = captureContext();
+  const recordEvent = vi.fn();
+  context.trajectoryRecorder = { recordEvent };
   context.params.onExecutionPhase = vi.fn();
   await expect(executePreparedCliRun(context)).rejects.toMatchObject({
     message: expect.stringMatching(/exceeded timeout/i),
@@ -1197,6 +1196,7 @@ it.each([
     model: "model",
     backend: "claude-cli",
   });
+  expect(recordEvent.mock.calls.map(([type]) => type)).not.toContain("tool.result");
 
   expectToolEvents(toolEvents, [
     ["started", fixture.toolCallId],
@@ -1454,8 +1454,18 @@ it.each([
 );
 
 it.each([
-  ["explicit final", true, "source", "required", "Delivery complete", true],
-  ["default final", undefined, "source", "required", "Delivery complete", true],
+  ["explicit final", true, "source", "required", "Tool-authored answer", true],
+  ["default final", undefined, "source", "required", "Tool-authored answer", true],
+  ["explicit short final", true, "source", "required", "Done", true, "Done"],
+  ["default short final", undefined, "source", "required", "Done", true, "Done"],
+  ["short progress repeat", false, "source", "required", "Done", true, "Done"],
+  ["trimmed short final", true, "source", "required", "Done", true, " Done "],
+  ["distinct short final", true, "source", "required", "No", false, "Done"],
+  ["short prefix correction", true, "source", "required", "Done, but failed", false, "Done"],
+  ["short other conversation", true, "other", "required", "Done", false, "Done"],
+  ["identical emoji final", true, "source", "required", "✅", true, "✅"],
+  ["distinct emoji final", true, "source", "required", "❌", false, "✅"],
+  ["continued work", undefined, "source", "required", "The operation failed", false],
   ["progress", false, "source", "required", "Final answer", false],
   ["other conversation", true, "other", "required", "Final answer", false],
   ["partial delivery", true, "partial", "required", "Final answer", false],
@@ -1466,7 +1476,7 @@ it.each([
   ["authored silence", true, "source", "required", "NO_REPLY", true],
 ] as const)(
   "settles automatic external source delivery with %s evidence",
-  async (_label, final, delivery, terminalReplyExpectation, text, suppress) => {
+  async (_label, final, delivery, terminalReplyExpectation, text, suppress, sentText?: string) => {
     const context = captureContext("local-cli", "text");
     context.params.sourceReplyDeliveryMode = "automatic";
     context.params.messageChannel = TEST_MESSAGE_CHANNEL;
@@ -1480,7 +1490,7 @@ it.each([
           action: "send",
           channel: TEST_MESSAGE_CHANNEL,
           target: delivery === "other" ? "other-chat" : "source-chat",
-          message: "Tool-authored answer",
+          message: sentText ?? "Tool-authored answer",
           ...(final !== undefined ? { final } : {}),
           ...(delivery === "dry-run" ? { dryRun: true } : {}),
         },
@@ -1506,28 +1516,27 @@ it.each([
           },
         },
       );
+      if (_label === "continued work") {
+        recordToolOutcome(captureKey, "exec", { command: "check-result" }, "completed");
+      }
       input.onStdout?.(text);
     });
     const output = await executePreparedCliRun(context);
-    expect(output.messagingToolSourceReplyPayloads).toBeUndefined();
     const preparedReply = prepareCliRunTerminalReply(context, output);
     const result = settledResult(context, output, preparedReply);
-    expect(result.payloads).toEqual(suppress ? undefined : [{ text }]);
+    const { replyPayloads } = await buildReplyPayloads({
+      payloads: result.payloads ?? [],
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      replyToMode: "off",
+      messageProvider: TEST_MESSAGE_CHANNEL,
+      originatingTo: "source-chat",
+      messagingToolSentTexts: result.messagingToolSentTexts,
+      messagingToolSentTargets: result.messagingToolSentTargets,
+    });
+    expect(replyPayloads.map((payload) => payload.text)).toEqual(suppress ? [] : [text]);
     if (text === "NO_REPLY") {
       expect(result.meta.terminalReply).toEqual({ disposition: "silent" });
-    }
-    if (terminalReplyExpectation === "result-required") {
-      expect(preparedReply.completedFinalSource).toBe(false);
-    } else {
-      expect(
-        buildEmbeddedRunPayloads({
-          ...output,
-          assistantTexts: [text],
-          lastAssistant: undefined,
-          sessionKey: context.params.sessionKey ?? "",
-          sourceReplyDeliveryMode: "automatic",
-        }),
-      ).toEqual(suppress ? [] : [{ text, replyToTag: false }]);
     }
   },
 );

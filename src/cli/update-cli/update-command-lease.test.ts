@@ -50,7 +50,7 @@ import {
   writeScenario,
   type Lane,
 } from "./update-command-lease.test-harness.js";
-import type { ProducedPluginUpdateResult } from "./update-command-plugins-internals.js";
+import type { PostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 
 // Register the shared mocks before any update entry point can capture its dependencies.
 await vi.hoisted(async () => {
@@ -577,7 +577,7 @@ describe("update orchestration lifecycle ownership", () => {
 
   it("repair reconciles captured runs before publishing successful convergence with warnings", async () => {
     const recovery = seedInterruptedPostCoreRun();
-    const warning: ProducedPluginUpdateResult = {
+    const warning: PostCorePluginUpdateResult = {
       ...pluginResult,
       status: "warning",
       changed: false,

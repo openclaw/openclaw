@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { sql, type Expression, type RawBuilder } from "kysely";
+import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import {
   LEGACY_MISSING_TOOL_RESULT_TEXT,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
@@ -274,6 +275,17 @@ export function projectModelContextNavigationSql(
     WHEN 'custom' THEN CASE WHEN ${jsonPathValue(db, event, sql.lit("$.customType"))} = 'openclaw.system-prompt'
       THEN json_set(${entry}, '$.data', json_object('restart', json(CASE
         WHEN json_type(${event}, '$.data.restart') = 'true' THEN 'true' ELSE 'false' END)))
+      WHEN ${jsonPathValue(db, event, sql.lit("$.customType"))} = ${BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE}
+      THEN ${jsonSetPath(
+        db,
+        entry,
+        sql.lit("$.data"),
+        jsonPickObject(db, jsonPathValue(db, event, sql.lit("$.data")), [
+          "afterEntryId",
+          "resultEntryIds",
+        ]),
+        true,
+      )}
       ELSE ${entry} END
     WHEN 'compaction' THEN json_set(${entry}, '$.summary', '')
     WHEN 'branch_summary' THEN json_set(${entry}, '$.summary', '')
@@ -375,6 +387,8 @@ function postgresModelNavigationSql(
       CASE WHEN ${customKind} IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('details', jsonb_build_object('kind', ${customKind})) END
     WHEN 'custom' THEN CASE WHEN ${event} ->> 'customType' = 'openclaw.system-prompt'
       THEN ${entry} || jsonb_build_object('data', jsonb_build_object('restart', coalesce((${event} #> '{data,restart}')::text, 'false') = 'true'))
+      WHEN ${event} ->> 'customType' = ${BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE}
+      THEN ${entry} || jsonb_build_object('data', ${postgresNavigationObjectSql(sql`${event} -> 'data'`, ["afterEntryId", "resultEntryIds"])})
       ELSE ${entry} END
     WHEN 'compaction' THEN ${entry} || jsonb_build_object('summary', '')
     WHEN 'branch_summary' THEN ${entry} || jsonb_build_object('summary', '')

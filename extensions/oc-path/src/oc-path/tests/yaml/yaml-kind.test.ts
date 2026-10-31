@@ -22,15 +22,15 @@ describe("YAML", () => {
     { operation: "map insertion", address: "options/+enabled", value: "true" },
     { operation: "sequence append", address: "items/+", value: "2" },
     { operation: "indexed insertion", address: "items/+0", value: "2" },
-  ])("preserves untouched numeric sources during $operation", ({ address, value }) => {
+  ])("preserves CRLF and untouched numeric sources during $operation", ({ address, value }) => {
     const before =
-      "id: 9007199254740993\nratio: 1.0000000000000001\nname: old\n" +
-      "options: {}\nitems: [9007199254740995]\n";
+      "id: 9007199254740993\r\nratio: 1.0000000000000001\r\nname: old\r\n" +
+      "options: {}\r\nitems: [9007199254740995]\r\n";
     const ast = parseYaml(before);
     const result = setOcPath(ast, path(address), value);
 
-    expect(result.raw).toContain("id: 9007199254740993\n");
-    expect(result.raw).toContain("ratio: 1.0000000000000001\n");
+    expect(result.raw).toContain("id: 9007199254740993\r\n");
+    expect(result.raw).toContain("ratio: 1.0000000000000001\r\n");
     expect(result.raw).toContain("9007199254740995");
     expect(typeof parseYaml(result.raw).doc.get("id")).toBe("number");
     expect(ast.raw).toBe(before);
@@ -72,10 +72,8 @@ describe("YAML", () => {
     expect(setYamlOcPath(parseYaml(raw), path(address), value).raw).toContain(expected);
   });
 
-  it("maps .yaml / .yml / .lobster to yaml", () => {
-    expect(inferKind("workflow.yaml")).toBe("yaml");
-    expect(inferKind("config.yml")).toBe("yaml");
-    expect(inferKind("inbox-triage.lobster")).toBe("yaml");
+  it.each(["x.yaml", "x.yml", "x.lobster"])("infers YAML for %s", (file) => {
+    expect(inferKind(file)).toBe("yaml");
   });
   it.each([
     { text: "1", key: 1 },
@@ -86,6 +84,7 @@ describe("YAML", () => {
     const written = parseYaml(result.raw).doc;
     expect(written.get(key)).toBe("updated");
     expect(written.get("untouched")).toBe("keep");
+    expect(() => set(`${text}: old\n`, `+${text}`, "new")).toThrow(error("unresolved"));
   });
 
   it.each([
@@ -108,6 +107,7 @@ describe("YAML", () => {
   it.each([
     ["count: 5\n", "count", "abc", "parse-error"],
     ["config:\n  a: 1\n", "config/+a", "99", "unresolved"],
+    ["config:\n  false: old\n", "config/+false", "new", "unresolved"],
   ])("rejects universal edits of %s at %s", (raw, address, value, reason) => {
     expect(() => set(raw, address, value)).toThrow(error(reason));
   });
@@ -132,7 +132,7 @@ describe("YAML", () => {
 
   it.each([
     ["items: []\n", "items/+", '"a"', "items: [ a ]"],
-    ["config:\n  a: 1\n", "config/+b", "2", "b: 2"],
+    ["true: old\n", "+false", "new", '"false": new'],
   ])("inserts into %s at %s", (raw, address, value, expected) => {
     expect(set(raw, address, value).raw).toContain(expected);
   });

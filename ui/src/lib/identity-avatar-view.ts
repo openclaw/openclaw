@@ -1,5 +1,5 @@
 import { isReservedSystemAgentId } from "../../../src/system-agent/agent-id.js";
-import { resolveAvatarImageUrl } from "./identity-avatar-loader.ts";
+import { readCachedAvatarImageUrl, resolveAvatarImageUrl } from "./identity-avatar-loader.ts";
 import {
   resolveAvatar,
   resolveAvatarInitials,
@@ -9,10 +9,15 @@ import {
 export type IdentityAvatarView = ReturnType<typeof resolveIdentityAvatarView>;
 
 /** Resolve one user identity consistently across the roster, profile, and chat. */
-export function resolveIdentityAvatarView(identity: IdentityAvatarInput) {
+export function resolveIdentityAvatarView(identity: IdentityAvatarInput, cachedOnly = false) {
   const avatar = resolveAvatar(identity);
   const fallback = avatar.kind === "initials" ? avatar : resolveAvatarInitials(identity);
-  const imageUrl = avatar.kind === "profile" ? resolveAvatarImageUrl(avatar.url) : null;
+  const imageUrl =
+    avatar.kind === "profile"
+      ? cachedOnly
+        ? readCachedAvatarImageUrl(avatar.url)
+        : resolveAvatarImageUrl(avatar.url)
+      : null;
   return {
     fallback,
     imageUrl,
@@ -28,10 +33,12 @@ export type AgentIdentity = {
   pending?: boolean;
 };
 
-export function resolveAgentIdentityAvatarView(agent: AgentIdentity) {
+export function resolveAgentIdentityAvatarView(agent: AgentIdentity, cachedOnly = false) {
   const imageUrl =
     !isReservedSystemAgentId(agent.id) && agent.avatar && !agent.pending
-      ? resolveAvatarImageUrl(agent.avatar, agent.avatar)
+      ? cachedOnly
+        ? readCachedAvatarImageUrl(agent.avatar)
+        : resolveAvatarImageUrl(agent.avatar, agent.avatar)
       : null;
   return {
     imageUrl,

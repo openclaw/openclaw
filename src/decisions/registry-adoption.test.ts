@@ -12,6 +12,7 @@ import { createToolLoadContext } from "../plugins/tools.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createDecisionRegistry, unavailable, waitForAbort } from "./contract.test-support.js";
 import { DecisionProviderHost } from "./provider-host.js";
+import type { DecisionProviderV1 } from "./provider-types.js";
 import { adoptRuntimeDecisionProviders } from "./registry-adoption.js";
 import {
   evaluateDecisionInRegistry,
@@ -19,7 +20,6 @@ import {
   prepareDecisionProviderReload,
 } from "./runtime.js";
 import { answer, batch, config as baseConfig, options } from "./runtime.test-support.js";
-import type { DecisionProviderV1 } from "./types.js";
 
 const config = {
   ...baseConfig,

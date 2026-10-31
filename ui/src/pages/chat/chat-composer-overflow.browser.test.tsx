@@ -349,8 +349,10 @@ it.each([
   }
   const draft =
     "A typed line that wraps within the available composer width. ".repeat(12) +
-    "\nA second editable line.";
+    "\nA second editable line.".repeat(40);
   await control.fill(draft);
+  await afterLayout();
+  // The pane-derived cap settles after the draft first reaches it.
   await afterLayout();
   expect([textarea.value, props.draft]).toEqual([draft, draft]);
   expect(placeholder.checkVisibility()).toBe(false);
@@ -408,7 +410,7 @@ it.each(server.browser === "webkit" ? ["classic", "overlay"] : ["overlay"])(
     };
     const text =
       "handover for plugin hot reload. To test it, make the knowledge fix and hit reload ";
-    const draft = text.repeat(6);
+    const draft = text.repeat(24);
     // Typing past the cap must not swap the end inset for a gutter that later
     // disappears: each wrap change would undo the overflow that caused it.
     const overflows = async (length: number) => {

@@ -44,21 +44,11 @@ function runWithPluginGatewayScope<T>(
   const current = getPluginExecutionFrame();
   const call = invocation ?? current?.invocation;
   const runtime = getPluginRuntimeExecutionFrame(current);
-  if (
-    runtime?.gatewayScope === gatewayScope &&
-    runtime.invocation === call &&
-    runtime.inputRecoveryContext === gatewayScope
-  ) {
+  if (runtime?.gatewayScope === gatewayScope && runtime.invocation === call) {
     return run();
   }
   return runWithPluginExecutionFrame(
-    new PluginRuntimeExecutionFrame(
-      current ?? {},
-      gatewayScope,
-      runtime?.generationRegistry,
-      call,
-      gatewayScope,
-    ),
+    new PluginRuntimeExecutionFrame(current ?? {}, gatewayScope, runtime?.generationRegistry, call),
     run,
   );
 }

@@ -5,6 +5,7 @@ import {
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
+  CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   CodexAppServerUnsafeSubscriptionError,
@@ -18,6 +19,7 @@ import {
   isCodexAppServerLiveThreadProtected,
   releaseCodexAppServerLiveThread,
   readCodexLiveThreadEphemeralPolicy,
+  waitForCodexAppServerThreadBackgroundCleanup,
 } from "./client-runtime.js";
 import { wasCodexAppServerThreadClosed } from "./client-thread-closure.js";
 import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
@@ -168,6 +170,8 @@ export async function releaseCodexBoundLiveThread(
   options: CodexLiveThreadReleaseParams & {
     clientId?: string;
     ownerClientId?: string;
+    /** Cold resume may join asynchronous Stop cleanup, never force its release. */
+    waitForBackgroundCleanup?: boolean;
     /** Runs synchronously when `signal` ends a wait for the previous owner's exit. */
     onExitWaitCancelled?: () => void;
   },
@@ -213,6 +217,30 @@ export async function releaseCodexBoundLiveThread(
     }
   }
   try {
+    if (
+      options.waitForBackgroundCleanup &&
+      !isCodexAppServerLiveThreadClaimed(client, options.threadId) &&
+      isCodexAppServerLiveThreadBackgroundOnly(client, options.threadId)
+    ) {
+      const deadline = AbortSignal.timeout(CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS);
+      const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
+      try {
+        await options.lifecycleTiming.measure("background-thread-cleanup", () =>
+          waitForCodexAppServerThreadBackgroundCleanup(client, options.threadId, signal),
+        );
+      } catch (error) {
+        throwIfCodexThreadLifecycleAborted(options.signal);
+        if (!deadline.aborted) {
+          throw error;
+        }
+        // A deadline is not settlement: the existing ownership guard still decides.
+      }
+      options.assertCurrent?.();
+      const closed = client.getCloseError();
+      if (closed) {
+        throw closed;
+      }
+    }
     const claimed = isCodexAppServerLiveThreadClaimed(client, options.threadId);
     const protectedWork = isCodexAppServerLiveThreadProtected(client, options.threadId);
     if (claimed || protectedWork) {
@@ -224,7 +252,9 @@ export async function releaseCodexBoundLiveThread(
         backgroundOnly: isCodexAppServerLiveThreadBackgroundOnly(client, options.threadId),
       });
       throw new AgentHarnessPreflightError(
-        `Codex thread ${options.threadId} is claimed by active work; stop it first.`,
+        options.waitForBackgroundCleanup && !claimed && protectedWork
+          ? `Codex thread ${options.threadId} still has background work after waiting for cleanup; stop its running work and retry.`
+          : `Codex thread ${options.threadId} is claimed by active work; stop it first.`,
       );
     }
     return await releaseCodexRetainedLiveThread({

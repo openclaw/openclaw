@@ -718,6 +718,21 @@
   background: color-mix(in srgb, var(--media-bg) 6%, transparent);
 }
 
+/* Full attachment cards sit close to the chat canvas, independently of sent chips. */
+:root .chat-bubble .chat-assistant-attachment-card {
+  --chat-attachment-surface: color-mix(in srgb, var(--text) 2.5%, var(--bg-content, var(--bg)));
+
+  background: var(--chat-attachment-surface);
+}
+
+.chat-bubble .chat-assistant-attachment-card:hover {
+  background-color: color-mix(in srgb, var(--media-foreground) 4%, var(--chat-attachment-surface));
+}
+
+:root[data-theme-mode="light"] .chat-bubble .chat-assistant-attachment-card:hover {
+  background-color: color-mix(in srgb, var(--media-bg) 3%, var(--chat-attachment-surface));
+}
+
 .chat-assistant-attachment-card--audio,
 .chat-assistant-attachment-card--video {
   display: flex;

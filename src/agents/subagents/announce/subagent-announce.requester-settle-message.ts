@@ -12,10 +12,6 @@ import {
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { isSubagentObligationRetired } from "../registry/subagent-requester-settle-identity.js";
 import { getSubagentTerminalReplySummary } from "../registry/subagent-run-payload-facts.js";
-import {
-  buildSubagentRestartRecoveryRoster,
-  SUBAGENT_RESTART_RECOVERY_INSTRUCTION,
-} from "../subagent-restart-recovery-prompt.js";
 import { needsRequesterSettleFindings } from "./subagent-announce.requester-settle-state.js";
 
 const REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS = 1_024;
@@ -30,7 +26,6 @@ export function buildRequesterSettleWakeMessage(params: {
   /** The bounded descendant-delivery wait expired before every result arrived. */
   descendantsUnsettled?: boolean;
   children: readonly SubagentRunRecord[];
-  recoveryChildren: readonly SubagentRunRecord[];
   completionChannel?: string;
   requesterOrigin: DeliveryContext | undefined;
   retainedMessage?: string;
@@ -80,7 +75,6 @@ export function buildRequesterSettleWakeMessage(params: {
     routeNotices.length > REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS
       ? `${truncateUtf16Safe(routeNotices, REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS - ROUTE_NOTICE_TRUNCATION.length)}${ROUTE_NOTICE_TRUNCATION}`
       : routeNotices;
-  const recoveryRoster = buildSubagentRestartRecoveryRoster(params.recoveryChildren);
   const completionChannel = normalizeMessageChannel(params.completionChannel);
   return [
     params.descendantsUnsettled
@@ -89,9 +83,6 @@ export function buildRequesterSettleWakeMessage(params: {
     "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive for it. Other batches may still be running.",
     // Private completion guidance already includes the shared outcome policy.
     ...(params.parentOnly ? [] : [`[Subagent Context] ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}`]),
-    ...(recoveryRoster
-      ? [`[Subagent Context] ${SUBAGENT_RESTART_RECOVERY_INSTRUCTION}`, recoveryRoster]
-      : []),
     params.parentOnly
       ? `[Subagent Context] ${buildSubagentPrivateCompletionInstruction(params.requesterOrigin)}`
       : params.yieldedFinalDeliverable

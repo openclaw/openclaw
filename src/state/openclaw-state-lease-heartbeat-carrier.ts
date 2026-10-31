@@ -147,6 +147,7 @@ export function acquireLeaseHeartbeatCarrier(params: {
     try {
       owned.worker.postMessage({ registration: params.data, port: ports.port2 }, [
         params.data.databaseAdmissionPort,
+        params.data.lossPort,
         ...postgresPoolTransferList(params.data.postgresPool),
         ports.port2,
       ]);

@@ -323,6 +323,21 @@ describe("Checkout chip state", () => {
     input(name, " picker-fixes ");
     expect(params.onBaseRefInput).toHaveBeenLastCalledWith(" release ");
     expect(params.onWorktreeNameInput).toHaveBeenLastCalledWith(" picker-fixes ");
+    for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
+      for (const key of ["ArrowDown", "ArrowUp", "Enter"]) {
+        const event = new KeyboardEvent("keydown", {
+          key,
+          ...composition,
+          bubbles: true,
+          cancelable: true,
+        });
+        baseRef.dispatchEvent(event);
+        flush();
+        expect(event.defaultPrevented).toBe(false);
+        expect(baseRef.hasAttribute("aria-activedescendant")).toBe(false);
+        expect(onPopoverHide).not.toHaveBeenCalled();
+      }
+    }
     keydown(baseRef, "ArrowDown");
     const suggestion = container.querySelector('[data-worktree-suggestion="main"]')!;
     expect(baseRef.getAttribute("aria-activedescendant")).toBe(suggestion.id);

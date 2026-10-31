@@ -17,21 +17,14 @@ import { CONFIG_PATH } from "../config/paths.js";
 import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withDoctorProgress } from "../flows/doctor-health-startup.js";
+import { formatDoctorProgressPhase } from "../infra/doctor-progress.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import { resolvePluginDoctorProviderRenames } from "../plugins/doctor-contract-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { AutomaticHeartbeatRepairAdmission } from "./doctor-automatic-heartbeat-repair.js";
-import {
-  noteDoctorHookConfigWarnings,
-  noteImplicitFallbackClobberWarnings,
-  noteMcpOriginWarning,
-  noteMediaCliModelWarnings,
-  noteMissingDefaultAgentOwner,
-  noteOpencodeProviderOverrides,
-  noteSandboxOriginProxyWarning,
-} from "./doctor-config-analysis.js";
+import { noteConfigAdvisories, noteDoctorHookConfigWarnings } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { createWorkspaceAliasMigrationRepair } from "./doctor-workspace-alias.js";
@@ -143,6 +136,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let shouldRepairCronCodexModelRefsAfterConfigWrite = false;
   let openAICodexAuthProfileIdMap: ReadonlyMap<string, string> | undefined;
   let modelRetirementRepairRan = false;
+  let modelRetirementOnly = false;
+  let channelWorkObserved = false;
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
@@ -450,6 +445,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       infoNotes: channelDoctorSequence.infoNotes,
       warningNotes: channelDoctorSequence.warningNotes,
     });
+    channelWorkObserved =
+      channelDoctorSequence.changeNotes.length > 0 || channelDoctorSequence.warningNotes.length > 0;
 
     const staleChannelCleanups = await runWithCurrentPluginMetadata(state.candidate, () =>
       channelDoctor.collectChannelDoctorStaleConfigMutations(state.candidate, {
@@ -501,7 +498,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");
     const prompter = params.prompter;
     const repairSequence = await withDoctorProgress(
-      "Config repairs",
+      formatDoctorProgressPhase("Config repairs"),
       () =>
         runDoctorRepairSequence({
           state,
@@ -540,6 +537,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     openAICodexAuthProfileIdMap = repairSequence.openAICodexAuthProfileIdMap;
     retiredModelRefConfig = repairSequence.retiredModelRefConfig;
     modelRetirementRepairRan = repairSequence.modelRetirementRepairRan;
+    modelRetirementOnly = repairSequence.modelRetirementOnly;
     if (repairSequence.authProfilesRepaired) {
       const { refreshGatewayAuthStateAfterAuthProfileRepair } =
         await import("./doctor/auth-profile-repair.js");
@@ -586,6 +584,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   // Retain normalized source facts before retirement removes heartbeat settings.
   const modelBillingRouteConfig = state.candidate;
+  const preRetiredConfigState = state;
   state = await applyRetiredConfigStep({
     state,
     shouldRepair,
@@ -629,28 +628,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       referenceSource?.installedPluginIdRecovery,
     );
 
-  const configuredOpencodePluginIds = [
-    cfg.models?.providers?.opencode || cfg.models?.providers?.["opencode-zen"]
-      ? "opencode"
-      : undefined,
-    cfg.models?.providers?.["opencode-go"] ? "opencode-go" : undefined,
-  ].filter((pluginId): pluginId is string => pluginId !== undefined);
-  let activeOpencodePluginIds: string[] = [];
-  if (configuredOpencodePluginIds.length > 0) {
-    const { resolveEnabledProviderPluginIds } = await import("../plugins/providers.js");
-    activeOpencodePluginIds = runWithCurrentPluginMetadata(cfg, () =>
-      resolveEnabledProviderPluginIds({ config: cfg, onlyPluginIds: configuredOpencodePluginIds }),
-    );
-  }
-  noteOpencodeProviderOverrides(cfg, {
-    opencodePluginActive: activeOpencodePluginIds.includes("opencode"),
-    opencodeGoPluginActive: activeOpencodePluginIds.includes("opencode-go"),
-  });
-  noteImplicitFallbackClobberWarnings(cfg);
-  noteSandboxOriginProxyWarning(cfg);
-  noteMcpOriginWarning(cfg);
-  noteMediaCliModelWarnings(cfg);
-  noteMissingDefaultAgentOwner(cfg);
+  await noteConfigAdvisories(cfg, runWithCurrentPluginMetadata);
 
   const migrationResult = await finalizeMigrationResult({
     cfg,
@@ -718,6 +696,30 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...(providerRenames.length > 0 ? { providerRenames } : {}),
     modelRetirementRepairRan:
       modelRetirementRepairRan && !legacyStep.blocksWrite && (shouldWriteConfig || snapshot.valid),
+    retirementOnly:
+      modelRetirementOnly &&
+      state === preRetiredConfigState &&
+      snapshot.exists &&
+      snapshot.valid &&
+      !legacyStep.blocksWrite &&
+      !deferHeartbeat &&
+      Boolean(preflight.preflightLegacyStateConfig) &&
+      !preflight.configChanged &&
+      !preflight.stateMigrationUnsettled &&
+      !preflight.cronStoreSelectionUnresolved &&
+      !preflight.heartbeatMigrationSource &&
+      !preflight.modelBillingRouteMigrationSource &&
+      configRepairWarnings.length === 0 &&
+      mutableAllowlistWarnings.length === 0 &&
+      pluginWarnings.length === 0 &&
+      !migrationResult.modelBillingRouteWarnings?.length &&
+      !pluginMetadataSnapshotState.inventoryChanged &&
+      !channelWorkObserved &&
+      providerRenames.length === 0 &&
+      blockedCodexModelIdentities.size === 0 &&
+      !retiredPhoneControlCleanup.cleanupPending &&
+      migrationResult.postSessionPluginMigrationPlanBound === true &&
+      !migrationResult.postSessionPluginMigration?.step.refusal,
     ...migrationResult,
     runWithPluginMetadataSnapshot,
     invalidatePluginMetadataSnapshot,

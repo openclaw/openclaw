@@ -163,6 +163,8 @@ nor the acknowledgement overrides `block` or a policy failure.
 
 Notes:
 
+Press Ctrl-C to cancel a pending search or Trending request without printing results afterward.
+
 | Flag/behavior                    | Description                                                                                                                                                                                                                                                                                                                       |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `search [query...]`              | Optional query; omit it to browse the ClawHub Trending skills feed.                                                                                                                                                                                                                                                               |

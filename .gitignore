@@ -241,3 +241,6 @@ extensions/discord/assets/embedded-app-sdk.mjs
 
 # Pinned Swift lint/format tools installed by scripts/install-swift-tools.sh
 .build/
+
+# Live thinking-probe records are local evidence; PRs summarize them.
+extensions/*/probes/

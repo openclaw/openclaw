@@ -370,6 +370,7 @@
             "type": "string",
             "enum": ["agent", "user"]
           },
+          "workerHostedCloud": { "type": "boolean" },
           "command": { "type": "string" },
           "args": {
             "oneOf": [

@@ -165,18 +165,9 @@ suite.define(() => {
           idempotencyKey: "working-run:user",
         },
       };
-      const completedTool = {
-        role: "toolResult",
-        toolName: "read",
-        toolCallId: "draft-read",
-        runId: "working-run",
-        content: [{ type: "text", text: "Draft source loaded." }],
-        timestamp: questionMessage.timestamp + 500,
-        __openclaw: { id: "draft-read-result", seq: 3 },
-      };
       const gateway = await installMockGateway(page, {
         sessionKey,
-        historyMessages: [replyMessage, multipleQuestions, completedTool],
+        historyMessages: [replyMessage, multipleQuestions],
         inFlightRun: { runId: "working-run", startedAt: Date.now(), text: "" },
         sessionInfo: { hasActiveRun: true, activeRunIds: ["working-run"] },
       });
@@ -250,10 +241,10 @@ suite.define(() => {
             phase: "final_answer",
             stopReason: "stop",
             timestamp: questionMessage.timestamp + 1_000,
-            __openclaw: { id: "draft-complete", seq: 4 },
+            __openclaw: { id: "draft-complete", seq: 3 },
           };
           await gateway.setMethodResponse("chat.history", {
-            messages: [replyMessage, multipleQuestions, completedTool, finalMessage],
+            messages: [replyMessage, multipleQuestions, finalMessage],
             sessionInfo: { hasActiveRun: false, activeRunIds: [] },
           });
           await gateway.emitGatewayEvent("chat", {
@@ -270,9 +261,6 @@ suite.define(() => {
             .toBe("false");
           expect(await expand.isVisible()).toBe(true);
           expect(await expand.textContent()).toContain(followUpTitle);
-          await expectBrowser(
-            page.locator(".chat-thread").getByText(title, { exact: true }),
-          ).toBeVisible();
           expect(await card.getByRole("textbox").count()).toBe(0);
         }
 

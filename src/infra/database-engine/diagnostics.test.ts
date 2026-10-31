@@ -3,14 +3,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-v26-layout.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
   restorePreTemplateStateIdentifiersForTest,
 } from "../../state/openclaw-state-schema.test-support.js";
+import * as stateOwner from "../gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { LEGACY_USAGE_COST_PARTITION_SCOPE } from "../session-cost-usage-partitions.js";
 import * as snapshotSource from "../sqlite-snapshot-source.js";
+import { loadAgentPortDescriptor } from "./agent-port-descriptor.js";
+import { formatDatabaseStoreDiagnostic } from "./diagnostics-format.js";
 import { inspectDatabaseStore, type DatabaseStoreInspection } from "./diagnostics.js";
 import { writePortAnchor } from "./port-backup.test-support.js";
 import type { PortDescriptor } from "./port-types.js";
@@ -65,6 +70,123 @@ async function stateStore(version: number) {
 }
 
 describe("physical store diagnostics", () => {
+  it.each(["retired cache", "index repair"])(
+    "keeps current-version %s preparation separate from schema lag",
+    async (preparation) => {
+      const input = fixture();
+      input.family = "agent";
+      input.descriptor = await loadAgentPortDescriptor();
+      {
+        using db = openNodeSqliteDatabase(input.path!);
+        db.exec(`${input.descriptor.sqlite}
+          PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
+          INSERT INTO schema_meta VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', NULL, 1, 1)`);
+        if (preparation === "retired cache") {
+          db.prepare(
+            "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, 1)",
+          ).run(LEGACY_USAGE_COST_PARTITION_SCOPE, "retired-key", "{}");
+        } else {
+          db.exec("DROP INDEX idx_agent_cache_expiry");
+        }
+        expect(input.descriptor.inspectSqliteSource!(db).migrationRequired).toBe(true);
+      }
+
+      const result = await inspectUnchanged(input);
+
+      expect(result.schema).toMatchObject({
+        version: OPENCLAW_AGENT_SCHEMA_VERSION,
+        expectedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+        pending: 0,
+      });
+      expect(result.issues.join(" ")).toContain("preparation");
+      expect(result.issues.join(" ")).not.toContain("schema migration is pending");
+      expect(result.nextSteps.join(" ")).toContain("private copy");
+      expect(result.nextSteps.join(" ")).not.toContain("doctor --fix before porting");
+      expect(formatDatabaseStoreDiagnostic(result)).toContain("pending=0");
+    },
+  );
+
+  it("does not prescribe maintenance for an uninspected lease or backup", async () => {
+    const input = fixture();
+    createStore(input, descriptor.version);
+
+    const result = await inspectUnchanged(input);
+
+    expect(result).toMatchObject({ lease: "unverifiable", backup: null, issues: [] });
+    expect(result.nextSteps).toEqual([]);
+    const output = formatDatabaseStoreDiagnostic(result);
+    expect(output).toContain("lease=unverifiable");
+    expect(output).toContain("backup=unknown");
+  });
+
+  it.each([false, true])(
+    "preserves observed custody guidance (malformed=%s)",
+    async (malformed) => {
+      const input = fixture();
+      createStore(input, descriptor.version);
+      const ownerPath = path.join(path.dirname(input.path!), "owner.json");
+      fs.writeFileSync(
+        ownerPath,
+        malformed
+          ? "{}"
+          : JSON.stringify({
+              pid: process.pid,
+              createdAt: "2026-01-01",
+              configPath: "fixture",
+              processNamespace: null,
+            }),
+      );
+      // Redirect only this diagnostic input; parsing and store inspection remain real.
+      vi.spyOn(stateOwner, "resolveGatewayStateOwnerPath").mockReturnValue(ownerPath);
+
+      const result = await inspectUnchanged(input);
+
+      expect(result.custody).toBe("unverifiable");
+      expect(result.nextSteps.join(" ")).toContain(
+        malformed ? "Check the Gateway owner" : "custody before offline maintenance",
+      );
+      expect(result.issues).toEqual(
+        malformed ? ["Physical store custody could not be verified."] : [],
+      );
+    },
+  );
+
+  it.each([false, true])("preserves observed lease guidance (malformed=%s)", async (malformed) => {
+    const input = await stateStore(OPENCLAW_STATE_SCHEMA_VERSION);
+    {
+      using db = openNodeSqliteDatabase(input.path!);
+      db.prepare(`INSERT INTO state_leases
+        (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
+        VALUES ('gateway-owner', 'global', 'recorded-generation', 1, 1, ?, 1, 1)`).run(
+        JSON.stringify(
+          malformed
+            ? {}
+            : {
+                owner: {
+                  pid: process.pid,
+                  host: "fixture-host",
+                  startedAt: null,
+                  processNamespace: null,
+                },
+                port: 19483,
+                mode: "foreground",
+                supervisor: null,
+              },
+        ),
+      );
+    }
+
+    const result = await inspectUnchanged(input);
+
+    expect(result.lease).toBe("unverifiable");
+    expect(result.nextSteps.join(" ")).toContain(
+      malformed ? "Check the Gateway owner" : "lease before offline maintenance",
+    );
+    expect(result.issues).toEqual(
+      malformed ? ["The recorded Gateway lease could not be verified."] : [],
+    );
+  });
+
   it("reports missing and damaged stores as unknown without creating or repairing them", async () => {
     const input = fixture();
     expect(await inspectDatabaseStore(input)).toMatchObject({
@@ -95,7 +217,7 @@ describe("physical store diagnostics", () => {
   it.each([
     [1, "sqlite", 2, 1, "doctor --fix"],
     [2, "postgres", 2, 0, "database port"],
-    [0, "sqlite", null, null, "backup"],
+    [0, "sqlite", null, null, null],
   ] as const)(
     "inspects SQLite %i against %s without blocking or changing bytes",
     async (version, effective, expectedVersion, pending, fix) => {
@@ -131,7 +253,11 @@ describe("physical store diagnostics", () => {
         lease: "unverifiable",
         backup: null,
       });
-      expect(result.nextSteps.join(" ")).toContain(fix);
+      if (fix) {
+        expect(result.nextSteps.join(" ")).toContain(fix);
+      } else {
+        expect(result.nextSteps).toEqual([]);
+      }
       expect(result.nextSteps.join(" ")).not.toContain("expected schema version");
     },
   );

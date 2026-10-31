@@ -2,12 +2,6 @@ import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
-import {
-  recoverRestartAbortedMainSessions,
-  markStartupOrphanedMainSessionsForRecovery,
-} from "../agents/main-session-recovery/main-session-restart-recovery.js";
-import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import * as sessionInputActors from "../config/sessions/session-input-actor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-pending-input-history.js";
@@ -22,21 +16,16 @@ import {
   getRpcSource,
   requestRpcSourceCancellation,
 } from "../sessions/session-controller.rpc-sources.js";
-import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOutsideStoreWriterContext } from "../shared/store-writer-queue.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import type { StartChatDispatchParams } from "./server-methods/chat-send-agent-dispatch.types.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
-  createGitWorkspace,
-  removeOwnedSessionWorktree,
-} from "./server.sessions.create.projects.test-support.js";
-import {
   chatSendOwner,
   dashboardTitleScheduleMocks,
   setupSessionCreateTestHarness,
 } from "./server.sessions.create.test-support.js";
-import { agentCommandMock, rpcReq, testState } from "./test-helpers.js";
+import { rpcReq } from "./test-helpers.js";
 
 const dispatch = vi.hoisted(() => ({ start: vi.fn<(params: StartChatDispatchParams) => void>() }));
 const turnBoundary = vi.hoisted(() => ({
@@ -94,10 +83,7 @@ vi.mock("./server-methods/chat-send-agent-dispatch.js", async (importOriginal) =
   ...(await importOriginal<typeof import("./server-methods/chat-send-agent-dispatch.js")>()),
   startChatDispatch: dispatch.start,
 }));
-let workspace: string;
-const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness(async (makeTempDir) => {
-  workspace = await createGitWorkspace(makeTempDir("openclaw-initial-turn-durability-"));
-});
+const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness();
 
 beforeEach(() => {
   dispatch.start.mockClear();
@@ -201,12 +187,6 @@ async function inputFixture(key: string, options?: Parameters<typeof openClient>
         pendingInputs: { items: Array<{ state: string; message: unknown }> };
       }>(connection.ws, "chat.history", { sessionKey: key }),
     read: () => expectDefined(loadSessionEntry(target), "persisted session"),
-    expectReceipt: (runId: string, sessionId?: string) =>
-      expect(loadSessionEntry(target)).toMatchObject({
-        ...(sessionId === undefined ? {} : { sessionId }),
-        restartRecoveryDeliveryRunId: runId,
-        restartRecoveryDeliverySourceRunId: runId,
-      }),
     settlement: () => captureSessionControllerSettlement({ scope: storePath, identities: [key] }),
     drain: () => drainDispatches(storePath, [key]),
   });
@@ -216,8 +196,6 @@ async function expectUncommittedInput(
   target: { agentId: string; sessionKey: string; storePath: string },
   entry: NonNullable<ReturnType<typeof loadSessionEntry>>,
 ) {
-  expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
-  expect(entry.restartRecoveryDeliverySourceRunId).toBeUndefined();
   const scope = { ...target, sessionId: entry.sessionId };
   expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
   expect(await loadTranscriptEvents(scope)).toEqual([
@@ -311,7 +289,7 @@ test.for([
   const fixture = await inputFixture(`agent:main:dashboard:initial-failure-${fault}`);
   const { key, target } = fixture;
   let { ws } = fixture;
-  const message = "Only retain this initial input after its restart claim commits.";
+  const message = "Only retain this initial input after its admission commits.";
   const failure = new Error(`initial input ${fault}`);
   const hit = vi.fn();
   const initial = captureInitial(key, () => {
@@ -411,7 +389,7 @@ test.for([
     initial.restore();
     const runId = fault === "idle-commit-refused" ? fault : initial.runId;
     await fixture.retry(message, runId);
-    fixture.expectReceipt(runId, before.sessionId);
+    expect(fixture.read().sessionId).toBe(before.sessionId);
     expect(await matchingTranscript(scope, message)).toHaveLength(1);
     if (fault === "idle-commit-refused") {
       expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
@@ -429,91 +407,32 @@ test.for([
   }
 });
 
-test.for(["lost-worker-response", "restart-before-ack"] as const)(
-  "retains exactly one recoverable initial turn after %s",
-  async (fault) => {
-    dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
-    const fixture = await inputFixture(`agent:main:dashboard:initial-committed-${fault}`);
-    const { ws, key, target } = fixture;
-    const message = "Recover this committed initial input exactly once.";
-    const initial = captureInitial(key);
-    const hit = vi.fn();
-    const stop = onSessionTranscriptUpdate((update) => {
-      if (
-        fault !== "restart-before-ack" ||
-        update.target.sessionKey !== key ||
-        hit.mock.calls.length
-      ) {
-        return;
-      }
-      const runId = initial.runId;
-      const entry = loadSessionEntry(target);
-      if (entry?.restartRecoveryDeliveryRunId !== runId) {
-        return;
-      }
-      hit();
-      const run = expectDefined(getRpcSource(runId), "committed run");
-      run.adapter.abortStopReason = "restart";
-      requestRpcSourceCancellation(run);
-    });
-    if (fault === "lost-worker-response") {
-      turnBoundary.afterCommit = () => {
-        turnBoundary.afterCommit = undefined;
-        hit();
-        throw new Error("Native turn committed but its command response was lost");
-      };
-    }
-    agentCommandMock.mockImplementation(async (raw) => {
-      const options = raw as AgentCommandGatewayIngressOpts;
-      await options.userTurnTranscriptRecorder?.persistApproved();
-    });
-    try {
-      const created = await fixture.create({ message }, fault === "lost-worker-response");
-      expect(hit).toHaveBeenCalledOnce();
-      const options = initial.options;
-      const runId = initial.runId;
-      const before = fixture.read();
-      fixture.expectReceipt(runId, created.sessionId);
-      const scope = { ...target, sessionId: before.sessionId };
-      expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
-      await fixture.drain();
-      const cfg = getRuntimeConfig();
-      await markStartupOrphanedMainSessionsForRecovery({ cfg });
-      const recover = () =>
-        recoverRestartAbortedMainSessions({
-          cfg,
-          gatewayRuntime: expectDefined(options.context.recoveryRuntime, "Gateway recovery owner"),
-        });
-      if (fault === "restart-before-ack") {
-        // An unadopted turn is retryable, not automatic execution authority.
-        expect(await recover()).toMatchObject({ settled: 0, failed: 0 });
-        expect(agentCommandMock).not.toHaveBeenCalled();
-        options.context.dedupe.delete(`chat:${runId}`);
-        await fixture.retry(message, runId);
-        expect(dispatch.start).toHaveBeenCalledOnce();
-        const retriedRelease = fixture.settlement();
-        const [turn] = dispatch.start.mock.calls[0]!;
-        turn.admission.cleanupAdmittedRun();
-        clearAgentRunContext(runId, turn.admission.lifecycleGeneration);
-        await retriedRelease;
-        await markStartupOrphanedMainSessionsForRecovery({ cfg });
-      }
-      const recovered = await recover();
-      expect(recovered).toMatchObject({ settled: 1, failed: 0 });
-      expect(agentCommandMock).toHaveBeenCalledOnce();
-      expect(await matchingTranscript(scope, message)).toHaveLength(1);
-      await fixture.retry(message, runId, "ok");
-      expect(agentCommandMock).toHaveBeenCalledOnce();
-      expect(await matchingTranscript(scope, message)).toHaveLength(1);
-    } finally {
-      turnBoundary.afterCommit = undefined;
-      stop();
-      initial.restore();
-      releaseDispatches();
-      ws.close();
-    }
-  },
-);
+test("dispatches a committed initial turn once when its worker response is lost", async () => {
+  const fixture = await inputFixture("agent:main:dashboard:initial-committed-lost-worker-response");
+  const { storePath, ws, key, target } = fixture;
+  const message = "Dispatch this committed initial input exactly once.";
+  const hit = vi.fn();
+  turnBoundary.afterCommit = () => {
+    turnBoundary.afterCommit = undefined;
+    hit();
+    throw new Error("Native turn committed but its command response was lost");
+  };
+  dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
+  try {
+    const created = await fixture.create({ message }, true);
+    expect(hit).toHaveBeenCalledOnce();
+    const before = fixture.read();
+    expect(before.sessionId).toBe(created.sessionId);
+    const scope = { ...target, sessionId: before.sessionId };
+    expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
+    expect(await matchingTranscript(scope, message)).toHaveLength(1);
+    expect(dispatch.start).toHaveBeenCalledOnce();
+  } finally {
+    turnBoundary.afterCommit = undefined;
+    await drainDispatches(storePath, [key]);
+    ws.close();
+  }
+});
 
 test("dispatches the original bytes of a committed initial input", async () => {
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
@@ -546,82 +465,3 @@ test("dispatches the original bytes of a committed initial input", async () => {
     ws.close();
   }
 });
-
-test.for([
-  { id: "openclaw-control-ui", mode: "webchat", worktree: true },
-  { id: "cli", mode: "cli", worktree: false },
-] as const)(
-  "recovers an acknowledged $id first turn (worktree=$worktree) before dispatch",
-  async ({ id, mode, worktree }) => {
-    testState.agentConfig = { workspace };
-    testState.gatewayControlUi = { allowedOrigins: ["http://localhost"] };
-    const key = `agent:main:dashboard:durable-${id}-${worktree}`;
-    const fixture = await inputFixture(key, {
-      client: { id, mode, platform: "test", version: "1.0.0" },
-      browserOrigin: mode === "webchat" ? "http://localhost" : undefined,
-    });
-    const { ws, target } = fixture;
-    const message = "Reply with exactly: retained first message.";
-    agentCommandMock.mockImplementation(async (raw) => {
-      const options = raw as AgentCommandGatewayIngressOpts;
-      expect(options.pinnedWidgetAuthoring).toBe(mode === "webchat" ? true : undefined);
-      const entry = fixture.read();
-      expect(entry.pendingWorktree).toBeUndefined();
-      if (worktree) {
-        expect(entry.worktree?.id).toBeDefined();
-        expect(entry.spawnedCwd).not.toBe(workspace);
-      }
-      await options.userTurnTranscriptRecorder?.persistApproved();
-    });
-    try {
-      const created = await fixture.create(
-        {
-          cwd: workspace,
-          worktree,
-          worktreeName: worktree ? `durability-${id}` : undefined,
-          message,
-        },
-        true,
-      );
-      const captured = expectDefined(dispatch.start.mock.calls[0]?.[0], "accepted dispatch");
-      const before = fixture.read();
-      expect(before.pendingWorktree !== undefined).toBe(worktree);
-      const followup = "Also retain this queued follow-up.";
-      if (worktree) {
-        const sent = await fixture.send(followup, `followup-${id}`);
-        expect(sent.ok, JSON.stringify(sent)).toBe(true);
-        const pending = await fixture.history();
-        expect(JSON.stringify(pending.payload?.pendingInputs.items)).toContain(followup);
-      }
-      // Drop process-only dispatches; do not run their terminal/error persistence.
-      await fixture.drain();
-      const cfg = getRuntimeConfig();
-      await markStartupOrphanedMainSessionsForRecovery({ cfg });
-      const recovery = await recoverRestartAbortedMainSessions({
-        cfg,
-        gatewayRuntime: expectDefined(captured.context.recoveryRuntime, "Gateway recovery owner"),
-      });
-      expect(recovery).toMatchObject({ settled: 1, failed: 0 });
-      expect(agentCommandMock).toHaveBeenCalledOnce();
-      const after = fixture.read();
-      expect(after.pendingWorktree).toBeUndefined();
-      expect(after.sessionId).toBe(created.sessionId);
-      expect(
-        await matchingTranscript({ ...target, sessionId: after.sessionId }, message),
-      ).toHaveLength(1);
-      const history = await fixture.history();
-      expect(history.ok, JSON.stringify(history)).toBe(true);
-      expect(JSON.stringify(history.payload?.messages)).toContain(message);
-      if (worktree) {
-        expect(history.payload?.pendingInputs.items).toMatchObject([{ state: "interrupted" }]);
-        expect(JSON.stringify(history.payload?.pendingInputs.items)).toContain(followup);
-        expect(JSON.stringify(history.payload?.messages)).not.toContain(followup);
-      }
-    } finally {
-      releaseDispatches();
-      ws.close();
-      await removeOwnedSessionWorktree(key);
-      testState.agentConfig = undefined;
-    }
-  },
-);

@@ -3408,6 +3408,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "src/plugins/contracts/deprecated-internal-config-api.test.ts",
     ],
   ],
+  [/^scripts\/ci-check-plan\.mts$/u, ["ci-check-plan", workflowPlanning]],
   [
     /^\.github\/workflows\/ci\.yml$/u,
     [

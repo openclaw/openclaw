@@ -41,6 +41,7 @@ import {
   LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX,
   withSqliteWritableSchema,
 } from "./openclaw-state-db-doctor-schema.js";
+import { migrateHistoricalStateImports } from "./openclaw-state-db-historical-imports.js";
 import { stateIndexOrderingMigrations } from "./openclaw-state-db-index-ordering-migrations.js";
 import { migrateMeetingTranscriptStartTime } from "./openclaw-state-db-meeting-chronology-migration.js";
 import {
@@ -440,9 +441,7 @@ function migrateGitHubPublicationRequesterAuthority(
     "github_publication_session_lifecycles",
     "github_repository_publication_requests",
   ]) {
-    if (tableExists(db, table)) {
-      changed = ensureColumn(db, table, "requester_authority_json TEXT") || changed;
-    }
+    changed = ensureColumn(db, table, "requester_authority_json TEXT") || changed;
   }
   return changed;
 }
@@ -624,7 +623,8 @@ export function migrateBoundedStateSchema(
   ) {
     return undefined;
   }
-  const changes: string[] = [];
+  // Consume the historical data shape before publishing a newer version marker.
+  const changes = migrateHistoricalStateImports(db, previousVersion);
   for (const migration of pending) {
     migration.migrate(db, previousVersion, options);
     changes.push(migration.applied);

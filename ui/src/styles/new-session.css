@@ -189,11 +189,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   text-align: left;
 }
 
-.new-session-page__scroll > .new-session-page__draft {
-  max-width: var(--chat-thread-max-width, 48rem);
-  margin-inline: auto;
-}
-
 .new-session-page__incognito-notice {
   display: flex;
   align-items: center;
@@ -347,7 +342,8 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   justify-content: flex-start;
   gap: 4px 2px;
   width: calc(100% - 36px);
-  max-width: 48rem;
+  /* Share the composer's left edge at any saved or dragged width. */
+  max-width: var(--chat-thread-max-width);
   margin: 0 auto;
   padding: 0;
   box-sizing: border-box;
@@ -1003,7 +999,6 @@ span.new-session-page__select {
 
 /* The chip row already spaces itself; keep the composer snug beneath it. */
 .new-session-page__composer.agent-chat__composer-shell {
-  position: relative;
   margin-top: 0;
   border-radius: var(--radius-md);
 }
@@ -1012,13 +1007,16 @@ span.new-session-page__select {
   animation: btn-spinner-spin 2.25s linear infinite;
 }
 
-/* Keep a long first prompt visible before scrolling. The shared auto-height
-   controller measures content; this surface owns its ten-line visual cap. */
+/* Share the desktop line cap while retaining New Session's ten-line floor. */
 /* No inset of its own: the editor's breathing room is the composer surface's
    decision, and a left-only override here put the draft further from one edge
    than the other while the chat composer stayed symmetric. */
 .new-session-page__composer .new-session-page__message {
-  max-height: calc(10lh + var(--chat-box-inset) + var(--chat-box-inset));
+  max-height: clamp(
+    10lh + 2 * var(--chat-box-inset),
+    var(--chat-composer-editor-height-limit, 100dvh),
+    12lh + 2 * var(--chat-composer-editor-inset-block)
+  );
 }
 
 .new-session-page__composer::after {
@@ -1040,10 +1038,6 @@ span.new-session-page__select {
 @media (prefers-reduced-motion: reduce) {
   .new-session-page__start-submit.new-session-page__start-submit--busy svg {
     animation: none;
-  }
-
-  .new-session-page__composer::after {
-    transition-duration: 0ms;
   }
 }
 
@@ -1238,10 +1232,6 @@ span.new-session-page__select {
     min-height: auto;
     margin-block: auto;
     padding: 24px 0;
-  }
-
-  .new-session-page__scroll > .new-session-page__draft {
-    max-width: none;
   }
 
   /* Center the whole composition, not the introduction alone. Auto margins

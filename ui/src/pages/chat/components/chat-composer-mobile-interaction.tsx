@@ -271,6 +271,9 @@ export function createComposerMobileInteraction(
     ];
     if (props.mobileComposer && insideEditor(doc.activeElement) && editable(doc.activeElement)) {
       changeEditing(true);
+      // A composer that mounts focused (a handed-off boot draft) never showed
+      // its compact form; opening it must not animate from that height.
+      previousInputHeight = undefined;
     }
     return () => {
       disposed = true;

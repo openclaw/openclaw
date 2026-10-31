@@ -184,8 +184,6 @@ export function createSessionActorWithExecutor(params: {
       command("appendTranscriptEvent", input, authority, observer, phase),
     completeTurn: (input, authority, observer) =>
       command("completeTurn", input, authority, observer, phase),
-    deliveryPending: (input, authority, observer) =>
-      command("deliveryPending", input, authority, observer, phase),
     deliverySettled: (input, authority, observer) =>
       command("deliverySettled", input, authority, observer, phase),
     patch: (input, authority, observer) => command("patch", input, authority, observer, phase),

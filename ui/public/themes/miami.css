@@ -49,6 +49,8 @@
   --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: var(--font-body);
   --font-chat: var(--font-body);
+  --link: var(--accent);
+  --link-on-tint: #ff7dc0;
 }
 
 :root[data-theme="miami-light"] {
@@ -96,4 +98,6 @@
   --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: var(--font-body);
   --font-chat: var(--font-body);
+  --link: #aa1d6a;
+  --link-on-tint: #9f0a61;
 }

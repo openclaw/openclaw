@@ -180,7 +180,6 @@ src/agents/embedded-agent-runner/tool-result-truncation.ts
 src/agents/embedded-agent-subscribe.handlers.tools.test.ts
 src/agents/harness/native-hook-relay.test.ts
 src/agents/harness/selection.test.ts
-src/agents/main-session-recovery/main-session-restart-recovery.test.ts
 src/agents/model-auth-availability.ts
 src/agents/model-fallback.test.ts
 src/agents/model-selection-shared.ts
@@ -323,10 +322,8 @@ src/gateway/talk/relay/index.test.ts
 src/gateway/test-helpers.server.ts
 src/gateway/watch-node-http.ts
 src/infra/backup-create.test.ts
-src/infra/command-explainer/extract.ts
 src/infra/diagnostic-events.ts
 src/infra/exec-approvals-allowlist.ts
-src/infra/exec-authorization-plan.ts
 src/infra/npm-managed-root.ts
 src/infra/outbound/deliver.test.ts
 src/infra/outbound/delivery-queue-recovery.ts

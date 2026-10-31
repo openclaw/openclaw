@@ -7,7 +7,6 @@ import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
 } from "../../../src/gateway/control-ui-contract.js";
-import { t } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -108,32 +107,25 @@ function attributionSummary(container: ParentNode): string {
 }
 
 describe("session hovercard", () => {
-  it.each([undefined, "Validation worker"])(
-    "shows the full failure above the notepad (child: %s)",
-    (childLabel) => {
-      const reason = "Validation failed.\n<worker> was unavailable; retry after reconnecting.";
-      const failed = row({
-        attention: { kind: "error", reason, childLabel, sourceSessionKey: "agent:main:failed" },
-      });
-      const container = renderCard({ row: failed, progressCard: progressCard() });
-      const error = container.querySelector(".session-hovercard__error");
-      expect(error?.textContent).toContain(reason);
-      expect(error?.textContent).toContain(
-        childLabel ? "Child session Validation worker failed:" : "Run failed:",
-      );
-      expect(error?.querySelector("worker")).toBeNull();
-      expect(error?.querySelector("svg")).not.toBeNull();
-      expect(error?.nextElementSibling?.classList.contains("session-hovercard__notepad")).toBe(
-        true,
-      );
+  it("shows the owning session failure above the notepad", () => {
+    const reason = "Validation failed.\n<worker> was unavailable; retry after reconnecting.";
+    const failed = row({
+      attention: { kind: "error", reason, sourceSessionKey: "agent:main:failed" },
+    });
+    const container = renderCard({ row: failed, progressCard: progressCard() });
+    const error = container.querySelector(".session-hovercard__error");
+    expect(error?.textContent).toContain(reason);
+    expect(error?.textContent).toContain("Run failed:");
+    expect(error?.querySelector("worker")).toBeNull();
+    expect(error?.querySelector("svg")).not.toBeNull();
+    expect(error?.nextElementSibling?.classList.contains("session-hovercard__notepad")).toBe(true);
 
-      renderCard({ row: failed }, container);
-      expect(container.querySelector(".session-hovercard__error")?.textContent).toContain(reason);
-      expect(container.querySelector(".session-hovercard__notepad")).toBeNull();
-      renderCard({ row: row({ attention: { kind: "none" } }) }, container);
-      expect(container.querySelector(".session-hovercard__error")).toBeNull();
-    },
-  );
+    renderCard({ row: failed }, container);
+    expect(container.querySelector(".session-hovercard__error")?.textContent).toContain(reason);
+    expect(container.querySelector(".session-hovercard__notepad")).toBeNull();
+    renderCard({ row: row({ attention: { kind: "none" } }) }, container);
+    expect(container.querySelector(".session-hovercard__error")).toBeNull();
+  });
 
   it.each([
     {
@@ -716,7 +708,7 @@ describe("session hovercard", () => {
     expect(plan?.querySelector("polyline")).not.toBeNull();
   });
 
-  it("follows delegated activity, connection loss, and a matching run failure", () => {
+  it("keeps delegated activity in the plan without a separate runtime status line", () => {
     const card = { ...progressCard(), updatedAt: 101 };
     const session = row({
       startedAt: 100,
@@ -726,29 +718,20 @@ describe("session hovercard", () => {
       hasActiveSubagentRun: true,
     });
     const container = renderCard({ row: session, progressCard: card, connected: true });
-    const runtime = () => container.querySelector(".session-progress-card__runtime")?.textContent;
-    expect(runtime()).toContain(t("sessionProgressCard.runtime.delegated"));
+    expect(container.querySelector(".session-progress-card__runtime")).toBeNull();
     expect(
       container.querySelector(".session-hovercard__plan-row")?.getAttribute("aria-label"),
     ).toBe("Verify, in progress");
-    renderCard({ row: session, progressCard: card, connected: false }, container);
-    expect(runtime()).toContain(t("sessionProgressCard.runtime.offline"));
-    expect(container.querySelector(".session-run-spinner")).toBeNull();
-    const failed = {
-      ...session,
-      status: "failed" as const,
-      hasActiveSubagentRun: false,
-      lastRunError: "Validation service unavailable",
-    };
-    renderCard({ row: failed, progressCard: card, connected: true }, container);
-    expect(runtime()).toContain(t("sessionProgressCard.outcome.failed"));
-    expect(runtime()).toContain("Validation service unavailable");
-    renderCard(
-      { row: { ...failed, startedAt: 200, endedAt: 210 }, progressCard: card, connected: true },
-      container,
+    expect(container.querySelector(".session-run-spinner")).not.toBeNull();
+    expect(container.querySelector(".session-hovercard__notepad")?.textContent).toContain(
+      "Release is ready.",
     );
-    expect(runtime()).not.toContain("Validation service unavailable");
-    expect(runtime()).not.toContain(t("sessionProgressCard.outcome.failed"));
+    renderCard({ row: session, progressCard: card, connected: false }, container);
+    expect(container.querySelector(".session-progress-card__runtime")).toBeNull();
+    expect(container.querySelector(".session-run-spinner")).toBeNull();
+    expect(
+      container.querySelector(".session-hovercard__plan-row")?.getAttribute("aria-label"),
+    ).toBe("Verify, paused");
   });
 
   it("pins a labeled markdown progress bar above the Task progress copy", () => {

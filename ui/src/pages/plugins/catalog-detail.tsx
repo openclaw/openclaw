@@ -13,7 +13,6 @@ import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import "../../styles/sidebar-markdown.css";
 import type { PluginInstallProgress } from "./install-progress.ts";
-import { PluginNativeUiDisclosure } from "./native-ui-disclosure.tsx";
 import {
   renderPluginContentCapabilities,
   renderPluginMetadata,
@@ -101,13 +100,6 @@ function CatalogDetailContent(props: {
             (detail().author?.imageUrl && props.state.iconLoading?.(detail().author!.imageUrl!)),
           )}
         />
-      }
-      notice={
-        plugin().local.action === "install" || installing() ? (
-          <PluginNativeUiDisclosure
-            variant={plugin().catalog.family === "bundle-plugin" ? "bundle" : "install"}
-          />
-        ) : undefined
       }
       titleAction={
         <>

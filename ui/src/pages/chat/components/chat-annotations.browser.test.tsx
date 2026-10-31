@@ -1,12 +1,11 @@
 import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/composer.css";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import "./chat-comment-pins.tsx";
+import { ChatCommentPins } from "./chat-comment-pins.tsx";
 import { CommentPreviewChip, CommentPreviewRow } from "./chat-comment-preview.tsx";
 import { removeChatSelectionPopup, showChatAnnotationEditor } from "./chat-selection-popup.tsx";
 import { createTranscriptMessageElements } from "./chat-transcript-message-elements.ts";
@@ -45,7 +44,7 @@ afterEach(() => {
 });
 
 function mountComments(count: number, top: number) {
-  container.style.cssText = `position: fixed; right: 16px; top: ${top}px`;
+  container.style.cssText = `position: fixed; right: 32px; top: ${top}px`;
   comments?.unmount();
   comments = mountSolid(
     () => (
@@ -63,12 +62,15 @@ function mountComments(count: number, top: number) {
   return container.querySelector<HTMLElement>(".chat-selection-annotations__chip")!;
 }
 
-async function openComments(trigger: HTMLElement) {
+async function openComments(trigger: HTMLElement, hover = false) {
   const tooltip = container.querySelector("openclaw-tooltip")!;
   await tooltip.updateComplete;
   const shown = new Promise<Event>((resolve) => {
     tooltip.addEventListener("overlay-after-show", resolve, { once: true });
   });
+  if (hover) {
+    await page.elementLocator(trigger).hover();
+  }
   trigger.focus();
   await shown;
   const body = tooltip.shadowRoot!.querySelector<HTMLElement>(".tooltip-surface")!;
@@ -179,7 +181,7 @@ describe("annotation chip and hovercard", () => {
       for (const count of [1, 3, 10]) {
         for (const top of [12, 430, 840]) {
           const trigger = mountComments(count, top);
-          const { tooltip, body } = await openComments(trigger);
+          const { tooltip, body } = await openComments(trigger, true);
           await expect
             .poll(() => {
               const card = body.getBoundingClientRect();
@@ -193,6 +195,8 @@ describe("annotation chip and hovercard", () => {
               );
             })
             .toBe(true);
+          await new Promise(requestAnimationFrame);
+          expect(trigger.matches(":hover")).toBe(true);
           const scroll = container.querySelector<HTMLElement>(".chat-comment-preview__scroll")!;
           expect(scroll.clientHeight).toBeGreaterThan(0);
           expect(scroll.clientHeight).toBeLessThanOrEqual(360);
@@ -223,6 +227,9 @@ describe("annotation chip and hovercard", () => {
           await userEvent.keyboard("{Escape}");
           await hidden;
           await expect.poll(() => tooltip.hasAttribute("open")).toBe(false);
+          await new Promise(requestAnimationFrame);
+          await new Promise(requestAnimationFrame);
+          expect(tooltip.hasAttribute("open")).toBe(false);
           trigger.blur();
         }
       }
@@ -431,15 +438,7 @@ describe("comment pins", () => {
     const messageElements = createTranscriptMessageElements(() => undefined);
     messageElements.forKey("source")(source);
     onTestFinished(() => messageElements.dispose());
-    const pins = document.createElement("openclaw-chat-comment-pins") as HTMLElement & {
-      attachments: ChatAttachment[];
-      sessionKey: string;
-      transcript: {
-        messageElements: typeof messageElements;
-        contentElement: HTMLDivElement;
-      };
-      updateComplete: Promise<unknown>;
-    };
+    const pins = new ChatCommentPins.Element();
     pins.transcript = {
       messageElements,
       contentElement: thread.querySelector<HTMLDivElement>(".chat-thread-inner")!,

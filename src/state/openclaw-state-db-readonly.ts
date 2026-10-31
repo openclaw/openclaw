@@ -3,7 +3,6 @@ import { lstatSync } from "node:fs";
 import { isMainThread } from "node:worker_threads";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { hasErrnoCode } from "../infra/errno.js";
-import { resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import { retainSnapshotWork } from "../infra/sqlite-readonly-location-cleanup.js";
 import {
@@ -50,6 +49,7 @@ import {
   assertRetainedReadScopeAdmission,
   bindRetainedReadScope,
   createRetainedReadScope,
+  readRetainedStateSnapshot,
   runRetainedReadScope,
   runSynchronousReadScope,
 } from "./openclaw-state-read-scope.js";
@@ -340,11 +340,7 @@ function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
     if (source) {
       return {
         reused: true,
-        value: withOpenClawStateReadOnlyLocation(
-          operation,
-          pathname,
-          source.cleanClose ? resolveImmutableSqliteFileUri(source.location) : source.location,
-        ),
+        value: readRetainedStateSnapshot(snapshot, source, operation),
       };
     }
   }

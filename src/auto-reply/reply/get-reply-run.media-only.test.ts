@@ -17,7 +17,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
-import { buildPrAttributionPrompt } from "../../agents/pr-attribution.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import {
   getGatewayToolCallerIdentity,
@@ -137,20 +136,6 @@ const envMockState = vi.hoisted(() => ({ fastTestRuntime: true }));
 vi.mock("../../infra/env.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/env.js")>()),
   isFastTestRuntimeEnv: () => envMockState.fastTestRuntime,
-}));
-
-vi.mock("../../agents/main-session-recovery/main-session-recovery-owner-release.js", () => ({
-  scheduleMainSessionRecoveryPendingTarget: vi.fn(),
-}));
-
-vi.mock("../../config/sessions/restart-recovery-state.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/sessions/restart-recovery-state.js")>()),
-  isMainRestartRecoveryCandidate: vi.fn().mockReturnValue(false),
-}));
-
-vi.mock("../../agents/main-session-recovery/main-session-recovery-store.js", () => ({
-  claimMainSessionRecoveryOwner: vi.fn(),
-  releaseMainSessionRecoveryOwner: vi.fn(),
 }));
 
 // Provider profile discovery is owned by thinking.test.ts. Keep the real thinking-policy
@@ -464,9 +449,6 @@ function expectTurnText(call: ReturnType<typeof requireRunReplyAgentCall>, text:
     followupRun: { prompt: text, transcriptPrompt: text },
   });
 }
-
-const PR_ATTRIBUTION_OFF = `PR attribution: ⟦openclaw:ctx⟧
-${buildPrAttributionPrompt(false)}`;
 
 describe("runPreparedReply media-only handling", () => {
   describe.each(["followup", "collect"] as const)("queued owner authority: %s", (mode) => {
@@ -1041,7 +1023,6 @@ describe("runPreparedReply media-only handling", () => {
     expectTurnText(call, "please answer here");
     expect(call.followupRun.currentInboundContext?.text).toBe(
       [
-        PR_ATTRIBUTION_OFF,
         "Current message:\nchat_id=-100123\ninbound_event_kind: user_request",
         MESSAGE_TOOL_ONLY_DELIVERY_HINT,
       ].join("\n\n"),
@@ -2246,9 +2227,7 @@ describe("runPreparedReply media-only handling", () => {
 
     const followupRun = requireRunReplyAgentCall().followupRun;
     const context = followupRun.currentInboundContext;
-    expect(followupRun.prompt).toBe(
-      [PR_ATTRIBUTION_OFF, "A new session was started via /new or /reset."].join("\n\n"),
-    );
+    expect(followupRun.prompt).toBe("A new session was started via /new or /reset.");
     for (const event of [
       "Slack reaction added: :eyes:",
       "Slack message in #claw-test from Alice",

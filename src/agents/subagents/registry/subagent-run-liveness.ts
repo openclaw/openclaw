@@ -94,10 +94,7 @@ export function getSubagentRunStaleAt(entry: SubagentRunLivenessRecord): number 
   return startedAt + cutoffMs;
 }
 
-export function isStaleUnendedSubagentRun(
-  entry: SubagentRunLivenessRecord,
-  now = Date.now(),
-): boolean {
+function isStaleUnendedSubagentRun(entry: SubagentRunLivenessRecord, now = Date.now()): boolean {
   return now > getSubagentRunStaleAt(entry);
 }
 

@@ -22,6 +22,7 @@
 // --layout-matrix covers routes, themes, viewports and cold/warm reloads; --runs is per bundle/cell.
 // Repeat --layout-cell mobile:light:chat:cold to isolate cells with their matrix setup intact.
 // --sidebar-presentation adds badges/avatars; --sidebar-presentation-probe records visible waves.
+// --late-row-facts covers titled links, native/ticketed thumbnails, archive notice and avatars.
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
 // --critical-path-intent-ms 150 includes hover/focus prefetch before route activation.
@@ -59,10 +60,6 @@ import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-
 import { sidebarPresentationProbe } from "../ui/src/test-helpers/control-ui-sidebar-presentation-probe.test-support.ts";
 import { installTeamScaleSidebarPresentation } from "../ui/src/test-helpers/control-ui-sidebar-presentation.test-support.ts";
 import { revealSidebarTarget } from "../ui/src/test-helpers/control-ui-sidebar-window.ts";
-import {
-  createControlUiStreamingReply,
-  createStreamingReplyProbeInitScript,
-} from "../ui/src/test-helpers/control-ui-streaming-reply.ts";
 import { createControlUiTeamScaleFixture } from "../ui/src/test-helpers/control-ui-team-scale-fixture.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import { resolveColdLoadLatency } from "./lib/control-ui-bench-latency.ts";
@@ -109,6 +106,8 @@ import {
 } from "./lib/control-ui-interaction-trace.ts";
 import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
 import { installPaneChromeProbe } from "./lib/control-ui-pane-chrome-probe.ts";
+import { createControlUiStreamingReply } from "./lib/control-ui-streaming-fixture.ts";
+import { createStreamingReplyProbeInitScript } from "./lib/control-ui-streaming-reply.ts";
 import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
 import {
   GATEWAY_HEAP_SAMPLE_INTERVAL,
@@ -272,6 +271,7 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     "warm-reload": { type: "boolean", default: false },
     "row-facts": { type: "boolean", default: false },
+    "late-row-facts": { type: "boolean", default: false },
     "pane-chrome-probe": { type: "boolean", default: false },
     "archived-session": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
@@ -335,6 +335,7 @@ const { values } = parseArgs({
     "network-latency-ms": { type: "string" },
     "download-kbps": { type: "string" },
     "cpu-throttle": { type: "string" },
+    "low-memory": { type: "boolean", default: false },
     port: { type: "string" },
     "sandbox-port": { type: "string" },
     "compare-bundle-dir": { type: "string", multiple: true, default: [] },
@@ -351,6 +352,22 @@ const { values } = parseArgs({
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
   },
 });
+if (values["late-row-facts"]) {
+  if (
+    !values["warm-reload"] ||
+    !values["gateway-http"] ||
+    values["cold-http-cache"] ||
+    values["hold-boot-assets"] ||
+    Number(values["history-validator-delay-ms"]) > 0 ||
+    values["duplicate-boot-reads"]
+  ) {
+    throw new Error(
+      "late-row-facts requires cache-enabled gateway-http + warm-reload without intercepted assets or duplicate-boot-reads",
+    );
+  }
+  values["row-facts"] = true;
+  values["transcript-avatars"] = true;
+}
 if (values["pane-chrome-probe"] && !values["warm-reload"]) {
   throw new Error("pane-chrome-probe requires warm-reload for the first transcript paint boundary");
 }
@@ -798,6 +815,7 @@ const fixture = createControlUiTeamScaleFixture({
   closedMenuMembers: values["closed-menu-members"],
   largeSnapshot: values["large-snapshot"],
   rowFacts: values["row-facts"],
+  lateRowFacts: values["late-row-facts"],
   offRosterSession: values["off-roster-route"],
   archivedSession: values["archived-session"],
   transcriptMessages,
@@ -846,7 +864,12 @@ const isolatedSandboxOrigin =
   values["dashboard-widget"] || values["dashboard-mcp-app"] || values["dashboard-paint-marker"]
     ? `http://127.0.0.1:${address.port}`
     : undefined;
-const chromiumArgs = isolatedSandboxOrigin ? [`--isolate-origins=${isolatedSandboxOrigin}`] : [];
+const chromiumArgs = [
+  ...(isolatedSandboxOrigin ? [`--isolate-origins=${isolatedSandboxOrigin}`] : []),
+  ...(values["low-memory"]
+    ? ["--enable-low-end-device-mode", "--js-flags=--max-old-space-size=128"]
+    : []),
+];
 let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
@@ -929,6 +952,8 @@ try {
         firstLiveShellMs: null as number | null,
         firstShellInteractiveMs: null as number | null,
         firstEnabledComposerMs: null as number | null,
+        firstUsableComposerMs: null as number | null,
+        firstUsableComposerKind: null as "static" | "hydrated" | "new" | null,
         firstComposerFocusMs: null as number | null,
         firstNonemptyTranscriptMs: null as number | null,
         firstRouteReadyMs: null as number | null,
@@ -1108,6 +1133,29 @@ try {
         ) {
           milestones.firstEnabledComposerMs = performance.now();
         }
+        if (milestones.firstUsableComposerMs === null) {
+          const composers = document.querySelectorAll<HTMLTextAreaElement>(
+            "#openclaw-boot-composer, .chat-pane-cache__pane--active .agent-chat__composer-combobox textarea, .new-session-page__message",
+          );
+          for (const candidate of composers) {
+            if (
+              candidate.matches(":disabled") ||
+              candidate.readOnly ||
+              candidate.closest("[inert]") ||
+              !visible(candidate)
+            ) {
+              continue;
+            }
+            milestones.firstUsableComposerMs = performance.now();
+            milestones.firstUsableComposerKind =
+              candidate.id === "openclaw-boot-composer"
+                ? "static"
+                : candidate.matches(".new-session-page__message")
+                  ? "new"
+                  : "hydrated";
+            break;
+          }
+        }
         if (
           milestones.firstNonemptyTranscriptMs === null &&
           [
@@ -1208,12 +1256,31 @@ try {
   ]);
   if (gatewayHttpServer) {
     // Native fixture HTTP keeps browser caching available for production assets.
-    gatewayHttpServer.setFixtureReader((pathname) => {
+    gatewayHttpServer.setFixtureReader((pathname, url) => {
       if (pathname === "/control-ui-config.json") {
         return {
           body: JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario)),
           contentType: "application/json",
         };
+      }
+      if (fixture.lateRowFacts && pathname === "/__openclaw__/assistant-media") {
+        if (url.searchParams.get("source") !== fixture.lateRowFacts.cacheableImageSource) {
+          return undefined;
+        }
+        if (url.searchParams.get("meta") === "1") {
+          return {
+            body: JSON.stringify(fixture.lateRowFacts.metadata),
+            contentType: "application/json",
+            headers: { "Cache-Control": "private, no-store" },
+          };
+        }
+        if (url.searchParams.get("mediaTicket") !== fixture.lateRowFacts.metadata.mediaTicket) {
+          return {
+            body: "Synthetic media ticket required",
+            contentType: "text/plain",
+            status: 403,
+          };
+        }
       }
       const asset = assets.get(pathname);
       return asset
@@ -1343,7 +1410,7 @@ try {
     : "";
   const warmProbes =
     values["warm-reload"] || firstLoad
-      ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"] })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
+      ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"], lateRowFacts: values["late-row-facts"] })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
       : "";
   const presentationProbes = fixture.sidebarPresentation
     ? `\n(${installTeamScaleSidebarPresentation.toString()})(${JSON.stringify(fixture.sidebarPresentation)});${values["sidebar-presentation-probe"] ? `\n(${sidebarPresentationProbe.toString()})();` : ""}`
@@ -1666,8 +1733,73 @@ try {
   const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
     sessionKey: fixture.selectedSessionKey,
     rowFacts: values["row-facts"],
+    lateRowFacts: values["late-row-facts"],
     offRosterSession: values["off-roster-route"],
     sidebarView: sidebarView === "online" ? "online" : "sessions",
+  };
+  const qualifyLateRowFacts = async () => {
+    if (!fixture.lateRowFacts) {
+      return;
+    }
+    await page
+      .waitForFunction(({ sessionTitle, prUrl }) => {
+        const thread = document.querySelector(".chat-pane-cache__pane--active .chat-thread");
+        const links = [...(thread?.querySelectorAll<HTMLAnchorElement>("a") ?? [])];
+        const images = [
+          ...(thread?.querySelectorAll<HTMLImageElement>(".chat-image-frame img") ?? []),
+        ];
+        const assistantAvatars = [
+          ...(thread?.querySelectorAll<HTMLImageElement>(
+            "img.chat-avatar.assistant, .chat-avatar.assistant img, .identity-avatar--agent img",
+          ) ?? []),
+        ];
+        return (
+          links.some(
+            (link) =>
+              link.classList.contains("markdown-session-link--titled") &&
+              link.textContent === sessionTitle,
+          ) &&
+          links.some((link) => link.href === prUrl && link.dataset.linkReaderTone === "positive") &&
+          images.length === 2 &&
+          images.every((image) => image.complete && image.naturalWidth > 0) &&
+          Boolean(thread?.querySelector('.chat-notice[data-chat-row-key^="archive:"]')) &&
+          assistantAvatars.some(
+            (image) => image.checkVisibility() && image.complete && image.naturalWidth > 0,
+          )
+        );
+      }, fixture.lateRowFacts)
+      .catch(async (error: unknown) => {
+        await writeFile(
+          path.join(artifactDir, "late-row-qualification-failure.json"),
+          JSON.stringify({
+            errors,
+            consoleErrors,
+            diagnostics: await page.evaluate(() => Reflect.get(window, "__coldLoad")?.read()),
+            thread: await page.locator(".chat-pane-cache__pane--active .chat-thread").innerHTML(),
+          }),
+        );
+        await page.screenshot({
+          path: path.join(artifactDir, "late-row-qualification-failure.png"),
+        });
+        throw error;
+      });
+  };
+  const qualifyLateRowSnapshot = (saved: (typeof snapshotSaves)[number], bundleIndex: number) => {
+    if (!values["late-row-facts"] || !comparisonBundleDirs.length || bundleIndex === 0) {
+      return;
+    }
+    const facts = saved.displayFacts;
+    if (
+      !facts ||
+      facts.thumbnails !== 2 ||
+      facts.imageDimensions !== 2 ||
+      facts.links < 2 ||
+      facts.thumbnailBytes <= 0 ||
+      facts.cachedThumbnails > 32 ||
+      facts.cachedThumbnailBytes > 8 * 1024 * 1024
+    ) {
+      throw new Error(`Unqualified candidate late-row snapshot: ${JSON.stringify(facts)}`);
+    }
   };
   if (!firstLoad) {
     await page.goto(chatUrl);
@@ -1740,6 +1872,7 @@ try {
       await settle("chat");
     }
     await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor({ state: "attached" });
+    await qualifyLateRowFacts();
     const { storage: warmStorage, ...snapshotSave } = await page.evaluate(
       persistColdLoadWarmState,
       warmInput,
@@ -1765,10 +1898,12 @@ try {
           await page.locator(".shell--nav-drawer-open").waitFor();
         }
         await expandSidebar();
+        await qualifyLateRowFacts();
         const { storage: captured, ...saved } = await page.evaluate(
           persistColdLoadWarmState,
           warmInput,
         );
+        qualifyLateRowSnapshot(saved, index);
         storage = captured;
         primes.push(saved);
         if (pass === passes - 1) {
@@ -2060,6 +2195,10 @@ try {
       await page.reload({ waitUntil: "domcontentloaded" });
     }
     await settle(runRoute);
+    if (values["late-row-facts"]) {
+      // Seeds are qualified above; best-effort live link prefetch can skip a reload.
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+    }
     const coverage = values.coverage
       ? (await page.coverage.stopJSCoverage())
           .filter((entry) => controlUiScriptAssetUrl(entry.url, new URL("assets/", baseUrl)))
@@ -3281,6 +3420,8 @@ try {
           firstStaticShellMs: result.presentation.firstStaticShellMs,
           firstShellInteractiveMs: result.presentation.firstShellInteractiveMs,
           firstEnabledComposerMs: result.presentation.firstEnabledComposerMs,
+          firstUsableComposerMs: result.presentation.firstUsableComposerMs,
+          firstUsableComposerKind: result.presentation.firstUsableComposerKind,
           firstNonemptyTranscriptMs: result.presentation.firstNonemptyTranscriptMs,
           cls: result.presentation.cls,
         },
@@ -3360,6 +3501,9 @@ try {
         networkLatencyMs,
         downloadKbps,
         cpuThrottle,
+        memoryProfile: values["low-memory"]
+          ? "Chromium low-end-device mode; 128 MiB V8 old-space limit, not an OS/RSS limit."
+          : "default",
         comparisonBundleDirs,
         fixture: fixture.counts,
         sidebarView,
@@ -3408,6 +3552,7 @@ try {
         connectNotBeforeMs,
         dashboardWidget: values["dashboard-widget"],
         rowFacts: values["row-facts"],
+        lateRowFacts: values["late-row-facts"],
         face,
         shortRoute: values["short-route"],
         fullUuidRoute: values["full-uuid-route"],

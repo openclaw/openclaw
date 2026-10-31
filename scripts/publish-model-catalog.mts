@@ -26,7 +26,6 @@ import { ModelInferenceCapabilitiesSchema } from "../packages/model-catalog-core
 import type {
   RemoteModelCatalogBundle,
   RemoteModelCatalogBundleV2,
-  RemoteModelCatalogBundleV3,
   RemoteModelCatalogPricing,
   RemoteModelCatalogPricingV2,
 } from "../packages/model-catalog-core/src/remote-catalog-bundle.js";
@@ -118,7 +117,6 @@ export function parsePublishModelCatalogArgs(args: string[]) {
   let pricing = false;
   let out: string | undefined;
   let outV2: string | undefined;
-  let outV3: string | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--dry-run") {
@@ -139,11 +137,6 @@ export function parsePublishModelCatalogArgs(args: string[]) {
       index += 1;
       continue;
     }
-    if (arg === "--out-v3") {
-      outV3 = requireOptionValue(args, index, arg);
-      index += 1;
-      continue;
-    }
     throw new Error(`unknown argument: ${arg}`);
   }
   if (!dryRun && !out) {
@@ -154,7 +147,6 @@ export function parsePublishModelCatalogArgs(args: string[]) {
     pricing,
     ...(out ? { out } : {}),
     ...(outV2 ? { outV2 } : {}),
-    ...(outV3 ? { outV3 } : {}),
   };
 }
 
@@ -179,14 +171,13 @@ export function readModelCatalogManifests(
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 }
 
-async function loadClientBundleValidator(version: 1 | 2 | 3 = 1) {
+async function loadClientBundleValidator(version: 1 | 2 = 1) {
   const modulePath = path.join(
     defaultRootDir,
     "packages/model-catalog-core/src/remote-catalog-bundle.ts",
   );
   const module = await importToolingTypeScript(pathToFileURL(modulePath).href, import.meta.url);
-  const name =
-    version === 1 ? "parseRemoteModelCatalogBundle" : `parseRemoteModelCatalogBundleV${version}`;
+  const name = version === 1 ? "parseRemoteModelCatalogBundle" : "parseRemoteModelCatalogBundleV2";
   const parse = module[name];
   const sanitize = module.sanitizeRemoteModelCatalogBundle;
   if (typeof parse !== "function" || typeof sanitize !== "function") {
@@ -258,8 +249,8 @@ export async function assembleModelCatalogBundle(options: {
   const validateBundle: BundleValidator =
     options.validateBundle ?? (await loadClientBundleValidator());
   const validated = validateBundle(bundle);
-  // The assembly is canonical source data, not a legacy wire projection. Preserve
-  // validated task declarations until v1/v2 and v3 are projected separately.
+  // The assembly is canonical source data, not a wire projection. Preserve validated
+  // task declarations so the v1/v2 projections can drop rows that are not chat models.
   for (const [id, provider] of Object.entries(validated.providers)) {
     const source = providers[id];
     if (!isRecord(source) || !Array.isArray(source.models)) {
@@ -1351,16 +1342,15 @@ export function projectRecommendedModels(
  * A provider's featured models lead its recommendations as listed, so the global family
  * rule never hides a provider pick; the global projection follows without repeats.
  */
-async function assembleVersionedModelCatalogBundle(
+export async function assembleModelCatalogBundleV2(
   bundle: PublishedModelCatalogBundle,
   pricingSelections: WeakMap<ModelCatalogModel, PricingSelection>,
   standalonePricing?: StandalonePricing,
   recommendedModels: readonly string[] = [],
   featuredModels: Readonly<Record<string, { ids: readonly string[] }>> = {},
-  version: 2 | 3 = 2,
-): Promise<RemoteModelCatalogBundleV2 | RemoteModelCatalogBundleV3> {
+): Promise<RemoteModelCatalogBundleV2> {
   const providers: RemoteModelCatalogBundleV2["providers"] = {};
-  const models: RemoteModelCatalogBundleV3["models"] = [];
+  const models: RemoteModelCatalogBundleV2["models"] = [];
   for (const [providerId, provider] of Object.entries(bundle.providers)) {
     const chatModels = provider.models.filter((model) => model.inference?.chat !== false);
     const featured = (featuredModels[providerId]?.ids ?? []).filter((id) =>
@@ -1387,13 +1377,11 @@ async function assembleVersionedModelCatalogBundle(
       ...(recommended.length > 0 ? { recommendedModels: recommended } : {}),
     };
     for (const model of provider.models) {
-      if (version === 2 && model.inference?.chat === false) {
+      if (model.inference?.chat === false) {
         continue;
       }
       const { cost, ...metadata } = model;
-      if (version === 2) {
-        delete metadata.inference;
-      }
+      delete metadata.inference;
       delete metadata.baseUrl;
       delete metadata.headers;
       delete metadata.upstreamModel;
@@ -1414,12 +1402,12 @@ async function assembleVersionedModelCatalogBundle(
       models.push({ ...metadata, provider: providerId, pricing });
     }
   }
-  const validateBundle = await loadClientBundleValidator(version);
+  const validateBundle = await loadClientBundleValidator(2);
   // schemaVersion gates admission; never copy v1's older client floor onto newer wires.
   const upstreamPricing = serializeStandalonePricing(standalonePricing?.upstream);
   const providerPricing = serializeStandalonePricing(standalonePricing?.provider);
   return validateBundle({
-    schemaVersion: version,
+    schemaVersion: 2,
     generatedAt: bundle.generatedAt,
     sourceCommit: bundle.sourceCommit,
     providers,
@@ -1429,27 +1417,7 @@ async function assembleVersionedModelCatalogBundle(
   });
 }
 
-export async function assembleModelCatalogBundleV2(
-  bundle: PublishedModelCatalogBundle,
-  pricingSelections: WeakMap<ModelCatalogModel, PricingSelection>,
-  standalonePricing?: StandalonePricing,
-  recommendedModels: readonly string[] = [],
-  featuredModels: Readonly<Record<string, { ids: readonly string[] }>> = {},
-): Promise<RemoteModelCatalogBundleV2> {
-  // SAFETY: the requested wire version selects its corresponding client validator.
-  return (await assembleVersionedModelCatalogBundle(
-    bundle,
-    pricingSelections,
-    standalonePricing,
-    recommendedModels,
-    featuredModels,
-    2,
-  )) as RemoteModelCatalogBundleV2;
-}
-
-export function serializeModelCatalogBundleV2(
-  bundle: RemoteModelCatalogBundleV2 | RemoteModelCatalogBundleV3,
-): string {
+export function serializeModelCatalogBundleV2(bundle: RemoteModelCatalogBundleV2): string {
   const models = bundle.models
     .toSorted(
       (left, right) =>
@@ -1495,11 +1463,11 @@ export async function runPublishModelCatalog(
 ) {
   const rootDir = options.rootDir ?? defaultRootDir;
   const args = parsePublishModelCatalogArgs(options.args ?? process.argv.slice(2));
-  const outputPaths = [args.out, args.outV2, args.outV3]
+  const outputPaths = [args.out, args.outV2]
     .filter((file): file is string => Boolean(file))
     .map((file) => path.resolve(rootDir, file));
   if (new Set(outputPaths).size !== outputPaths.length) {
-    throw new Error("--out, --out-v2 and --out-v3 must name different files");
+    throw new Error("--out and --out-v2 must name different files");
   }
   const generatedAt = (options.now ?? Date.now)();
   const sourceCommit = options.sourceCommit ?? resolveSourceCommit(rootDir);
@@ -1523,8 +1491,9 @@ export async function runPublishModelCatalog(
     }
   }
   const retirementResult = await retireUnservedModels({ bundle, loadSource });
-  const featuredResult =
-    args.outV2 || args.outV3 ? await resolveProviderFeaturedModels({ bundle, loadSource }) : {};
+  const featuredResult = args.outV2
+    ? await resolveProviderFeaturedModels({ bundle, loadSource })
+    : {};
   const standalonePricing: StandalonePricing = { upstream: new Map(), provider: new Map() };
   const pricingResult = args.pricing
     ? await enrichModelCatalogPricing({
@@ -1535,16 +1504,6 @@ export async function runPublishModelCatalog(
         standalonePricing,
       })
     : { modelsEnriched: 0, pricingEntries: 0 };
-  const bundleV3 = args.outV3
-    ? await assembleVersionedModelCatalogBundle(
-        bundle,
-        pricingSelections,
-        standalonePricing,
-        recommendedModels,
-        featuredResult,
-        3,
-      )
-    : undefined;
   projectReleasedModelInputs(bundle);
   // Validate after all enrichment so metadata-only and dry-run output obey the
   // same client contract as priced catalogs.
@@ -1565,8 +1524,6 @@ export async function runPublishModelCatalog(
   const bundleBytes = Buffer.byteLength(serialized);
   const serializedV2 = bundleV2 ? serializeModelCatalogBundleV2(bundleV2) : undefined;
   const bundleV2Bytes = serializedV2 ? Buffer.byteLength(serializedV2) : 0;
-  const serializedV3 = bundleV3 ? serializeModelCatalogBundleV2(bundleV3) : undefined;
-  const bundleV3Bytes = serializedV3 ? Buffer.byteLength(serializedV3) : 0;
   if (bundleBytes > BUNDLE_SIZE_WARNING_BYTES) {
     process.stderr.write(
       `[${SCRIPT_LABEL}] warning: bundle size ${bundleBytes} bytes exceeds ${BUNDLE_SIZE_WARNING_BYTES} bytes\n`,
@@ -1580,11 +1537,6 @@ export async function runPublishModelCatalog(
   if (bundleV2Bytes > CLIENT_BUNDLE_LIMIT_BYTES) {
     throw new Error(
       `catalog v2 bundle ${bundleV2Bytes} bytes exceeds client limit ${CLIENT_BUNDLE_LIMIT_BYTES} bytes`,
-    );
-  }
-  if (bundleV3Bytes > CLIENT_BUNDLE_LIMIT_BYTES) {
-    throw new Error(
-      `catalog v3 bundle ${bundleV3Bytes} bytes exceeds client limit ${CLIENT_BUNDLE_LIMIT_BYTES} bytes`,
     );
   }
   const hydrationSummary = Object.entries(hydrationResult)
@@ -1622,9 +1574,6 @@ export async function runPublishModelCatalog(
     ...(args.outV2 && serializedV2
       ? [{ file: path.resolve(rootDir, args.outV2), content: serializedV2 }]
       : []),
-    ...(args.outV3 && serializedV3
-      ? [{ file: path.resolve(rootDir, args.outV3), content: serializedV3 }]
-      : []),
   ];
   if (outputs.length > 1) {
     await publishModelCatalogPair(outputs, (message) =>
@@ -1634,15 +1583,10 @@ export async function runPublishModelCatalog(
     fs.mkdirSync(path.dirname(outputFile), { recursive: true });
     fs.writeFileSync(outputFile, serialized);
   }
-  for (const [version, published, bytes, out] of [
-    [2, bundleV2, bundleV2Bytes, args.outV2],
-    [3, bundleV3, bundleV3Bytes, args.outV3],
-  ] as const) {
-    if (published) {
-      process.stdout.write(
-        `[${SCRIPT_LABEL}] published schemaVersion=${version} models=${published.models.length} recommendedProviders=${Object.values(published.providers).filter((provider) => provider.recommendedModels).length} bundleBytes=${bytes} out=${out}\n`,
-      );
-    }
+  if (bundleV2) {
+    process.stdout.write(
+      `[${SCRIPT_LABEL}] published schemaVersion=2 models=${bundleV2.models.length} recommendedProviders=${Object.values(bundleV2.providers).filter((provider) => provider.recommendedModels).length} bundleBytes=${bundleV2Bytes} out=${args.outV2}\n`,
+    );
   }
   process.stdout.write(
     `[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n${hydrationSummary}${retirementSummary}${featuredSummary}`,

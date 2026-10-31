@@ -151,9 +151,9 @@ function bindChannelDelivery<
 >(params: T, consumer?: PluginInstanceConsumer, custody?: ChannelDeliveryCustody): T {
   let replyOptions = params.replyOptions;
   let adoption: TurnAdoptionLifecycle | undefined;
-  if (consumer && custody && replyOptions?.onQueuedFollowupReplyBatch) {
-    // Queued source delivery outlives dispatch; the queue owns its final release.
-    const source = params.turnAdoptionLifecycle ?? replyOptions.turnAdoptionLifecycle;
+  const source = params.turnAdoptionLifecycle ?? replyOptions?.turnAdoptionLifecycle;
+  if (consumer && custody && (source || replyOptions?.onQueuedFollowupReplyBatch)) {
+    // Queued observers and source delivery outlive dispatch; settlement releases both.
     adoption = {
       ...source,
       onAdopted: source?.onAdopted ?? (() => {}),

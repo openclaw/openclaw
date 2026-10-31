@@ -52,10 +52,14 @@ function copyFiles(root: string, files: string[]) {
     write(root, file, read(process.cwd(), file));
   }
 }
-function fixture(platform = "ios", testflight?: ReturnType<typeof testflightPlan>) {
+function fixture(
+  platform = "ios",
+  testflight?: ReturnType<typeof testflightPlan>,
+  shallow = false,
+) {
   const directory = tempDirs.make("openclaw-mobile-release-");
   const remote = path.join(directory, "origin.git");
-  const root = path.join(directory, "checkout");
+  let root = path.join(directory, "checkout");
   const recovery = path.join(directory, "recovery");
   const uploadAudit = path.join(directory, "upload.json");
   const firebaseAudit = path.join(directory, "firebase.jsonl");
@@ -240,8 +244,16 @@ $lanes.fetch(:release_upload).call(destination: ARGV.fetch(0).delete_prefix("des
 `,
     });
   }
-  const base = commit(root, "Initial source");
+  commit(root, "Initial source");
+  write(root, "README.md", "Updated application source.\n");
+  const base = commit(root, "Update application source");
   git(root, "push", "origin", "main");
+  if (shallow) {
+    const checkout = path.join(directory, "shallow");
+    git(directory, "clone", "--no-local", "--no-tags", "--depth=1", remote, checkout);
+    fs.symlinkSync(path.join(root, "node_modules"), path.join(checkout, "node_modules"), "dir");
+    root = checkout;
+  }
   const env = {
     ...process.env,
     FIXTURE_UPLOAD_AUDIT: uploadAudit,
@@ -292,11 +304,20 @@ $lanes.fetch(:release_upload).call(destination: ARGV.fetch(0).delete_prefix("des
 }
 
 function advanceMain(f: ReturnType<typeof fixture>): string {
-  git(f.root, "checkout", "-b", "advance-main", f.base);
-  write(f.root, "README.md", "Application source advanced after planning.\n");
-  const sha = commit(f.root, "Advance main");
-  git(f.root, "push", "origin", "HEAD:main");
-  git(f.root, "checkout", "main");
+  const sha = git(
+    f.remote,
+    "-c",
+    "user.name=Release Fixture",
+    "-c",
+    "user.email=release@example.invalid",
+    "commit-tree",
+    `${f.base}^{tree}`,
+    "-p",
+    f.base,
+    "-m",
+    "Advance main",
+  );
+  git(f.remote, "update-ref", "refs/heads/main", sha);
   return sha;
 }
 function workflowEnv(sha: string, event = "schedule") {
@@ -602,6 +623,7 @@ describe("mobile release CLI", () => {
       const f = fixture(
         "ios",
         testflightPlan([candidate], outcome === "deferred-review" ? candidate : null),
+        true,
       );
       if (outcome !== "deferred-review") {
         git(f.root, "push", "origin", `${f.base}:refs/openclaw/mobile-releases/ios/2026.9.20-7`);
@@ -609,6 +631,8 @@ describe("mobile release CLI", () => {
       const result = f.invoke("run", ["--destination", "testflight"], { OPENAI_API_KEY: "" });
       expect(fs.existsSync(f.uploadAudit)).toBe(false);
       expect(exists(f.recovery, "release-notes.json")).toBe(false);
+      expect(exists(f.recovery, "source")).toBe(false);
+      expect(git(f.root, "rev-parse", "--is-shallow-repository")).toBe("true");
       if (outcome === "recovery-required") {
         expectResult(result, 1, "Recover its saved destination");
       } else {
@@ -618,8 +642,22 @@ describe("mobile release CLI", () => {
           groupId: "external-fixture",
           sourceSha: f.base,
         });
-        expect(exists(f.recovery, "source")).toBe(false);
       }
+    },
+  );
+
+  it.each(["ios", "android"])(
+    "retains full %s release ancestry when notes are needed",
+    (platform) => {
+      const f = fixture(platform, undefined, true);
+      const latestMain = advanceMain(f);
+      expect(git(f.root, "rev-list", "--count", "HEAD")).toBe("1");
+      const result = f.invoke("run", [], workflowEnv(f.base));
+      expectResult(result, 0);
+      expect(git(f.root, "log", "--format=%s")).toBe("Update application source\nInitial source");
+      expect(f.audit()).toHaveLength(1);
+      expect(f.ref("main")).toBe(latestMain);
+      expect(git(f.root, "rev-parse", "HEAD")).toBe(f.base);
     },
   );
 

@@ -1,7 +1,24 @@
+import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 
-/** Linked identity only. The caller retains current session, role and connection authority. */
-export function captureOwnGitHubPullRequestReader(profileId: string, getHost: () => string) {
+type RecordedPublication = {
+  url: string;
+  publisher: Pick<
+    GitHubPublicationExecutionRow,
+    | "agent_id"
+    | "identity_source"
+    | "identity_profile_id"
+    | "identity_account_id"
+    | "identity_login"
+  >;
+};
+
+/** Inspection verifies recorded publications are public; other readers require linked identity. */
+export function captureOwnGitHubPullRequestReader(
+  profileId: string,
+  getHost: () => string,
+  publication?: RecordedPublication,
+) {
   const host = getHost();
   const profile = captureResidentUserProfileAccess(profileId);
   const accountIds = () => {
@@ -14,7 +31,7 @@ export function captureOwnGitHubPullRequestReader(profileId: string, getHost: ()
         );
   };
   const admittedIds = accountIds();
-  if (!admittedIds.length) {
+  if (!admittedIds.length && !publication) {
     throw new Error(
       "Link a verified GitHub account on the configured host before inspecting your PR.",
     );
@@ -22,7 +39,13 @@ export function captureOwnGitHubPullRequestReader(profileId: string, getHost: ()
   return {
     host,
     accountIds: admittedIds,
-    identity: JSON.stringify([profileId, host, admittedIds.toSorted((a, b) => a - b)]),
+    publication,
+    identity: JSON.stringify([
+      profileId,
+      host,
+      admittedIds.toSorted((a, b) => a - b),
+      ...(publication ? [publication] : []),
+    ]),
     assertCurrent: () => {
       const currentIds = accountIds();
       if (getHost() !== host || !admittedIds.every((id) => currentIds.includes(id))) {

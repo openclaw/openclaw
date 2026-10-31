@@ -108,8 +108,15 @@ function setup(
   return { state, openclaw, runtime: state.profiles.get("openclaw")!, fetchMock };
 }
 
-function setupManagedTabEviction(closed: string[], cleanup: { resolve: () => void }) {
-  return setup(async (url) => {
+function setupManagedTabEviction(seedActivity?: () => void) {
+  vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
+    retainedDashboardRecord("OLD1"),
+  ]);
+  mockCreatedTarget("NEW", "http://127.0.0.1:3009");
+  const closed: string[] = [];
+  const cleanup = Promise.withResolvers<void>();
+  seedActivity?.();
+  const harness = setup(async (url) => {
     if (url.includes("/json/list")) {
       return Response.json(makeManagedTabsWithNew({ newFirst: true }));
     }
@@ -126,6 +133,8 @@ function setupManagedTabEviction(closed: string[], cleanup: { resolve: () => voi
     }
     throw new Error("unexpected fetch: " + url);
   });
+  harness.runtime.running = mockLaunchedChrome(vi.fn(), 1234);
+  return { ...harness, closed, cleanup };
 }
 
 function listOnly(tabs: () => ReturnType<typeof page>[]) {
@@ -295,14 +304,7 @@ describe("browser tab selection and ownership", () => {
   });
 
   it("retains dashboard and just-opened tabs when evicting excess managed tabs", async () => {
-    vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
-      retainedDashboardRecord("OLD1"),
-    ]);
-    mockCreatedTarget("NEW", "http://127.0.0.1:3009");
-    const closed: string[] = [];
-    const cleanup = Promise.withResolvers<void>();
-    const { openclaw, runtime } = setupManagedTabEviction(closed, cleanup);
-    runtime.running = mockLaunchedChrome(vi.fn(), 1234);
+    const { openclaw, runtime, closed, cleanup } = setupManagedTabEviction();
     const opened = await openclaw.openTab("http://127.0.0.1:3009");
     expect(opened).toMatchObject({
       targetId: "NEW",
@@ -322,20 +324,14 @@ describe("browser tab selection and ownership", () => {
   });
 
   it("orders managed eviction by recorded activity, not CDP listing position", async () => {
-    vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
-      retainedDashboardRecord("OLD1"),
-    ]);
-    mockCreatedTarget("NEW", "http://127.0.0.1:3009");
-    const closed: string[] = [];
-    const cleanup = Promise.withResolvers<void>();
-    seedVolatileTabActivity(
-      Array.from({ length: 7 }, (_, index) => ({
-        targetId: `OLD${index + 2}`,
-        lastUsedAt: 2_000 + index,
-      })),
+    const { openclaw, closed, cleanup } = setupManagedTabEviction(() =>
+      seedVolatileTabActivity(
+        Array.from({ length: 7 }, (_, index) => ({
+          targetId: `OLD${index + 2}`,
+          lastUsedAt: 2_000 + index,
+        })),
+      ),
     );
-    const { openclaw, runtime } = setupManagedTabEviction(closed, cleanup);
-    runtime.running = mockLaunchedChrome(vi.fn(), 1234);
     await openclaw.openTab("http://127.0.0.1:3009");
     await cleanup.promise;
     // OLD1 is dashboard-retained; among the rest OLD2 carries the oldest
@@ -345,20 +341,14 @@ describe("browser tab selection and ownership", () => {
   });
 
   it("evicts untracked managed tabs ahead of recently tracked ones", async () => {
-    vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
-      retainedDashboardRecord("OLD1"),
-    ]);
-    mockCreatedTarget("NEW", "http://127.0.0.1:3009");
-    const closed: string[] = [];
-    const cleanup = Promise.withResolvers<void>();
-    seedVolatileTabActivity(
-      Array.from({ length: 5 }, (_, index) => ({
-        targetId: `OLD${index + 4}`,
-        lastUsedAt: 5_000 + index,
-      })),
+    const { openclaw, closed, cleanup } = setupManagedTabEviction(() =>
+      seedVolatileTabActivity(
+        Array.from({ length: 5 }, (_, index) => ({
+          targetId: `OLD${index + 4}`,
+          lastUsedAt: 5_000 + index,
+        })),
+      ),
     );
-    const { openclaw, runtime } = setupManagedTabEviction(closed, cleanup);
-    runtime.running = mockLaunchedChrome(vi.fn(), 1234);
     await openclaw.openTab("http://127.0.0.1:3009");
     await cleanup.promise;
     // OLD2 and OLD3 carry no recorded activity, so OLD3 (ahead of OLD2 in the

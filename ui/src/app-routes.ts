@@ -24,6 +24,7 @@ import {
   type RouteId,
 } from "./app-route-paths.ts";
 import type { SolidRouteProps } from "./app-route-types.tsx";
+import { retireBootComposer } from "./app/boot-composer.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import { gatewayPresentationScope } from "./app/gateway-presentation-scope.ts";
 import { retryControlUiImport } from "./app/stale-chunk-reload.ts";
@@ -272,7 +273,11 @@ export async function startApplicationRouter(
   const initialDynamicRoute = dynamicRouteFromPath(location.pathname, basePath);
   const applicationHistory: RouterHistory = {
     location: () => routerHistoryLocation(history.location(), basePath),
-    push: (next) => history.push(next),
+    push: (next) => {
+      // A pushed destination is not the linked session the boot composer was typed for.
+      retireBootComposer();
+      history.push(next);
+    },
     replace: (next) => history.replace(next),
     listen: (listener) => {
       let listening = true;

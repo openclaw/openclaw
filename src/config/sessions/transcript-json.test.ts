@@ -1,13 +1,9 @@
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
-import {
-  prepareCodeModeCheckpoint,
-  persistCodeModeCheckpoint,
-} from "../../agents/code-mode-checkpoint.js";
-import { normalizeTranscriptJsonValue } from "./transcript-json.js";
+import { cloneTranscriptEnvelope, normalizeTranscriptJsonValue } from "./transcript-json.js";
 
-it.each(["exec", "wait"])("shares admitted %s payloads across checkpoint stamping", (toolName) => {
+it.each(["exec", "wait"])("shares admitted %s payloads across envelope copies", (toolName) => {
   const message = {
     role: "toolResult",
     toolName,
@@ -15,10 +11,9 @@ it.each(["exec", "wait"])("shares admitted %s payloads across checkpoint stampin
     content: [{ type: "text", text: "output 🦞\ud800" }],
     details: { nested: { values: [null, 7, "retained output"] } },
   };
-  prepareCodeModeCheckpoint(message, {});
   normalizeTranscriptJsonValue({ message }, "");
-  const stamped = persistCodeModeCheckpoint(message, message);
-  const expected = JSON.stringify({ ...message, __openclaw: { codeModeCheckpoint: null } });
+  const stamped = cloneTranscriptEnvelope(message);
+  const expected = JSON.stringify(message);
   const persisted = normalizeTranscriptJsonValue(stamped, "") as typeof stamped;
   expect(JSON.stringify(persisted)).toBe(expected);
   expect(persisted.content).toBe(message.content);
@@ -29,7 +24,7 @@ it.each(["exec", "wait"])("shares admitted %s payloads across checkpoint stampin
   expect(message).not.toHaveProperty("__openclaw");
 });
 
-it("does not admit arbitrary frozen payloads when copying a checkpoint envelope", () => {
+it("does not admit arbitrary frozen payloads when copying an envelope", () => {
   const content = Object.freeze([{ type: "text", text: "unadmitted output" }]);
   Object.freeze(content[0]);
   const message = Object.freeze({
@@ -38,8 +33,7 @@ it("does not admit arbitrary frozen payloads when copying a checkpoint envelope"
     toolCallId: "call",
     content,
   });
-  prepareCodeModeCheckpoint(message, {});
-  const stamped = persistCodeModeCheckpoint(message, message);
+  const stamped = cloneTranscriptEnvelope(message);
   const persisted = normalizeTranscriptJsonValue(stamped, "") as typeof stamped;
   expect(persisted.content).toEqual(content);
   expect(persisted.content).not.toBe(content);

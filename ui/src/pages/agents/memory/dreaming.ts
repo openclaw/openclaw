@@ -406,10 +406,13 @@ async function loadDreamingResourceSpec<Key extends DreamingResourceKey>(
     state.dreamingStatusError = null;
   }
   // The Memory owner replaces this state when its agent or connection epoch changes.
-  const promise = (async () => {
-    const payload = await client.request<DreamingResourcePayloads[Key]>(spec.method, { agentId });
-    spec.apply(state, payload);
-  })();
+  const promise = client
+    .request<DreamingResourcePayloads[Key]>(spec.method, { agentId })
+    .then((payload) => {
+      if (state.resourceReads[key]?.promise === promise) {
+        spec.apply(state, payload);
+      }
+    });
   const issued = { promise, pending: true };
   state.resourceReads[key] = issued;
   try {
@@ -445,8 +448,6 @@ export async function runDreamDiaryAction(
   }
   state.dreamDiaryActionLoading = true;
   state.dreamingStatusError = null;
-  clearSettledDreamingRead(state, "dreamingStatus");
-  clearSettledDreamingRead(state, "dreamDiary");
   state.dreamDiaryActionMessage = null;
   state.dreamDiaryActionArchivePath = null;
   try {
@@ -454,6 +455,8 @@ export async function runDreamDiaryAction(
     if (!isCurrent()) {
       return false;
     }
+    // Reads issued before this write cannot satisfy its refresh or publish stale data.
+    delete state.resourceReads.dreamingStatus;
     // Keep the confirmed receipt if a follow-up read is interrupted.
     state.dreamDiaryActionArchivePath =
       method === "doctor.memory.repairDreamingArtifacts"
@@ -467,6 +470,7 @@ export async function runDreamDiaryAction(
       method !== "doctor.memory.resetGroundedShortTerm" &&
       method !== "doctor.memory.repairDreamingArtifacts"
     ) {
+      delete state.resourceReads.dreamDiary;
       await loadDreamingResource(state, "dreamDiary");
     }
     if (!isCurrent()) {

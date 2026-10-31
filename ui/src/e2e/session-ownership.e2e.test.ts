@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
@@ -192,11 +193,11 @@ suite.define(() => {
       backSize: [18, 18],
       centerDelta: 0,
       frontSize: [18, 18],
-      overlap: 8,
-      reveal: 10,
+      overlap: 10,
+      reveal: 8,
       slotWidth: 20,
-      stackSize: [28, 20],
-      textGap: 4,
+      stackSize: [26, 20],
+      textGap: 5,
     });
     await expectBrowser(overflowRow.locator(".session-owner-stack__overflow")).toHaveText("+2");
     const [collaborative, single] = await Promise.all(
@@ -347,9 +348,6 @@ suite.define(() => {
           toggle: box("[data-child-session-toggle]"),
         };
       });
-    const header = await page
-      .locator(".personal-session-groups__heading")
-      .evaluate((element) => element.getBoundingClientRect().bottom);
     const [idle, legacyOwner, unread, running, artwork, draft] = await Promise.all([
       rowGeometry("idle"),
       rowGeometry("legacy-owner"),
@@ -360,7 +358,11 @@ suite.define(() => {
     ]);
     expect(legacyOwner.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
     if (grouping === "Person") {
-      expect(idle.top - header).toBeLessThanOrEqual(12);
+      // The 30px picker is centered in the 44px toolbar; the list adds 6px below it.
+      const ownerTitleBottom = await page
+        .locator("#sidebar-session-owner-title")
+        .evaluate((element) => element.getBoundingClientRect().bottom);
+      expect(idle.top - ownerTitleBottom).toBeCloseTo(13, 1);
     }
     if (width === 1200 || grouping === "Person") {
       const frame = await takeControlUiScreenshotFrame(
@@ -414,8 +416,8 @@ suite.define(() => {
     await row("child").locator(".session-glyph__ring").waitFor();
     await row("child").hover({ position: { x: 2, y: 10 } });
     const child = await rowGeometry("child");
-    // Child actions already take their width in flow. The title should fill
-    // the link to within its normal inter-item gap, not lose an action reserve again.
+    // Child actions overlay padding inside the text box. Keep that box filling
+    // the link rather than reserving the action width a second time in flow.
     expect(child.text?.width).toBeGreaterThanOrEqual(
       child.link.right - child.text!.left - child.gap,
     );
@@ -948,36 +950,83 @@ suite.define(() => {
     ).toHaveCount(0);
   });
 
-  it("clears a selected draft mode when sharing policy becomes unavailable", async () => {
-    const page = await newPage();
-    const gateway = await installMockGateway(page, {
-      allowedSessionVisibilities: ["shared", "draft"],
-      hasMultipleSessionSharingIdentities: true,
-      methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"]) },
-    });
+  it.each([
+    { width: 1200, refused: false },
+    { width: 390, refused: false },
+    { width: 1200, refused: true },
+  ])(
+    "preserves a pending Draft after creation is disabled (width: $width, refused: $refused)",
+    async ({ width, refused }) => {
+      const page = await newPage(width);
+      const gateway = await installMockGateway(page, {
+        allowedSessionVisibilities: ["shared", "draft"],
+        hasMultipleSessionSharingIdentities: true,
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+        methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"]) },
+      });
+      await page.goto(`${suite.server?.baseUrl ?? ""}new`);
+      const composer = page.locator(".new-session-page__composer");
+      const attachmentMenu = composer.getByRole("button", { name: "Add attachment" });
+      await attachmentMenu.click();
+      const draftToggle = composer.getByRole("menuitemcheckbox", { name: "Draft", exact: true });
+      await draftToggle.click();
+      await attachmentMenu.click();
+      await expectBrowser(attachmentMenu).toHaveAttribute("aria-expanded", "false");
+      const message = page.locator(".new-session-page__message");
+      await message.fill("Keep this private plan");
+      await composer.locator("input.agent-chat__file-input").setInputFiles({
+        name: "plan.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("Picnic checklist"),
+      });
+      await expectBrowser(composer.locator(".chat-attachment-file__name")).toHaveText("plan.txt");
+      await gateway.setSessionSharingPolicy({
+        allowedSessionVisibilities: ["shared"],
+        hasMultipleSessionSharingIdentities: true,
+      });
+      if (refused) {
+        await gateway.deferNext("sessions.create");
+        await composer.getByRole("button", { name: "Start session", exact: true }).click();
+        expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
+          visibility: "draft",
+        });
+        await gateway.rejectDeferred("sessions.create", {
+          code: "INVALID_REQUEST",
+          message: "session visibility is disabled: draft",
+        });
+        await page.getByText("session visibility is disabled: draft", { exact: true }).waitFor();
+      }
+      await replaceGatewayClient(page);
 
-    await page.goto(`${suite.server?.baseUrl ?? ""}new`);
-    const draftToggle = page.getByRole("switch", { name: "Draft", exact: true });
-    await page.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
-    await draftToggle.check();
-    await gateway.setSessionSharingPolicy({
-      allowedSessionVisibilities: ["shared"],
-      hasMultipleSessionSharingIdentities: false,
-    });
-    await replaceGatewayClient(page);
-    await expect
-      .poll(() => page.getByRole("button", { name: "Draft", exact: true }).count())
-      .toBe(0);
-
-    await gateway.setSessionSharingPolicy({
-      allowedSessionVisibilities: ["shared", "draft"],
-      hasMultipleSessionSharingIdentities: true,
-    });
-    await replaceGatewayClient(page);
-    await page.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
-    await draftToggle.waitFor();
-    expect(await draftToggle.isChecked()).toBe(false);
-  });
+      const notice = page.locator(".agent-chat__composer-status-text").filter({
+        hasText: "Draft creation is disabled",
+      });
+      if (!refused) {
+        await expectBrowser(notice).toBeVisible();
+      }
+      await expectBrowser(page.locator(".new-session-page__visibility--draft")).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+      await expectBrowser(message).toHaveValue("Keep this private plan");
+      await expectBrowser(composer.locator(".chat-attachment-file__name")).toHaveText("plan.txt");
+      await message.press("Enter");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(refused ? 1 : 0);
+      await attachmentMenu.click();
+      await expectBrowser(draftToggle).toHaveAttribute("aria-checked", "true");
+      await draftToggle.click();
+      await attachmentMenu.click();
+      await expectBrowser(attachmentMenu).toHaveAttribute("aria-expanded", "false");
+      await expectBrowser(notice).toHaveCount(0);
+      await composer.getByRole("button", { name: "Start session", exact: true }).click();
+      const create = await gateway.waitForRequest("sessions.create", { after: refused ? 1 : 0 });
+      expect(create.params).toMatchObject({
+        message: "Keep this private plan",
+        attachments: [expect.objectContaining({ fileName: "plan.txt" })],
+      });
+      expect(create.params).not.toHaveProperty("visibility");
+    },
+  );
 
   it("aligns the sharing and Details icons in the session toolbar", async () => {
     const { page } = await openSession(ownerSessions("shared"), {

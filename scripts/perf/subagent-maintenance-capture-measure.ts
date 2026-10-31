@@ -26,6 +26,7 @@ import type { ControlledSubagentRunsReadContext } from "../../src/agents/subagen
 import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { summarizeDurationDistribution } from "../lib/perf-duration-distribution.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 import { generateTeamShapeFixture, parseTeamShapeOptions } from "./team-shape-fixture.ts";
 
@@ -165,20 +166,6 @@ function run(index: number, protectedRun = index < 60): SubagentRunRecord {
     completion: { required: true, resultText: "Synthetic retained result" },
     delivery: protectedRun ? { status: "pending" } : { status: "delivered" },
     ...(protectedRun ? {} : { cleanupCompletedAt: 400 + index }),
-  };
-}
-
-function distribution(samples: number[]) {
-  const sorted = samples.toSorted((a, b) => a - b);
-  const count = sorted.length;
-  const totalMs = sorted.reduce((sum, value) => sum + value, 0);
-  return {
-    count,
-    totalMs,
-    meanMs: count ? totalMs / count : 0,
-    maxMs: sorted.at(-1) ?? 0,
-    p95: { samples: count, ms: sorted[Math.ceil(count * 0.95) - 1] ?? null },
-    p99: { samples: count, ms: sorted[Math.ceil(count * 0.99) - 1] ?? null },
   };
 }
 
@@ -532,7 +519,7 @@ try {
     writeFileSync(profilePath, JSON.stringify(profile));
   }
   const gc = (kind?: number) =>
-    distribution(
+    summarizeDurationDistribution(
       collections
         .filter((entry) => kind === undefined || entry.kind === kind)
         .map((entry) => entry.ms),
@@ -579,7 +566,7 @@ try {
     latencyScope: mutateEvery
       ? `${flow} read and periodic committed run replacement`
       : `${flow} read`,
-    captureLatency: distribution(latency),
+    captureLatency: summarizeDurationDistribution(latency),
     elapsedMs: measuredEnd - measuredStart,
     cpuMs: (usedCpu.user + usedCpu.system) / 1000,
     threadCpuMs: (usedThreadCpu.user + usedThreadCpu.system) / 1000,

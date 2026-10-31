@@ -6,7 +6,6 @@ import path from "node:path";
 import type { DiagnosticsChannel } from "undici";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
-import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
 
 const resolveToken = vi.hoisted(() => vi.fn());
 const authenticate = vi.hoisted(() => vi.fn());
@@ -147,19 +146,6 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     });
     expect(resolveToken).not.toHaveBeenCalled();
     expect(authenticate).not.toHaveBeenCalled();
-  });
-
-  it("selects fallback for authentication and discovery errors, but not unrelated failures", () => {
-    const cases: Array<[Error, boolean]> = [
-      [new Error("Copilot user response missing endpoints.api"), true],
-      [new Error("Unexpected response from GitHub Copilot user endpoint"), true],
-      [new Error("github-copilot.model-discovery: malformed JSON response"), true],
-      [new CopilotRuntimeAuthError({ reason: "timeout", timeoutMs: 30_000 }), true],
-      [new Error("Network timeout"), false],
-    ];
-    for (const [error, expected] of cases) {
-      expect(adapter.shouldContinueAutoSelection?.(error)).toBe(expected);
-    }
   });
 });
 

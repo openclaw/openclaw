@@ -11,6 +11,7 @@ import {
   supportsClaudeInHistorySystemMessages,
   type Context,
   type Model,
+  type ToolResultMessage,
 } from "@openclaw/llm-core";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAiTransportHost } from "../host.js";
@@ -106,7 +107,7 @@ const anthropicMessageProjections = new WeakMap<
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
 
 async function convertContentBlocks(
-  content: readonly unknown[],
+  content: Readonly<ToolResultMessage["content"]>,
   model: { input: readonly string[] },
   imageBudget: AnthropicInlineImageBudget,
   profile: "provider" | "transport",
@@ -125,29 +126,21 @@ async function convertContentBlocks(
   }
   const blocks: Array<TextBlockParam | ImageBlockParam> = [];
   for (const block of content) {
-    const record = asOptionalObjectRecord(block);
-    if (!record) {
+    if (!asOptionalObjectRecord(block)) {
       continue;
     }
     const blockText = extractToolResultBlockText(block);
     if (blockText) {
       blocks.push({ type: "text", text: blockText });
     }
-    if (!isImageWithMediaPayload(record)) {
+    if (!isImageWithMediaPayload(block)) {
       continue;
     }
     const [normalizedImage] = await normalizeAnthropicInlineContent(
       [
-        {
-          type: "image" as const,
-          data: record.data,
-          mimeType:
-            typeof record.mimeType === "string"
-              ? record.mimeType
-              : profile === "provider"
-                ? "image/jpeg"
-                : "image/png",
-        },
+        typeof block.mimeType === "string"
+          ? block
+          : { ...block, mimeType: profile === "provider" ? "image/jpeg" : "image/png" },
       ],
       imageBudget,
     );

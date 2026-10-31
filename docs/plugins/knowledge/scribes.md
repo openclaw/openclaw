@@ -3,7 +3,8 @@ summary: "Knowledge scribes: conversations Knowledge starts for you that keep a 
 read_when:
   - You want Knowledge to learn from your conversations or from Memory without asking each time
   - You are turning on the scheduled consolidation of unlinked claims
-  - A scribe shows Failing or Needs reauthorization on the Scribes tab
+  - You want Granola meetings ingested into Knowledge automatically
+  - A scribe shows Failing or Conversation not found on the Scribes tab
 title: "Knowledge scribes"
 sidebarTitle: "Scribes"
 ---
@@ -14,17 +15,18 @@ to the viewed agent's store. Part of the [Knowledge plugin](/plugins/knowledge)
 guide.
 
 Open **Knowledge** in the Control UI and select the **Scribes** tab. Scribes
-that are starting, on, paused, failing, or need reauthorization are listed under
+that are starting, on, paused, failing, or whose conversation is not found are listed under
 **On**. The rest are under **Available**, including a once scribe that is done,
 which can be started again.
 
 ## The scribes
 
-| Scribe                   | Runs            | Options                                                                       | Skill                           |
-| ------------------------ | --------------- | ----------------------------------------------------------------------------- | ------------------------------- |
-| Knowledge Consolidation  | Ongoing         | Weekly or nightly                                                             | `knowledge-claim-consolidation` |
-| Learn from conversations | Once or ongoing | Active only, or active and archived; starting 30 days, 90 days, all, or today | `knowledge-ingest`              |
-| Learn from Memory        | Once            | `MEMORY.md`, daily notes, and the Dreaming diary (`DREAMS.md`)                | `knowledge-ingest`              |
+| Scribe                   | Runs            | Options                                                                          | Skill                           |
+| ------------------------ | --------------- | -------------------------------------------------------------------------------- | ------------------------------- |
+| Knowledge Consolidation  | Ongoing         | Weekly or nightly                                                                | `knowledge-claim-consolidation` |
+| Learn from conversations | Once or ongoing | Active only, or active and archived; starting 30 days, 90 days, all, or today    | `knowledge-ingest`              |
+| Learn from Granola       | Once or ongoing | Your meetings, or every meeting you can read; starting 7 days, 30 days, or today | `knowledge-meeting-ingest`      |
+| Learn from Memory        | Once            | `MEMORY.md`, daily notes, and the Dreaming diary (`DREAMS.md`)                   | `knowledge-ingest`              |
 
 - **Knowledge Consolidation** files claims that
   [maintenance](/plugins/knowledge/maintenance) left unlinked, creates pages for
@@ -39,8 +41,41 @@ which can be started again.
   conversations daily at 4:00 AM in your time zone. Conversations already
   learned from are skipped. Defaults are active conversations from the last 30
   days.
+- **Learn from Granola** turns each Granola meeting into a meeting page, updates
+  the people, companies, and projects it discusses, and saves its decisions and
+  commitments, through the [Granola plugin](#the-granola-plugin). Ongoing runs
+  check for finished meetings on weekdays at 10 AM, 2 PM, and 6 PM in your time
+  zone. Meetings already in Knowledge are skipped, and a meeting still being
+  recorded waits for a later run. It keeps a checkpoint page,
+  `Knowledge scribe checkpoint · Learn from Granola`, so an interrupted run
+  resumes. Defaults are your meetings (recorded by you or with you invited)
+  from the last 7 days.
 - **Learn from Memory** brings `memory-core` notes into Knowledge once. Memory
   itself is not changed.
+
+### The Granola plugin
+
+Learn from Granola reads meetings with the tools of the Granola plugin, which
+connects to your Granola account through Granola's MCP server. The Scribes tab
+checks the plugin and shows one of:
+
+| Shown                                    | Control              |
+| ---------------------------------------- | -------------------- |
+| Needs the Granola plugin, not installed  | **Install Granola…** |
+| Needs the Granola plugin, turned off     | **Turn on Granola…** |
+| Installed, not connected to your account | **Connect Granola…** |
+| Granola connected                        | None                 |
+
+Each control opens the plugin's page under **Plugins**, where you install it,
+turn it on, or sign in. **Set up…** stays disabled until Granola is connected.
+If the page cannot read the plugin's state (for example, without
+`operator.read`), it shows nothing and lets you start; a run without the plugin
+stops with `Scribe status: failed` and says the plugin is not connected.
+
+The scribe keeps the meeting's Granola ID (the UUID in its
+`notes.granola.ai/d/…` link) on the meeting page. It retains the meeting notes
+and the full transcript as originals; a meeting without a transcript is not
+ingested.
 
 ## Start a scribe
 
@@ -116,15 +151,15 @@ the run message, and its schedule is the scribe's schedule.
 
 ## States
 
-| State                 | Meaning                                                                                                                                        |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Available             | No scribe conversation, a conversation that never received its prompt, or an ongoing scribe that was turned off.                               |
-| Starting              | The conversation received its prompt but has not reported its status yet.                                                                      |
-| On                    | Its automation is enabled and the last run did not fail.                                                                                       |
-| Paused                | Its automation is disabled.                                                                                                                    |
-| Failing               | The last run failed, the scheduler disabled it after repeated failures, a turn reported a failure, or the start turn stopped without a status. |
-| Done                  | A once scribe finished.                                                                                                                        |
-| Needs reauthorization | The automation exists but its conversation was archived or deleted.                                                                            |
+| State                  | Meaning                                                                                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Available              | No scribe conversation, a conversation that never received its prompt, or an ongoing scribe that was turned off.                               |
+| Starting               | The conversation received its prompt but has not reported its status yet.                                                                      |
+| On                     | Its automation is enabled and the last run did not fail.                                                                                       |
+| Paused                 | Its automation is disabled.                                                                                                                    |
+| Failing                | The last run failed, the scheduler disabled it after repeated failures, a turn reported a failure, or the start turn stopped without a status. |
+| Done                   | A once scribe finished.                                                                                                                        |
+| Conversation not found | The automation exists but its conversation was archived or deleted. Repair restores an archived one or starts a new one.                       |
 
 The Scribes tab derives an ongoing scribe's state from its automation: whether
 it exists and targets the scribe's conversation, whether it is enabled, and its
@@ -138,16 +173,17 @@ summary.
 ## Controls
 
 Open a scribe for its schedule, next and last run, model, failure alert, and
-recent runs.
+recent runs. Learn from Granola also shows the Granola plugin's state as its
+source.
 
-| Control           | Effect                                                                                                                                        |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Run now           | Runs the automation immediately. If a run is already in progress, it does not start another.                                                  |
-| Pause / Resume    | Disables or enables the automation.                                                                                                           |
-| Turn off…         | Removes the automation. The conversation is kept.                                                                                             |
-| Open conversation | Opens the scribe's conversation.                                                                                                              |
-| Repair            | Restores an archived conversation, or creates one, and asks it to re-check and recreate its automation, keeping its schedule and run message. |
-| Start again…      | For a failing scribe without an automation: opens the start dialog and sends a new prompt in the same conversation.                           |
+| Control           | Effect                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Run now           | Runs the automation immediately. If a run is already in progress, it does not start another.                                                                                                                                                                                                                                                             |
+| Pause / Resume    | Disables or enables the automation.                                                                                                                                                                                                                                                                                                                      |
+| Turn off…         | Removes the automation. The conversation is kept.                                                                                                                                                                                                                                                                                                        |
+| Open conversation | Opens the scribe's conversation.                                                                                                                                                                                                                                                                                                                         |
+| Repair            | Gets the automation running again. For an archived conversation it restores the conversation and turns the automation back on, without a model turn. For a deleted conversation, or a failing scribe, it asks the scribe's conversation (a new one when deleted) to recreate its automation there, keeping its schedule and run message, and turn it on. |
+| Start again…      | For a failing scribe without an automation: opens the start dialog and sends a new prompt in the same conversation.                                                                                                                                                                                                                                      |
 
 Controls need write access. Pause, resume, and turn off are rejected if the
 automation changed since the page read it; the page shows the error, and
@@ -160,10 +196,10 @@ reopening the scribe shows its current state.
 - Conversation counts and the `MEMORY.md` size come from Gateway reads. A count
   the Gateway cannot provide is left out rather than estimated.
 - The tab reads status lines from the conversation's last 100 messages.
-- The page finds a scribe's conversation by its `Scribe · <title>` name and, for an
-  ongoing scribe, picks the one its automation targets. Renaming the conversation
-  hides it from the tab: a once scribe starts a new conversation next time, and an
-  ongoing one shows Needs reauthorization.
+- An ongoing scribe's conversation is the session its automation targets, read by
+  session key, so renaming it is safe. A scribe without an automation is found by
+  its `Scribe · <title>` name; renaming that conversation means the scribe starts a
+  new one next time.
 
 ## Related
 

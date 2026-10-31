@@ -13,7 +13,7 @@ import {
   resolveStateDir,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeWindowsNamespaceAlias } from "../infra/backup-archive-path-policy.js";
+import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import {
   resolveBackupConfigCapture,
   type BackupConfigCapture,
@@ -177,25 +177,6 @@ export function buildBackupArchiveRoot(nowMs = Date.now()): string {
 
 export function buildBackupArchiveBasename(nowMs = Date.now()): string {
   return `${buildBackupArchiveRoot(nowMs)}.tar.gz`;
-}
-
-/** Encode an absolute or relative source path into a traversal-safe archive payload path. */
-function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
-  const normalized = normalizeWindowsNamespaceAlias(sourcePath).replaceAll("\\", "/");
-  const windowsMatch = normalized.match(/^([A-Za-z]):\/(.*)$/);
-  if (windowsMatch) {
-    const drive = windowsMatch[1]?.toUpperCase() ?? "UNKNOWN";
-    const rest = windowsMatch[2] ?? "";
-    return path.posix.join("windows", drive, rest);
-  }
-  if (normalized.startsWith("/")) {
-    return path.posix.join("posix", normalized.slice(1));
-  }
-  return path.posix.join("relative", normalized);
-}
-
-export function buildBackupArchivePath(archiveRoot: string, sourcePath: string): string {
-  return path.posix.join(archiveRoot, "payload", encodeAbsolutePathForBackupArchive(sourcePath));
 }
 
 /** Resolve a backup plan from explicit paths, deduplicating assets already covered by parents. */

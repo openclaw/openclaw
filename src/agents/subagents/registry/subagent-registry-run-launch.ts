@@ -15,7 +15,6 @@ import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
-import { createOperatorInputRecoverySource } from "../../operator-run-recovery-source.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
   prepareTerminatedCollectorLaunch,
@@ -220,32 +219,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             }),
       );
       authority = await captureOperatorToolGatewayContinuationContext();
-      // Direct child turns have no spawning requester turn. Save their own admitted
-      // source before launch so a restart never depends on an absent parent claim.
-      const recoveryTarget =
-        requesterAgentId &&
-        registerParams.completionRequesterSessionId &&
-        registerParams.requesterTurnRunId
-          ? {
-              agentId: requesterAgentId,
-              sessionKey: requesterSessionKey,
-              entry: {
-                sessionId: registerParams.completionRequesterSessionId,
-                lifecycleRevision: registerParams.completionRequesterLifecycleRevision,
-                updatedAt: Date.now(),
-              },
-              sourceRunId: registerParams.requesterTurnRunId,
-            }
-          : {
-              agentId: childAgentId,
-              sessionKey: childSessionKey,
-              entry: { ...registerParams.sessionEntry, updatedAt: Date.now() },
-              sourceRunId: runId,
-            };
-      const operatorRecoverySource = createOperatorInputRecoverySource({
-        ...recoveryTarget,
-        authority: authority?.operatorAuthority,
-      });
       const assertCurrent = () => {
         options.assertCurrent?.();
         authority?.assertCurrent();
@@ -333,7 +306,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                   )
                 : undefined,
           });
-          entry.operatorRecoverySource = operatorRecoverySource;
           entry.requesterStorePath =
             previous?.requesterStorePath ??
             resolvePhysicalSessionStorePath(
@@ -349,9 +321,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               },
               cfg,
             );
-          if (registerParams.queued) {
-            entry.queuedLaunch = undefined;
-          }
           const postimages = this.planSupersededKillReconciliations(rows, entry);
           postimages.set(runId, entry);
           plannedEntry = entry;
@@ -385,7 +354,11 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                 ),
               });
               if (authority && !registerParams.collect) {
-                subagentRuns.bindCompletionAuthority(entry, authority);
+                subagentRuns.bindCompletionAuthority(
+                  entry,
+                  authority,
+                  options.requesterRunInstance,
+                );
                 custodyTransferred = true;
               }
             } finally {
@@ -423,7 +396,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         await registerRequiredQueuedSubagent({
           context,
           entry: published,
-          queuedLaunch: registerParams.queuedLaunch,
           manager: this.options,
           activate,
           ...options,
@@ -534,7 +506,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           typeof current.execution.startedAt === "number" &&
           current.swarmLaunchPending === true;
         const terminalBeforeAcceptance =
-          current.collectorCompletion !== undefined && current.queuedLaunch !== undefined;
+          current.collectorCompletion !== undefined && current.swarmLaunchPending === true;
         if (
           current.killIntent ||
           current.killReconciliation ||
@@ -563,7 +535,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             status: "running",
             acceptedAt: Date.now(),
             lifecycleGeneration: acceptedLifecycleGeneration,
-            restartRecovery: undefined,
             suppressSessionEffects: undefined,
             startedAt,
           };
@@ -571,7 +542,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             typeof startedAt === "number" ? (entry.sessionStartedAt ?? startedAt) : undefined;
         }
         entry.swarmLaunchPending = false;
-        entry.queuedLaunch = undefined;
         bindSubagentRunRuntimeKey(entry, getSubagentRunRuntimeKey(current));
         const postimages = new Map<string, SubagentRunRecord | null>([[nextRunId, entry]]);
         if (selected.runId !== nextRunId) {

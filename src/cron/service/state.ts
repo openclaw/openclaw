@@ -56,6 +56,8 @@ export type { CronAddOptions } from "./job-options.types.js";
 
 /** Transient internal context delivered beside, but never projected into, a CronEvent. */
 type CronEventContext = {
+  runNotStarted?: boolean;
+  quietTrigger?: boolean;
   failureNotificationDetail?: CronFailureNotificationDetail;
 };
 
@@ -206,6 +208,8 @@ export type CronServiceDeps = {
       expectedTarget?: SessionEventTarget;
       createIfMissing?: true;
       assertAcceptanceCurrent?: () => void;
+      /** The job a notice is about; its turn acts for that job's requester. */
+      jobId?: string;
     },
   ) => void | Promise<{ ok: true } | { ok: false; error: string }>;
   deferSessionEvent?: (

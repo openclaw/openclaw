@@ -588,6 +588,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
         expect(observations.nativeActions).toEqual([]);
         expect(diagnostics).toContain("operator-owned");
       } else {
+        expect(diagnostics).toContain("systemd 254+");
         expect(observations.unit).toContain(
           `ExecStart=${selectedNode === "cli" ? process.execPath : selectedNode} `,
         );

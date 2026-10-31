@@ -10,15 +10,12 @@ import {
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import { getRuntimeConfigCapture } from "../config/runtime-config-capture-state.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ProviderModelRouteAuthRequirement,
   ProviderModelRouteCandidate,
 } from "../plugin-sdk/provider-model-types.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
-import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import {
   listExternalCliSyncProviderIds,
   resolveExternalCliAuthProfiles,
@@ -54,6 +51,9 @@ import { createCliRuntimeModelAuthEvaluator } from "./model-auth-availability.cl
 import { createRuntimeCredentialOverlay } from "./model-auth-availability.runtime-overlay.js";
 import type {
   ModelAuthAvailability,
+  CreateModelAuthAvailabilityResolverParams,
+  AuthTarget,
+  AuthSourceEvaluation,
   ModelAuthAvailabilityEvidence,
   ModelAuthAvailabilityEvaluation,
   ModelAuthAvailabilityRef,
@@ -76,8 +76,8 @@ import {
 import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
 import { resolveSelectedModelCredential } from "./model-auth-selected-credential.js";
 import { hasAuthoredProviderRequestParams } from "./model-extra-params.js";
+import { resolveNativeCommandAuthRoute } from "./model-native-command-auth.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
-import type { CliRuntimeAuthDirectories } from "./model-runtime-aliases.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import {
@@ -111,49 +111,6 @@ const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 const EXTERNAL_CLI_REFRESH_PROVIDER_IDS = new Set(
   listExternalCliSyncProviderIds().map(normalizeProviderIdForAuth),
 );
-
-type CreateModelAuthAvailabilityResolverParams = {
-  evaluatePluginAuth?: (
-    provider: string,
-    ref: ModelAuthAvailabilityRef,
-  ) => ModelAuthAvailabilityEvaluation;
-  cfg: OpenClawConfig;
-  preparedCliRuntimeAuthDirectories?: CliRuntimeAuthDirectories;
-  agentId?: string;
-  authStore: AuthProfileStore;
-  agentDir?: string;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  syntheticAuthProviderRefs?: readonly string[];
-  metadataSnapshot?: PluginMetadataSnapshot;
-  externalCliProviderIds?: readonly string[];
-  routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
-  preparedRuntimeAuthStore?: AuthProfileStore;
-  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
-  preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
-  preparedSyntheticAuthComplete?: boolean;
-  /**
-   * Ids the credential's own ready account listing returned, including hidden rows; absent when
-   * that credential has no ready listing. Another account's listing says nothing about this one.
-   */
-  accountListedModelIds?: (
-    provider: string,
-    profileId: string | undefined,
-  ) => ReadonlySet<string> | undefined;
-};
-
-type AuthTarget = ModelAuthAvailabilityRef & {
-  authRequirement?: ProviderModelRouteAuthRequirement;
-};
-type AuthSourceEvaluation = Pick<
-  ModelAuthAvailabilityEvaluation,
-  | "availability"
-  | "selectedAuthMode"
-  | "evidence"
-  | "selectedProfileId"
-  | "unavailableReason"
-  | "unavailableUntil"
->;
 
 function modeAllowed(
   provider: string,
@@ -860,6 +817,9 @@ export function createModelAuthAvailabilityResolver(
     ref: ModelAuthAvailabilityRef = {},
   ): AuthSourceEvaluation => {
     const provider = normalizeProviderIdForAuth(rawProvider);
+    if (resolveMergedModelProviderConfig(params.cfg, provider)?.auth === "native-command") {
+      return { availability: false, evidence: "runtime" };
+    }
     if (isPluginAuthProvider(provider)) {
       return (
         params.evaluatePluginAuth?.(provider, ref) ?? {
@@ -899,6 +859,36 @@ export function createModelAuthAvailabilityResolver(
     ref: ModelAuthAvailabilityRef = {},
   ): ModelAuthAvailabilityEvaluation => {
     const provider = normalizeProviderIdForAuth(rawProvider);
+    const commandAuth = resolveNativeCommandAuthRoute({
+      config: params.cfg,
+      provider,
+      modelId: ref.modelId,
+      api: ref.api,
+      baseUrl: ref.baseUrl,
+      agentId: params.agentId,
+      workspaceDir: params.workspaceDir,
+      metadataSnapshot: params.metadataSnapshot,
+    });
+    if (commandAuth) {
+      const available =
+        commandAuth.supported &&
+        ref.runtimeId === commandAuth.runtimeId &&
+        synthetic.has(commandAuth.runtimeId) &&
+        !ref.requiredProfileId &&
+        !ref.pinnedProfileId &&
+        !ref.preferredProfileId &&
+        !ref.observedRoutes?.some(
+          (route) => route.api !== commandAuth.api || route.baseUrl !== commandAuth.baseUrl,
+        );
+      return {
+        availability: available,
+        availabilityAuthoritative: true,
+        routeResolution: null,
+        selectedAuthMode: "native-command",
+        evidence: "runtime",
+        ...(available ? { runtimeAuth: { id: "codex", source: "native" } as const } : {}),
+      };
+    }
     if (isPluginAuthProvider(provider)) {
       return {
         ...resolveProviderEvaluation(provider, ref),
@@ -1350,7 +1340,11 @@ export function createModelAuthAvailabilityResolver(
         runtimeId = resolveAgentHarnessPolicy(policyParams, configuredRuntimePolicy).runtime;
       }
       const evaluation = evaluateModelAuth(provider, { ...ref, runtimeId });
-      if (isPluginAuthProvider(provider) || ref.requiredProfileId?.trim()) {
+      if (
+        evaluation.selectedAuthMode === "native-command" ||
+        isPluginAuthProvider(provider) ||
+        ref.requiredProfileId?.trim()
+      ) {
         return evaluation;
       }
       const runtimeEvaluation = evaluateCliRuntimeAuth(

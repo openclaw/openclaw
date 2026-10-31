@@ -45,7 +45,12 @@ Remembering and extraction are best effort; read back what was saved.
   claims. Useful decisions, commitments, beliefs, and timeline events become
   claim records.
 - **One event, many entities.** A meeting event is one dated claim that lists
-  every relevant entity, plus dated profile prose, not duplicate event records.
+  every relevant entity, not duplicate event records.
+- **Source notes, not Timeline prose.** What a source says about an entity is
+  the body of one relationship between them: `attended` (participant to meeting)
+  or `discusses` (source to entity). Entity Timelines are derived from these
+  notes and the source's claims; pages have no Timeline section, and agents
+  retire older written ones when they edit the page.
 - **Typed edges need support.** Co-mention is not evidence of employment,
   ownership, or attendance. `attended` runs from participant to meeting.
 - **Reconcile across sources.** Reuse duplicate imports, add evidence, link

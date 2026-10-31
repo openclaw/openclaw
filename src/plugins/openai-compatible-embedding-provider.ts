@@ -11,7 +11,6 @@ import {
 } from "../../packages/memory-host-sdk/src/host/embeddings-debug.js";
 import { extractEmbeddingUsage } from "../../packages/memory-host-sdk/src/host/embeddings-remote-fetch.js";
 import { withRemoteHttpResponse } from "../../packages/memory-host-sdk/src/host/remote-http.js";
-import { MEMORY_SEARCH_DEADLINE_CONTROL } from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
 import {
   createProviderHttpError,
   readProviderJsonResponse,
@@ -32,12 +31,13 @@ import {
   OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
   OPENAI_COMPATIBLE_MODEL_APIS,
 } from "./embedding-provider-config.js";
-import type {
-  EmbeddingInput,
-  EmbeddingProvider,
-  EmbeddingProviderAdapter,
-  EmbeddingProviderCallOptions,
-  EmbeddingProviderCreateOptions,
+import {
+  EMBEDDING_DEADLINE_CONTROL,
+  type EmbeddingInput,
+  type EmbeddingProvider,
+  type EmbeddingProviderAdapter,
+  type EmbeddingProviderCallOptions,
+  type EmbeddingProviderCreateOptions,
 } from "./embedding-provider-types.js";
 
 const EMBEDDING_ERROR_BODY_MAX_BYTES = 8 * 1024;
@@ -68,10 +68,6 @@ type ConfiguredEmbeddingProvider = Partial<
 type ResolvedConfiguredEmbeddingProvider = {
   providerId: string;
   config: ConfiguredEmbeddingProvider;
-};
-
-type LocalServiceAwareEmbeddingOptions = EmbeddingProviderCreateOptions & {
-  acquireLocalService?: AcquireConfiguredProviderLocalService;
 };
 
 function normalizeBaseUrl(value: string | undefined): string {
@@ -361,7 +357,7 @@ async function postEmbeddingRequest(params: {
   callOptions?: EmbeddingProviderCallOptions;
 }): Promise<number[][]> {
   const { client, input, callOptions } = params;
-  const deadlineControl = callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL];
+  const deadlineControl = callOptions?.[EMBEDDING_DEADLINE_CONTROL];
   const errorPrefix = "openai-compatible embeddings failed";
   const context = `${client.providerId} embeddings failed (model: ${client.model}, batch size: ${input.length})`;
   const inputType = resolveRequestInputType(client, callOptions?.inputType);
@@ -484,7 +480,6 @@ async function createOpenAICompatibleEmbeddingClient(
       headers.authorization = `Bearer ${providerApiKey}`;
     }
   }
-  const localServiceOptions = options as LocalServiceAwareEmbeddingOptions;
   return {
     providerId,
     baseUrl,
@@ -508,7 +503,7 @@ async function createOpenAICompatibleEmbeddingClient(
             baseUrl,
             headers,
           },
-          acquireLocalService: localServiceOptions.acquireLocalService,
+          acquireLocalService: options.acquireLocalService,
         }
       : {}),
     ...(options.dimensions !== undefined

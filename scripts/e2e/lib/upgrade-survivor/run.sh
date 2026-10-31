@@ -367,6 +367,7 @@ const summary = {
   packageActivationRecovery: readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "package-activation-recovery.json")),
   nativeAssignmentEligibility: readArtifact("native-assignment-eligibility.json"),
   nativeAssignments: readArtifact("native-assignment-proof.json", "legacy-operator-state"),
+  deferredSchemaDoctor: readArtifact("deferred-schema-doctor.json", "legacy-operator-state"),
   pluginPolicy: readArtifact("webhooks-only-policy/result.json", "legacy-operator-state"),
   nativePluginUi: readArtifact("native-ui-candidate-proof.json", "legacy-operator-state"),
   nativePluginUiOptOut: readArtifact("native-ui-opt-out/native-ui-candidate-proof.json", "legacy-operator-state"),
@@ -583,7 +584,7 @@ trap 'on_signal SIGINT 130' INT
 trap 'on_signal SIGTERM 143' TERM
 
 phase() {
-  local name="$1" phase_status previous_phase="$CURRENT_PHASE"
+  local name="$1" phase_status previous_phase="$CURRENT_PHASE" phase_started="$SECONDS"
   shift
   CURRENT_PHASE="$name"
   echo "==> upgrade-survivor:$name" >&3
@@ -591,6 +592,8 @@ phase() {
   "$@"
   phase_status=$?
   [ "$phase_status" -eq 0 ] || return "$phase_status"
+  # Timed-out containers lose phases.jsonl; the streamed log keeps the budget breakdown.
+  echo "==> upgrade-survivor:$name passed $((SECONDS - phase_started))s (total ${SECONDS}s)" >&3
   json_event "$name" passed
   CURRENT_PHASE="$previous_phase"
 }
@@ -1104,6 +1107,23 @@ assert_schema_outcome() {
     "$ARTIFACT_ROOT/schema-before.json" "$update_exit_code" "$installed_version" "$update_outcome" \
     "$ARTIFACT_ROOT/schema-after.json"
 }
+
+observe_deferred_schema_doctor() (
+  local observed doctor_status=0
+  umask 077
+  observed="$(node scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs doctor-before \
+    "$ARTIFACT_ROOT/schema-before.json" "$ARTIFACT_ROOT/deferred-schema-private.json")" || return "$?"
+  if [ "$observed" = "observed" ]; then
+    # Informational findings intentionally exit 1; the complete JSON owns acceptance.
+    openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --lint \
+      --only core/doctor/database-engine --severity-min info --json \
+      >"$ARTIFACT_ROOT/deferred-schema-doctor-private.json" \
+      2>"$ARTIFACT_ROOT/deferred-schema-doctor-private.err" || doctor_status=$?
+  fi
+  node scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs doctor-after \
+    "$ARTIFACT_ROOT/deferred-schema-private.json" "$doctor_status" \
+    "$ARTIFACT_ROOT/deferred-schema-doctor-private.json" "$ARTIFACT_ROOT/deferred-schema-doctor.json"
+)
 
 start_formerly_bundled_doctor() {
   echo "==> upgrade-survivor:formerly-bundled-doctor" >&3
@@ -1669,6 +1689,9 @@ update_candidate() {
   # classifying the result; an unreadable package must not retain the baseline.
   installed_version="$(read_installed_version)" || installed_version=""
   update_exit_code="$update_status"
+  node -e 'const steps = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).steps ?? [];
+    console.log(`update steps: ${steps.map((s) => `${s.name}=${Math.round(s.durationMs / 1000)}s`).join(", ")}`);' \
+    "$update_json" >&3 2>/dev/null || true
   # A nonzero command never runs the JSON assertion and must not be labeled as one.
   if [ "$after_repair" = "1" ] && [ "$update_status" -eq 0 ]; then
     CURRENT_PHASE="recovery-update-result-assertion"
@@ -2837,6 +2860,14 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase seed-legacy-doctor-repairs node scripts/e2e/lib/upgrade-survivor/legacy-operator-doctor-repairs.mjs seed
 fi
 phase update-candidate update_candidate_for_install_mode
+if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$UPDATE_RESTART_MODE" = "manual" ] && [ "$baseline_version" = "2026.9.2" ]; then
+  if [ "$CANDIDATE_KIND" = "tarball" ] && [ -n "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" ]; then
+    # Observe the shipped unfenced updater's natural header before any candidate probe.
+    phase observe-deferred-schema-doctor observe_deferred_schema_doctor
+  else
+    echo "Skipping deferred-schema Doctor witness: a selected tarball source is required." >&3
+  fi
+fi
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase assert-legacy-doctor-repairs node scripts/e2e/lib/upgrade-survivor/legacy-operator-doctor-repairs.mjs assert
 fi

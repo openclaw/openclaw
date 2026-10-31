@@ -33,7 +33,7 @@ export function createRefreshChatPane(client?: GatewayBrowserClient) {
 }
 
 export type TestChatPane = Omit<BaseTestChatPane, "loadOlderMessages"> & {
-  loadOlderMessages: () => Promise<boolean>;
+  loadOlderMessages: (readerIntent?: boolean) => Promise<boolean>;
   stagedOlder: { page: unknown; load: Promise<void> | null };
   replyMessageStatus: (messageId: string) => string | undefined;
   openReplyMessage: (messageId: string) => void;
@@ -87,6 +87,7 @@ function createPaginatedChatPane(request: ReturnType<typeof vi.fn>, firstSeq: nu
   result.state.chatHistoryPagination = {
     hasMore: true,
     nextOffset: 2,
+    olderCursor: "older-2",
     totalMessages: firstSeq + 1,
   };
   return result;
@@ -106,14 +107,14 @@ export function stagedPagesRequest(overrides: Record<number, () => unknown> = {}
     pages[offset] ??= () => ({
       messages: [7 - offset, 8 - offset].map((seq) => nativeHistoryMessage(seq)),
       hasMore: offset < 6,
-      ...(offset < 6 ? { nextOffset: offset + 2 } : {}),
+      ...(offset < 6 ? { olderCursor: `older-${offset + 2}` } : {}),
       totalMessages: 8,
     });
   }
-  return vi.fn(async (_method: string, params: { offset?: number }) => {
-    const page = pages[params.offset ?? -1];
+  return vi.fn(async (_method: string, params: { cursor?: string }) => {
+    const page = pages[Number(params.cursor?.replace("older-", ""))];
     if (!page) {
-      throw new Error(`no scripted page for offset ${String(params.offset)}`);
+      throw new Error(`no scripted page for cursor ${String(params.cursor)}`);
     }
     return page();
   });

@@ -182,9 +182,27 @@ export async function hydrateChatHistory(
     if (!isCurrent()) {
       return undefined;
     }
-    if (isHistoryCursor(response) && response.kind === "reset") {
+    const cursorReset = isHistoryCursor(response) && response.kind === "reset";
+    if (cursorReset) {
       clearHistoryCursor(state, sessionKey, requestAgentId);
       response = await request();
+      if (!isCurrent()) {
+        return undefined;
+      }
+    }
+    // Only a Stop-style cursor reset can cut a transcript this pane shows from
+    // its start; a window reset asks for a fresh window instead.
+    if (cursorReset && !isHistoryCursor(response) && !requests.windowReset?.isCurrent()) {
+      const { fillHeldHistoryGap } = await import("./chat-history-held-gap.ts");
+      response = await fillHeldHistoryGap(
+        state,
+        client,
+        sessionKey,
+        requestAgentId,
+        response,
+        isCurrent,
+        read.signal,
+      );
       if (!isCurrent()) {
         return undefined;
       }
@@ -302,18 +320,21 @@ export async function hydrateChatHistory(
       ? res.sessionInfo?.activeLeafEntryId?.trim() || null
       : (previousDisplayedLeafEntryId ?? null);
     const retainsTranscriptIdentity =
+      !requests.windowReset?.isCurrent() &&
       res.windowReset !== true &&
       (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId) &&
       (previousDisplayedLeafEntryId === undefined ||
         previousDisplayedLeafEntryId === nextDisplayedLeafEntryId);
-    const reconciledHistory = reconcileHistoryTail({
-      nextMessages: visibleMessages,
-      nextPagination,
-      nextSessionId,
-      previousMessages: retainsTranscriptIdentity ? previousTerminalMessages : [],
-      previousPagination,
-      previousSessionId,
-    });
+    const reconciledHistory = retainsTranscriptIdentity
+      ? reconcileHistoryTail({
+          nextMessages: visibleMessages,
+          nextPagination,
+          nextSessionId,
+          previousMessages: previousTerminalMessages,
+          previousPagination,
+          previousSessionId,
+        })
+      : null;
     const authoritativeMessages = reconciledHistory?.messages ?? visibleMessages;
     const scope = readChatSessionProjectionScope(state, {
       sessionKey,
@@ -346,6 +367,7 @@ export async function hydrateChatHistory(
       state.chatDisplayedLeafEntryId = nextDisplayedLeafEntryId;
     }
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
+    delete requests.windowReset;
     state.currentSessionId = nextSessionId;
     applyChatPendingInputs(state, res.pendingInputs, {
       queriedRunIds: inputRunIds,

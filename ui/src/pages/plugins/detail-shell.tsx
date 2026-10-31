@@ -41,7 +41,6 @@ export function renderPluginDetailShell(props: {
   backLabel: string;
   onBack: () => void;
   titleAction?: JSX.Element;
-  notice?: JSX.Element;
   identity: JSX.Element | undefined;
   icon?: JSX.Element;
   readme?: JSX.Element;
@@ -73,7 +72,6 @@ export function renderPluginDetailShell(props: {
           {props.summary ? (
             <p class="plugin-catalog-detail__summary">{props.summary}</p>
           ) : undefined}
-          {props.notice}
           <div class="plugin-catalog-detail__actions">{props.titleAction ?? undefined}</div>
         </div>
       </div>

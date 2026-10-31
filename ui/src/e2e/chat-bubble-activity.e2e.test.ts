@@ -148,39 +148,13 @@ suite.define(() => {
       ]);
       expect(await chat.locator(".chat-bubble-dots").count()).toBe(0);
       expect(await chat.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-      const work = chat.locator(".chat-work-group > .chat-activity-group__summary");
-      await browserExpect(work).toHaveCount(1);
-      await browserExpect(work.locator(".chat-activity-group__label")).toHaveText("Worked");
-      await browserExpect(work).toHaveAttribute("aria-expanded", "false");
-      expect((await work.boundingBox())!.height).toBeLessThanOrEqual(36);
-      await work.click();
-      await browserExpect(work).toHaveAttribute("aria-expanded", "true");
-      // The in-place chunk reveals the tool group's own raw-details disclosure.
-      const activity = chat.locator(
-        ".chat-activity-group:not(.chat-work-group) > .chat-activity-group__summary",
-      );
-      await browserExpect(activity).toHaveCount(1);
-      await browserExpect(activity).toHaveAttribute("aria-expanded", "false");
-      await browserExpect(chat.locator(".chat-tool-msg-summary")).toHaveCount(0);
+      // Bubble mode keeps narration in place: one activity disclosure, no completed-work rollup.
+      await browserExpect(chat.locator(".chat-work-group")).toHaveCount(0);
+      const activity = chat.locator(".chat-activity-group > button").first();
+      await browserExpect(activity).toHaveText(/operation|Read|Raw details/);
+      expect((await activity.boundingBox())!.height).toBeLessThanOrEqual(36);
       await activity.click();
-      await browserExpect(activity).toHaveAttribute("aria-expanded", "true");
-      const tool = chat.locator(".chat-tool-msg-summary");
-      await browserExpect(tool).toHaveCount(1);
-      await browserExpect(tool).toBeVisible();
-      await tool.click();
-      await browserExpect(
-        chat.getByText("Layout inspection complete.", { exact: true }),
-      ).toBeVisible();
-      await work.click();
-      await browserExpect(work).toHaveAttribute("aria-expanded", "false");
-      await browserExpect(chat.locator(".chat-tool-msg-summary")).toHaveCount(0);
-      for (const text of [
-        "I’ll check the spacing first.",
-        "The layout now has room to breathe.",
-        "The second message keeps its rounded corners.",
-      ]) {
-        await browserExpect(chat.getByText(text, { exact: true })).toBeVisible();
-      }
+      await browserExpect(chat.locator(".chat-tool-msg-summary").first()).toBeVisible();
     });
   });
 

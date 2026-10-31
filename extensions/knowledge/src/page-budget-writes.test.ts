@@ -126,6 +126,8 @@ it("rejects page growth on every prose path, never gates claims, and lets oversi
     ["Timeline", 20010, 10013],
   ]);
   expect(grown.message).toMatch(/knowledge_extract_section/);
+  expect(grown.message).toMatch(/Never extract a written Timeline section/);
+  expect(grown.message).toMatch(/dated event claim for every other entry/);
   expect((await f.call("mutation", { requestId: grown.requestId })).receipt).toBe(null);
   const big = "b".repeat(PAGE_BUDGET_CHARS + 1);
   const left = await f.save("Sam", "person", "s".repeat(13000)),
@@ -155,6 +157,8 @@ it("rejects page growth on every prose path, never gates claims, and lets oversi
   ]) {
     expect(result.state).toBe("rejected");
   }
+  // Pages without a written Timeline get no Timeline advice.
+  expect((await f.save("Too big again", "concept", big)).message).not.toMatch(/Timeline/);
   expect(await f.file(atlas.path)).toBe(bytes);
 
   // Facts about an oversized page are always saved as claims.

@@ -24,16 +24,12 @@ import {
   logDecisionEvaluation,
   type DecisionEvaluationFacts,
 } from "./diagnostics.js";
-import type {
-  DecisionBatchV2,
-  DecisionEvaluateOptionsV2,
-  DecisionOutcomeV2,
-  DecisionProviderV2,
-} from "./types-v2.js";
+import type { DecisionEvaluateOptionsV2 } from "./execution-types.js";
+import type { DecisionProviderV2, DecisionProviderV1 } from "./provider-types.js";
+import type { DecisionBatchV2, DecisionOutcomeV2 } from "./types-v2.js";
 import type {
   DecisionBatch,
   DecisionOutcome,
-  DecisionProviderV1,
   ProviderFailureReason,
   UnavailableReason,
 } from "./types.js";
@@ -238,53 +234,7 @@ export class DecisionProviderHost {
     };
   }
 
-  evaluate(
-    submitted: DecisionBatch,
-    options: Options,
-    model: string,
-    config: OpenClawConfig,
-    registry: PluginRegistry,
-    consumerId?: string,
-    isAdmissible?: () => boolean,
-    onPreparedBilling?: (facts: PreparedDecisionBilling) => void,
-  ): Promise<DecisionOutcome> {
-    return this.evaluateVersion(
-      submitted,
-      options,
-      model,
-      config,
-      registry,
-      1,
-      consumerId,
-      isAdmissible,
-      onPreparedBilling,
-    ) as Promise<DecisionOutcome>; // SAFETY: Version 1 dispatch pairs this V1 batch with a V1 outcome.
-  }
-
-  evaluateV2(
-    submitted: DecisionBatchV2,
-    options: Options,
-    model: string,
-    config: OpenClawConfig,
-    registry: PluginRegistry,
-    consumerId?: string,
-    isAdmissible?: () => boolean,
-    onPreparedBilling?: (facts: PreparedDecisionBilling) => void,
-  ): Promise<DecisionOutcomeV2> {
-    return this.evaluateVersion(
-      submitted,
-      options,
-      model,
-      config,
-      registry,
-      2,
-      consumerId,
-      isAdmissible,
-      onPreparedBilling,
-    ) as Promise<DecisionOutcomeV2>; // SAFETY: Version 2 dispatch pairs this V2 batch with a V2 outcome.
-  }
-
-  private async evaluateVersion(
+  async evaluate(
     submitted: Batch,
     options: Options,
     model: string,
@@ -395,19 +345,23 @@ export class DecisionProviderHost {
         // Await physical settlement. A callback that ignores abort keeps its native lease
         // and is fenced by normal failed-drain recovery, never detached as "disposed".
         let outcome;
+        const provider = this.provider;
         const v1Batch =
           version === 1
             ? (submitted as DecisionBatch) // SAFETY: The V1 entry point supplies a V1 batch for version 1.
-            : decisionBatchV2ToV1(
-                submitted as DecisionBatchV2, // SAFETY: The V2 entry point supplies a V2 batch for version 2.
-              );
+            : provider.contractVersion === 1
+              ? decisionBatchV2ToV1(
+                  submitted as DecisionBatchV2, // SAFETY: The V2 entry point supplies a V2 batch for version 2.
+                )
+              : undefined;
         const v2Batch =
           version === 2
             ? (submitted as DecisionBatchV2) // SAFETY: The V2 entry point supplies a V2 batch for version 2.
-            : decisionBatchV1ToV2(
-                submitted as DecisionBatch, // SAFETY: The V1 entry point supplies a V1 batch for version 1.
-              );
-        const provider = this.provider;
+            : provider.contractVersion === 2
+              ? decisionBatchV1ToV2(
+                  submitted as DecisionBatch, // SAFETY: The V1 entry point supplies a V1 batch for version 1.
+                )
+              : undefined;
         if (
           (provider.contractVersion === 1 &&
             (!v1Batch || (options.reasoning !== undefined && options.reasoning !== "auto"))) ||
@@ -415,9 +369,11 @@ export class DecisionProviderHost {
         ) {
           return this.unavailable("unsupported-input");
         }
-        // Keep offered questions separate from provider-mutated input for both contracts.
-        const offeredV1 = v1Batch ? structuredClone(v1Batch) : undefined;
-        const offeredV2 = v2Batch ? structuredClone(v2Batch) : undefined;
+        // V1 validation and cross-version conversion need the executor's original questions.
+        // Same-version V2 validation retains its snapshot in executePreparedDecision.
+        const offeredV1 =
+          provider.contractVersion === 1 && v1Batch ? structuredClone(v1Batch) : undefined;
+        const offeredV2 = version === 1 && v2Batch ? structuredClone(v2Batch) : undefined;
         const admissible = () => {
           observedInterruption ??= interrupted();
           return observedInterruption === undefined;

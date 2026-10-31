@@ -14,7 +14,7 @@ import type {
   SessionActorReducer,
 } from "./session-actor-contract.js";
 import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 // mock-isolation: Actor ownership proof must not schedule unrelated background maintenance.
@@ -43,10 +43,9 @@ type Completion = Extract<Mutation, { type: "session.actor.completeTurn" }>;
 function completion(
   f: Fixture,
   commandId: string,
-  input: Pick<
-    Completion["input"],
-    "reducers" | "activitySummary" | "pendingFinalDelivery" | "restartClaimCleanup"
-  > & { phaseId?: string },
+  input: Pick<Completion["input"], "reducers" | "activitySummary" | "pendingFinalDelivery"> & {
+    phaseId?: string;
+  },
 ): Completion {
   const before = f.read();
   return {
@@ -60,7 +59,7 @@ function completion(
         sessionId: f.scope.sessionId,
         lifecycleRevision: before.entry!.lifecycleRevision ?? null,
         writerRunId: before.entry!.activeWriterRunId,
-        expectedState: buildRestartRecoveryExpectedState(before.entry!),
+        expectedState: buildSessionTranscriptTurnExpectedState(before.entry!),
       },
       ...input,
     },
@@ -88,15 +87,12 @@ function recap(
   };
 }
 
-it("commits final custody, recap, usage, and claim cleanup together across rollback and restart", async () => {
+it("commits final custody, recap, usage, together across rollback and restart", async () => {
   await withActor(async (f) => {
     f.writeEntry({
       ...f.nativeEntry()!,
       lifecycleRevision: "completion-lifecycle",
       activeWriterRunId: "writer",
-      restartRecoveryDeliveryRunId: "recovery",
-      restartRecoveryDeliverySourceRunId: "source",
-      restartRecoveryRuns: [{ runId: "writer", lifecycleGeneration: "generation" }],
     });
     f.read();
     f.patchEntry({
@@ -120,18 +116,6 @@ it("commits final custody, recap, usage, and claim cleanup together across rollb
     const command = completion(f, "complete-with-cleanup", {
       activitySummary,
       pendingFinalDelivery: pending,
-      restartClaimCleanup: {
-        kind: "restart-claim-clear",
-        expected: {
-          sessionId: f.scope.sessionId,
-          lifecycleRevision: before.entry!.lifecycleRevision,
-        },
-        sessionId: f.scope.sessionId,
-        recoveryRunId: "recovery",
-        recoverySourceRunId: "source",
-        executionRunId: "writer",
-        executionGeneration: "generation",
-      },
       reducers: [{ kind: "group-intro", needsSystemIntro: false }, usageReducer],
     });
     await f.prepare(command);
@@ -167,14 +151,10 @@ it("commits final custody, recap, usage, and claim cleanup together across rollb
       pendingFinalDelivery: pending,
       label: "entry owner committed",
       groupActivationNeedsSystemIntro: false,
-      restartRecoveryTerminalRunIds: ["source"],
       activitySummary,
       inputTokens: 12,
       outputTokens: 4,
     });
-    expect(after?.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(after?.restartRecoveryDeliverySourceRunId).toBeUndefined();
-    expect(after?.restartRecoveryRuns).toBeUndefined();
   });
 });
 

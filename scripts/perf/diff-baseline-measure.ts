@@ -11,12 +11,13 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -79,9 +80,6 @@ const read = async () => {
   assert.equal(result.additions, 0);
   assert.equal(result.deletions, 0);
 };
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 const inspector = new Session();
 try {
   for (let index = 0; index < 5; index++) {
@@ -118,7 +116,7 @@ try {
       p50Ms: samples[Math.ceil(iterations * 0.5) - 1],
       p99Ms: samples[Math.ceil(iterations * 0.99) - 1],
       processCpuMsPerDiff: (cpu.user + cpu.system) / 1000 / iterations,
-      allocatedBytesPerDiff: profile ? allocated(profile.head) / iterations : undefined,
+      allocatedBytesPerDiff: profile ? sumSampledHeapBytes(profile.head) / iterations : undefined,
       memory: process.memoryUsage(),
     }),
   );

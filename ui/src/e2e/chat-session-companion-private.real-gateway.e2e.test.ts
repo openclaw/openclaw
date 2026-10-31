@@ -124,6 +124,7 @@ const suite = createControlUiE2eSuite({
     try {
       instance = await createOpenClawTestInstance({
         name: "private-side-chat-real-gateway",
+        entrypoint: ["dist/index.js"],
         env: { VITEST: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
         config: {
           gateway: {

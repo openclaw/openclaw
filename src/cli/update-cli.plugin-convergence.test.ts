@@ -379,53 +379,41 @@ describe("update-cli", () => {
     },
   );
 
-  it.each(["disabled after failure", "ClawHub blocked"] as const)(
-    "reports actionable skipped plugin updates: %s",
-    async (kind) => {
-      const blocked = kind === "ClawHub blocked";
-      const trustWarning =
-        "╭─ BLOCKED - ClawHub flagged this release as malicious ─╮\n" +
-        "│ • Security scan: malicious                           │\n" +
-        "╰──────────────────────────────────────────────────────╯";
-      if (!blocked) {
-        update.mockGitUpdateAfterMutation();
-        vi.mocked(update.resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
-          "/tmp/openclaw-updated-entry.mjs",
-        );
-      }
-      mockNpmPluginOutcomes(
-        [
-          {
-            pluginId: "demo",
-            status: "skipped",
-            ...(blocked ? { code: "clawhub_download_blocked", warning: trustWarning } : {}),
-            message: blocked
-              ? "Skipped demo ClawHub update: ClawHub blocked this release; update was not started. Existing installed plugin left unchanged."
-              : 'Disabled "demo" after plugin update failure; OpenClaw will continue without it. Failed to update demo: registry timeout',
-          },
-        ],
-        !blocked,
-      );
-      vi.mocked(update.defaultRuntime.writeJson).mockClear();
+  it("reports actionable ClawHub blocked plugin updates", async () => {
+    const trustWarning =
+      "╭─ BLOCKED - ClawHub flagged this release as malicious ─╮\n" +
+      "│ • Security scan: malicious                           │\n" +
+      "╰──────────────────────────────────────────────────────╯";
+    mockNpmPluginOutcomes(
+      [
+        {
+          pluginId: "demo",
+          status: "skipped",
+          code: "clawhub_download_blocked",
+          warning: trustWarning,
+          message:
+            "Skipped demo ClawHub update: ClawHub blocked this release; update was not started. Existing installed plugin left unchanged.",
+        },
+      ],
+      false,
+    );
+    vi.mocked(update.defaultRuntime.writeJson).mockClear();
 
-      await update.updateCommand({ json: true, restart: false });
+    await update.updateCommand({ json: true, restart: false });
 
-      const result = assert.lastWriteJsonCall() as UpdateRunResult | undefined;
-      expect(result?.postUpdate?.plugins?.status).toBe("warning");
-      expect(assert.pluginWarning(result)).toMatchObject({
-        pluginId: "demo",
-        guidance: ["openclaw plugins update demo"],
-      });
-      expect(assert.pluginOutcome(result)).toMatchObject({ pluginId: "demo", status: "skipped" });
-      if (blocked) {
-        expect(assert.pluginWarning(result)?.reason).toContain("Security scan: malicious");
-        expect(assert.pluginWarning(result)?.reason).toContain("ClawHub blocked this release");
-        expect(assert.pluginOutcome(result)?.message).toContain(
-          "Existing installed plugin left unchanged",
-        );
-      }
-    },
-  );
+    const result = assert.lastWriteJsonCall() as UpdateRunResult | undefined;
+    expect(result?.postUpdate?.plugins?.status).toBe("warning");
+    expect(assert.pluginWarning(result)).toMatchObject({
+      pluginId: "demo",
+      guidance: ["openclaw plugins update demo"],
+    });
+    expect(assert.pluginOutcome(result)).toMatchObject({ pluginId: "demo", status: "skipped" });
+    expect(assert.pluginWarning(result)?.reason).toContain("Security scan: malicious");
+    expect(assert.pluginWarning(result)?.reason).toContain("ClawHub blocked this release");
+    expect(assert.pluginOutcome(result)?.message).toContain(
+      "Existing installed plugin left unchanged",
+    );
+  });
 
   it("fails unexpected post-core npm update exceptions", async () => {
     await mockUnbuiltRecoveryFixture();
@@ -466,7 +454,6 @@ describe("update-cli", () => {
     const result = await updatePlugins();
 
     expect(result.status).toBe("warning");
-    expect(result.assessment).toEqual({ kind: "unsafe", reason: "convergence-failed" });
     expect(result.warnings).toEqual([
       expect.objectContaining({
         reason: repairWarning.reason,

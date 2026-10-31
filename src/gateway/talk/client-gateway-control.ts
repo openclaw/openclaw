@@ -8,7 +8,6 @@ import {
   reserveSessionControllerSource,
   type SessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
-import { waitForAgentInputRecovery } from "../../state/agent-input-recovery-context.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
@@ -67,7 +66,6 @@ export function createTalkClientGatewayControlOwner(
   });
   const entryPrefix = `gateway-${randomUUID()}`;
   const consults = new Set<Promise<void>>();
-  let consultAdmission: Promise<void> | undefined;
   let consultAdmissionSealed = false;
   const consultControllers = new Map<
     string | symbol,
@@ -131,15 +129,6 @@ export function createTalkClientGatewayControlOwner(
   const awaitProviderConsultReadiness = async (consultSignal: AbortSignal): Promise<void> => {
     assertActive();
     consultSignal.throwIfAborted();
-    const recovery = waitForAgentInputRecovery(params.sessionTarget.agentId, {
-      signal: AbortSignal.any([signal, consultSignal]),
-      owner: params.context.inputRecovery,
-    });
-    if (recovery) {
-      await recovery;
-      assertActive();
-      consultSignal.throwIfAborted();
-    }
     await transcriptReadiness.wait(consultSignal);
     // Keep accepted work detached, but reject pending admission if either owner
     // changed while transcript writes were draining.
@@ -365,35 +354,7 @@ export function createTalkClientGatewayControlOwner(
         bindGatewayContextResolver(input, params.context.resolveGatewayContext);
         return input;
       };
-      const waitForRecovery = () =>
-        waitForAgentInputRecovery(params.sessionTarget.agentId, {
-          signal: admissionSignal,
-          owner: params.context.inputRecovery,
-        });
-      const pendingAdmission = consultAdmission
-        ? consultAdmission.then(async () => {
-            const recovery = waitForRecovery();
-            if (recovery) {
-              await recovery;
-            }
-            return reserve();
-          })
-        : waitForRecovery()?.then(reserve);
-      // Keep arrival order through recovery without holding the next reservation
-      // behind the preceding model run. Ready agents still reserve synchronously.
-      const input = pendingAdmission ?? reserve();
-      if (pendingAdmission) {
-        const tail = pendingAdmission.then(
-          () => undefined,
-          () => undefined,
-        );
-        consultAdmission = tail;
-        void tail.then(() => {
-          if (consultAdmission === tail) {
-            consultAdmission = undefined;
-          }
-        });
-      }
+      const input = reserve();
       consultControllers.set(event.callId, { controller, closeDisposition: "abort" });
       const consult = runConsult(event, controller, input)
         .catch((error: unknown) => {

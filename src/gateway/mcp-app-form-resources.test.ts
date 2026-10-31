@@ -62,8 +62,8 @@ vi.mock("./question-session-access.js", () => ({
     return consume([undefined]);
   },
 }));
-vi.mock("./server-methods/sessions-files.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./server-methods/sessions-files.js")>()),
+vi.mock("./server-methods/session-files-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-methods/session-files-root.js")>()),
   withSessionFileRoot: async (
     _params: unknown,
     _cfg: unknown,

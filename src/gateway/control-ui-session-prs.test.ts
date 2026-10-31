@@ -111,6 +111,7 @@ describe("loadControlUiSessionPullRequests", () => {
     vi.stubEnv("GH_TOKEN", "");
     vi.stubEnv("GITHUB_TOKEN", "");
     cacheEpochMs += 10 * 60_000;
+    vi.advanceTimersByTime(cacheEpochMs);
     vi.setSystemTime(cacheEpochMs);
   });
 

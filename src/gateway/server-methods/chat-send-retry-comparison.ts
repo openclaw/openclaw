@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
@@ -20,6 +21,16 @@ export type ChatSendRetryComparison = {
   source?: "pending" | "transcript";
   messageSeq?: number;
 };
+
+export function chatSendRequestConflictError(unverifiable = false) {
+  return errorShape(
+    ErrorCodes.INVALID_REQUEST,
+    unverifiable
+      ? "The previous mention selections cannot be verified. Check the conversation history and use a new message ID to send again."
+      : "This message ID was already used for different input. Check the conversation history and use a new message ID to send again.",
+    { details: { reason: "chat-request-conflict" } },
+  );
+}
 
 /** Submitted bytes compare input; the caller's current owner still decides replay. */
 export function readChatSendRetryComparison(session: ComparisonSession) {

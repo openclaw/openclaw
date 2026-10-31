@@ -1,7 +1,10 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
-import { protectCodexAppServerLiveThread } from "./client-runtime.js";
+import {
+  isCodexAppServerLiveThreadProtected,
+  protectCodexAppServerLiveThread,
+} from "./client-runtime.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 import { getCodexInferenceThread, ownCodexInferenceClient } from "./inference-routing.js";
@@ -94,15 +97,21 @@ it("retains a protected parent through private completion and owner reentry", as
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await run;
     }
+    const changed = createParams(sessionFile, tempDir, { runId: "changed-policy" });
+    changed.agentDir = agentDir;
+    changed.extraSystemPrompt = "Changed persistent operator policy.";
+    await expect(runCodexAppServerAttempt(changed)).rejects.toMatchObject({
+      name: "AgentHarnessPreflightError",
+      message:
+        "Codex thread thread-1 still has background work after waiting for cleanup; stop its running work and retry.",
+    });
+    expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
+    expect(harness.requests.filter(({ method }) => method === "thread/unsubscribe")).toEqual([]);
     expect(
       harness.requests
         .filter(({ method }) => ["thread/start", "thread/resume"].includes(method))
         .map(({ method }) => method),
     ).toEqual(["thread/start"]);
-    const changed = createParams(sessionFile, tempDir, { runId: "changed-policy" });
-    changed.agentDir = agentDir;
-    changed.extraSystemPrompt = "Changed persistent operator policy.";
-    await expect(runCodexAppServerAttempt(changed)).rejects.toThrow(/claimed by active work/);
   } finally {
     release();
     harness.close();

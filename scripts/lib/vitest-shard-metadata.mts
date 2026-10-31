@@ -296,7 +296,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/cli-runner/prepare.test.ts", 42],
   ["src/agents/command/attempt-execution.cli.test.ts", 14],
   ["src/agents/harness/selection.test.ts", 10],
-  ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts", 17],
   ["src/agents/runtime-plan/prepare-auth.test.ts", 11],
   ["src/agents/subagents/registry/subagent-control.retirement.test.ts", 10],
   ["src/agents/subagents/spawn/subagent-spawn.authority.test.ts", 10],

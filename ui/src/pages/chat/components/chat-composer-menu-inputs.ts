@@ -104,6 +104,7 @@ export function menuRenderInputs(
     }
   } else if (view === "connectors") {
     inputs.push(
+      menu.mcpServersReadState,
       menu.mutationBlockedReason,
       Boolean(menu.onOpenToolAccess),
       menu.basePath,

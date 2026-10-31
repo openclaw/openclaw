@@ -24,8 +24,12 @@ export function createPackageRuntimeRecovery(params: {
   opts: Pick<UpdateCommandOptions, "run" | "runtimeRecoveryEnv">;
   timeoutMs: number;
   executorFence?: UpdateRecoveryFence;
+  assertBoundChildCurrent?: () => void;
 }): PackageRuntimeRecovery {
-  const authority = createUpdateCommandAuthority(params, "Node runtime provisioning");
+  const authority = createUpdateCommandAuthority(
+    { ...params, assertCurrent: params.assertBoundChildCurrent },
+    "Node runtime provisioning",
+  );
   const executor = authority.executorFence;
   return {
     env: params.opts.runtimeRecoveryEnv ?? {},
@@ -46,6 +50,7 @@ export function createPackageRuntimeRecovery(params: {
                   input: gate.input,
                   beforeInput: (pid, argv) => {
                     authority.assertRequesterCurrent();
+                    params.assertBoundChildCurrent?.();
                     bindChild(pid, argv);
                   },
                   timeoutMs: params.timeoutMs,
@@ -94,6 +99,8 @@ export async function preparePackageUpdateRuntime(params: {
   packageInstallEnv?: NodeJS.ProcessEnv;
   packageRuntimeTarget?: Parameters<typeof resolvePackageRuntimePreflight>[0]["target"];
   shouldRestart: boolean;
+  assertCurrent?: () => void;
+  assertBoundChildCurrent?: () => void;
   opts: UpdateCommandOptions;
   executor: UpdateCommandExecutor;
   timeoutMs: number;
@@ -118,6 +125,7 @@ export async function preparePackageUpdateRuntime(params: {
   if (params.opts.run) {
     params.opts.run.executorFence = fence;
   }
+  const assertCurrent = params.assertCurrent ?? (() => fence.assertCurrent());
   const result = await resolvePackageRuntimePreflight({
     root: params.root,
     service: params.managedService,
@@ -141,10 +149,11 @@ export async function preparePackageUpdateRuntime(params: {
             opts: params.opts,
             timeoutMs: params.timeoutMs,
             executorFence: fence,
+            assertBoundChildCurrent: params.assertBoundChildCurrent,
           })
         : undefined,
   });
-  fence.assertCurrent();
+  assertCurrent();
   if (result.ok) {
     if (
       result.value.nodeSecurityWarning &&

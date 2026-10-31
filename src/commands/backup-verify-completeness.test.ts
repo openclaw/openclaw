@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
+import { withIsolatedBackupState } from "../infra/backup-create.test-support.js";
 import type { PostgresExportEnvelope } from "../snapshot/export-envelope.js";
 import {
   registerOpenClawAgentDatabase,
@@ -12,13 +14,16 @@ import {
 } from "../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backupRestoreCommand } from "./backup-restore.js";
-import { buildBackupArchivePath } from "./backup-shared.js";
 import type { BackupManifest } from "./backup-verify-manifest.js";
 import { backupVerifyCommand, verifyBackupArchive } from "./backup-verify.js";
 import { backupCreateCommand } from "./backup.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
+
+vi.mock("tar", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("tar")>();
+  return { ...actual, t: vi.fn(actual.t), x: vi.fn(actual.x) };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const readManifest = async (root: string, archiveRoot: string): Promise<BackupManifest> =>
@@ -86,7 +91,7 @@ async function writeSmallArchive(
 
 describe("standalone backup database completeness", () => {
   it("restores configured, registered, and discovered WAL databases without workspaces and rejects each omission", async () => {
-    await withOpenClawTestState(
+    await withIsolatedBackupState(
       { layout: "home", prefix: "backup-inventory-wal-", scenario: "minimal" },
       async (state) => {
         const externalAgent = state.path("external-agent");
@@ -208,7 +213,7 @@ describe("standalone backup database completeness", () => {
   });
 
   it("captures an empty inventory for a config-only backup", async () => {
-    await withOpenClawTestState(
+    await withIsolatedBackupState(
       { layout: "home", prefix: "backup-empty-inventory-", scenario: "minimal" },
       async (state) => {
         openOpenClawAgentDatabase({
@@ -237,7 +242,7 @@ describe("standalone backup database completeness", () => {
   });
 
   it("does not require a registered database that was absent at capture time", async () => {
-    await withOpenClawTestState(
+    await withIsolatedBackupState(
       { layout: "home", prefix: "backup-absent-registration-", scenario: "minimal" },
       async (state) => {
         registerOpenClawAgentDatabase({
@@ -319,6 +324,9 @@ describe("standalone backup database completeness", () => {
 
 describe("archive PostgreSQL capsule verification", () => {
   it.each([
+    "truncated archive",
+    "SQLite snapshot",
+    "manifest mismatch",
     "image",
     "manifest",
     "inner anchor",
@@ -397,7 +405,17 @@ describe("archive PostgreSQL capsule verification", () => {
       await writeJson(manifestPath, envelope);
       const archiveManifestPath = path.join(fixture.root, fixture.archiveRoot, "manifest.json");
       const manifest = await readManifest(fixture.root, fixture.archiveRoot);
-      delete manifest.paths;
+      const globalPath = `${fixture.payload}/state/openclaw.sqlite`;
+      await fs.mkdir(path.dirname(path.join(fixture.root, globalPath)), { recursive: true });
+      {
+        using db = new DatabaseSync(path.join(fixture.root, globalPath));
+        db.exec(`CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, role TEXT);
+          INSERT INTO schema_meta VALUES ('primary', 'global');
+          CREATE TABLE agent_databases (agent_id TEXT, path TEXT)`);
+      }
+      manifest.sqliteSnapshots = [
+        { role: "global", sourcePath: "/synthetic/state/state/openclaw.sqlite" },
+      ];
       const captureHash = async () =>
         createHash("sha256")
           .update(await fs.readFile(manifestPath))
@@ -405,14 +423,14 @@ describe("archive PostgreSQL capsule verification", () => {
       manifest.postgresSnapshots = [
         { archivePath: directoryPath, manifestSha256: await captureHash() },
       ];
-      manifest.assets = [
-        {
-          kind: "plugin",
-          sourcePath: "/synthetic",
-          archivePath: buildBackupArchivePath(fixture.archiveRoot, "/synthetic"),
-        },
-      ];
+      manifest.assets.push({
+        kind: "plugin",
+        sourcePath: "/synthetic",
+        archivePath: buildBackupArchivePath(fixture.archiveRoot, "/synthetic"),
+      });
       await writeJson(archiveManifestPath, manifest);
+      const readsBefore = vi.mocked(tar.t).mock.calls.length;
+      const extractsBefore = vi.mocked(tar.x).mock.calls.length;
       await expect(
         verifyBackupArchive(
           await repack(
@@ -428,7 +446,19 @@ describe("archive PostgreSQL capsule verification", () => {
           ),
         ),
       ).resolves.toMatchObject({ ok: true });
-      if (walWriter) {
+      expect(tar.t).toHaveBeenCalledTimes(readsBefore + 1);
+      expect(tar.x).toHaveBeenCalledTimes(extractsBefore);
+      if (damage === "SQLite snapshot") {
+        const dbPath = path.join(fixture.root, globalPath);
+        const bytes = await fs.readFile(dbPath);
+        bytes[100] = 0;
+        await fs.writeFile(dbPath, bytes);
+      } else if (damage === "manifest mismatch") {
+        manifest.assets[0]!.archivePath += "/missing";
+        await writeJson(archiveManifestPath, manifest);
+      } else if (damage === "truncated archive") {
+        // Truncate the compressed stream after a complete, otherwise valid capture.
+      } else if (walWriter) {
         walWriter.exec(
           damage === "database WAL"
             ? "UPDATE notes SET body = 'unmanifested'"
@@ -463,13 +493,29 @@ describe("archive PostgreSQL capsule verification", () => {
         }
       }
       const damaged = await repack(fixture.root, fixture.archiveRoot, "damaged");
+      if (damage === "truncated archive") {
+        const bytes = await fs.readFile(damaged);
+        await fs.writeFile(damaged, bytes.subarray(0, -16));
+      }
+      const handles: Awaited<ReturnType<typeof fs.open>>[] = [];
+      const open = fs.open;
+      using _ = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        handles.push(handle);
+        return handle;
+      });
       await expect(verifyBackupArchive(damaged)).rejects.toThrow(
-        damage === "manifest binding"
-          ? /does not match its capture inventory/
-          : walWriter
-            ? /unexpected SQLite sidecar/
-            : /verification failed/,
+        damage === "manifest mismatch"
+          ? /missing payload/
+          : damage === "manifest binding"
+            ? /does not match its capture inventory/
+            : walWriter
+              ? /unexpected SQLite sidecar/
+              : /verification failed/,
       );
+      expect(handles.filter((handle) => handle.fd !== -1)).toEqual([]);
+      expect(tar.t).toHaveBeenCalledTimes(readsBefore + 2);
+      expect(tar.x).toHaveBeenCalledTimes(extractsBefore);
     },
   );
 });

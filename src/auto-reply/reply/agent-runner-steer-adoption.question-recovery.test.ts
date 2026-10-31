@@ -56,7 +56,7 @@ function startSteer(
   return runActiveReplySteer(
     createSteerParams(key, run, operation, {
       replyOperationRunState: state,
-      restartRecoverySourceTurnId: run.messageId,
+      sourceTurnId: run.messageId,
       runFollowup: followup,
     }),
   );

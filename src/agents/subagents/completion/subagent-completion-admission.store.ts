@@ -10,10 +10,7 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { retireSubagentCompletionControllerInput } from "../registry/subagent-controller-inputs.js";
 import { ensureDeliveryState } from "../registry/subagent-delivery-state.js";
-import {
-  SUBAGENT_ENDED_REASON_ERROR,
-  SUBAGENT_ENDED_REASON_KILLED,
-} from "../registry/subagent-lifecycle-events.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import {
   getSubagentRunsForChildSession,
   subagentRuns,
@@ -217,32 +214,6 @@ type CompletionMutationPublication = {
   publication: "published" | "unchanged";
 };
 
-function sameCompletionTerminalOwner(
-  current: SubagentRunRecord,
-  expected: SubagentRunRecord,
-): boolean {
-  if (current.terminalOwner === expected.terminalOwner) {
-    return true;
-  }
-  // Cleanup retires the transient recovery marker, not the interrupted winner's settlement custody.
-  return (
-    expected.terminalOwner === "interrupted-recovery" &&
-    current.terminalOwner === undefined &&
-    current.cleanupCompletedAt !== undefined &&
-    current.execution.suppressSessionEffects === true &&
-    current.execution.status === "terminal" &&
-    expected.execution.status === "terminal" &&
-    current.endedReason === SUBAGENT_ENDED_REASON_ERROR &&
-    expected.endedReason === current.endedReason &&
-    current.execution.interruptionReason === "gateway-restart" &&
-    expected.execution.interruptionReason === current.execution.interruptionReason &&
-    current.execution.startedAt === expected.execution.startedAt &&
-    current.execution.endedAt === expected.execution.endedAt &&
-    current.execution.outcome?.status === "error" &&
-    isDeepStrictEqual(current.execution.outcome, expected.execution.outcome)
-  );
-}
-
 function sameCompletionCancellationOwner(
   current: SubagentRunRecord,
   expected: SubagentRunRecord,
@@ -272,7 +243,6 @@ function currentCompletionOwner(
     current.execution.lifecycleGeneration !== expected.execution.lifecycleGeneration ||
     !isDeepStrictEqual(current.childSessionIdentity, expected.childSessionIdentity) ||
     !sameCompletionCancellationOwner(current, expected) ||
-    !sameCompletionTerminalOwner(current, expected) ||
     current.suppressAnnounceReason !== expected.suppressAnnounceReason
   ) {
     throw new SubagentCompletionSourceChangedError(
@@ -493,7 +463,7 @@ function currentRequesterEntries(
       return { subagent: expected };
     }
     // Terminal bookkeeping settles the owed wake, not the child's old execution custody.
-    // Cleanup and recovery can change that custody while this exact wave remains owed.
+    // Cleanup can change that custody while this exact wave remains owed.
     // Committed receipts validate their own postimages in the transaction owner.
     const current =
       operation === "transition" && !committed

@@ -142,6 +142,10 @@ describe("Control UI theme contrast", () => {
       "text text-strong chat-text muted muted-strong muted-foreground"
         .split(" ")
         .flatMap((ink) => onSurfaces(`var(--${ink})`, SURFACE_TOKENS, floor)),
+    "links on reading surfaces: AA": () =>
+      ["--link", "--link-hover"].flatMap((ink) =>
+        onSurfaces(`var(${ink})`, ["--bg-content", ...SURFACE_TOKENS], AA_NORMAL_TEXT_MIN),
+      ),
     "selected controls and session labels: AA": () => controls,
     "filled actions and accent glyphs": () => [
       ["var(--primary-foreground)", "var(--primary)", AA_NORMAL_TEXT_MIN],

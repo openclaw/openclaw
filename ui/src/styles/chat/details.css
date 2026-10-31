@@ -534,7 +534,8 @@ button.chat-details__process:is(:hover, :focus-visible) {
   display: block;
   color: var(--muted);
 }
-.chat-details__more:is(:hover, :focus-visible) {
+.chat-details .chat-details__more:is(:hover, :focus-visible) {
+  background: none;
   color: var(--text);
 }
 @keyframes chat-details-pulse {

@@ -48,6 +48,7 @@ var External = [
     /^.*$/u,
     /^.*$/u,
     /(^changeId$|^voiceSessionId$|^sessionKey$|^voice$|^phase$)/u,
+    /(^workspaceId$|^root$|^fileRoot$)/u,
   ],
   check_0 = (value) => check_1(value),
   check_1 = (value) =>
@@ -330,6 +331,26 @@ var External = [
   check_75 = (value) => check_76(value) || check_77(value),
   check_76 = (value) => typeof value == "string" && value === "requested",
   check_77 = (value) => typeof value == "string" && value === "cancelled",
+  check_78 = (value) => check_79(value),
+  check_79 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    (value.source === void 0 || !("source" in value) || check_80(value.source)) &&
+    (value.root === void 0 || !("root" in value) || check_14(value.root)),
+  check_80 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "workspaceId" in value &&
+    "root" in value &&
+    "fileRoot" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_25, unique_26) => External[12].test(unique_25) || check_2(value[unique_25]),
+    ) &&
+    check_4(value.workspaceId) &&
+    check_24(value.root) &&
+    check_24(value.fileRoot),
   isAgentRuntimeRestrictionErrorDetails = (value) => check_0(value),
   isSessionsGoalUpdateParams = (value) => check_25(value),
   isSessionsGoalClearParams = (value) => check_42(value),
@@ -341,12 +362,14 @@ var External = [
   isSessionTitleSource = (value) => check_64(value),
   isSessionPermissionMode = (value) => check_66(value),
   isSessionToolOverrides = (value) => check_67(value),
-  isTalkVoiceChangeEvent = (value) => check_73(value);
+  isTalkVoiceChangeEvent = (value) => check_73(value),
+  isSessionFileReadMetadata = (value) => check_78(value);
 export {
   isAgentRuntimeRestrictionErrorDetails,
   isSessionCyberAccessProgram,
   isSessionDeviceFolder,
   isSessionFastMode,
+  isSessionFileReadMetadata,
   isSessionPermissionMode,
   isSessionRepository,
   isSessionTitleSource,

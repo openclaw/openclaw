@@ -43,46 +43,51 @@ function SidebarOwnerPicker(props: { host: SessionListHost }) {
       : []),
   ];
   const picker = createMemo(
-    () => ({
-      keys: [
-        ownerId(),
-        selfId(),
-        props.host.sessionInvolvingMeFilterActive,
-        Boolean(props.host.sidebarSnapshot),
-        isMobileNavLayout(),
-        getLocale(),
-        ...owners().flatMap((entry) => [
-          entry.id,
-          entry.label,
-          entry.avatarUrl,
-          entry.identity ? sessionParticipantIdentityKey(entry.identity) : null,
-        ]),
-      ],
-      params: {
-        id: "sidebar-session-owner-title",
-        class: "sidebar-session-owner-filter",
-        label: t("sessionsView.owners"),
-        value: props.host.sessionInvolvingMeFilterActive
-          ? "involving-me"
-          : ownerId()
-            ? `owner:${ownerId()}`
-            : "all",
-        disabled: Boolean(props.host.sidebarSnapshot),
-        searchable: "always" as const,
-        sheet: isMobileNavLayout(),
-        showOptionTooltips: false,
-        renderLeading: (option: { value: string }) => {
-          const owner = owners().find((entry) => `owner:${entry.id}` === option.value);
-          return owner ? renderSessionOwnerAvatar(owner) : undefined;
+    () => {
+      // Leading content belongs to these compared picker facts, not the live sidebar revision.
+      const staticOwners = owners();
+      return {
+        keys: [
+          ownerId(),
+          selfId(),
+          props.host.sessionInvolvingMeFilterActive,
+          Boolean(props.host.sidebarSnapshot),
+          isMobileNavLayout(),
+          getLocale(),
+          ...staticOwners.flatMap((entry) => [
+            entry.id,
+            entry.label,
+            entry.avatarUrl,
+            entry.identity ? sessionParticipantIdentityKey(entry.identity) : null,
+          ]),
+        ],
+        params: {
+          id: "sidebar-session-owner-title",
+          class: "sidebar-session-owner-filter",
+          triggerIcon: "chevronsUpDown" as const,
+          label: t("sessionsView.owners"),
+          value: props.host.sessionInvolvingMeFilterActive
+            ? "involving-me"
+            : ownerId()
+              ? `owner:${ownerId()}`
+              : "all",
+          disabled: Boolean(props.host.sidebarSnapshot),
+          searchable: "always" as const,
+          sheet: isMobileNavLayout(),
+          showOptionTooltips: false,
+          renderLeading: (option: { value: string }) => {
+            const owner = staticOwners.find((entry) => `owner:${entry.id}` === option.value);
+            return owner ? renderSessionOwnerAvatar(owner) : undefined;
+          },
+          options: options(),
+          onChange: (value: string) =>
+            props.host.setSessionOwnerFilter(
+              value.startsWith("owner:") ? value.slice("owner:".length) : null,
+              value === "involving-me",
+            ),
         },
-        options: options(),
-        onChange: (value: string) =>
-          props.host.setSessionOwnerFilter(
-            value.startsWith("owner:") ? value.slice("owner:".length) : null,
-            value === "involving-me",
-          ),
-      },
-    }),
+      };
+    },
     {
       equals: (previous, next) =>
         previous.keys.length === next.keys.length &&

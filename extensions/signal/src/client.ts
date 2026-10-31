@@ -400,6 +400,7 @@ export async function streamSignalEvents(params: {
   account?: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+  lastEventId?: string;
   onEvent: (event: SignalSseEvent) => unknown;
   onStreamOpen?: () => void;
 }): Promise<void> {
@@ -516,7 +517,10 @@ export async function streamSignalEvents(params: {
       url,
       {
         method: "GET",
-        headers: { Accept: "text/event-stream" },
+        headers: {
+          Accept: "text/event-stream",
+          ...(params.lastEventId ? { "Last-Event-ID": params.lastEventId } : {}),
+        },
       },
       (res) => {
         const status = res.statusCode ?? 0;
@@ -556,7 +560,7 @@ export async function streamSignalEvents(params: {
   let currentEventDataBytes = 0;
 
   const flushEvent = async () => {
-    if (!currentEvent.data && !currentEvent.event && !currentEvent.id) {
+    if (!currentEvent.data && !currentEvent.event && currentEvent.id === undefined) {
       return;
     }
     await params.onEvent({
@@ -592,7 +596,7 @@ export async function streamSignalEvents(params: {
         throw new Error("Signal SSE event data exceeded size limit");
       }
       currentEvent.data = currentEvent.data ? `${currentEvent.data}${segment}` : segment;
-    } else if (field === "id") {
+    } else if (field === "id" && !value.includes("\0")) {
       currentEvent.id = value;
     }
   };
@@ -633,6 +637,4 @@ export async function streamSignalEvents(params: {
   } finally {
     cleanupStream();
   }
-
-  await flushEvent();
 }

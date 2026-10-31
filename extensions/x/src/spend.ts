@@ -328,6 +328,7 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
   };
   return {
     api,
+    failed: () => failure !== undefined,
     update(nextRuntime: SpendRuntime, nextLimits: () => XCostLimits) {
       limits = nextLimits;
       logger = nextRuntime.logging.getChildLogger({ channel: "x", accountId });
@@ -347,7 +348,9 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
 export function openXSpend(runtime: SpendRuntime, accountId: string, getLimits: () => XCostLimits) {
   const key = JSON.stringify([runtime.state.resolveStateDir(), accountId]);
   let owner = owners.get(key);
-  if (!owner) {
+  // A failed owner keeps refusing its handles. Reopening recovers from the durable
+  // reservations, as a restart would, so one transient write error cannot pause spend forever.
+  if (!owner || owner.failed()) {
     owner = createSpendOwner(runtime, accountId, getLimits);
     owners.set(key, owner);
   } else {

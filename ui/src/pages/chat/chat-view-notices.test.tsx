@@ -56,6 +56,7 @@ function publishHistory(
       messages,
       runError: initial.runError && { ...initial.runError },
       placementStartup: initial.placementStartup && { ...initial.placementStartup },
+      providerPolicyNotice: initial.providerPolicyNotice && { ...initial.providerPolicyNotice },
     });
     flush();
     check();

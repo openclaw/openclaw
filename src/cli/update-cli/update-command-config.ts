@@ -27,6 +27,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.open
 import { shouldWarnOnTouchedVersion } from "../../config/version.js";
 import { composeConfigWriteAssertions } from "../../config/write-authority.js";
 import { withConfigWriteLock } from "../../config/write-lock.js";
+import { getScopedDatabaseEngineSelection } from "../../infra/database-engine/context.js";
 import { readDeferredPluginMigrationsAsync } from "../../infra/deferred-plugin-migrations.js";
 import { normalizeUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
 import type { PreUpdateConfigRestoreInput } from "../../infra/update-post-core-context.js";
@@ -383,7 +384,7 @@ function createUpdatedConfigSnapshot(
 /** Read-only startup configuration, retaining the authored snapshot alongside any projection. */
 export async function readUpdateChannelConfig(
   channelRequested: boolean,
-  options?: { tolerateReadFailure?: boolean },
+  options?: { tolerateReadFailure?: boolean; dryRun?: boolean },
 ) {
   let configSnapshot: ConfigFileSnapshot;
   let configReadFailure: Error | undefined;
@@ -391,6 +392,9 @@ export async function readUpdateChannelConfig(
     configSnapshot = await readUpdateConfigFileSnapshot({
       skipPluginValidation: true,
       observe: false,
+      // Malformed previews cannot choose an engine for persisted migration facts.
+      deferredPluginMigrations:
+        options?.dryRun && !getScopedDatabaseEngineSelection() ? [] : undefined,
     });
   } catch (error) {
     if (!options?.tolerateReadFailure) {

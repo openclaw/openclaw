@@ -12,6 +12,7 @@ import {
 } from "../../../../src/agents/bash-tools.lifecycle.test-support.js";
 import * as childMemory from "../../../../src/process/child-memory.js";
 import { withinTest } from "../../../helpers/promise.js";
+import { isProcessPresent } from "../../../scripts/run-process.test-support.js";
 
 type ExecTool = ReturnType<typeof createExecTool>;
 type ProcessTool = ReturnType<typeof createProcessTool>;
@@ -55,19 +56,10 @@ function requireSession(result: ToolResult): { pid: number; sessionId: string } 
   return { pid: details.pid as number, sessionId: details.sessionId as string };
 }
 
-function pidExists(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // Process removal does not expose an extinction join, and its owner may remove child listeners.
 async function waitForExitedPids(pids: readonly number[], signal?: AbortSignal): Promise<void> {
   const check = async () => {
-    while (pids.some(pidExists)) {
+    while (pids.some(isProcessPresent)) {
       await delay(25, undefined, { signal });
     }
   };
@@ -124,7 +116,7 @@ test.for([
           await action("remove", session.id);
         }
         for (const pid of cleanupPids) {
-          if (pidExists(pid)) {
+          if (isProcessPresent(pid)) {
             process.kill(pid, "SIGKILL");
           }
         }
@@ -160,7 +152,7 @@ test.for([
         expect.objectContaining({ id: killedSession.sessionId, exited: false }),
       );
       expect(getActiveBackgroundExecSessionCount()).toBe(1);
-      expect(pidExists(killedSession.pid)).toBe(true);
+      expect(isProcessPresent(killedSession.pid)).toBe(true);
 
       const killed = await action("kill", killedSession.sessionId);
       expect(killed.details).toMatchObject({ status: "completed" });
@@ -172,7 +164,7 @@ test.for([
         status: "completed",
       });
       await waitForExitedPids([killedSession.pid], signal);
-      expect(pidExists(killedSession.pid)).toBe(false);
+      expect(isProcessPresent(killedSession.pid)).toBe(false);
       cleanupPids.delete(killedSession.pid);
       const finalList = await action("list");
       expect((finalList.details as ProcessDetails).sessions).toEqual([]);

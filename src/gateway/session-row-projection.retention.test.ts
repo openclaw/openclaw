@@ -3,6 +3,14 @@ import { expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createSessionCatalogRequestEntrySnapshot,
+  type SessionCatalogInstances,
+} from "./server-methods/session-catalog-entry-snapshot.js";
+import {
+  catalogHost,
+  catalogSession,
+} from "./server-methods/session-catalog.fixtures.test-support.js";
 import { expectCollected, weak, weakControl } from "./session-collection.test-support.js";
 import { ready } from "./session-row-projection-record.js";
 import {
@@ -11,6 +19,44 @@ import {
   seedRow as writeEntry,
 } from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions, prepareSessionRowSelection } from "./session-utils-list.js";
+
+it("releases old catalog planning rosters while published adoption identities remain usable", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const key = "agent:main:catalog-retention";
+    writeEntry(key, { sessionId: "original", updatedAt: 1 });
+    using _ = holdForeground();
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    await projection.ensureMaterialized();
+    const host = catalogHost({ sessions: [catalogSession("thread", { sessionKey: key })] });
+    const instances: SessionCatalogInstances = new Map();
+    function capture() {
+      const planning = createSessionCatalogRequestEntrySnapshot({
+        cfg,
+        fallbackAgentId: "main",
+        projection,
+      });
+      planning.freeze();
+      planning.captureHostInstances(host, instances);
+      const entries = planning.sessionEntries.entriesForCatalog!();
+      return [weak(entries), ...entries.map(weak)];
+    }
+    const retired = capture();
+    writeEntry(key, { sessionId: "replacement", updatedAt: 2 });
+    await projection.ensureMaterialized();
+    // Publication alone retires the roster; no subsequent catalog request is needed.
+    await expectCollected(weakControl(), ...retired);
+    expect(instances.get(key)?.sessionId).toBe("original");
+    const delivery = createSessionCatalogRequestEntrySnapshot({
+      cfg,
+      fallbackAgentId: "main",
+      projection,
+      sessionKeys: [key],
+    });
+    expect(delivery.projectHostSessions(host, instances).sessions[0]?.sessionKey).toBeUndefined();
+  });
+});
 
 it("collects superseded resident rows and their materializations after metadata refreshes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

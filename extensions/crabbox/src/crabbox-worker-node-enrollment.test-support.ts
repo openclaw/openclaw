@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import {
   fixtureReceiptClientSource,
   type FixtureReceiptChannel,
@@ -33,6 +36,7 @@ export const createNodeBootstrapFixture = (
   sha256: "a".repeat(64),
   bytes: 100,
   openclawVersion: "2026.8.1",
+  install: "npm",
   enabledPluginIds: ["demo"],
   ...overrides,
 });
@@ -62,6 +66,7 @@ export async function createNodePackageFixture(
   build: string,
   receipts: FixtureReceiptChannel,
   postinstall = "",
+  install: "bundle" | "npm" = "npm",
 ): Promise<Buffer> {
   const root = makeTempDir("crabbox-bootstrap-package-");
   const packageRoot = path.join(root, "package");
@@ -110,6 +115,51 @@ if (args[0] === "--version") {
   fs.writeFileSync(path.join(tools, "bootstrap-tool-fixture"), "#!/bin/sh\necho verified-tool\n", {
     mode: 0o755,
   });
+  if (install === "bundle") {
+    const dependency = path.join(packageRoot, "node_modules/runtime-fixture");
+    fs.mkdirSync(dependency, { recursive: true });
+    fs.writeFileSync(
+      path.join(dependency, "package.json"),
+      JSON.stringify({
+        name: "runtime-fixture",
+        version: "1.0.0",
+        type: "module",
+        main: "index.js",
+      }),
+    );
+    fs.writeFileSync(path.join(dependency, "index.js"), 'export const version = "2026.8.1";');
+    fs.writeFileSync(
+      path.join(packageRoot, "node-runtime.json"),
+      JSON.stringify({
+        buildId: "fixture-runtime-build",
+        openclawVersion: "2026.8.1",
+        install,
+        platforms: [{ platform: process.platform, arch: process.arch, prefix: "" }],
+      }),
+    );
+    const inventory: Array<{ path: string; size: number; mode: number; sha256: string }> = [];
+    const visit = (directory: string) => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const file = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          visit(file);
+        } else {
+          const contents = fs.readFileSync(file);
+          inventory.push({
+            path: "package/" + path.relative(packageRoot, file).split(path.sep).join("/"),
+            size: contents.length,
+            mode: fs.statSync(file).mode & 0o777,
+            sha256: createHash("sha256").update(contents).digest("hex"),
+          });
+        }
+      }
+    };
+    visit(packageRoot);
+    fs.writeFileSync(
+      path.join(packageRoot, "node-runtime.manifest.json"),
+      JSON.stringify(inventory),
+    );
+  }
   const archive = path.join(root, "package.tgz");
   await tar.create({ cwd: root, file: archive, gzip: true }, ["package"]);
   return fs.readFileSync(archive);
@@ -128,4 +178,22 @@ export async function expectSetupPhases(result: Promise<{ code: number | null; o
   return lines
     .filter((line) => line.startsWith("CRABBOX_PHASE:"))
     .map((line) => line.slice("CRABBOX_PHASE:".length));
+}
+
+export async function runtimeManifestSha256(archive: Buffer): Promise<string | undefined> {
+  let digest: string | undefined;
+  const parser = tar.list({
+    onReadEntry(entry) {
+      if (entry.path !== "package/node-runtime.manifest.json") {
+        return;
+      }
+      const hash = createHash("sha256");
+      entry.on("data", (chunk: Buffer) => hash.update(chunk));
+      entry.on("end", () => {
+        digest = hash.digest("hex");
+      });
+    },
+  });
+  await pipeline(Readable.from([archive]), parser).catch(() => undefined);
+  return digest;
 }

@@ -125,11 +125,7 @@ export function resolveAgentPluginBundleResponse(body) {
     !isRecord(result) ||
     result.isError === true ||
     !Array.isArray(result.content) ||
-    !isRecord(result.details) ||
-    result.details.mcpServer !== "weather-probe" ||
-    result.details.mcpTool !== "weather_probe" ||
-    result.details.status !== undefined ||
-    result.details.error !== undefined
+    result.details !== undefined
   ) {
     return failure("unexpected-tool-output");
   }

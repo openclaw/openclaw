@@ -260,6 +260,7 @@ type PreparedAgentDatabaseDeletionSnapshot = {
 export function prepareAgentDatabaseDeletionSnapshotRead(
   inputOptions: OpenClawStateDatabaseOptions = {},
   purpose: AgentDeletionJournalPurpose = "maintenance",
+  signal?: AbortSignal,
 ): {
   read(): Promise<PreparedAgentDatabaseDeletionSnapshot>;
   readWithCurrentAdmission(): Promise<PreparedAgentDatabaseDeletionSnapshot>;
@@ -280,6 +281,7 @@ export function prepareAgentDatabaseDeletionSnapshotRead(
   const context = source.workerContext();
   const readSnapshot = async (readContext: typeof context) => {
     const assertReadCurrent = () => {
+      signal?.throwIfAborted();
       readContext.maintenanceScope?.assertAdmission();
       readContext.admission.assertCurrent();
     };
@@ -287,7 +289,7 @@ export function prepareAgentDatabaseDeletionSnapshotRead(
     const reply = await executeExistingOpenClawStateRead(
       options,
       { type: "agentDatabaseDeletion.snapshot", purpose },
-      { context: readContext, current: true },
+      { context: readContext, current: true, signal },
     );
     assertReadCurrent();
     if (purpose === "runtime-discovery" && reply) {

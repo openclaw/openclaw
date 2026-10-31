@@ -204,7 +204,7 @@ it.for([
           [
             ["sessions.github.action", "operator.sessions.write", "sessions", endpoint],
             ["sessions.github.publish", "operator.sessions.write", "sessions", publish],
-            ["tools.effective", "operator.read", "tools", forbidden],
+            ["tools.catalog", "operator.read", "tools", forbidden],
             ["plugins.reload", "operator.admin", "plugins", forbidden],
           ],
           () => config,
@@ -232,7 +232,7 @@ it.for([
               ).toMatchObject({ status: "requested", requestId: "synthetic-publication" });
               await expect(
                 callAgentToolGatewayRequest({
-                  method: "tools.effective",
+                  method: "tools.catalog",
                   params: scope,
                 }),
               ).rejects.toThrow("operator.read");

@@ -549,6 +549,7 @@ function stubPullRequestPreparation(sessionKey: string) {
     async ({ assertCurrent }) => ({
       result: { ...pullRequest, author: { accountId: 9, login: "guest" }, state: "open" },
       assertCurrent,
+      requirePublicRepositories: false,
     }),
   );
   vi.spyOn(availability, "prepareCurrentGitHubPublicationIdentity").mockResolvedValue({
@@ -811,7 +812,9 @@ it("refuses another guest and lost access before binding, PR import and earlier 
       try {
         // Another guest fails the publication requester; an admin passes it but is not the owner.
         await expect(prepare(otherClient)).rejects.toThrow("no longer authorized");
-        await expect(prepare(adminClient)).rejects.toThrow("Only this conversation's owner");
+        await expect(prepare(adminClient)).rejects.toThrow(
+          "Only the person who started this conversation",
+        );
         expect(allocate).not.toHaveBeenCalled();
         unbound();
 

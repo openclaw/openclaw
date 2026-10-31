@@ -213,17 +213,18 @@ describe("TTS runtime native voice-note routing", () => {
     expect(providerConfig.apiKey).toBe("test-key");
   });
 
-  it("resolves the configured timeout for voice listing", async () => {
+  it("resolves voice listing aliases with the configured timeout", async () => {
     const listVoicesMock = vi.fn(async (_request: SpeechListVoicesRequest) => []);
     installSpeechProviders([
       createMockSpeechProvider("mock", {
+        aliases: ["mock-alias"],
         defaultTimeoutMs: 60_000,
         listVoices: listVoicesMock,
       }),
     ]);
 
     await listSpeechVoices({
-      provider: "mock",
+      provider: "  MOCK-ALIAS  ",
       cfg: { tts: { enabled: true, provider: "mock", timeoutMs: 45_000 } },
     });
 

@@ -5,7 +5,10 @@ import { describe, expect, it } from "vitest";
 import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
 import { SANDBOX_HOST_PATH } from "../agents/sandbox-host.js";
-import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
+import {
+  createSandboxHostHttpServer,
+  createSandboxHostHttpRequestHandler,
+} from "./mcp-app-sandbox-http.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const representationHeaders = (response: Response) =>
@@ -189,4 +192,12 @@ describe("MCP App sandbox HTTP origin", () => {
     }
     expect(request("http://[", "GET").res.statusCode).toBe(400);
   });
+});
+
+it("rejects a malformed resource request without an unhandled URL exception", async () => {
+  const { res, end } = makeMockHttpResponse();
+  const handler = createSandboxHostHttpRequestHandler({ clients: new Set() });
+  await handler({ url: "http://[", method: "GET" } as IncomingMessage, res);
+  expect(res.statusCode).toBe(400);
+  expect(end).toHaveBeenCalledWith("Bad Request");
 });

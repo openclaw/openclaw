@@ -117,8 +117,6 @@ export type FollowupRunPayload = {
   /** Turn-owned tool authority captured before queue ownership transfers. */
   toolsAllow?: string[];
   disableTools?: boolean;
-  forceRestartSafeTools?: boolean;
-  forceCodeModeTools?: boolean;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;
   /** Internal Goal nudge; admission must still observe this exact active Goal. */
@@ -161,6 +159,8 @@ export type FollowupRunPayload = {
     scheduledAutomation?: ScheduledSessionAutomation;
     bootstrapContextMode?: GetReplyOptions["bootstrapContextMode"];
     internalEventExecution?: SessionEventExecution;
+    /** Event origin retained after detaching from its occurrence: no channel-turn authority. */
+    sessionEventOrigin?: { deliver?: false };
     agentId: string;
     agentDir: string;
     runtimePolicySessionKey?: string;

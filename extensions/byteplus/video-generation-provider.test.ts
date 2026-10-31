@@ -89,13 +89,13 @@ it("rejects generated video downloads that exceed the configured media cap", asy
   ).rejects.toThrow(`${downloadLabel} exceeds 1 bytes`);
 });
 
-it("shares one wall-clock deadline across download headers and body", async () => {
+it("shares one monotonic deadline across download headers and body", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(1_000);
   fetchWithTimeoutMock
     .mockResolvedValueOnce(taskResponse({ model: undefined }))
     .mockImplementationOnce(async () => {
-      vi.setSystemTime(1_090);
+      vi.advanceTimersByTime(90);
       return videoResponse(
         new ReadableStream<Uint8Array>({
           async pull(controller) {

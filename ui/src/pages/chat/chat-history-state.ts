@@ -74,6 +74,9 @@ type ChatHistoryLoadState =
   | ({ phase: "failed"; message: string; retryable: boolean } & ChatHistoryLoadRequest);
 
 type ChatHistoryPaneRequests = {
+  // A failed authoritative read must not restore a prefix invalidated by a
+  // cursor reset. Keep that fact only for the connection and selected session.
+  windowReset?: { isCurrent: () => boolean };
   historyVersion: number;
   branchVersion: number;
   branchQuery: ChatBranchesQueryReceipt | undefined;
@@ -373,6 +376,7 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // snapshot owner and its coalesced request before creating the next epoch.
   requests.historyVersion += 1;
   delete requests.initialHistory;
+  delete requests.windowReset;
   // Keep the presentation accessor installed when clearing accepted history.
   requests.acceptedHistory = undefined;
   setChatHistoryLoad(state, { phase: "idle" });

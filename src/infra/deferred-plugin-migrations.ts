@@ -230,14 +230,14 @@ export function mergeDeferredPluginMigration(
   };
 }
 
-function readPendingMigrationRows(database: EngineConnection) {
+function readPendingMigrationRows(database: EngineConnection, includeDeferred = false) {
   return executeSqliteQuerySync(
     database,
     getNodeSqliteKysely<Pick<DB, "migration_runs">>(database)
       .selectFrom("migration_runs")
-      .select(["id", "report_json"])
+      .select(["id", "report_json", "status"])
       .where("id", "like", `${RUN_PREFIX}%`)
-      .where("status", "=", "pending")
+      .where("status", "in", includeDeferred ? ["pending", "deferred"] : ["pending"])
       .orderBy("id"),
   ).rows;
 }
@@ -246,16 +246,16 @@ function pendingMigrationRecords(rows: ReturnType<typeof readPendingMigrationRow
   return rows.map((row) => deferredPluginMigrationSchema.parse(JSON.parse(row.report_json)));
 }
 
-function readPendingMigrationRecords(database: EngineConnection) {
+function readPendingMigrationRecords(database: EngineConnection, includeDeferred = false) {
   return tableExists(database, "migration_runs")
-    ? pendingMigrationRecords(readPendingMigrationRows(database))
+    ? pendingMigrationRecords(readPendingMigrationRows(database, includeDeferred))
     : [];
 }
 
 export const deferredPluginMigrationReadOperations = {
-  "plugins.deferredMigrations.read": (_input: undefined, db) => ({
+  "plugins.deferredMigrations.read": (input: { includeDeferred?: boolean } | undefined, db) => ({
     type: "plugins.deferredMigrations.read" as const,
-    pending: readPendingMigrationRecords(db),
+    pending: readPendingMigrationRecords(db, input?.includeDeferred),
   }),
 } satisfies WorkerOperationHandlers<EngineConnection>;
 
@@ -274,13 +274,15 @@ export function readDeferredPluginMigrations(
     path?: string;
     env?: NodeJS.ProcessEnv;
     artifactPreservingReadOnly?: boolean;
+    /** Dormant obligations still gate runtime and must reach Doctor after activation. */
+    includeDeferred?: boolean;
   } = {},
 ): readonly DeferredPluginMigration[] {
   const read =
     options.artifactPreservingReadOnly === false
       ? withExistingOpenClawStateDatabaseReadOnly
       : withExistingOpenClawStateDatabaseArtifactPreservingReadOnly;
-  return read(({ db }) => readPendingMigrationRecords(db), options) ?? [];
+  return read(({ db }) => readPendingMigrationRecords(db, options.includeDeferred), options) ?? [];
 }
 
 /** Prime resolution in this module before the updater replaces its package. */
@@ -301,7 +303,7 @@ export async function readDeferredPluginMigrationsAsync(
   const read = () =>
     executeExistingOpenClawStateRead(options, {
       type: "plugins.deferredMigrations.read",
-      input: undefined,
+      input: options.includeDeferred ? { includeDeferred: true } : undefined,
     });
   const reply = await (options.artifactPreservingReadOnly === false
     ? read()
@@ -359,7 +361,7 @@ export function readDeferredPluginMigrationCompletions(
           .selectFrom("migration_runs")
           .select(["id", "finished_at"])
           .where("id", "like", `${RUN_PREFIX}%`)
-          .where("status", "in", ["completed", "superseded"]),
+          .where("status", "in", ["completed", "superseded", "deferred"]),
       ).rows.flatMap(({ id, finished_at }) =>
         finished_at === null
           ? []
@@ -504,7 +506,7 @@ export type DeferredPluginMigrationRecordInput = {
   resolvedPluginIds?: readonly string[];
   settlements?: readonly {
     pluginId: string;
-    status: "completed" | "superseded";
+    status: "completed" | "superseded" | "deferred";
     reason: string;
   }[];
   expectedPending?: readonly DeferredPluginMigration[];
@@ -524,10 +526,10 @@ export function recordDeferredPluginMigrationsInTransaction(
       deferredPluginMigrationSchema.parse(pending),
     ]),
   );
-  const currentRows = readPendingMigrationRows(db);
+  const currentRows = readPendingMigrationRows(db, true);
   if (params.expectedPending) {
     assertPendingGeneration(
-      pendingMigrationRecords(currentRows),
+      pendingMigrationRecords(currentRows.filter((row) => row.status === "pending")),
       params.expectedPending,
       "migration settlement",
     );
@@ -544,7 +546,7 @@ export function recordDeferredPluginMigrationsInTransaction(
       current,
     );
     const reportJson = JSON.stringify(pending);
-    if (previous?.report_json === reportJson) {
+    if (previous?.status === "pending" && previous.report_json === reportJson) {
       continue;
     }
     recordLegacyMigrationRun(db, {

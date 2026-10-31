@@ -438,13 +438,13 @@ describe("OpenCode session catalog", () => {
   );
 
   itWithCli.each([1, 2])(
-    "lists and reads sessions through the v%s CLI JSON surfaces",
+    "searches and reads canonical titles through the v%s CLI JSON surfaces",
     async (version) => {
-      await installFakeOpenCode("hi", "Catalog session", { command: "pwd" }, version);
-      const listed = await listLocalOpenCodeSessionPage({ limit: 20 });
+      await installFakeOpenCode("hi", "Cafe\u0301 catalog", { command: "pwd" }, version);
+      const listed = await listLocalOpenCodeSessionPage({ limit: 20, searchTerm: "CAFÉ" });
       const expectedSession = {
         threadId: "ses_test",
-        name: "Catalog session",
+        name: "Cafe\u0301 catalog",
         cwd: "/workspace",
         source: "opencode-cli",
         canContinue: true,

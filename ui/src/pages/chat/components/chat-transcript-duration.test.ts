@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
 import { threadFixture } from "./chat-transcript-fixture.test-support.tsx";
 import {
@@ -105,94 +104,78 @@ it("keeps the recap duration when zero runtime cannot label completed work", asy
   expect(text(".chat-turn-recap")).toContain("42 output tokens");
 });
 
-it("keeps a watched run's duration in its recap instead of either work stretch", async () => {
-  const runId = "duration-run";
-  const props = propsFor(runId, [prompt(runId, 1_000), work(runId, 2_000)]);
-  running(props, runId, 42);
-  const { container, text, rerender } = mount(props);
-  props.messages = [
-    ...props.messages,
-    { ...reply(runId, 3_000, "Checking another file."), phase: "commentary" },
-    { ...work(runId, 4_000), toolCallId: "second-read" },
-    reply(runId, 14_000),
-  ];
-  props.runActive = false;
-  props.runWorking = false;
-  props.runId = null;
-  props.selectedSession = session(runId, 13_000);
-  props.transcriptMetadata = projectChatTranscriptMetadata(props.selectedSession);
-  rerender();
-  await flushDeferredRowPrune();
-  expect(
-    [...container.querySelectorAll(".chat-activity-group__label")].map(
-      (label) => label.textContent,
-    ),
-  ).toEqual(["Worked", "Worked"]);
-  expect(text(".chat-turn-recap")).toContain("Done in 13 seconds");
-  expect(text(".chat-turn-recap")).toContain("42 output tokens");
-});
-
 it.each([
-  [true, "live"],
   [false, "live"],
-  [true, "cached"],
   [false, "cached"],
-  [true, "sparse"],
-  [false, "sparse"],
+  [true, "live"],
+  [true, "cached"],
 ] as const)(
-  "restores only the visible completed run's duration (matching=%s, source=%s)",
-  async (matching, source) => {
+  "restores the visible answer's duration without a work rollup (bubble=%s, source=%s)",
+  async (bubbleMode, source) => {
     const runId = "restored-duration";
     const props = propsFor(runId, [
       prompt(runId, 1_000),
-      work(runId, 2_000),
-      { ...reply(runId, 3_000, "Checking another file."), phase: "commentary" },
-      { ...work(runId, 4_000), toolCallId: "second-read" },
+      ...(bubbleMode ? [work(runId, 2_000)] : []),
       reply(runId, 14_000),
     ]);
-    const saved = session(matching ? runId : "another-run", 13_000);
+    props.chatBubbleMode = bubbleMode;
+    const saved = session(runId, 13_000);
     props.selectedSession =
-      source === "live"
-        ? saved
-        : source === "sparse"
-          ? { key: saved.key, kind: saved.kind, updatedAt: saved.updatedAt }
-          : undefined;
-    props.transcriptMetadata = source === "live" ? undefined : projectChatTranscriptMetadata(saved);
+      source === "live" ? saved : { key: saved.key, kind: saved.kind, updatedAt: 1 };
+    props.transcriptMetadata =
+      source === "cached" ? projectChatTranscriptMetadata(saved) : undefined;
     const { container, text } = mount(props);
     await flushDeferredRowPrune();
-    expect(
-      [...container.querySelectorAll(".chat-activity-group__label")].map(
-        (label) => label.textContent,
-      ),
-    ).toEqual(["Worked", "Worked"]);
-    expect(text(".chat-turn-recap") ?? "").toBe(matching ? "Done in 13 seconds" : "");
+    expect(container.querySelector(".chat-work-group")).toBeNull();
+    expect(text(".chat-turn-recap")).toContain("Done in 13 seconds");
   },
 );
 
-it("keeps the work disclosure interactive after its parent renders again", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(60_000);
-  const runId = "restored-work";
-  const props = threadProps("pane-redraw-owner", "agent:main:dashboard:redraw-owner", [
-    prompt(runId, 1_000),
-    work(runId, 2_000),
-    reply(runId, 3_000, "Inspection complete"),
-  ]);
-  const { container, rerender } = mount(props);
-  await vi.advanceTimersByTimeAsync(0);
-  rerender();
-  const disclosure = container.querySelector<HTMLButtonElement>(".chat-work-group > button");
-  expect(disclosure).not.toBeNull();
-  expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
-  disclosure?.click();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(disclosure?.getAttribute("aria-expanded")).toBe("true");
-  await waitForSolid(() => expect(container.textContent).toContain("read"));
-  disclosure?.click();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
-  expect(container.textContent).not.toContain("read");
-  expect(container.textContent).toContain("Inspection complete");
+it("uses matching lifecycle duration, not final-message creation time", async () => {
+  const status = "done";
+  const runId = "duration-run";
+  const messages = [prompt(runId, 1_000), work(runId, 2_000), reply(runId, 508_000)];
+  const props = propsFor(runId, messages);
+  props.selectedSession = session(runId, 1_655_000, {
+    status,
+    startedAt: 1_000,
+    endedAt: 1_656_000,
+    updatedAt: 1_656_000,
+  });
+  const liveSession = props.selectedSession;
+  props.transcriptMetadata = projectChatTranscriptMetadata(liveSession);
+  props.selectedSession = { key: props.sessionKey, kind: "direct", updatedAt: 1 };
+  const { container, text, rerender } = mount(props);
+  // A fresh pane has never watched this run: restored lifecycle facts suffice.
+  await flushDeferredRowPrune();
+  const duration = () => text(".chat-activity-group__label");
+  const expectDuration = (expected: string) => {
+    rerender();
+    expect(duration()).toBe(expected);
+  };
+  expect(duration()).toBe("Worked for 27 minutes, 35 seconds");
+  props.transcriptMetadata = undefined;
+  props.selectedSession = liveSession;
+  props.selectedSession.runtimeMs = 1_660_000;
+  expectDuration("Worked for 27 minutes, 40 seconds");
+  props.messages = messages.slice(1);
+  expectDuration("Worked for 27 minutes, 40 seconds");
+  props.messages = messages;
+  props.selectedSession.lastRunId = "unrelated-run";
+  // An advancing session row cannot erase timing already recorded for this answer.
+  expectDuration("Worked for 27 minutes, 40 seconds");
+  expect(container.querySelector(".chat-work-group")).not.toBeNull();
+  props.selectedSession.lastRunId = runId;
+  props.selectedSession.status = "running";
+  expectDuration("Worked");
+  props.selectedSession.status = status;
+  for (const runtimeMs of [undefined, -1, Number.NaN]) {
+    props.selectedSession.runtimeMs = runtimeMs;
+    expectDuration("Worked");
+  }
+  props.selectedSession.runtimeMs = 1_655_000;
+  props.selectedSession.key = "agent:main:dashboard:other";
+  expectDuration("Worked");
 });
 
 it.each([false, true])(
@@ -218,7 +201,7 @@ it.each([false, true])(
       summaries.map(
         (summary) => summary.querySelector(".chat-activity-group__label")?.textContent ?? null,
       ),
-    ).toEqual(steer ? ["Worked"] : ["Worked", "Worked"]);
+    ).toEqual(steer ? ["Worked for 20 seconds"] : ["Worked", "Worked for 20 seconds"]);
   },
 );
 it("keeps progress after accepted steers and before queued input", async () => {

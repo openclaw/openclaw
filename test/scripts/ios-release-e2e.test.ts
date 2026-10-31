@@ -738,6 +738,15 @@ process.exitCode = 23;
           : ["ios:screenshots"],
       );
       if (flow === "screenshots") {
+        const hostPreparation = requiredWorkflowStep(
+          release.jobs.screenshots.steps,
+          "Reserve host CPU for screenshots",
+        );
+        expect(
+          evaluateWorkflow(hostPreparation.if ?? "${{ true }}", {
+            inputs: { startup_probe: startupProbe },
+          }),
+        ).toBe(!startupProbe);
         expect(observed.snapshots).toBe("1");
         expect(observed.startupProbe).toBe(startupProbe ? "1" : "0");
         expect(observed.deviceFamily).toBe(startupProbe ? "iphone" : "");
@@ -1988,6 +1997,8 @@ it.each([
       containing([
         "-configuration",
         "Debug",
+        "ARCHS=arm64",
+        "COMPILER_INDEX_STORE_ENABLE=NO",
         "CODE_SIGNING_ALLOWED=YES",
         "CODE_SIGN_IDENTITY=-",
         "CODE_SIGN_STYLE=Manual",

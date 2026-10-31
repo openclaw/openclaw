@@ -94,6 +94,7 @@ export type MarkdownFileLinkTarget = {
   line?: number | null;
   sessionKey?: string;
   messageEntryId?: string;
+  documentRelative?: boolean;
 };
 
 export function markdownFileLinkFromEvent(event: Event): MarkdownFileLinkTarget | null {
@@ -116,6 +117,7 @@ export function markdownFileLinkFromEvent(event: Event): MarkdownFileLinkTarget 
     line: line ? Number.parseInt(line, 10) : null,
     ...(sessionKey ? { sessionKey } : {}),
     ...(messageEntryId ? { messageEntryId } : {}),
+    ...(link.dataset.fileDocumentRelative === "true" ? { documentRelative: true } : {}),
   };
 }
 
@@ -162,4 +164,32 @@ export function parseMarkdownFileLinkTarget(
 
 export function isHostLocalMarkdownFileHref(href: string): boolean {
   return HOST_LOCAL_FILE_HREF_RE.test(href.trim());
+}
+
+/** Selection cues may drop a query; source-bound reads still reject it. */
+export function parseMarkdownDocumentFileLinkTarget(
+  href: string,
+  purpose: "read" | "select" = "read",
+) {
+  // Split URL delimiters before decoding: encoded # and ? belong to the filename.
+  const path = href.split(purpose === "select" ? /[?#]/ : "#", 1)[0] ?? "";
+  if (!path || path.includes("?")) {
+    return null;
+  }
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    return null;
+  }
+  const target = splitMarkdownFileLineSuffix(decoded);
+  if (
+    !target.path ||
+    /^(?:[/\\]|~[/\\]|[a-z][a-z0-9+.-]*:)/i.test(target.path) ||
+    /\p{Cc}/u.test(decoded)
+  ) {
+    return null;
+  }
+  // Authored document hrefs already delimit their paths, including extensionless files.
+  return target;
 }

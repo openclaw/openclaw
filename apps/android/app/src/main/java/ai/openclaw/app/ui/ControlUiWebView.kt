@@ -297,8 +297,6 @@ internal fun controlUiStartupAuth(page: NodeRuntime.GatewayControlPage): JsonObj
     if (legacy?.containsKey("password") == true) put("token", JsonNull)
   }
 
-// WebKit 1.17's lint detector reports Kotlin WebViewClient constructors even when this callback exists.
-@SuppressLint("MissingOnRenderProcessGone")
 private class ControlUiWebViewClient(
   private val page: NodeRuntime.GatewayControlPage,
   private val navigationUrl: String? = null,

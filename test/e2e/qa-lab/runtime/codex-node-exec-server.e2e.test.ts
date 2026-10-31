@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import { createServer } from "node:http";
 import path from "node:path";
 import { setTimeout as waitForProofTick } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -27,7 +27,10 @@ import {
   type FixtureReceiptChannel,
 } from "../../../helpers/fixture-receipts.js";
 import { acquireGatewayTestClient } from "../../../helpers/gateway-client.js";
-import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
+import {
+  writeOpenAiResponsesItem,
+  readLatestUserMarker,
+} from "../../../helpers/openai-responses-item.test-support.js";
 import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
@@ -60,6 +63,13 @@ const REQUEST_TIMEOUT_MS = 120_000;
 const WAIT_OPTIONS = { timeout: 60_000, interval: 100 };
 const WORKER_COMMAND_ARGS = new Set(["worker", "--internal-worker-session"]);
 const WORKER_OR_CODEX_COMMAND_ARGS = new Set([...WORKER_COMMAND_ARGS, "codex"]);
+const PROOF_USAGE = {
+  input_tokens: 32,
+  input_tokens_details: null,
+  output_tokens: 16,
+  output_tokens_details: null,
+  total_tokens: 48,
+};
 const SCENARIO_MARKERS = [
   ["recovery", RECOVERY_MARKER],
   ["repeat", REPEAT_MARKER],
@@ -131,44 +141,6 @@ function waitForTurn(reviewer: GatewayClient, runId: string, timeoutMs = REQUEST
 }
 type ProofProvider = Awaited<ReturnType<typeof startProofProvider>>;
 
-function finishProofResponse(response: ServerResponse, item: Record<string, unknown>): void {
-  const responseId = `resp_codex_node_${randomUUID()}`;
-  writeOpenAiResponsesSse(response, [
-    { type: "response.created", response: { id: responseId } },
-    { type: "response.output_item.done", item },
-    {
-      type: "response.completed",
-      response: {
-        id: responseId,
-        status: "completed",
-        output: [item],
-        usage: {
-          input_tokens: 32,
-          input_tokens_details: null,
-          output_tokens: 16,
-          output_tokens_details: null,
-          total_tokens: 48,
-        },
-      },
-    },
-  ]);
-}
-
-function readProofScenario(body: Record<string, unknown>): ProofScenario | undefined {
-  const input = Array.isArray(body.input) ? body.input : [];
-  for (const entry of input.toReversed()) {
-    if (!isRecord(entry) || entry.role !== "user") {
-      continue;
-    }
-    const userText = JSON.stringify(entry);
-    const scenario = SCENARIO_MARKERS.find(([, marker]) => userText.includes(marker));
-    if (scenario) {
-      return scenario[0];
-    }
-  }
-  return undefined;
-}
-
 function proofShellCommand(params: {
   scenario: ProofScenario;
   baseUrl: string;
@@ -205,7 +177,11 @@ function proofShellCommand(params: {
           "runtimeInjectionPresent:Boolean(process.env.NODE_OPTIONS),",
           "ordinary:process.env.NODE_ENV||null,",
           `privateHome:process.env.HOME!==${JSON.stringify(params.nodeHome)},`,
-          'privateCodexHome:Boolean(process.env.CODEX_HOME&&process.env.CODEX_HOME.startsWith(process.env.HOME+"/")),',
+          // Retained workspace HOME and ephemeral credential-free CODEX_HOME have separate owners.
+          "privateCodexHome:Boolean(process.env.CODEX_HOME",
+          '&&process.env.CODEX_HOME!==process.env.HOME+"/.codex"',
+          `&&process.env.CODEX_HOME!==${JSON.stringify(`${params.nodeHome}/.codex`)}`,
+          "&&(fs.statSync(process.env.CODEX_HOME).mode&0o077)===0),",
           "http:await response.text(),pid:process.pid};",
           `fs.writeFileSync(${JSON.stringify(evidenceFile)},JSON.stringify(evidence));`,
           `console.log(${JSON.stringify(params.scenario === "recovery" ? "CODEX_NODE_FRESH_ATTEMPT_OK" : "CODEX_NODE_PROCESS_OK")});`,
@@ -241,7 +217,7 @@ async function startProofProvider(nodeHome: string) {
             visibleTools.add(tool.name);
           }
         }
-        const scenario = readProofScenario(body);
+        const scenario = readLatestUserMarker(body, SCENARIO_MARKERS);
         if (scenario) {
           const callId = `call_codex_node_${scenario}`;
           const completed = (Array.isArray(body.input) ? body.input : []).some(
@@ -249,25 +225,35 @@ async function startProofProvider(nodeHome: string) {
               isRecord(entry) && entry.type === "function_call_output" && entry.call_id === callId,
           );
           if (completed) {
-            finishProofResponse(response, {
-              type: "message",
-              role: "assistant",
-              id: `msg_codex_node_${scenario}`,
-              content: [{ type: "output_text", text: `CODEX_NODE_${scenario.toUpperCase()}_OK` }],
-            });
+            writeOpenAiResponsesItem(
+              response,
+              `resp_codex_node_${randomUUID()}`,
+              {
+                type: "message",
+                role: "assistant",
+                id: `msg_codex_node_${scenario}`,
+                content: [{ type: "output_text", text: `CODEX_NODE_${scenario.toUpperCase()}_OK` }],
+              },
+              PROOF_USAGE,
+            );
             return;
           }
           nativeExecCalls += 1;
-          finishProofResponse(response, {
-            type: "function_call",
-            call_id: callId,
-            name: "exec_command",
-            arguments: JSON.stringify({
-              cmd: proofShellCommand({ scenario, baseUrl, nodeHome }),
-              yield_time_ms: scenario === "disconnect" ? 10_000 : 30_000,
-              max_output_tokens: 1_000,
-            }),
-          });
+          writeOpenAiResponsesItem(
+            response,
+            `resp_codex_node_${randomUUID()}`,
+            {
+              type: "function_call",
+              call_id: callId,
+              name: "exec_command",
+              arguments: JSON.stringify({
+                cmd: proofShellCommand({ scenario, baseUrl, nodeHome }),
+                yield_time_ms: scenario === "disconnect" ? 10_000 : 30_000,
+                max_output_tokens: 1_000,
+              }),
+            },
+            PROOF_USAGE,
+          );
           return;
         }
       }
@@ -459,7 +445,8 @@ async function waitForProofState(
 }
 
 async function expectSuccessfulTurn(reviewer: GatewayClient, runId: string): Promise<void> {
-  expect(await waitForTurn(reviewer, runId)).toMatchObject({ status: "ok" });
+  const outcome = await waitForTurn(reviewer, runId);
+  expect(outcome, JSON.stringify(outcome)).toMatchObject({ status: "ok" });
 }
 
 describe("Codex paired-device exec-server carrier", () => {
@@ -500,6 +487,7 @@ describe("Codex paired-device exec-server carrier", () => {
             argsPrefix: ["dist/index.js"],
             cwd: process.cwd(),
             usePackagedPlugins: true,
+            tempParentDir: root,
           },
           transportBaseUrl: "http://127.0.0.1",
           providerMode: "mock-openai",
@@ -794,7 +782,15 @@ describe("Codex paired-device exec-server carrier", () => {
         () => stopQaGatewayFixture(gatewayOwner),
         () => (published ? closeWireServer(published.server) : undefined),
         () => provider?.stop(),
-      );
+      ).catch((cause: unknown) => {
+        throw new Error(
+          `Codex node execution failed:
+${gateway?.readLogsSince(0) ?? ""}`,
+          {
+            cause,
+          },
+        );
+      });
     },
   );
 });

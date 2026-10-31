@@ -189,10 +189,45 @@ it("keeps match filters and active anchors authoritative across worker payload e
         padding: compressed ? "compressible payload ".repeat(256) : "",
       });
       const answer = encodedAssistant("answer", "completed-run", { display: true });
+      // These answers must not bypass silence through explicit delivery facts.
+      const progressRows: Array<[string, Record<string, unknown>]> = [
+        ["interim-run", { content: "NO_REPLY", endTurn: false }],
+        ["commentary-run", { content: "NO_REPLY", phase: "commentary" }],
+        ["async-run", { content: "NO_REPLY", openclawAsyncDelivery: { itemId: "async-item" } }],
+        [
+          "segment-run",
+          { content: "NO_REPLY", openclawStreamFallback: { source: "segment", itemId: "segment" } },
+        ],
+      ];
+      const priorAnswerCases = progressRows.map(([runId, message]) => ({
+        runId,
+        prior: encodedAssistant(`${runId}-answer`, runId),
+        later: encodedAssistant(`${runId}-later`, runId, message),
+      }));
+      const mediaReply = encodedAssistant("media-reply", "media-run", {
+        content: "NO_REPLY",
+        __openclaw: { runId: "media-run", media: [{ path: "/tmp/result.png" }] },
+      });
+      const deliveredMediaReply = encodedAssistant("delivered-media", "delivered-media-run", {
+        content: "NO_REPLY",
+        openclawDelivery: { mediaUrls: ["/tmp/result.png"] },
+      });
+      const unkeyedFallback = encodedAssistant("unkeyed-fallback", "unkeyed-run", {
+        openclawStreamFallback: { source: "segment" },
+      });
+      const currentFallback = encodedAssistant("current-fallback", "current-run", {
+        openclawStreamFallback: { source: "current", itemId: "current" },
+      });
+      const sourceRows = ["system", null].map((role) =>
+        encodedAssistant(`source-${role}`, "source-rows-run", {
+          role,
+          idempotencyKey: `source-${role}`,
+        }),
+      );
       const finalMirror = encodedAssistant("final-source-reply", "mirror-run", {
         openclawDeliveryMirror: {
           kind: "message-tool-source-reply",
-          sourceTurnId: "mirror-run",
+          sourceTurnId: "source-turn",
           final: true,
         },
       });
@@ -235,8 +270,19 @@ it("keeps match filters and active anchors authoritative across worker payload e
       const events = [
         { type: "session", id: sessionId, version: 3 },
         answer,
+        ...priorAnswerCases.flatMap(({ prior, later }) => [prior, later]),
+        mediaReply,
+        deliveredMediaReply,
+        unkeyedFallback,
+        currentFallback,
+        ...sourceRows,
         encodedAssistant("unsent", "silent-run"),
-        encodedAssistant("silent-final", "silent-run", { content: "NO_REPLY" }),
+        encodedAssistant("silent-final", "silent-run", {
+          content: [
+            { type: "thinking", text: "internal" },
+            { type: "text", text: "NO_REPLY" },
+          ],
+        }),
         encodedAssistant("silent", "completed-run", { content: "NO_REPLY" }),
         encodedAssistant("tool-use", "completed-run", { stopReason: "toolUse" }),
         encodedAssistant("tool-call", "completed-run", {
@@ -275,6 +321,20 @@ it("keeps match filters and active anchors authoritative across worker payload e
         [{ kind: "visible-final", runId: "mirror-run" }, finalMirror],
         [{ kind: "visible-final", runId: "absent-run" }],
         [{ kind: "visible-final", runId: "silent-run" }],
+        ...priorAnswerCases.map(({ runId, prior }): [SessionTranscriptEventMatch, unknown] => [
+          { kind: "visible-final", runId },
+          prior,
+        ]),
+        [{ kind: "visible-final", runId: "unkeyed-run" }, unkeyedFallback],
+        [{ kind: "visible-final", runId: "current-run" }, currentFallback],
+        [{ kind: "visible-final", runId: "media-run" }, mediaReply],
+        [{ kind: "visible-final", runId: "delivered-media-run" }, deliveredMediaReply],
+        [{ kind: "visible-final", runId: "source-rows-run" }],
+        [{ kind: "visible-final", runId: "widget-run" }],
+        ...sourceRows.map((event): [SessionTranscriptEventMatch, unknown] => [
+          { kind: "idempotency", key: event.id },
+          event,
+        ]),
         [{ kind: "idempotency", key: "shared-key" }, user],
         [{ kind: "idempotency", key: "shared-key", assistant: true }, ordinary],
         [{ kind: "idempotency", key: "shared-key", runId: "delivery-run" }, ordinary],

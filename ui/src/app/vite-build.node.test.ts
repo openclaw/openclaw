@@ -306,6 +306,15 @@ it.each(["unresolved import", "blocked output"])(
   },
 );
 
+it("keeps the WebKit text-size lock that stops iPhone Safari from boosting small text", async () => {
+  await writeRoot("lazy.css", "html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }");
+
+  const { names } = await buildOutput(createConfig());
+
+  const styles = (await readAssets(names, ".css")).map(({ source }) => source).join("\n");
+  expect(styles).toContain("-webkit-text-size-adjust:100%");
+});
+
 it("finalizes raw browser-fixture assets when precompression is omitted", async () => {
   const config = createConfig();
   await writeRoot(

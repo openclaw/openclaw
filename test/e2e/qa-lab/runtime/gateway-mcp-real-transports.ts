@@ -24,6 +24,7 @@ import { runGatewaySmoke } from "../../../../scripts/dev/gateway-smoke.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { withFixturePlugin } from "./fixture-plugin-config.ts";
 import { createMcpClientTempState } from "./mcp-client-temp-state.fixture.ts";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.ts";
 
@@ -189,27 +190,6 @@ module.exports = {
     pluginDir,
     startupGatePath,
     cleanup: () => fs.rm(root, { force: true, recursive: true }),
-  };
-}
-
-function withFixturePlugin(config: OpenClawConfig, pluginDir: string): OpenClawConfig {
-  const existingPaths = config.plugins?.load?.paths ?? [];
-  const existingAllow = config.plugins?.allow ?? [];
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      enabled: true,
-      allow: [...new Set([...existingAllow, FIXTURE_PLUGIN_ID])],
-      load: {
-        ...config.plugins?.load,
-        paths: [...new Set([...existingPaths, pluginDir])],
-      },
-      entries: {
-        ...config.plugins?.entries,
-        [FIXTURE_PLUGIN_ID]: { enabled: true },
-      },
-    },
   };
 }
 
@@ -626,7 +606,7 @@ async function runMcpGatewayStartupRetryProof(options: ProducerOptions): Promise
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: false,
       onListening,
-      mutateConfig: (config) => withFixturePlugin(config, fixture.pluginDir),
+      mutateConfig: (config) => withFixturePlugin(config, fixture.pluginDir, FIXTURE_PLUGIN_ID),
     });
     if (!proxy || !mcp) {
       throw new Error("MCP client was not started by the Gateway before-spawn hook");
@@ -709,7 +689,7 @@ async function runMcpGatewayStartupRetryProof(options: ProducerOptions): Promise
 
 async function writePluginToolsConfig(root: string, pluginDir: string) {
   const configPath = path.join(root, "openclaw.json");
-  const config = withFixturePlugin({} as OpenClawConfig, pluginDir);
+  const config = withFixturePlugin({} as OpenClawConfig, pluginDir, FIXTURE_PLUGIN_ID);
   await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   return configPath;
 }

@@ -147,13 +147,14 @@ export const contextReport = (generatedAt: number, ordinal = 0): SessionSystemPr
 
 export const usageRoleConfig = (
   base: OpenClawConfig,
-  others: "none" | "view" = "none",
+  others: "none" | "invited" | "view" = "none",
 ): OpenClawConfig => ({
   ...base,
   gateway: {
     roles: {
       default: "guest",
       definitions: {
+        // @ts-expect-error Runtime invitation policy precedes config enum activation in step 13.
         guest: { sessions: { others }, agents: "*", scopes: ["operator.read", "operator.write"] },
       },
     },

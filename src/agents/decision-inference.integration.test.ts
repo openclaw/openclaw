@@ -6,7 +6,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { DecisionProviderContextV2 } from "../decisions/provider-context.js";
-import type { DecisionBatchResultV2, DecisionRuntimeV2 } from "../decisions/types-v2.js";
+import type { DecisionRuntimeV2 } from "../decisions/runtime-types.js";
+import type { DecisionBatchResultV2 } from "../decisions/types-v2.js";
 import {
   createContext,
   createOperatorClient,

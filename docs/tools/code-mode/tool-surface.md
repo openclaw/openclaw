@@ -39,7 +39,6 @@ Model-facing input:
 type CodeModeExecInput = {
   title?: string;
   code: string;
-  restartSafe?: boolean;
   awaitResults?: boolean;
 };
 ```
@@ -66,19 +65,10 @@ Rules:
 - The retired `language` and `typecheck` fields are rejected with `invalid_input`.
   Tool arguments are validated when each call reaches its normal execution owner;
   Code Mode does not typecheck the whole program before execution.
-- Do not set `restartSafe` on a new `exec`. Set it to `true` only when OpenClaw
-  explicitly requests replay after a gateway restart, and never for `write`,
-  `edit`, `exec`, or any mutation. Every catalog call must be explicitly
-  replay-safe. OpenClaw rejects unmarked catalog tools and namespace
-  surfaces that are not proven replay-safe. A generic exec surface is not
-  replay-safe merely because one command appears read-only; use audited read,
-  grep, or find tools.
-  Suspended results are marked replay-safe so
-  [restart recovery](/gateway/restart-recovery) can reconstruct an interrupted
-  turn from its transcript instead of restoring the process-local continuation.
-  Recovery remains limited to audited read-only core tools and explicitly
-  replay-safe plugin tools. `store` and `load` are unavailable in `restartSafe`
-  cells. Leave the field omitted for ordinary calls.
+- A Gateway restart ends the process-local Code Mode continuation. The resumed
+  root session inspects the transcript and current state before running a new cell;
+  it does not reconstruct or replay an unfinished cell. See
+  [Restart recovery](/gateway/restart-recovery).
 - `exec` rejects `import`, `require`, dynamic import, and module-loader
   patterns.
 - `exec` never exposes the normal shell `exec` implementation recursively.

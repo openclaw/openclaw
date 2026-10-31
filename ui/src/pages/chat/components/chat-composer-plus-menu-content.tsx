@@ -32,6 +32,7 @@ export function ChatComposerPlusMenuContent(props: ChatComposerPlusMenuBodyProps
       skills: capabilityMenu?.skills ?? null,
       skillsRead: capabilityMenu?.skillsRead ?? null,
       mcpServers: capabilityMenu?.mcpServers ?? [],
+      mcpServersReadState: capabilityMenu?.mcpServersReadState ?? "unavailable",
       toolsEffectiveResult: capabilityMenu?.toolsEffectiveResult ?? null,
       toolsEffectiveLoading: capabilityMenu?.toolsEffectiveLoading ?? false,
       toolsEffectiveError: capabilityMenu?.toolsEffectiveError ?? false,

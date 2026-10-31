@@ -22,14 +22,20 @@ it.each([true, false])("services snapshots without yielding (preserve=%s)", (pre
   fs.mkdirSync(cache);
   const sourceUrl = resolveRuntimeWorkerUrl(sqliteSnapshotStagingEntrypoints.source);
   const cleanupUrl = resolveRuntimeWorkerUrl(sqliteSnapshotStagingEntrypoints.cleanup);
+  const sqliteUrl = resolveRuntimeWorkerUrl({
+    ...sqliteSnapshotStagingEntrypoints.source,
+    sourceWorkerName: "node-sqlite",
+    distWorkerPath: "infra/node-sqlite.js",
+  });
   const script = `
       import assert from 'node:assert/strict';
       import fs from 'node:fs';
       import { spawnSync } from 'node:child_process';
-      import { createRequire, syncBuiltinESMExports } from 'node:module';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { requireNodeSqlite } from ${JSON.stringify(sqliteUrl.href)};
       import { startSqliteReadOnlyLocationAsync } from ${JSON.stringify(sourceUrl.href)};
       import { cleanupSnapshotOperations } from ${JSON.stringify(cleanupUrl.href)};
-      const sqlite = createRequire(import.meta.url)('node:sqlite');
+      const sqlite = requireNodeSqlite();
       const source = ${JSON.stringify(source)};
       const seed = new sqlite.DatabaseSync(source);
       try {
@@ -79,8 +85,8 @@ it.each([true, false])("services snapshots without yielding (preserve=%s)", (pre
         assert.equal(Boolean(prepared.privateFamily), ${JSON.stringify(preserve)});
         assert.deepEqual([idle.microtask, idle.timer], [false, false]);
         assert.equal(fs.existsSync(prepared.location), true);
-        const reader = spawnSync(process.execPath, ['--input-type=module', '-e',
-          "import { DatabaseSync } from 'node:sqlite';" +
+        const reader = spawnSync(process.execPath, [...${JSON.stringify(resolveRuntimeWorkerArgv(sqliteUrl).slice(0, -1))}, '--input-type=module', '-e',
+          ${JSON.stringify(`import { requireNodeSqlite } from ${JSON.stringify(sqliteUrl.href)}; const { DatabaseSync } = requireNodeSqlite();`)} +
           "const database = new DatabaseSync(process.argv[1], { readOnly: true });" +
           "try { process.stdout.write(JSON.stringify(database.prepare('SELECT value FROM probe').get())); }" +
           "finally { database.close(); }",

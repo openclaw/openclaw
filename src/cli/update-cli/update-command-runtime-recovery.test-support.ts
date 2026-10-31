@@ -152,7 +152,7 @@ export function expectInterruptedDoctorPackageRollback(runs: UpdateRunRecord[]):
     {
       phase: "finished",
       status: "failed",
-      reason: "doctor-failed",
+      reason: "interrupted",
       verification: {
         recovery: {
           serviceRestartSafe: false,

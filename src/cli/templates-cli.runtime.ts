@@ -71,8 +71,8 @@ const TEMPLATE_AGENT_RELOAD_TIMEOUT_MS = 15_000;
 const TEMPLATE_AGENT_RELOAD_POLL_MS = 100;
 
 function logTemplateAddPlanSummary(plan: TemplateAddPlan): void {
-  runtime.log(`Agent: ${plan.agent.finalId}`);
-  runtime.log(`Workspace: ${plan.agent.workspace}`);
+  runtime.log(`Agent: ${sanitizeTerminalText(plan.agent.finalId)}`);
+  runtime.log(`Workspace: ${sanitizeTerminalText(plan.agent.workspace)}`);
   logTemplateAgentConfiguration(plan);
   runtime.log(`Actions: ${plan.summary.totalActions}`);
   runtime.log(`Packages: ${plan.summary.packageActions}`);
@@ -81,7 +81,7 @@ function logTemplateAddPlanSummary(plan: TemplateAddPlan): void {
       typeof action.details?.requirementState === "string"
         ? action.details.requirementState
         : "unresolved";
-    runtime.log(`  Requirement ${action.target}: ${requirementState}`);
+    runtime.log(`  Requirement ${sanitizeTerminalText(action.target)}: ${requirementState}`);
   }
   const skillWarnings = addPlanSkillWarnings(plan);
   if (skillWarnings.length > 0) {
@@ -103,7 +103,7 @@ function logTemplateAddPlanSummary(plan: TemplateAddPlan): void {
         : typeof server?.command === "string"
           ? redactSensitiveArgv([server.command, ...filterStringEntries(server.args)]).join(" ")
           : "invalid declaration";
-    runtime.log(`  MCP ${action.id}: ${target}`);
+    runtime.log(`  MCP ${sanitizeTerminalText(action.id)}: ${sanitizeTerminalText(target)}`);
   }
   runtime.log(`Cron jobs: ${plan.summary.cronJobActions}`);
   if (plan.capabilityChanges.length > 0) {
@@ -167,7 +167,9 @@ export async function runTemplatesInspectCommand(
     }
     return;
   }
-  runtime.log(`Template: ${result.source.name}@${result.source.version}`);
+  runtime.log(
+    `Template: ${sanitizeTerminalText(result.source.name)}@${sanitizeTerminalText(result.source.version)}`,
+  );
   runtime.log(
     `Agent: ${sanitizeTerminalText(result.manifest.agent.name ?? result.manifest.agent.id)}`,
   );
@@ -264,7 +266,9 @@ export async function runTemplatesAddCommand(
         if (opts.json) {
           writeRuntimeJson(runtime, plan);
         } else {
-          runtime.log(`Template add preview: ${plan.template.name}@${plan.template.version}`);
+          runtime.log(
+            `Template add preview: ${sanitizeTerminalText(plan.template.name)}@${sanitizeTerminalText(plan.template.version)}`,
+          );
           logTemplateAddPlanSummary(plan);
         }
         return;

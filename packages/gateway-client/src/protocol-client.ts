@@ -3,7 +3,7 @@ import {
   isGatewayEventFrame,
   isGatewayResponseFrame,
 } from "@openclaw/gateway-protocol/frame-guards";
-import { toStringifiedError } from "@openclaw/normalization-core";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveSleepDelayMs, RetrySupervisor, sleepWithAbort } from "@openclaw/retry";

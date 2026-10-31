@@ -433,7 +433,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         .spyOn(plugins, "updatePluginsAfterCoreUpdate")
         .mockImplementation(async () => {
           events.push("local-plugins");
-          return { ...unchangedPluginUpdate(), assessment: { kind: "no-payload-repair" } };
+          return unchangedPluginUpdate();
         });
       const actualResume = await vi.importActual<typeof import("./update-command-resume.js")>(
         "./update-command-resume.js",

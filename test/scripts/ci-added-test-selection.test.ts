@@ -1,33 +1,16 @@
-import { execFileSync } from "node:child_process";
 import { renameSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { resolveChangedNodeTestTargets } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createNestedGitEnv } from "../helpers/temp-repo.js";
-import { writeFiles } from "./ci-changed-node-test-plan.test-support.js";
+import { createFixtureGit, writeFiles } from "./ci-changed-node-test-plan.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const inventory = "test/vitest-projects-config.test.ts";
 
 it("audits added opt-in tests and rename destinations without auditing ordinary edits", () => {
   const cwd = tempDirs.make("ci-added-test-selection-");
-  const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.test",
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "core.hooksPath=/dev/null",
-        ...args,
-      ],
-      { cwd, env: createNestedGitEnv(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ).trim();
+  const git = createFixtureGit(cwd);
   const existing = "scripts/control-ui-retention/existing.test.ts";
   const oldPath = "scripts/control-ui-retention/old.test.ts";
   const renamed = "scripts/control-ui-retention/renamed.test.ts";

@@ -27,6 +27,7 @@ import type { GatewayHotReloadApplication } from "./config-reload-status.types.j
 import { commitHookTransformMappingReload } from "./hooks-mapping.js";
 import { resolveHooksConfig } from "./hooks.js";
 import type { GatewayCronExitWatcherHandoff } from "./server-cron-contract.js";
+import { reconcileOrphanedMemoryDreamingJobs } from "./server-cron-memory-dreaming-jobs.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import { reviveAgentDatabasesAfterConfigCommit } from "./server-reload-agent-databases.js";
@@ -476,6 +477,7 @@ export function createGatewayReloadHandlers(
           sourceConfig: publication ? publication.sourceConfig : nextConfig,
           changedPaths: plan.changedPaths,
           reloadPluginIds: plan.reloadPluginIds,
+          restartServiceIds: plan.restartServices,
           pluginLifecycle: plan.pluginLifecycle,
           prepareConfigEffects,
           commitRuntime,
@@ -593,6 +595,22 @@ export function createGatewayReloadHandlers(
         return "applied-restart-required";
       } finally {
         await reloadRetainedPluginServices();
+      }
+
+      if (plan.reloadPlugins) {
+        const cleanupConfig = getRuntimeConfig();
+        const cleanupRegistry = params.getPluginRegistry();
+        await reconcileOrphanedMemoryDreamingJobs({
+          cron: nextState.cronState.cron,
+          cfg: cleanupConfig,
+          logger: params.logReload,
+          manifestRegistry: params.getPluginMetadataSnapshot?.()?.manifestRegistry,
+          isCurrent: () =>
+            ownsCron() &&
+            isReloadOwnerActive() &&
+            cleanupConfig === getRuntimeConfig() &&
+            cleanupRegistry === params.getPluginRegistry(),
+        });
       }
 
       if (plan.disposeMcpRuntimes) {

@@ -52,6 +52,8 @@
   /* Typography — IBM Plex Sans (fonts/ibm-plex-sans.css): an engineered humanist sans
      for the steel-cyan identity. Fallbacks keep text painting on failure. */
   --font-body: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --link: var(--accent);
+  --link-on-tint: #61bcde;
 }
 
 :root[data-theme="tide-light"] {
@@ -94,4 +96,6 @@
   --grid-line: rgba(20, 40, 60, 0.04);
   /* Typography — IBM Plex Sans (fonts/ibm-plex-sans.css); see the dark block. */
   --font-body: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --link: #0f6585;
+  --link-on-tint: #005c7b;
 }

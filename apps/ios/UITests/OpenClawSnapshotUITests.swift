@@ -989,6 +989,12 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
         XCTAssertTrue(work.waitForExistence(timeout: 5))
         work.tap()
+        let result = app.buttons["chat-tool-activity-fixture-long-review"]
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        result.tap()
+        let earlier = app.staticTexts.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "Earlier response context.")).firstMatch
+        XCTAssertTrue(earlier.waitForExistence(timeout: 5))
         // A visible text leaf can be unhittable inside its accessible message container.
         // This setup needs the reply's pixels in the viewport, not a tap target.
         for _ in 0..<12 where !latestSeededReply.exists || !transcript.frame.contains(latestSeededReply.frame) {
@@ -1204,6 +1210,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY)
         self.assertElementHasRenderedContent(latest, named: "final reply with work collapsed")
         work.tap()
+        let result = app.buttons["chat-tool-activity-fixture-long-review"]
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        result.tap()
         XCTAssertTrue(earlier.waitForExistence(timeout: 5))
         self.attachScreenshot(named: "completed-work-expanded")
         let workLabel = work.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
@@ -1367,6 +1376,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             "Ready when you are. I can check a project, coordinate an agent, or prepare the next step.",
         ]
         XCTAssertTrue(assistant.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["chat-message-actions"].exists)
         assistant.press(forDuration: 0.8)
         XCTAssertTrue(assistant.exists)
         XCTAssertTrue(app.otherElements["chat-composer-surface"].exists)
@@ -2156,7 +2166,7 @@ extension OpenClawSnapshotUITests {
     }
 
     private func agentIdentity(in app: XCUIApplication) -> XCUIElement {
-        app.otherElements.matching(identifier: "chat-agent-identity").firstMatch
+        app.buttons.matching(identifier: "chat-agent-identity").firstMatch
     }
 
     private func readinessMarker(in app: XCUIApplication) -> XCUIElement {

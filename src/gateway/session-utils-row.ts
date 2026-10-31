@@ -72,6 +72,7 @@ import type {
 } from "./session-utils-contracts.js";
 import {
   resolveEstimatedSessionCostUsd,
+  resolveGatewaySessionBackgroundProcessCount,
   readStoreChildSessionLinks,
   type SessionChildLink,
   resolveSessionChildController,
@@ -517,10 +518,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     lifecycleRevision: entry?.lifecycleRevision,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
-    restartRecoveryStatus: entry?.mainRestartRecovery?.tombstone ? "tombstoned" : undefined,
-    restartRecoveryCycleId: entry?.mainRestartRecovery?.tombstone
-      ? entry.mainRestartRecovery.cycleId
-      : undefined,
     thinkingLevel: input.thinkingProjection.thinkingLevel,
     contextWindow: input.contextWindowProfile.contextWindow,
     contextWindows: input.contextWindowProfile.contextWindows,
@@ -590,6 +587,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     row: freezeTrustedJsonSnapshot<Readonly<GatewaySessionRow>>(row),
     source: Object.freeze({
       parsedKey: parseAgentSessionKey(key),
+      agentId: input.agentId,
       cfg,
       entry,
       selectedModel: input.selectedModel,
@@ -645,6 +643,15 @@ export function presentSessionRow(
   // Stamp the temporal projection, not the reusable materialized inputs.
   // Completed list caches retain this sample when they replay the finished row.
   row.snapshotAt = now;
+  const backgroundProcessCount = resolveGatewaySessionBackgroundProcessCount({
+    cfg: source.cfg,
+    key: row.key,
+    agentId: source.agentId,
+    sessionId: row.sessionId,
+  });
+  if (backgroundProcessCount !== undefined) {
+    row.backgroundProcessCount = backgroundProcessCount;
+  }
   const subagentRuns =
     options.subagentRuns ?? buildSubagentRunReadIndexFromRuns({ ...source.subagentRunInputs, now });
   const { subagentRun, fields } = projectGatewaySessionRunState({

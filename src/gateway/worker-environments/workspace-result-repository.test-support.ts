@@ -221,9 +221,6 @@ export function useRepositoryWorkspaceResultFixture() {
       );
     }
     const environments: WorkerDispatchEnvironmentService = {
-      fenceWorkerTurnForRecovery: () => {
-        throw new Error("Repository result fixture does not synthesize startup claims");
-      },
       prepareProjectIntent: async () => {
         throw new Error("unexpected local-project preparation");
       },
@@ -243,6 +240,7 @@ export function useRepositoryWorkspaceResultFixture() {
       reconcileEnvironment: vi.fn(async () => {}),
       reconcileOnce: vi.fn(async () => {}),
       supportsProviderExecutionMode: () => true,
+      fenceWorkerTurnForRecovery: vi.fn(),
     };
     const resolveWorkspace = async () => ({
       kind: "repository" as const,

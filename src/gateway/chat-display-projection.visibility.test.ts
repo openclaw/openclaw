@@ -236,6 +236,29 @@ it("hides heartbeat prompt and ok acknowledgements from visible history", () => 
   );
 });
 
+it.each([false, true])("preserves separate reasoning items after a heartbeat: %s", (heartbeat) => {
+  const reasoning = ["first-item", "second-item"].map((itemId, index) => ({
+    role: "assistant",
+    content: [{ type: "thinking", thinking: "Checking the next step." }],
+    stopReason: "stop",
+    __openclaw: { id: itemId, seq: index + 2, runId: "run-1" },
+  }));
+  const answer = assistantTextMessage("Finished.", 4);
+  expectProjection(
+    [...(heartbeat ? [userTextMessage(HEARTBEAT_PROMPT)] : []), ...reasoning, answer],
+    [
+      heartbeat
+        ? {
+            ...reasoning[0],
+            __openclaw: { id: "first-item", seq: 2, runId: "run-1", turnBoundary: true },
+          }
+        : reasoning[0],
+      reasoning[1],
+      answer,
+    ],
+  );
+});
+
 it.each([
   ["agent:main:main", "main"],
   ["legacy-session", undefined],

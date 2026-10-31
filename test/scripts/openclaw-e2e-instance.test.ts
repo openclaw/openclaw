@@ -17,6 +17,7 @@ import {
 } from "../helpers/fixture-receipts.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { isProcessPresent } from "./run-process.test-support.js";
 
 const pendingChildCompletions = new Set<Promise<unknown>>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -139,22 +140,13 @@ async function closeBashFixture(fixture: ReturnType<typeof startBash>) {
   await fixture.closed;
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // Shell stop/watchdog escalation can return before a foreign PID has been reaped.
 async function waitForProcessGone(
   pid: number,
   signal: AbortSignal,
   message: string,
 ): Promise<void> {
-  while (isProcessAlive(pid)) {
+  while (isProcessPresent(pid)) {
     await delay(5, undefined, { signal }).catch((error: unknown) => {
       throw new Error(`${message}: ${pid}`, { cause: error });
     });

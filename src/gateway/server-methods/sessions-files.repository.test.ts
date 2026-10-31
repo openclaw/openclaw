@@ -336,11 +336,20 @@ it("browses, previews, edits and diffs only the live repository without a Gatewa
   expect(listedPaths).not.toContain("package.json");
   expect(list.root).toBeUndefined();
   const before = await files.ok("get", "changed.txt");
+  expect(before.source).toEqual({ workspaceId: source.workspaceId, root: null, fileRoot: null });
   const content = "x".repeat(192 * 1024);
-  await files.ok("set", edit(content, before.file.hash));
+  await files.ok("set", { ...edit(content, before.file.hash), expectedSource: before.source });
   const saved = await files.ok("get", "changed.txt");
   expect(saved.file).toMatchObject({ content, hash: hashContent(content) });
   expect(saved.root).toBeUndefined();
+  expect(saved.source).toEqual(before.source);
+  await expect(
+    files.request("set", {
+      ...edit("wrong repository", saved.file.hash),
+      expectedSource: { ...before.source, workspaceId: "different-repository" },
+    }),
+  ).rejects.toMatchObject({ error: { details: { type: "session_file_source_changed" } } });
+  expect((await files.ok("get", "changed.txt")).file.content).toBe(content);
   const stale = await files.error("set", edit("stale", before.file.hash));
   expect(stale.details.type).toBe("session_file_conflict");
   writeFile("changed.txt", "after\n");
@@ -418,6 +427,14 @@ it.each(["second-München.txt", "second-Mu\u0308nchen.txt"])(
     writeFile(storedName, "retained second\n");
     writeFile("oversized.txt", oversizedBytes);
     await publishCheckpoint(base, await capture());
+    expect((await files.error("get", "oversized.txt")).details).toEqual({
+      type: "session_file_too_large",
+      maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
+      path: "oversized.txt",
+      size: oversizedBytes.length,
+      source: { workspaceId: source.workspaceId, root: null, fileRoot: null },
+    });
+    expect(run).toHaveBeenCalledOnce();
     active = false;
     const originalGitRead = worktreeGit.runGitBuffered;
     using hostReads = vi.spyOn(worktreeGit, "runGitBuffered");
@@ -432,6 +449,11 @@ it.each(["second-München.txt", "second-Mu\u0308nchen.txt"])(
     expect(retained.file.content).toBe("retained second\n");
     expect(retained.file.hash).toBeUndefined();
     expect(retained.root).toBeUndefined();
+    expect(retained.source).toEqual({
+      workspaceId: source.workspaceId,
+      root: null,
+      fileRoot: null,
+    });
     const blobsRead = () => hostReads.mock.calls.filter(([, args]) => args[1] === "--batch").length;
     using connection = createSessionFileDownloadClient();
     const download = await files.ok("download", "oversized.txt", undefined, connection);
@@ -450,6 +472,7 @@ it.each(["second-München.txt", "second-Mu\u0308nchen.txt"])(
         path: "oversized.txt",
         maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
         size: oversizedBytes.length,
+        source: retained.source,
       },
     });
     expect(blobsRead()).toBe(beforeOversized);
@@ -457,7 +480,7 @@ it.each(["second-München.txt", "second-Mu\u0308nchen.txt"])(
     const diff = await loadSessionDiff({ sessionKey }, context as never);
     expect(diff.unavailableReason).toBe("workspace_stopped");
     expect(diff.files.map((file) => file.path)).toEqual(changedPaths);
-    expect(run).not.toHaveBeenCalled();
+    expect(run).toHaveBeenCalledOnce();
     expect(mocks.workspace).not.toHaveBeenCalled();
 
     hostReads.mockImplementation(async (...args) => {

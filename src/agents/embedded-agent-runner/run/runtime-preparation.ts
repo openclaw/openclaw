@@ -9,10 +9,8 @@ import {
   hasPreparedAuthAttemptModelMetadata,
   resolveCredentialScopedAuthAttemptModelDecision,
 } from "../../runtime-plan/credential-scoped-model.js";
-import {
-  canRunPreparedAgentRuntimeAuthAttempt,
-  type PreparedAgentRuntimeAuthAttempt,
-} from "../../runtime-plan/prepare-auth.js";
+import { canRunPreparedAgentRuntimeAuthAttempt } from "../../runtime-plan/prepare-auth.js";
+import type { PreparedAgentRuntimeAuthAttempt } from "../../runtime-plan/types.js";
 import { resolveCandidateThinkingLevel } from "../../thinking-runtime.js";
 import { log } from "../logger.js";
 import {

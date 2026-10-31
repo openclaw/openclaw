@@ -17,6 +17,7 @@ import {
   isRuntimeTestFileIncluded,
   type CompactNodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
 import {
   CI_PROOF_TEST_FILES,
   PR_PROTECTED_RUNTIME_TEST_FILES,
@@ -388,7 +389,6 @@ describe("CI changed Node test plan", () => {
     expect(files).toContain(ordinary);
     expect(files.some(isCiProofTestFile)).toBe(false);
     const dedicatedProofs = [
-      "src/gateway/gateway.sessions-send-recovery.test.ts",
       "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
       "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts",
       "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
@@ -464,6 +464,8 @@ describe("CI changed Node test plan", () => {
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/pr-merge-admission.test.ts",
         "test/scripts/pr-merge-outcome.test.ts",
+        "test/scripts/pr-merge-prior-ci-artifact-build.test.ts",
+        "test/scripts/pr-merge-prior-ci.test.ts",
         "test/scripts/pr-merge-receipt.test.ts",
         "test/scripts/pr-merge-recovery.test.ts",
         "test/scripts/pr-merge-rest.test.ts",
@@ -474,6 +476,8 @@ describe("CI changed Node test plan", () => {
       const selected = createChangedNodeTestShards(targets, {
         runnerBackend,
         includeReleaseOnlyRuntimeTests: false,
+        includePrExemptRuntimeTests: false,
+        selectionMode: "aggressive",
       });
       expect(before).not.toBeNull();
       expect(selected).not.toBeNull();
@@ -510,6 +514,69 @@ describe("CI changed Node test plan", () => {
           "planConcurrency",
           "pretestBuildMode",
         ]);
+      }
+    },
+  );
+
+  it.each(["blacksmith", "github", "hybrid"])(
+    "selects prior-CI shell fixtures from their owner without enabling unrelated tooling (%s)",
+    (runnerBackend) => {
+      const targets = [
+        "test/scripts/pr-merge-prior-ci-artifact-build.test.ts",
+        "test/scripts/pr-merge-prior-ci.test.ts",
+      ];
+      const changedPaths = ["scripts/pr-lib/merge-prior-ci.mjs"];
+      const options = {
+        runnerBackend,
+        includeReleaseOnlyRuntimeTests: false,
+        includePrExemptRuntimeTests: false,
+        selectionMode: "aggressive" as const,
+      };
+      const watched = resolvePolicyTestTargets(changedPaths);
+      const before = createChangedNodeTestShards(targets, { runnerBackend });
+      // Use the real resolver-to-packer handoff; shell fixtures do not import their owner.
+      const selected = expectDefined(
+        createChangedNodeTestShards(changedPaths, options),
+        "prior-CI owner shard plan",
+      );
+      const envScratch = argvTempDirs.make("prior-ci-owner-env-");
+      const files = selectedFiles(selected);
+      expect(files).not.toContain("test/scripts/ci-workflow-planning.test.ts");
+      for (const target of targets) {
+        expect(watched).toContain(target);
+        expect(isRuntimeTestFileIncluded(target, { ...options, changedPaths })).toBe(true);
+        expect(files.filter((file) => file === target)).toHaveLength(1);
+        const original = targetOwner(before, target);
+        const current = targetOwner(selected, target);
+        expectSameFields(current.owner, original.owner, [
+          "configs",
+          "env",
+          "requiresDist",
+          "pretestBuildMode",
+        ]);
+        expect(current.group?.fallbackMaxWorkers).toBe(original.group?.fallbackMaxWorkers);
+        expect(current.group?.minTotalMemoryBytes).toBe(original.group?.minTotalMemoryBytes);
+        expect(buildChildEnv(current.entry, current.job.env ?? {}, envScratch, 0)).toEqual({
+          ...buildChildEnv(original.entry, original.job.env ?? {}, envScratch, 0),
+          ...(current.group ? { OPENCLAW_VITEST_SHARD_NAME: current.group.shard_name } : {}),
+        });
+        expectSameFields(current.job, original.job, [
+          "runner",
+          "requiresDist",
+          "planConcurrency",
+          "pretestBuildMode",
+        ]);
+      }
+      for (const unrelated of [[], ["src/media/new.ts"]]) {
+        const unrelatedWatch = resolvePolicyTestTargets(unrelated);
+        const unrelatedFiles = selectedFiles(createChangedNodeTestShards(unrelated, options));
+        for (const target of targets) {
+          expect(unrelatedWatch).not.toContain(target);
+          expect(isRuntimeTestFileIncluded(target, { ...options, changedPaths: unrelated })).toBe(
+            false,
+          );
+          expect(unrelatedFiles).not.toContain(target);
+        }
       }
     },
   );

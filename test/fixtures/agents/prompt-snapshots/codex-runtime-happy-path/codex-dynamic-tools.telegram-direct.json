@@ -1096,6 +1096,11 @@
             "timeoutMs": {
               "minimum": 1,
               "type": "integer"
+            },
+            "toolsAllowMode": {
+              "const": "exact",
+              "description": "Add/update: use \"exact\" to keep the requested toolsAllow without configured default tools. Omitted adds cron.defaultTools before policy checks. An explicit [] always stays tool-less.",
+              "type": "string"
             }
           },
           "required": ["action"],

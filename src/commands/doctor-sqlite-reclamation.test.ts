@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { deriveTranscriptPredicateFields } from "../config/sessions/transcript-predicate-fields.js";
+import { writePortAnchor } from "../infra/database-engine/port-backup.test-support.js";
 import * as diskSpace from "../infra/disk-space.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -54,32 +55,24 @@ async function seed(state: OpenClawTestState, withAgent = false) {
   await closeOpenClawStateDatabaseAsync();
   const paths = [shared, ...agents.map((agent) => agent.path)];
   for (const pathname of paths) {
-    const db = openNodeSqliteDatabase(pathname);
-    try {
-      db.exec(`PRAGMA auto_vacuum=NONE; VACUUM;
+    using db = openNodeSqliteDatabase(pathname);
+    db.exec(`PRAGMA auto_vacuum=NONE; VACUUM;
         CREATE TABLE retained(id INTEGER PRIMARY KEY, text TEXT);
         CREATE TABLE discarded(data BLOB);
         INSERT INTO discarded VALUES(zeroblob(1048576)); DELETE FROM discarded;`);
-      db.prepare("INSERT INTO retained VALUES (41, ?)").run("kept π \0 雪");
-    } finally {
-      db.close();
-    }
+    db.prepare("INSERT INTO retained VALUES (41, ?)").run("kept π \0 雪");
   }
   return { shared, agents, paths };
 }
 
 function inspect(pathname: string) {
-  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
-  try {
-    return {
-      mode: db.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum,
-      free: Number(db.prepare("PRAGMA freelist_count").get()?.freelist_count),
-      retained: db.prepare("SELECT id,hex(CAST(text AS BLOB)) AS bytes FROM retained").all(),
-      integrity: db.prepare("PRAGMA integrity_check").get()?.integrity_check,
-    };
-  } finally {
-    db.close();
-  }
+  using db = openNodeSqliteDatabase(pathname, { readOnly: true });
+  return {
+    mode: db.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum,
+    free: Number(db.prepare("PRAGMA freelist_count").get()?.freelist_count),
+    retained: db.prepare("SELECT id,hex(CAST(text AS BLOB)) AS bytes FROM retained").all(),
+    integrity: db.prepare("PRAGMA integrity_check").get()?.integrity_check,
+  };
 }
 
 function convert(
@@ -103,6 +96,10 @@ function convert(
 it("converts legacy stores once, preserves canonical rowids/search, and enables later reclamation", async () => {
   await withOpenClawTestState({ scenario: "external-service" }, async (state) => {
     const { shared, agents, paths } = await seed(state, true);
+    const pg = state.path("postgres.sqlite");
+    writePortAnchor(pg, "synthetic-postgres-store", "doctor_reclamation");
+    const pgBytes = fs.readFileSync(pg);
+    agents.push({ agentId: "retained", path: pg, realPath: pg, source: "disk" });
     const before = paths.map(inspect);
     expect(before.every((item) => item.mode === 0 && item.free > 0)).toBe(true);
     await expect(convert(state, { agents })).resolves.toEqual({ warnings: [] });
@@ -157,6 +154,7 @@ it("converts legacy stores once, preserves canonical rowids/search, and enables 
     await expect(convert(state, { agents, log })).resolves.toEqual({ warnings: [] });
     expect(log).not.toHaveBeenCalled();
     expect(physicalFamily()).toEqual(compactedFamily);
+    expect(fs.readFileSync(pg)).toEqual(pgBytes);
 
     const db = openNodeSqliteDatabase(shared);
     const maintenance = configureSqliteWalMaintenance(db, {

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/linux-node",
-  "version": "2026.10.8",
+  "version": "2026.10.9",
   "description": "OpenClaw Linux node device capabilities",
   "type": "module",
   "dependencies": {

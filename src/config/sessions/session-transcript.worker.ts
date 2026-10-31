@@ -14,10 +14,7 @@ import { serveOwnedWorkerTasks } from "../../infra/worker-task-server.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
 import { isSessionHistoryReadOperation } from "./session-history-read-operation-kind.js";
-import {
-  encodeSessionTranscriptWorkerError,
-  encodeSessionTranscriptRequestError,
-} from "./session-history-worker-errors.js";
+import { encodeSessionTranscriptRequestError } from "./session-history-worker-errors.js";
 import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import {
   withHistoryDatabase,
@@ -234,7 +231,7 @@ serveOwnedWorkerTasks(
       }
       if (request.kind === "transcript-stats-batch") {
         const { readTranscriptStatsBatchReadOnlySync } =
-          await import("./session-accessor.sqlite-read.js");
+          await import("./session-accessor.sqlite-transcript-stats-read.js");
         return {
           kind: request.kind,
           stats: readTranscriptStatsBatchReadOnlySync(
@@ -325,19 +322,10 @@ serveOwnedWorkerTasks(
             }
           : { kind: request.kind, ...cold.readSessionColdStorageInventoryInWorker(options) };
       }
-      if (request.kind === "session-store-target") {
-        const { readSessionStoreTargetResult } =
-          await import("./session-store-target-inventory.js");
-        request.request.env = cloneEnvWithPlatformSemantics(request.request.env);
-        const read = readSessionStoreTargetResult(request.request);
-        if (!read.ok) {
-          const readError = encodeSessionTranscriptWorkerError(read.error);
-          if (!readError) {
-            throw read.error;
-          }
-          return { kind: "session-store-target", readError };
-        }
-        return read.value;
+      if (request.kind === "session-target-prepare" || request.kind === "session-store-target") {
+        const { readSessionStoreTargetWorkerRequest } =
+          await import("./session-store-target.worker.js");
+        return readSessionStoreTargetWorkerRequest(request);
       }
       if (request.kind === "session-retirement-read") {
         const { readSessionRetirementInWorker } =

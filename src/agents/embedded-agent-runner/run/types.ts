@@ -106,6 +106,8 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 };
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Set only by prompt admission after validating an already-delivered input. */
+  inputAlreadyDelivered?: true;
   /** Transport hooks follow the current endpoint without changing admitted request policy. */
   transportConfig?: RunEmbeddedAgentParams["config"];
   modelCallSequence?: { value: number };
@@ -297,6 +299,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 };
 
 export type EmbeddedRunAttemptResult = {
+  /** Exact historical input acknowledged without another model turn. */
+  inputAlreadyDelivered?: true;
   cyberAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red";
   terminal: AgentRunAttemptTerminal;
   preparedTerminalReply?: PreparedAgentRunTerminalReply;

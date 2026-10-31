@@ -308,7 +308,7 @@ describe("Gateway GitHub publication", () => {
               status: "failed",
               code: "github_rejected",
               nextAction:
-                "Reopen the closed pull request or retry to create a new publication request.",
+                "GitHub pull request was closed before publication completed. Reopen the closed pull request or retry to create a new publication request.",
             }
           : { status: "published", repository: "openclaw/openclaw", url: resultUrl },
       );
@@ -333,8 +333,8 @@ describe("Gateway GitHub publication", () => {
 
   it("rejects an effective clean filter before snapshotting workspace content", async () => {
     overrideCommands((_command, argv) => {
-      if (argv.includes("ls-tree")) {
-        return commandResult(`100644 blob ${"f".repeat(40)}\t.GITATTRIBUTES\0`);
+      if (argv.includes("ls-files")) {
+        return commandResult(`${"f".repeat(40)}\n`);
       }
       if (argv.includes("cat-file") && argv.includes("blob")) {
         return commandResult("*.bin filter=lfs\n");
@@ -402,6 +402,7 @@ describe("Gateway GitHub publication", () => {
       "\u001b[31mfatal: Authentication failed\u001b[0m",
       "https://user:fixture-password@example.test/repo?unknown=fixture-query#fixture-fragment",
       "https://user:fi'xture@example.test/repo",
+      `https://example.test/${"x".repeat(4_096)}?unknown=fixture-long-query#fixture-long-fragment`,
       "Authorization: Bearer fixture-bearer",
       `GH_TOKEN=${token}`,
       "password=fixture-secret",
@@ -409,7 +410,11 @@ describe("Gateway GitHub publication", () => {
     ].join("\n");
     overrideCommands((_command, argv) =>
       argv.includes("fetch")
-        ? { ...commandResult("", 1), stderr: Buffer.from(diagnostic) }
+        ? {
+            ...commandResult("fixture-private-stdout", 1),
+            termination: "exit",
+            stderr: Buffer.from(diagnostic),
+          }
         : undefined,
     );
     try {
@@ -417,12 +422,14 @@ describe("Gateway GitHub publication", () => {
       const message = formatErrorMessage(error);
       expect(message).toContain("fatal: Authentication failed");
       expect(message).not.toMatch(
-        /fixture-(?:password|query|fragment|bearer|secret)|example\.test/u,
+        /fixture-(?:password|query|fragment|long-query|long-fragment|bearer|secret|private-stdout)|example\.test/u,
       );
       expect(message).not.toContain(token);
       expect(message).not.toContain("\u001b");
       expect(message).not.toContain("\n");
-      const detail = message.split("Git fetch: ").at(-1)!;
+      expect(message).toContain("Git commit fetch failed (exit code 1)");
+      // Recovery can aggregate multiple independently bounded diagnostics.
+      const detail = message.slice(message.lastIndexOf("Git commit fetch"));
       expect(Buffer.byteLength(detail)).toBeLessThanOrEqual(1_024);
       expect(await coordinator.readAsync("publication-fetch-redaction")).toMatchObject({
         status: "publishing",
@@ -544,7 +551,7 @@ describe("Gateway GitHub publication", () => {
           code: "workspace_changed",
           message: "GitHub publication failed.",
           nextAction:
-            "Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
+            "GitHub publication worktree authority changed. Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
         });
         expect(commandMatchesAny("commit-tree", "push", "POST")).toEqual([]);
       });

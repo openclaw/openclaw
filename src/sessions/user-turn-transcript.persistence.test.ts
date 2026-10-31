@@ -67,17 +67,6 @@ function installWriteHook(write: (message: PersistedUserTurnMessage) => AgentMes
   );
 }
 
-const acceptedPeerDelivery = {
-  source: { sessionKey: "agent:main:source" },
-  operatorSource: {
-    kind: "channel",
-    snapshot: {
-      profileId: "original",
-      scopes: ["operator.read"],
-    },
-  },
-};
-
 describe("persistUserTurnTranscript", () => {
   const sessionDirs = useSessionStoreTempDirs(
     (cleanup) =>
@@ -342,7 +331,6 @@ describe("persistUserTurnTranscript", () => {
               ? {}
               : {
                   senderIdentity: identity,
-                  sessionSendDelivery: structuredClone(acceptedPeerDelivery),
                 }),
           },
         }),
@@ -351,20 +339,14 @@ describe("persistUserTurnTranscript", () => {
             mode === "in-place" ? message["__openclaw"]! : { ...message["__openclaw"] };
           if (mode === "forge") {
             metadata.senderIdentity = { type: "profile", id: "forged" };
-            metadata.sessionSendDelivery = { ...acceptedPeerDelivery, operatorSource: null };
           }
           if (mode === "in-place") {
             (metadata.senderIdentity as { id: string }).id = "forged";
             requesterOrigin.senderId = "forged";
             requesterOrigin.sessionKey = "agent:main:replacement";
-            const delivery = metadata.sessionSendDelivery as typeof acceptedPeerDelivery;
-            delivery.source.sessionKey = "agent:main:forged";
-            delivery.operatorSource.snapshot.profileId = "forged";
-            delivery.operatorSource.snapshot.scopes.push("operator.admin");
           }
           if (mode === "raw-redact") {
             delete metadata.senderId;
-            delete metadata.sessionSendDelivery;
           }
           return {
             ...message,
@@ -382,9 +364,7 @@ describe("persistUserTurnTranscript", () => {
         senderName: "Edited display",
         senderIsOwner: true,
         ...(mode === "retain" ? { senderIdentity: { type: "profile", id: "original" } } : {}),
-        ...(mode === "forge"
-          ? {}
-          : { requesterOrigin: originalOrigin, sessionSendDelivery: acceptedPeerDelivery }),
+        ...(mode === "forge" ? {} : { requesterOrigin: originalOrigin }),
       });
     },
   );

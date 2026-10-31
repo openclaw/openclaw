@@ -14,6 +14,7 @@ import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { AttachmentPreviewSkeleton, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
+import { createPdfPreviewWorker } from "./chat-pdf-worker.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 import type { FilePreviewSource } from "./chat-sidebar-content-types.ts";
 
@@ -151,19 +152,31 @@ export function ChatPdfPreview(props: {
     // The reader survives changed bytes; only its settled Blob URL changes lifetime.
     const renderFrame = (value: Accessor<ArrayBuffer>) => {
       const [url, setUrl] = createSignal<string>();
+      const [reader, setReader] = createSignal<ReturnType<typeof createPdfPreviewWorker>>();
+      const [failed, setFailed] = createSignal(false);
+      onSettled(() => {
+        try {
+          const next = createPdfPreviewWorker(setUrl, () => setFailed(true));
+          setReader(next);
+          return () => next.dispose();
+        } catch {
+          setFailed(true);
+          return undefined;
+        }
+      });
       return (
-        <>
-          <Show when={value()} keyed>
-            {(content) => {
-              onSettled(() => {
-                const next = URL.createObjectURL(new Blob([content], { type: "application/pdf" }));
-                setUrl(next);
-                return () => URL.revokeObjectURL(next);
-              });
-              return null;
-            }}
+        <Show when={!failed()} fallback={unavailable()}>
+          <Show when={reader()} keyed>
+            {(current) => (
+              <Show when={value()} keyed>
+                {(content) => {
+                  onSettled(() => current.show(content));
+                  return null;
+                }}
+              </Show>
+            )}
           </Show>
-          <Show when={url()}>
+          <Show when={url()} fallback={<AttachmentPreviewSkeleton />}>
             <iframe
               class="sidebar-pdf-preview__frame"
               title={props.label}
@@ -171,7 +184,7 @@ export function ChatPdfPreview(props: {
               referrerpolicy="no-referrer"
             />
           </Show>
-        </>
+        </Show>
       );
     };
     return (

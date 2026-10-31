@@ -8,6 +8,7 @@ import * as gatewayCall from "../gateway/call.js";
 import * as uiLinks from "../gateway/control-ui-links.js";
 import * as browserHandoff from "../infra/browser-handoff.js";
 import * as browserOpen from "../infra/browser-open.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import * as handoff from "./control-ui-handoff.js";
 import { runBrowserHatchHandoff } from "./onboard-browser-handoff.js";
 
@@ -72,23 +73,16 @@ afterEach(() => {
 });
 
 function displayedNotes() {
-  return vi
-    .mocked(prompter.note)
-    .mock.calls.map(([message]) => message)
-    .join("\n");
+  const notes = vi.mocked(prompter.note).mock.calls;
+  return notes.map(([text]) => text).join("\n");
 }
 
 async function runHandoff(
   params: Partial<Parameters<typeof runBrowserHatchHandoff>[0]> = {},
   advanceMs = 0,
 ) {
-  const result = runBrowserHatchHandoff({
-    config: {},
-    prompter,
-    ...params,
-  });
-  await vi.advanceTimersByTimeAsync(advanceMs);
-  return await result;
+  const result = runBrowserHatchHandoff({ config: {}, prompter, ...params });
+  return (await Promise.all([result, vi.advanceTimersByTimeAsync(advanceMs)]))[0];
 }
 
 it("opens utility-only setup on the custodian route", async () => {
@@ -220,21 +214,23 @@ it("keeps resolved password SecretRefs inside the Gateway presence request", asy
       },
     },
   });
-  expect(sharedMocks.callGateway.mock.calls.map(([options]) => options.password)).toEqual([
-    gatewayPassword,
-    gatewayPassword,
-  ]);
+  const passwords = sharedMocks.callGateway.mock.calls.map(([options]) => options.password);
+  expect(passwords).toEqual([gatewayPassword, gatewayPassword]);
   expect(displayedNotes()).not.toContain(gatewayPassword);
   expect(displayedNotes()).toContain("#bootstrapToken=one-time-bootstrap");
   expect(sharedMocks.issueControlUiBrowserHandoff).toHaveBeenCalledWith(links);
 });
 
-it.each(["suppressed", "disabled", "document", "presence", "bootstrap"] as const)(
+it.each(["suppressed", "disabled", "document", "abort", "presence", "bootstrap"] as const)(
   "does not open browser credentials after a %s gate failure",
   async (reason) => {
-    if (reason === "document") {
+    const scope = new AsyncWorkScope();
+    if (reason === "document" || reason === "abort") {
       sharedMocks.waitForControlUiDocument.mockImplementation(async ({ onPending }) => {
         onPending?.();
+        if (reason === "abort") {
+          scope.beginClose();
+        }
         return { ready: false, reason: "Control UI build failed." };
       });
     } else if (reason === "presence") {
@@ -243,17 +239,20 @@ it.each(["suppressed", "disabled", "document", "presence", "bootstrap"] as const
       sharedMocks.detectBrowserOpenSupport.mockResolvedValue({ ok: true });
       sharedMocks.issueControlUiBrowserHandoff.mockRejectedValue(new Error("state unavailable"));
     }
-    const result = await runHandoff({
-      config: reason === "disabled" ? { gateway: { controlUi: { enabled: false } } } : {},
-      suppressTokenOutput: reason === "suppressed",
-    });
-    expect(result).toBe(false);
+    const run = () =>
+      runHandoff({
+        config: reason === "disabled" ? { gateway: { controlUi: { enabled: false } } } : {},
+        suppressTokenOutput: reason === "suppressed",
+      });
+    await (reason === "abort"
+      ? expect(scope.run(run)).rejects.toThrow()
+      : expect(run()).resolves.toBe(false));
     expect(sharedMocks.openUrlPrivately).not.toHaveBeenCalled();
     if (reason === "suppressed" || reason === "disabled") {
       expect(sharedMocks.detectBrowserOpenSupport).not.toHaveBeenCalled();
       expect(sharedMocks.waitForControlUiDocument).not.toHaveBeenCalled();
     }
-    if (reason === "document") {
+    if (reason === "document" || reason === "abort") {
       expect(sharedMocks.callGateway).not.toHaveBeenCalled();
       expect(prompter.progress).toHaveBeenCalledWith("Preparing the Control UI…");
       expect(vi.mocked(prompter.progress).mock.results[0]?.value.stop).toHaveBeenCalledOnce();

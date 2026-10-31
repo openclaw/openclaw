@@ -11,6 +11,7 @@ import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
@@ -127,9 +128,7 @@ async function captureRejectedClaudeRun(
   } catch (caught) {
     error = caught;
   } finally {
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await waitForDiagnosticEventsDrained();
     unsubscribe();
   }
   return { error, events };
@@ -375,9 +374,7 @@ describe("runCliAgent before_agent_reply seam", () => {
         model: "sonnet-4.6",
         runId,
       });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await waitForDiagnosticEventsDrained();
     } finally {
       unsubscribe();
     }

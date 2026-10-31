@@ -19,6 +19,7 @@ import {
   registerDiagnosticTracePropagationBridge,
 } from "../../src/infra/diagnostic-trace-propagation.js";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 // Also usable as transcript-broadcast-measure's --entry for a counting-only pass.
@@ -227,12 +228,7 @@ if (values.mode === "counts") {
   const inspector = new Session();
   if (values.mode === "allocation") {
     // Sampler startup must finish before the shared workload deadline.
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 16384,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 16384);
   }
   if (startAt) {
     assert(startAt > Date.now(), "missed synchronized start");

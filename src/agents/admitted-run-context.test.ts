@@ -91,62 +91,10 @@ it.each([false, true])("binds frozen Gateway routing (audit=%s)", async (enabled
   expect(gateway.getGatewayContextResolver(admitted)).toBeUndefined();
 });
 
-it("consumes disabled recovery evidence so a reused run id cannot inherit it", async () => {
-  const token = audit.createExecutionIdentityAdmissionToken(facts.runId);
-  const recovery = run.createExecutionIdentityRecoveryAdmission({ retryOnly: true, token });
-
-  const disabled = await prepareRun({ recovery }).admit("embedded");
-  const laterEnabled = await prepareRun({ cfg: enabledConfig, recovery }).admit("embedded");
-
-  expect(disabled).not.toHaveProperty("executionIdentityToken");
-  expect(laterEnabled).not.toHaveProperty("executionIdentityToken");
-});
-
-it.each([false, true])("adopts exact retry evidence (bound=%s)", async (bound) => {
-  const token = audit.createExecutionIdentityAdmissionToken(bound ? "original-run" : facts.runId);
-  const sink = installSink();
-  const recovery = () =>
-    run.createExecutionIdentityRecoveryAdmission({
-      retryOnly: true,
-      token,
-      ...(bound ? { expectedOperationalRunId: facts.runId } : {}),
-    });
-  if (bound) {
-    const rejected = recovery();
-    expect([rejected.consume("other-operational-run"), rejected.consume(facts.runId)]).toEqual([
-      { accepted: false },
-      { accepted: false },
-    ]);
-  }
-  const admitted = await prepareRun({ cfg: enabledConfig, recovery: recovery() }).admit("embedded");
-  expect(admitted.executionIdentityToken).toBe(token);
-  expect(sink).toHaveBeenCalledExactlyOnceWith({ kind: "retry-reference", token });
-});
-
-it("keeps missing or mismatched recovery identity unbound", async () => {
-  const sink = installSink();
-  for (const recovery of [
-    run.createExecutionIdentityRecoveryAdmission({ retryOnly: true }),
-    run.createExecutionIdentityRecoveryAdmission({
-      retryOnly: true,
-      token: audit.createExecutionIdentityAdmissionToken("different-run"),
-    }),
-    {
-      retryOnly: false,
-      token: { ...audit.createExecutionIdentityAdmissionToken(facts.runId) },
-    } as never,
-  ]) {
-    const admitted = await prepareRun({ cfg: enabledConfig, recovery }).admit("embedded");
-    expect(admitted).not.toHaveProperty("executionIdentityToken");
-  }
-  expect(sink).not.toHaveBeenCalled();
-});
-
 it("allocates once and reuses the first runtime admission across fallback", async () => {
   const sink = installSink();
   const prepared = prepareRun({
     cfg: enabledConfig,
-    recovery: run.createExecutionIdentityRecoveryAdmission({ retryOnly: false }),
   });
 
   const [first, fallback] = await Promise.all([

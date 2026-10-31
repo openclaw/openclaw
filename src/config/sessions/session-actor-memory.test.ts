@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { prepareReplyToolAuthorityCallerRead } from "../../agents/harness/host-private-capabilities.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { prepareSessionResetCleanupGuard } from "../../auto-reply/reply/session-reset-cleanup.js";
@@ -20,7 +20,7 @@ import {
   prepareSessionGenerationFacts,
 } from "./session-delivery-generation.js";
 import { acquireSessionInputActor } from "./session-input-actor.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
@@ -70,147 +70,27 @@ const activityCommand = (updatedAt: number) => ({
   reducers: [{ kind: "activity" as const, updatedAt }],
 });
 
-function turnCommand(actor: SessionActor, commandId: string, options: SessionTurnPlan["options"]) {
-  return {
-    commandId,
-    phaseId: "turn",
-    lifecycle: {},
-    expectedState: buildRestartRecoveryExpectedState({ sessionId: "session-1", updatedAt: 1 }),
-    turn: { agentId: "main", sessionKey: actor.target.sessionKey, options },
-  };
-}
-
 describe("memory session actor", () => {
-  it.each([
-    { change: "unchanged", accepted: true },
-    { change: "excluded-input", accepted: false },
-    { change: "reset", accepted: false },
-    { change: "compaction", accepted: true },
-  ] as const)(
-    "evaluates recovery from active history after $change",
-    async ({ change, accepted }) => {
-      const { actor } = await fixture();
-      const request = (commandId: string, eventId: string, message: unknown) => ({
-        ...turnCommand(actor, commandId, {
-          expectedSessionId: "session-1",
-          sessionFile: "/synthetic/transcript",
-          messages: [{ eventId, message, now: 2 }],
-        }),
-        phaseId: "recovery",
-      });
-      const source = await actor.adoptRun(
-        {
-          ...request("source", "source-input", {
-            role: "user",
-            content: "Task completed",
-            timestamp: 2,
-            idempotencyKey: "source-run:user",
-            __openclaw: { runId: "source-run" },
-            provenance: {
-              kind: "inter_session",
-              sourceChannel: "internal",
-              sourceTool: "agent_harness_completion",
-              sourceSessionKey: "task-run",
-            },
-          }),
-          sessionId: "session-1",
-          runId: "recovery-run",
-        },
-        authority,
-      );
-      expect(source.kind).toBe("committed");
-      if (change === "excluded-input") {
-        const later = await actor.acceptInput(
-          request("later-input", "later-input", {
-            role: "user",
-            content: "Do something else",
-            timestamp: 3,
-            excludeFromContext: true,
-          }),
-          authority,
-        );
-        expect(later.kind).toBe("committed");
-      } else if (change === "reset" || change === "compaction") {
-        const boundary = await actor.appendTranscriptEvent(
-          {
-            commandId: "boundary",
-            phaseId: "recovery",
-            sessionId: "session-1",
-            lifecycleRevision: null,
-            eventJson: JSON.stringify({
-              type: change,
-              id: "boundary",
-              parentId: "source-input",
-              timestamp: new Date(3).toISOString(),
-              firstKeptEntryId: change === "reset" ? "source-input" : "boundary",
-              ...(change === "reset"
-                ? { reason: "reset" }
-                : { summary: "Summary", tokensBefore: 10 }),
-            }),
-          },
-          authority,
-        );
-        expect(boundary.kind).toBe("committed");
-      }
-      const before = actor.snapshot(authority);
-      const recovered = await actor.acceptInput(
-        {
-          ...request("recover", "recovery-input", {
-            role: "user",
-            content: "Resume",
-            timestamp: 4,
-          }),
-          recovery: {
-            sources: [],
-            expectedRunId: "recovery-run",
-            harnessCompletion: {
-              taskId: "task",
-              taskStatus: "succeeded",
-              taskRunId: "task-run",
-              sourceRunId: "source-run",
-              requesterSessionKey: sessionKey,
-              requesterAgentId: "main",
-              sessionId: "session-1",
-            },
-          },
-        },
-        authority,
-      );
-      expect(recovered.kind).toBe(accepted ? "committed" : "rolled-back");
-      if (accepted) {
-        expect(actor.snapshot(authority)?.transcript.anchors.at(-1)?.entryId).toBe(
-          "recovery-input",
-        );
-      } else {
-        expect(recovered).toMatchObject({
-          error: { message: "Session actor recovery input no longer matches its source" },
-        });
-        expect(actor.snapshot(authority)).toEqual(before);
-      }
-      await actor.release();
-    },
-  );
-
   it("detaches committed receipts and rejects a stale command version", async () => {
     const { actor } = await fixture();
     const old = actor.snapshot(authority)!;
-    const result = await actor.patch(activityCommand(10), authority);
-    if (result.kind !== "committed") {
-      throw new Error("Expected a committed receipt");
-    }
+    const result = await actor.patch(activityCommand(10), authority, {
+      committed(value) {
+        Object.assign(value.receipt.afterVersion, { sequence: 100 });
+        value.receipt.postimage.entry!.updatedAt = 100;
+        value.receipt.transcript.after.rawSeq = 100;
+      },
+    });
+    assert(result.kind === "committed", "Expected a committed receipt");
     const retained = actor.snapshot(authority);
+    expect(result.receipt.postimage).toEqual(retained);
+    expect(retained?.entry?.updatedAt).toBe(10);
     Object.assign(result.receipt.afterVersion, { sequence: 100 });
+    result.receipt.postimage.entry!.updatedAt = 100;
     result.receipt.transcript.after.rawSeq = 100;
     expect(actor.snapshot(authority)).toEqual(retained);
-    expect(
-      await actor.patch(
-        {
-          ...activityCommand(99),
-          expected: old.version,
-        },
-        authority,
-      ),
-    ).toMatchObject({
+    const stale = await actor.patch({ ...activityCommand(99), expected: old.version }, authority);
+    expect(stale).toMatchObject({
       kind: "stale-version",
       postimage: { entry: { updatedAt: 10 } },
     });
@@ -268,13 +148,26 @@ async function initialize(
   options: Partial<SessionTurnPlan["options"]> = {},
 ) {
   const result = await actor.acceptInput(
-    turnCommand(actor, commandId, {
-      expectedSessionId: "session-1",
-      sessionFile: sessionKey,
-      initialSessionEntry: { sessionId: "session-1", updatedAt: 1, incognito: true },
-      messages: [{ message: { role: "user", content: "Hello" }, eventId: "user-1", now: 1 }],
-      ...options,
-    }),
+    {
+      commandId,
+      phaseId: "turn",
+      expectedState: buildSessionTranscriptTurnExpectedState({
+        sessionId: "session-1",
+        updatedAt: 1,
+      }),
+      lifecycle: {},
+      turn: {
+        agentId: "main",
+        sessionKey: actor.target.sessionKey,
+        options: {
+          expectedSessionId: "session-1",
+          sessionFile: sessionKey,
+          initialSessionEntry: { sessionId: "session-1", updatedAt: 1, incognito: true },
+          messages: [{ message: { role: "user", content: "Hello" }, eventId: "user-1", now: 1 }],
+          ...options,
+        },
+      },
+    },
     authority,
   );
   expect(result.kind).toBe("committed");
@@ -448,18 +341,15 @@ describe("memory actor effect adapters", () => {
     expect(f.actor.snapshot(authority)?.entry?.label).toBe("Still open");
   });
 
-  it("reads terminal steering eligibility after an awaited in-process write", async () => {
+  it("refuses steering after its in-process owner closes", async () => {
     const f = await effectFixture();
     const delivery = f.run(() =>
       prepareSteeringDelivery({
         ...scope,
-        sourceTurnId: "source-turn",
         assertCurrent() {},
       }),
     );
     await delivery.prepareCurrent();
-    await f.patch({ restartRecoveryDeliveryReceiptState: "terminal-pending" });
-    await expect(delivery.prepareCurrent()).rejects.toThrow("terminal-pending");
     f.owner.close();
     await expect(delivery.prepareCurrent()).rejects.toThrow("closed");
   });

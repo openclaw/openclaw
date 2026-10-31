@@ -247,9 +247,11 @@ it("delivers fresh prompt-hook parent context on the same protected thread", asy
     }
     expect(received[1]).not.toContain("Synthetic first-turn recall");
     systemPrompt = "Changed persistent thread policy";
-    await expect(runCodexAppServerAttempt(paramsFor("changed-policy"))).rejects.toThrow(
-      "Codex thread thread-1 is claimed by active work; stop it first.",
-    );
+    await expect(runCodexAppServerAttempt(paramsFor("changed-policy"))).rejects.toMatchObject({
+      name: "AgentHarnessPreflightError",
+      message:
+        "Codex thread thread-1 still has background work after waiting for cleanup; stop its running work and retry.",
+    });
     expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
     expect(harness.requests).not.toContainEqual(unsubscribe);
     expect(

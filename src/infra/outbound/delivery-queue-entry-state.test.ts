@@ -32,7 +32,6 @@ import {
   enqueuePreparedDeliveryOnce as publishPrepared,
   failDeliveryAfterPlatformSend as failAfterSend,
   findDeliveryIntentOwner,
-  findDeliveryIntentOwners,
   loadPendingDelivery,
   markDeliveryPlatformSendDispatched as markDispatched,
   reserveDeliveryAttempt,
@@ -50,7 +49,6 @@ describe("delivery queue entry state", () => {
   const queueId = "synthetic-entry";
   function expectPublicInput(input: object) {
     expect(input).not.toHaveProperty("deliveryQueueStateContext");
-    expect(input).not.toHaveProperty("transcriptGeneration");
   }
 
   function root(name: string) {
@@ -158,13 +156,6 @@ describe("delivery queue entry state", () => {
         },
         deliveryQueueStateContext: { stateDir: injectedRoot },
         deliveryQueueStateDir: injectedRoot,
-        transcriptGeneration: {
-          agentId: "unrelated",
-          storePath: path.join(injectedRoot, "agent.sqlite"),
-          sessionKey: "agent:unrelated:main",
-          sessionId: "unrelated-session",
-          lifecycleRevision: null,
-        },
       };
       if (entrypoint === "sdk") {
         await expect(sendDurableMessageBatch(injected)).resolves.toMatchObject({ status: "sent" });
@@ -343,7 +334,13 @@ describe("delivery queue entry state", () => {
       await ackDelivery(id, undefined, { expectedPlatformSendAttemptId: claimId }, context);
       const mainSql = observeMainThreadSql();
       try {
-        expect(await findDeliveryIntentOwners([id, "missing", id], undefined, context)).toEqual([
+        expect(
+          await Promise.all(
+            [id, "missing", id].map((intentId) =>
+              findDeliveryIntentOwner(intentId, undefined, context),
+            ),
+          ),
+        ).toEqual([
           expect.objectContaining({ status: "completed" }),
           null,
           expect.objectContaining({ status: "completed" }),

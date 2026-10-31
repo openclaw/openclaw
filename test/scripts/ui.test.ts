@@ -719,7 +719,7 @@ require("node:module").syncBuiltinESMExports();
       ].join("\n");
       const childOutcome = childSignal
         ? `process.kill(process.pid, '${childSignal}');`
-        : "setTimeout(() => process.exit(0), 25);";
+        : "setTimeout(() => process.exit(0), 500);";
       const handlerLines = descendant
         ? ["process.on('SIGTERM', () => process.exit(0));"]
         : ["SIGTERM", "SIGHUP"].flatMap((handledSignal) => [

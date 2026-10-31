@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "`openclaw gateway restart`, install identity, external process supervisors, and Gateway profiling"
 read_when:
   - Restarting the Gateway safely, forcibly, or with a bounded wait
@@ -33,19 +34,18 @@ for an unresolved startup dependency or unknown process ownership.
 
 `--safe` asks the running Gateway to preflight active work and schedule one coalesced restart after that work drains. The wait is bounded to 5 minutes; when the budget expires the restart is forced. `--safe` cannot combine with `--force` or `--wait`.
 
-`--skip-deferral` bypasses only the safe-restart active-work deferral gate. It can move the Gateway into shutdown even while active-work blockers are reported, but the close-stage pending-reply drain still applies before the process exits. It requires `--safe` — use it when a deferral is stuck on a runaway task and reply delivery can still be allowed to settle.
+`--skip-deferral` bypasses the safe-restart active-work deferral gate and requires `--safe`. Once shutdown commits, the Gateway records running root sessions and aborts work promptly rather than waiting for active replies to finish.
 
-`--wait <duration>` overrides the drain budget for a plain (non-safe) restart. Accepts bare milliseconds or unit suffixes `ms`, `s`, `m`, `h`, `d` (e.g. `30s`, `5m`, `1h30m`); `--wait 0` waits indefinitely. Not compatible with `--force` or `--safe`.
-
-Native service stop deadlines still apply: the Gateway caps the drain at 315 seconds
-for systemd's 330-second limit, and 5 seconds for launchd's 20-second limit. Both
-leave time for cancellation and cleanup. These caps also apply to `--wait 0`. Longer model or
-heartbeat timeouts do not extend it. When available, the drain log reports the
-largest observed model request timeout for context.
+`--wait <duration>` remains accepted for restart intent compatibility, with bare
+milliseconds or unit suffixes `ms`, `s`, `m`, `h`, and `d`. It cannot combine with
+`--force` or `--safe`. A committed shutdown no longer waits out an agent-run drain
+budget: it marks running root sessions for resume and aborts work promptly.
+Native service deadlines still bound persistence and resource cleanup.
 
 Queued heartbeat wakes settle as `gateway-draining` when shutdown closes admission,
 including wakes waiting to retry. They cannot start another turn in the draining runtime.
-Already-running wakes and pending final reply writes retain their drain grace.
+Already-running wakes are aborted; in-flight final reply writes retain a short
+bounded persistence grace.
 
 If the worker inventory has already retired when shutdown starts, the Gateway
 still drains its retained worker tunnels and workspace transfers. Inventory
@@ -57,16 +57,12 @@ next reconciliation reloads the inventory and resumes worker maintenance without
 a Gateway restart. Closed stores stay closed during shutdown, and database
 replacement or corruption still requires recovery through the database owner.
 
-If work still ignores cancellation at the shutdown deadline under systemd or launchd,
-a native service stop or supervisor-owned restart logs
-the remaining work categories and pending owners (including command lanes and
-request origins), writes a diagnostic stability bundle, and exits
-with status `0`. It does not reuse that unfinished runtime for an in-process
-restart. This lets a requested stop finish cleanly and lets the service manager
-start a fresh Gateway for a restart.
-
-An explicit server-close failure retains exit status `1`, including when final
-provider cleanup crosses the native shutdown deadline.
+Bounded-grace leftovers from child cleanup, lifetime sidecars, or plugin runtime
+retention are logged. The lifecycle returns with status `0` unless required
+persistence failed, and Node exits naturally after owned handles close. A retained
+runtime is never reused for an in-process restart. If leaked handles keep Node
+alive past the shutdown deadline, the native watchdog kills the process. That
+signal exit is accepted; the service manager starts a fresh Gateway.
 
 Admission-close logs name the shutdown trigger, for example `stop (SIGTERM)` or
 `restart (SIGUSR2: config reload: gateway.bind)`. Process failures retain their
@@ -78,6 +74,13 @@ SIGTERM/SIGINT stops across process lifetimes, produce a hint to check
 `openclaw gateway status --deep` for another supervisor. Under Kubernetes or
 `OPENCLAW_SUPERVISOR_MODE=external`, that platform owns stops and replacements,
 so repeated stops across process lifetimes are logged at info without the hint.
+
+Restart-intent settlement has a one-second bound, including queued signals and
+closed stores. If it stalls, SIGTERM proceeds with ordinary graceful shutdown:
+record running sessions for resume, abort work, and run bounded cleanup. A locally
+authorized SIGUSR2 can continue without the stored intent; an unauthorized signal
+still requires authorization. A timed-out stored restart intent may be lost.
+
 A SIGTERM that arrives after an in-process restart released Gateway state stops
 the Gateway and logs at info, since no restart intent can be read then. Deep local status shows
 the last recorded shutdown reason and time for the selected state directory;
@@ -99,18 +102,15 @@ the database path and read error instead of reporting a config read failure.
 Stop OpenClaw processes, then restore that file from a verified backup, as
 `openclaw doctor` also advises.
 
-Foreground/manual Gateways, in-process restarts selected by `OPENCLAW_NO_RESPAWN=1`, and other supervisors retain exit status `1` when
-cleanup cannot finish before the shutdown deadline.
+An in-process restart requested with `OPENCLAW_NO_RESPAWN=1` cannot reuse a runtime
+that still owns resources. The process exits instead, allowing its supervisor to
+start a fresh Gateway.
 
-`--force` begins restart immediately and closes new admissions. The current CLI supplies the normal drain budget, capped by the native service shutdown deadline. Only work remaining at that deadline is canceled before cleanup. A safe restart whose deferral budget has already expired does not get a second drain budget. Plain `restart` normally uses the service-manager restart path.
-
-Forced requests from older callers that supply no drain budget get at most
-45 seconds to drain. Their 60-second replacement window reserves 10 seconds for
-cleanup and 5 seconds for replacement. This applies to interactive and update
-callers alike. If work remains when the drain expires, the Gateway records a
-warning with the remaining work categories in its restart history and log, then
-cancels that work through normal terminal recovery. Callers that supply a budget
-retain that budget, subject to native service deadlines.
+`--force` begins restart immediately and closes new admissions. It skips active-work
+deferral, then follows the same marker, abort, persistence, and bounded-cleanup
+path. Plain `restart` normally uses the service-manager restart path. The next
+Gateway sends one ordinary resume input to each marked root session. A crash or
+`SIGKILL` writes no markers and resumes nothing automatically.
 
 During an upgrade, restart records its reason and drain options in the existing
 Gateway state without starting a schema migration while the old Gateway is still
@@ -248,11 +248,11 @@ External supervisor implementations should also apply these acceptance rules:
 - `OPENCLAW_GATEWAY_STARTUP_TRACE=1` logs phase timings during startup, including per-phase `eventLoopMax` delay and plugin lookup-table timings (installed-index, manifest registry, startup planning, owner-map work). The `process.bootstrap` breakdown includes earlier CLI imports, configuration, database admission, session inventory, and workspace readiness. Each bootstrap step records its process-relative `start`, duration, call count, and available fleet counts; repeated calls aggregate under one name. The `ready` trace repeats the step names and totals in `bootstrapSteps`. Nested steps overlap, so their durations should not be added together.
 - `sidecars.worker-environments` gates readiness on placement recovery. Its `github-ready`, `workspaces`, `active`, and `publications` sub-spans distinguish publication admission, local workspace journal recovery, active placement/environment reconciliation, and publication recovery. Worker runtime assembly happens earlier; worker installation artifacts are prepared on demand.
 - `cli.bootstrap.admission.state-snapshot` includes config recovery, database/session/workspace readiness, plugin validation, and device identity, as well as acquiring and releasing the read snapshot. It is not a database-copy timer. Plugin config and database readiness overlap. `admission.plugin-config` reports metadata-owner timings and plugin counts; `admission.plugin-metadata-completion` measures completion of the metadata snapshot. Existing `cli.command.config.snapshot.read.*` spans break down config I/O and validation.
-- `OPENCLAW_GATEWAY_RESTART_TRACE=1` logs `restart trace:` lines for restart signal handling, active-work drain, shutdown phases, next start, ready timing, and memory metrics. Ordinary stops also start a fresh trace with `stop.signal.received` and `stop.drain` timing. Named shutdown steps and coarse close phases emit `.begin` before waiting, then a duration when they settle; an unmatched begin identifies an entered phase that has not settled. These phases do not time every nested cleanup operation individually.
+- `OPENCLAW_GATEWAY_RESTART_TRACE=1` logs `restart trace:` lines for restart signal handling, shutdown phases, next start, ready timing, and memory metrics. Ordinary stops also start a fresh trace with `stop.signal.received`. The `restart.close.session-abort` phase includes recording running sessions and aborting their work. Named shutdown steps and coarse close phases emit `.begin` before waiting, then a duration when they settle; an unmatched begin identifies an entered phase that has not settled. These phases do not time every nested cleanup operation individually.
 - `OPENCLAW_DIAGNOSTICS=timeline` with `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH=<path>` writes a best-effort JSONL startup diagnostics timeline for external QA harnesses (equivalent to config `diagnostics.flags: ["timeline"]`; the path is still env-only). Add `OPENCLAW_DIAGNOSTICS_EVENT_LOOP=1` to include event-loop samples.
 - `pnpm build` then `pnpm test:startup:gateway -- --runs 5 --warmup 1` benchmarks Gateway startup against the built CLI entry: first process output, `/healthz`, `/readyz`, startup trace timings, event-loop delay, and plugin lookup-table timing.
 - `pnpm build` then `pnpm test:restart:gateway -- --case skipChannels --runs 1 --restarts 5` benchmarks in-process restart on macOS or Linux (not supported on Windows; restart requires `SIGUSR2`). Uses `SIGUSR2`, enables both traces in the child process, and records next `/healthz`, next `/readyz`, downtime, ready timing, CPU, RSS, and restart trace metrics.
-- Session projection warming overlaps transport setup after session admission and request-context preparation. Readiness still waits for initial session materialization and interrupted-turn recovery; a listener can be live while those gates remain pending. Update canaries continue to defer session catalogs until activation.
+- Session projection warming overlaps transport setup after session admission and request-context preparation. Readiness waits for initial session materialization; a listener can be live while that gate remains pending. Marked sessions receive ordinary resume inputs during startup without waiting for their agent runs to finish. Update canaries continue to defer session catalogs until activation.
 - `/healthz` is liveness; `/readyz` is usable readiness. Treat trace lines and benchmark output as owner-attribution signal, not a complete performance conclusion from one span or sample.
 
 For persistent startup tracing, set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` in the
@@ -263,14 +263,12 @@ An existing startup-trace assignment in the service definition, including
 `openclaw gateway install --force` and service repair. Generated service values
 remain authoritative; arbitrary `OPENCLAW_*` script edits are not preserved.
 
-Without tracing, stops and restarts report nonzero active-work category counts at
-the first drain snapshot and at most once every 30 seconds while still pending.
-These reports omit task identities and request origins; categories can overlap.
-An ordinary stop logs `active-work drain settled; beginning server close` before
-teardown, including after a drain timeout or failure. Diagnostics do not change
-drain budgets or the service manager's stop deadline.
+Stops and restarts record running sessions before aborting their work. Shutdown
+logs name cleanup steps that fail or exceed their bounded grace. The Gateway
+does not wait for active agent work to finish. Diagnostics do not change cleanup
+budgets or the service manager's stop deadline.
 
 A client disconnect leaves interactive setup available for reconnect. A Gateway
-stop or restart closes setup prompts before draining work. Settings writes already
+stop or restart closes setup prompts before cleanup. Settings writes already
 in progress may finish, but setup will not wait for another answer during shutdown.
 After the Gateway starts again, reopen setup and check the saved settings.

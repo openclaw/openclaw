@@ -267,9 +267,30 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("verifies Twilio signatures over sorted form fields", () => {
-    const input = signatureInput(inboundForm());
+    // Twilio's published vector independently checks the shared signer and verifier.
+    // https://www.twilio.com/docs/usage/security#explore-the-algorithm-yourself
+    const account = createAccount({
+      publicWebhookUrl: "https://example.com/myapp.php?foo=1&bar=2",
+      authToken: "12345",
+    });
+    const form = {
+      To: "+18005551212",
+      Digits: "1234",
+      From: "+14158675310",
+      CallSid: "CA1234567890ABCDE",
+      Caller: "+14158675310",
+    };
+    const input = {
+      form,
+      url: account.publicWebhookUrl,
+      authToken: account.authToken,
+      signature: "L/OH5YylLD5NRKLltdqwSvS0BnU=",
+    };
+    expect(signSmsTestForm(form, account).signature).toBe(input.signature);
     expect(verifyTwilioSignature(input)).toBe(true);
-    expect(verifyTwilioSignature({ ...input, url: `${WEBHOOK}/other` })).toBe(false);
+    expect(verifyTwilioSignature({ ...input, url: `${input.url}&other=1` })).toBe(false);
+    expect(verifyTwilioSignature({ ...input, authToken: "wrong-token" })).toBe(false);
+    expect(verifyTwilioSignature({ ...input, form: { ...form, Digits: "4321" } })).toBe(false);
     expect(verifyTwilioSignature({ ...input, signature: input.signature.slice(0, -1) })).toBe(
       false,
     );

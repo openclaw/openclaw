@@ -23,6 +23,8 @@
   --text-tertiary: var(--muted);
   --icon-interactive: var(--muted);
   --rail-header-action-color: var(--muted);
+  --chat-composer-control-text: var(--muted);
+  --chat-composer-control-icon: var(--muted);
   --navigation-selected-border: var(--border-strong);
 
   /* Atkinson Hyperlegible Next everywhere, prose included: the face is part of
@@ -95,6 +97,10 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.95);
 
   --grid-line: rgba(255, 255, 255, 0.08);
+
+  --link: var(--accent);
+
+  --link-on-tint: var(--link);
 }
 
 :root[data-theme="beacon-light"] {
@@ -159,4 +165,8 @@
   --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.3);
 
   --grid-line: rgba(0, 0, 0, 0.12);
+
+  --link: #5b3c00;
+
+  --link-on-tint: #4f3400;
 }

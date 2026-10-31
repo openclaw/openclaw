@@ -19,7 +19,6 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
@@ -30,6 +29,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { VaultAccess } from "../../extensions/knowledge/src/access.js";
 import type { GitChange } from "../../extensions/knowledge/src/git-history.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -126,9 +126,6 @@ const percentile = (samples: number[], quantile: number) =>
   samples.length
     ? samples.toSorted((a, b) => a - b)[Math.ceil(samples.length * quantile) - 1]!
     : null;
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
-}
 async function measure(name: string, operations: number, run: () => void) {
   globalThis.gc?.();
   await new Promise<void>((resolve) => {
@@ -197,8 +194,8 @@ async function measure(name: string, operations: number, run: () => void) {
       heapAfter: memoryAfter.heapUsed,
       ...(allocation
         ? {
-            sampledBytes: sampledBytes(allocation.profile.head),
-            sampledBytesPerOperation: sampledBytes(allocation.profile.head) / operations,
+            sampledBytes: sumSampledHeapBytes(allocation.profile.head),
+            sampledBytesPerOperation: sumSampledHeapBytes(allocation.profile.head) / operations,
           }
         : {}),
     }),

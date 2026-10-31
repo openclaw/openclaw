@@ -276,6 +276,9 @@ There is no Template ownership record or reverse-install operation.
 Use `--json` for experimental machine-readable output. Validation errors,
 blocked requirements, and failed additions exit `1`.
 
+Human-readable reports sanitize terminal control characters in Template fields
+and project paths. `--json` retains the original field values for machine processing.
+
 ## See also
 
 - [Agents](/cli/agents)

@@ -33,6 +33,8 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import type { WorkshopChange } from "./changes.kernel.js";
+import { scheduleSkillExperienceReview } from "./experience-review-default.js";
+import * as experienceReview from "./experience-review.js";
 import { runSkillExperienceReview } from "./experience-review.js";
 import { createExperienceReviewCandidate } from "./experience-review.test-support.js";
 import { createWorkshopSkill, writeWorkshopSkillFile } from "./library.js";
@@ -296,6 +298,44 @@ it.each([
       });
       expect(event.channel).toBeUndefined();
       expect(event.costUsd).toBe(0);
+    }
+  },
+);
+
+it.each(["off", "tool-policy"] as const)(
+  "admits a due review under the current config, so %s refuses it",
+  async (restriction) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const prepare = vi.spyOn(experienceReview, "prepareSkillExperienceReviewCandidate");
+      expect(
+        await experienceReview.prepareSkillExperienceReviewCandidate(candidate, candidate.config),
+      ).toEqual({ ...candidate, config: candidate.config });
+      prepare.mockClear();
+      scheduleSkillExperienceReview({
+        event: { messages: [], success: true },
+        ctx: {
+          ...candidate.ctx,
+          sessionKey: candidate.source.sessionKey,
+          modelIterations: 10,
+          skillWorkshopAvailable: true,
+        },
+        config: candidate.config,
+        source: candidate.source,
+      });
+      await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
+      const current =
+        restriction === "off"
+          ? { ...candidate.config, skills: { workshop: { autonomous: { mode: "off" as const } } } }
+          : { ...candidate.config, tools: { ...candidate.config.tools, deny: ["skill_workshop"] } };
+      setRuntimeConfigSnapshot(current);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce());
+      expect(prepare.mock.calls[0]?.[1]).toBe(current);
+      await expect(prepare.mock.results[0]?.value).resolves.toBeUndefined();
+      expect(mocks.runEmbeddedAgent).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
     }
   },
 );

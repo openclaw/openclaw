@@ -24,7 +24,11 @@ import type { SessionControllerEntry } from "../../../sessions/session-controlle
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../../state/agent-database-admission-error.js";
 import { buildCollectPrompt, previewQueueSummaryPrompt } from "../../../utils/queue-helpers.js";
-import { collectRuntimeMetadata, resolveFollowupReplyAnchor } from "./delivery-context.js";
+import {
+  collectCurrentInboundContext,
+  collectRuntimeMetadata,
+  resolveFollowupReplyAnchor,
+} from "./delivery-context.js";
 import { runOutsideAdmittedGenerationScopes } from "./drain-admission-scope.js";
 import {
   buildCollectTranscriptInput,
@@ -179,7 +183,9 @@ async function executeClaim(
       queue.activeSummarySources.add(item);
     }
   }
-  const summaryLines = sources.map((item) => {
+  // A summary prompt shows only the newest cap lines; source context pairs with those lines.
+  const summarizedSources = queue.cap > 0 ? sources.slice(-queue.cap) : sources;
+  const summaryLines = summarizedSources.map((item) => {
     const index = queue.summarySources.indexOf(item);
     if (index >= 0) {
       return queue.summaryLines[index] ?? "";
@@ -193,10 +199,7 @@ async function executeClaim(
     return item.summaryLine ?? item.prompt;
   });
   const prompt = claim.summary
-    ? (previewQueueSummaryPrompt({
-        droppedCount: sources.length,
-        summaryLines: queue.cap > 0 ? summaryLines.slice(-queue.cap) : summaryLines,
-      }) ?? "")
+    ? (previewQueueSummaryPrompt({ droppedCount: sources.length, summaryLines }) ?? "")
     : buildCollectPrompt({
         title: "[Queued messages while agent was busy]",
         items: sources,
@@ -230,7 +233,9 @@ async function executeClaim(
       ...resolveOriginRoutingMetadata(sources),
       ...collectRuntimeMetadata(sources, cancellation.signal),
       ...collectQueuedPromptMedia(sources),
-      ...(claim.summary ? { currentInboundContext: undefined } : {}),
+      ...(claim.summary
+        ? { currentInboundContext: collectCurrentInboundContext(summarizedSources) }
+        : {}),
       prompt,
       transcriptPrompt: claim.summary ? prompt : buildCollectTranscriptInput(sources).text,
       userTurnTranscriptRecorder: recorder,

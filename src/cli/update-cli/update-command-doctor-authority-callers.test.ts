@@ -69,7 +69,10 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
 // both process transports inert while exercising its synthetic one-shot fence.
 vi.mock("./update-command-doctor-child.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-doctor-child.js")>()),
-  inspectUpdateDoctorChildSupport: async () => true,
+  inspectUpdateDoctorChildSupport: async () => ({
+    doctorConfigWrites: true,
+    doctorRetirementOnly: true,
+  }),
   withUpdateDoctorChild: async (
     params: Parameters<typeof import("./update-command-doctor-child.js").withUpdateDoctorChild>[0],
     operation: Parameters<

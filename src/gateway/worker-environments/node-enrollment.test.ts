@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import { ensureDevicePairSetupBootstrapToken } from "../../infra/device-bootstrap.js";
 import { decodePairingSetupCode } from "../../pairing/setup-code.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import * as processExec from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -141,6 +142,7 @@ describe("worker node enrollment", () => {
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-node-enrollment-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
     transfer = createWorkerBootstrapArtifactTransferService();
@@ -154,6 +156,7 @@ describe("worker node enrollment", () => {
       manager.stop();
     }
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
@@ -169,6 +172,98 @@ describe("worker node enrollment", () => {
       "Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://localhost:19821, from plugins.entries.device-pair.config.publicUrl)",
     );
     expect(prepareArtifact).not.toHaveBeenCalled();
+  });
+
+  it.each(["codex", "runtime-plugin"])(
+    "scopes private Codex inputs to the selected %s runtime at enrollment",
+    async (pluginId) => {
+      const directory = path.join(root, "worker-provisioning", "codex");
+      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+      const configPath = path.join(directory, "config.toml");
+      const helperPath = path.join(directory, "token.mjs");
+      const configToml =
+        'model_provider = "worker"\n[model_providers.worker]\nwire_api = "responses"\nauth = { command = "node", args = [' +
+        JSON.stringify(helperPath) +
+        "] }\n";
+      const helperScript = 'process.stdout.write("synthetic-worker-token")\n';
+      await fs.writeFile(configPath, configToml, { mode: 0o600 });
+      await fs.writeFile(helperPath, helperScript, { mode: 0o600 });
+      vi.stubEnv("OPENAI_API_KEY", "synthetic-gateway-only-token");
+      const record = await createProvisioning();
+      const manager = createManager({
+        prepareArtifact: async () => ({ ...artifact(), enabledPluginIds: [pluginId] }),
+      });
+      const runtime = await manager.prepareRuntime(record, bundle());
+      expect(runtime).not.toHaveProperty("workerCodex");
+      const enrollment = await manager.begin(record);
+      if (pluginId !== "codex") {
+        expect(enrollment).not.toHaveProperty("workerCodex");
+        return;
+      }
+      expect(enrollment.workerCodex).toEqual({
+        configToml,
+        helperScript,
+        helperPath,
+        configVersion: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+      const { resolveCodexWorkerAppServerCommand } = loadBundledPluginPublicArtifactModuleSync<{
+        resolveCodexWorkerAppServerCommand: (env: NodeJS.ProcessEnv, required: boolean) => string;
+      }>({ dirName: "codex", artifactBasename: "worker-provisioning-api.js" });
+      const command = resolveCodexWorkerAppServerCommand(process.env, true);
+      expect(command).toBe("codex.app-server.stdio.v1." + enrollment.workerCodex!.configVersion);
+      await fs.writeFile(helperPath, helperScript + "// changed\n");
+      const changed = await manager.begin(record);
+      expect(changed.workerCodex!.configVersion).not.toBe(enrollment.workerCodex!.configVersion);
+      expect(resolveCodexWorkerAppServerCommand(process.env, true)).toBe(
+        "codex.app-server.stdio.v1." + changed.workerCodex!.configVersion,
+      );
+      expect(JSON.stringify(enrollment.nodeBootstrap)).not.toContain("synthetic-worker-token");
+      expect(JSON.stringify(enrollment)).not.toContain("synthetic-gateway-only-token");
+    },
+  );
+
+  it.each([
+    "incomplete",
+    "malformed",
+    "outside helper",
+    "empty",
+    "oversized",
+    "public file",
+    "symlink",
+  ])("rejects %s private Codex bundle without issuing pairing credentials", async (invalid) => {
+    const directory = path.join(root, "worker-provisioning", "codex");
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    const helperPath = path.join(directory, "token.mjs");
+    const selectedHelper =
+      invalid === "outside helper" ? path.join(root, "outside.mjs") : helperPath;
+    const config =
+      'model_provider = "worker"\n[model_providers.worker]\nwire_api = "responses"\nauth = { command = "node", args = [' +
+      JSON.stringify(selectedHelper) +
+      "] }\n";
+    await fs.writeFile(
+      path.join(directory, "config.toml"),
+      invalid === "empty" ? "" : invalid === "malformed" ? "invalid [" : config,
+      { mode: 0o600 },
+    );
+    if (invalid !== "incomplete") {
+      await fs.writeFile(
+        helperPath,
+        invalid === "oversized" ? "x".repeat(16 * 1024 + 1) : "// private helper\n",
+        { mode: invalid === "public file" ? 0o644 : 0o600 },
+      );
+    }
+    if (invalid === "symlink") {
+      await fs.rename(helperPath, path.join(root, "actual.mjs"));
+      await fs.symlink(path.join(root, "actual.mjs"), helperPath);
+    }
+    const manager = createManager({
+      prepareArtifact: async () => ({ ...artifact(), enabledPluginIds: ["codex"] }),
+    });
+    vi.mocked(ensureDevicePairSetupBootstrapToken).mockClear();
+    await expect(manager.begin(await createProvisioning())).rejects.toThrow(
+      /Worker Codex|Cloud worker Codex/,
+    );
+    expect(ensureDevicePairSetupBootstrapToken).not.toHaveBeenCalled();
   });
 
   it("prepares requested-state artifacts without enrollment or transfer grants", async () => {

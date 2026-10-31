@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/x",
-  "version": "2026.10.8",
+  "version": "2026.10.9",
   "description": "OpenClaw X mentions and public reply channel plugin",
   "type": "module",
   "dependencies": {
@@ -17,7 +17,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.10.8"
+    "openclaw": ">=2026.10.9"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -44,7 +44,7 @@
       "minHostVersion": ">=2026.9.8"
     },
     "compat": {
-      "pluginApi": ">=2026.10.8"
+      "pluginApi": ">=2026.10.9"
     },
     "build": {
       "bundledDist": true

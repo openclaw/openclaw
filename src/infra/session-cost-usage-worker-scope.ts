@@ -208,6 +208,8 @@ export async function withSessionCostUsageWorkerDatabases<T>(
                   : undefined,
               },
             ),
+          [],
+          signal,
         );
         if (!reply.ok) {
           throw new UsageCostWorkerReplyError(reply.error);

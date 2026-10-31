@@ -50,7 +50,9 @@ Claims have no budget.
 - Edits that keep a body the same size or smaller always succeed, even on a page
   already over budget. Such a page can only shrink.
 - On rejection, don't truncate, summarize away detail, or park the text on an
-  unrelated nearby page. Move a whole section that has its own subject with
+  unrelated nearby page. If the page has a written `## Timeline` section, retire
+  it ([retire a written Timeline](profiles.md#retire-a-written-timeline)); never
+  extract it. Otherwise move a whole section that has its own subject with
   `knowledge_extract_section`, to a listed candidate it is about or to a new page,
   then reread and retry your edit.
 - A rejected page edit never blocks a fact: save it with `knowledge_remember` or

@@ -26,9 +26,8 @@ import {
 } from "./session-hovercard-automations.tsx";
 import { participantLabel, formatSessionAge, sessionAttribution } from "./session-hovercard.ts";
 import { sessionMachineParts } from "./session-machine.ts";
-import { ProgressRuntime } from "./session-progress-card-content.tsx";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
-import { progressCardHeadsUp, progressCardRunOutcome } from "./session-progress-card.ts";
+import { progressCardHeadsUp } from "./session-progress-card.ts";
 import { ChannelAvatar } from "./solid/channel-avatar.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { ViewerAvatar, ViewerFacepile } from "./solid/viewer-facepile.tsx";
@@ -615,26 +614,6 @@ export function SessionHovercard(props: SessionHovercardInput) {
           <section class="session-hovercard__section session-hovercard__section--header">
             <Header {...props} />
           </section>
-        </Show>
-        <Show when={props.progressCard}>
-          {(card) => (
-            <ProgressRuntime
-              runtime={{
-                hasActiveSubagentRun: props.row?.hasActiveSubagentRun,
-                known: Boolean(props.row),
-                connected: props.connected,
-                lastRunError: props.row?.lastRunError,
-              }}
-              hasActiveRun={props.row?.gatewayHasActiveRun ?? props.row?.hasActiveRun ?? false}
-              sessionStatus={props.row?.status}
-              terminalOutcome={progressCardRunOutcome(
-                card(),
-                props.row?.status,
-                props.row?.startedAt,
-                props.row?.endedAt,
-              )}
-            />
-          )}
         </Show>
         <Show when={hasContext()}>
           <section class="session-hovercard__section session-hovercard__section--metadata">

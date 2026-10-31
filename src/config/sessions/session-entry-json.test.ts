@@ -3,6 +3,9 @@ import {
   admitCanonicalSessionEntry,
   parseCanonicalSqliteSessionEntry,
 } from "./session-entry-json.js";
+import { projectPublicSessionEntry } from "./session-entry-projection.js";
+import { preserveGenerationPrivateFields } from "./session-entry-public-patch.js";
+import { applySessionEntryWritePolicy } from "./session-entry-write-policy.js";
 
 describe("canonical session numeric metadata", () => {
   it.each([
@@ -90,5 +93,52 @@ describe("canonical session numeric metadata", () => {
     expect(projected).not.toHaveProperty("snoozedUntil");
     expect(projected).not.toHaveProperty("snoozedAt");
     expect((projected.spawnDepth ?? 0) + 1).toBe(3);
+  });
+
+  it("keeps a graceful resume marker private and scoped to its current incarnation", () => {
+    const resumeAfterRestart = { queuedInputIds: ["accepted-before-shutdown"] };
+    const entry = admitCanonicalSessionEntry({
+      sessionId: "session",
+      lifecycleRevision: "incarnation",
+      updatedAt: 1,
+      resumeAfterRestart,
+      mainRestartRecovery: { cycleId: "upgrade", revision: 1, executionIdentity: "retired" },
+      restartRecoveryOperatorSource: { snapshot: { obsolete: true } },
+      pendingExecNotifications: { obsolete: {} },
+    });
+    expect(entry).toEqual({
+      sessionId: "session",
+      lifecycleRevision: "incarnation",
+      updatedAt: 1,
+      resumeAfterRestart,
+      mainRestartRecovery: { cycleId: "upgrade" },
+    });
+    const publicEntry = projectPublicSessionEntry(entry);
+    expect(publicEntry).not.toHaveProperty("resumeAfterRestart");
+    expect(publicEntry).not.toHaveProperty("mainRestartRecovery");
+    expect(preserveGenerationPrivateFields(entry, { label: "Renamed" })).toMatchObject({
+      label: "Renamed",
+      resumeAfterRestart,
+    });
+    for (const next of [
+      publicEntry,
+      { ...publicEntry, resumeAfterRestart: undefined },
+      { ...entry, sessionId: "replacement" },
+      { ...entry, lifecycleRevision: "replacement" },
+      { ...entry, archivedAt: 2 },
+    ]) {
+      const written = applySessionEntryWritePolicy(
+        "main",
+        "agent:main:session",
+        next,
+        { ...next },
+        entry,
+        {},
+      ).entry;
+      expect(written.mainRestartRecovery).toBeUndefined();
+      expect(written.resumeAfterRestart).toEqual(
+        next === publicEntry ? resumeAfterRestart : undefined,
+      );
+    }
   });
 });

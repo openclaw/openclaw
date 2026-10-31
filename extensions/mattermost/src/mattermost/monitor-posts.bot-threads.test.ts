@@ -1,8 +1,16 @@
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  consumeChannelAdmissionEvidence,
+  readChannelContextAdmissionEvidence,
+  withRegisteredChannelIngress,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/channel-policy";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
+import { mattermostPlugin } from "../channel.js";
 import { setMattermostRuntime } from "../runtime.js";
 import type { MattermostConfig } from "../types.js";
 import { resolveMattermostAccount } from "./accounts.js";
@@ -46,6 +54,7 @@ function setup(
   const cfg: OpenClawConfig = { ...cfgExtra, channels: { ...cfgExtra.channels, mattermost } };
   const account = resolveMattermostAccount({ cfg, accountId });
   const core = createPluginRuntimeMock();
+  core.channel.inbound.buildContext = buildChannelInboundEventContext;
   core.channel.mentions.buildMentionRegexes = () => [];
   core.channel.groups.resolveRequireMention = resolveChannelGroupRequireMention;
   core.channel.commands.shouldHandleTextCommands = () => false;
@@ -80,8 +89,46 @@ function setup(
     );
   const receive = (message = body, id = "follow-up") =>
     receivePost({ id, root_id: "root", message });
-  return { core, root, request, receive, receivePost };
+  return { core, monitor, root, request, receive, receivePost };
 }
+
+it("retains host admission for an ordinary post in its final thread session", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = setup({
+      requireMention: false,
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["sender"],
+    });
+    await withRegisteredChannelIngress(
+      { plugin: mattermostPlugin, config: f.monitor.cfg, setRuntime: setMattermostRuntime },
+      async (runtime) => {
+        f.core.channel.inbound.ingress = runtime.channel.inbound.ingress;
+        f.core.channel.inbound.buildContext = runtime.channel.inbound.buildContext;
+        f.core.channel.routing.resolveAgentRoute = runtime.channel.routing.resolveAgentRoute;
+        await f.receive();
+        const context = dispatch.mock.calls[0]?.[1].ctxPayload;
+        expect(context).toMatchObject({
+          SessionKey: "agent:main:mattermost:channel:room:thread:root",
+          SenderId: "sender",
+          MessageSid: "follow-up",
+          NativeChannelId: "room",
+          MessageThreadId: "root",
+        });
+        expect(
+          consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(context)),
+        ).toMatchObject({
+          ingressState: "present",
+          invoker: {
+            state: "present",
+            kind: "person",
+            rawPrincipalRef: JSON.stringify(["mattermost", "default", "sender"]),
+          },
+          decisionCoverage: "enforced",
+        });
+      },
+    );
+  });
+});
 
 const policy = {
   implicitMentions: { threadParticipation: true },

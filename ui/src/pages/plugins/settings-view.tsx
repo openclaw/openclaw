@@ -24,7 +24,6 @@ import "./custom-elements.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
-import { PluginNativeUiDisclosure } from "./native-ui-disclosure.tsx";
 import {
   renderPluginCapabilitySection,
   renderPluginCompatibilityNotices,
@@ -587,11 +586,6 @@ function PluginOverview(props: DetailProps): JSX.Element {
           />
         }
         identity={renderPluginPublisher(catalog(), props.inspection?.overview?.publisherName)}
-        notice={
-          (props.inspection?.overview?.hasNativeUi ?? plugin().hasNativeUi) ? (
-            <PluginNativeUiDisclosure />
-          ) : undefined
-        }
         titleAction={
           <Show
             when={Boolean(props.installProgress)}

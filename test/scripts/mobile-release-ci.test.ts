@@ -275,107 +275,124 @@ describe("mobile release CI tools", () => {
       buildDirectory: "release-artifacts",
       binaries: ["OpenClaw-phone.aab", "OpenClaw-wear.aab", "OpenClaw.apk", "OpenClaw.aab.sha256"],
     },
-  ];
-  describe.each(releasePlatforms)(
-    "$platform release artifact recovery",
-    ({ platform, workflow }) => {
-      it("checks out and verifies the dispatch commit before accessing signing credentials", () => {
-        const steps = releaseSteps(workflow);
-        expect(steps[0]).toMatchObject({
-          uses: expect.stringMatching(/^actions\/checkout@/u),
-          with: { ref: "${{ github.sha }}", "fetch-depth": platform === "android" ? 1 : 0 },
-        });
-        const verification = steps[1]?.run;
-        if (!verification) {
-          throw new Error("Release checkout must be verified before subsequent steps.");
-        }
-        const root = tempRoots.make("openclaw-release-dispatch-");
-        initGit(root, { name: "Release Fixture", email: "release@example.invalid" });
-        writeFile(root, "README.md", "Synthetic release source\n");
-        const sha = commit(root, "Initial source");
-        git(root, "checkout", "--detach", sha);
-        const verify = (expectedSha: string) =>
-          spawnSync("bash", ["-c", verification], {
-            cwd: root,
-            env: { ...process.env, GITHUB_SHA: expectedSha },
-            encoding: "utf8",
-          });
-        expect(verify(sha).status).toBe(0);
-        expect(verify("0".repeat(40)).status).toBe(1);
+  ] as const;
+  describe.each(releasePlatforms)("$platform release artifact recovery", ({ workflow }) => {
+    it("checks out and verifies the dispatch commit before accessing signing credentials", () => {
+      const steps = releaseSteps(workflow);
+      const checkoutIndex = steps.findIndex((step) => step.uses?.startsWith("actions/checkout@"));
+      expect(steps[checkoutIndex]).toMatchObject({
+        uses: expect.stringMatching(/^actions\/checkout@/u),
+        with: { ref: "${{ github.sha }}", "fetch-depth": 1 },
       });
+      const verification = expectDefined(
+        steps[checkoutIndex + 1]?.run,
+        "Release checkout verification",
+      );
+      expect(steps.findIndex((step) => JSON.stringify(step).includes("secrets."))).toBeGreaterThan(
+        checkoutIndex + 1,
+      );
+      const root = tempRoots.make("openclaw-release-dispatch-");
+      initGit(root, { name: "Release Fixture", email: "release@example.invalid" });
+      writeFile(root, "README.md", "Synthetic release source\n");
+      const sha = commit(root, "Initial source");
+      git(root, "checkout", "--detach", sha);
+      const verify = (expectedSha: string) =>
+        spawnSync("bash", ["-c", verification], {
+          cwd: root,
+          env: { ...process.env, GITHUB_SHA: expectedSha },
+          encoding: "utf8",
+        });
+      expect(verify(sha).status).toBe(0);
+      expect(verify("0".repeat(40)).status).toBe(1);
+    });
+  });
+
+  it.each(releasePlatforms)(
+    "supports selective $platform history hydration after shallow source admission",
+    ({ platform }) => {
+      const root = tempRoots.make(`openclaw-${platform}-release-history-`);
+      const remote = path.join(root, "remote.git");
+      const seed = path.join(root, "seed");
+      const checkout = path.join(root, "checkout");
+      initGit(seed, { name: "Release Fixture", email: "release@example.invalid" });
+      const phoneFile =
+        platform === "ios" ? "apps/ios/Sources/Chat.swift" : "apps/android/app/src/main/Chat.kt";
+      const wearFile =
+        platform === "ios"
+          ? "apps/ios/WatchApp/Notifications.swift"
+          : "apps/android/wear/src/main/Notifications.kt";
+      writeFile(seed, phoneFile, "initial phone\n");
+      writeFile(seed, wearFile, "initial watch\n");
+      const phoneBaseline = commit(seed, "Initial release");
+      writeFile(seed, phoneFile, "phone chat\n");
+      commit(seed, "Improve phone chat");
+      writeFile(seed, wearFile, "watch notifications\n");
+      const source = commit(seed, "Improve watch notifications");
+      writeFile(seed, "README.md", "Main advanced while queued\n");
+      const currentMain = commit(seed, "Advance main");
+      git(seed, "checkout", "-b", "wear-public", phoneBaseline);
+      writeFile(seed, wearFile, "older public watch\n");
+      const wearBaseline = commit(seed, "Public watch correction");
+      git(seed, "checkout", "-b", "unrelated", phoneBaseline);
+      writeFile(seed, "unrelated.txt", "Not needed by this release\n");
+      const unrelated = commit(seed, "Unrelated branch");
+      git(seed, "tag", "unrelated-tag");
+      git(root, "clone", "--bare", seed, remote);
+      git(remote, "config", "uploadpack.allowFilter", "true");
+      const baselines = [
+        { sha: phoneBaseline, ref: `refs/openclaw/mobile-releases/${platform}/2026.10.70-1` },
+        { sha: wearBaseline, ref: `refs/openclaw/mobile-releases/${platform}/2026.10.70-2` },
+      ];
+      for (const { sha, ref } of baselines) {
+        git(remote, "update-ref", ref, sha);
+      }
+      initGit(checkout, { name: "Release Fixture", email: "release@example.invalid" });
+      git(checkout, "remote", "add", "origin", pathToFileURL(remote).href);
+      git(
+        checkout,
+        "fetch",
+        "--no-tags",
+        "--depth=1",
+        "origin",
+        `${source}:refs/remotes/origin/main`,
+      );
+      git(checkout, "checkout", "--detach", source);
+      git(checkout, "fetch", "--no-tags", "origin", "refs/heads/main");
+      git(checkout, "merge-base", "--is-ancestor", source, currentMain);
+      expect(git(checkout, "rev-parse", "--is-shallow-repository")).toBe("true");
+      const fetched = bash(
+        'git fetch --no-tags --filter=blob:none --unshallow origin "$GITHUB_SHA"',
+        { GITHUB_SHA: source },
+        { cwd: checkout },
+      );
+      expect(fetched.status, fetched.stderr).toBe(0);
+      expect(git(checkout, "rev-parse", "--is-shallow-repository")).toBe("false");
+      expect(git(checkout, "for-each-ref", "--format=%(refname)")).toBe("refs/remotes/origin/main");
+      expect(git(checkout, "rev-parse", "origin/main")).toBe(currentMain);
+      expect(
+        git(checkout, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)"),
+      ).not.toContain(unrelated);
+      expect(git(checkout, "rev-parse", "FETCH_HEAD")).toBe(source);
+      const staged = path.join(root, "staged");
+      git(checkout, "worktree", "add", "--detach", staged, source);
+      for (const { sha, ref } of baselines) {
+        git(staged, "fetch", "--no-tags", "origin", ref);
+        expect(git(staged, "rev-parse", "FETCH_HEAD")).toBe(sha);
+        const options = {
+          platform,
+          baseline: sha,
+          source,
+          deadline: Date.now() + 30_000,
+        };
+        const expected = collectReleaseInventory({ ...options, rootDir: seed });
+        expect(expected.commits).toEqual(["Improve watch notifications", "Improve phone chat"]);
+        expect(collectReleaseInventory({ ...options, rootDir: staged })).toEqual(expected);
+      }
+      expect(git(staged, "rev-parse", "HEAD")).toBe(source);
+      expect(git(checkout, "rev-parse", "HEAD")).toBe(source);
+      expect(git(staged, "status", "--porcelain")).toBe("");
     },
   );
-
-  it("retains Android release evidence and ancestry without unrelated branch history", () => {
-    const root = tempRoots.make("openclaw-android-release-history-");
-    const remote = path.join(root, "remote.git");
-    const seed = path.join(root, "seed");
-    const checkout = path.join(root, "checkout");
-    initGit(seed, { name: "Release Fixture", email: "release@example.invalid" });
-    const phoneFile = "apps/android/app/src/main/Chat.kt";
-    const wearFile = "apps/android/wear/src/main/Notifications.kt";
-    writeFile(seed, phoneFile, "initial phone\n");
-    writeFile(seed, wearFile, "initial watch\n");
-    const phoneBaseline = commit(seed, "Initial release");
-    writeFile(seed, phoneFile, "phone chat\n");
-    commit(seed, "Improve phone chat");
-    writeFile(seed, wearFile, "watch notifications\n");
-    const source = commit(seed, "Improve watch notifications");
-    writeFile(seed, "README.md", "Main advanced while queued\n");
-    const currentMain = commit(seed, "Advance main");
-    git(seed, "checkout", "-b", "wear-public", phoneBaseline);
-    writeFile(seed, wearFile, "older public watch\n");
-    const wearBaseline = commit(seed, "Public watch correction");
-    git(seed, "checkout", "-b", "unrelated", phoneBaseline);
-    writeFile(seed, "unrelated.txt", "Not needed by this release\n");
-    const unrelated = commit(seed, "Unrelated branch");
-    git(seed, "tag", "unrelated-tag");
-    git(root, "clone", "--bare", seed, remote);
-    const baselines = [
-      { sha: phoneBaseline, ref: "refs/openclaw/mobile-releases/android/2026.10.70-1" },
-      { sha: wearBaseline, ref: "refs/openclaw/mobile-releases/android/2026.10.70-2" },
-    ];
-    for (const { sha, ref } of baselines) {
-      git(remote, "update-ref", ref, sha);
-    }
-    initGit(checkout, { name: "Release Fixture", email: "release@example.invalid" });
-    git(checkout, "remote", "add", "origin", pathToFileURL(remote).href);
-    git(checkout, "fetch", "--no-tags", "--depth=1", "origin", source);
-    git(checkout, "checkout", "--detach", source);
-    const steps = releaseSteps(".github/workflows/android-store-release.yml");
-    const history = expectDefined(
-      steps[stepIndex(steps, "Fetch release source history")]?.run,
-      "Android release history step",
-    );
-    const fetched = bash(history, { GITHUB_SHA: source }, { cwd: checkout });
-    expect(fetched.status, fetched.stderr).toBe(0);
-    expect(git(checkout, "rev-parse", "--is-shallow-repository")).toBe("false");
-    expect(git(checkout, "for-each-ref", "--format=%(refname)")).toBe("refs/remotes/origin/main");
-    expect(git(checkout, "rev-parse", "origin/main")).toBe(source);
-    expect(() => git(checkout, "cat-file", "-e", unrelated)).toThrow();
-    git(checkout, "fetch", "--no-tags", "origin", "refs/heads/main");
-    expect(git(checkout, "rev-parse", "FETCH_HEAD")).toBe(currentMain);
-    expect(git(checkout, "rev-parse", "origin/main")).toBe(currentMain);
-    git(checkout, "merge-base", "--is-ancestor", source, currentMain);
-    const staged = path.join(root, "staged");
-    git(checkout, "worktree", "add", "--detach", staged, source);
-    for (const { sha, ref } of baselines) {
-      git(staged, "fetch", "--no-tags", "origin", ref);
-      expect(git(staged, "rev-parse", "FETCH_HEAD")).toBe(sha);
-      const options = {
-        platform: "android" as const,
-        baseline: sha,
-        source,
-        deadline: Date.now() + 30_000,
-      };
-      const expected = collectReleaseInventory({ ...options, rootDir: seed });
-      expect(expected.commits).toEqual(["Improve watch notifications", "Improve phone chat"]);
-      expect(collectReleaseInventory({ ...options, rootDir: staged })).toEqual(expected);
-    }
-    expect(git(staged, "rev-parse", "HEAD")).toBe(source);
-    expect(git(checkout, "rev-parse", "HEAD")).toBe(source);
-    expect(git(staged, "status", "--porcelain")).toBe("");
-  });
 
   it.each([
     ...releasePlatforms.flatMap(({ platform, workflow, buildDirectory, binaries }) =>
@@ -1705,15 +1722,14 @@ describe("mobile release CI tools", () => {
         timeoutMs: number;
       }) => {
         const pidFile = path.join(runnerTemp, `${name}.pid`);
+        // Publish both PIDs before the grandchild can trigger the output cap.
+        const childSource = `process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(process.env.PID_FILE, \`\${process.ppid}\\n\${process.pid}\\n\`); ${grandchildSource}`;
         const parentSource = [
-          // A timeout during PID publication must not terminate the fixture before it writes.
           'process.on("SIGTERM", () => {});',
           'const { spawn } = require("node:child_process");',
-          'const fs = require("node:fs");',
-          `const child = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildSource)}], {`,
+          `spawn(process.execPath, ["-e", ${JSON.stringify(childSource)}], {`,
           '  stdio: ["ignore", process.stdout, process.stderr],',
           "});",
-          "fs.writeFileSync(process.env.PID_FILE, `${process.pid}\\n${child.pid}\\n`);",
           "setInterval(() => {}, 1000);",
         ].join("\n");
         const runnerSource = `
@@ -1768,14 +1784,13 @@ process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message
 
       await exerciseOwnedProcessTree({
         expectedError: "timed out after 1000ms",
-        grandchildSource: 'process.on("SIGTERM", () => {}); setTimeout(() => {}, 5000);',
+        grandchildSource: "setTimeout(() => {}, 5000);",
         name: "timeout-tree",
         timeoutMs: 1_000,
       });
       await exerciseOwnedProcessTree({
         expectedError: "exceeded the 4096-byte output limit",
-        grandchildSource:
-          'process.on("SIGTERM", () => {}); setInterval(() => process.stdout.write("x".repeat(2048)), 1);',
+        grandchildSource: 'setInterval(() => process.stdout.write("x".repeat(2048)), 1);',
         maxOutputBytes: 4096,
         name: "output-cap-tree",
         timeoutMs: 5_000,

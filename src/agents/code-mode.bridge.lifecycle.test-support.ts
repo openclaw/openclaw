@@ -38,7 +38,8 @@ export function createSubscribedCodeModeHarness(params: {
       codeMode: {
         enabled: true,
         executor: params.executor,
-        timeoutMs: params.timeoutMs ?? 1_500,
+        // Lifecycle cases use product admission defaults; deadline tests opt into their own budget.
+        timeoutMs: params.timeoutMs,
       },
     },
   } as never;
