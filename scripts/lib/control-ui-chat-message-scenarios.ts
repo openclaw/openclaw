@@ -110,6 +110,26 @@ async function preparePreviousMessages(page: Page) {
   await frames(page);
 }
 
+async function prepareToolRows(page: Page) {
+  await preparePreviousMessages(page);
+  const work = page
+    .locator(`${activePane} .chat-work-group > .chat-activity-group__summary`)
+    .last();
+  await work.click();
+  await expectExpanded(work, true);
+  // Expansion can leave the tool rows outside the mobile virtualizer's window.
+  await work.scrollIntoViewIfNeeded();
+  await frames(page);
+  const activity = page
+    .locator(
+      `${activePane} .chat-activity-group:not(.chat-work-group) > .chat-activity-group__summary`,
+    )
+    .last();
+  if ((await activity.count()) && (await activity.getAttribute("aria-expanded")) === "false") {
+    await activity.click();
+  }
+}
+
 async function prepareFailedSend(page: Page, gateway: MockGatewayControls) {
   await prepareChat(page);
   await gateway.deferNext("chat.send");
@@ -444,22 +464,7 @@ export function createChatMessageScenarios(): readonly EngineScenario[] {
       fixtureOverrides: workFixture,
       expected: "An expanded grouped tool result opens and closes its code-copy context menu.",
       prepare: async (page) => {
-        await preparePreviousMessages(page);
-        await page
-          .locator(`${activePane} .chat-work-group > .chat-activity-group__summary`)
-          .last()
-          .click();
-        const activity = page
-          .locator(
-            `${activePane} .chat-activity-group:not(.chat-work-group) > .chat-activity-group__summary`,
-          )
-          .last();
-        if (
-          (await activity.count()) &&
-          (await activity.getAttribute("aria-expanded")) === "false"
-        ) {
-          await activity.click();
-        }
+        await prepareToolRows(page);
         await bubble(page, "interaction-0-395").waitFor({ state: "visible" });
         await bubble(page, "interaction-0-395").locator(".chat-tool-row__toggle").press("Space");
         await bubble(page, "interaction-0-395")
@@ -487,22 +492,7 @@ export function createChatMessageScenarios(): readonly EngineScenario[] {
       fixtureOverrides: workFixture,
       expected: "The first grouped tool disclosure opens and closes without sending a request.",
       prepare: async (page) => {
-        await preparePreviousMessages(page);
-        await page
-          .locator(`${activePane} .chat-work-group > .chat-activity-group__summary`)
-          .last()
-          .click();
-        const activity = page
-          .locator(
-            `${activePane} .chat-activity-group:not(.chat-work-group) > .chat-activity-group__summary`,
-          )
-          .last();
-        if (
-          (await activity.count()) &&
-          (await activity.getAttribute("aria-expanded")) === "false"
-        ) {
-          await activity.click();
-        }
+        await prepareToolRows(page);
         const toggle = page.locator(`${activePane} .chat-tool-row__toggle`).first();
         await toggle.waitFor({ state: "visible" });
         if ((await toggle.getAttribute("aria-expanded")) === "true") {
