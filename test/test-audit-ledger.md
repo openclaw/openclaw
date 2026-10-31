@@ -31,15 +31,17 @@ Its failed CI remains failed; no current-head CI success is claimed.
 
 ## Current qualification
 
-Pinned main `4afb241323b`: qualify49 unselected failover corpus rows. The
-classifier selects38 IDs and retry selects18, with one overlap; the complete
-corpus has104 unique rows but only55 selected inputs. Overflow56→8 and
-billing7→6 remove49 rows; keep every selected payload, expectation and order.
-Remove only newly unused `errorsSource` support and overflow imports; retain
-`structuredSource` for the selected auth-format row. Full source/history and
-independent preservation review approve this scope with no assertions to carry.
-Native baseline, exact selected-input comparison, focused checks, removal scans
-and fresh final review are pending. No runtime result is claimed yet.
+[189429](https://github.com/openclaw/openclaw/pull/189429), pinned main
+`4afb241323b`: remove49 unselected failover corpus rows. Classifier38 IDs and
+retry18 overlap once; corpus104→55, overflow56→8, billing7→6. Actual imported
+selected payloads, expectations, order, selectors and both consumer files match
+the baseline exactly. Retain `structuredSource` for the selected auth-format row;
+remove only newly unused `errorsSource` and overflow imports. Independent
+preservation review found no assertions to carry. Native baseline and candidate
+both pass257 tests/14 suites; typed lint, scoped TypeScript and format pass.
+−189 fixture/support LOC; no declarations, assertions or production changed.
+All removal phases passed before and after. Final review and PR CI remain
+workflow gates.
 
 ## Completed source review
 
