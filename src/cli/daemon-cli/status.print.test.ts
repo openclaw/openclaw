@@ -534,6 +534,32 @@ describe("printDaemonStatus", () => {
     expect(output()).not.toContain("ai.openclaw.gateway");
   });
 
+  it.each([undefined, "external", " ExTeRnAl "])(
+    "shows single-gateway advice only without external supervision (%s)",
+    (mode) => {
+      withEnv({ OPENCLAW_SUPERVISOR_MODE: mode }, () => {
+        printDaemonStatus(
+          {
+            service: { loadState: { status: "not-loaded" }, targetRole: "diagnostic-only" },
+            extraServices: [
+              {
+                platform: "darwin",
+                scope: "system",
+                label: "com.example.openclaw-gateway",
+                detail: "system LaunchDaemon",
+              },
+            ],
+          },
+          { json: false, deep: true },
+        );
+
+        expect(output()).toContain("com.example.openclaw-gateway");
+        expect(output().includes("Recommendation: run a single gateway per machine")).toBe(!mode);
+        expect(output().includes("If you need multiple gateways")).toBe(!mode);
+      });
+    },
+  );
+
   registerServiceInspectionHintTests({
     renderHints: renderGatewayServiceCleanupHintsMock,
     output,
